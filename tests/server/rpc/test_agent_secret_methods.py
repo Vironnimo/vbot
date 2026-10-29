@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from core.secrets._agent_secret_model import SecretRecordError
 from core.secrets.agent_secrets import AgentSecrets, Lifetime
 from core.secrets.requests import SecretRequests
 from core.sessions import SessionAddress
@@ -148,6 +150,120 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
     )
     assert stale["message"] == "This request is no longer waiting; the Agent stopped asking."
     assert (await rpc_result(state, "agent_secrets.list"))["requests"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overlap", ["cancel", "answer", "decline", "replacement", "invalid", "timeout"]
+)
+async def test_an_accepted_answer_settles_once_before_another_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overlap: str
+) -> None:
+    state = _state(tmp_path)
+    requests = state.runtime.secret_requests
+    secrets = state.runtime.agent_secrets
+    address = SessionAddress(None, "main", "s1")
+    secret = secrets.create(
+        name="API", kind="token", values={"value": "old"}, actor="user", agents=["main"]
+    )
+    deadline = asyncio.timeout(None)
+    if overlap == "timeout":
+        timeout = asyncio.timeout
+        monkeypatch.setattr(
+            asyncio,
+            "timeout",
+            lambda delay: deadline if delay == requests._timeout else timeout(delay),
+        )
+
+    async def ask() -> Any:
+        return await requests.request(
+            agent_id="main",
+            session_id="s1",
+            project_id=None,
+            name="API",
+            kind="token",
+            description="",
+            lifetime="session",
+        )
+
+    asked = asyncio.create_task(ask())
+    await asyncio.sleep(0)
+    pending = requests.pending_for(address, "API")
+    assert pending is not None
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    store = requests._store
+    rejected = False
+
+    def blocked_store(*args: Any) -> Any:
+        nonlocal rejected
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5)
+        if overlap == "invalid" and not rejected:
+            rejected = True
+            raise SecretRecordError("The answer could not be stored.")
+        return store(*args)
+
+    monkeypatch.setattr(requests, "_store", blocked_store)
+    call = rpc_error if overlap == "invalid" else rpc_result
+    answer = asyncio.create_task(
+        call(
+            state,
+            "agent_secrets.answer",
+            id=pending.id,
+            values={"value": PASSWORD},
+        )
+    )
+    replacement = None
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        if overlap == "cancel":
+            answer.cancel()
+            await asyncio.sleep(0)
+            answer.cancel()
+            await asyncio.sleep(0)
+            assert not answer.done()
+        elif overlap == "timeout":
+            deadline.reschedule(loop.time() - 1)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not asked.done()
+        elif overlap in {"answer", "decline"}:
+            params = {"values": {"value": "competing"}} if overlap == "answer" else {}
+            error = await rpc_error(state, f"agent_secrets.{overlap}", id=pending.id, **params)
+            assert error["code"] == "invalid_request"
+            assert not asked.done()
+        elif overlap == "replacement":
+            replacement = asyncio.create_task(ask())
+            await asyncio.sleep(0)
+            assert requests.pending_for(address, "API") is pending
+            assert not asked.done()
+    finally:
+        release.set()
+    if overlap == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await answer
+    else:
+        await answer
+    if overlap == "invalid":
+        assert requests.pending_for(address, "API") is pending
+        await rpc_result(state, "agent_secrets.answer", id=pending.id, values={"value": PASSWORD})
+    outcome = await asyncio.wait_for(asked, 2)
+    assert outcome.status == "stored"
+    assert outcome.secret == secrets.get(secret.id)
+    current = secrets.get(secret.id)
+    assert current is not None
+    target = current.field_named("value")
+    assert target is not None and secrets.field_value(current, target) == PASSWORD
+    if replacement is not None:
+        await asyncio.sleep(0)
+        next_request = requests.pending_for(address, "API")
+        assert next_request is not None and next_request.id != pending.id
+        assert next_request.replaces == secret.id
+        await rpc_result(state, "agent_secrets.decline", id=next_request.id)
+        assert (await replacement).status == "declined"
+    assert requests.list() == []
 
 
 @pytest.mark.asyncio

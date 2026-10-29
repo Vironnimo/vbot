@@ -235,6 +235,8 @@ def test_settings_changes_refresh_only_their_live_services(
     # This decision table replaces every live service below. Exercise the public
     # coordinator against that wiring without starting unrelated databases.
     shared_runtime = Mock(spec=Runtime)
+    shared_runtime._startup_id = "settings-fixture"
+    shared_runtime._started = True
     extension_reload = AsyncMock()
     disabled_change = AsyncMock()
     skills_reload = AsyncMock()

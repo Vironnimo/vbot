@@ -14,10 +14,16 @@ from core.automation._cron_delivery import (
     CHANNEL_GONE_HOURS,
     channel_gone_alert,
     chat_message_text,
+    check_chat_delivery,
     dropped_messages_line,
     outbound_note,
 )
-from core.automation._cron_jobs import CronJob, CronStorageError
+from core.automation._cron_jobs import (
+    CronDelivery,
+    CronJob,
+    CronJobValidationError,
+    CronStorageError,
+)
 from core.automation._cron_notification_model import CronNotification
 from core.channels import ChannelError, ChannelNotFoundError
 from core.utils.logging import get_logger
@@ -64,6 +70,7 @@ class CronNotifications:
                 agent_id=job.agent_id,
                 channel_id=delivery.channel_id,
                 platform_target=delivery.platform_target,
+                platform=delivery.platform,
                 thread_id=delivery.thread_id,
                 text=text,
                 note=outbound_note(job, text),
@@ -110,25 +117,85 @@ class CronNotifications:
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), timeout=_RETRY_SECONDS)
 
-    async def retry(self, job_id: str) -> None:
+    async def retry(self, job_id: str, delivery: CronDelivery | None = None) -> int:
         """Explicit retry after the user checked an uncertain delivery."""
-        async with self._lock:
-            self._owner.get_job(job_id)
-            job = self._owner._jobs[job_id]
-            previous, alert = job.notifications, job.unread_alert
-            job.notifications = tuple(
-                replace(item, state="pending", error=None, retry_after_at=None) for item in previous
-            )
-            if alert is not None and alert.kind == "delivery":
-                # Retrying answers the alert about the delivery.
-                job.unread_alert = None
+        async with self._owner._edits, self._lock:
+            return await settle_before_cancelling(self._retry_locked(job_id, delivery))
 
-            def undo() -> None:
-                job.notifications = previous
+    async def _retry_locked(self, job_id: str, delivery: CronDelivery | None) -> int:
+        self._owner.get_job(job_id)
+        job = self._owner._jobs[job_id]
+        replacements: dict[str, CronNotification] = {}
+        if delivery is not None:
+            replacements = await self._reselect(job, delivery)
+            retained = {item.id for item in job.notifications if item.state == "pending"}
+            replacements = {key: item for key, item in replacements.items() if key in retained}
+            if not replacements:
+                raise CronJobValidationError(
+                    "No pending messages are blocked by an unknown or changed platform. "
+                    "Nothing was changed."
+                )
+        previous = {item.id: item for item in job.notifications}
+        alert = job.unread_alert
+        edited = {
+            item.id: replacements.get(item.id, item)
+            if delivery is not None
+            else replace(item, state="pending", error=None, retry_after_at=None)
+            for item in job.notifications
+        }
+        job.notifications = tuple(edited.values())
+        if delivery is None and alert is not None and alert.kind == "delivery":
+            # Retrying answers the alert about the delivery.
+            job.unread_alert = None
+
+        def undo() -> None:
+            # A Run can stage more messages while this write yields. Restore only
+            # this retry's changes, without losing new items or reviving evictions.
+            job.notifications = tuple(
+                previous[item.id] if edited.get(item.id) == item else item
+                for item in job.notifications
+            )
+            if job.unread_alert is None:
                 job.unread_alert = alert
 
-            await self._owner._save_edit(undo)
+        await self._owner._save_edit(undo)
         self.wake()
+        return len(replacements)
+
+    async def _reselect(self, job: CronJob, delivery: CronDelivery) -> dict[str, CronNotification]:
+        """Rebind only provably unsent platform-blocked snapshots to an explicit target."""
+        if delivery.kind != "chat":
+            raise CronJobValidationError("Select a chat destination for the blocked messages")
+        selected = self._owner._clone_job(job)
+        selected.delivery = delivery
+        await check_chat_delivery(selected, self._owner._chats, bind_platform=True)
+        target = selected.delivery
+        assert target is not None and target.channel_id and target.platform_target
+        chats = self._owner._chats
+        assert chats is not None
+        replacements: dict[str, CronNotification] = {}
+        for item in job.notifications:
+            if item.state != "pending" or item.agent_id != job.agent_id:
+                continue
+            if item.platform is not None:
+                try:
+                    original_channel = await chats.get_channel(item.channel_id)
+                except ChannelNotFoundError:
+                    continue
+                if original_channel.platform == item.platform:
+                    continue
+            replacements[item.id] = replace(
+                item,
+                channel_id=target.channel_id,
+                platform=target.platform,
+                platform_target=target.platform_target,
+                thread_id=target.thread_id,
+                platform_blocked=False,
+                error=None,
+                retry_after_at=None,
+                channel_missing_since=None,
+            )
+        return replacements
 
     async def flush(self, job_id: str | None = None) -> None:
         async with self._lock:
@@ -139,10 +206,11 @@ class CronNotifications:
                     continue
                 # Keep each conversation's notifications in order: one still
                 # waiting holds back only later ones of the same chat and thread.
-                held: set[tuple[str, str, str | None]] = set()
+                held: set[tuple[str, str | None, str, str | None]] = set()
                 for snapshot in job.notifications:
                     conversation = (
                         snapshot.channel_id,
+                        snapshot.platform,
                         snapshot.platform_target,
                         snapshot.thread_id,
                     )
@@ -218,10 +286,25 @@ class CronNotifications:
             await self._defer(job_id, item, error)
             return
         # The Channel exists (again), so no deadline for a missing one runs.
-        item = replace(item, channel_missing_since=None)
+        item = replace(item, channel_missing_since=None, platform_blocked=False)
         if channel.agent_id != item.agent_id:
             moved = ChannelError("The Channel now belongs to another Agent")
             await self._defer(job_id, item, moved)
+            return
+        if item.platform is None or channel.platform != item.platform:
+            reason = (
+                "its original platform is unknown"
+                if item.platform is None
+                else f"the Channel platform changed from {item.platform} to {channel.platform}"
+            )
+            await self._defer(
+                job_id,
+                replace(item, platform_blocked=True),
+                ChannelError(
+                    f"Delivery is blocked: {reason}. "
+                    "Select a destination when retrying these messages."
+                ),
+            )
             return
         sending = replace(item, state="sending", error=None)
         if not await self._update(job_id, sending):
@@ -244,6 +327,7 @@ class CronNotifications:
                 item.platform_target,
                 thread_id=item.thread_id,
                 expected_agent_id=item.agent_id,
+                expected_platform=item.platform,
             )
         except ChannelError as error:
             if not error.possibly_delivered:
@@ -267,6 +351,8 @@ class CronNotifications:
                 self._owner._secret_masker().mask(item.note),
                 thread_id=item.thread_id,
                 skip_session_id=item.session_id,
+                expected_agent_id=item.agent_id,
+                expected_platform=item.platform,
             )
         except Exception:
             # A missing mirror note must never repeat an already sent message.

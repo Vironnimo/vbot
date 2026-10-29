@@ -10,6 +10,8 @@ Write mechanics of `SkillAuthoringService` (`core/skills/authoring.py`), the one
 
 Mutating an existing package requires its `SKILL.md`, including delete and support-file operations. Package directories, the entry document and support-file path components reject symlink/junction redirects before resolution (other reparse points, such as OneDrive cloud-file placeholders, are ordinary files), so aliases cannot bypass document validation or target a different named package. Installation reuses this authoring boundary (`tests/core/skills/test_authoring.py`).
 
+When a create's atomic document write fails, cleanup removes only the empty directory it created. Files added there by an outside writer survive the failure; no creation revision is recorded.
+
 ## Shared-owner invalidation
 
 `SkillRuntime.invalidate_agent_skills(owner_id)` owns the dependency from a private home to its shared receivers and invalidates their cached registries across every Project context. Tool and Accessor writes identify the owner without duplicating that dependency. This includes creating, changing or deleting a package named by an existing share, and archiving or renaming the owning Agent; unrelated Agent caches remain intact (`test_runtime_shared_skills.py`).

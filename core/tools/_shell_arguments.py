@@ -685,11 +685,11 @@ def _parse_call(
 def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore | None) -> Path:
     raw = optional_string(arguments.get("workdir"), field_name="workdir")
     if not raw:
-        workdir = context.effective_cwd
+        workdir = context.resolve_path(context.effective_cwd, access="start_dir")
     elif is_project_workdir(raw):
         # Not advertised; the Projects block names each Project's directory path.
         try:
-            return project_workdir(projects, raw)
+            return project_workdir(projects, raw, permissions=context.permissions)
         except ProjectWorkdirError as error:
             raise _call_error(str(error)) from error
     else:

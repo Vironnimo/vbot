@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.projects import ProjectError, ProjectNotFoundError, ProjectStore, cwd_exists
 from core.utils.paths import model_path
 
@@ -34,7 +35,9 @@ def is_project_workdir(value: str) -> bool:
     return value.startswith(PROJECT_WORKDIR_PREFIX)
 
 
-def project_workdir(projects: ProjectStore | None, value: str) -> Path:
+def project_workdir(
+    projects: ProjectStore | None, value: str, *, permissions: PermissionBoundary
+) -> Path:
     """The directory of the Project a ``project:<project-id>`` workdir names.
 
     Raises ``ProjectWorkdirError`` when the id is empty, the Project does not
@@ -68,6 +71,8 @@ def project_workdir(projects: ProjectStore | None, value: str) -> Path:
             "Project's directory path instead.",
             code="project_unavailable",
         ) from error
+    if refusal := permissions.check_path(project.cwd, "start_dir"):
+        raise PermissionDenied(refusal)
     if not cwd_exists(project.cwd):
         raise ProjectWorkdirError(
             f"the directory of Project {project_id}, {model_path(project.cwd)}, does not exist. "

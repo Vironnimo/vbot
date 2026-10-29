@@ -278,10 +278,15 @@ async def test_video_poll_updates_create_usage_before_download_failure(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finishes", [True, False], ids=["job-finishes", "shutdown-first"])
+@pytest.mark.parametrize(
+    ("finishes", "close_in_caller"),
+    [(True, False), (False, False), (False, True)],
+    ids=["job-finishes", "shutdown-first", "shutdown-before-follower-starts"],
+)
 @respx.mock
 async def test_cancelled_video_generation_follows_its_paid_job(
     finishes: bool,
+    close_in_caller: bool,
     recorder: UsageRecorder,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -289,18 +294,29 @@ async def test_cancelled_video_generation_follows_its_paid_job(
     """The provider cannot cancel a job: its cost is recorded, else its id is logged."""
 
     monkeypatch.setattr("core.model_tasks.video_providers.VIDEO_POLL_INTERVAL_SECONDS", 0)
-    polled, release = asyncio.Event(), asyncio.Event()
+    polled, release, poll_ended = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def status(_request: httpx.Request) -> httpx.Response:
         polled.set()
-        await release.wait()
-        return httpx.Response(200, json={"status": "completed", "usage": {"cost": 0.4}})
+        try:
+            await release.wait()
+            return httpx.Response(200, json={"status": "completed", "usage": {"cost": 0.4}})
+        finally:
+            poll_ended.set()
 
     respx.post(BASE + "/videos").respond(200, json={"id": "job-7", "status": "pending"})
     respx.get(BASE + "/videos/job-7").mock(side_effect=status)
     content = respx.get(BASE + "/videos/job-7/content?index=0").respond(200, content=b"v")
     service = VideoService(_Bindings(), _runtime(), usage_recorder=recorder)
-    generation = asyncio.create_task(service.generate("video"))
+
+    async def generate() -> None:
+        try:
+            await service.generate("video")
+        finally:
+            if close_in_caller:
+                await service.aclose()
+
+    generation = asyncio.create_task(generate())
     await polled.wait()
     generation.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -311,6 +327,7 @@ async def test_cancelled_video_generation_follows_its_paid_job(
         followers = [t for t in asyncio.all_tasks() if t.get_name() == "video-job-cost"]
         await asyncio.wait_for(asyncio.gather(*followers), timeout=1)
     await service.aclose()
+    assert poll_ended.is_set()
 
     _, records = read_ledger(recorder)
     assert len(records) == 1

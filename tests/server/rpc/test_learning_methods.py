@@ -9,7 +9,7 @@ import pytest
 
 from core.automation import LearningChanges
 from core.memory import MemoryService, MemoryWriter
-from core.skills import SkillWriter
+from core.skills import HUMAN_WRITER, SkillWriter
 from tests.server.rpc_test_support import (
     StubAdapter,
     make_state,
@@ -23,7 +23,9 @@ _MEMORY = MemoryWriter(agent_id="coder", actor="tool", run_id=REVIEW, run_kind="
 _SKILLS = SkillWriter(actor="reflection", run_id=REVIEW, run_kind="reflection")
 
 
-def _reviewed_agent(tmp_path: Path, *, with_project: bool = False) -> tuple[Any, Path]:
+def _reviewed_agent(
+    tmp_path: Path, *, with_project: bool = False, with_shared: bool = False
+) -> tuple[Any, Path]:
     """A state whose Agent ``coder`` has one review's Memory entry and Skill."""
     state = make_state(tmp_path, StubAdapter())
     agent_dir = tmp_path / "agents" / "coder"
@@ -49,24 +51,41 @@ def _reviewed_agent(tmp_path: Path, *, with_project: bool = False) -> tuple[Any,
             "Changes need user review.",
             writer=MemoryWriter(agent_id="coder", project_id="sample", run_id=REVIEW),
         )
+    if with_shared:
+        shared = tmp_path / "agents" / "owner" / "skills"
+        state.runtime.skill_authoring.create(
+            shared,
+            "deploy",
+            "---\nname: deploy\ndescription: Deploy.\n---\n\nOriginal.\n",
+            writer=HUMAN_WRITER,
+        )
+        state.runtime.skill_authoring.write_file(
+            shared, "deploy", "references/learned.md", "Learned.\n", writer=_SKILLS
+        )
+    if with_project or with_shared:
         state.runtime.learning_changes = LearningChanges(
             memory=state.runtime.memory,
             skills=state.runtime.skill_authoring,
             skill_home=lambda agent_id: tmp_path / "agents" / agent_id / "skills",
             run_active=lambda run_id: state.runtime.chat_run_manager.is_running(run_id),
-            project_memories=lambda: {"sample": project},
+            project_memories=lambda: {"sample": project} if with_project else {},
+            skill_homes=lambda: {"owner": shared} if with_shared else {},
         )
     return state, agent_dir
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_project", [False, True], ids=["personal", "shared-project"])
+@pytest.mark.parametrize("with_shared", [False, True], ids=["own-skills", "shared-skills"])
 async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     with_project: bool,
+    with_shared: bool,
 ) -> None:
-    state, agent_dir = _reviewed_agent(tmp_path, with_project=with_project)
+    state, agent_dir = _reviewed_agent(tmp_path, with_project=with_project, with_shared=with_shared)
+    invalidated: list[str | None] = []
+    monkeypatch.setattr(state.runtime, "invalidate_agent_skills", invalidated.append)
 
     listed = await rpc_result(state, "learning.changes", agent_id="coder", run_id=REVIEW)
     # A Run still running cannot be undone yet.
@@ -78,16 +97,22 @@ async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
     undone = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
 
     memory_count = 2 if with_project else 1
-    assert listed["summary"] == {"memory": memory_count, "skills": 1, "undone": False}
+    skill_count = 2 if with_shared else 1
+    assert listed["summary"] == {"memory": memory_count, "skills": skill_count, "undone": False}
     assert [(change["store"], change["kind"]) for change in listed["changes"]] == [
         ("memory", "added"),
         *([("memory", "added")] if with_project else []),
         ("skill", "created"),
+        *([("skill", "file_written")] if with_shared else []),
     ]
     if with_project:
         assert listed["changes"][1]["project_id"] == "sample"
         assert (tmp_path / "projects" / "sample" / "MEMORY.md").read_text(encoding="utf-8") == ""
-    assert undone["summary"] == {"memory": memory_count, "skills": 1, "undone": True}
+    if with_shared:
+        assert listed["changes"][-1]["skill_owner_id"] == "owner"
+        assert not (tmp_path / "agents" / "owner" / "skills" / "deploy" / "references").exists()
+    assert invalidated == (["coder", "owner"] if with_shared else ["coder"])
+    assert undone["summary"] == {"memory": memory_count, "skills": skill_count, "undone": True}
     assert (agent_dir / "workspace" / "USER.md").read_text(encoding="utf-8") == ""
     assert not (agent_dir / "skills" / "deploy").exists()
     assert resource_changes(state) == [

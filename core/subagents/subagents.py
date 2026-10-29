@@ -12,7 +12,7 @@ through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, cast
 
@@ -490,63 +490,72 @@ class SubAgentCoordinator:
                     target=target_address, choices=choices
                 ),
             )
-        temporary_parent = await self._temporary_parent(context, target_agent_id, target_project_id)
-        failure = await _validate_target_agent(
-            runtime,
-            target_agent_id,
-            target_project_id,
-            model=overrides.get("model"),
-            temporary_parent_binding=temporary_parent,
-            caller=context,
-            overrides=overrides,
-        )
-        if failure is not None:
-            error = failure["error"]
-            if error["code"] in {"agent_not_found", "project_not_found"}:
-                reason = str(error["message"]).rstrip(".")
-                choices = await sessions.run_async(target_choices, runtime, context)
-                return tool_failure(
-                    error["code"],
-                    f"Nothing was started. {reason}. {choices}",
-                )
-            return failure
+        async with runtime.chat_run_manager.prepare_admission(
+            target_agent_id, project_id=target_project_id
+        ) as preparation:
+            await preparation.bind_working_project(
+                _child_working_project(context, target_project_id)
+            )
+            temporary_parent = await self._temporary_parent(
+                context, target_agent_id, target_project_id
+            )
+            failure = await _validate_target_agent(
+                runtime,
+                target_agent_id,
+                target_project_id,
+                model=overrides.get("model"),
+                temporary_parent_binding=temporary_parent,
+                caller=context,
+                overrides=overrides,
+            )
+            if failure is not None:
+                error = failure["error"]
+                if error["code"] in {"agent_not_found", "project_not_found"}:
+                    reason = str(error["message"]).rstrip(".")
+                    choices = await sessions.run_async(target_choices, runtime, context)
+                    return tool_failure(
+                        error["code"],
+                        f"Nothing was started. {reason}. {choices}",
+                    )
+                return failure
 
-        # Chat leaves the Tool out of the Tool list of a Session at the nesting
-        # limit (``subagent_tool_usable``); this refusal stays the safety net.
-        depth_limit = await sessions.run_async(_nesting_limit_reached, runtime, caller)
-        if depth_limit is not None:
-            return tool_failure(
-                "subagent_depth_exceeded",
-                SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=depth_limit),
-            )
-        settings = _load_subagent_settings(runtime)
-        async with self._admission_lock:
-            refusal = await self._limit_refusal(
-                caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
-            )
-            if refusal is not None:
-                return refusal
-            if context.is_cancelled():
+            # Chat leaves the Tool out of the Tool list of a Session at the nesting
+            # limit (``subagent_tool_usable``); this refusal stays the safety net.
+            depth_limit = await sessions.run_async(_nesting_limit_reached, runtime, caller)
+            if depth_limit is not None:
                 return tool_failure(
-                    "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
+                    "subagent_depth_exceeded",
+                    SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=depth_limit),
                 )
-            # Past this check the start completes even when the calling Run is
-            # cancelled meanwhile: once the child Run exists, the Parent must
-            # receive this result, or it takes the call as unfinished and may
-            # start the same work a second time.
-            return await finish_despite_cancel(
-                self._start_subagent(
-                    context,
-                    cast(str, arguments["content"]),
-                    target_agent_id,
-                    target_project_id,
-                    description=description,
-                    overrides=overrides,
-                    temporary_parent=temporary_parent,
-                    notes=notes,
-                    secrets=passed,
+            settings = _load_subagent_settings(runtime)
+            async with self._admission_lock:
+                refusal = await self._limit_refusal(
+                    caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
                 )
-            )
+                if refusal is not None:
+                    return refusal
+                if context.is_cancelled():
+                    return tool_failure(
+                        "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
+                    )
+                # Past this check the start completes even when the calling Run is
+                # cancelled meanwhile: once the child Run exists, the Parent must
+                # receive this result, or it takes the call as unfinished and may
+                # start the same work a second time.
+                return await finish_despite_cancel(
+                    self._start_subagent(
+                        context,
+                        cast(str, arguments["content"]),
+                        target_agent_id,
+                        target_project_id,
+                        description=description,
+                        overrides=overrides,
+                        temporary_parent=temporary_parent,
+                        notes=notes,
+                        secrets=passed,
+                        release_preparation=preparation.release,
+                    )
+                )
 
     async def _start_subagent(
         self,
@@ -560,6 +569,7 @@ class SubAgentCoordinator:
         temporary_parent: TemporarySessionBinding | None,
         notes: list[str],
         secrets: list[str] | None = None,
+        release_preparation: Callable[[], Awaitable[None]],
     ) -> JsonObject:
         """Create the Sub-Agent Session, start its Run and return the ``run`` result.
 
@@ -617,6 +627,7 @@ class SubAgentCoordinator:
                 await run.wait_admitted()
             except Exception:
                 assert session.generation_id is not None
+                await release_preparation()
                 await _remove_unstarted_session(runtime, address, session.generation_id)
                 raise
         activity = await self._activities.ensure(address, parent=_caller(context))
@@ -726,61 +737,67 @@ class SubAgentCoordinator:
                 SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE.format(id=link.id),
             )
         address = link.session
-        try:
-            session = await sessions.get_async(address)
-        except SessionNotFoundError:
-            return _not_found(subagent_id, await sessions.run_async(children, sessions, caller))
-        generation_id = session.generation_id
-        assert generation_id is not None  # get_async returns a generation-bound handle.
-        overrides = _parse_session_overrides(arguments)
-        temporary_parent = await self._temporary_parent(
-            context, address.agent_id, address.project_id
-        )
-        failure = await _validate_continued_session(runtime, link, model=overrides.get("model"))
-        if failure is not None:
-            return failure
-        try:
-            working_project_id = await runtime.agent_resolver.session_working_project_async(address)
-        except WorkingProjectMissingError as error:
-            return tool_failure(
-                "project_not_found",
-                SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE.format(
-                    id=link.id, project_id=error.project_id
-                ),
-                retryable=False,
+        async with runtime.chat_run_manager.prepare_admission(
+            address.agent_id, project_id=address.project_id, session_id=address.session_id
+        ) as preparation:
+            try:
+                session = await sessions.get_async(address)
+            except SessionNotFoundError:
+                return _not_found(subagent_id, await sessions.run_async(children, sessions, caller))
+            generation_id = session.generation_id
+            assert generation_id is not None  # get_async returns a generation-bound handle.
+            overrides = _parse_session_overrides(arguments)
+            temporary_parent = await self._temporary_parent(
+                context, address.agent_id, address.project_id
             )
-        steerable = context.execution_owner is None and temporary_parent is None
-        # A message to an idle Sub-Agent starts its next Run, which counts against the limits.
-        async with self._admission_lock:
-            if not is_working(runtime, address):
-                refusal = await self._limit_refusal(
-                    caller,
-                    _load_subagent_settings(runtime),
-                    idle_id=link.id,
-                    can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME),
+            failure = await _validate_continued_session(runtime, link, model=overrides.get("model"))
+            if failure is not None:
+                return failure
+            try:
+                working_project_id = await runtime.agent_resolver.session_working_project_async(
+                    address
                 )
-                if refusal is not None:
-                    return refusal
-            if context.is_cancelled():
+            except WorkingProjectMissingError as error:
                 return tool_failure(
-                    "run_cancelled", "Your Run was cancelled before the message was sent."
+                    "project_not_found",
+                    SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE.format(
+                        id=link.id, project_id=error.project_id
+                    ),
+                    retryable=False,
                 )
-            # Past this check the message is sent even when the calling Run is
-            # cancelled meanwhile, and the Parent receives the result, so it
-            # never sends the same message a second time.
-            return await finish_despite_cancel(
-                self._deliver_send(
-                    context,
-                    link.id,
-                    address,
-                    cast(str, arguments["content"]),
-                    overrides=overrides,
-                    temporary_parent=temporary_parent,
-                    working_project_id=working_project_id,
-                    steerable=steerable,
-                    generation_id=generation_id,
+            await preparation.bind_working_project(working_project_id)
+            steerable = context.execution_owner is None and temporary_parent is None
+            # A message to an idle Sub-Agent starts its next Run, which counts against the limits.
+            async with self._admission_lock:
+                if not is_working(runtime, address):
+                    refusal = await self._limit_refusal(
+                        caller,
+                        _load_subagent_settings(runtime),
+                        idle_id=link.id,
+                        can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME),
+                    )
+                    if refusal is not None:
+                        return refusal
+                if context.is_cancelled():
+                    return tool_failure(
+                        "run_cancelled", "Your Run was cancelled before the message was sent."
+                    )
+                # Past this check the message is sent even when the calling Run is
+                # cancelled meanwhile, and the Parent receives the result, so it
+                # never sends the same message a second time.
+                return await finish_despite_cancel(
+                    self._deliver_send(
+                        context,
+                        link.id,
+                        address,
+                        cast(str, arguments["content"]),
+                        overrides=overrides,
+                        temporary_parent=temporary_parent,
+                        working_project_id=working_project_id,
+                        steerable=steerable,
+                        generation_id=generation_id,
+                    )
                 )
-            )
 
     async def _deliver_send(
         self,

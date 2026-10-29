@@ -9,6 +9,7 @@ import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
@@ -118,6 +119,51 @@ class RunPersistence(Protocol):
         ...
 
 
+@dataclass(eq=False)
+class _AdmissionPreparation:
+    """A producer's short reservation while resolving and creating its target."""
+
+    manager: ChatRunManager
+    agent_id: str
+    project_id: str | None
+    session_id: str | None
+    working_project_id: str | None = None
+    changed_projects: set[str] = field(default_factory=set)
+
+    async def bind_working_project(self, project_id: str | None) -> None:
+        async with self.manager._lock:
+            if self not in self.manager._preparing or self.manager._closed:
+                raise RunAdmissionBlockedError("run manager is shutting down")
+            if project_id is not None and (
+                project_id in self.changed_projects or project_id in self.manager._guarded_projects
+            ):
+                raise RunAdmissionBlockedError(
+                    "run admission is blocked while its Session, Agent, or Project is transitioning"
+                )
+            self.working_project_id = project_id
+
+    async def bind_session(self, session_id: str) -> None:
+        """Narrow a new-Session reservation once its creating write returned its id."""
+        async with self.manager._lock:
+            if self not in self.manager._preparing:
+                raise RunAdmissionBlockedError("run admission preparation already ended")
+            if self.session_id not in (None, session_id):
+                raise ValueError("admission preparation cannot change its Session")
+            self.session_id = session_id
+
+    async def release(self) -> None:
+        """End preparation before a caller's guarded cleanup, or on context exit."""
+        async with self.manager._lock:
+            self.manager._preparing.discard(self)
+
+    def includes(self, address: SessionAddress) -> bool:
+        return (
+            self.project_id == address.project_id
+            and self.agent_id == address.agent_id
+            and self.session_id in (None, address.session_id)
+        )
+
+
 class ChatRunManager:
     """Coordinate Runs with optional persistence supplied at construction.
 
@@ -147,6 +193,7 @@ class ChatRunManager:
         self._guarded_sessions: set[SessionAddress] = set()
         self._guarded_agents: set[tuple[str | None, str]] = set()
         self._guarded_projects: set[str] = set()
+        self._preparing: set[_AdmissionPreparation] = set()
         self._waiting_work_admissions: dict[str, WaitingWorkAdmission] = {}
         # Slots reserved while a queued input is durably accepted.
         self._pending_waiting_scopes: list[str | None] = []
@@ -252,6 +299,33 @@ class ChatRunManager:
         _notify(self._queue_changed_callbacks, address, "Queue change callback failed")
 
     @asynccontextmanager
+    async def prepare_admission(
+        self, agent_id: str, *, project_id: str | None, session_id: str | None = None
+    ) -> AsyncIterator[_AdmissionPreparation]:
+        """Keep target lifecycle stable from preflight through Run/Queue installation.
+
+        This does not reserve a Run slot or block other producers. Until a new
+        Session has an id, its Agent scope conservatively excludes Session moves.
+        Bind the resolved Working Project before creating or mutating the Session.
+        """
+        preparation = _AdmissionPreparation(self, agent_id, project_id, session_id)
+        async with self._lock:
+            if self._closed or (
+                (project_id, agent_id) in self._guarded_agents
+                or project_id in self._guarded_projects
+                or any(preparation.includes(address) for address in self._guarded_sessions)
+            ):
+                raise RunAdmissionBlockedError(
+                    "run admission is blocked while its Session, Agent, or Project is transitioning"
+                )
+            preparation.changed_projects.update(self._guarded_projects)
+            self._preparing.add(preparation)
+        try:
+            yield preparation
+        finally:
+            await settle_before_cancelling(preparation.release())
+
+    @asynccontextmanager
     async def session_admission_guard(
         self,
         *session_addresses: SessionAddress,
@@ -270,6 +344,7 @@ class ChatRunManager:
         async with self._lock:
             if any(
                 self._has_activity_for_session_locked(address)
+                or any(preparation.includes(address) for preparation in self._preparing)
                 or self._run_admission_is_guarded_locked(address, working_project_id=None)
                 for address in guarded_sessions
             ):
@@ -297,7 +372,14 @@ class ChatRunManager:
                 )
                 or (project_id is not None and project_id in self._guarded_projects)
             )
-            if conflicts_with_guard or self._has_activity_for_agent_locked(agent_key):
+            if (
+                conflicts_with_guard
+                or self._has_activity_for_agent_locked(agent_key)
+                or any(
+                    (preparation.project_id, preparation.agent_id) == agent_key
+                    for preparation in self._preparing
+                )
+            ):
                 raise RunAdmissionBlockedError(
                     "agent removal conflicts with active, queued, or guarded work"
                 )
@@ -323,11 +405,20 @@ class ChatRunManager:
                     for guarded_project_id, _agent_id in self._guarded_agents
                 )
             )
-            if conflicts_with_guard or self._has_activity_for_project_locked(project_id):
+            if (
+                conflicts_with_guard
+                or self._has_activity_for_project_locked(project_id)
+                or any(
+                    project_id in (preparation.project_id, preparation.working_project_id)
+                    for preparation in self._preparing
+                )
+            ):
                 raise RunAdmissionBlockedError(
                     "project removal conflicts with active, queued, or guarded work"
                 )
             self._guarded_projects.add(project_id)
+            for preparation in self._preparing:
+                preparation.changed_projects.add(project_id)
         try:
             yield
         finally:

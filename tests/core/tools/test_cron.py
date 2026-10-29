@@ -755,7 +755,9 @@ def _chat(thread_id: str | None = None) -> ReplySurface:
         pytest.param(
             _chat(),
             {},
-            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            CronDelivery(
+                kind="chat", channel_id="tg-main", platform_target="chat-42", platform="telegram"
+            ),
             "chat chat-42 of Channel tg-main",
             id="chat",
         ),
@@ -763,7 +765,11 @@ def _chat(thread_id: str | None = None) -> ReplySurface:
             _chat("7"),
             {"deliver": "here"},
             CronDelivery(
-                kind="chat", channel_id="tg-main", platform_target="chat-42", thread_id="7"
+                kind="chat",
+                channel_id="tg-main",
+                platform_target="chat-42",
+                thread_id="7",
+                platform="telegram",
             ),
             "chat chat-42, thread 7, of Channel tg-main",
             id="chat-thread",
@@ -772,7 +778,9 @@ def _chat(thread_id: str | None = None) -> ReplySurface:
         pytest.param(
             _chat(),
             {"deliver": "Telegram"},
-            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            CronDelivery(
+                kind="chat", channel_id="tg-main", platform_target="chat-42", platform="telegram"
+            ),
             "chat chat-42 of Channel tg-main",
             id="this-platform",
         ),
@@ -816,6 +824,7 @@ def test_answers_go_to_the_conversation_the_job_was_made_in_unless_told_otherwis
             {"deliver": "slack"}, "this conversation is not a slack chat", id="another-platform"
         ),
         pytest.param({}, "delivery Channel tg-main is not available", id="channel-gone"),
+        pytest.param({"deliver": "here"}, "platform changed", id="platform-changed"),
     ],
 )
 def test_a_chat_that_cannot_take_the_answers_is_refused_with_vbot_instead(
@@ -824,6 +833,8 @@ def test_a_chat_that_cannot_take_the_answers_is_refused_with_vbot_instead(
     tool = cron_tool(tmp_path)
     if not fields:
         tool.chats.owners.clear()
+    elif fields == {"deliver": "here"}:
+        tool.chats.platforms["tg-main"] = "discord"
 
     message = tool.refused(
         {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", **fields},

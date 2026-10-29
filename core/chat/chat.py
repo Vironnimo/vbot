@@ -540,57 +540,63 @@ class ChatLoop:
         today's identity behavior. ``max_tool_iterations`` and ``context_note``
         are as in :meth:`start_run`.
         """
-        _validate_run_tool_iteration_limit(max_tool_iterations)
-        session = await self._get_session_async(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        resolver = self._dependencies.agent_resolver
-        agent = await resolver.resolve_agent_async(
-            project_id, agent_id, session_id=session_id, run_overrides=run_overrides
-        )
-        working_project_id = await resolver.resolve_working_project_async(
-            project_id, agent, session_id=session_id
-        )
-        _reject_live_input(agent, run_kind)
-        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _ensure_provider_exists(self._dependencies.providers, provider_id)
-        manager = self._dependencies.run_manager
-        request = _RunRequest(
-            content=content,
-            run_overrides=run_overrides,
-            internal=internal,
-            input_origin=input_origin,
-            sender=sender,
-            reply_surface=reply_surface,
-            tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
-            tool_denial_resolver=tool_denial_resolver,
-            max_tool_iterations=max_tool_iterations,
-            input_persisted_hook=input_persisted_hook,
-            context_note=context_note,
-        )
-        if permission_ceiling is not None:
-            await self._dependencies.sessions.run_async(
-                resolver.join_session_ceiling, session.address, permission_ceiling
+        async with self._dependencies.run_manager.prepare_admission(
+            agent_id, project_id=project_id, session_id=session_id
+        ) as preparation:
+            _validate_run_tool_iteration_limit(max_tool_iterations)
+            session = await self._get_session_async(
+                agent_id, session_id, create_missing=False, project_id=project_id
             )
-        return await manager.enqueue(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
-            _QueuedRunExecutor(self, request),
-            display_content=_display_content_preview(content),
-            editable=queue_content_is_editable(content),
-            steerable=request.supports_steering and run_kind == RunKind.USER,
-            internal=internal,
-            waiting_work_admission=waiting_work_admission,
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                run_kind=run_kind,
-                contributes_to_agent_activity=contributes_to_agent_activity,
-                completion_activity=completion_activity,
-                schedule_id=schedule_id,
-                notification_policy=notification_policy,
-                expected_session_generation_id=session.generation_id,
-            ),
-        )
+            await self._reject_owner_managed_session(project_id, agent_id, session_id)
+            resolver = self._dependencies.agent_resolver
+            agent = await resolver.resolve_agent_async(
+                project_id, agent_id, session_id=session_id, run_overrides=run_overrides
+            )
+            working_project_id = await resolver.resolve_working_project_async(
+                project_id, agent, session_id=session_id
+            )
+            await preparation.bind_working_project(working_project_id)
+            _reject_live_input(agent, run_kind)
+            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            manager = self._dependencies.run_manager
+            request = _RunRequest(
+                content=content,
+                run_overrides=run_overrides,
+                internal=internal,
+                input_origin=input_origin,
+                sender=sender,
+                reply_surface=reply_surface,
+                tool_restriction=(
+                    tuple(tool_restriction) if tool_restriction is not None else None
+                ),
+                tool_denial_resolver=tool_denial_resolver,
+                max_tool_iterations=max_tool_iterations,
+                input_persisted_hook=input_persisted_hook,
+                context_note=context_note,
+            )
+            if permission_ceiling is not None:
+                await self._dependencies.sessions.run_async(
+                    resolver.join_session_ceiling, session.address, permission_ceiling
+                )
+            return await manager.enqueue(
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+                _QueuedRunExecutor(self, request),
+                display_content=_display_content_preview(content),
+                editable=queue_content_is_editable(content),
+                steerable=request.supports_steering and run_kind == RunKind.USER,
+                internal=internal,
+                waiting_work_admission=waiting_work_admission,
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    run_kind=run_kind,
+                    contributes_to_agent_activity=contributes_to_agent_activity,
+                    completion_activity=completion_activity,
+                    schedule_id=schedule_id,
+                    notification_policy=notification_policy,
+                    expected_session_generation_id=session.generation_id,
+                ),
+            )
 
     async def build_queue_update(
         self,
@@ -639,48 +645,54 @@ class ChatLoop:
         prompt blocks in the compacted request and the next prompt epoch; a
         child Session the Agent delegated to itself has neither.
         """
-        compaction_service = self._compaction_service
-        if compaction_service is None:
-            raise CompactionUnavailableError("Compaction is not available.")
+        async with self._dependencies.run_manager.prepare_admission(
+            agent_id, project_id=project_id, session_id=session_id
+        ) as preparation:
+            compaction_service = self._compaction_service
+            if compaction_service is None:
+                raise CompactionUnavailableError("Compaction is not available.")
 
-        session = await self._get_session_async(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        resolver = self._dependencies.agent_resolver
-        sessions = self._dependencies.sessions
-        binding = await _CHAT_TRANSFORM_WORKERS.run(sessions.temporary_binding, session.address)
-        if binding is None:
-            binding = await _CHAT_TRANSFORM_WORKERS.run(
-                sessions.temporary_agent_binding, project_id, agent_id
+            session = await self._get_session_async(
+                agent_id, session_id, create_missing=False, project_id=project_id
             )
-        agent = (
-            await resolver.resolve_temporary_agent_async(
-                binding.address, generation_id=binding.generation_id, session=session.address
+            resolver = self._dependencies.agent_resolver
+            sessions = self._dependencies.sessions
+            binding = await _CHAT_TRANSFORM_WORKERS.run(sessions.temporary_binding, session.address)
+            if binding is None:
+                binding = await _CHAT_TRANSFORM_WORKERS.run(
+                    sessions.temporary_agent_binding, project_id, agent_id
+                )
+            agent = (
+                await resolver.resolve_temporary_agent_async(
+                    binding.address, generation_id=binding.generation_id, session=session.address
+                )
+                if binding is not None
+                else await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
             )
-            if binding is not None
-            else await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
-        )
-        working_project_id = await resolver.resolve_working_project_async(
-            project_id, agent, session_id=session_id
-        )
-        return await self._dependencies.run_manager.start(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
-            lambda run: self._compaction_runs.execute_manual_run(
-                run,
-                agent,
-                session,
-                compaction_service,
-                instruction=instruction,
-                temporary_binding=(
-                    binding if binding is not None and binding.address == session.address else None
+            working_project_id = await resolver.resolve_working_project_async(
+                project_id, agent, session_id=session_id
+            )
+            await preparation.bind_working_project(working_project_id)
+            return await self._dependencies.run_manager.start(
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+                lambda run: self._compaction_runs.execute_manual_run(
+                    run,
+                    agent,
+                    session,
+                    compaction_service,
+                    instruction=instruction,
+                    temporary_binding=(
+                        binding
+                        if binding is not None and binding.address == session.address
+                        else None
+                    ),
                 ),
-            ),
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                contributes_to_agent_activity=binding is None,
-                expected_session_generation_id=session.generation_id,
-            ),
-        )
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    contributes_to_agent_activity=binding is None,
+                    expected_session_generation_id=session.generation_id,
+                ),
+            )
 
     async def compact_session(
         self,
@@ -752,133 +764,144 @@ class ChatLoop:
             raise ChatError("Continuation settings belong to another Session")
         if session_id is None and create_missing and new_session is None:
             new_session = _NewSession()
-        session = None
-        if new_session is None:
-            try:
-                session = await self._get_session_async(
-                    agent_id, session_id, create_missing=False, project_id=project_id
+        async with self._dependencies.run_manager.prepare_admission(
+            agent_id,
+            project_id=project_id,
+            session_id=new_session.session_id if new_session is not None else session_id,
+        ) as preparation:
+            session = None
+            if new_session is None:
+                try:
+                    session = await self._get_session_async(
+                        agent_id, session_id, create_missing=False, project_id=project_id
+                    )
+                except SessionNotFoundError:
+                    if not create_missing:
+                        raise
+            if session_id is not None:
+                await self._reject_owner_managed_session(project_id, agent_id, session_id)
+            if expected_session_generation_id is not None and (
+                session is None or session.generation_id != expected_session_generation_id
+            ):
+                raise SessionNotFoundError("The completion's Session was replaced")
+            if (
+                continuation_source is not None
+                and continuation_source.generation_id is not None
+                and (session is None or session.generation_id != continuation_source.generation_id)
+            ):
+                raise ChatError("The continuation's Session is no longer available")
+            resolver = self._dependencies.agent_resolver
+            if new_session is None:
+                agent = await resolver.resolve_agent_async(
+                    project_id, agent_id, session_id=session_id, run_overrides=run_overrides
                 )
-            except SessionNotFoundError:
-                if not create_missing:
-                    raise
-        if session_id is not None:
-            await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        if expected_session_generation_id is not None and (
-            session is None or session.generation_id != expected_session_generation_id
-        ):
-            raise SessionNotFoundError("The completion's Session was replaced")
-        if (
-            continuation_source is not None
-            and continuation_source.generation_id is not None
-            and (session is None or session.generation_id != continuation_source.generation_id)
-        ):
-            raise ChatError("The continuation's Session is no longer available")
-        resolver = self._dependencies.agent_resolver
-        if new_session is None:
-            agent = await resolver.resolve_agent_async(
-                project_id, agent_id, session_id=session_id, run_overrides=run_overrides
-            )
-            # A Session that does not exist yet (``create_missing``) starts in the
-            # Agent's default Project.
-            working_project_id = await resolver.resolve_working_project_async(
-                project_id, agent, session_id=session_id
-            )
-        else:
-            agent = await resolver.resolve_agent_async(
-                project_id,
-                agent_id,
-                new_session_overrides=new_session.agent_overrides,
-                run_overrides=run_overrides,
-            )
-            working_project_id = await resolver.resolve_working_project_async(
-                project_id, agent, requested=new_session.working_project_id
-            )
-        _reject_live_input(agent, run_kind)
-        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session_agent = agent
-        if run_overrides is not None and not run_overrides.is_empty:
-            # Capture ordinary defaults, never the temporary Run settings. A
-            # replaced Session Model need not be available for this Run.
-            session_agent = await resolver.resolve_agent_async(
-                project_id,
-                agent_id,
-                session_id=session_id if new_session is None else None,
-                new_session_overrides=new_session.agent_overrides if new_session else None,
-                require_model=False,
-            )
-        if new_session is not None:
-            session = await self._dependencies.sessions.create_async(
-                agent_id,
-                session_id=new_session.session_id,
-                project_id=project_id,
-                actor=new_session.actor,
-                metadata=new_session.metadata(session_agent, permission_ceiling),
-                working_project_id=_stored_working_project(project_id, working_project_id),
-            )
-        elif session is None:
-            session = await self._get_session_async(
-                agent_id,
-                session_id,
-                create_missing=create_missing,
-                project_id=project_id,
-                working_project_id=_stored_working_project(project_id, working_project_id),
-            )
-        if new_session is None:
-            await self._dependencies.sessions.run_async(
-                resolver.capture_session_settings, session.address, session_agent
-            )
-            if permission_ceiling is not None:
-                await self._dependencies.sessions.run_async(
-                    resolver.join_session_ceiling, session.address, permission_ceiling
+                # A Session that does not exist yet (``create_missing``) starts in the
+                # Agent's default Project.
+                working_project_id = await resolver.resolve_working_project_async(
+                    project_id, agent, session_id=session_id
                 )
-        if edit_message_id is not None:
-            if internal or not isinstance(content, str):
-                raise ChatError("history edits require visible plain-text content")
-            editable_session_message_index(await session.load_active_async(), edit_message_id)
-        manager = self._dependencies.run_manager
-        request = _RunRequest(
-            content=content,
-            run_overrides=run_overrides,
-            internal=internal,
-            input_origin=input_origin,
-            sender=sender,
-            reply_surface=reply_surface,
-            tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
-            tool_denial_resolver=tool_denial_resolver,
-            max_tool_iterations=max_tool_iterations,
-            input_persisted_hook=input_persisted_hook,
-            edit_message_id=edit_message_id,
-            context_note=context_note,
-        )
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id)
-        try:
-            return await manager.start(
-                address,
-                lambda run: self._execution._execute_run(run, request),
-                admission=RunAdmission(
-                    working_project_id=working_project_id,
-                    run_kind=run_kind,
-                    contributes_to_agent_activity=contributes_to_agent_activity,
-                    completion_activity=completion_activity,
-                    schedule_id=schedule_id,
-                    notification_policy=notification_policy,
-                    source_session_id=source_session_id,
-                    parent_source=(
-                        continuation_source.parent_source if continuation_source else None
-                    ),
-                    expected_session_generation_id=(
-                        expected_session_generation_id
-                        or (continuation_source.generation_id if continuation_source else None)
-                        or session.generation_id
-                    ),
-                ),
-            )
-        except BaseException:
-            # Another request may already have used the Session we just created.
+            else:
+                agent = await resolver.resolve_agent_async(
+                    project_id,
+                    agent_id,
+                    new_session_overrides=new_session.agent_overrides,
+                    run_overrides=run_overrides,
+                )
+                working_project_id = await resolver.resolve_working_project_async(
+                    project_id, agent, requested=new_session.working_project_id
+                )
+            await preparation.bind_working_project(working_project_id)
+            _reject_live_input(agent, run_kind)
+            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            session_agent = agent
+            if run_overrides is not None and not run_overrides.is_empty:
+                # Capture ordinary defaults, never the temporary Run settings. A
+                # replaced Session Model need not be available for this Run.
+                session_agent = await resolver.resolve_agent_async(
+                    project_id,
+                    agent_id,
+                    session_id=session_id if new_session is None else None,
+                    new_session_overrides=new_session.agent_overrides if new_session else None,
+                    require_model=False,
+                )
             if new_session is not None:
-                await self._discard_new_session(session)
-            raise
+                session = await self._dependencies.sessions.create_async(
+                    agent_id,
+                    session_id=new_session.session_id,
+                    project_id=project_id,
+                    actor=new_session.actor,
+                    metadata=new_session.metadata(session_agent, permission_ceiling),
+                    working_project_id=_stored_working_project(project_id, working_project_id),
+                )
+            elif session is None:
+                session = await self._get_session_async(
+                    agent_id,
+                    session_id,
+                    create_missing=create_missing,
+                    project_id=project_id,
+                    working_project_id=_stored_working_project(project_id, working_project_id),
+                )
+            if new_session is None:
+                await self._dependencies.sessions.run_async(
+                    resolver.capture_session_settings, session.address, session_agent
+                )
+                if permission_ceiling is not None:
+                    await self._dependencies.sessions.run_async(
+                        resolver.join_session_ceiling, session.address, permission_ceiling
+                    )
+            if edit_message_id is not None:
+                if internal or not isinstance(content, str):
+                    raise ChatError("history edits require visible plain-text content")
+                editable_session_message_index(await session.load_active_async(), edit_message_id)
+            manager = self._dependencies.run_manager
+            request = _RunRequest(
+                content=content,
+                run_overrides=run_overrides,
+                internal=internal,
+                input_origin=input_origin,
+                sender=sender,
+                reply_surface=reply_surface,
+                tool_restriction=(
+                    tuple(tool_restriction) if tool_restriction is not None else None
+                ),
+                tool_denial_resolver=tool_denial_resolver,
+                max_tool_iterations=max_tool_iterations,
+                input_persisted_hook=input_persisted_hook,
+                edit_message_id=edit_message_id,
+                context_note=context_note,
+            )
+            address = SessionAddress(
+                project_id=project_id, agent_id=agent_id, session_id=session.id
+            )
+            try:
+                return await manager.start(
+                    address,
+                    lambda run: self._execution._execute_run(run, request),
+                    admission=RunAdmission(
+                        working_project_id=working_project_id,
+                        run_kind=run_kind,
+                        contributes_to_agent_activity=contributes_to_agent_activity,
+                        completion_activity=completion_activity,
+                        schedule_id=schedule_id,
+                        notification_policy=notification_policy,
+                        source_session_id=source_session_id,
+                        parent_source=(
+                            continuation_source.parent_source if continuation_source else None
+                        ),
+                        expected_session_generation_id=(
+                            expected_session_generation_id
+                            or (continuation_source.generation_id if continuation_source else None)
+                            or session.generation_id
+                        ),
+                    ),
+                )
+            except BaseException:
+                # Another request may already have used the Session we just created.
+                if new_session is not None:
+                    await preparation.release()
+                    await self._discard_new_session(session)
+                raise
 
     async def _discard_new_session(self, session: ChatSession) -> None:
         """Remove a Session this start created for a Run it could not start (best effort)."""
@@ -916,42 +939,50 @@ class ChatLoop:
     ) -> Run:
         """Start one owner-authorized temporary Session through the normal Chat engine."""
 
-        current = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.temporary_binding, binding.address
-        )
-        if current != binding:
-            raise ChatError(
-                "This Session is no longer available. Check its state through its Extension."
-            )
-        agent = await self._dependencies.agent_resolver.resolve_temporary_agent_async(
-            binding.address, generation_id=binding.generation_id, session=binding.address
-        )
-        working_project_id = await self._dependencies.agent_resolver.resolve_working_project_async(
-            binding.address.project_id, agent, session_id=binding.address.session_id
-        )
-        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _ensure_provider_exists(self._dependencies.providers, provider_id)
-        await self._get_session_async(
+        async with self._dependencies.run_manager.prepare_admission(
             binding.address.agent_id,
-            binding.address.session_id,
-            create_missing=False,
             project_id=binding.address.project_id,
-        )
-        request = _RunRequest(
-            content=content,
-            temporary_binding=binding,
-            input_already_persisted=input_already_persisted,
-        )
-        return await self._dependencies.run_manager.start(
-            binding.address,
-            lambda run: self._execution._execute_run(run, request),
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                contributes_to_agent_activity=False,
-                owner=owner,
-                input_id=input_id,
-            ),
-        )
+            session_id=binding.address.session_id,
+        ) as preparation:
+            current = await _CHAT_TRANSFORM_WORKERS.run(
+                self._dependencies.sessions.temporary_binding, binding.address
+            )
+            if current != binding:
+                raise ChatError(
+                    "This Session is no longer available. Check its state through its Extension."
+                )
+            agent = await self._dependencies.agent_resolver.resolve_temporary_agent_async(
+                binding.address, generation_id=binding.generation_id, session=binding.address
+            )
+            working_project_id = (
+                await self._dependencies.agent_resolver.resolve_working_project_async(
+                    binding.address.project_id, agent, session_id=binding.address.session_id
+                )
+            )
+            await preparation.bind_working_project(working_project_id)
+            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            await self._get_session_async(
+                binding.address.agent_id,
+                binding.address.session_id,
+                create_missing=False,
+                project_id=binding.address.project_id,
+            )
+            request = _RunRequest(
+                content=content,
+                temporary_binding=binding,
+                input_already_persisted=input_already_persisted,
+            )
+            return await self._dependencies.run_manager.start(
+                binding.address,
+                lambda run: self._execution._execute_run(run, request),
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    contributes_to_agent_activity=False,
+                    owner=owner,
+                    input_id=input_id,
+                ),
+            )
 
     async def start_owned_continuation(
         self,
@@ -964,63 +995,69 @@ class ChatLoop:
         expected_session_generation_id: str | None = None,
     ) -> Run:
         """Continue a normal Session under an Extension-owned descendant Run."""
-        if not isinstance(content, str) or not content:
-            raise ChatError("owned continuation content is required")
-        if not isinstance(input_id, str) or not input_id:
-            raise ChatError("owned continuation input id is required")
-        parent = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.temporary_binding_by_participant,
-            owner_name=owner.extension,
-            group_id=owner.group_id,
-            participant_id=owner.participant_id,
-        )
-        if parent is not None and (
-            parent.address.agent_id != address.agent_id
-            or parent.address.project_id != address.project_id
-        ):
-            parent = None
-        agent = (
-            await self._dependencies.agent_resolver.resolve_temporary_agent_async(
-                parent.address, generation_id=parent.generation_id, session=address
+        async with self._dependencies.run_manager.prepare_admission(
+            address.agent_id, project_id=address.project_id, session_id=address.session_id
+        ) as preparation:
+            if not isinstance(content, str) or not content:
+                raise ChatError("owned continuation content is required")
+            if not isinstance(input_id, str) or not input_id:
+                raise ChatError("owned continuation input id is required")
+            parent = await _CHAT_TRANSFORM_WORKERS.run(
+                self._dependencies.sessions.temporary_binding_by_participant,
+                owner_name=owner.extension,
+                group_id=owner.group_id,
+                participant_id=owner.participant_id,
             )
-            if parent is not None
-            else await self._dependencies.agent_resolver.resolve_agent_async(
-                address.project_id, address.agent_id, session_id=address.session_id
+            if parent is not None and (
+                parent.address.agent_id != address.agent_id
+                or parent.address.project_id != address.project_id
+            ):
+                parent = None
+            agent = (
+                await self._dependencies.agent_resolver.resolve_temporary_agent_async(
+                    parent.address, generation_id=parent.generation_id, session=address
+                )
+                if parent is not None
+                else await self._dependencies.agent_resolver.resolve_agent_async(
+                    address.project_id, address.agent_id, session_id=address.session_id
+                )
             )
-        )
-        working_project_id = await self._dependencies.agent_resolver.resolve_working_project_async(
-            address.project_id, agent, session_id=address.session_id
-        )
-        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = await self._get_session_async(
-            address.agent_id,
-            address.session_id,
-            create_missing=False,
-            project_id=address.project_id,
-        )
-        if expected_session_generation_id not in (None, session.generation_id):
-            raise SessionNotFoundError("The completion's Session was replaced")
-        request = _RunRequest(
-            content=content,
-            internal=True,
-            input_persisted_hook=input_persisted_hook,
-            temporary_parent_binding=parent,
-        )
-        return await self._dependencies.run_manager.start(
-            address,
-            lambda run: self._execution._execute_run(run, request),
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                run_kind=RunKind.SYSTEM,
-                contributes_to_agent_activity=False,
-                owner=owner,
-                input_id=input_id,
-                expected_session_generation_id=(
-                    expected_session_generation_id or session.generation_id
+            working_project_id = (
+                await self._dependencies.agent_resolver.resolve_working_project_async(
+                    address.project_id, agent, session_id=address.session_id
+                )
+            )
+            await preparation.bind_working_project(working_project_id)
+            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            session = await self._get_session_async(
+                address.agent_id,
+                address.session_id,
+                create_missing=False,
+                project_id=address.project_id,
+            )
+            if expected_session_generation_id not in (None, session.generation_id):
+                raise SessionNotFoundError("The completion's Session was replaced")
+            request = _RunRequest(
+                content=content,
+                internal=True,
+                input_persisted_hook=input_persisted_hook,
+                temporary_parent_binding=parent,
+            )
+            return await self._dependencies.run_manager.start(
+                address,
+                lambda run: self._execution._execute_run(run, request),
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    run_kind=RunKind.SYSTEM,
+                    contributes_to_agent_activity=False,
+                    owner=owner,
+                    input_id=input_id,
+                    expected_session_generation_id=(
+                        expected_session_generation_id or session.generation_id
+                    ),
                 ),
-            ),
-        )
+            )
 
     async def _reject_owner_managed_session(
         self, project_id: str | None, agent_id: str, session_id: str

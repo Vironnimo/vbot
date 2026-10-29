@@ -6,6 +6,8 @@ Task-gated reference for the `video_generation` Task Model and OpenRouter Video 
 
 `core/model_tasks/video.py` owns binding resolution, exact configured-Model capability validation, local frame-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/video_providers.py` owns OpenRouter's asynchronous `POST /videos` -> same-origin job polling -> authenticated content download wire. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
 
+A Connection or Account that disappears during client preparation is a `VideoConfigurationError`, preserving the Tool's unavailable-Model guidance before any create request is sent.
+
 ## Discovery and Options
 
 OpenRouter's ordinary `output_modalities=video` catalog supplies the coarse `video_generation` task tag. The dedicated `/videos/models` catalog is an independent fail-soft enrichment source for exact resolutions, aspect ratios, sizes, durations, frame-image positions, audio generation, seed support, and passthrough keys. Dedicated-catalog-only entries become minimal non-chat Models. Targets need a published `duration` choice and exclude router Models. `VideoProfile` decides the per-call Tool fields and validates their values (`model_tasks/media-profiles.md`); the service rejects unsupported values with the offered choices (`VideoOptionError`, `invalid_arguments`). A requested aspect ratio or resolution drops the Settings `size`.
@@ -21,6 +23,8 @@ OpenRouter has no endpoint to cancel or delete a job (only submit, poll and down
 Non-null job statuses must be strings before polling logic inspects them. Malformed initial statuses retain outcome-unknown classification; malformed poll statuses fail as ordinary non-retryable Provider errors without resubmission. Missing/null statuses and unknown string values remain pending rather than claiming an unverified terminal meaning.
 
 Durable `video_generation` accounting starts at each create POST attempt. Poll responses may enrich the accepted create call with reported Usage; status and content GETs never add Model calls. Consumption survives a failed download or artifact write. Tool callers pass their internal execution scope; absent Provider counters or costs remain unknown. `test_task_usage.py` covers polling enrichment followed by download failure, and a cancelled generation whose job later reports its cost or is logged by id at shutdown.
+
+Shutdown cancels the owned status polls directly and drains their cost watchers, including a watcher that has not started yet. Caller cancellation cannot finish service shutdown while an adopted poll still runs.
 
 ## Tests
 

@@ -12,6 +12,8 @@ import core.tools.shell_environment as shell_environment
 import core.tools.terminal as terminal_module
 import core.tools.terminal_manager as manager_module
 from core.permissions import PermissionBoundary
+from core.projects import ProjectStore
+from core.tools import _workdir
 from core.tools._terminal_permissions import permission_scope
 from core.tools._terminal_shell_state import ShellState
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
@@ -22,6 +24,7 @@ from tests.core.permissions.command_check_support import (
     plan,
     restricted,
 )
+from tests.core.tools.shell_test_support import FakeProjects
 from tests.core.tools.terminal_helpers import call, make_context, manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
 
@@ -113,6 +116,44 @@ async def test_a_restricted_start_launches_nothing_the_rules_refuse(
     assert refused["error"]["code"] == "permission_denied"
     assert fragment in refused["error"]["message"]
     assert terminal.factory.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["default", "project", "path"])
+async def test_a_denied_workdir_is_refused_before_its_status_is_probed(
+    manager: tuple[TerminalManager, AdapterFactory],
+    work: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: str,
+) -> None:
+    probed: list[object] = []
+    original_is_dir = Path.is_dir
+
+    def is_dir(path: Path, **kwargs: Any) -> bool:
+        if path == work:
+            probed.append(path)
+            return False
+        return original_is_dir(path, **kwargs)
+
+    def unavailable(path: object) -> bool:
+        probed.append(path)
+        return False
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    monkeypatch.setattr(_workdir, "cwd_exists", unavailable)
+    arguments: JsonObject = {"action": "start", "command": "fake-tui"}
+    if selection != "default":
+        arguments["workdir"] = "project:private" if selection == "project" else str(work)
+    terminal_manager, factory = manager
+    result = await call(
+        terminal_manager,
+        make_context(work, permissions=restricted(work, deny=["Read({workdir})"])),
+        arguments,
+        projects=cast(ProjectStore, FakeProjects({"private": work})),
+    )
+    assert result["error"]["code"] == "permission_denied"
+    assert probed == []
+    assert factory.calls == []
 
 
 @pytest.mark.asyncio

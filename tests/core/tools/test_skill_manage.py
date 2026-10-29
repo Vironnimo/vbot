@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -78,6 +79,7 @@ class _Harness:
         self.shared: set[str] = set()
         # When each Run started, by Run id.
         self.run_started: dict[str, str] = {}
+        self.subject_created_at: dict[str, str] = {}
         # What names a Skill a merge deletes, which of it cannot move, and each
         # merge: owner, Skill, absorbing Skill and whether the delete succeeded.
         self.references: tuple[SkillReference, ...] = ()
@@ -101,6 +103,7 @@ class _Harness:
                 else (scopes or {}).get(name, "shared" if name in self.shared else None)
             ),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
+            resolve_subject_created_at=self.subject_created_at.get,
             run_started_at=self.run_started.get,
             follow_merge=self.follow_merge,
             resolve_global_skills_dir=lambda: self.global_home,
@@ -199,6 +202,22 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
     create = service.create
+    guarded = False
+    subject_created_at = "2026-10-29T12:00:00.000000Z"
+
+    @contextmanager
+    def lifecycle_guard() -> Iterator[None]:
+        nonlocal guarded
+        guarded = True
+        try:
+            yield
+        finally:
+            guarded = False
+
+    def creation_identity(agent_id: str) -> str:
+        assert guarded and agent_id == "main"
+        assert threading.get_ident() != loop_thread
+        return subject_created_at
 
     def blocked_create(*args: Any, **kwargs: Any) -> Any:
         loop.call_soon_threadsafe(entered.set)
@@ -208,7 +227,14 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
 
     monkeypatch.setattr(service, "create", blocked_create)
     home = tmp_path / "skills"
-    register_skill_manage_tool(registry, service, lambda _: home, invalidated.append)
+    register_skill_manage_tool(
+        registry,
+        service,
+        lambda _: home,
+        invalidated.append,
+        lifecycle_guard=lifecycle_guard,
+        resolve_subject_created_at=creation_identity,
+    )
     task = asyncio.create_task(
         registry.dispatch(
             _context("main", tmp_path),
@@ -444,6 +470,11 @@ def test_background_reviews_change_and_merge_unpinned_skills(
     tmp_path: Path, caller: str, review: RunKind, actor: str
 ) -> None:
     harness = _Harness(tmp_path)
+    harness.subject_created_at.update(
+        main="2026-10-29T12:00:00.000000Z",
+        owner="2026-10-29T13:00:00.000000Z",
+        librarian="2026-10-29T14:00:00.000000Z",
+    )
     harness.create(name="old")
     # Who created a Skill does not limit background writers, nor does sharing it.
     harness.authoring.create(
@@ -488,6 +519,9 @@ def test_background_reviews_change_and_merge_unpinned_skills(
         review.value,
         "session-one",
     )
+    shared_revision = harness.authoring.history(harness.home("owner"), "deploy")[0]
+    for recorded in (revision, shared_revision):
+        assert recorded.subject_created_at == harness.subject_created_at["main"]
 
 
 def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
@@ -1241,6 +1275,7 @@ def test_global_skills_outside_the_global_home_stay_read_only(
 
 def test_publish_moves_an_own_skill_into_the_global_home(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
+    harness.subject_created_at["main"] = "2026-10-29T12:00:00.000000Z"
     harness.create(name="notes")
     harness.run(
         {
@@ -1268,6 +1303,9 @@ def test_publish_moves_an_own_skill_into_the_global_home(tmp_path: Path) -> None
         ("references/more.md", "created", 1, 0),
     ]
     assert (harness.invalidated, harness.global_reloads) == ([None], 1)
+    for home in (harness.home("main"), harness.global_home):
+        latest = harness.authoring.history(home, "notes")[0]
+        assert latest.subject_created_at == harness.subject_created_at["main"]
 
 
 @pytest.mark.parametrize(

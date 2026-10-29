@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+from core.skills import authoring as authoring_module
 from core.skills.authoring import (
     HUMAN_WRITER,
     PROVENANCE_AUTHOR_KEY,
@@ -68,6 +69,31 @@ def test_create_writes_an_lf_document_the_registry_loads(
     assert SkillRegistry.load(root).get("demo").description == "Do a demo task."
     with pytest.raises(SkillAuthoringError):
         service.create(root, "demo", skill_document(), writer=AGENT)
+
+
+@pytest.mark.parametrize("outside_file", [False, True])
+def test_failed_create_removes_only_its_empty_directory(
+    service: SkillAuthoringService,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outside_file: bool,
+) -> None:
+    package = root / "demo"
+
+    def fail_write(path: Path, _text: str, _ending: str) -> None:
+        if outside_file:
+            (path.parent / "user-notes.txt").write_bytes(b"Later user data.\n")
+        raise OSError("controlled creation failure")
+
+    monkeypatch.setattr(authoring_module, "_atomic_write_styled", fail_write)
+    with pytest.raises(OSError):
+        service.create(root, "demo", skill_document(), writer=AGENT)
+
+    assert service.recorded_revisions(root) == []
+    if outside_file:
+        assert (package / "user-notes.txt").read_bytes() == b"Later user data.\n"
+    else:
+        assert not package.exists()
 
 
 def test_provenance_is_stamped_into_vbot_metadata_beside_requirements(

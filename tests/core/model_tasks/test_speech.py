@@ -35,6 +35,7 @@ from core.model_tasks.speech_local import LocalSpeechExecutionError
 from core.model_tasks.speech_types import SpeechAudioCallback, SpeechAudioChunk, SpeechBusyError
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
+from core.utils.errors import ConfigError
 
 
 @pytest.mark.asyncio
@@ -595,30 +596,44 @@ async def test_provider_input_rejection_remains_an_input_error_without_sending(
 
 
 @pytest.mark.asyncio
-async def test_transcribe_logs_provider_error_at_warning_without_traceback(
+@pytest.mark.parametrize("operation", ["transcribe", "synthesize"])
+@pytest.mark.parametrize("preparation_failure", [False, True])
+async def test_speech_logs_provider_error_at_warning_without_traceback(
     tmp_path: Path,
     caplog: Any,
+    operation: str,
+    preparation_failure: bool,
 ) -> None:
-    """A provider :class:`ProviderError` (a VBotError) logs at warning, no traceback."""
+    """Provider preparation and execution failures share the Speech error boundary."""
 
-    service = SpeechService(_ProviderSttModelTasks(), cast(Any, object()), tmp_path)
+    model_tasks = (
+        _ProviderSttModelTasks() if operation == "transcribe" else _ProviderTtsModelTasks()
+    )
+    service = SpeechService(model_tasks, cast(Any, object()), tmp_path)
     failing_client = _FailingProviderSpeechClient(ProviderError("rate limited"))
+    failure = "Account removed" if preparation_failure else "rate limited"
 
     try:
         with (
             patch(
                 "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
                 return_value=failing_client,
+                side_effect=ConfigError(failure) if preparation_failure else None,
             ),
             caplog.at_level(logging.WARNING, logger="vbot.speech"),
-            pytest.raises(SpeechExecutionError, match="rate limited"),
+            pytest.raises(SpeechExecutionError, match=failure),
         ):
-            await service.transcribe(_wav_audio_bytes())
+            if operation == "transcribe":
+                await service.transcribe(_wav_audio_bytes())
+            else:
+                await service.synthesize("hello")
     finally:
         await service.aclose()
 
-    relevant = [r for r in caplog.records if "Speech transcription failed" in r.getMessage()]
-    assert relevant, "expected a log record for the failed transcription"
+    relevant = [
+        r for r in caplog.records if "Speech " in r.getMessage() and " failed" in r.getMessage()
+    ]
+    assert relevant, "expected a log record for the failed Speech request"
     assert all(r.levelno == logging.WARNING for r in relevant)
     assert all(r.exc_info is None for r in relevant)
 

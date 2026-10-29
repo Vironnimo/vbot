@@ -88,7 +88,14 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
     automation = runtime._automation_references
     sessions = runtime._chat_sessions
     agents = runtime._agents
-    if authoring is None or automation is None or sessions is None or agents is None:
+    learning = runtime._learning_changes
+    if (
+        authoring is None
+        or automation is None
+        or sessions is None
+        or agents is None
+        or learning is None
+    ):
         raise RuntimeError("Librarian services are not available")
     # The Agent and Project stores satisfy the directory protocols structurally.
     usage = StatisticsService(
@@ -106,6 +113,7 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
     return LibrarianService(
         runtime,
         authoring=authoring,
+        learning=learning,
         skills_dir=runtime.agent_skills_dir,
         skill_usage=usage.skill_package_usage_async,
         triggered_skill_names=automation.agent_triggered_skill_names,

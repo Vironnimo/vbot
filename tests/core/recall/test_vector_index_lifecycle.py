@@ -9,7 +9,12 @@ import pytest
 
 from core.chat import ChatMessage
 from core.database import create_data_snapshot, restore_data_snapshot
-from core.recall import RecallBackendContext, VectorRecallBackend, _passage_catalog
+from core.recall import (
+    RecallBackendContext,
+    RecallSearchError,
+    VectorRecallBackend,
+    _passage_catalog,
+)
 from core.recall.passages import build_session_passages
 from core.recall.vector import SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
@@ -139,9 +144,8 @@ async def test_a_restored_history_replaces_the_passages_of_discarded_turns(
     recall = backend(sessions)
     try:
         await embed_documents(recall.index, sessions, embeddings)
-        assert any(
-            "broke down" in hit.text for hit in (await recall.search_page(request("car"))).hits
-        )
+        first = await recall.search_page(request("car"))
+        assert any("broke down" in hit.text for hit in first.hits)
     finally:
         recall.close()
     projected = sessions.list_history_versions([session.address])[session.address]
@@ -159,6 +163,9 @@ async def test_a_restored_history_replaces_the_passages_of_discarded_turns(
         )
         assert restored.list_history_versions([session.address])[session.address] == projected
         await embed_documents(recall.index, restored, embeddings)
+        with pytest.raises(RecallSearchError) as error:
+            await recall.search_page(request("car", offset=1, snapshot_id=first.snapshot_id))
+        assert error.value.code == "stale_cursor"
         page = await recall.search_page(request("car"))
         current = build_session_passages(restored.get(session.address).load_active())
     finally:

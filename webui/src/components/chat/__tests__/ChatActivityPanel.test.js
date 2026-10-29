@@ -154,6 +154,15 @@ const SAVED_CHANGES = [
   },
   {
     store: 'skill',
+    kind: 'changed',
+    revisions: [3],
+    undone: false,
+    skill: 'deploy',
+    skill_owner_id: 'release',
+    files: ['SKILL.md'],
+  },
+  {
+    store: 'skill',
     kind: 'archived',
     revisions: [9],
     undone: true,
@@ -829,12 +838,12 @@ describe('ChatActivityPanel', () => {
     const rows = reviewRows([
       {
         runId: 'saved',
-        outcome: { memory: 1, skills: 2, undone: false },
+        outcome: { memory: 1, skills: 3, undone: false },
         details: { changes: SAVED_CHANGES },
       },
       {
         runId: 'undone',
-        outcome: { memory: 1, skills: 2, undone: true },
+        outcome: { memory: 1, skills: 3, undone: true },
         details: { changes: SAVED_CHANGES },
       },
       {
@@ -878,6 +887,7 @@ describe('ChatActivityPanel', () => {
     ).toEqual([
       'Added User Memory Prefers short answers.',
       'Created deploy SKILL.md, references/hosts.md',
+      'Changed deploy (release) SKILL.md',
       'Archived old-deploy Undone Merged into deploy · Planned moves: calendar event “Weekly review”. Individual moves can fail.',
     ]);
 

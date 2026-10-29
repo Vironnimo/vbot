@@ -1256,6 +1256,36 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     assert "rtc_1" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_stopping_the_voice_run_while_connecting_cancels_the_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opening = asyncio.Event()
+    wire_closed = asyncio.Event()
+
+    async def open_wire(*args: Any, **kwargs: Any) -> FakeWire:
+        opening.set()
+        try:
+            await asyncio.Event().wait()
+            raise AssertionError("A stopped start must not create a Live call")
+        finally:
+            wire_closed.set()
+
+    monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
+    service, chat = _service()
+    host = FakeHost()
+    starting = asyncio.create_task(service.start_call(media="webrtc", offer_sdp=OFFER, host=host))
+    await opening.wait()
+    voice = chat.voices[0]
+    assert voice.on_cancel is not None
+    voice.on_cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+    assert wire_closed.is_set()
+    assert voice.discarded
+    assert host.updates == []
+
+
 _VOICE_NAMES = ["overview", "end_call"]
 
 

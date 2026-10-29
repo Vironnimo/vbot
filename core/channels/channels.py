@@ -280,6 +280,7 @@ class ChannelService:
         buttons: list[list[InteractionButton]] | None = None,
         run_origin: RouteFacts | None = None,
         expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         await _delivery.send(
@@ -292,6 +293,7 @@ class ChannelService:
             buttons=buttons,
             run_origin=run_origin,
             expected_agent_id=expected_agent_id,
+            expected_platform=expected_platform,
         )
 
     async def relay_completion_run(self, run: Run, reply_surface: ReplySurface) -> None:
@@ -325,6 +327,8 @@ class ChannelService:
         *,
         thread_id: str | None = None,
         skip_session_id: str | None = None,
+        expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> bool:
         """Add a Note about a message sent to one chat to the Session mirroring that chat.
 
@@ -339,6 +343,8 @@ class ChannelService:
             note,
             thread_id=thread_id,
             skip_session_id=skip_session_id,
+            expected_agent_id=expected_agent_id,
+            expected_platform=expected_platform,
         )
 
     async def ensure_outbound_session(

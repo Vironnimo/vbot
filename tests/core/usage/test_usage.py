@@ -11,7 +11,12 @@ from pathlib import Path
 import pytest
 
 from core.chat.messages import ChatMessage
-from core.database import create_data_snapshot, restore_data_snapshot, write_bootstrap_marker
+from core.database import (
+    DatabaseUnavailableError,
+    create_data_snapshot,
+    restore_data_snapshot,
+    write_bootstrap_marker,
+)
 from core.model_tasks.image import ImageExecutionError
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import NetworkError, ProviderRateLimitError, ProviderUsageLimitError
@@ -151,7 +156,10 @@ async def test_accounting_returns_but_never_stores_producer_usage_metadata(recor
 
 
 @pytest.mark.asyncio
-async def test_settlement_records_duration_and_only_a_failure_keeps_its_class(tmp_path):
+@pytest.mark.parametrize("retry", [False, True], ids=["first-write", "retried-write"])
+async def test_settlement_records_duration_and_only_a_failure_keeps_its_class(
+    tmp_path, monkeypatch, retry
+):
     write_bootstrap_marker(tmp_path)
     now = [100.0]
     owner = UsageRecorder(tmp_path / "model-usage.db", clock=lambda: now[0])
@@ -166,6 +174,21 @@ async def test_settlement_records_duration_and_only_a_failure_keeps_its_class(tm
         error.status_code = 529
         await owner.finish(failed, status="failed", failure=error)
         await owner.finish(cancelled, status="cancelled", failure=error)
+        if retry:
+            write = owner.database.write
+
+            def failed_write(operation):
+                def fail(connection):
+                    operation(connection)
+                    raise DatabaseUnavailableError("test settlement rollback")
+
+                return write(fail)
+
+            with monkeypatch.context() as blocked:
+                blocked.setattr(owner.database, "write", failed_write)
+                with pytest.raises(DatabaseUnavailableError):
+                    await owner.finish(completed, failure=error)
+            now[0] += 60
         await owner.finish(completed, failure=error)
         now[0] += 60
         # A repeated settlement keeps the first duration.

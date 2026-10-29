@@ -151,6 +151,25 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         )
         command_parser.add_argument("id", metavar="<job-id>", help=f"Cron job id to {command}")
 
+    retry_parser = _add_command_parser(
+        cron_subparsers,
+        "retry-delivery",
+        "Retry retained messages after checking the chat for an uncertain send",
+        example="cron retry-delivery <job-id>",
+    )
+    retry_parser.epilog = (
+        "With --channel and --chat, select a destination for pending messages blocked by an "
+        "unknown or changed platform, including completed jobs. Other messages and the job's "
+        "future destination stay unchanged. Without a destination, retry the original targets; "
+        "check the chat first because an uncertain send may already be visible. "
+        "Prints the retry request and retained counts. Exit 0 on acceptance, 1 on refusal."
+    )
+    retry_parser.add_argument("id", metavar="<job-id>", help="Cron job id from vbot cron list")
+    _add_cron_chat_arguments(retry_parser)
+    retry_parser.add_argument(
+        "--json", action="store_true", help="Print the complete result as JSON"
+    )
+
     secret_parser = _add_command_parser(
         cron_subparsers, "secret", CRON_HELP["secret"], example="cron secret <job-id>"
     )
@@ -310,6 +329,10 @@ def _add_cron_delivery_arguments(parser: argparse.ArgumentParser, *, update: boo
             f"--chat) or none (the answer stays in the Run's Session). {omit}"
         ),
     )
+    _add_cron_chat_arguments(parser)
+
+
+def _add_cron_chat_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--channel",
         metavar="<channel-id>",

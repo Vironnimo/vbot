@@ -46,7 +46,9 @@
   let version = 0;
   let disposed = false;
 
-  let scope = $derived(`agent:${agent.id}`);
+  // A navigation can change the prop before its effect clears the old status.
+  // Every revision still belongs to the Agent whose status supplied it.
+  let subjectId = $derived(status?.agent_id || loadedId || agent.id);
   let settings = $derived(status?.settings ?? {});
   let lastPass = $derived(status?.last_pass ?? null);
   let changes = $derived(
@@ -164,12 +166,14 @@
   // Each change links to its Skill's history, or to the archive when the
   // Skill is archived now; a purged Skill stays plain text.
   function changeTarget(revision) {
+    const scope = `agent:${revision.skill_owner_id || subjectId}`;
+    const name = changeName(revision);
     const entry = inventory.find(
       (item) => item.editable_scope === scope && item.name === revision.skill,
     );
     if (entry)
       return {
-        label: t('skills.librarian.openHistory', { name: revision.skill }),
+        label: t('skills.librarian.openHistory', { name }),
         open: () => onOpenHistory(entry),
       };
     if (
@@ -178,10 +182,16 @@
       )
     )
       return {
-        label: t('skills.librarian.openArchived', { name: revision.skill }),
+        label: t('skills.librarian.openArchived', { name }),
         open: () => onOpenArchived(revision.skill),
       };
     return null;
+  }
+
+  function changeName(revision) {
+    return revision.skill_owner_id
+      ? `${revision.skill} (${revision.skill_owner_id})`
+      : revision.skill;
   }
 </script>
 
@@ -301,7 +311,7 @@
           >{t('skills.librarian.changes', { count: changes.length })}</summary
         >
         <ol class="skills-history">
-          {#each changes as revision (revision.id)}
+          {#each changes as revision (`${revision.skill_owner_id || subjectId}:${revision.id}`)}
             {@const target = changeTarget(revision)}
             <li class="skills-history__item" data-revision-id={revision.id}>
               <div class="skills-history__head">
@@ -311,10 +321,12 @@
                     type="button"
                     class="skills-librarian__skill"
                     aria-label={target.label}
-                    onclick={target.open}>{revision.skill}</button
+                    onclick={target.open}>{changeName(revision)}</button
                   >
                 {:else}
-                  <span class="skills-librarian__skill">{revision.skill}</span>
+                  <span class="skills-librarian__skill"
+                    >{changeName(revision)}</span
+                  >
                 {/if}
                 <span class="skills-history__what"
                   >{skillRevisionText(revision)}</span
@@ -329,12 +341,9 @@
         <Button
           variant="secondary"
           class="skills-librarian__revert"
-          disabled={busy}
-          onClick={() =>
-            onRevertPass(
-              scope,
-              changes.map((revision) => revision.id),
-            )}>{t('skills.revert.togetherAction')}</Button
+          disabled={busy || status.running || !lastPass.started_at}
+          onClick={() => onRevertPass(subjectId, lastPass.started_at)}
+          >{t('skills.revert.togetherAction')}</Button
         >
       </details>
     {:else}

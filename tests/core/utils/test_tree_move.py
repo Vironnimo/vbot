@@ -143,21 +143,31 @@ def test_move_tree_leaves_the_source_whole_while_a_program_holds_a_file_open(
     assert not (tmp_path / "moved").exists()
 
 
-@pytest.mark.parametrize("destination", ["existing", "inside-source"])
+@pytest.mark.parametrize("destination", ["existing", "inside-source", "appeared-during-move"])
 def test_move_tree_refuses_a_destination_that_cannot_hold_the_tree(
-    tmp_path: Path, destination: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, destination: str
 ) -> None:
     source = make_tree(tmp_path / "source")
     expected = contents(source)
-    target = tmp_path / "existing" if destination == "existing" else source / "sub" / "moved"
+    target = source / "sub" / "moved" if destination == "inside-source" else tmp_path / "existing"
     target.parent.mkdir(exist_ok=True)
     if destination == "existing":
         target.mkdir()
+    if destination == "appeared-during-move":
+
+        def cross_volume(_source: Path, destination: Path) -> None:
+            destination.mkdir()
+            (destination / "later.txt").write_text("independent later data", encoding="utf-8")
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        monkeypatch.setattr(tree_move, "_replace", cross_volume)
 
     with pytest.raises(OSError):
         move_tree(source, target)
 
     assert contents(source) == expected
+    if destination == "appeared-during-move":
+        assert contents(target) == {"later.txt": "independent later data"}
 
 
 def test_move_tree_keeps_the_copy_when_the_original_cannot_be_fully_deleted(

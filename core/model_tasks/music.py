@@ -28,7 +28,7 @@ from core.model_tasks.task_execution import (
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.errors import TaskError, VBotError
+from core.utils.errors import ConfigError, TaskError, VBotError
 
 
 class MusicError(TaskError):
@@ -136,14 +136,17 @@ class MusicService:
             )
         images = await asyncio.to_thread(load_image_inputs, source_paths)
 
-        client = await ProviderMusicClient.from_runtime_async(
-            self._runtime,
-            target_ref,
-            usage_observer=TaskUsage(
-                self._usage_recorder, TASK_MUSIC_GENERATION, target_ref, context=usage_context
-            ),
-            debug_context=task_debug_context(usage_context, target_ref, streaming=True),
-        )
+        try:
+            client = await ProviderMusicClient.from_runtime_async(
+                self._runtime,
+                target_ref,
+                usage_observer=TaskUsage(
+                    self._usage_recorder, TASK_MUSIC_GENERATION, target_ref, context=usage_context
+                ),
+                debug_context=task_debug_context(usage_context, target_ref, streaming=True),
+            )
+        except (ConfigError, KeyError) as exc:
+            raise MusicConfigurationError(str(exc)) from exc
         try:
             return await client.generate(
                 normalized_prompt,

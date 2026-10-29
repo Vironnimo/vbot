@@ -6,6 +6,7 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -159,10 +160,18 @@ async def test_skill_scan_cannot_publish_across_runtime_shutdown(
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
-    older = asyncio.create_task(runtime.reload_skills_async())
+    previous = runtime.storage.load_settings()
+    runtime.storage.update_settings_sections({"server": {"timezone": "Asia/Tokyo"}})
+    current = runtime.storage.load_settings()
+    timezone_reload = Mock(wraps=runtime.reload_timezone)
+    monkeypatch.setattr(runtime, "reload_timezone", timezone_reload)
+    older = asyncio.create_task(
+        runtime.apply_settings_change(previous, current, refresh_sections=("skills",))
+    )
     try:
         await asyncio.wait_for(entered.wait(), 5)
         runtime.skill_policy.set_package_disabled(RELOADED_PACKAGE, disabled=True)
+        runtime.storage.update_settings_sections({"server": {"timezone": "Europe/Berlin"}})
         if shutdown == "stop":
             runtime.stop()
         else:
@@ -172,6 +181,7 @@ async def test_skill_scan_cannot_publish_across_runtime_shutdown(
             latest = runtime.skills
         release.set()
         await asyncio.wait_for(older, 5)
+        timezone_reload.assert_not_called()
         if restart:
             assert runtime.skills is latest
             with pytest.raises(KeyError):

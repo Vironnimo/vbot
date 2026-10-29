@@ -695,13 +695,19 @@ def _write_scopes(
     written: list[MemoryScope] = []
     try:
         for scope, path in paths.items():
-            _write_entries(path, entries[scope])
+            # A durability failure can follow the successful atomic replacement.
+            # Include this attempt; restoring unchanged original bytes is a no-op.
             written.append(scope)
+            _write_entries(path, entries[scope])
     except Exception as failure:
         unrestored: list[MemoryScope] = []
         for scope in written:
             try:
-                _restore_file(paths[scope], originals[scope])
+                _restore_file(
+                    paths[scope],
+                    originals[scope],
+                    _render_entries_file(entries[scope]).encode("utf-8"),
+                )
             except MemoryError:
                 unrestored.append(scope)
         if unrestored:
@@ -709,8 +715,13 @@ def _write_scopes(
         raise
 
 
-def _restore_file(path: Path, content: bytes | None) -> None:
-    """Put back a memory file's earlier *content*, or remove a file that did not exist."""
+def _restore_file(path: Path, content: bytes | None, written: bytes) -> None:
+    """Restore our write only while no newer outside change has replaced it."""
+    current = _read_file(path)
+    if current == content:
+        return
+    if current != written:
+        raise MemoryError(f"memory file changed before it could be restored: {path}")
     try:
         if content is None:
             path.unlink(missing_ok=True)

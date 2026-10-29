@@ -372,10 +372,10 @@ class SpeechService:
 
         if progress is not None:
             progress.update("synthesizing")
-        provider_client = await ProviderSpeechClient.from_runtime_async(
-            self._runtime, target_ref, usage_observer=usage
-        )
         try:
+            provider_client = await ProviderSpeechClient.from_runtime_async(
+                self._runtime, target_ref, usage_observer=usage
+            )
             return await provider_client.synthesize(
                 normalized_text,
                 options=options,

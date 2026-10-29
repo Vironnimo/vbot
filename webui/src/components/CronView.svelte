@@ -3,6 +3,7 @@
   import NotificationPolicySelect from './sessions/NotificationPolicySelect.svelte';
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
   import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
+  import CronDeliveryRetryDialog from './cron/CronDeliveryRetryDialog.svelte';
   import CronWatchSettings from './cron/CronWatchSettings.svelte';
   import CronWebhookSettings from './cron/CronWebhookSettings.svelte';
   import CronExecutionSettings from './cron/CronExecutionSettings.svelte';
@@ -121,6 +122,7 @@
   let viewState = $state(createCronViewState());
   let category = $state(SCHEDULES);
   let expandedJobs = $state({});
+  let deliveryRepairJob = $state(null);
 
   // Project teams power the project-agent options in the cron dropdown. They are
   // loaded lazily the first time the detail pane renders a form (one
@@ -916,6 +918,15 @@
                     {:else if editor.selectedJob.delivery_progress.error}
                       <p>{editor.selectedJob.delivery_progress.error}</p>
                     {/if}
+                    {#if editor.selectedJob.delivery_progress.platform_blocked}
+                      <p>
+                        {t('cron.delivery.platformBlocked', {
+                          count:
+                            editor.selectedJob.delivery_progress
+                              .platform_blocked,
+                        })}
+                      </p>
+                    {/if}
                     {#if editor.selectedJob.delivery_progress.dropped}
                       <p>
                         {t('cron.delivery.dropped', {
@@ -932,6 +943,14 @@
                       ? t('cron.delivery.checkedRetry')
                       : t('cron.delivery.retry')}
                   </Button>
+                  {#if editor.selectedJob.delivery_progress.platform_blocked}
+                    <Button
+                      disabled={Boolean(editor.mutatingJobId)}
+                      onClick={() => (deliveryRepairJob = editor.selectedJob)}
+                    >
+                      {t('cron.delivery.chooseTarget')}
+                    </Button>
+                  {/if}
                 </Banner>
               {/if}
               {#if editor.selectedJob.last_error}
@@ -1130,6 +1149,14 @@
       {/key}
     {/if}
   </div>
+
+  {#if deliveryRepairJob}
+    <CronDeliveryRetryDialog
+      job={deliveryRepairJob}
+      onRetry={(delivery) => editor.retryDelivery(deliveryRepairJob, delivery)}
+      onClose={() => (deliveryRepairJob = null)}
+    />
+  {/if}
 
   {#if editor.deleteConfirmJob}
     <ConfirmDialog

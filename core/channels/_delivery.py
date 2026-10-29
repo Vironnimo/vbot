@@ -124,6 +124,7 @@ async def send(
     buttons: list[list[InteractionButton]] | None = None,
     run_origin: RouteFacts | None = None,
     expected_agent_id: str | None = None,
+    expected_platform: str | None = None,
 ) -> None:
     """Delegate an outbound send to a running channel adapter."""
     normalized_id = _normalize_channel_id(channel_id)
@@ -160,12 +161,7 @@ async def send(
     sending = False
     try:
         adapter = service._connections.active_adapter(normalized_id)
-        if expected_agent_id is not None:
-            # Capture and validate the transport's own immutable config without an
-            # await between them: an earlier caller preflight may have gone stale.
-            config = service._connections.active_engine(normalized_id).config
-            if config.agent_id != expected_agent_id:
-                raise ChannelConfigError("The Channel now belongs to another Agent")
+        _check_expected_identity(service, normalized_id, expected_agent_id, expected_platform)
         outbound_buttons = normalized_buttons
         if run_origin is not None and normalized_buttons is not None:
             # One hop per database: the origin check on the Session database's
@@ -312,6 +308,8 @@ async def record_outbound_note(
     *,
     thread_id: str | None = None,
     skip_session_id: str | None = None,
+    expected_agent_id: str | None = None,
+    expected_platform: str | None = None,
 ) -> bool:
     """Add *note* to the Session that mirrors one chat, creating that Session.
 
@@ -320,9 +318,9 @@ async def record_outbound_note(
     """
     normalized_id = _normalize_channel_id(channel_id)
     _check_chat_target(platform_target, thread_id)
-    route = await service._connections.active_adapter(normalized_id).ensure_outbound_session(
-        platform_target, thread_id=thread_id
-    )
+    adapter = service._connections.active_adapter(normalized_id)
+    _check_expected_identity(service, normalized_id, expected_agent_id, expected_platform)
+    route = await adapter.ensure_outbound_session(platform_target, thread_id=thread_id)
     if route.session_id == skip_session_id:
         return False
     chat_sessions = service._chat_sessions
@@ -332,6 +330,22 @@ async def record_outbound_note(
     async with chat_sessions.write_lock(target):
         await chat_sessions.run_async(_append_note, chat_sessions, target, note)
     return True
+
+
+def _check_expected_identity(
+    service: ChannelService,
+    channel_id: str,
+    expected_agent_id: str | None,
+    expected_platform: str | None,
+) -> None:
+    # Called without an await after capturing the adapter. Its immutable config
+    # closes the gap between a caller's earlier preflight and actual delivery.
+    if expected_agent_id is not None or expected_platform is not None:
+        config = service._connections.active_engine(channel_id).config
+        if expected_agent_id is not None and config.agent_id != expected_agent_id:
+            raise ChannelConfigError("The Channel now belongs to another Agent")
+        if expected_platform is not None and config.platform != expected_platform:
+            raise ChannelConfigError("The Channel now uses another platform")
 
 
 def _append_note(chat_sessions: ChatSessionManager, target: SessionAddress, note: str) -> None:

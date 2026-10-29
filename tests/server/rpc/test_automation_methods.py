@@ -553,6 +553,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "delivery_progress": {
                     "waiting": 0,
                     "uncertain": 0,
+                    "platform_blocked": 0,
                     "error": None,
                     "last_delivered_at": None,
                     "dropped": 0,
@@ -676,12 +677,20 @@ async def test_cron_job_actions_address_one_job(
 
 
 @pytest.mark.asyncio
-async def test_retry_delivery_only_retries_notifications() -> None:
+@pytest.mark.parametrize("reselect", [False, True])
+async def test_retry_delivery_only_retries_notifications(reselect) -> None:
     state = _cron_state()
     state.runtime.cron_service.get_job.return_value = _cron_job(status="completed")
-    result = await rpc_result(state, "cron.retry_delivery", id="job-1")
+    delivery = {**_CHAT, "platform": "discord"}
+    state.runtime.cron_service.retry_delivery.return_value = 2
+    params = {"delivery": delivery} if reselect else {}
+    result = await rpc_result(state, "cron.retry_delivery", id="job-1", **params)
     assert result["status"] == "completed"
-    state.runtime.cron_service.retry_delivery.assert_awaited_once_with("job-1")
+    state.runtime.cron_service.retry_delivery.assert_awaited_once_with(
+        "job-1", **({"delivery": CronDelivery.from_dict(delivery)} if reselect else {})
+    )
+    if reselect:
+        assert result["rebound_notifications"] == 2
     state.runtime.cron_service.enable_job.assert_not_called()
 
 

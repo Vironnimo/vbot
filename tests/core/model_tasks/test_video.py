@@ -10,8 +10,9 @@ from unittest.mock import patch
 import pytest
 
 from core.model_tasks import TASK_VIDEO_GENERATION, VideoOptionError, VideoService
-from core.model_tasks.video import VideoProfile, build_video_profile
+from core.model_tasks.video import VideoConfigurationError, VideoProfile, build_video_profile
 from core.model_tasks.video_types import VideoGenerationResult
+from core.utils.errors import ConfigError
 
 _FACTS = {
     "frame_images": ["last_frame", "first_frame", "middle_frame"],
@@ -103,6 +104,21 @@ class _Client:
     async def generate(self, _prompt: str, *, options: dict[str, Any], **_: Any) -> Any:
         self.options = options
         return VideoGenerationResult(data=b"v", media_type="video/mp4", model="m", job_id="j")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [ConfigError, KeyError])
+async def test_client_preparation_preserves_configuration_error(
+    error_type: type[Exception],
+) -> None:
+    service = VideoService(_ModelTasks({}), cast(Any, None))
+    failure = error_type("Connection or Account removed during preparation")
+    with (
+        patch("core.model_tasks.video.ProviderVideoClient.from_runtime", side_effect=failure),
+        pytest.raises(VideoConfigurationError) as caught,
+    ):
+        await service.generate("A short clip")
+    assert caught.value.__cause__ is failure
 
 
 _RESOLUTION_FACTS: dict[str, Any] = {

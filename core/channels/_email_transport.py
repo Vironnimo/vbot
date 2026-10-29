@@ -104,10 +104,13 @@ class ImapMailbox:
                 f"Cannot reach the IMAP server ({type(error).__name__})", retryable=True
             ) from None
         try:
-            client.login(settings.username, password)
+            try:
+                client.login(settings.username, password)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    client.shutdown()
+                raise
         except imaplib.IMAP4.error:
-            with contextlib.suppress(Exception):
-                client.logout()
             raise ChannelConfigError("The IMAP server refused the login") from None
         except OSError as error:
             raise ChannelError(
@@ -171,6 +174,9 @@ class ImapMailbox:
     def close(self) -> None:
         with contextlib.suppress(Exception):
             self._client.logout()
+        # LOGOUT can fail before imaplib reaches its socket shutdown.
+        with contextlib.suppress(Exception):
+            self._client.shutdown()
 
 
 def send_smtp(settings: EmailSettings, password: str, message: EmailMessage) -> None:
@@ -188,8 +194,16 @@ def send_smtp(settings: EmailSettings, password: str, message: EmailMessage) -> 
             )
         else:
             client = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_TIMEOUT_SECONDS)
-            client.starttls(context=context)
-        client.login(settings.username, password)
+        try:
+            if settings.smtp_security != "ssl":
+                client.starttls(context=context)
+            client.login(settings.username, password)
+        except BaseException:
+            # Setup failed before the send's cleanup scope. Do not retain an
+            # authenticated or half-negotiated socket while the caller retries.
+            with contextlib.suppress(Exception):
+                client.close()
+            raise
     except smtplib.SMTPAuthenticationError:
         raise ChannelError("The SMTP server refused the login") from None
     except (OSError, smtplib.SMTPException) as error:
@@ -217,6 +231,8 @@ def send_smtp(settings: EmailSettings, password: str, message: EmailMessage) -> 
     finally:
         with contextlib.suppress(Exception):
             client.quit()
+        with contextlib.suppress(Exception):
+            client.close()
 
 
 def _refused(what: str, code: int) -> ChannelError:

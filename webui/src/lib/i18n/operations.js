@@ -655,6 +655,14 @@ export default Object.freeze({
   'cron.delivery.checkedRetry': 'Chat checked — retry delivery',
   'cron.delivery.retry': 'Retry delivery now',
   'cron.delivery.retryError': 'Could not retry delivery',
+  'cron.delivery.platformBlocked':
+    '{count} notifications need a new delivery target because their Channel platform changed or was not recorded.',
+  'cron.delivery.chooseTarget': 'Choose a new delivery target',
+  'cron.delivery.rebindExplanation':
+    'Only notifications blocked by a missing or changed Channel platform will use this chat. Other waiting or uncertain notifications and the job’s future delivery settings stay unchanged.',
+  'cron.delivery.rebind': 'Use this chat and retry',
+  'cron.delivery.rebound':
+    '{count} blocked notifications assigned to the selected chat.',
   'cron.delivery.dropped':
     '{count} older messages were dropped unsent because too many were waiting. The next sent message says so.',
   'cron.alert.unread': 'Unread alert',

@@ -655,6 +655,7 @@ class AgentStore:
         target_id: str,
         *,
         source_id: str,
+        expected_created_at: str | None,
         workspace: str | None,
         root_project_id: str | None,
     ) -> None:
@@ -667,6 +668,7 @@ class AgentStore:
             self,
             target_id,
             source_id=source_id,
+            expected_created_at=expected_created_at,
             workspace=workspace,
             root_project_id=root_project_id,
         )

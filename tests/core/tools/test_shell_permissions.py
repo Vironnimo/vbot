@@ -13,6 +13,7 @@ import pytest_asyncio
 
 import core.tools.shell_environment as shell_environment
 from core.permissions.commands.commands import UnresolvedElement
+from core.tools import _shell_arguments, _workdir
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.update_handoff import UpdateHandoffs
 from tests.core.permissions.command_check_support import (
@@ -23,6 +24,7 @@ from tests.core.permissions.command_check_support import (
     restricted,
 )
 from tests.core.tools.shell_test_support import (
+    FakeProjects,
     Shell,
     data,
     launched,
@@ -34,6 +36,33 @@ from tests.core.tools.shell_test_support import (
 async def shell(tmp_path: Path) -> AsyncIterator[Shell]:
     async with started_shell(tmp_path) as harness:
         yield harness
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["default", "project", "path"])
+async def test_a_denied_workdir_is_refused_before_its_status_is_probed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    probed: list[object] = []
+
+    def unavailable(path: object) -> bool:
+        probed.append(path)
+        return False
+
+    monkeypatch.setattr(_shell_arguments, "is_dir_strict", unavailable)
+    monkeypatch.setattr(_workdir, "cwd_exists", unavailable)
+    arguments: dict[str, object] = {"command": "echo safe"}
+    if selection != "default":
+        arguments["workdir"] = "project:private" if selection == "project" else str(tmp_path)
+    async with started_shell(
+        tmp_path,
+        projects=FakeProjects({"private": tmp_path}),
+        permissions=restricted(tmp_path, deny=["Read({workdir})"]),
+    ) as shell:
+        result = await shell.call(arguments)
+    assert result["error"]["code"] == "permission_denied"
+    assert probed == []
+    assert shell.launcher.processes == []
 
 
 @pytest.mark.parametrize(

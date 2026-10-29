@@ -1,4 +1,5 @@
 import { t } from '$lib/i18n.js';
+import { reflectionUndoErrorText } from '$lib/chatTimelinePresentation.js';
 import { createSkillDocument, skillDeleteConfirmText } from './skillsView.js';
 import {
   accessPatch,
@@ -12,6 +13,7 @@ import {
   setSkillDisabled,
   setSkillPinned,
   revertSkillRevisions,
+  undoLibrarianPass,
   restoreSkill,
   purgeSkill,
   shareSkill,
@@ -51,8 +53,8 @@ export function createSkillActions(context) {
   // The revert awaiting confirmation: `{ scope, name, revisions, later,
   // pass }`; `later` is the revision the server named as changing the same
   // part of the Skill `name` afterwards, which the revert then includes (null
-  // at first). `pass` marks the changes of one Librarian pass, which can span
-  // several Skills (`name` is then null until the server names one).
+  // at first). A Librarian pass instead captures its Agent and exact start,
+  // because its atomic undo can span several Skill homes and Memory stores.
   let revertTarget = $state(null);
 
   // The archived package awaiting permanent-delete confirmation.
@@ -257,13 +259,11 @@ export function createSkillActions(context) {
     };
   }
 
-  // Takes back every change of one Librarian pass in an Agent's scope.
-  function requestRevertPass(scope, revisions) {
-    if (busy || !revisions.length) return;
+  function requestRevertPass(agentId, startedAt) {
+    if (busy || !agentId || !startedAt) return;
     revertTarget = {
-      scope,
-      name: null,
-      revisions: [...revisions].sort((a, b) => a - b),
+      agentId,
+      startedAt,
       later: null,
       pass: true,
     };
@@ -288,6 +288,28 @@ export function createSkillActions(context) {
     const target = revertTarget;
     revertTarget = null;
     if (!target) return;
+    if (target.pass) {
+      return run(
+        () => undoLibrarianPass(target.agentId, target.startedAt),
+        () => t('skills.revert.error'),
+        () => t('skills.revert.passDone'),
+        (error) => {
+          context.onToast({
+            title: reflectionUndoErrorText({
+              conflict:
+                error?.code === 'learning_undo_conflict'
+                  ? error?.details?.data
+                  : null,
+              message: error?.message || t('skills.revert.error'),
+            }),
+            variant: 'error',
+          });
+          // A failed compensation can leave changes behind; reload them too.
+          void context.loadInventory();
+          return true;
+        },
+      );
+    }
     await run(
       () => revertSkillRevisions(target.scope, target.revisions),
       () => t('skills.revert.error'),

@@ -90,6 +90,7 @@ class FakeChats:
     owners: dict[str, str] = field(
         default_factory=lambda: {"tg-main": "agent-one", "mail-main": "agent-one"}
     )
+    platforms: dict[str, str] = field(default_factory=dict)
     relayed: list[tuple[Any, str, str, str | None]] = field(default_factory=list)
     sent: list[tuple[str, str, str, str | None]] = field(default_factory=list)
     notes: list[tuple[str, str, str, str | None, str | None]] = field(default_factory=list)
@@ -97,7 +98,9 @@ class FakeChats:
     async def get_channel(self, channel_id: str) -> SimpleNamespace:
         if channel_id not in self.owners:
             raise ChannelNotFoundError(f"Channel not found: {channel_id}")
-        platform = "email" if channel_id.startswith("mail-") else "telegram"
+        platform = self.platforms.get(
+            channel_id, "email" if channel_id.startswith("mail-") else "telegram"
+        )
         return SimpleNamespace(agent_id=self.owners[channel_id], platform=platform)
 
     async def relay_run_to_chat(
@@ -113,9 +116,14 @@ class FakeChats:
         *,
         thread_id: str | None = None,
         expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> None:
         if expected_agent_id is not None and self.owners[channel_id] != expected_agent_id:
             raise ChannelConfigError("Channel Agent changed")
+        if expected_platform is not None:
+            channel = await self.get_channel(channel_id)
+            if channel.platform != expected_platform:
+                raise ChannelConfigError("Channel platform changed")
         self.sent.append((channel_id, message, platform_target, thread_id))
 
     async def record_outbound_note(
@@ -126,6 +134,8 @@ class FakeChats:
         *,
         thread_id: str | None = None,
         skip_session_id: str | None = None,
+        expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> bool:
         self.notes.append((channel_id, platform_target, note, thread_id, skip_session_id))
         return True

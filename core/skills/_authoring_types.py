@@ -101,6 +101,9 @@ class SkillWriter:
     session_id: str | None = None
     run_id: str | None = None
     run_kind: str | None = None
+    # Identity of the Agent whose learning this write belongs to, independent
+    # of the package owner and later Session moves or Agent renames.
+    subject_created_at: str | None = None
 
     @property
     def background(self) -> bool:

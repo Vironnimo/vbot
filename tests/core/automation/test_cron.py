@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1051,7 +1052,7 @@ async def test_delivery_and_last_answer_round_trip_and_stay_absent_when_unset(
     assert [reloaded[job.id].delivery for job in (bare, app, chat)] == [
         None,
         CronDelivery(kind="app"),
-        _CHAT,
+        replace(_CHAT, platform="telegram"),
     ]
     last_result = reloaded[chat.id].last_result
     assert last_result is not None and last_result.to_dict() == answer

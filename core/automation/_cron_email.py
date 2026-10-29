@@ -197,6 +197,14 @@ class CronEmails(CronInbox[WaitingMail]):
                 f"Cron jobs cannot be read, so no email job takes the mail: "
                 f"{self._owner._storage_load_error}"
             )
+        chats = self._owner._chats
+        if chats is None:
+            raise CronStorageError(
+                "The email Channel owner cannot be checked: Channels are unavailable"
+            )
+        channel = await chats.get_channel(mail.channel_id)
+        if channel.platform != "email":
+            return
 
         def wanted(job_id: str) -> bool:
             job = self._owner._jobs.get(job_id)
@@ -206,6 +214,7 @@ class CronEmails(CronInbox[WaitingMail]):
                 and job.schedule_type == "email"
                 and job.email is not None
                 and job.email.channel_id == mail.channel_id
+                and job.agent_id == channel.agent_id
                 and job.email.matches(mail.sender, mail.subject)
             )
 

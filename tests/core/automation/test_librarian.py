@@ -16,6 +16,7 @@ import pytest
 import core.automation.librarian as librarian_module
 import core.skills._history as skill_history_module
 from core.agents import AgentNotFoundError
+from core.automation.learning import LearningChanges, LearningUndoConflictError
 from core.automation.librarian import (
     CHECK_INTERVAL_SECONDS,
     FIRST_CHECK_DELAY_SECONDS,
@@ -27,6 +28,7 @@ from core.automation.librarian import (
     librarian_candidates,
     validate_librarian_state_file,
 )
+from core.memory import MemoryService
 from core.prompts.briefs import librarian_brief
 from core.runs import RunKind
 from core.skills import SkillAuthoringService, SkillWriter
@@ -86,6 +88,7 @@ class _Harness:
         self.now = datetime.now(UTC) + _LATER
 
         async def resolve_agent_async(_project_id: str | None, agent_id: str) -> Any:
+            self.agents[agent_id].workspace = self.home(agent_id).parent / "workspace"
             return self.agents[agent_id]
 
         runtime = SimpleNamespace(
@@ -100,6 +103,9 @@ class _Harness:
                     SimpleNamespace(id=agent_id, name=agent.name)
                     for agent_id, agent in self.agents.items()
                     if getattr(agent, "builtin", None) is None
+                ],
+                list_with_builtins=lambda: [
+                    SimpleNamespace(id=agent_id) for agent_id in self.agents
                 ],
                 exists=lambda agent_id: agent_id in self.agents,
                 find=self.agents.get,
@@ -135,6 +141,13 @@ class _Harness:
         self.service = LibrarianService(
             cast("Any", runtime),
             authoring=self.authoring,
+            learning=LearningChanges(
+                memory=MemoryService(history_root=data_dir / "agents"),
+                skills=self.authoring,
+                skill_home=self.home,
+                skill_homes=lambda: {owner: self.home(owner) for owner in self.agents},
+                run_active=lambda _run_id: False,
+            ),
             skills_dir=self.home,
             skill_usage=skill_usage,
             triggered_skill_names=lambda agent_id: self.scheduled.get(agent_id, frozenset()),
@@ -323,12 +336,24 @@ async def test_a_pass_archives_inactive_skills_and_reports_them(
     path = harness.storage.data_dir / "agents" / "main" / "librarian.json"
     assert validate_librarian_state_file(path).diagnostics == ()
 
+    # Aging has no Model Run; its recorded revisions still undo together.
+    undone = await harness.service.undo("main", last_pass["started_at"])
+    assert len(harness.authoring.records(root)) == 11
+    assert undone["changes"] == status["changes"]  # Historical, including after undo.
+    history_size = len(harness.authoring.history(root))
+    await harness.service.undo("main", last_pass["started_at"])
+    assert len(harness.authoring.history(root)) == history_size
+
 
 @pytest.mark.asyncio
 async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     harness: _Harness,
 ) -> None:
     root = harness.home("main")
+    # A built-in Agent may also own a shared Skill; it is absent from list().
+    harness.agents["librarian"] = SimpleNamespace(builtin="librarian", name="Librarian")
+    shared = harness.home("librarian")
+    harness.authoring.create(shared, "deploy-web", _document("deploy-web"), writer=_HUMAN)
     harness.authoring.create(root, "deploy-web", _document("deploy-web"), writer=_AGENT)
     harness.authoring.create(root, "deploy-api", _document("deploy-api"), writer=_REFLECTION)
     harness.authoring.create(root, "deploy-docs", _document("deploy-docs"), writer=_HUMAN)
@@ -355,6 +380,9 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         )
         harness.authoring.delete(
             root, "deploy-api", writer=writer, reason="absorbed", absorbed_into="deploy-web"
+        )
+        harness.authoring.edit(
+            shared, "deploy-web", _document("deploy-web", body="# Shared update\n"), writer=writer
         )
 
     harness.on_run = merge
@@ -405,13 +433,17 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         "session_id": "lib-1",
         "run_id": "run-lib-1",
         "created": 0,
-        "changed": 1,
+        "changed": 2,
     }
     assert last_pass["merged"] == 1
-    assert [(change["skill"], change["kind"]) for change in status["changes"]] == [
-        ("deploy-api", "archive"),
-        ("deploy-web", "change"),
-    ]
+    assert {
+        (change.get("skill_owner_id", "main"), change["skill"], change["kind"])
+        for change in status["changes"]
+    } == {
+        ("main", "deploy-api", "archive"),
+        ("main", "deploy-web", "change"),
+        ("librarian", "deploy-web", "change"),
+    }
 
     # Unchanged candidates are not consolidated again.
     harness.authoring.create(root, "deploy-cli", _document("deploy-cli"), writer=_AGENT)
@@ -466,6 +498,116 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conflicting_edit", [False, True])
+async def test_pass_undo_keeps_aging_and_all_skill_owners_together(
+    harness: _Harness, conflicting_edit: bool
+) -> None:
+    root = harness.home("main")
+    shared = harness.home("owner")
+    harness.agents["owner"] = harness.agent(name="Owner")
+    for name in ("old", "deploy-web", "deploy-api"):
+        harness.authoring.create(root, name, _document(name), writer=_AGENT)
+    for name in ("deploy-web", "unrelated"):
+        harness.authoring.create(shared, name, _document(name), writer=_HUMAN)
+    before = _document("deploy-web", body="# Before the pass\n")
+    harness.authoring.edit(shared, "deploy-web", before, writer=_HUMAN)
+    snapshots = {
+        path: path.read_text(encoding="utf-8")
+        for home in (root, shared)
+        for path in home.glob("*/SKILL.md")
+    }
+    for name in ("deploy-web", "deploy-api"):
+        harness.usage[("main", name)] = SkillUse(
+            last_activated=format_canonical_timestamp(harness.now), count=1
+        )
+
+    def change_both(started: dict[str, Any], run_id: str) -> None:
+        writer = SkillWriter(
+            actor="librarian", session_id=started["session_id"], run_id=run_id, run_kind="librarian"
+        )
+        for home in (root, shared):
+            harness.authoring.edit(
+                home, "deploy-web", _document("deploy-web", body="# Pass update\n"), writer=writer
+            )
+
+    harness.on_run = change_both
+    status = await harness.run_pass()
+    started_at = status["last_pass"]["started_at"]
+    assert (status["last_pass"]["archived"], status["last_pass"]["changed"]) == (1, 2)
+    assert {
+        (change.get("skill_owner_id", "main"), change["id"]) for change in status["changes"]
+    } == {("main", 4), ("main", 5), ("owner", 4)}
+    # Reconstruct counts for passes persisted before shared writes were counted.
+    document = harness.state()
+    document["last_pass"]["changed"] = 1
+    harness.write_state("main", document)
+    assert (await harness.service.status("main"))["last_pass"]["changed"] == 2
+    with pytest.raises(LibrarianUnavailableError, match="no longer in its history"):
+        await harness.service.undo("main", "a-stale-pass")
+
+    if conflicting_edit:
+        harness.authoring.edit(
+            shared, "deploy-web", _document("deploy-web", body="# Later edit\n"), writer=_HUMAN
+        )
+        sizes = {home: len(harness.authoring.history(home)) for home in (root, shared)}
+        with pytest.raises(LearningUndoConflictError) as caught:
+            await harness.service.undo("main", started_at)
+        assert caught.value.skill_owner_id == "owner"
+        assert "old" not in harness.authoring.records(root)
+        assert all(len(harness.authoring.history(home)) == size for home, size in sizes.items())
+        return
+
+    harness.changed.clear()
+    undone = await harness.service.undo("main", started_at)
+    assert all(path.read_text(encoding="utf-8") == content for path, content in snapshots.items())
+    assert set(harness.changed) == {"main", "owner"}
+    assert undone["changes"] == status["changes"]
+    sizes = {home: len(harness.authoring.history(home)) for home in (root, shared)}
+    await harness.service.undo("main", started_at)
+    assert all(len(harness.authoring.history(home)) == size for home, size in sizes.items())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_and_caller_cancellation_drain_an_admitted_pass_undo(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = harness.home("main")
+    harness.authoring.create(root, "old", _document("old"), writer=_AGENT)
+    harness.settings["consolidate"] = False
+    status = await harness.run_pass()
+    started_at = status["last_pass"]["started_at"]
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original = harness.service._learning.undo
+
+    def held_undo(*args: Any, **kwargs: Any) -> Any:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness.service._learning, "undo", held_undo)
+    undo = asyncio.create_task(harness.service.undo("main", started_at))
+    await entered.wait()
+    undo.cancel()
+    closing = asyncio.create_task(harness.service.aclose())
+    try:
+        await asyncio.sleep(0)
+        undo.cancel()
+        assert not undo.done() and not closing.done()
+        with pytest.raises(LibrarianBusyError, match="shutting down"):
+            await harness.service.undo("main", started_at)
+    finally:
+        release.set()
+    await closing
+    with pytest.raises(asyncio.CancelledError):
+        await undo
+    assert "old" in harness.authoring.records(root)
+    assert harness.changed == ["main", "main"]
+    assert not harness.service._undo_tasks
+
+
+@pytest.mark.asyncio
 async def test_run_refuses_clearly_and_changes_nothing(
     harness: _Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -487,6 +629,8 @@ async def test_run_refuses_clearly_and_changes_nothing(
     await harness.service.run("main")
     status = await harness.service.status("main")
     assert status["running"] is True and status["running_since"] is not None
+    with pytest.raises(LibrarianBusyError, match="still running"):
+        await harness.service.undo("main", status["running_since"])
     with pytest.raises(LibrarianBusyError, match="already running"):
         await harness.service.run("main")
     # Passes run one at a time.

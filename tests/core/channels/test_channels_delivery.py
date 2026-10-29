@@ -69,12 +69,18 @@ async def test_send_reaches_the_running_adapter_after_validating_buttons(
             "12345",
             buttons=rows,
             expected_agent_id="assistant",
+            expected_platform="telegram",
         )
         with pytest.raises(ChannelConfigError) as changed:
             await service.send(
                 "tg-assistant", "stale destination", "12345", expected_agent_id="another"
             )
         assert not changed.value.possibly_delivered
+        with pytest.raises(ChannelConfigError) as changed_platform:
+            await service.send(
+                "tg-assistant", "stale platform", "12345", expected_platform="discord"
+            )
+        assert not changed_platform.value.possibly_delivered
         # Empty data, and 65 bytes of data (one over Telegram's 64-byte cap),
         # fail on every platform before the adapter is reached.
         for data in ("", "d" * 65):
@@ -188,6 +194,14 @@ async def test_an_outbound_note_lands_in_the_chats_session_unless_it_sent_the_me
     chat = SessionAddress(project_id=None, agent_id="assistant", session_id="ch-blocking-555")
     try:
         assert await service.record_outbound_note("tg-assistant", "555", "Sent: report") is True
+        with pytest.raises(ChannelConfigError):
+            await service.record_outbound_note(
+                "tg-assistant", "555", "Wrong platform", expected_platform="discord"
+            )
+        with pytest.raises(ChannelConfigError):
+            await service.record_outbound_note(
+                "tg-assistant", "555", "Wrong Agent", expected_agent_id="other"
+            )
         assert (
             await service.record_outbound_note(
                 "tg-assistant", "555", "Sent again", skip_session_id=chat.session_id

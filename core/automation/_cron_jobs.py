@@ -187,7 +187,7 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
 CRON_JOBS_FORMAT_VERSION = 1
 
 _EVENT_PROGRESS_FIELDS = frozenset(("due_at", "occurrence_ids"))
-_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_id"))
+_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform", "platform_target", "thread_id"))
 _LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
 _WATCH_KINDS = ("command", "url")
 _WATCH_FIELDS = frozenset((*_WATCH_KINDS, "always"))
@@ -821,6 +821,9 @@ class CronJob:
         return {
             "waiting": len(self.notifications),
             "uncertain": sum(item.state in {"sending", "uncertain"} for item in self.notifications),
+            "platform_blocked": sum(
+                item.state == "pending" and item.platform_blocked for item in self.notifications
+            ),
             "error": next((item.error for item in self.notifications if item.error), None),
             "last_delivered_at": self.last_delivered_at,
         }
@@ -960,6 +963,7 @@ class CronDelivery:
     channel_id: str | None = None
     platform_target: str | None = None
     thread_id: str | None = None
+    platform: str | None = None
 
     def stored(self) -> CronDelivery | None:
         """The value a job keeps: ``none`` is stored as no delivery."""
@@ -967,7 +971,7 @@ class CronDelivery:
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"kind": self.kind}
-        for field_name in ("channel_id", "platform_target", "thread_id"):
+        for field_name in ("channel_id", "platform_target", "thread_id", "platform"):
             value = getattr(self, field_name)
             if value is not None:
                 data[field_name] = value
@@ -987,10 +991,10 @@ class CronDelivery:
                 )
             return cls(kind=cast(DeliveryKind, kind))
         texts: dict[str, str | None] = {}
-        for name in ("channel_id", "platform_target", "thread_id"):
+        for name in ("channel_id", "platform_target", "thread_id", "platform"):
             raw = value.get(name)
             text = raw.strip() if isinstance(raw, str) else None
-            if (raw is not None or name != "thread_id") and not text:
+            if (raw is not None or name in {"channel_id", "platform_target"}) and not text:
                 raise CronJobValidationError(f"delivery.{name} must be a non-empty string")
             texts[name] = text
         return cls(
@@ -998,6 +1002,7 @@ class CronDelivery:
             channel_id=texts["channel_id"],
             platform_target=texts["platform_target"],
             thread_id=texts["thread_id"],
+            platform=texts["platform"],
         )
 
 

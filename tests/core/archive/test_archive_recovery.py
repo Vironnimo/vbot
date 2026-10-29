@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -145,25 +146,36 @@ async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("kind", "planned", "missing_review_owner"),
+    ("kind", "planned", "missing_review_owner", "identity"),
     [
-        ("agent", False, False),
-        ("agent", True, False),
-        ("project", False, False),
-        ("agent", True, True),
-        ("project", False, True),
+        ("agent", False, False, "original"),
+        ("agent", True, False, "original"),
+        ("project", False, False, "original"),
+        ("agent", True, True, "original"),
+        ("project", False, True, "original"),
+        ("agent", True, False, "replacement"),
+        ("project", False, False, "replacement"),
+        ("agent", True, False, "unproven"),
+        ("project", False, False, "unproven"),
+        ("agent", True, False, "unstamped"),
+        ("project", False, False, "unstamped"),
     ],
-    ids=["agent-old-plan", "agent-current-plan", "project", "agent-review", "project-review"],
 )
 async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
-    world: ArchiveWorld, tmp_path: Path, kind: str, planned: bool, missing_review_owner: bool
+    world: ArchiveWorld,
+    tmp_path: Path,
+    kind: str,
+    planned: bool,
+    missing_review_owner: bool,
+    identity: str,
 ) -> None:
     sessions, ledger = world.sessions, world.sessions.archive_ledger
     if kind == "agent":
         agent = agent_with_session(world, "original")
+        created_at = agent.created_at
         session_id = agent.current_session_id
     else:
-        world.projects.create("original", "Original", tmp_path / "repo")
+        created_at = world.projects.create("original", "Original", tmp_path / "repo").created_at
         session_id = sessions.create("coder", project_id="original").id
     review = None
     if missing_review_owner:
@@ -189,13 +201,43 @@ async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
         await world.service.archive_agent("review-owner") if missing_review_owner else None
     )
     plan: dict[str, Any] = {"target_id": "restored", "strip_channel_keys": True}
+    if identity != "unproven":
+        plan["source_created_at"] = created_at
     if planned and kind == "agent":
         plan.update(workspace=None, root_project_id=None)
     ledger.begin_restore(entry_id, plan)
     payload = world.payload(entry_id, kind)
     target = world.data_dir / f"{kind}s" / "restored"
     os.replace(payload, target)
+    config = target / f"{kind}.json"
+    if identity == "replacement":
+        os.replace(target, tmp_path / "rescued")
+        if kind == "agent":
+            world.agents.create("restored", workspace=tmp_path / "replacement-workspace")
+        else:
+            world.projects.create("restored", "Replacement", tmp_path / "replacement-repo")
+    elif identity == "unstamped":
+        raw = json.loads(config.read_text(encoding="utf-8"))
+        raw.pop("created_at")
+        config.write_text(json.dumps(raw), encoding="utf-8")
+    before = config.read_bytes()
     world.service.recover()
+    if identity != "original":
+        assert config.read_bytes() == before
+        assert world.entry(entry_id).state == "restoring"
+        assert not sessions.exists(
+            SessionAddress(
+                None if kind == "agent" else "restored",
+                "restored" if kind == "agent" else "coder",
+                session_id,
+            )
+        )
+        [blocker] = (await world.service.show(entry_id)).restore.blockers
+        assert blocker.code == "entry_busy" and "cannot be verified" in blocker.message
+        world.service.recover()
+        assert config.read_bytes() == before
+        assert world.entry(entry_id).state == "restoring"
+        return
     if owner_entry is not None:
         assert world.entry(entry_id).state == "restoring"
         assert review is not None and not sessions.exists(review)
@@ -419,7 +461,11 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
         monkeypatch.undo()
     else:
         # Stopped before the files moved, or after they did and before the commit.
-        restore_plan = {"target_id": None, "strip_channel_keys": False}
+        restore_plan = {
+            "target_id": None,
+            "strip_channel_keys": False,
+            "source_created_at": coder.created_at,
+        }
         if left == "invalid-planned-files":
             restore_plan.update(workspace=None, root_project_id=None)
         ledger.begin_restore(entry_id, restore_plan)
@@ -429,6 +475,8 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
             (home / "agent.json").write_text("{ not json", encoding="utf-8")
 
     plan = world.entry(entry_id).facts.get("restore_plan")
+    assert isinstance(plan, dict)
+    assert plan["source_created_at"] == coder.created_at
     if left == "unreadable-live-files":
         deny_access(home.parent)
     elif left == "unreadable-payload":

@@ -960,9 +960,9 @@ def test_external_change_between_hunks_is_not_overwritten(tmp_path, monkeypatch)
     assert path.read_bytes() == b"external\ntwo=old\n"
 
 
-@pytest.mark.parametrize("observation_error", [False, True])
+@pytest.mark.parametrize("interference", ["content", "unavailable", "directory"])
 def test_post_write_verification_failure_retains_effect_and_continues_siblings(
-    tmp_path, monkeypatch, observation_error
+    tmp_path, monkeypatch, interference
 ):
     original_write, original_snapshot = (
         file_changes_module.atomic_write_bytes,
@@ -976,11 +976,14 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
         original_write(target, payload, **kwargs)
         if target == path:
             written = True
-            if not observation_error:
+            if interference == "content":
                 path.write_bytes(b"external\n")
+            elif interference == "directory":
+                path.unlink()
+                path.mkdir()
 
     def snapshot(target):
-        if observation_error and written and target == path:
+        if interference == "unavailable" and written and target == path:
             raise PermissionError("fixture observation unavailable")
         return original_snapshot(target)
 
@@ -988,19 +991,12 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
     monkeypatch.setattr(file_changes_module, "_snapshot", snapshot)
     result = apply(tmp_path, "*** Add File: a.txt\n+requested\n*** Add File: b.txt\n+done")
     assert result["ok"]
-    reason = (
-        "a.txt was written, but reading it back failed: fixture observation unavailable. "
-        "Check it before resending this change."
-        if observation_error
-        else "a.txt changed on disk while this patch ran. Read it and resend the unfinished "
-        "changes."
-    )
-    assert text(result).startswith("1 of 2 changes fully applied; 1 only in part.")
-    assert text(result).endswith(
-        f"\nCreated a.txt (1 line).\nCreated b.txt (1 line).\nIncomplete: {reason}\n"
-        "Already done: a.txt."
-    )
-    assert path.read_bytes() == (b"requested\n" if observation_error else b"external\n")
+    assert edit_outcome(text(result)) == "partial"
+    if interference == "directory":
+        assert path.is_dir()
+    else:
+        expected = b"requested\n" if interference == "unavailable" else b"external\n"
+        assert path.read_bytes() == expected
     assert (tmp_path / "b.txt").read_bytes() == b"done\n"
 
 

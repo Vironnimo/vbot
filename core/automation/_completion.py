@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
@@ -75,6 +75,7 @@ class _CompletionNotice:
     body: str
     delivered: asyncio.Future[None]
     boundary_run: Run | None
+    submitted_address: SessionAddress
     suppress_run: bool = False
     execution_owner: RunExecutionOwner | None = None
     # False: reach an active Run at its next boundary, but never start one.
@@ -205,6 +206,10 @@ class _CompletionDeliveryCoordinator:
             delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             delivered.cancel()
             return delivered
+        for candidate in self._buckets.values():
+            existing = candidate.notices.get(notice_id)
+            if existing is not None and existing.submitted_address == address:
+                return existing.delivered
         bucket = self._buckets.get(address)
         if bucket is None:
             bucket = self._buckets[address] = _CompletionBucket(address)
@@ -244,6 +249,8 @@ class _CompletionDeliveryCoordinator:
                 )
                 if source.run_overrides is not None and not source.run_overrides.is_empty:
                     schedule_options["run_overrides"] = source.run_overrides
+        if expected_session_generation_id is None and source is not None:
+            expected_session_generation_id = source.generation_id
         delivered = asyncio.get_running_loop().create_future()
         notice = _CompletionNotice(
             id=notice_id,
@@ -255,17 +262,14 @@ class _CompletionDeliveryCoordinator:
             body=self._secret_masker().mask(body),
             delivered=delivered,
             boundary_run=boundary_run,
+            submitted_address=address,
             suppress_run=suppress_run,
             execution_owner=execution_owner,
             wake=wake,
             subagent_message=subagent_message,
         )
         bucket.notices[notice_id] = notice
-        if bucket.delivery_task is None or bucket.delivery_task.done():
-            bucket.delivery_task = asyncio.create_task(
-                self._deliver(address, bucket),
-                name=f"completion-delivery:{address.agent_id}",
-            )
+        self._start_delivery(bucket)
         self._changed(address)
         return delivered
 
@@ -281,16 +285,81 @@ class _CompletionDeliveryCoordinator:
         message carrying it is being handed over or is in the Session already.
         """
         bucket = self._buckets.get(address)
-        if bucket is None:
-            return False
-        notice = bucket.notices.get(notice_id)
+        notice = bucket.notices.get(notice_id) if bucket is not None else None
+        if notice is None:
+            # A producer may still hold its submission address after a move.
+            for candidate in self._buckets.values():
+                moved = candidate.notices.get(notice_id)
+                if moved is not None and moved.submitted_address == address:
+                    bucket, notice = candidate, moved
+                    break
         if notice is None or notice.claimed or notice.read_after is not None:
             return False
+        assert bucket is not None
         bucket.notices.pop(notice_id, None)
         if not notice.delivered.done():
             notice.delivered.cancel()
-        self._changed(address)
+        self._changed(bucket.address)
         return True
+
+    def _start_delivery(self, bucket: _CompletionBucket) -> None:
+        if not self._closed and (bucket.delivery_task is None or bucket.delivery_task.done()):
+            bucket.delivery_task = asyncio.create_task(
+                self._deliver(bucket.address, bucket),
+                name=f"completion-delivery:{bucket.address.agent_id}",
+            )
+
+    async def _follow_moved_sessions(
+        self, bucket: _CompletionBucket, notices: list[_CompletionNotice]
+    ) -> Exception | None:
+        """Keep pending results with their original live generation after a move.
+
+        The source may be renamed while Chat preflight or persistence is awaiting.
+        An archived or replaced generation has no live address and is never adopted.
+        """
+        sessions = self._sessions
+        if sessions is None:
+            return None
+        generations = {
+            notice.expected_session_generation_id
+            for notice in notices
+            if notice.expected_session_generation_id is not None
+        }
+        if not generations:
+            return None
+        try:
+            addresses = await sessions.run_async(
+                lambda: {
+                    generation: sessions.generation_address(generation)
+                    for generation in generations
+                }
+            )
+        except Exception as error:
+            return error
+        for notice in self._still_pending(bucket, notices):
+            target = addresses.get(notice.expected_session_generation_id or "")
+            if target is None or target == bucket.address:
+                continue
+            destination = self._buckets.setdefault(target, _CompletionBucket(target))
+            bucket.notices.pop(notice.id)
+            source = notice.schedule_options.get("continuation_source")
+            if source is not None:
+                notice.schedule_options["continuation_source"] = replace(
+                    source,
+                    project_id=target.project_id,
+                    agent_id=target.agent_id,
+                    session_id=target.session_id,
+                )
+            active_run = self._active_run(target)
+            if active_run is None:
+                notice.boundary_run = None
+            else:
+                _join_run([notice], active_run)
+            destination.notices[notice.id] = notice
+            self._start_delivery(destination)
+            self._changed(target)
+            self._changed(bucket.address)
+        return None
 
     async def deliver_to_request(self, run: Run, session: ChatSession) -> ChatMessage | None:
         """Persist ready results for the next request of their active boundary Run."""
@@ -312,6 +381,13 @@ class _CompletionDeliveryCoordinator:
             and notice.execution_owner == run.execution_owner
             and notice.read_after is None
         ]
+        if any(
+            notice.expected_session_generation_id not in (None, session.generation_id)
+            for notice in pending
+        ):
+            if await self._follow_moved_sessions(bucket, pending) is not None:
+                return None
+            pending = self._still_pending(bucket, pending)
         pending = self._reject_stale_generation(bucket, pending, session.generation_id)
         if not pending:
             return None
@@ -528,6 +604,15 @@ class _CompletionDeliveryCoordinator:
                     continue
                 except Exception as error:
                     _claim(pending, False)
+                    if await self._follow_moved_sessions(bucket, pending) is not None:
+                        await _sleep(admission_retry_delay)
+                        admission_retry_delay = min(
+                            admission_retry_delay * 2, _COMPLETION_RETRY_MAX_SECONDS
+                        )
+                        continue
+                    pending = self._still_pending(bucket, pending)
+                    if not pending:
+                        continue
                     if owner is not None:
                         # An owned delivery must never bypass closed admission by
                         # falling back to an arbitrary Session write.
@@ -619,9 +704,9 @@ class _CompletionDeliveryCoordinator:
 
     @staticmethod
     def _move_idle_notices_to_run(bucket: _CompletionBucket, run: Run) -> None:
-        for notice in bucket.notices.values():
-            if notice.boundary_run is None:
-                notice.boundary_run = run
+        _join_run(
+            [notice for notice in bucket.notices.values() if notice.boundary_run is None], run
+        )
 
     def _owner_admits(self, address: SessionAddress, owner: RunExecutionOwner) -> bool:
         """Return whether the owner may still receive work in this Session.
@@ -720,6 +805,9 @@ class _CompletionDeliveryCoordinator:
         pending = self._reject_inadmissible_owned(
             address, bucket, self._still_pending(bucket, notices)
         )
+        if error := await self._follow_moved_sessions(bucket, pending):
+            return error
+        pending = self._still_pending(bucket, pending)
         if not pending:
             return None
 
@@ -735,6 +823,9 @@ class _CompletionDeliveryCoordinator:
             try:
                 session = await sessions.get_async(address)
             except SessionNotFoundError as error:
+                if relocation_error := await self._follow_moved_sessions(bucket, pending):
+                    return relocation_error
+                pending = self._still_pending(bucket, pending)
                 # There is no durable target left. A terminal delivery
                 # failure lets producers release their process-local state.
                 self._fail(bucket, pending, error)
@@ -743,13 +834,26 @@ class _CompletionDeliveryCoordinator:
                 return error
             # Results withdrawn meanwhile stay out of the note.
             pending = self._still_pending(bucket, pending)
+            if any(
+                notice.expected_session_generation_id not in (None, session.generation_id)
+                for notice in pending
+            ):
+                if relocation_error := await self._follow_moved_sessions(bucket, pending):
+                    return relocation_error
+                pending = self._still_pending(bucket, pending)
             pending = self._reject_stale_generation(bucket, pending, session.generation_id)
             if not pending:
                 return None
             _claim(pending, True)
             append = asyncio.ensure_future(
-                session.add_note_async(
-                    _completion_message(pending), subagent_messages=_subagent_messages(pending)
+                session.append_many_async(
+                    [
+                        ChatMessage.note(
+                            _completion_message(pending),
+                            subagent_messages=_subagent_messages(pending),
+                        )
+                    ],
+                    expected_generation_id=session.generation_id,
                 )
             )
             try:
@@ -766,6 +870,11 @@ class _CompletionDeliveryCoordinator:
                 raise
             except Exception as error:
                 _claim(pending, False)
+                if isinstance(error, SessionNotFoundError):
+                    if relocation_error := await self._follow_moved_sessions(bucket, pending):
+                        return relocation_error
+                    self._fail(bucket, self._still_pending(bucket, pending), error)
+                    return None
                 return error
             self._acknowledge(address, bucket, pending)
             return None
@@ -909,7 +1018,8 @@ class _CompletionDeliveryCoordinator:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        for address, bucket in list(self._buckets.items()):
+        while self._buckets:
+            address, bucket = next(iter(self._buckets.items()))
             pending = [
                 notice for notice in bucket.notices.values() if notice.execution_owner is None
             ]
@@ -927,6 +1037,7 @@ class _CompletionDeliveryCoordinator:
             for notice in bucket.notices.values():
                 if not notice.delivered.done():
                     notice.delivered.cancel()
+            self._buckets.pop(address, None)
         self._buckets.clear()
         self._suppressed_origins.clear()
 

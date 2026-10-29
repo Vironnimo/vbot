@@ -399,12 +399,22 @@ async def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_retry_delivery(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "cron.retry_delivery")
+    _reject_unsupported(params, {"id", "delivery"}, "cron.retry_delivery")
     job_id = _required_string(params, "id")
     try:
         service = state.runtime.cron_service
-        await service.retry_delivery(job_id)
-        return _cron_job_response(service, service.get_job(job_id))
+        delivery = _optional_delivery(params) if "delivery" in params else None
+        if "delivery" in params and (delivery is None or delivery.kind != "chat"):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "Select a chat destination for the blocked messages"
+            )
+        rebound = await service.retry_delivery(
+            job_id, **({"delivery": delivery} if delivery else {})
+        )
+        response = _cron_job_response(service, service.get_job(job_id))
+        if delivery is not None:
+            response["rebound_notifications"] = rebound
+        return response
     except Exception as error:
         raise _map_expected_error(error) from error
 
@@ -430,7 +440,7 @@ async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     return _cron_job_response(state.runtime.cron_service, job)
 
 
-_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_id"))
+_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform", "platform_target", "thread_id"))
 
 
 def _optional_delivery(params: JsonObject) -> CronDelivery | None:

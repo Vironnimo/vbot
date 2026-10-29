@@ -34,8 +34,9 @@ from core.model_tasks.video_types import VideoGenerationResult
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.errors import TaskError, VBotError
+from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger(__name__)
@@ -180,15 +181,17 @@ class VideoService:
             model_tasks,
             configuration_error=VideoConfigurationError,
         )
-        self._cancelled_jobs: set[asyncio.Task[None]] = set()
+        self._cancelled_jobs: dict[asyncio.Task[None], asyncio.Task[JsonObject]] = {}
 
     async def aclose(self) -> None:
         """Stop following cancelled jobs; each one still running logs its job id."""
 
-        jobs = list(self._cancelled_jobs)
-        for job in jobs:
-            job.cancel()
-        await asyncio.gather(*jobs, return_exceptions=True)
+        jobs = dict(self._cancelled_jobs)
+        for polling in jobs.values():
+            polling.cancel()
+        # A watcher may not have started yet. Cancel its owned poll directly,
+        # then let the watcher record that the job's final cost remains unknown.
+        await settle_before_cancelling(asyncio.gather(*jobs, return_exceptions=True))
 
     def generation_profile(self) -> VideoProfile:
         """Return what the configured video Model offers, without a request."""
@@ -232,22 +235,25 @@ class VideoService:
         merged_options = {**_shape_options(options, requested, profile), **requested}
         frames = await self._load_frames(profile, frame_paths or {})
 
-        client = await ProviderVideoClient.from_runtime_async(
-            self._runtime,
-            target_ref,
-            usage_observer=TaskUsage(
-                self._usage_recorder, TASK_VIDEO_GENERATION, target_ref, context=usage_context
-            ),
-            debug_context=task_debug_context(usage_context, target_ref),
-        )
+        try:
+            client = await ProviderVideoClient.from_runtime_async(
+                self._runtime,
+                target_ref,
+                usage_observer=TaskUsage(
+                    self._usage_recorder, TASK_VIDEO_GENERATION, target_ref, context=usage_context
+                ),
+                debug_context=task_debug_context(usage_context, target_ref),
+            )
+        except (ConfigError, KeyError) as exc:
+            raise VideoConfigurationError(str(exc)) from exc
         model_ref = f"{target_ref.provider_id}/{target_ref.model_id}"
 
         def follow_cancelled_job(job_id: str, polling: asyncio.Task[JsonObject]) -> None:
             job = asyncio.create_task(
                 _settle_cancelled_job(job_id, polling, model_ref), name="video-job-cost"
             )
-            self._cancelled_jobs.add(job)
-            job.add_done_callback(self._cancelled_jobs.discard)
+            self._cancelled_jobs[job] = polling
+            job.add_done_callback(lambda finished: self._cancelled_jobs.pop(finished, None))
 
         try:
             return await client.generate(

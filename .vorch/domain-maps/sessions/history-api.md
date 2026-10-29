@@ -10,6 +10,8 @@ Appends are transactional: `append_messages` writes the entries at `next_seq`, t
 
 `append_many` and `append_many_async` accept `metadata_update` for a partial metadata merge in the history transaction, using the same managed-field validation as `mutate_metadata`. Invalid metadata rolls back the history append too. Chat uses it to record the context-command marker together with its note (`chat/context-commands.md`).
 
+Their optional `expected_generation_id` checks the live target within that same transaction before any history or metadata change. Completion delivery uses this fence for notes written without a Run; a Session moved or replaced between its read and the append raises `SessionNotFoundError` without writing into the replacement (`automation/completion-delivery.md`).
+
 `ChatSession` is a path-free handle: `append`/`append_many`, `load` (own audit), `load_active` (current view), `commit_compaction`, `apply_edit`, Stream draft writes, Notes, Skill activation state, and `load_since(cursor)`. `append_many(messages, *, tool_results, seen_skills, subagent_reply_target, since)` and owned receipt appends return the `load_since` delta for a given cursor within their write transaction. Frequent partial consumers use dedicated read models instead: one atomic Chat History snapshot, the status aggregate, targeted Run summary/result lookup (`load_run_result`/`load_run_result_async`), and the manager's `tool_result_persisted_async` probe (an Assistant Tool call stored in the live Session and its durable result, via `tool_calls_by_call_id`; calls a fork inherits through lineage do not count). Async counterparts execute through bounded worker pools at their owning boundary.
 
 ## Read cursors

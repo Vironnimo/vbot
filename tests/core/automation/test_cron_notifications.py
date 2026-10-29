@@ -154,7 +154,7 @@ async def test_failure_alerts_retry_after_stop_and_a_failed_claim_never_sends(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["delete", "agent"])
+@pytest.mark.parametrize("change", ["delete", "agent", "platform"])
 async def test_a_destination_changed_while_its_notification_claim_saves_prevents_the_send(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -185,8 +185,10 @@ async def test_a_destination_changed_while_its_notification_claim_saves_prevents
     try:
         if change == "delete":
             await service.delete_job(job.id)
-        else:
+        elif change == "agent":
             chats.owners["tg-main"] = "agent-two"
+        else:
+            chats.platforms["tg-main"] = "discord"
     finally:
         finish_claim.set()
     await delivery
@@ -197,6 +199,200 @@ async def test_a_destination_changed_while_its_notification_claim_saves_prevents
         assert pending.state == "pending"
         assert pending.error is not None
     assert chats.sent == [] and chats.notes == []
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_platform_binding_survives_restart_and_only_reselection_binds_future_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    assert job.delivery is not None and job.delivery.platform == "telegram"
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Original platform."))
+    await service._execution._trigger_job_run(job)
+    await service.aclose()
+    jobs_file = tmp_path / "cron" / "jobs.json"
+    if legacy:
+        stored = json.loads(jobs_file.read_text(encoding="utf-8"))
+        stored["jobs"][0]["delivery"].pop("platform")
+        stored["jobs"][0]["notifications"][0].pop("platform")
+        jobs_file.write_text(json.dumps(stored), encoding="utf-8")
+
+    recovered, recovered_trigger = make_service(tmp_path)
+    chats.platforms["tg-main"] = "discord"
+    recovered.set_chat_delivery(chats)
+    recovered.list_jobs()
+    await recovered.update_job(job.id, prompt="Unrelated edit")
+    await recovered.retry_delivery(job.id)
+    await recovered._notifications.flush()
+    assert chats.sent == []
+    [pending] = recovered.get_job(job.id).notifications
+    assert pending.platform == (None if legacy else "telegram")
+    assert pending.state == "pending" and pending.error is not None
+    rebound = await recovered.update_job(job.id, delivery=_CHAT)
+    assert rebound.delivery is not None and rebound.delivery.platform == "discord"
+    scripted_runs(recovered_trigger, (RunStatus.COMPLETED, "Reselected platform."))
+    await recovered._execution._trigger_job_run(rebound)
+    await recovered._notifications.flush()
+    assert [text for _, text, *_ in chats.sent] == ["Reselected platform."]
+    [retained] = recovered.get_job(job.id).notifications
+    assert retained.id == pending.id and retained.platform == pending.platform
+    await recovered.aclose()
+
+    # Restart preserves both independent bindings. Retry never rebinds old mail.
+    again, _ = make_service(tmp_path)
+    chats.platforms["tg-main"] = "telegram"
+    again.set_chat_delivery(chats)
+    assert again.get_job(job.id).delivery == rebound.delivery
+    await again.retry_delivery(job.id)
+    await again._notifications.flush()
+    assert [text for _, text, *_ in chats.sent] == (
+        ["Reselected platform."] if legacy else ["Reselected platform.", "Original platform."]
+    )
+    await again.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_explicit_retry_reselects_only_platform_blocked_unsent_messages_of_completed_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats(owners={"tg-main": "agent-one", "unchanged": "agent-one"})
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        remaining_runs=1,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Retained result."))
+    await service._execution._trigger_job_run(job)
+    await service.aclose()
+    jobs_file = tmp_path / "cron" / "jobs.json"
+    stored = json.loads(jobs_file.read_text(encoding="utf-8"))
+    [notification] = stored["jobs"][0]["notifications"]
+    if legacy:
+        notification.pop("platform")
+    # Other snapshots must keep both their destinations and delivery certainty.
+    stored["jobs"][0]["notifications"] += [
+        {**notification, "id": "healthy", "channel_id": "unchanged", "platform": "telegram"},
+        {**notification, "id": "uncertain", "state": "uncertain"},
+    ]
+    jobs_file.write_text(json.dumps(stored), encoding="utf-8")
+    recovered, recovered_trigger = make_service(tmp_path)
+    chats.platforms["tg-main"] = "discord"
+    recovered.set_chat_delivery(chats)
+    before = recovered.get_job(job.id)
+    selected = CronDelivery(
+        kind="chat", channel_id="tg-main", platform_target="selected-chat", platform="discord"
+    )
+    with pytest.raises(CronJobValidationError):
+        await recovered.retry_delivery(
+            job.id,
+            delivery=CronDelivery(
+                kind="chat",
+                channel_id="tg-main",
+                platform_target="stale-choice",
+                platform="telegram",
+            ),
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            recovered, "_save_jobs_async", AsyncMock(side_effect=CronStorageError("disk"))
+        )
+        with pytest.raises(CronStorageError):
+            await recovered.retry_delivery(job.id, delivery=selected)
+    assert recovered.get_job(job.id).notifications == before.notifications
+    assert await recovered.retry_delivery(job.id, delivery=selected) == 1
+    repaired = recovered.get_job(job.id)
+    assert repaired.status == "completed" and repaired.delivery == before.delivery
+    assert repaired.notifications[1:] == before.notifications[1:]
+    assert repaired.notifications[0].platform == "discord"
+    assert repaired.notifications[0].platform_target == "selected-chat"
+    await recovered._notifications.flush()
+    assert [(channel, target) for channel, _, target, _ in chats.sent] == [
+        ("tg-main", "selected-chat"),
+        ("unchanged", "chat-42"),
+    ]
+    assert recovered_trigger.trigger_run.await_count == 0
+    assert [item.state for item in recovered.get_job(job.id).notifications] == ["uncertain"]
+    await recovered.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retry_only_owns_admitted_changes_and_keeps_new_messages_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Original."))
+    await service._execution._trigger_job_run(job)
+    original = service.get_job(job.id).notifications
+    started = asyncio.Event()
+
+    async def retry() -> None:
+        started.set()
+        await service.retry_delivery(job.id)
+
+    async with service._edits:
+        task = asyncio.create_task(retry())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert service.get_job(job.id).notifications == original
+
+    async def fail_after_staging() -> None:
+        service._notifications.stage(service._jobs[job.id], "Arrived during save.")
+        raise CronStorageError("disk")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service, "_save_jobs_async", fail_after_staging)
+        with pytest.raises(CronStorageError):
+            await service.retry_delivery(job.id)
+    assert [item.text for item in service.get_job(job.id).notifications] == [
+        "Original.",
+        "Arrived during save.",
+    ]
+    # A lookup can yield long enough for the bounded backlog to evict every
+    # repair candidate. Report no repair, preserving the new messages.
+    chats.platforms["tg-main"] = "discord"
+    get_channel = chats.get_channel
+    lookups = 0
+
+    async def overflow(channel_id: str):
+        nonlocal lookups
+        lookups += 1
+        if lookups == 2:
+            service._notifications.stage(service._jobs[job.id], "Replaced backlog.")
+        return await get_channel(channel_id)
+
+    monkeypatch.setattr(cron_notifications, "MAX_RETAINED_NOTIFICATIONS", 1)
+    monkeypatch.setattr(chats, "get_channel", overflow)
+    with pytest.raises(CronJobValidationError):
+        await service.retry_delivery(job.id, delivery=_CHAT)
+    assert [item.text for item in service.get_job(job.id).notifications] == ["Replaced backlog."]
     await service.aclose()
 
 

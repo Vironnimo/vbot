@@ -183,9 +183,7 @@
           name: actions.revertTarget.name,
         })
       : actions.revertTarget.pass
-        ? t('skills.revert.pass', {
-            revisions: actions.revertTarget.revisions.join(', '),
-          })
+        ? t('skills.revert.pass')
         : t('skills.revert.confirm')}
     confirmLabel={actions.revertTarget.later === null &&
     !actions.revertTarget.pass

@@ -128,13 +128,17 @@ export function enableCronJob(id, options = {}) {
   return rpc('cron.enable', { id }, options);
 }
 
-export function retryCronDelivery(id, options = {}) {
+export function retryCronDelivery(id, { delivery, ...options } = {}) {
   requireNonEmptyString(
     id,
     'Cron job id must be a non-empty string',
     'cron.retry_delivery',
   );
-  return rpc('cron.retry_delivery', { id }, options);
+  return rpc(
+    'cron.retry_delivery',
+    { id, ...(delivery ? { delivery } : {}) },
+    options,
+  );
 }
 
 // Marks a job's unread alert as read; returns the job.

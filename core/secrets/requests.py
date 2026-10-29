@@ -29,6 +29,7 @@ from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 __all__ = [
     "REQUEST_TIMEOUT_SECONDS",
@@ -114,6 +115,7 @@ class SecretRequests:
         self._on_change = on_change
         self._timeout = timeout
         self._pending: dict[str, PendingSecretRequest] = {}
+        self._answers: dict[tuple[SessionAddress, str], asyncio.Future[None]] = {}
 
     def set_change_listener(self, on_change: Callable[[str], None] | None) -> None:
         self._on_change = on_change
@@ -136,9 +138,12 @@ class SecretRequests:
         first, whose caller then gets ``declined``.
         """
         secret_name = normalize_secret_name(name)
-        existing = self._secrets.lookup(
-            SessionAddress(project_id, agent_id, session_id), secret_name, passed_only=passed_only
-        )
+        address = SessionAddress(project_id, agent_id, session_id)
+        # An accepted answer owns its write and outcome. A new request takes its
+        # replacement snapshot only after that write has settled.
+        while (answer := self._answers.get((address, secret_name))) is not None:
+            await asyncio.shield(answer)
+        existing = self._secrets.lookup(address, secret_name, passed_only=passed_only)
         now = self._clock()
         pending = PendingSecretRequest(
             id=new_id("sreq", claim=lambda item: item not in self._pending),
@@ -164,6 +169,12 @@ class SecretRequests:
             async with asyncio.timeout(self._timeout):
                 return await asyncio.shield(pending.outcome)
         except TimeoutError:
+            # Expiry withdraws unanswered requests, not a write already accepted
+            # from the user. Its outcome must agree with the committed value.
+            while (answer := self._answers.get((address, secret_name))) is not None:
+                await asyncio.shield(answer)
+            if pending.outcome.done():
+                return pending.outcome.result()
             _LOGGER.info("Secret request for %s expired unanswered", secret_name)
             return SecretRequestOutcome("expired")
         finally:
@@ -207,21 +218,36 @@ class SecretRequests:
         pending = self._pending.get(request_id)
         if pending is None or pending.outcome.done():
             raise SecretRecordError("This request is no longer waiting; the Agent stopped asking.")
+        key = (pending.address, pending.name)
+        if key in self._answers:
+            raise SecretRecordError("An answer is already being saved. Wait for it to finish.")
         chosen: Lifetime | None = lifetime
         if chosen is None and expires_at is not None:
             chosen = "until"
         if expires_at is not None and chosen == "permanent":
             chosen = "until"
-        secret, replaced = await asyncio.to_thread(
-            self._store, pending, dict(values), chosen, expires_at
-        )
-        self._finish(pending, SecretRequestOutcome("stored", secret, replaced))
-        return secret
+        settled = asyncio.get_running_loop().create_future()
+        self._answers[key] = settled
+
+        async def store_and_finish() -> AgentSecret:
+            secret, replaced = await asyncio.to_thread(
+                self._store, pending, dict(values), chosen, expires_at
+            )
+            self._finish(pending, SecretRequestOutcome("stored", secret, replaced))
+            return secret
+
+        try:
+            return await settle_before_cancelling(store_and_finish())
+        finally:
+            self._answers.pop(key)
+            settled.set_result(None)
 
     def decline(self, request_id: str) -> None:
         pending = self._pending.get(request_id)
         if pending is None:
             raise SecretRecordError("This request is no longer waiting; the Agent stopped asking.")
+        if (pending.address, pending.name) in self._answers:
+            raise SecretRecordError("An answer is already being saved. Wait for it to finish.")
         _LOGGER.info("Secret request for %s declined", pending.name)
         self._finish(pending, SecretRequestOutcome("declined"))
 

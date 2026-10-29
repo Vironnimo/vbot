@@ -857,7 +857,6 @@ describe('CronView', () => {
       repeat: null,
       session_id: null,
       notification_policy: 'all',
-      delivery: { kind: 'none' },
       watch: null,
       working_project_id: null,
     });
@@ -992,7 +991,6 @@ describe('CronView', () => {
       repeat: 1,
       session_id: 'session-preserve',
       notification_policy: 'all',
-      delivery: { kind: 'none' },
       watch: null,
     });
   });
@@ -1047,7 +1045,6 @@ describe('CronView', () => {
       working_project_id: null,
       session_id: null,
       notification_policy: 'all',
-      delivery: { kind: 'none' },
       watch: null,
     });
   });
@@ -1102,6 +1099,99 @@ describe('CronView', () => {
       () => acknowledgeCronAlertMock.mock.calls.length === 1,
     );
     expect(acknowledgeCronAlertMock).toHaveBeenCalledWith('job-done');
+  });
+
+  it('explicitly repairs a completed Once job’s platform-blocked delivery without changing its job or uncertain messages', async () => {
+    const agentChannels = [
+      {
+        id: 'new-chat',
+        platform: 'telegram',
+        agent_id: 'agent-alpha',
+        allowed_chat_ids: ['42'],
+      },
+      { id: 'other-agent', platform: 'discord', agent_id: 'agent-beta' },
+    ];
+    rpcMock.mockImplementation(
+      createAgentListRpcMock(defaultAgents(), agentChannels),
+    );
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'done-once',
+          status: 'completed',
+          schedule_type: 'once',
+          run_at: '2026-05-14T10:00:00+00:00',
+          remaining_runs: 0,
+          delivery: {
+            kind: 'chat',
+            channel_id: 'old-chat',
+            platform_target: 'old-recipient',
+          },
+          delivery_progress: { waiting: 3, uncertain: 1, platform_blocked: 2 },
+        }),
+      ],
+    });
+    retryCronDeliveryMock
+      .mockRejectedValueOnce(new Error('Channel changed again'))
+      .mockResolvedValue({ rebound_notifications: 2 });
+    mountView();
+    await waitForCondition(() =>
+      findButtonByText(t('cron.delivery.chooseTarget')),
+    );
+    buttonByText(t('cron.delivery.chooseTarget')).click();
+    flushSync();
+    await waitForCondition(() =>
+      document.getElementById('cron-delivery-retry-channel'),
+    );
+    // Re-read the current Channels when choosing a destination, rather than
+    // reusing the catalog captured when the Automations view mounted.
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'channel.list'),
+    ).toHaveLength(2);
+    expect(inputById('cron-delivery-retry-chat').value).toBe('');
+    expect(buttonByText(t('cron.delivery.rebind')).disabled).toBe(true);
+    document.getElementById('cron-delivery-retry-channel').click();
+    flushSync();
+    expect(
+      [...document.querySelectorAll('.dropdown-option')].map((option) =>
+        option.textContent.trim(),
+      ),
+    ).toEqual(['new-chat · Telegram']);
+    document.querySelector('.dropdown-option').click();
+    flushSync();
+    for (const [id, value] of [
+      ['cron-delivery-retry-chat', '42'],
+      ['cron-delivery-retry-thread', '7'],
+    ]) {
+      inputById(id).value = value;
+      inputById(id).dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    flushSync();
+    buttonByText(t('cron.delivery.rebind')).click();
+    await waitForCondition(() =>
+      document.querySelector('#cron-delivery-retry-form [role="alert"]'),
+    );
+    expect(inputById('cron-delivery-retry-chat').value).toBe('42');
+    buttonByText(t('cron.delivery.rebind')).click();
+    await waitForCondition(
+      () => !document.getElementById('cron-delivery-retry-form'),
+    );
+    expect(retryCronDeliveryMock).toHaveBeenLastCalledWith('done-once', {
+      delivery: {
+        kind: 'chat',
+        channel_id: 'new-chat',
+        platform: 'telegram',
+        platform_target: '42',
+        thread_id: '7',
+      },
+    });
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: t('cron.delivery.rebound', { count: 2 }),
+      }),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+    expect(enableCronJobMock).not.toHaveBeenCalled();
   });
 
   it('shows a silent Run and the last answer and delivers to a chat of the Agent', async () => {
@@ -1181,11 +1271,75 @@ describe('CronView', () => {
         delivery: {
           kind: 'chat',
           channel_id: 'tg-alpha',
+          platform: 'telegram',
           platform_target: '42',
         },
       }),
     );
   });
+
+  it.each([undefined, 'telegram'])(
+    'keeps a %s delivery binding on unrelated edits and requires an explicit new chat for a changed platform',
+    async (platform) => {
+      const job = cronJob({
+        id: 'job-bound',
+        delivery: {
+          kind: 'chat',
+          channel_id: 'chat',
+          platform_target: '42',
+          ...(platform ? { platform } : {}),
+        },
+      });
+      rpcMock.mockImplementation(
+        createAgentListRpcMock(defaultAgents(), [
+          { id: 'chat', platform: 'discord', agent_id: 'agent-alpha' },
+        ]),
+      );
+      listCronJobsMock.mockImplementation(async () => ({ jobs: [job] }));
+      updateCronJobMock.mockImplementation(async (patch) => {
+        Object.assign(job, patch);
+        return job;
+      });
+      mountView();
+      await waitForCondition(() =>
+        document.getElementById('cron-job-delivery-channel'),
+      );
+      inputById('cron-job-prompt').value = 'Changed prompt';
+      inputById('cron-job-prompt').dispatchEvent(
+        new Event('input', { bubbles: true }),
+      );
+      flushSync();
+      buttonByText(t('common.save')).click();
+      await waitForCondition(
+        () =>
+          listCronJobsMock.mock.calls.length === 2 &&
+          document
+            .querySelector('.cron-detail-footer')
+            .textContent.includes(t('common.saved')),
+      );
+      expect(updateCronJobMock.mock.calls[0][0]).not.toHaveProperty('delivery');
+      chooseOption('cron-job-delivery-channel', 'chat');
+      expect(inputById('cron-job-delivery-chat').value).toBe('');
+      buttonByText(t('common.save')).click();
+      await waitForCondition(() =>
+        document.body.textContent.includes(t('cron.errors.chatDelivery')),
+      );
+      expect(updateCronJobMock).toHaveBeenCalledTimes(1);
+      inputById('cron-job-delivery-chat').value = '84';
+      inputById('cron-job-delivery-chat').dispatchEvent(
+        new Event('input', { bubbles: true }),
+      );
+      flushSync();
+      buttonByText(t('common.save')).click();
+      await waitForCondition(() => updateCronJobMock.mock.calls.length === 2);
+      expect(updateCronJobMock.mock.calls[1][0].delivery).toEqual({
+        kind: 'chat',
+        channel_id: 'chat',
+        platform: 'discord',
+        platform_target: '84',
+      });
+    },
+  );
 
   it('runs a job on each new email to an email Channel of its Agent', async () => {
     rpcMock.mockImplementation(

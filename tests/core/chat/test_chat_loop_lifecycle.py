@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, override
 
@@ -14,6 +15,7 @@ import core.tools.change_tracker as change_tracker_module
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.extensions import ExtensionRegistry
+from core.projects import ProjectStore
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
@@ -54,6 +56,95 @@ def _runtime(tmp_path: Path, responses: list[Any], **adapter_options: Any) -> An
 
 def _answer(content: str = "Done") -> JsonObject:
     return {"content": content, "reasoning": None, "tool_calls": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["programmatic", "accessor"])
+@pytest.mark.parametrize("boundary", ["resolution", "creation"])
+async def test_new_session_admission_keeps_the_selected_project_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry_point: str, boundary: str
+) -> None:
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model=MODEL, root_project_id="work"),
+        adapter=StubAdapter([_answer()]),
+    )
+    projects = ProjectStore(tmp_path, sessions=runtime.chat_sessions)
+    runtime.projects = projects
+    original_repo, replacement_repo = tmp_path / "original", tmp_path / "replacement"
+    original_repo.mkdir()
+    replacement_repo.mkdir()
+    projects.create("work", "Original", original_repo)
+    entered, release = asyncio.Event(), asyncio.Event()
+    if boundary == "resolution":
+        resolve = runtime.agent_resolver.resolve_working_project_async
+
+        async def held_resolution(*args, **kwargs):
+            result = await resolve(*args, **kwargs)
+            entered.set()
+            await release.wait()
+            return result
+
+        monkeypatch.setattr(
+            runtime.agent_resolver, "resolve_working_project_async", held_resolution
+        )
+    else:
+        create = runtime.chat_sessions.create_async
+
+        async def held_creation(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await create(*args, **kwargs)
+
+        monkeypatch.setattr(runtime.chat_sessions, "create_async", held_creation)
+    loop = build_chat_loop(runtime)
+    request = (
+        loop.start_run_in_new_session("coder", "Use my Project", session_id="new-input")
+        if entry_point == "programmatic"
+        else loop.submit_accessor_input(
+            "coder",
+            "Use my Project",
+            input_id="input",
+            request_hash="hash",
+            new_session=True,
+            session_id="new-input",
+        )
+    )
+    pending = asyncio.create_task(request)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        with pytest.raises(RunAdmissionBlockedError):
+            async with runtime.chat_runs.agent_admission_guard("coder", project_id=None):
+                pytest.fail("the Agent must remain stable throughout preparation")
+        if boundary == "resolution":
+            async with runtime.chat_runs.project_admission_guard("work"):
+                with projects.archive_files("work", tmp_path / "archived-project"):
+                    runtime.agents._agent = replace(runtime.agents._agent, root_project_id=None)
+            projects.create("work", "Replacement", replacement_repo)
+            release.set()
+            with pytest.raises(RunAdmissionBlockedError):
+                await pending
+            assert not runtime.chat_sessions.exists(session_address("coder", "new-input"))
+            assert runtime.adapter.requests == []
+        else:
+            with pytest.raises(RunAdmissionBlockedError):
+                async with runtime.chat_runs.project_admission_guard("work"):
+                    pytest.fail("the selected Project must stay until Run installation")
+            release.set()
+            result: Any = await pending
+            run = result if entry_point == "programmatic" else result.run
+            assert run is not None
+            await run.wait()
+            assert run.working_project_id == "work"
+            assert projects.get("work").display_name == "Original"
+        # Success, refusal and cancellation release all preparation reservations.
+        async with runtime.chat_runs.agent_admission_guard("coder", project_id=None):
+            pass
+    finally:
+        release.set()
+        await runtime.chat_runs.aclose()
+        projects.close()
+        runtime.chat_sessions.close()
 
 
 @pytest.mark.asyncio
@@ -120,11 +211,15 @@ async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
             monkeypatch.setattr(resolver, "resolve_working_project_async", paused_project)
         pending = asyncio.create_task(start("coder", "Hi", session_id=SESSION.session_id))
         await asyncio.wait_for(entered.wait(), 5)
-        async with runtime.chat_runs.session_admission_guard(SESSION):
-            await runtime.chat_sessions.archive(SESSION)
-            if session_state == "recreated":
-                replacement = runtime.chat_sessions.create("coder", session_id=SESSION.session_id)
-                replacement.append(ChatMessage.user("Replacement history"))
+        with pytest.raises(RunAdmissionBlockedError):
+            async with runtime.chat_runs.session_admission_guard(SESSION):
+                pytest.fail("preflight must exclude the lifecycle transition")
+        # Bypass the lifecycle caller deliberately: canonical generation admission
+        # must still refuse an independently replaced address.
+        await runtime.chat_sessions.archive(SESSION)
+        if session_state == "recreated":
+            replacement = runtime.chat_sessions.create("coder", session_id=SESSION.session_id)
+            replacement.append(ChatMessage.user("Replacement history"))
         release.set()
         run = None
         with pytest.raises(ChatSessionError):

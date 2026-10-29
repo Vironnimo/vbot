@@ -129,6 +129,8 @@ export function createChatHistory({
     const snapshotVersion = sessionState.historySnapshotVersion;
     const compactionPolicy = sessionState.compactionPolicy;
     const usage = sessionState.usage;
+    const sessionUsage = sessionState.sessionUsage;
+    const contextUsage = sessionState.contextUsage;
     const outputSpeed = sessionState.outputSpeed;
     const outputLatency = sessionState.outputLatency;
     return {
@@ -142,6 +144,10 @@ export function createChatHistory({
         }
         // Output from the live Run may have advanced since the read began.
         if (sessionState.usage !== usage) options.preserveUsage = true;
+        if (sessionState.sessionUsage !== sessionUsage)
+          options.preserveSessionUsage = true;
+        if (sessionState.contextUsage !== contextUsage)
+          options.preserveContextUsage = true;
         if (sessionState.outputSpeed !== outputSpeed)
           options.preserveOutputSpeed = true;
         if (sessionState.outputLatency !== outputLatency)

@@ -16,7 +16,7 @@ A reservation for inbound work that is accepted but cannot yet become a queued R
 
 ### Run Admission Guard
 
-A block on new Run admission for one Session, Agent or Project scope, which a destructive workflow such as archive, move or delete holds while it changes that scope and can take only while the scope has no active or queued work (Interfaces). Not a cancellation mechanism or a persistence lock: the workflow still makes its storage changes through its own domain's APIs.
+A block on new Run admission for one Session, Agent or Project scope, which a destructive workflow such as archive, move or delete holds while it changes that scope and can take only while the scope has no active, queued or preparing work (`runs/queue-and-admission.md` -> Admission preparation). Not a cancellation mechanism or a persistence lock: the workflow still makes its storage changes through its own domain's APIs.
 
 ## Data Model
 

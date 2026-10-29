@@ -1,10 +1,14 @@
-"""Librarian commands of the vBot CLI: inspect and start Librarian passes."""
+"""Librarian commands of the vBot CLI: inspect, start and undo Librarian passes."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
+from cli._recovery import format_command, target_options
+from cli.formatting import inline_text
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -77,7 +81,9 @@ def librarian_status(instance: ServerInstance, agent_id: str) -> CommandResult:
     if not payload.ok:
         return payload.to_command_result()
     return CommandResult(
-        ok=True, message="\n".join(_format_status(agent_id, payload.data)), instance=instance
+        ok=True,
+        message="\n".join(_format_status(instance, agent_id, payload.data)),
+        instance=instance,
     )
 
 
@@ -92,6 +98,34 @@ def librarian_run(instance: ServerInstance, agent_id: str) -> CommandResult:
         f"see its result with: vbot librarian status {agent_id}",
     ]
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def librarian_undo(
+    instance: ServerInstance, agent_id: str, started_at: str, *, as_json: bool = False
+) -> CommandResult:
+    """Undo one exact pass through the server's cross-owner learning transaction."""
+    payload = _rpc_call(
+        instance, "librarian.undo", {"agent_id": agent_id, "started_at": started_at}
+    )
+    if not payload.ok:
+        result = payload.to_command_result()
+        if as_json:
+            error: dict[str, Any] = {"message": result.message, "data": dict(payload.error_data)}
+            if result.failure is not None:
+                error.update(code=result.failure.code, request_state=result.failure.request_state)
+            return replace(result, message=json.dumps({"ok": False, "error": error}))
+        return result
+    message = (
+        json.dumps(payload.data, ensure_ascii=False, indent=2)
+        if as_json
+        else "\n".join(
+            [
+                f"Librarian pass of {inline_text(agent_id)} at {inline_text(started_at)} undone",
+                *_format_status(instance, agent_id, payload.data),
+            ]
+        )
+    )
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def _format_overview(data: Mapping[str, Any]) -> list[str]:
@@ -124,7 +158,7 @@ def _format_overview(data: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
+def _format_status(instance: ServerInstance, agent_id: str, data: Mapping[str, Any]) -> list[str]:
     settings = _mapping(data.get("settings"))
     lines = [f"Librarian of {agent_id}"]
     reason = _UNSCHEDULED_TEXT.get(str(data.get("unscheduled_reason")))
@@ -153,11 +187,29 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
     if not changes:
         lines.append("the last pass changed no skill")
     else:
-        lines.append(f"changes of the last pass: {len(changes)} revisions, newest first")
+        lines.append(f"recorded changes of the last pass: {len(changes)} revisions, newest first")
         for revision in changes:
-            lines.extend(format_skill_revision(revision))
-        ids = " ".join(str(revision.get("id")) for revision in changes)
-        lines.append(f"undo them together with: vbot skill revert {ids} --scope agent:{agent_id}")
+            owner = revision.get("skill_owner_id")
+            displayed = (
+                {**revision, "skill": f"{revision.get('skill', '?')} ({owner})"}
+                if isinstance(owner, str) and owner
+                else revision
+            )
+            lines.extend(format_skill_revision(displayed))
+        started_at = last_pass.get("started_at")
+        if isinstance(started_at, str) and started_at:
+            command = format_command(
+                (
+                    "vbot",
+                    "librarian",
+                    "undo",
+                    agent_id,
+                    "--started-at",
+                    started_at,
+                    *target_options(instance),
+                )
+            )
+            lines.append(f"Undo: {command}")
     if _running_session(data) or any(
         isinstance(record.get("session_id"), str) for record in (last_pass, *earlier)
     ):
@@ -185,6 +237,8 @@ def _format_pass(last_pass: Mapping[str, Any]) -> list[str]:
         f"last pass: {_string_or_default(last_pass.get('finished_at'), '?')} "
         f"({_trigger_text(last_pass)})"
     ]
+    if isinstance(last_pass.get("started_at"), str):
+        lines.append(f"  started {last_pass['started_at']}")
     stopped = _OUTCOME_TEXT.get(str(last_pass.get("outcome")))
     if stopped is not None:
         lines.append(f"  {stopped}")
@@ -214,6 +268,8 @@ def _pass_line(record: Mapping[str, Any], *, agent: bool) -> str:
         name = _string_or_default(record.get("agent_name"), agent_id)
         parts.append(agent_id if name == agent_id else f"{name} ({agent_id})")
     parts.append(_trigger_text(record))
+    if isinstance(record.get("started_at"), str):
+        parts.append(f"started {record['started_at']}")
     stopped = _OUTCOME_TEXT.get(str(record.get("outcome")))
     if stopped is not None:
         parts.append(stopped)

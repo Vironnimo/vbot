@@ -68,7 +68,7 @@ from core.utils.atomic import atomic_write_bytes
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.ids import has_id_entry, is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 from core.utils.tree_move import move_tree
 from core.utils.user_order import apply_order, reorder_state, validated_reorder_request
 
@@ -650,16 +650,29 @@ class ProjectStore:
                 _move_back(project_dir, source, exc, "Project restore failed")
                 raise
 
-    def complete_restore_files(self, target_id: str, *, source_id: str) -> None:
+    def complete_restore_files(
+        self, target_id: str, *, source_id: str, expected_created_at: str | None
+    ) -> None:
         """Finish the configuration rewrite of an Anchor already moved by restore."""
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_project_id(target_id)
             config = self._project_dir(target_id) / _PROJECT_CONFIG_FILENAME
-            project = project_from_dict(load_validated_project_json(config))
+            data = load_validated_project_json(config)
+            project = project_from_dict(data)
             if project.project_id not in (source_id, target_id):
                 raise ProjectError(
                     f"Project restore target belongs to another Project: {target_id}"
                 )
+            try:
+                if not isinstance(expected_created_at, str):
+                    raise ValueError
+                parse_timestamp(expected_created_at)
+                if data.get("created_at") != expected_created_at:
+                    raise ValueError
+            except ValueError as error:
+                raise ProjectError(
+                    f"The restore target cannot be verified as the archived Project: {target_id}"
+                ) from error
             self._reject_duplicate_cwd(project.cwd, exclude_project_id=target_id)
             restored = replace(project, project_id=target_id, updated_at=utc_now_timestamp())
             try:

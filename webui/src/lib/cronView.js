@@ -467,6 +467,7 @@ function deliveryFormFields(delivery) {
   return {
     delivery_kind: delivery?.kind ?? CRON_DELIVERY_NONE,
     delivery_channel_id: delivery?.channel_id ?? '',
+    delivery_platform: delivery?.platform ?? '',
     delivery_platform_target: delivery?.platform_target ?? '',
     delivery_thread_id: delivery?.thread_id ?? '',
   };
@@ -485,6 +486,8 @@ function cronDeliveryPayload(formValues) {
     platform_target: requiredText(formValues?.delivery_platform_target),
   };
   const threadId = optionalText(formValues?.delivery_thread_id);
+  const platform = optionalText(formValues?.delivery_platform);
+  if (platform !== null) payload.platform = platform;
   if (threadId !== null) {
     payload.thread_id = threadId;
   }
@@ -743,7 +746,7 @@ export function buildCreateCronPayload(formValues) {
   return payload;
 }
 
-export function buildUpdateCronPayload(formValues) {
+export function buildUpdateCronPayload(formValues, originalDelivery) {
   const scheduleType = normalizeScheduleType(formValues?.schedule_type);
 
   const payload = {
@@ -754,10 +757,16 @@ export function buildUpdateCronPayload(formValues) {
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
     notification_policy: formValues.notification_policy ?? 'all',
-    delivery: cronDeliveryPayload(formValues),
     watch: cronWatchPayload(formValues),
     ...cronExecutionPayload(formValues, true),
   };
+
+  // Sending delivery explicitly is a new binding choice, including for a
+  // legacy job whose old platform is unknown. Unrelated edits leave it alone.
+  const delivery = cronDeliveryPayload(formValues);
+  if (JSON.stringify(delivery) !== JSON.stringify(originalDelivery)) {
+    payload.delivery = delivery;
+  }
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
@@ -857,6 +866,10 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     delivery_progress: {
       waiting: Math.max(0, Number(job?.delivery_progress?.waiting) || 0),
       uncertain: Math.max(0, Number(job?.delivery_progress?.uncertain) || 0),
+      platform_blocked: Math.max(
+        0,
+        Number(job?.delivery_progress?.platform_blocked) || 0,
+      ),
       error: optionalText(job?.delivery_progress?.error),
       last_delivered_at: optionalText(
         job?.delivery_progress?.last_delivered_at,
@@ -967,6 +980,9 @@ function normalizeDelivery(delivery) {
   return {
     kind,
     channel_id: asText(delivery.channel_id),
+    ...(optionalText(delivery.platform) !== null
+      ? { platform: optionalText(delivery.platform) }
+      : {}),
     platform_target: asText(delivery.platform_target),
     thread_id: optionalText(delivery.thread_id),
   };

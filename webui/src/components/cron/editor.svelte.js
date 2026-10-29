@@ -435,7 +435,10 @@ export function createCronEditor(context) {
                 id: selectedJobId,
                 notification_policy: formValues.notification_policy,
               }
-            : buildUpdateCronPayload(formValues),
+            : buildUpdateCronPayload(
+                formValues,
+                JSON.parse(formBaseline).delivery,
+              ),
         );
       }
 
@@ -520,14 +523,24 @@ export function createCronEditor(context) {
     }
   }
 
-  async function retryDelivery(job) {
-    if (!job?.id || mutatingJobId) return;
+  async function retryDelivery(job, delivery = null) {
+    if (!job?.id || mutatingJobId) return false;
     mutatingJobId = job.id;
     try {
-      await retryCronDelivery(job.id);
+      if (delivery) {
+        const result = await retryCronDelivery(job.id, { delivery });
+        context.showToast(
+          t('cron.delivery.rebound', {
+            count: result.rebound_notifications ?? 0,
+          }),
+          'success',
+        );
+      } else await retryCronDelivery(job.id);
       await context.loadJobs({ silent: true });
+      return true;
     } catch (error) {
       context.showToast(t('cron.delivery.retryError'), 'error', error);
+      return false;
     } finally {
       mutatingJobId = '';
     }

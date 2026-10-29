@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import shutil
@@ -322,6 +323,8 @@ def test_background_protection_resolves_each_home_once_and_keeps_owner_precedenc
     "scope",
     [
         "shared",
+        "legacy_shared",
+        "legacy_shared_reload",
         "disabled_owner",
         "project",
         "disabled_own_shared",
@@ -336,6 +339,17 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
     runtime.start()
     try:
         data_dir = runtime.storage.data_dir
+        legacy = scope.startswith("legacy_")
+        agent_file = data_dir / "agents" / "main" / "agent.json"
+        if legacy:
+            persisted = json.loads(agent_file.read_text(encoding="utf-8"))
+            persisted.pop("created_at")
+            agent_file.write_text(json.dumps(persisted), encoding="utf-8")
+            if scope.endswith("_reload"):
+                runtime.reload_skills()
+            # Reading old history must not invent provenance for existing work.
+            assert runtime.learning_changes.of_run("main", "run-one").summary.skills == 0
+            assert "created_at" not in json.loads(agent_file.read_text(encoding="utf-8"))
         for owner_id in ("a-owner", "z-owner"):
             runtime.agents.create(owner_id, owner_id)
             write_agent_skill(data_dir, owner_id, "deploy", "Shared playbook.")
@@ -406,6 +420,23 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
         else:
             assert result["ok"] is True
             assert changed == {visible}
+            if legacy:
+                stamp = json.loads(agent_file.read_text(encoding="utf-8"))["created_at"]
+                assert runtime.agents.get("main").created_at == stamp
+                [revision] = runtime.skill_authoring.history(
+                    visible.parent.parent, "deploy", limit=1
+                )
+                assert revision.subject_created_at == stamp
+                assert runtime.learning_changes.of_run("main", "run-one").summary.skills == 1
+                # Renaming the writing Agent preserves its incarnation and the
+                # attribution in the other Agent's unmoved Skill history.
+                await runtime.rename_agent("main", "renamed")
+                assert runtime.agents.get("renamed").created_at == stamp
+                undone = runtime.learning_changes.undo(
+                    "renamed", "run-one", workspace=Path(runtime.agents.get("renamed").workspace)
+                )
+                assert undone.skills_changed
+                assert visible.read_bytes() == before[visible]
     finally:
         await runtime.aclose()
 

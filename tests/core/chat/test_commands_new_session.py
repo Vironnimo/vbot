@@ -7,8 +7,10 @@ that creates the Session and uses it leaves a Session behind.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -26,7 +28,7 @@ from core.chat import (
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
 from core.projects import AgentOverrides, ModelConfigurationError
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunAdmissionBlockedError
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     ChatSessionManager,
@@ -87,9 +89,14 @@ def sessions(tmp_path: Path, current_session_store_template: Path) -> Iterator[C
 
 
 @pytest.fixture
-def dispatcher(sessions: ChatSessionManager) -> CommandDispatcher:
+def chat_runs(sessions: ChatSessionManager) -> ChatRunManager:
+    return ChatRunManager(persistence=sessions)
+
+
+@pytest.fixture
+def dispatcher(sessions: ChatSessionManager, chat_runs: ChatRunManager) -> CommandDispatcher:
     return CommandDispatcher(
-        ChatRunManager(persistence=sessions),
+        chat_runs,
         agent_resolver=cast(Any, _Resolver()),
         sessions=sessions,
     )
@@ -162,13 +169,17 @@ async def test_commands_that_work_on_a_session_wait_for_its_first_message(
 async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
     dispatcher: CommandDispatcher,
     sessions: ChatSessionManager,
+    chat_runs: ChatRunManager,
     uses_session: bool,
     requested_id: str | None,
 ) -> None:
     observed: list[str] = []
+    entered, release = asyncio.Event(), asyncio.Event()
 
-    def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+    async def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
         observed.append(context.session_id)
+        entered.set()
+        await release.wait()
         if uses_session:
             address = SessionAddress(context.project_id, context.agent_id, context.session_id)
             sessions.get(address).append(ChatMessage.user("Workflow brief"))
@@ -180,12 +191,37 @@ async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
         "fixture", name="workflow", description="Start the workflow.", handler=handler
     )
 
-    result = await dispatcher.execute_for_new_session(
-        _prepared(dispatcher, "/workflow"),
-        replace(
-            _context(working_project_id="vbot", model="openai/gpt-mini"), session_id=requested_id
-        ),
+    pending = asyncio.create_task(
+        dispatcher.execute_for_new_session(
+            _prepared(dispatcher, "/workflow"),
+            replace(
+                _context(working_project_id="vbot", model="openai/gpt-mini"),
+                session_id=requested_id,
+            ),
+        )
     )
+    await entered.wait()
+    async with chat_runs.session_admission_guard(SessionAddress(None, "coder", "unrelated")):
+        pass
+    # A command may await before it starts its first Run. Its new Session and
+    # resolved owners stay reserved throughout that preparation too.
+    try:
+        with pytest.raises(RunAdmissionBlockedError):
+            async with chat_runs.agent_admission_guard("coder", project_id=None):
+                pytest.fail("the new command still uses this Agent")
+        with pytest.raises(RunAdmissionBlockedError):
+            async with chat_runs.project_admission_guard("vbot"):
+                pytest.fail("the new command still uses this Working Project")
+        with pytest.raises(RunAdmissionBlockedError):
+            async with chat_runs.session_admission_guard(
+                SessionAddress(None, "coder", observed[0])
+            ):
+                pytest.fail("the new command still uses this Session")
+    finally:
+        release.set()
+    result = await pending
+    async with chat_runs.agent_admission_guard("coder", project_id=None):
+        pass
 
     # The handler ran in a Session created with the new Session's overrides and
     # working Project.
@@ -215,6 +251,53 @@ async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
         assert result.session_id is None
         assert sessions.list("coder") == []
         assert result.outcome.resource_changes == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_creating_command_cleanup_keeps_a_replacement_session(
+    dispatcher: CommandDispatcher,
+    sessions: ChatSessionManager,
+    chat_runs: ChatRunManager,
+    monkeypatch: pytest.MonkeyPatch,
+    cancelled: bool,
+) -> None:
+    def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        if cancelled:
+            raise asyncio.CancelledError
+        return CommandOutcome(command="workflow")
+
+    dispatcher.register_extension_command(
+        "fixture", name="workflow", description="Start the workflow.", handler=handler
+    )
+    original_guard = chat_runs.session_admission_guard
+    replacement_generation = None
+
+    @asynccontextmanager
+    async def replace_before_cleanup(address: SessionAddress) -> AsyncIterator[None]:
+        nonlocal replacement_generation
+        # Another lifecycle operation wins after the command releases preparation.
+        async with original_guard(address):
+            await sessions.archive(address)
+            replacement_generation = sessions.create(
+                address.agent_id, session_id=address.session_id
+            ).generation_id
+        async with original_guard(address):
+            yield
+
+    monkeypatch.setattr(chat_runs, "session_admission_guard", replace_before_cleanup)
+    request = dispatcher.execute_for_new_session(
+        _prepared(dispatcher, "/workflow"), replace(_context(), session_id="caller-session")
+    )
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    else:
+        result = await request
+        assert result.session_id is None
+    assert sessions.get(SessionAddress(None, "coder", "caller-session")).generation_id == (
+        replacement_generation
+    )
 
 
 @pytest.mark.asyncio

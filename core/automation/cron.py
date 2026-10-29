@@ -246,6 +246,7 @@ class CronService:
         self._calendar = calendar
         # Delivers Run answers and failure alerts to Channel chats once wired.
         self._chats: ChatDelivery | None = None
+        self._mail_reference_lock: asyncio.Lock | None = None
         self._notifications = CronNotifications(self)
         # Runs the checks of watching jobs once wired.
         self._watch_checks: WatchChecks | None = None
@@ -279,13 +280,17 @@ class CronService:
         if calendar is not None:
             calendar.add_changed_callback(self._event_binding._on_calendar_changed)
 
-    def set_chat_delivery(self, chats: ChatDelivery | None) -> None:
+    def set_chat_delivery(
+        self, chats: ChatDelivery | None, *, reference_lock: asyncio.Lock | None = None
+    ) -> None:
         """Wire the Channels that deliver jobs' answers and alerts to chats.
 
         Without it, a job cannot be set to deliver to a chat, and a stored chat
         delivery logs a warning instead of sending.
         """
         self._chats = chats
+        if reference_lock is not None:
+            self._mail_reference_lock = reference_lock
 
     def set_watch_checks(self, checks: WatchChecks | None) -> None:
         """Wire what runs the checks of watching jobs.
@@ -360,7 +365,13 @@ class CronService:
         when it could not be stored, so the Channel hands it over again. A job
         takes each ``message_id`` at most once.
         """
-        await self._emails.accept_mail(mail)
+        if self._mail_reference_lock is None:
+            await self._emails.accept_mail(mail)
+        else:
+            # A rename moves Channels before Cron jobs. New mail waits for the
+            # complete owner transition; an old adapter can cancel while waiting.
+            async with self._mail_reference_lock:
+                await self._emails.accept_mail(mail)
 
     def email_status(self, job: CronJob) -> InboxCounts | None:
         """The mails an email job received and keeps for its next Run; None for any other job."""
@@ -498,7 +509,7 @@ class CronService:
                 self._webhooks.check_available()
             self._event_binding._check_event_binding(job)
             await self._validate_references_async(
-                job, check_delivery=True, check_email=True, snapshot_new=True
+                job, check_delivery=True, bind_delivery=True, check_email=True, snapshot_new=True
             )
             self._reject_past_once_run(job)
             self._validate_capacity(job)
@@ -881,7 +892,10 @@ class CronService:
             )
             issued = False
             try:
-                if changed_fields and changed_fields != ["notification_policy"]:
+                if (
+                    changed_fields and changed_fields != ["notification_policy"]
+                ) or "delivery" in fields:
+                    candidate = self._clone_job(candidate)
                     snapshot_target = (
                         not rename
                         and "working_project_id" not in fields
@@ -896,7 +910,8 @@ class CronService:
                     # unrelated edit (pausing, say) works while its Channel is gone.
                     await self._validate_references_async(
                         candidate,
-                        check_delivery=bool({"delivery", "agent_id"} & set(changed_fields)),
+                        check_delivery="delivery" in fields or "agent_id" in changed_fields,
+                        bind_delivery="delivery" in fields and not rename,
                         check_email=bool(
                             {"email", "agent_id", "schedule_type"} & set(changed_fields)
                         ),
@@ -904,6 +919,8 @@ class CronService:
                     )
                     if snapshot_target:
                         fields = {**fields, "working_project_id": candidate.working_project_id}
+                    if "delivery" in fields:
+                        fields = {**fields, "delivery": candidate.delivery}
                     if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
                         await settle_before_cancelling(self._prepare_webhook(job_id))
                         issued = True
@@ -1170,9 +1187,9 @@ class CronService:
         self._validate_capacity(candidate, replacing_id=job_id)
         return job, candidate, changed_fields, restart_task
 
-    async def retry_delivery(self, job_id: str) -> None:
+    async def retry_delivery(self, job_id: str, *, delivery: CronDelivery | None = None) -> int:
         """Retry retained notifications, including an explicitly checked uncertain send."""
-        await self._notifications.retry(job_id)
+        return await self._notifications.retry(job_id, delivery)
 
     async def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one cron job and cancel any active task."""
@@ -1458,6 +1475,7 @@ class CronService:
         job: CronJob,
         *,
         check_delivery: bool = False,
+        bind_delivery: bool = False,
         check_email: bool = False,
         snapshot_new: bool = False,
     ) -> None:
@@ -1477,7 +1495,7 @@ class CronService:
         else:
             await self._sessions.run_async(validate, job)
         if check_delivery:
-            await check_chat_delivery(job, self._chats)
+            await check_chat_delivery(job, self._chats, bind_platform=bind_delivery)
         if check_email:
             await check_email_channel(job, self._chats)
 

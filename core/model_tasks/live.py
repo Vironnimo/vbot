@@ -91,6 +91,7 @@ from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 JsonObject = dict[str, Any]
 
@@ -428,11 +429,16 @@ class LiveVoiceService:
         started_at = self._clock().astimezone(ZoneInfo(self._runtime.timezone_name()))
         title = f"Live call · {started_at:%Y-%m-%d %H:%M}"
         call: LiveCallSession | None = None
+        starting_task = asyncio.current_task()
 
         def end_call() -> None:
             # The user stopped the voice Run in the app.
             if call is not None:
                 call.abort_soon()
+            elif starting_task is not None:
+                # The voice Run exists while its Provider wire is opening.
+                # Stop must cancel that work before a call can become live.
+                starting_task.cancel()
 
         try:
             voice = await chat.start_external_run(
@@ -453,7 +459,7 @@ class LiveVoiceService:
             setup = self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
             wire = await self._open_wire(plan, label, offer_sdp, setup)
         except BaseException:
-            await asyncio.shield(voice.discard())
+            await settle_before_cancelling(voice.discard())
             raise
         log_id = new_id("live")
         call = LiveCallSession(

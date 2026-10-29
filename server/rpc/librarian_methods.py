@@ -11,16 +11,32 @@ runs or the Agent or the Librarian has an active or queued Run, and with
 ``invalid_request`` when no pass can run for the Agent (the Librarian is
 unavailable, the Agent's ``librarian_enabled`` is off, it has no Skills of its
 own, or it is the Librarian).
+``librarian.undo`` takes the Agent and a retained pass's exact ``started_at``;
+it undoes aging and consolidation across Skill owners together and returns
+current status. It never accepts revision ids from the caller.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.automation import LibrarianBusyError, LibrarianService, LibrarianUnavailableError
+from core.automation import (
+    LearningRunActiveError,
+    LearningUndoConflictError,
+    LibrarianBusyError,
+    LibrarianService,
+    LibrarianUnavailableError,
+)
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RPC_ERROR_AGENT_BUSY, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_ACTIVE_RUN,
+    RPC_ERROR_AGENT_BUSY,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_LEARNING_UNDO_CONFLICT,
+    RpcError,
+)
+from server.rpc.learning_methods import _guard_learning_mutation
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
@@ -60,6 +76,25 @@ async def _librarian_run(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
+@_guard_learning_mutation
+async def _librarian_undo(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "started_at"}, "librarian.undo")
+    agent_id = _required_string(params, "agent_id")
+    started_at = _required_string(params, "started_at")
+    try:
+        return await _librarian(state).undo(agent_id, started_at)
+    except LearningRunActiveError as exc:
+        raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc), data={"run_id": exc.run_id}) from exc
+    except LearningUndoConflictError as exc:
+        raise RpcError(RPC_ERROR_LEARNING_UNDO_CONFLICT, str(exc), data=exc.to_dict()) from exc
+    except LibrarianBusyError as exc:
+        raise RpcError(RPC_ERROR_AGENT_BUSY, str(exc)) from exc
+    except LibrarianUnavailableError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the Librarian RPC handlers."""
 
@@ -67,4 +102,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "librarian.status": _librarian_status,
         "librarian.overview": _librarian_overview,
         "librarian.run": _librarian_run,
+        "librarian.undo": _librarian_undo,
     }
