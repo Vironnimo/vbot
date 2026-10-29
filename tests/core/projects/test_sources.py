@@ -557,7 +557,7 @@ def test_selected_profile_reloads_inherited_rules_and_only_its_definition(
 
 
 @pytest.mark.parametrize("source", ["claude", "opencode", "codex"])
-@pytest.mark.parametrize("failure", ["malformed", "unreadable"])
+@pytest.mark.parametrize("failure", ["malformed", "unreadable", "too_deep"])
 def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
     agents, projects, repo, deny_access, source, failure
 ):
@@ -575,6 +575,7 @@ def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
         )
         broken = "---\nname: [\n---\nBroken."
     write(repo, ".cursor/agents/reviewer.md", "---\nmodel: openai/gpt-5.2\n---\nShadowed.")
+    write(repo, ".cursor/agents/healthy.md", "---\nmodel: openai/gpt-5.2\n---\nHealthy.")
     project = projects.create(
         "repo",
         "Repo",
@@ -585,11 +586,24 @@ def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
     resolver.rescan_project(project)
     if failure == "malformed":
         path.write_text(broken, encoding="utf-8")
+    elif failure == "too_deep":
+        nested = "[" * 1200 + "0" + "]" * 1200
+        broken = (
+            f'name="reviewer"\nunknown={nested}'
+            if source == "codex"
+            else f"---\nname: reviewer\nunknown: {nested}\n---\nBroken."
+        )
+        path.write_text(broken, encoding="utf-8")
     else:
         deny_access(path)
     with pytest.raises(AgentResolutionError) as error:
         resolver.resolve_agent("repo", "reviewer")
     assert type(error.value) is AgentResolutionError
+    # A full rescan still reports unreadable definitions and keeps independent
+    # Team members; parser limits are configuration failures, not scan crashes.
+    rescanned = scan_project(repo, sources=project.sources)
+    assert any(member.agent_id == "healthy" for member in rescanned.team)
+    assert any(finding.type is FindingType.INVALID_SOURCE for finding in rescanned.report.findings)
 
 
 # The old readers: Claude walked its agents folder, OpenCode read only its top level.

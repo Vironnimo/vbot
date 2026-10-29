@@ -75,7 +75,7 @@ def markdown(path: Path) -> tuple[dict[str, Any], str]:
         raise SourceError("Unterminated YAML frontmatter.")
     try:
         fields = yaml.load("".join(lines[1:closing]), Loader=_YamlLoader)
-    except yaml.YAMLError as error:
+    except (yaml.YAMLError, RecursionError) as error:
         raise SourceError(f"Invalid YAML metadata: {error}") from error
     if fields is None:
         fields = {}

@@ -42,6 +42,8 @@ Source order decides winners, then stable path order within a Source; Agent name
 
 Membership and its winning definition can be cached; each Run uses the adapter's direct read of the selected file or named definition, with live inherited settings. This reuses the Team's source choice, not its configuration; new competitors require the normal Team rescan/invalidation. Removed or renamed definitions fall back to the ordered live search. Selected discovered files are checked for links along their source-folder path before reading. Codex still validates every explicit role config file because an invalid role source makes the shared configuration unavailable, but translates only the selected role and does not scan unrelated standalone files. There is no separate parsed-configuration cache. Project show/open rescans and refreshes detection. Skill registry/inventory rebuilds also refresh Sources. Mutations of order, activation, cwd or Model mappings invalidate Team/Skill projections.
 
+YAML and TOML parser nesting limits make the affected definition unavailable just like malformed metadata. A selected definition stays refused rather than using its shadowed fallback; a full scan retains unrelated Team members and reports the invalid input.
+
 ## Source and evidence
 
 Skill inventory passes its operation-local `SkillScan` through `ProjectStore.refresh_sources` and `detect_sources`, reusing those package reads for the inventory's later projections. Project opening still rescans the Team and that Project's Skills, but an unchanged global Skill catalog no longer invalidates unrelated Project/Agent scopes, and an unchanged Project Skill rescan keeps that Project's cached registries (`skills/manager.md` -> Invalidation).
