@@ -113,6 +113,10 @@ class RunSource(Protocol):
 
     def add_run_finished_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]: ...
 
+    def bind_work_span(
+        self, reader: Callable[[SessionAddress], datetime | None] | None
+    ) -> None: ...
+
     def add_queue_changed_callback(
         self, callback: Callable[[SessionAddress], None]
     ) -> Callable[[], None]: ...
@@ -236,6 +240,10 @@ class SessionActivity:
             completions.add_completion_changed_callback(self._mark),
             subagents.add_forwarded_callback(self._on_forwarded),
         ]
+        # Each finishing Run records the span it belongs to, so Accessors can
+        # show the Runs of one span as one piece of work, also after a reload.
+        runs.bind_work_span(self._work_started_at)
+        self._unsubscribers.append(lambda: runs.bind_work_span(None))
 
     def state(self, address: SessionAddress) -> SessionActivityState:
         """The Session's activity as last published; ``IDLE`` for one never followed."""
@@ -301,6 +309,12 @@ class SessionActivity:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._entries.clear()
+
+    def _work_started_at(self, address: SessionAddress) -> datetime | None:
+        # Read by the Run manager on the Event Loop as a Run finishes; a span
+        # in its settle period still counts, since leaving idle continues it.
+        entry = self._entries.get(address)
+        return None if entry is None or entry.span is None else entry.span[0]
 
     # Events
 

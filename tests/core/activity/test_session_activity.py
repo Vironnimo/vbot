@@ -28,6 +28,7 @@ from core.runs import ChatRunManager, Run, RunAdmission
 from core.sessions import SessionAddress
 from core.subagents.links import SubAgentLink
 from core.tools.command_manager import CommandNotFoundError
+from core.utils.timestamps import format_canonical_timestamp
 
 pytestmark = pytest.mark.asyncio
 
@@ -298,6 +299,14 @@ async def test_a_run_inside_the_settle_period_continues_the_span(
 
     assert world.states(PARENT) == ["working", "working", "idle"]
     assert world.changes[-1][2] == FinishedWork(START, START + timedelta(seconds=20), 20_000)
+    # Both Runs record the span they belong to with their terminal timing.
+    assert [_work_started_at(run) for run in (first, second)] == [
+        format_canonical_timestamp(START)
+    ] * 2
+
+
+def _work_started_at(run: Run) -> object:
+    return run.events[-1].payload["timing"].get("work_started_at")
 
 
 @pytest.mark.parametrize("removal", ["remove", "clear", "steer", "abandon"])
