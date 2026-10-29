@@ -49,13 +49,16 @@ async def test_run_does_not_recreate_a_generation_archived_before_admission(
 
     async def archive_before_start(address: SessionAddress, executor, **kwargs):
         created.append(address)
-        async with harness.manager.session_admission_guard(address):
-            await harness.sessions.archive(address)
-            if replace:
-                replacement = harness.sessions.create(
-                    address.agent_id, address.session_id, project_id=address.project_id
-                )
-                replacement.append(ChatMessage.user("replacement history"))
+        with pytest.raises(RunAdmissionBlockedError):
+            async with harness.manager.session_admission_guard(address):
+                pytest.fail("preflight must exclude the lifecycle transition")
+        # Independently exercise the canonical generation fence too.
+        await harness.sessions.archive(address)
+        if replace:
+            replacement = harness.sessions.create(
+                address.agent_id, address.session_id, project_id=address.project_id
+            )
+            replacement.append(ChatMessage.user("replacement history"))
         return await start(address, executor, **kwargs)
 
     monkeypatch.setattr(harness.manager, "start", archive_before_start)
@@ -103,15 +106,18 @@ async def test_send_refuses_a_generation_archived_during_preflight(
         )
     )
     await entered.wait()
-    async with harness.manager.session_admission_guard(address):
-        await harness.sessions.archive(address)
-        if replace:
-            replacement = harness.sessions.create(
-                address.agent_id, address.session_id, project_id=address.project_id
-            )
-            assert replacement.generation_id != generation
-            harness.resolver.update_session_overrides(address, {"model": "fixture/replacement"})
-            replacement.append(ChatMessage.user("replacement history"))
+    with pytest.raises(RunAdmissionBlockedError):
+        async with harness.manager.session_admission_guard(address):
+            pytest.fail("send preflight must exclude the lifecycle transition")
+    # The storage fence remains necessary even without the lifecycle caller.
+    await harness.sessions.archive(address)
+    if replace:
+        replacement = harness.sessions.create(
+            address.agent_id, address.session_id, project_id=address.project_id
+        )
+        assert replacement.generation_id != generation
+        harness.resolver.update_session_overrides(address, {"model": "fixture/replacement"})
+        replacement.append(ChatMessage.user("replacement history"))
     notices_before = list(harness.triggers.notices)
     release.set()
     result = await sending

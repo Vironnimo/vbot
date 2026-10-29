@@ -604,44 +604,51 @@ class CommandDispatcher:
     ) -> NewSessionCommandResult:
         resolver = _require_dependency(self._agent_resolver, "AgentResolver")
         sessions = _require_dependency(self._sessions, "ChatSessionManager")
-        # The Agent, an override Model and the working Project must be usable
-        # before the Session exists.
-        agent = await resolver.resolve_agent_async(
-            context.project_id,
-            context.agent_id,
-            new_session_overrides=context.agent_overrides,
-        )
-        working_project_id = await resolver.resolve_working_project_async(
-            context.project_id, agent, requested=context.working_project_id
-        )
-        session = await sessions.create_async(
-            context.agent_id,
-            session_id=context.session_id,
-            project_id=context.project_id,
-            actor="command",
-            metadata={
-                **context.agent_overrides.session_metadata(),
-                "fast_mode": context.fast_mode,
-                **({"execution": context.execution} if context.execution is not None else {}),
-            },
-            working_project_id=working_project_id if context.project_id is None else None,
-        )
-        address = SessionAddress(context.project_id, context.agent_id, session.id)
-        try:
-            outcome = await self.execute(
-                prepared,
-                CommandExecutionContext(
-                    agent_id=context.agent_id,
-                    session_id=session.id,
-                    project_id=context.project_id,
-                    reply_surface=context.reply_surface,
-                    on_change=context.on_change,
-                ),
+        async with self._chat_runs.prepare_admission(
+            context.agent_id, project_id=context.project_id, session_id=context.session_id
+        ) as preparation:
+            # The Agent, an override Model and the working Project must be usable
+            # before the Session exists.
+            agent = await resolver.resolve_agent_async(
+                context.project_id,
+                context.agent_id,
+                new_session_overrides=context.agent_overrides,
             )
-        except BaseException:
-            await self._remove_unused_session(address)
-            raise
-        if await self._remove_unused_session(address):
+            working_project_id = await resolver.resolve_working_project_async(
+                context.project_id, agent, requested=context.working_project_id
+            )
+            await preparation.bind_working_project(working_project_id)
+            session = await sessions.create_async(
+                context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+                actor="command",
+                metadata={
+                    **context.agent_overrides.session_metadata(),
+                    "fast_mode": context.fast_mode,
+                    **({"execution": context.execution} if context.execution is not None else {}),
+                },
+                working_project_id=working_project_id if context.project_id is None else None,
+            )
+            assert session.generation_id is not None
+            address = SessionAddress(context.project_id, context.agent_id, session.id)
+            try:
+                await preparation.bind_session(session.id)
+                outcome = await self.execute(
+                    prepared,
+                    CommandExecutionContext(
+                        agent_id=context.agent_id,
+                        session_id=session.id,
+                        project_id=context.project_id,
+                        reply_surface=context.reply_surface,
+                        on_change=context.on_change,
+                    ),
+                )
+            except BaseException:
+                await preparation.release()
+                await self._remove_unused_session(address, session.generation_id)
+                raise
+        if await self._remove_unused_session(address, session.generation_id):
             return NewSessionCommandResult(outcome)
         scope = {"agent_id": context.agent_id, "session_id": session.id}
         if context.project_id is not None:
@@ -652,11 +659,13 @@ class CommandDispatcher:
             session_id=session.id,
         )
 
-    async def _remove_unused_session(self, address: SessionAddress) -> bool:
-        """Remove a Session a command created and left without History or Runs."""
+    async def _remove_unused_session(self, address: SessionAddress, generation_id: str) -> bool:
+        """Remove this created generation if unused; a replacement belongs to another caller."""
         sessions = _require_dependency(self._sessions, "ChatSessionManager")
         try:
             async with self._chat_runs.session_admission_guard(address):
+                if await sessions.run_async(sessions.generation_address, generation_id) != address:
+                    return True
                 versions = await sessions.run_async(sessions.list_history_versions, [address])
                 if address in versions and versions[address][1] != 0:
                     return False

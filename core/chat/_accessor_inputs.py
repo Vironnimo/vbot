@@ -165,132 +165,143 @@ class AccessorInputs:
         prior = await self.lookup(input_id, request_hash)
         if prior is not None:
             return prior
-        deps = self.loop._dependencies
-        resolver, sessions = deps.agent_resolver, deps.sessions
-        new = (
-            _NewSession(
-                session_id=session_id,
-                agent_overrides=agent_overrides or AgentOverrides(),
-                working_project_id=working_project_id,
-                ephemeral=ephemeral,
-                fast_mode=fast_mode,
-                execution=execution,
-                actor="rpc",
+        async with self.loop._dependencies.run_manager.prepare_admission(
+            agent_id, project_id=project_id, session_id=session_id
+        ) as preparation:
+            deps = self.loop._dependencies
+            resolver, sessions = deps.agent_resolver, deps.sessions
+            new = (
+                _NewSession(
+                    session_id=session_id,
+                    agent_overrides=agent_overrides or AgentOverrides(),
+                    working_project_id=working_project_id,
+                    ephemeral=ephemeral,
+                    fast_mode=fast_mode,
+                    execution=execution,
+                    actor="rpc",
+                )
+                if new_session
+                else None
             )
-            if new_session
-            else None
-        )
-        if new is None:
-            if execution is not None:
-                raise ChatError("Computer selection can accompany only a new Session.")
-            if session_id is None:
-                raise ChatError("ordinary input requires an existing or explicitly new Session")
-            session = await self.loop._get_session_async(
-                agent_id, session_id, create_missing=False, project_id=project_id
+            if new is None:
+                if execution is not None:
+                    raise ChatError("Computer selection can accompany only a new Session.")
+                if session_id is None:
+                    raise ChatError("ordinary input requires an existing or explicitly new Session")
+                session = await self.loop._get_session_async(
+                    agent_id, session_id, create_missing=False, project_id=project_id
+                )
+                if (
+                    expected_generation_id is not None
+                    and session.generation_id != expected_generation_id
+                ):
+                    raise SessionNotFoundError("Session generation changed before input acceptance")
+                await self.loop._reject_owner_managed_session(project_id, agent_id, session_id)
+                agent = await resolver.resolve_agent_async(
+                    project_id, agent_id, session_id=session_id
+                )
+                working = await resolver.resolve_working_project_async(
+                    project_id, agent, session_id=session_id
+                )
+            else:
+                agent = await resolver.resolve_agent_async(
+                    project_id, agent_id, new_session_overrides=new.agent_overrides
+                )
+                working = await resolver.resolve_working_project_async(
+                    project_id, agent, requested=new.working_project_id
+                )
+            await preparation.bind_working_project(working)
+            if expected_working_project_id is not None and working != expected_working_project_id:
+                raise ChatError("The receiving Session is not in the same Working Project.")
+            run_kind = (
+                RunKind.SESSION_MESSAGE if sender and sender.kind == "session" else RunKind.USER
             )
-            if (
-                expected_generation_id is not None
-                and session.generation_id != expected_generation_id
-            ):
-                raise SessionNotFoundError("Session generation changed before input acceptance")
-            await self.loop._reject_owner_managed_session(project_id, agent_id, session_id)
-            agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
-            working = await resolver.resolve_working_project_async(
-                project_id, agent, session_id=session_id
+            _reject_live_input(agent, run_kind)
+            provider_id, _ = _resolve_agent_connection(deps, agent)
+            _ensure_provider_exists(deps.providers, provider_id)
+            content = masked_content(content, deps.secret_masker)
+            if isinstance(context_note, str):
+                # Execution and the crash/terminal fallback share the same Note
+                # identity, including when the input append itself never succeeds.
+                context_note = (
+                    ChatMessage.note(deps.secret_masker.mask(context_note))
+                    if context_note
+                    else None
+                )
+            elif context_note is not None and isinstance(context_note.content, str):
+                context_note = replace(
+                    context_note, content=deps.secret_masker.mask(context_note.content)
+                )
+            request = _RunRequest(
+                content=content,
+                sender=sender,
+                input_origin=input_origin,
+                reply_surface=reply_surface,
+                context_note=context_note,
             )
-        else:
-            agent = await resolver.resolve_agent_async(
-                project_id, agent_id, new_session_overrides=new.agent_overrides
-            )
-            working = await resolver.resolve_working_project_async(
-                project_id, agent, requested=new.working_project_id
-            )
-        if expected_working_project_id is not None and working != expected_working_project_id:
-            raise ChatError("The receiving Session is not in the same Working Project.")
-        run_kind = RunKind.SESSION_MESSAGE if sender and sender.kind == "session" else RunKind.USER
-        _reject_live_input(agent, run_kind)
-        provider_id, _ = _resolve_agent_connection(deps, agent)
-        _ensure_provider_exists(deps.providers, provider_id)
-        content = masked_content(content, deps.secret_masker)
-        if isinstance(context_note, str):
-            # Execution and the crash/terminal fallback share the same Note
-            # identity, including when the input append itself never succeeds.
-            context_note = (
-                ChatMessage.note(deps.secret_masker.mask(context_note)) if context_note else None
-            )
-        elif context_note is not None and isinstance(context_note.content, str):
-            context_note = replace(
-                context_note, content=deps.secret_masker.mask(context_note.content)
-            )
-        request = _RunRequest(
-            content=content,
-            sender=sender,
-            input_origin=input_origin,
-            reply_surface=reply_surface,
-            context_note=context_note,
-        )
-        payload = _payload(request, working)
-        if new is not None:
-            session = await sessions.create_async(
-                agent_id,
-                session_id=new.session_id,
-                project_id=project_id,
-                actor=new.actor,
-                metadata=new.metadata(agent, None),
-                working_project_id=_stored_working_project(project_id, working),
-            )
-        else:
-            await sessions.run_async(resolver.capture_session_settings, session.address, agent)
-        queue_id = new_id("que")
+            payload = _payload(request, working)
+            if new is not None:
+                session = await sessions.create_async(
+                    agent_id,
+                    session_id=new.session_id,
+                    project_id=project_id,
+                    actor=new.actor,
+                    metadata=new.metadata(agent, None),
+                    working_project_id=_stored_working_project(project_id, working),
+                )
+            else:
+                await sessions.run_async(resolver.capture_session_settings, session.address, agent)
+            queue_id = new_id("que")
 
-        async def accept() -> None:
-            await sessions.accept_accessor_input_async(
-                session.address,
-                input_id,
-                request_hash=request_hash,
-                payload=payload,
-                queue_id=queue_id,
-                expected_generation_id=session.generation_id,
-                attachment_ids=_attachment_ids(payload),
-                fallback_input=ChatMessage.from_dict(payload["message"]),
-                fallback_notes=_fallback_notes(payload),
-                source=source,
-                expected_source_generation_id=expected_source_generation_id,
-                expected_working_project_id=expected_working_project_id,
-            )
+            async def accept() -> None:
+                await sessions.accept_accessor_input_async(
+                    session.address,
+                    input_id,
+                    request_hash=request_hash,
+                    payload=payload,
+                    queue_id=queue_id,
+                    expected_generation_id=session.generation_id,
+                    attachment_ids=_attachment_ids(payload),
+                    fallback_input=ChatMessage.from_dict(payload["message"]),
+                    fallback_notes=_fallback_notes(payload),
+                    source=source,
+                    expected_source_generation_id=expected_source_generation_id,
+                    expected_working_project_id=expected_working_project_id,
+                )
 
-        try:
-            item = await deps.run_manager.enqueue(
-                session.address,
-                QueuedChatInput(self.loop, request),
-                display_content=_display_content_preview(content),
-                editable=not request.session_message and queue_content_is_editable(content),
-                steerable=request.supports_steering,
-                steering=request.session_message,
-                admission=RunAdmission(
-                    run_kind=run_kind,
-                    working_project_id=working,
-                    expected_session_generation_id=session.generation_id,
-                    accessor_input_id=input_id,
-                ),
-                item_id=queue_id,
-                persist_input=accept,
-            )
-        except BaseException:
-            # No accepted receipt: roll back only our still-unused new Session.
-            if new is not None and await sessions.lookup_accessor_input_async(input_id) is None:
-                await self.loop._discard_new_session(session)
-            raise
-        if item.future.done() and not item.future.cancelled():
-            run = item.future.result()
             try:
-                await run.wait_admitted()
+                item = await deps.run_manager.enqueue(
+                    session.address,
+                    QueuedChatInput(self.loop, request),
+                    display_content=_display_content_preview(content),
+                    editable=not request.session_message and queue_content_is_editable(content),
+                    steerable=request.supports_steering,
+                    steering=request.session_message,
+                    admission=RunAdmission(
+                        run_kind=run_kind,
+                        working_project_id=working,
+                        expected_session_generation_id=session.generation_id,
+                        accessor_input_id=input_id,
+                    ),
+                    item_id=queue_id,
+                    persist_input=accept,
+                )
             except BaseException:
-                await sessions.remove_accessor_input_async(session.address, input_id)
+                # No accepted receipt: roll back only our still-unused new Session.
+                if new is not None and await sessions.lookup_accessor_input_async(input_id) is None:
+                    await preparation.release()
+                    await self.loop._discard_new_session(session)
                 raise
-        record = await sessions.lookup_accessor_input_async(input_id)
-        assert record is not None
-        return self.project(record)
+            if item.future.done() and not item.future.cancelled():
+                run = item.future.result()
+                try:
+                    await run.wait_admitted()
+                except BaseException:
+                    await sessions.remove_accessor_input_async(session.address, input_id)
+                    raise
+            record = await sessions.lookup_accessor_input_async(input_id)
+            assert record is not None
+            return self.project(record)
 
     async def restore(self) -> None:
         async with self._restore_lock:

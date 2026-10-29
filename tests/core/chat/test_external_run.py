@@ -392,8 +392,9 @@ async def test_a_tool_result_that_cannot_be_stored_is_not_acknowledged(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replaced", [False, True])
 async def test_external_run_failure_and_discard(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replaced: bool
 ) -> None:
     runtime = _runtime(tmp_path, _tools())
     loop = build_chat_loop(runtime)
@@ -407,8 +408,20 @@ async def test_external_run_failure_and_discard(
     assert _stored(runtime, failed.session_id) == [("error", "The voice connection dropped.")]
 
     unused = await loop.start_external_run("coder", model="voice-model", title="Live call")
+    address = session_address("coder", unused.session_id)
+    replacement_generation = None
+    if replaced:
+        await unused.finish()
+        await unused.run.wait()
+        async with runtime.chat_runs.session_admission_guard(address):
+            await runtime.chat_sessions.archive(address)
+            replacement_generation = runtime.chat_sessions.create(
+                "coder", session_id=unused.session_id
+            ).generation_id
     await unused.discard()
-    assert not runtime.chat_sessions.exists(session_address("coder", unused.session_id))
+    assert runtime.chat_sessions.exists(address) is replaced
+    if replaced:
+        assert runtime.chat_sessions.get(address).generation_id == replacement_generation
 
     # A start that fails after its Run was admitted ends that Run, then removes its Session.
     async def failing_bind_permissions(self: Any, project_root: Path | None) -> None:

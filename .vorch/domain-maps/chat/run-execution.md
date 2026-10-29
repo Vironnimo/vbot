@@ -10,6 +10,8 @@ Task-gated reference for Chat admission, provider/Tool progression, streaming re
 
 ## Entry points and admission
 
+Chat admission reserves its target through `ChatRunManager.prepare_admission` before asynchronous resolution and binds the resolved Working Project before Session mutation. This covers immediate, queued, ordinary Accessor, Compaction, external and owned/temporary starts; Session creation and installed Run/Queue ownership leave no lifecycle gap (`runs/queue-and-admission.md` -> Admission preparation).
+
 `start_run(..., expected_session_generation_id=...)` optionally pins the target independently of continuation settings. It checks the loaded Session before preflight and carries the same expectation into Run admission, so replacing an address during an awaited producer or preflight step cannot redirect its input.
 
 Run start logs at DEBUG. The Runs domain writes each Run's one terminal line (`runs/lifecycle.md` -> Terminal log line); Chat never logs the outcome itself but supplies its facts on the `Run`: `model` (the bare answering route, replaced when a Model fallback activates), `internal`, `retry_count` (every backoff-scheduled Model request retry, partial-answer continuations included) and `stream_recovery_count` (partial answers preserved after a broken stream). Per-attempt retry, stream-recovery and missing-answer lines log at DEBUG, as does a transport failure after a finish delta whose completed response the Run keeps; each Model fallback switch logs one WARNING. An interruption keeps the last failure as its cause so the terminal line can name it. Log levels do not change persisted Run summaries or lifecycle events. Coverage: `test_chat_loop_requests.py`, `test_chat_loop_lifecycle.py`, and `test_chat_loop_stream_recovery.py`.

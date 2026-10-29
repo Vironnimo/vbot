@@ -262,9 +262,11 @@ class ExternalRun:
         if self._run is not None:
             with contextlib.suppress(Exception):
                 await self._run.wait()
+        assert self._session.generation_id is not None
         await _discard(
             self._dependencies,
             SessionAddress(project_id=None, agent_id=self.agent_id, session_id=self.session_id),
+            self._session.generation_id,
         )
 
     async def execute(self, run: Run) -> None:
@@ -438,87 +440,93 @@ async def start_external_run(
     on_cancel: Callable[[], None] | None,
 ) -> ExternalRun:
     """Create the Session and start the Run of an external conversation at *agent_id*."""
-    resolver = dependencies.agent_resolver
-    agent = await resolver.resolve_agent_async(None, agent_id)
-    working_project_id = await resolver.resolve_working_project_async(
-        None, agent, requested=AGENT_DEFAULT_PROJECT
-    )
-    # The Working Project's cwd and repository, read off the Event Loop as a
-    # Chat Run reads them; an unavailable repository refuses the start.
-    project_cwd, prompt_project = (
-        await _CHAT_TRANSFORM_WORKERS.run(
-            _resolve_working_project, requests, dependencies, working_project_id, True
+    async with dependencies.run_manager.prepare_admission(agent_id, project_id=None) as preparation:
+        resolver = dependencies.agent_resolver
+        agent = await resolver.resolve_agent_async(None, agent_id)
+        working_project_id = await resolver.resolve_working_project_async(
+            None, agent, requested=AGENT_DEFAULT_PROJECT
         )
-        if working_project_id is not None
-        else (None, None)
-    )
-    skill_project_id, identity_agent_id = resolve_skill_scope(None, prompt_project, agent)
-    skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
-        dependencies.resolve_skills, skill_project_id, identity_agent_id
-    )
-    definitions = await requests.tool_catalog.preview_tool_definitions(agent)
-    offered = {str(definition.get("name")) for definition in definitions}
-    extra = [name for name in dict.fromkeys(extra_tools) if name not in offered]
-    if extra:
-        definitions = [
-            *definitions,
-            *(
-                definition
-                for definition in dependencies.tools.provider_definitions(extra)
-                if definition.get("name") in extra
-            ),
-        ]
-    allowed = [str(definition.get("name")) for definition in definitions]
-    session = await dependencies.sessions.create_async(
-        agent_id,
-        run_kind=run_kind,
-        metadata={"auto_title": title, "auto_title_initialized": True},
-        working_project_id=working_project_id,
-    )
-    session.begin_defer_notes()
-    handle = ExternalRun(
-        dependencies=dependencies,
-        agent=agent,
-        session=session,
-        model=model,
-        tool_definitions=_neutral_definitions(definitions),
-        allowed_tools=allowed,
-        on_cancel=on_cancel,
-        project_cwd=project_cwd,
-        skill_project_id=skill_project_id,
-        skill_registry=skill_registry,
-    )
-    address = SessionAddress(project_id=None, agent_id=agent_id, session_id=session.id)
-    try:
-        run = await dependencies.run_manager.start(
-            address,
-            handle.execute,
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                run_kind=run_kind,
-                contributes_to_agent_activity=False,
-                expected_session_generation_id=session.generation_id,
-            ),
+        await preparation.bind_working_project(working_project_id)
+        # The Working Project's cwd and repository, read off the Event Loop as a
+        # Chat Run reads them; an unavailable repository refuses the start.
+        project_cwd, prompt_project = (
+            await _CHAT_TRANSFORM_WORKERS.run(
+                _resolve_working_project, requests, dependencies, working_project_id, True
+            )
+            if working_project_id is not None
+            else (None, None)
         )
-        handle.bind(run)
-        await run.wait_admitted()
-        await handle.bind_permissions(
-            Path(prompt_project.cwd) if prompt_project is not None else None
+        skill_project_id, identity_agent_id = resolve_skill_scope(None, prompt_project, agent)
+        skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
+            dependencies.resolve_skills, skill_project_id, identity_agent_id
         )
-    except BaseException:
-        # The Run ends before its Session goes: a Run left on a removed Session
-        # could never store its end, also when the caller was cancelled.
-        await settle_before_cancelling(handle.discard())
-        raise
-    return handle
+        definitions = await requests.tool_catalog.preview_tool_definitions(agent)
+        offered = {str(definition.get("name")) for definition in definitions}
+        extra = [name for name in dict.fromkeys(extra_tools) if name not in offered]
+        if extra:
+            definitions = [
+                *definitions,
+                *(
+                    definition
+                    for definition in dependencies.tools.provider_definitions(extra)
+                    if definition.get("name") in extra
+                ),
+            ]
+        allowed = [str(definition.get("name")) for definition in definitions]
+        session = await dependencies.sessions.create_async(
+            agent_id,
+            run_kind=run_kind,
+            metadata={"auto_title": title, "auto_title_initialized": True},
+            working_project_id=working_project_id,
+        )
+        session.begin_defer_notes()
+        handle = ExternalRun(
+            dependencies=dependencies,
+            agent=agent,
+            session=session,
+            model=model,
+            tool_definitions=_neutral_definitions(definitions),
+            allowed_tools=allowed,
+            on_cancel=on_cancel,
+            project_cwd=project_cwd,
+            skill_project_id=skill_project_id,
+            skill_registry=skill_registry,
+        )
+        address = SessionAddress(project_id=None, agent_id=agent_id, session_id=session.id)
+        try:
+            run = await dependencies.run_manager.start(
+                address,
+                handle.execute,
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    run_kind=run_kind,
+                    contributes_to_agent_activity=False,
+                    expected_session_generation_id=session.generation_id,
+                ),
+            )
+            handle.bind(run)
+            await run.wait_admitted()
+            await handle.bind_permissions(
+                Path(prompt_project.cwd) if prompt_project is not None else None
+            )
+        except BaseException:
+            # The Run ends before its Session goes: a Run left on a removed Session
+            # could never store its end, also when the caller was cancelled.
+            await preparation.release()
+            await settle_before_cancelling(handle.discard())
+            raise
+        return handle
 
 
-async def _discard(dependencies: ChatLoopDependencies, address: SessionAddress) -> None:
+async def _discard(
+    dependencies: ChatLoopDependencies, address: SessionAddress, generation_id: str
+) -> None:
     """Remove the Session of a conversation that never started, unless a Run still holds it."""
     sessions = dependencies.sessions
     try:
         async with dependencies.run_manager.session_admission_guard(address):
-            await sessions.run_async(sessions.delete, address)
+            if await sessions.run_async(sessions.generation_address, generation_id) == address:
+                await sessions.run_async(sessions.delete, address)
     except ActiveRunError:
         # A Run that has not ended yet owns the Session; it stays.
         return

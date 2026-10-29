@@ -119,21 +119,25 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         return created
 
     try:
-        # One resolver seam validates both sources: identity agents through the
-        # store, project agents through the team scan. The session is then created
-        # under the matching anchor (identity dir vs. project anchor).
-        agent = await resolver.resolve_agent_async(
-            project_id,
-            agent_id,
-            **({"new_session_overrides": AgentOverrides(**overrides)} if overrides else {}),
-        )
-        # The Session works in this Project for its whole life: the requested
-        # one (it must exist), the Workspace (null), or the Agent's default
-        # Project; a Team Agent's Session in its Team's Project.
-        working_project_id = await resolver.resolve_working_project_async(
-            project_id, agent, requested=requested_project
-        )
-        session = await chat_sessions.run_async(create_session)
+        async with state.chat_runs.prepare_admission(
+            agent_id, project_id=project_id, session_id=session_id
+        ) as preparation:
+            # One resolver seam validates both sources: identity agents through the
+            # store, project agents through the team scan. The session is then created
+            # under the matching anchor (identity dir vs. project anchor).
+            agent = await resolver.resolve_agent_async(
+                project_id,
+                agent_id,
+                **({"new_session_overrides": AgentOverrides(**overrides)} if overrides else {}),
+            )
+            # The Session works in this Project for its whole life: the requested
+            # one (it must exist), the Workspace (null), or the Agent's default
+            # Project; a Team Agent's Session in its Team's Project.
+            working_project_id = await resolver.resolve_working_project_async(
+                project_id, agent, requested=requested_project
+            )
+            await preparation.bind_working_project(working_project_id)
+            session = await chat_sessions.run_async(create_session)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Session creation is the single emit point for the sessions channel: it also
