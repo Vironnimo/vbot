@@ -438,9 +438,11 @@ async def test_a_refused_native_spawn_is_a_definite_start_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_close", [False, True])
 async def test_native_close_drains_a_cancelled_pending_launch(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     monkeypatch: pytest.MonkeyPatch,
+    cancel_close: bool,
 ) -> None:
     _manager, link, factory = remote
     entered, finish_spawn = threading.Event(), threading.Event()
@@ -460,10 +462,20 @@ async def test_native_close_drains_a_cancelled_pending_launch(
     with pytest.raises(asyncio.CancelledError):
         await launching
     closing = asyncio.create_task(link.native.close())
-    await asyncio.sleep(0)
-    assert not closing.done()
-    finish_spawn.set()
-    await closing
+    try:
+        await asyncio.sleep(0)
+        if cancel_close:
+            for _ in range(2):
+                closing.cancel()
+                await asyncio.sleep(0)
+        assert not closing.done()
+    finally:
+        finish_spawn.set()
+    if cancel_close:
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    else:
+        await closing
     assert len(factory.adapters) == 1
     assert not factory.adapters[0].alive
     assert factory.adapters[0].closed
