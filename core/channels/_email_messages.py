@@ -6,6 +6,7 @@ every mailbox and server connection.
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -323,7 +324,7 @@ def _attachments(message: Message) -> list[ParsedAttachment]:
                             ParsedAttachment(
                                 filename=part.get_filename() or f"forwarded-{index + 1}.eml",
                                 media_type="message/rfc822",
-                                data=attached.as_bytes(policy=policy.SMTP),
+                                data=_attached_message_bytes(attached),
                             )
                         )
             continue
@@ -341,3 +342,21 @@ def _attachments(message: Message) -> list[ParsedAttachment]:
             )
         )
     return attachments
+
+
+def _attached_message_bytes(message: Message) -> bytes:
+    """Serialize a mail with ASCII MIME bodies, preserving every decoded leaf."""
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        raw = part.get_payload()
+        if not isinstance(raw, str) or raw.isascii():
+            continue
+        payload = part.get_payload(decode=True)
+        if isinstance(payload, bytes):
+            # Re-encode bytes rather than decoding their declared charset: even
+            # an unknown charset must survive and remain storable as text.
+            del part["Content-Transfer-Encoding"]
+            part.set_payload(base64.encodebytes(payload).decode("ascii"))
+            part["Content-Transfer-Encoding"] = "base64"
+    return message.as_bytes(policy=policy.SMTP)

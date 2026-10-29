@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 
 import core.channels.email as email_module
+from core.attachments import AttachmentStore
 from core.channels._email_state import MailboxWatermark, MailThread
 from core.channels._email_transport import FolderStatus, ImapMailbox, send_smtp
 from core.channels.adapter import ConversationFacts, FileData
@@ -375,26 +376,52 @@ async def test_mail_carries_its_facts_to_the_conversation_and_the_triggers(
         attachments=(MailAttachment("report.pdf", "application/pdf", len(report[1])),),
     )
     assert anonymous.message_id.endswith(f"@{_CHANNEL}.vbot.invalid>")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("charset", ["utf-8", "iso-8859-1", "x-vbot-unknown"])
+async def test_forwarded_mail_reaches_the_attachment_store_without_losing_its_content(
+    harness: Harness, tmp_path: Path, charset: str
+) -> None:
     forwarded = BytesParser(policy=policy.default).parsebytes(
         make_mail(sender="stranger@example.com", message_id="<forwarded@example.com>")
     )
     assert isinstance(forwarded, EmailMessage)
-    original = BytesParser(policy=policy.default).parsebytes(make_mail(attachment=report))
+    payload = b"Gr\xc3\xbc\xc3\x9fe" if charset == "utf-8" else b"Gr\xfc\xdfe"
+    original = BytesParser(policy=policy.default).parsebytes(
+        b"From: original@example.com\r\n"
+        b"To: me@example.com\r\n"
+        b"Subject: Forwarded invoice\r\n"
+        + f"Content-Type: text/plain; charset={charset}\r\n".encode()
+        + b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        + payload
+    )
+    assert isinstance(original, EmailMessage)
+    report = b"%PDF-1.7"
+    original.add_attachment(report, maintype="application", subtype="pdf", filename="report.pdf")
     forwarded.add_attachment(original, filename="forwarded.eml")
     await harness.deliver(forwarded.as_bytes())
     assert [item.filename for item in harness.sink.mails[-1].attachments] == ["forwarded.eml"]
     assert harness.sink.mails[-1].attachments[0].media_type == "message/rfc822"
-    assert harness.sink.mails[-1].attachments[0].size > len(report[1])
+    assert harness.sink.mails[-1].attachments[0].size > len(report)
     forwarded.replace_header("From", _ME)
     forwarded.replace_header("Message-ID", "<forwarded-conversation@example.com>")
     await harness.deliver(forwarded.as_bytes())
-    attached_mail = harness.engine.media_payloads[-1][0]["attachment"]
-    kept = BytesParser(policy=policy.default).parsebytes(attached_mail.data)
+    store = AttachmentStore(tmp_path)
+    harness.adapter._attachment_store = store
+    [block] = await harness.adapter.build_media_blocks(harness.engine.media_payloads[-1][0])
+    assert block.type == "file" and block.attachment_id is not None
+    record = await store.get_async(block.attachment_id)
+    assert record.filename == "forwarded.eml"
+    kept = BytesParser(policy=policy.default).parsebytes(Path(record.file_path).read_bytes())
     assert isinstance(kept, EmailMessage)
     body = kept.get_body()
     assert body is not None
-    assert body.get_content().strip() == "Hello"
-    assert [part.get_filename() for part in kept.iter_attachments()] == ["report.pdf"]
+    assert body.get_payload(decode=True) == payload
+    assert body.get_content_charset() == charset
+    [attachment] = kept.iter_attachments()
+    assert attachment.get_filename() == "report.pdf"
+    assert attachment.get_payload(decode=True) == report
 
 
 @pytest.mark.asyncio

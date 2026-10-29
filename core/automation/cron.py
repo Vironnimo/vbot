@@ -929,8 +929,8 @@ class CronService:
                         job_id, fields, validate_references=False, rename=rename
                     )
                 if changed_fields:
-                    await self._apply_edit(
-                        job_id, job, candidate, changed_fields, restart_task, rename=rename
+                    job, candidate, changed_fields = await self._apply_edit(
+                        job_id, job, candidate, fields, changed_fields, restart_task, rename=rename
                     )
             except BaseException:
                 if issued:
@@ -943,11 +943,12 @@ class CronService:
         job_id: str,
         job: CronJob,
         candidate: CronJob,
+        fields: dict[str, Any],
         changed_fields: list[str],
         restart_task: bool,
         *,
         rename: bool = False,
-    ) -> None:
+    ) -> tuple[CronJob, CronJob, list[str]]:
         """Apply a staged edit to memory and the job tasks at once, then save; undo on failure."""
         edited = self._clone_job(candidate)
 
@@ -958,6 +959,13 @@ class CronService:
                 self._scheduler._restart_job_task(candidate)
 
         async def save() -> None:
+            nonlocal job, candidate, changed_fields, restart_task, edited
+            # Runs and notification delivery can settle while the inbox
+            # checkpoint writes. Apply only this edit to the current record.
+            job, candidate, changed_fields, restart_task = self._stage_update(
+                job_id, fields, validate_references=False, rename=rename
+            )
+            edited = self._clone_job(candidate)
             publish()
             await self._save_edit(undo)
 
@@ -969,13 +977,16 @@ class CronService:
                 if self._started and restart_task:
                     self._scheduler._restart_job_task(candidate)
 
-        reset_email = job.email is not None and (
-            candidate.email is None or candidate.email.channel_id != job.email.channel_id
+        reset_email = (None if job.email is None else job.email.channel_id) != (
+            None if candidate.email is None else candidate.email.channel_id
         )
         if reset_email:
-            assert job.email is not None
             await settle_before_cancelling(
-                self._emails.discard_after(job_id, save, previous_binding=job.email.channel_id)
+                self._emails.discard_after(
+                    job_id,
+                    save,
+                    previous_binding=None if job.email is None else job.email.channel_id,
+                )
             )
         else:
             publish()
@@ -984,6 +995,7 @@ class CronService:
             await settle_before_cancelling(self._webhooks.discard(job_id))
         if _new_check(job, candidate, rename=rename):
             await self._renew_watch(candidate)
+        return job, candidate, changed_fields
 
     async def _prepare_webhook(self, job_id: str) -> None:
         """Give a job that gets a webhook schedule a new secret and no stale requests."""

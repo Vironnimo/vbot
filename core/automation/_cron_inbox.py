@@ -250,7 +250,7 @@ class CronInbox[Item: InboxItem]:
             return len(state.waiting(taken=self._taken_seqs(job_id)))
 
     async def discard_after(
-        self, job_id: str, commit: Callable[[], Awaitable[None]], *, previous_binding: str
+        self, job_id: str, commit: Callable[[], Awaitable[None]], *, previous_binding: str | None
     ) -> None:
         """Commit an edit, then reset its inbox before a replacement task can read it.
 
@@ -263,7 +263,14 @@ class CronInbox[Item: InboxItem]:
             # replacement Channel. A crash between that save and cleanup then
             # cannot hand the old mail to the replacement after restart.
             previous = await self._state(job_id)
-            checkpoint = previous.copy()
+            # A non-email job owns no mail. Retire any leftover state before
+            # publishing a new email binding, even when it names the same
+            # Channel as an activation whose cleanup a crash interrupted.
+            checkpoint = (
+                previous.copy()
+                if previous_binding is not None
+                else InboxState(job_id, next_seq=previous.next_seq)
+            )
             checkpoint.binding = previous_binding
             await self._write(checkpoint)
             self._states[job_id] = checkpoint
