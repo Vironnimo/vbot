@@ -42,7 +42,7 @@
     // The displayed Session's list row as last read (`{ displayName,
     // createdAt, lastActiveAt }`), or null until then.
     session = null,
-    notificationSettings,
+    advancedSettings,
     // The usage of the Session's own Runs and its Sub-Agents' Runs
     // (`{ session, subAgents, total, subAgentCount }`, report Totals), or null.
     usage = null,
@@ -344,7 +344,7 @@
       {/if}
     </dl>
   {/if}
-  {@render notificationSettings?.()}
+  {@render advancedSettings?.()}
 {/snippet}
 
 {#snippet usageSummary()}

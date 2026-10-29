@@ -31,8 +31,7 @@
   import { moveItem } from './ui/sortable.js';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
-  import Modal from './ui/Modal.svelte';
-  import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
+  import SessionCompactionPolicyDialog from './sessions/SessionCompactionPolicyDialog.svelte';
   import { untrack } from 'svelte';
   import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import {
@@ -966,64 +965,4 @@
   </ConfirmDialog>
 {/if}
 
-{#if actions.policySession}
-  <Modal
-    title={t('sessions.compactionPolicy')}
-    labelledById="session-compaction-policy-title"
-    size="lg"
-    closeDisabled={actions.policySaving}
-    onClose={actions.closePolicyEdit}
-  >
-    {#snippet body()}
-      <div class="modal-body">
-        <!-- Without the override the rows show the inherited Policy, read-only. -->
-        <div class="s-group">
-          <div class="s-row s-row--compact">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('sessions.compactionOverride')}
-              </div>
-              <div class="s-row-desc">
-                {t('sessions.compactionOverrideDescription')}
-              </div>
-            </div>
-            <div class="s-row-control">
-              <Toggle
-                checked={actions.policyUsesOverride}
-                disabled={actions.policySaving}
-                ariaLabel={t('sessions.compactionOverride')}
-                onChange={(enabled) => (actions.policyUsesOverride = enabled)}
-              />
-            </div>
-          </div>
-          <CompactionPolicyEditor
-            layout="rows"
-            value={actions.policyDraft}
-            disabled={!actions.policyUsesOverride || actions.policySaving}
-            idPrefix="session-compaction-policy"
-            onChange={(next) => (actions.policyDraft = next)}
-          />
-        </div>
-        {#if actions.policyError}
-          <Banner variant="error" role="alert">{actions.policyError}</Banner>
-        {/if}
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="secondary"
-        disabled={actions.policySaving}
-        onClick={actions.closePolicyEdit}
-      >
-        {t('common.cancel')}
-      </Button>
-      <Button
-        variant="primary"
-        disabled={actions.policySaving}
-        onClick={actions.savePolicy}
-      >
-        {actions.policySaving ? t('common.saving') : t('common.save')}
-      </Button>
-    {/snippet}
-  </Modal>
-{/if}
+<SessionCompactionPolicyDialog {actions} />

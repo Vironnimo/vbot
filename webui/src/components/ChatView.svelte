@@ -20,7 +20,7 @@
   import ComputerUseControl from './ComputerUseControl.svelte';
   import SecretGiveForm from './chat/SecretGiveForm.svelte';
   import SecretRequests from './chat/SecretRequests.svelte';
-  import SessionNotificationSettings from './sessions/SessionNotificationSettings.svelte';
+  import SessionAdvancedSettings from './sessions/SessionAdvancedSettings.svelte';
   import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
@@ -312,7 +312,7 @@
       return chatController;
     },
     get sessionsRefreshToken() {
-      return sessionsRefreshToken;
+      return `${sessionSettings.view?.revision}:${sessionEdits}`;
     },
     get timelineItems() {
       return activity.timelineItems;
@@ -369,6 +369,7 @@
   // Counts the Sessions this area's drafts created; each one refreshes the
   // Session list.
   let createdSessions = $state(0);
+  let sessionEdits = $state(0);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
 
@@ -754,7 +755,7 @@
           agentId={target.activeAgentAddress}
           currentSessionId={navigation.viewingSessionId ||
             target.activeAgent.current_session_id}
-          reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
+          reloadToken={`${sessionsRefreshToken}:${createdSessions}:${sessionEdits}`}
           invalidations={sessionInvalidations}
           agents={target.sessionDrawerAgents}
           liveActivity={activity.sessionDrawerActivity}
@@ -1134,14 +1135,17 @@
           onStopBackgroundCommand={actions.handleStopBackgroundCommand}
           onLoadCommandOutput={actions.loadCommandOutput}
         >
-          {#snippet notificationSettings()}
+          {#snippet advancedSettings()}
             {#if target.activeSessionState?.sessionId}
               {#key target.activeSessionState.key}
                 {@const settingsSession = target.activeSessionState}
-                <SessionNotificationSettings
+                <SessionAdvancedSettings
                   agentId={settingsSession.agentId}
                   sessionId={settingsSession.sessionId}
+                  session={sessionInfo.row}
                   policy={settingsSession.notificationPolicy ?? 'all'}
+                  onChanged={() => (sessionEdits += 1)}
+                  onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
                   onCommit={(summary) =>
                     applySessionCompletionActivity(settingsSession, summary)}
                 />

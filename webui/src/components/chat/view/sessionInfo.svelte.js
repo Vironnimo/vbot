@@ -41,6 +41,7 @@ export function createSessionInfo(context) {
   let wanted = $state(false);
   let stats = $state.raw(undefined);
   let summary = $state.raw(null);
+  let row = $state.raw(null);
   let usage = $state.raw(null);
   let subAgents = $state.raw([]);
   let infoSessionKey = '';
@@ -71,6 +72,7 @@ export function createSessionInfo(context) {
         infoSessionKey = displayKey;
         stats = undefined;
         summary = null;
+        row = null;
         usage = null;
         subAgents = [];
         baseKey = '';
@@ -185,6 +187,7 @@ export function createSessionInfo(context) {
         .then((result) => {
           const session = result?.session;
           if (current() && session) {
+            row = session;
             applySessionCompletionActivity(
               context.target.activeSessionState,
               session,
@@ -206,6 +209,9 @@ export function createSessionInfo(context) {
     },
     get summary() {
       return summary;
+    },
+    get row() {
+      return row;
     },
     get usage() {
       return usage;

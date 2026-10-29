@@ -337,6 +337,12 @@ export function createSessionActions(context) {
     get startRename() {
       return startRename;
     },
+    get cancelRename() {
+      return cancelRename;
+    },
+    get submitRename() {
+      return submitRename;
+    },
     get requestDelete() {
       return requestDelete;
     },

@@ -153,6 +153,18 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         session_id: sessionId,
         ...(permanent ? { permanent } : {}),
       }),
+    renameSession: (agentId, sessionId, title) =>
+      call('session.rename', {
+        agent_id: agentId,
+        session_id: sessionId,
+        title,
+      }),
+    setSessionCompactionPolicy: (agentId, sessionId, policy) =>
+      call('session.set_compaction_policy', {
+        agent_id: agentId,
+        session_id: sessionId,
+        policy,
+      }),
     listSessionActivity: (agentIds) =>
       call('session.activity_list', { agent_ids: agentIds }),
     listSessions: (agentIds, query = {}) =>

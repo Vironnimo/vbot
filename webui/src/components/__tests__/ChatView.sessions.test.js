@@ -147,6 +147,79 @@ describe('ChatView Sessions', () => {
   );
 
   describe('Session information', () => {
+    it('refreshes the shown name after Rename in Advanced and applies the saved Compaction Policy', async () => {
+      const row = {
+        id: 'session-1',
+        auto_title: 'Before rename',
+        compaction_policy_effective: {
+          enabled: true,
+          trigger: { type: 'context_ratio', threshold: 0.8 },
+          strategy: { type: 'continuation' },
+        },
+      };
+      getSessionMock.mockImplementation(async () => ({ session: { ...row } }));
+      const fallback = createChatRpcMock();
+      const effective = { ...row.compaction_policy_effective, enabled: false };
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'session.rename') {
+          row.title = params.title;
+          return { ok: true };
+        }
+        if (method === 'session.set_compaction_policy') {
+          row.compaction_policy_effective = effective;
+          return { override: null, effective };
+        }
+        return fallback(method, params);
+      });
+      const props = reactiveProps({ sessionInvalidations: [] });
+      await chat.mountChat(props);
+      document.querySelector('.chat-header__info-toggle').click();
+      await waitForText('Before rename');
+      findButtonByText(t('sessions.advanced')).click();
+      flushSync();
+      findButtonByText(t('sessions.rename')).click();
+      flushSync();
+      setInputValue(
+        document.querySelector(
+          `input[aria-label="${t('sessions.rename_label')}"]`,
+        ),
+        'After rename',
+      );
+      findButtonByText(t('common.save')).click();
+      await waitForCondition(
+        () =>
+          document
+            .querySelector('.chat-activity__session-name')
+            ?.textContent.trim() === 'After rename',
+      );
+      expect(rpcCalls('session.rename')).toEqual([
+        { agent_id: 'alpha', session_id: 'session-1', title: 'After rename' },
+      ]);
+
+      findButtonByText(t('sessions.compactionPolicy')).click();
+      flushSync();
+      findButtonByText(t('common.save')).click();
+      await waitForCondition(
+        () =>
+          testChatStateRefs[0].sessions['alpha::session-1'].compactionPolicy
+            ?.enabled === false,
+      );
+      expect(rpcCalls('session.set_compaction_policy')).toEqual([
+        { agent_id: 'alpha', session_id: 'session-1', policy: null },
+      ]);
+
+      row.title = 'Renamed elsewhere';
+      props.sessionInvalidations = [
+        { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+      ];
+      await waitForCondition(
+        () =>
+          document
+            .querySelector('.chat-activity__session-name')
+            ?.textContent.trim() === row.title,
+      );
+    });
+
     it('reads the change statistics and usage of the Session and its Sub-Agents while it is open', async () => {
       const answers = [
         { files: 1, added: 3, removed: 1, file_stats: [] },
