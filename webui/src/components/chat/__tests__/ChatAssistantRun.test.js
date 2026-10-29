@@ -796,13 +796,13 @@ describe('ChatAssistantRun', () => {
           startTimestamp: '2026-08-05T18:00:00.000Z',
         },
         Date.parse('2026-08-05T18:00:05.250Z'),
-        () => `${t('chat.runStatus.running')} · 5.3s`,
+        () => `${t('chat.runStatus.working')} · 5.3s`,
       ],
       [
         'only the status without duration or changes',
         {},
         undefined,
-        () => t('chat.runStatus.running'),
+        () => t('chat.runStatus.working'),
       ],
       [
         'the iteration count',

@@ -32,6 +32,7 @@ export {
   isRunChildWorking,
   latestRunActivity,
   reasoningDurationLabel,
+  runFooterGroups,
   runFooterParts,
   runFooterDetails,
   runFooterNotice,

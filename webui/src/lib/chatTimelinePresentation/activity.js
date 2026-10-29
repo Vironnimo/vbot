@@ -101,61 +101,101 @@ export function reasoningDurationMs(child, nowMs = Date.now()) {
   return Math.max(0, nowMs - start);
 }
 
+// Runs of one work span (the Session's whole piece of work: a Run, the
+// Runs that background results woke, and the waiting between them) show as
+// one piece of work with one footer, on the span's last Run. A Run records
+// its span start as `timing.work_started_at`; the latest Run of a Session
+// that is still working or waiting takes it from Session activity
+// (`workStartedAt`). An earlier Run belongs to a later Run's span when that
+// span had begun before the earlier Run ended. Returns, by Run item id, the
+// Runs whose footer each Run shows: the whole span for its last Run, an
+// empty list for the others.
+export const runFooterGroups = (
+  timelineItems,
+  { workStartedAt = null } = {},
+) => {
+  const runs = (timelineItems ?? []).filter(
+    (item) => item?.type === 'assistant_run',
+  );
+  const groups = new Map();
+  let group = [];
+  let spanStartMs = null;
+  const flush = () => {
+    group.forEach((run, index) =>
+      groups.set(run.id, index === group.length - 1 ? group : []),
+    );
+    group = [];
+  };
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index];
+    const endMs = timestampToMs(run.endTimestamp);
+    if (
+      group.length > 0 &&
+      !(spanStartMs !== null && endMs !== null && spanStartMs <= endMs)
+    ) {
+      flush();
+    }
+    if (group.length === 0) {
+      spanStartMs = timestampToMs(
+        run.timing?.work_started_at ??
+          (index === runs.length - 1 ? workStartedAt : null),
+      );
+    }
+    group.unshift(run);
+  }
+  flush();
+  return groups;
+};
+
 // Footer line for an assistant run: status · duration · iterations · end
-// time. The duration ticks live while the run is running (driven by the
-// shared nowMs clock); the end time appears once the run reaches a terminal
+// time. The duration ticks live while the work is going on (driven by the
+// shared nowMs clock); the end time appears once it reached a terminal
 // state (completion, cancellation, failure) and uses the same clock-time
 // formatting as the message header timestamp. This is the stable first line
 // of run-level meta information; the message header shows only the start
 // timestamp. File-change statistics are appended to this same line via
 // `changeStatsParts`, while transient problem notices (provider liveness)
 // render on a separate line below via `runFooterNotice` so they can never
-// push the stable parts onto a wrap line. `waiting` marks the Session's
-// latest Run while the Session waits for work that will wake it (Session
-// activity): see `footerRun`.
-export const runFooterParts = (
-  assistantRun,
-  nowMs = Date.now(),
-  { waiting = false } = {},
-) => {
-  assistantRun = footerRun(assistantRun, waiting);
-  const parts = [];
-  parts.push(runStatusLabel(assistantRun.status));
-  const duration = formatRunDuration(assistantRun, nowMs);
+// push the stable parts onto a wrap line. See `runFooter` for the options.
+export const runFooterParts = (assistantRun, nowMs = Date.now(), options) => {
+  const footer = runFooter(assistantRun, nowMs, options);
+  const parts = [runStatusLabel(footer.status)];
+  const duration = formatDurationMs(footer.durationMs);
   if (duration) {
     parts.push(duration);
   }
-  const iterationLabel = labelForRunIterations(assistantRun);
-  if (iterationLabel) {
-    parts.push(iterationLabel);
+  if (footer.iterationCount !== null) {
+    parts.push(t('chat.runIterations', { count: footer.iterationCount }));
   }
-  const endTimeLabel = runEndTimeLabel(assistantRun);
+  const endTimeLabel = formatTime(footer.endTimestamp);
   if (endTimeLabel) {
     parts.push(endTimeLabel);
   }
   return parts;
 };
 
-// Tooltip details behind the Run footer: the Run's state, what its "iter"
-// count stands for (as the lead line, so the moment rows keep a narrow label
-// column), when it started and finished, and how long it ran.
-export const runFooterDetails = (
-  assistantRun,
-  nowMs = Date.now(),
-  { waiting = false } = {},
-) => {
-  assistantRun = footerRun(assistantRun, waiting);
-  const running = assistantRun.status === 'running';
+// Tooltip details behind the Run footer: the state, what its "iter" count
+// stands for (as the lead line, so the moment rows keep a narrow label
+// column), when the work started and finished, how long it took, how many
+// Runs it took, and the Models that answered.
+export const runFooterDetails = (assistantRun, nowMs = Date.now(), options) => {
+  const footer = runFooter(assistantRun, nowMs, options);
   const rows = executionDetailRows({
-    startedAt: assistantRun.startTimestamp ?? assistantRun.timestamp,
-    finishedAt: assistantRun.endTimestamp,
-    durationMs: runDurationMs(assistantRun, nowMs),
-    running,
+    startedAt: footer.startTimestamp,
+    finishedAt: footer.endTimestamp,
+    durationMs: footer.durationMs,
+    running: footer.live,
     nowMs,
   });
-  const iterationCount = assistantRun?.iterationCount;
+  if (footer.runs.length > 1) {
+    rows.push({
+      label: t('chat.details.runs'),
+      value: String(footer.runs.length),
+    });
+  }
+  const iterationCount = footer.iterationCount;
   const text =
-    !Number.isInteger(iterationCount) || iterationCount < 0
+    iterationCount === null
       ? ''
       : iterationCount === 1
         ? t('chat.details.modelResponseOne')
@@ -164,27 +204,29 @@ export const runFooterDetails = (
   // settings may be different, especially after an Automation's temporary
   // override or a fallback. Keep distinct Model/effort pairs in response order.
   const seenModels = new Set();
-  for (const child of assistantRun.items ?? []) {
-    if (child.type !== 'assistant_output') continue;
-    for (const message of child.messages ?? []) {
-      const model = trimmedString(message.model);
-      if (!model) continue;
-      const effort = message.thinking_effort;
-      const hasEffort = typeof effort === 'string';
-      const key = JSON.stringify([model, hasEffort ? effort : null]);
-      if (seenModels.has(key)) continue;
-      seenModels.add(key);
-      rows.push({
-        label: hasEffort
-          ? t('chat.details.modelAndThinking')
-          : t('chat.details.model'),
-        value: hasEffort
-          ? `${model} · ${effort || t('chat.details.providerDefault')}`
-          : model,
-      });
+  for (const run of footer.runs) {
+    for (const child of run.items ?? []) {
+      if (child.type !== 'assistant_output') continue;
+      for (const message of child.messages ?? []) {
+        const model = trimmedString(message.model);
+        if (!model) continue;
+        const effort = message.thinking_effort;
+        const hasEffort = typeof effort === 'string';
+        const key = JSON.stringify([model, hasEffort ? effort : null]);
+        if (seenModels.has(key)) continue;
+        seenModels.add(key);
+        rows.push({
+          label: hasEffort
+            ? t('chat.details.modelAndThinking')
+            : t('chat.details.model'),
+          value: hasEffort
+            ? `${model} · ${effort || t('chat.details.providerDefault')}`
+            : model,
+        });
+      }
     }
   }
-  return { title: runStatusLabel(assistantRun.status), text, rows };
+  return { title: runStatusLabel(footer.status), text, rows };
 };
 
 // SSE keepalive comments from gateways like OpenRouter arrive every few
@@ -721,17 +763,10 @@ function shouldRenderToolCall(tool) {
   );
 }
 
-function labelForRunIterations(assistantRun) {
-  const iterationCount = assistantRun?.iterationCount;
-  if (!Number.isInteger(iterationCount) || iterationCount < 0) {
-    return '';
-  }
-  return t('chat.runIterations', {
-    count: iterationCount,
-  });
-}
-
 function runStatusLabel(status) {
+  if (status === 'waiting') {
+    return t('chat.runStatus.waiting');
+  }
   if (status === 'failed') {
     return t('chat.runStatus.failed');
   }
@@ -744,41 +779,72 @@ function runStatusLabel(status) {
   if (status === 'completed' || status === 'success') {
     return t('chat.runStatus.completed');
   }
-  return t('chat.runStatus.running');
+  return t('chat.runStatus.working');
 }
 
-// Clock time when the run ended (e.g. "7:20 PM"), shown once the run reached
-// a terminal state — completion, user cancellation, or failure — with the
-// same formatting as the message header timestamp. Empty while running or
-// when no end timestamp is known.
-function runEndTimeLabel(assistantRun) {
-  if (assistantRun.status === 'running') {
-    return '';
+// What the footer of `assistantRun` says about the work it ends. `runs` are
+// the Runs of its work span (`runFooterGroups`), ending with it; `waiting`
+// and `workStartedAt` come from Session activity for the Session's latest
+// Run. The status is `working` while the last Run runs, `waiting` while it
+// completed but the Session waits for background work it started, else the
+// last Run's own. The duration spans from the work's start to the last Run's
+// end, ticking while working or waiting; a lone Run keeps its own recorded
+// duration. Iterations add up over the Runs. Nothing recorded changes.
+function runFooter(
+  assistantRun,
+  nowMs,
+  { waiting = false, workStartedAt = null, runs = [assistantRun] } = {},
+) {
+  const last = runs.at(-1) ?? assistantRun;
+  const first = runs[0] ?? assistantRun;
+  const completed = last.status === 'completed' || last.status === 'success';
+  const status =
+    last.status === 'running'
+      ? 'working'
+      : waiting && completed
+        ? 'waiting'
+        : last.status;
+  const live = status === 'working' || status === 'waiting';
+  const firstStart = first.startTimestamp ?? first.timestamp;
+  const firstStartMs = timestampToMs(firstStart);
+  const spanStart = last.timing?.work_started_at ?? workStartedAt;
+  const spanStartMs = timestampToMs(spanStart);
+  // The span can begin before the first loaded Run, when older History is
+  // not loaded yet.
+  const spanBeganEarlier =
+    spanStartMs !== null &&
+    (firstStartMs === null || spanStartMs < firstStartMs);
+  const startTimestamp = spanBeganEarlier ? spanStart : firstStart;
+  const startMs = spanBeganEarlier ? spanStartMs : firstStartMs;
+  const endMs = timestampToMs(last.endTimestamp);
+  let durationMs;
+  if (live) {
+    durationMs = startMs === null ? null : Math.max(0, nowMs - startMs);
+  } else if (
+    (runs.length === 1 && !spanBeganEarlier) ||
+    startMs === null ||
+    endMs === null ||
+    endMs < startMs
+  ) {
+    durationMs = runDurationMs(last, nowMs);
+  } else {
+    durationMs = endMs - startMs;
   }
-  return formatTime(assistantRun.endTimestamp);
-}
-
-// The Run as its footer shows it. A completed Run whose Session still waits
-// for background work it started (Sub-Agents, commands, undelivered results)
-// is not done from the user's side, so its footer keeps running: `Running`,
-// the time ticking from the Run's start, no end time. The recorded Run stays
-// as it is; once the Session stops waiting the footer shows it again.
-function footerRun(assistantRun, waiting) {
-  const completed =
-    assistantRun.status === 'completed' || assistantRun.status === 'success';
-  if (!waiting || !completed) {
-    return assistantRun;
-  }
+  const iterations = runs
+    .map((run) => run.iterationCount)
+    .filter((count) => Number.isInteger(count) && count >= 0);
   return {
-    ...assistantRun,
-    status: 'running',
-    durationMs: null,
-    endTimestamp: null,
+    runs,
+    status,
+    live,
+    startTimestamp,
+    endTimestamp: live ? null : last.endTimestamp,
+    durationMs,
+    iterationCount:
+      iterations.length === 0
+        ? null
+        : iterations.reduce((sum, count) => sum + count, 0),
   };
-}
-
-function formatRunDuration(assistantRun, nowMs = Date.now()) {
-  return formatDurationMs(runDurationMs(assistantRun, nowMs));
 }
 
 function runDurationMs(assistantRun, nowMs = Date.now()) {

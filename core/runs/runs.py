@@ -209,6 +209,7 @@ class ChatRunManager:
         self._persistence = persistence
         self._input_withdrawer = input_withdrawer
         self._admission_validator = admission_validator
+        self._work_span_reader: Callable[[SessionAddress], datetime | None] | None = None
 
     def reserve_waiting_work(
         self,
@@ -278,6 +279,16 @@ class ChatRunManager:
         the next queued item, if any, has started. Returns the unsubscribe function.
         """
         return _subscribe(self._run_finished_callbacks, callback)
+
+    def bind_work_span(self, reader: Callable[[SessionAddress], datetime | None] | None) -> None:
+        """Record each finishing Run's work span start in its terminal timing.
+
+        Session activity owns the work span and binds its reader once it exists
+        (``None`` unbinds). The reader returns when the Session's current work
+        span began, or ``None`` when none is known; the Run then records none.
+        Accessors show the Runs of one work span as one piece of work.
+        """
+        self._work_span_reader = reader
 
     def add_input_queued_callback(
         self, callback: Callable[[SessionAddress], None]
@@ -1029,11 +1040,16 @@ class ChatRunManager:
         def terminal_timing() -> JsonObject:
             completed_at = datetime.now(UTC)
             duration_ms = max(0, round((time.perf_counter() - timing_started_perf) * 1000))
-            return {
+            timing: JsonObject = {
                 "started_at": format_canonical_timestamp(timing_started_at),
                 "completed_at": format_canonical_timestamp(completed_at),
                 "duration_ms": duration_ms,
             }
+            reader = self._work_span_reader
+            work_started_at = None if reader is None else reader(address)
+            if work_started_at is not None:
+                timing["work_started_at"] = format_canonical_timestamp(work_started_at)
+            return timing
 
         def terminal_extras() -> JsonObject:
             extras: JsonObject = dict(run.terminal_payload_extras)
