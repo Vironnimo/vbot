@@ -25,6 +25,15 @@ Programmatic Tool calls (`ToolContext.programmatic`, `tools/registry-dispatch.md
 
 ## Connection lifecycle and call outcomes
 
+Management `save` accepts an optional `base`: `null` requires a missing id; an
+object is the expected previous connection configuration. Both configurations
+normalize through the same validator, and the saved value is compared under the
+connection mutation lock before persistence, credentials or runner changes.
+A mismatch raises the existing `SettingsConflictError` (`settings_conflict` over
+RPC) and changes nothing. Omitting `base` retains create-or-replace behavior.
+The WebUI sends its editor baseline, so two creates or edits cannot overwrite one
+another after an earlier list read. Coverage: `test_save_compares_its_base_atomically_before_any_change`.
+
 Connection management admits work under its per-connection lock. Once admitted,
 configuration persistence, runner replacement and Tool publication settle together
 before caller cancellation propagates; a cancelled lock waiter changes nothing.

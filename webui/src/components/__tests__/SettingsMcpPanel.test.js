@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -232,6 +232,7 @@ describe('MCP management surface', () => {
           command: 'uvx',
           args: ['blender-mcp'],
         }),
+        base: null,
       },
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -268,26 +269,48 @@ describe('MCP management surface', () => {
       credential_environment: { TOKEN: 'TEST_KEY' },
     });
   });
-  it('retains the editor and displays save failures', async () => {
-    const handler = rpc.getMockImplementation();
-    rpc.mockImplementation((method, params) =>
-      params?.operation === 'save'
-        ? Promise.reject(new Error('test-owned-save-error'))
-        : handler(method, params),
-    );
-    component = mount(Panel, { target: document.body });
-    await settle();
-    button('Add MCP connection').click();
-    await settle();
-    input('Connection name', 'example');
-    input('Program', 'python');
-    submit();
-    await settle();
-    expect(
-      document.querySelector('[role="dialog"] [role="alert"]').textContent,
-    ).toContain('test-owned-save-error');
-    expect(field('Connection name').value).toBe('example');
-  });
+  it.each([null, 'settings_conflict'])(
+    'retains the editor after a save failure (%s)',
+    async (code) => {
+      const handler = rpc.getMockImplementation();
+      rpc.mockImplementation((method, params) => {
+        if (params?.operation !== 'save') return handler(method, params);
+        if (code)
+          records = [
+            {
+              id: 'example',
+              configuration: { ...original, command: 'other-client' },
+              state: 'connected',
+            },
+          ];
+        return Promise.reject(
+          Object.assign(new Error('test-owned-save-error'), { code }),
+        );
+      });
+      component = mount(Panel, { target: document.body });
+      await settle();
+      button('Add MCP connection').click();
+      await settle();
+      input('Connection name', 'example');
+      input('Program', 'python');
+      submit();
+      await settle();
+      expect(
+        document.querySelector('[role="dialog"] [role="alert"]').textContent,
+      ).toContain(code ? t('mcp.duplicate') : 'test-owned-save-error');
+      expect(field('Connection name').value).toBe('example');
+      expect(field('Program').value).toBe('python');
+      if (code) {
+        // No live invalidation arrived: the refusal itself refreshes the
+        // roster, so the offered existing connection is current on reopen.
+        button('Cancel').click();
+        await settle();
+        button('Edit').click();
+        await settle();
+        expect(field('Program').value).toBe('other-client');
+      }
+    },
+  );
   it('uses a write-only password field and clears it after saving', async () => {
     records = [
       {

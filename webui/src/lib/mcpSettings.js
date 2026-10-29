@@ -1,6 +1,7 @@
 import { extensionOperation } from './api.js';
 import { PENDING_INPUTS_RESOURCE } from './extensionInputs.js';
 import { t, tOr } from './i18n.js';
+import { isSettingsConflict } from './settingsSave.js';
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
 export const MCP_DESCRIPTION_MAX_LENGTH = 200;
@@ -338,17 +339,24 @@ export function createMcpSettings({
     save(draft, original) {
       return act(async () => {
         const connection = mcpConfiguration(draft);
-        const current = (await invoke('list')).connections.find(
-          (item) => item.id === connection.id,
-        );
-        if (!original && current) throw new Error(t('mcp.duplicate'));
-        if (
-          original &&
-          (!current ||
-            JSON.stringify(current.configuration) !== JSON.stringify(original))
-        )
-          throw new Error(t('mcp.changed'));
-        await invoke('save', { connection });
+        try {
+          // The owner checks this baseline while committing. A separate list
+          // preflight would let another window write between check and save.
+          await invoke('save', {
+            connection,
+            base: original ? clone(original) : null,
+          });
+        } catch (error) {
+          if (isSettingsConflict(error)) {
+            // Reopening must use the current record even if its invalidation
+            // has not arrived. The modal retains this unsaved draft.
+            await refresh();
+            throw new Error(t(original ? 'mcp.changed' : 'mcp.duplicate'), {
+              cause: error,
+            });
+          }
+          throw error;
+        }
         publish({
           notice: t('mcp.saved'),
         });

@@ -22,10 +22,12 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from http import HTTPStatus
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
+from core.storage import SettingsConflictError
 from core.tools.availability import resolve_tool_access
 from core.tools.contracts import declared_parameters
 from core.tools.tools import (
@@ -781,12 +783,17 @@ class MCPService:
         *,
         replace: bool = True,
         credentials: dict[str, str | None] | None = None,
+        base: dict[str, Any] | None | EllipsisType = ...,
     ) -> dict[str, Any]:
         config = validate_connection(value)
+        if base is not ... and base is not None:
+            base = validate_connection(base)
         identifier = config["id"]
         return await self._change_connection(
             identifier,
-            lambda: self._save_connection(config, replace=replace, credentials=credentials),
+            lambda: self._save_connection(
+                config, replace=replace, credentials=credentials, base=base
+            ),
         )
 
     async def _save_connection(
@@ -795,10 +802,13 @@ class MCPService:
         *,
         replace: bool,
         credentials: dict[str, str | None] | None,
+        base: dict[str, Any] | None | EllipsisType,
     ) -> dict[str, Any]:
         identifier = config["id"]
         async with self._lock:
             previous = self.connections.get(identifier)
+            if base is not ... and previous != base:
+                raise SettingsConflictError((f"MCP connection {identifier}",))
             if previous is not None and not replace:
                 raise ValueError(f"MCP connection {identifier} already exists")
             # Import credentials belong to the admitted connection save.

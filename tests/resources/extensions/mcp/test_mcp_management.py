@@ -18,8 +18,10 @@ from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.databases import ExtensionDatabases
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+from core.storage import SettingsConflictError
 from core.tools.tools import ToolRegistry, tool_success
 from resources.extensions.mcp._connectors import load_connectors
+from resources.extensions.mcp._management import register_management
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import remote_tool_name
@@ -145,6 +147,71 @@ async def test_stopping_a_connection_that_ignores_cancellation_still_retires_its
     finally:
         release.set()
         await runner._task
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["create", "edit", "remove"])
+async def test_save_compares_its_base_atomically_before_any_change(host, monkeypatch, change):
+    service, registry = await start_service(host)
+    register_management(service.api, service.management.manage)
+    invoke = service.api.operations.invoke
+    original = {**_CONNECTION, "enabled": False}
+    base = None
+    if change != "create":
+        await invoke("save", {"connection": original})
+        # Defaults omitted from a caller's baseline normalize like the saved record.
+        base = original
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    save = service.store.save
+    writes = 0
+
+    def held_save(records):
+        nonlocal writes
+        writes += 1
+        save(records)
+        if writes == 1:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(timeout=5)
+
+    monkeypatch.setattr(service.store, "save", held_save)
+    winner = {**original, "description": "first"}
+    losing = {**original, "description": "second"}
+    first = asyncio.create_task(
+        invoke("remove", {"id": "example"})
+        if change == "remove"
+        else invoke("save", {"connection": winner, "base": base})
+    )
+    second = None
+    try:
+        async with asyncio.timeout(5):
+            await entered.wait()
+            second = asyncio.create_task(invoke("save", {"connection": losing, "base": base}))
+            await asyncio.sleep(0)
+            assert not second.done()
+            release.set()
+            await first
+            with pytest.raises(SettingsConflictError):
+                await second
+        assert writes == 1
+        if change == "remove":
+            assert "example" not in service.connections
+            assert "mcp_example" not in _tool_names(registry)
+        else:
+            assert service.connections["example"] == validate_connection(winner)
+            assert service.runners["example"].config == validate_connection(winner)
+        assert service.store.load() == service.connections
+        # Existing callers that omit base retain explicit create-or-replace behavior.
+        result = await invoke("save", {"connection": losing})
+        assert result["configuration"] == validate_connection(losing)
+        assert writes == 2
+    finally:
+        release.set()
+        tasks = [task for task in (first, second) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await service.close()
 
 

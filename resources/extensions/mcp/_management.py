@@ -148,6 +148,7 @@ _ADD_FROM_CATALOG_PROPERTIES: dict[str, Any] = {
 
 # Required arguments where not every listed property is required.
 _REQUIRED: dict[str, list[str]] = {
+    "save": ["connection"],
     "explore": ["id", "agent", "action"],
     "inspect": ["id"],
     "import": ["source"],
@@ -178,7 +179,16 @@ def register_management(
             ),
             base,
         ),
-        "save": {"connection": CONNECTION_SCHEMA},
+        "save": {
+            "connection": CONNECTION_SCHEMA,
+            "base": {
+                "anyOf": [CONNECTION_SCHEMA, {"type": "null"}],
+                "description": (
+                    "Expected previous configuration from status; null requires an unused id. "
+                    "Omit to create or replace without checking for concurrent changes."
+                ),
+            },
+        },
         "import": _IMPORT_PROPERTIES,
         "add_from_catalog": _ADD_FROM_CATALOG_PROPERTIES,
         "events": {**base, "after": {"type": "integer", "minimum": 0}},
@@ -394,7 +404,9 @@ class ConnectionManagement:
         if operation == "cancel-job":
             return await self._service.jobs.cancel(arguments["job_id"])
         if operation == "save":
-            return await self._service._save(arguments["connection"])
+            return await self._service._save(
+                arguments["connection"], base=arguments.get("base", ...)
+            )
         if operation == "import":
             return await self._import(arguments)
         if operation == "catalog":

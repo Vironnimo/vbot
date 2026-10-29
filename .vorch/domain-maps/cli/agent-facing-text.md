@@ -6,6 +6,7 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| `references/mcp.md`: `Include "base":null for a new connection; for an edit, include "base" with the unmodified configuration from status.` / conflict recovery sentence | A separate read cannot prevent a competing create or edit from winning before save. The optional baseline is checked atomically by the MCP owner; the instruction preserves the read value instead of sending the edited draft as its own baseline (`test_mcp_management.py`, `mcpSettings.test.js`). |
 | Librarian `undo` help, exact `--started-at` argument and `Undo: vbot librarian undo ...` status hint | Identifies one retained pass rather than guessing the latest one; a pass can change several Skill homes whose revision ids collide, so reverting them in only the curated Agent's home is incorrect. The hint retains the selected server. |
 | Librarian owner-qualified revision names, `recorded changes of the last pass` and `Librarian pass of ... at ... undone` | Same-named shared Skills remain distinguishable, and a successful undo cannot make historical pass records look like a new set of writes. |
 | `references/skills.md`: Librarian status/undo instructions, including exact start timestamps, foreign homes and historical details after undo | Gives Agents the whole-pass operation and the source of its identity; avoids the former single-home revision recipe and distinguishes recorded history from current effects. |
