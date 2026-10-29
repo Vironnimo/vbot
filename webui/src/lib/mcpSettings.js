@@ -351,7 +351,7 @@ export function createMcpSettings({
             // Reopening must use the current record even if its invalidation
             // has not arrived. The modal retains this unsaved draft.
             await refresh();
-            throw new Error(t(original ? 'mcp.changed' : 'mcp.duplicate'), {
+            throw new Error(original ? t('mcp.changed') : t('mcp.duplicate'), {
               cause: error,
             });
           }
