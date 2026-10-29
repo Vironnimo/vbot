@@ -33,6 +33,10 @@ class UnsupportedOperationError(InvocationNotSentError):
     """An operation the server does not offer under the negotiated protocol; never sent."""
 
 
+class ToolChangedError(InvocationNotSentError):
+    """A prepared Tool's input schema changed before transmission; never sent."""
+
+
 class SubscriptionEndedError(ValueError):
     """An unsubscribe ended a subscription before its caller received the outcome."""
 
@@ -62,6 +66,8 @@ class _Call:
     delivered: bool
     # The connection task that admitted the call.
     owner: asyncio.Task[None] | None
+    # The known Tool contract before waiting for a connection or queue slot.
+    input_schema: dict[str, Any] | None = None
     task: asyncio.Task[None] | None = None
     # A read that may run again: it failed transiently or lost its connection.
     retry: bool = False

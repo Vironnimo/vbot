@@ -33,6 +33,13 @@ and recovery storage, so an old save cannot land after the replacement service l
 During that drain the retiring service accepts no new Tool call or catalog publication.
 Coverage: `test_admitted_connection_changes_settle_before_cancellation_and_shutdown`.
 
+An invocation retains its known remote input schema before connection and queue
+waits. Immediately before sending `tools/call`, after any roots notification, the
+protocol compares it with the current catalog; a changed or removed schema returns
+the existing `mcp_tool_changed` refusal without a remote effect. Resuming an existing
+server task still reads that task's result and does not send the original call.
+Coverage: `test_schema_change_before_transmission_never_sends_prepared_call`.
+
 Unsubscribing also settles a subscription still awaiting its acknowledgement;
 one removed after acknowledgement but before its caller resumes cannot become a
 retained subscription again. The same URI can be subscribed explicitly afterwards.

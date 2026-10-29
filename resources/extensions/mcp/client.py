@@ -8,6 +8,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
+from copy import deepcopy
 from http import HTTPStatus
 from typing import Any
 
@@ -27,6 +28,7 @@ from ._calls import _CURRENT_CALL, _Call
 from ._calls import InvalidToolResultError as InvalidToolResultError
 from ._calls import InvocationNotSentError as InvocationNotSentError
 from ._calls import SubscriptionEndedError as SubscriptionEndedError
+from ._calls import ToolChangedError as ToolChangedError
 from ._calls import UnsupportedOperationError as UnsupportedOperationError
 from ._events import ConnectionEvents
 from ._protocol import TASK_OPERATIONS as TASK_OPERATIONS
@@ -399,6 +401,16 @@ class ConnectionRunner:
         context: ToolContext | None,
         resumed: TaskRun | None = None,
     ) -> _Call:
+        schema = None
+        if operation == "tools/call" and resumed is None:
+            schema = next(
+                (
+                    deepcopy(tool["inputSchema"])
+                    for tool in self.catalog.get("tools", [])
+                    if tool["name"] == arguments.get("name")
+                ),
+                None,
+            )
         owner = await self._connected()
         call = _Call(
             self,
@@ -408,6 +420,7 @@ class ConnectionRunner:
             asyncio.get_running_loop().create_future(),
             delivered=not self._tracks_delivery,
             owner=owner,
+            input_schema=schema,
             server_task=resumed,
             resuming=resumed is not None,
         )
@@ -775,6 +788,7 @@ class ConnectionRunner:
             | TaskEndedError
             | TaskUnknownError
             | UnsupportedOperationError
+            | ToolChangedError
             | SubscriptionEndedError,
         ):
             # The server's own account of the call, or vBot's refusal to send it,

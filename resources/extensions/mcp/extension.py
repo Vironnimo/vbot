@@ -668,6 +668,7 @@ class MCPService:
             InvalidToolResultError,
             InvocationNotSentError,
             SubscriptionEndedError,
+            ToolChangedError,
             UnsupportedOperationError,
         )
 
@@ -675,6 +676,15 @@ class MCPService:
             payload = await runner.invoke(operation, arguments, context)
         except UnsupportedOperationError:
             return unsupported_operation(operation)
+        except ToolChangedError:
+            return tool_failure(
+                "mcp_tool_changed",
+                MCP_MESSAGES["tool_changed"].format(
+                    tool=arguments["name"],
+                    describe=compact(describe_call(f"tool:{arguments['name']}")),
+                    connection=runner.id,
+                ),
+            )
         except InvocationNotSentError as error:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
