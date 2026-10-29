@@ -52,6 +52,7 @@ async def apply_settings_change(
     refresh_sections: Collection[str] = (),
 ) -> SettingsChangeEffects:
     """Refresh live consumers after persistence; return the catalogs to invalidate."""
+    startup_id = runtime._startup_id
     newly_enabled = _disabled_names(previous) - _disabled_names(current)
     newly_disabled = _disabled_names(current) - _disabled_names(previous)
     rebuild_extensions = bool(newly_enabled) or previous.get(
@@ -68,11 +69,19 @@ async def apply_settings_change(
         # apply an independently changed Recall selection.
         await runtime.apply_extension_disabled_change(newly_disabled)
 
+    if not runtime._started or runtime._startup_id != startup_id:
+        return SettingsChangeEffects()
+
     skills_changed = "skills" in refresh_sections or previous.get(
         "skill_directories"
     ) != current.get("skill_directories")
     if skills_changed and not (rebuild_extensions or newly_disabled):
         await runtime.reload_skills_async()
+
+    # A scan can settle after shutdown or restart. Its publication is fenced by
+    # its owner; the remaining effects must also stay on the original Runtime.
+    if not runtime._started or runtime._startup_id != startup_id:
+        return SettingsChangeEffects()
 
     recall_changed = "recall" in refresh_sections or previous.get("recall") != current.get("recall")
     if recall_changed and not rebuild_extensions:

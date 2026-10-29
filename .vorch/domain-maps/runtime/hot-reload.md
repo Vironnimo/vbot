@@ -17,4 +17,6 @@ The Runtime's live reload paths: `apply_settings_change` and the Provider, local
 
 Live Skill, credential and Custom Provider reload orchestration and generation-checked publication live in `_settings.py`; Runtime keeps their stable public entrypoints.
 
+The Settings coordinator also checks the original startup identity after awaited reloads. A change that settles after shutdown or restart applies no remaining effects to the closed or replacement service graph and returns no catalog invalidations.
+
 Only published credential snapshots and Custom Provider overlays retire ProviderRuntime's reusable HTTP pools. Existing responses finish on retired pools; subsequent requests use fresh connections even through already-created Adapters/Task clients (`providers/request-policy.md` -> HTTP, retry, and streaming). Superseded reload results do not retire them.
