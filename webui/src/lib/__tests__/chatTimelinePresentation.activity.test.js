@@ -125,20 +125,31 @@ describe('runFooterParts', () => {
     expect(runFooterParts(run)).toEqual(expected());
   });
 
-  it('marks the latest Run of a waiting Session after its own duration', () => {
+  it('keeps the latest completed Run of a waiting Session running', () => {
     const waiting = { waiting: true };
-    expect(
-      runFooterParts({ status: 'completed', durationMs: 8000 }, 0, waiting),
-    ).toEqual([
-      status('completed'),
-      t('chat.runDurationWaiting', { duration: seconds('8.0') }),
+    const start = '2026-08-05T18:19:52Z';
+    const nowMs = Date.parse(start) + 25_000;
+    const completed = {
+      status: 'completed',
+      startTimestamp: start,
+      durationMs: 8000,
+      iterationCount: 2,
+      endTimestamp: end,
+    };
+    expect(runFooterParts(completed, nowMs, waiting)).toEqual([
+      status('running'),
+      seconds('25'),
+      t('chat.runIterations', { count: 2 }),
     ]);
+    const details = runFooterDetails(completed, nowMs, waiting);
+    expect(details.title).toBe(status('running'));
+    expect(details.rows.map((row) => row.label)).toContain(
+      t('chat.details.runningFor'),
+    );
+    // A Run that ended otherwise keeps its own outcome.
     expect(
-      runFooterParts({ status: 'completed', durationMs: null }, 0, waiting),
-    ).toEqual([status('completed'), t('chat.runWaiting')]);
-    expect(
-      runFooterParts({ status: 'running', durationMs: null }, 0, waiting),
-    ).toEqual([status('running')]);
+      runFooterParts({ status: 'cancelled', durationMs: 8000 }, 0, waiting),
+    ).toEqual([status('cancelled'), seconds('8.0')]);
   });
 
   it('details the Run state and recorded Models and effort without inferring older settings', () => {

@@ -241,8 +241,6 @@ export default Object.freeze({
   'chat.runStatus.failed': 'Failed',
   'chat.runStatus.cancelled': 'Cancelled',
   'chat.runStatus.interrupted': 'Interrupted',
-  'chat.runDurationWaiting': '{duration} (Waiting)',
-  'chat.runWaiting': '(Waiting)',
   'chat.agentMenu.label': 'Actions for {name}',
   'chat.agentActivity.idle': '{name}: Idle',
   'chat.agentActivity.model': 'Model',

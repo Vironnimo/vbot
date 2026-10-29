@@ -112,22 +112,18 @@ export function reasoningDurationMs(child, nowMs = Date.now()) {
 // render on a separate line below via `runFooterNotice` so they can never
 // push the stable parts onto a wrap line. `waiting` marks the Session's
 // latest Run while the Session waits for work that will wake it (Session
-// activity): the duration stays the Run's own, followed by "(Waiting)".
+// activity): see `footerRun`.
 export const runFooterParts = (
   assistantRun,
   nowMs = Date.now(),
   { waiting = false } = {},
 ) => {
+  assistantRun = footerRun(assistantRun, waiting);
   const parts = [];
   parts.push(runStatusLabel(assistantRun.status));
   const duration = formatRunDuration(assistantRun, nowMs);
-  const waitingMark = waiting && assistantRun.status !== 'running';
   if (duration) {
-    parts.push(
-      waitingMark ? t('chat.runDurationWaiting', { duration }) : duration,
-    );
-  } else if (waitingMark) {
-    parts.push(t('chat.runWaiting'));
+    parts.push(duration);
   }
   const iterationLabel = labelForRunIterations(assistantRun);
   if (iterationLabel) {
@@ -143,7 +139,12 @@ export const runFooterParts = (
 // Tooltip details behind the Run footer: the Run's state, what its "iter"
 // count stands for (as the lead line, so the moment rows keep a narrow label
 // column), when it started and finished, and how long it ran.
-export const runFooterDetails = (assistantRun, nowMs = Date.now()) => {
+export const runFooterDetails = (
+  assistantRun,
+  nowMs = Date.now(),
+  { waiting = false } = {},
+) => {
+  assistantRun = footerRun(assistantRun, waiting);
   const running = assistantRun.status === 'running';
   const rows = executionDetailRows({
     startedAt: assistantRun.startTimestamp ?? assistantRun.timestamp,
@@ -755,6 +756,25 @@ function runEndTimeLabel(assistantRun) {
     return '';
   }
   return formatTime(assistantRun.endTimestamp);
+}
+
+// The Run as its footer shows it. A completed Run whose Session still waits
+// for background work it started (Sub-Agents, commands, undelivered results)
+// is not done from the user's side, so its footer keeps running: `Running`,
+// the time ticking from the Run's start, no end time. The recorded Run stays
+// as it is; once the Session stops waiting the footer shows it again.
+function footerRun(assistantRun, waiting) {
+  const completed =
+    assistantRun.status === 'completed' || assistantRun.status === 'success';
+  if (!waiting || !completed) {
+    return assistantRun;
+  }
+  return {
+    ...assistantRun,
+    status: 'running',
+    durationMs: null,
+    endTimestamp: null,
+  };
 }
 
 function formatRunDuration(assistantRun, nowMs = Date.now()) {

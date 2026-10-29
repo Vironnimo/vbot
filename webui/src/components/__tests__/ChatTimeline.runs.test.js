@@ -342,6 +342,31 @@ describe('ChatTimeline Runs', () => {
     expect(toolTime.textContent).toBe('3.0s');
   });
 
+  it('keeps the latest completed Run running while its Session waits', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T18:00:05.000Z'));
+    const sessionState = timelineSession();
+    sessionState.timelineItems = [
+      assistantRun('run-waiting', [], {
+        status: 'completed',
+        startTimestamp: '2026-08-05T18:00:00.000Z',
+        endTimestamp: '2026-08-05T18:00:02.000Z',
+        durationMs: 2000,
+      }),
+    ];
+    timeline.render(sessionState, { sessionWaiting: true });
+
+    const footer = document.querySelector('.run-footer');
+    expect(footer.textContent).toContain(t('chat.runStatus.running'));
+    expect(footer.textContent).toContain('5.0s');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    flushSync();
+
+    expect(footer.textContent).toContain('6.0s');
+    expect(footer.textContent).not.toContain(t('chat.runStatus.completed'));
+  });
+
   it('shows no duration while a streamed Tool call is still preparing', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-05T18:00:05.000Z'));

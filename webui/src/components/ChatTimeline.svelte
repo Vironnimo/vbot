@@ -177,15 +177,20 @@
     const statuses = subAgentStatuses;
     const durableCommandStatuses = backgroundCommandStatuses;
     const liveCommandStatuses = commandStatuses;
-    if (
-      liveClockCadenceMs(
+    const waiting = sessionWaiting;
+    // A waiting Session's latest Run footer keeps running, so the clock ticks
+    // at least every second while nothing else on screen needs it.
+    const cadenceMs = () => {
+      const delay = liveClockCadenceMs(
         visibleItems,
         statuses,
         Date.now(),
         durableCommandStatuses,
         liveCommandStatuses,
-      ) === 0
-    ) {
+      );
+      return waiting && delay === 0 ? 1000 : delay;
+    };
+    if (cadenceMs() === 0) {
       return undefined;
     }
 
@@ -202,13 +207,7 @@
       if (disposed || document.hidden) {
         return;
       }
-      const delay = liveClockCadenceMs(
-        visibleItems,
-        statuses,
-        Date.now(),
-        durableCommandStatuses,
-        liveCommandStatuses,
-      );
+      const delay = cadenceMs();
       if (delay === 0) {
         return;
       }

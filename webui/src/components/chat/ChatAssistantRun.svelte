@@ -94,7 +94,7 @@
     backgroundCommandStatuses = null,
     commandStatuses = null,
     // This is the Session's latest Run and the Session waits for work that
-    // will wake it: the footer marks the duration "(Waiting)".
+    // will wake it: a completed Run's footer keeps running.
     sessionWaiting = false,
     nowMs = Date.now(),
   } = $props();
@@ -888,7 +888,8 @@
         <button
           type="button"
           class="run-footer__summary"
-          use:tooltip={() => runFooterDetails(item, Date.now())}
+          use:tooltip={() =>
+            runFooterDetails(item, Date.now(), { waiting: sessionWaiting })}
         >
           {#each footerParts as footerPart, index (footerPart)}
             {#if index > 0}
