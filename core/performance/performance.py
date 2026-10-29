@@ -410,6 +410,7 @@ class PerformanceService:
         self._last_census: HeapCensus | None = None
         self._window_lock = threading.Lock()
         self._window: WindowStart | None = None
+        self._pending_window: dict[str, Any] | None = None
         self._window_stalls: list[dict[str, Any]] = []
         self._window_stalls_dropped = 0
         self._history_task: asyncio.Task[None] | None = None
@@ -455,7 +456,7 @@ class PerformanceService:
         task, self._history_task = self._history_task, None
         if task is not None:
             await cancel_and_wait(task)
-        if self._window is not None:
+        if self._window is not None or self._pending_window is not None:
             await self._write_window(REASON_SHUTDOWN)
         if self._finishing:
             await asyncio.gather(*self._finishing, return_exceptions=True)
@@ -549,8 +550,10 @@ class PerformanceService:
 
     async def stop_recording(self) -> dict[str, Any]:
         """Stop the active recording and write its trace and summary files."""
+        from core.utils.workers import settle_before_cancelling
+
         recording = self._detach(STOPPED_REQUESTED)
-        return await self._finish(recording)
+        return await settle_before_cancelling(self._finish_task(recording))
 
     def recording_status(self) -> dict[str, Any] | None:
         """Return the active recording status, or ``None``."""
@@ -597,6 +600,10 @@ class PerformanceService:
     def _close_window(self, reason: str) -> None:
         """Append the window ending now; a shutdown window ends the history."""
         with self._window_lock:
+            # A failed append may already have reached disk. Retry the same
+            # captured window before taking another; append_window is idempotent.
+            if self._pending_window is not None:
+                self._append_pending_window()
             start = self._window
             if start is None:
                 return
@@ -612,7 +619,7 @@ class PerformanceService:
             self._window = (
                 None if reason == REASON_SHUTDOWN else WindowStart(ended_at, histograms, counters)
             )
-            record = window_record(
+            self._pending_window = window_record(
                 start,
                 ended_at=ended_at,
                 reason=reason,
@@ -624,12 +631,18 @@ class PerformanceService:
                 stalls=stalls,
                 stalls_dropped=dropped,
             )
-            append_window(
-                self._history_dir,
-                record,
-                retention_days=self._history_retention_days,
-                max_bytes=self._history_max_bytes,
-            )
+            self._append_pending_window()
+
+    def _append_pending_window(self) -> None:
+        """Publish the retained window; only success releases its measurements."""
+        assert self._pending_window is not None
+        append_window(
+            self._history_dir,
+            self._pending_window,
+            retention_days=self._history_retention_days,
+            max_bytes=self._history_max_bytes,
+        )
+        self._pending_window = None
 
     def _snapshot(self) -> dict[str, Any]:
         with self._stall_lock:
@@ -691,11 +704,15 @@ class PerformanceService:
             detached = self._detach(STOPPED_MAX_SECONDS, expected=recording)
         except RecordingInactiveError:
             return
+        self._finish_task(detached)
+
+    def _finish_task(self, recording: Recording) -> asyncio.Task[dict[str, Any]]:
         task = asyncio.get_running_loop().create_task(
-            self._finish(detached), name="vbot-performance-recording-finish"
+            self._finish(recording), name="vbot-performance-recording-finish"
         )
         self._finishing.add(task)
         task.add_done_callback(self._finished)
+        return task
 
     def _finished(self, task: asyncio.Task[dict[str, Any]]) -> None:
         self._finishing.discard(task)

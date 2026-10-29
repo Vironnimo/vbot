@@ -6,6 +6,7 @@ import asyncio
 import gc
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from core.performance import (
     session_track,
     set_gauge,
 )
+from core.performance import performance as performance_module
 from core.performance.performance import (
     DROPPED_METRICS_GAUGE,
     MAX_METRIC_NAMES,
@@ -306,6 +308,62 @@ async def test_recording_stops_itself_after_max_seconds(
     assert [entry["recording_id"] for entry in recordings] == [status["recording_id"]]
     assert recordings[0]["stopped_reason"] == "max_seconds"
     await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["queued", "writing"])
+async def test_requested_recording_stop_settles_on_cancellation_and_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    service = _service(tmp_path, history_interval_s=None)
+    entered, release = asyncio.Event(), asyncio.Event()
+    thread_release = threading.Event()
+    loop = asyncio.get_running_loop()
+    write = performance_module.write_recording
+    worker_run = service._workers.run
+
+    async def held_admission(function: Any, *args: Any, **kwargs: Any) -> Any:
+        if function is write:
+            entered.set()
+            await release.wait()
+        return await worker_run(function, *args, **kwargs)
+
+    def held_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        loop.call_soon_threadsafe(entered.set)
+        assert thread_release.wait(5), "recording writer was not released"
+        return write(*args, **kwargs)
+
+    if phase == "queued":
+        monkeypatch.setattr(service._workers, "run", held_admission)
+    else:
+        monkeypatch.setattr(performance_module, "write_recording", held_write)
+    status = service.start_recording()
+    count("test.events", 4)
+    stopping = asyncio.create_task(service.stop_recording())
+    closing = None
+    try:
+        await entered.wait()
+        stopping.cancel()
+        closing = asyncio.create_task(service.aclose())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        assert not closing.done()
+    finally:
+        release.set()
+        thread_release.set()
+        stopped = await asyncio.gather(stopping, return_exceptions=True)
+        if closing is not None:
+            await closing
+        else:
+            await service.aclose()
+    assert isinstance(stopped[0], asyncio.CancelledError)
+    summary = json.loads(
+        (tmp_path / "performance" / f"{status['recording_id']}.summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["summary"]["counters"]["test.events"] == 4
+    assert summary["stopped_reason"] == "requested"
 
 
 @pytest.mark.asyncio

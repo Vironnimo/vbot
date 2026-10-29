@@ -98,14 +98,24 @@ def append_window(
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{day.isoformat()}{_FILE_SUFFIX}"
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False, sort_keys=True) + "\n"
+    encoded = line.encode("utf-8")
     with path.open("a+b") as handle:
+        end = handle.tell()
+        # A previous write can report failure after its complete line landed.
+        # The service retries that exact window before publishing another one.
+        if end >= len(encoded):
+            handle.seek(end - len(encoded))
+            already_written = handle.read(len(encoded)) == encoded
+        else:
+            already_written = False
         # A crash can leave a torn last line; start on a fresh line so only
         # that line is lost.
-        if handle.tell() > 0:
+        if not already_written and end > 0:
             handle.seek(-1, 2)
             if handle.read(1) != b"\n":
-                line = "\n" + line
-        handle.write(line.encode("utf-8"))
+                encoded = b"\n" + encoded
+        if not already_written:
+            handle.write(encoded)
     prune_history(directory, today=day, retention_days=retention_days, max_bytes=max_bytes)
 
 
