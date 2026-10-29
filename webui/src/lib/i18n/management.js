@@ -360,7 +360,8 @@ export default Object.freeze({
     'Revision {later} later changed the same part of “{name}”, so these revisions can only be reverted together.',
   'skills.revert.passTitle': 'Revert the last maintenance pass?',
   'skills.revert.pass':
-    'This takes back revisions {revisions}. Each revert is recorded as a new revision that you can revert in turn.',
+    'This takes back every change from this pass, including changes to shared Skills. If a later edit conflicts, nothing is reverted. Each revert is recorded in its history.',
+  'skills.revert.passDone': 'Librarian pass reverted.',
   'skills.revert.action': 'Revert',
   'skills.revert.togetherAction': 'Revert together',
   'skills.revert.doneOne': 'Revision {revision} reverted.',

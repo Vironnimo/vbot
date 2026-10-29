@@ -166,6 +166,7 @@ export {
   librarianStatus,
   librarianOverview,
   runLibrarian,
+  undoLibrarianPass,
   restoreSkill,
   purgeSkill,
   shareSkill,

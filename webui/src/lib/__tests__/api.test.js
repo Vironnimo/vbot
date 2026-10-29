@@ -26,6 +26,21 @@ const invalidRequest = (method) =>
   });
 
 describe('rpc()', () => {
+  it('sends an explicitly chosen Cron retry destination only when supplied', async () => {
+    const fetch = rpcFetch();
+    const delivery = {
+      kind: 'chat',
+      channel_id: 'chosen',
+      platform: 'telegram',
+      platform_target: '42',
+    };
+    await api.retryCronDelivery('job', { fetch });
+    await api.retryCronDelivery('job', { delivery, fetch });
+    expect(sentEnvelopes(fetch)).toEqual([
+      { method: 'cron.retry_delivery', params: { id: 'job' } },
+      { method: 'cron.retry_delivery', params: { id: 'job', delivery } },
+    ]);
+  });
   it('posts the RPC envelope to the server and returns its result', async () => {
     const fetchFunction = rpcFetch({ agents: [] });
 
@@ -791,6 +806,11 @@ describe('RPC wrappers', () => {
     ['librarian.overview', (o) => api.librarianOverview(o), {}],
     ['librarian.run', (o) => api.runLibrarian('main', o), { agent_id: 'main' }],
     [
+      'librarian.undo',
+      (o) => api.undoLibrarianPass('main', '2026-10-29T10:00:00.123456Z', o),
+      { agent_id: 'main', started_at: '2026-10-29T10:00:00.123456Z' },
+    ],
+    [
       'skill.restore',
       (o) => api.restoreSkill('global', 'deploy_01', o),
       { scope: 'global', archive_id: 'deploy_01' },
@@ -909,6 +929,11 @@ describe('RPC wrappers', () => {
       'a Skill revert naming a non-positive revision',
       () => api.revertSkillRevisions('global', [3, 0]),
       'skill.revert',
+    ],
+    [
+      'a Librarian undo without a pass identity',
+      () => api.undoLibrarianPass('main', ''),
+      'librarian.undo',
     ],
     [
       'an unknown Memory scope',

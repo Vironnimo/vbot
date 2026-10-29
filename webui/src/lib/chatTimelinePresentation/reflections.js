@@ -173,6 +173,13 @@ const stringList = (value) =>
     ? value.filter((item) => typeof item === 'string' && item)
     : [];
 
+const skillChangeName = (change) => {
+  const name = typeof change.skill === 'string' ? change.skill : '';
+  const owner =
+    typeof change.skill_owner_id === 'string' ? change.skill_owner_id : '';
+  return owner ? `${name} (${owner})` : name;
+};
+
 // One line per change the review made, in the server's order: what happened,
 // where (a Memory scope or a Skill name), and the entry text or the files.
 export const reflectionChangeItems = (changes) =>
@@ -187,9 +194,7 @@ export const reflectionChangeItems = (changes) =>
         kind: changeKindLabel(change.kind),
         place: memory
           ? memoryScopeLabel(change.scope, change.project_id)
-          : typeof change.skill === 'string'
-            ? change.skill
-            : '',
+          : skillChangeName(change),
         detail: memory
           ? typeof change.text === 'string'
             ? change.text
@@ -259,7 +264,7 @@ export function reflectionUndoErrorText(error) {
       ? t('chat.activity.undoConflict.memoryBy', { scope, text, actor, time })
       : t('chat.activity.undoConflict.memory', { scope, text });
   }
-  const skill = typeof conflict.skill === 'string' ? conflict.skill : '';
+  const skill = skillChangeName(conflict);
   return later
     ? t('chat.activity.undoConflict.skillBy', { skill, actor, time })
     : t('chat.activity.undoConflict.skill', { skill });

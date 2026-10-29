@@ -369,6 +369,25 @@ export function runLibrarian(agentId, options = {}) {
   return rpc('librarian.run', { agent_id: agentId }, options);
 }
 
+// Reverts the exact pass shown, across all Skill homes and learning changes.
+export function undoLibrarianPass(agentId, startedAt, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'librarian.undo',
+  );
+  requireNonEmptyString(
+    startedAt,
+    'Pass start must be a non-empty string',
+    'librarian.undo',
+  );
+  return rpc(
+    'librarian.undo',
+    { agent_id: agentId, started_at: startedAt },
+    options,
+  );
+}
+
 export function restoreSkill(scope, archiveId, options = {}) {
   requireSkillScope(scope, 'skill.restore');
   requireNonEmptyString(

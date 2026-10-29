@@ -134,6 +134,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('librarian.status', { agent_id: agentId }),
     librarianOverview: () => call('librarian.overview', {}),
     runLibrarian: (agentId) => call('librarian.run', { agent_id: agentId }),
+    undoLibrarianPass: (agentId, startedAt) =>
+      call('librarian.undo', { agent_id: agentId, started_at: startedAt }),
     restoreSkill: (scope, archiveId) =>
       call('skill.restore', { scope, archive_id: archiveId }),
     purgeSkill: (scope, archiveId) =>

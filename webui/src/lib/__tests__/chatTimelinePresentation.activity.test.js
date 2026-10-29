@@ -1032,6 +1032,16 @@ describe('Reflection rows', () => {
       { store: 'skill', skill: 'deploy', later: null },
       'Nothing was undone: Skill “deploy” was changed again later. Change it directly instead.',
     ],
+    [
+      'a shared Skill changed in another Agent home',
+      {
+        store: 'skill',
+        skill: 'deploy',
+        skill_owner_id: 'release',
+        later: { actor: 'external' },
+      },
+      'Nothing was undone: Skill “deploy (release)” was changed again later by an edit outside vBot',
+    ],
   ])('names %s that blocks an undo', (_label, conflict, expected) => {
     const at = '2026-09-05T10:30:00Z';
     const later = conflict.later

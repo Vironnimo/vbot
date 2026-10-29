@@ -1266,6 +1266,14 @@ describe('Skills manager', () => {
   });
 
   it('shows an Agent’s last Librarian pass, links its changes and Session, reverts them together, starts a pass and names why another Agent gets none', async () => {
+    inventory.push(
+      entry('foreign-deploy', 'deploy', {
+        owner_id: 'reviewer',
+        editable_scope: 'agent:reviewer',
+        shared: true,
+        shared_with: ['main'],
+      }),
+    );
     const change = (id, skill, kind, extra = {}) => ({
       id,
       at: `2026-09-30T10:0${id - 6}:00.000000Z`,
@@ -1323,10 +1331,12 @@ describe('Skills manager', () => {
           ],
         }),
         change(8, 'deploy', 'change'),
+        change(8, 'deploy', 'change', { skill_owner_id: 'reviewer' }),
         change(7, 'stale', 'archive', { reason: 'inactive' }),
       ],
     };
     let otherStatus = {};
+    let undoConflict = true;
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'librarian.status' && params.agent_id === 'main')
         return mainStatus;
@@ -1349,6 +1359,21 @@ describe('Skills manager', () => {
         throw Object.assign(new Error('busy-sentinel'), {
           code: 'agent_busy',
         });
+      if (method === 'librarian.undo') {
+        if (undoConflict)
+          throw Object.assign(new Error('Nothing was undone.'), {
+            code: 'learning_undo_conflict',
+            details: {
+              data: {
+                store: 'skill',
+                skill: 'deploy',
+                skill_owner_id: 'reviewer',
+                later: { revision: 9, actor: 'human' },
+              },
+            },
+          });
+        return mainStatus;
+      }
       if (method === 'skill.history') return { revisions: [] };
       return defaultRpc(method, params);
     });
@@ -1377,6 +1402,7 @@ describe('Skills manager', () => {
     expect(texts('.skills-librarian .skills-history__what')).toEqual([
       'Merged into deploy · Planned moves: share with Coder, cron job “Nightly”. Individual moves can fail.',
       'Changed',
+      'Changed',
       'Retired as unused',
     ]);
     // A purged Skill has neither a page nor an archive entry to link to.
@@ -1386,16 +1412,27 @@ describe('Skills manager', () => {
 
     click(button('Revert together', section()));
     let dialog = document.querySelector('[role="dialog"]');
-    expect(dialog.textContent).toContain(
-      t('skills.revert.pass', { revisions: '7, 8, 9' }),
-    );
+    expect(dialog.textContent).toContain(t('skills.revert.pass'));
     click(button('Revert together', dialog));
     await settle();
-    expect(calls('skill.revert')).toEqual([
-      { scope: 'agent:main', revisions: [7, 8, 9] },
+    expect(onToast).toHaveBeenCalledWith({
+      title: expect.stringContaining('deploy (reviewer)'),
+      variant: 'error',
+    });
+    // A pass conflict is never expanded into later edits outside that pass.
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(calls('skill.revert')).toEqual([]);
+    undoConflict = false;
+    click(button('Revert together', section()));
+    dialog = document.querySelector('[role="dialog"]');
+    click(button('Revert together', dialog));
+    await settle();
+    expect(calls('librarian.undo')).toEqual([
+      { agent_id: 'main', started_at: mainStatus.last_pass.started_at },
+      { agent_id: 'main', started_at: mainStatus.last_pass.started_at },
     ]);
     expect(onToast).toHaveBeenCalledWith({
-      title: 'Revisions 7, 8, 9 reverted.',
+      title: t('skills.revert.passDone'),
       variant: 'success',
     });
 
@@ -1412,6 +1449,16 @@ describe('Skills manager', () => {
     expect(calls('skill.history')).toEqual([
       { scope: 'agent:main', name: 'deploy', limit: 50 },
     ]);
+    click(button('Back to Main'));
+    await settle();
+
+    click(button('Open the history of deploy (reviewer)'));
+    await settle();
+    expect(calls('skill.history').at(-1)).toEqual({
+      scope: 'agent:reviewer',
+      name: 'deploy',
+      limit: 50,
+    });
     click(button('Back to Main'));
     await settle();
 
