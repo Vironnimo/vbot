@@ -133,6 +133,8 @@ class RequestState:
     prompt_blocks: PromptBlockPin | None = None
     tool_loads: Mapping[str, ToolChange] | None = None
     effort: EffortState | None = None
+    # A Compaction projection owns this fresh budget until its checkpoint commits.
+    image_budget: RequestImageBudget | None = None
 
     @property
     def loadable_tools(self) -> dict[str, JsonObject]:

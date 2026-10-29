@@ -87,6 +87,7 @@ class RequestMedia:
             request_messages,
             budget=image_budget,
             image_limit=inputs.max_request_images,
+            remember=inputs.fresh_prompt_epoch,
         )
 
     async def restore_tool_results(
@@ -103,6 +104,7 @@ class RequestMedia:
             wire_media_types=inputs.wire_media_types,
             image_budget=inputs.image_budget,
             image_limit=inputs.max_request_images,
+            remember_image_retirement=inputs.fresh_prompt_epoch,
             image_converter=self._tool_image_converter,
             max_image_bytes=inputs.max_image_bytes,
         )
