@@ -77,13 +77,11 @@ export function workingSpanStarts(run) {
   return starts;
 }
 
-const MAX_NAMED_TOOLS = 3;
-
 // What one Working line says about its rows. `rowStatus(child)` is the state
 // the Tool row itself shows and `toolName(child)` its displayed name; `active`
 // marks the group holding a running Run's latest activity, whose duration
 // keeps ticking with `nowMs`, and `thinking` that this activity is Thinking.
-// The line names the Tools used, most used first.
+// `toolKinds` lists the Tools used, most used first, for the tooltip.
 export function workingGroupSummary(
   group,
   { active = false, nowMs = Date.now(), rowStatus, toolName },
@@ -103,8 +101,7 @@ export function workingGroupSummary(
   return {
     active,
     thinking: active && group.children.at(-1)?.type === 'reasoning',
-    toolKinds: kinds.slice(0, MAX_NAMED_TOOLS),
-    otherToolKinds: kinds.slice(MAX_NAMED_TOOLS),
+    toolKinds: kinds,
     toolCount: tools.length,
     thoughtCount: group.children.length - tools.length,
     failedCount: statuses.filter((status) => status === 'failed').length,
@@ -117,7 +114,8 @@ export function workingGroupSummary(
   };
 }
 
-// The tooltip behind a Working line: counts the line leaves out.
+// The tooltip behind a Working line: the counts and which Tools ran, which
+// the line leaves out so it stays quieter than the Agent's text.
 export function workingGroupDetails(summary) {
   return {
     rows: [
@@ -126,8 +124,8 @@ export function workingGroupDetails(summary) {
         value: String(summary.toolCount),
       },
       {
-        label: t('chat.working.otherTools'),
-        value: summary.otherToolKinds
+        label: t('chat.working.tools'),
+        value: summary.toolKinds
           .map(({ name, count }) => (count > 1 ? `${name} ${count}` : name))
           .join(', '),
       },

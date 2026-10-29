@@ -413,8 +413,6 @@ describe('ChatAssistantRun', () => {
       expect(summaryText('.working-block__label')).toBeNull();
       expect(block.querySelector('.working-block__icon--active')).toBeNull();
       expect(summaryText('.working-block__count')).toBe('1 Tool call');
-      expect(summaryText('.working-block__kinds')).toBe('read');
-      expect(summaryText('.working-block__chip--more')).toBeNull();
       expect(summaryText('.working-block__note')).toBe('1 thought');
       expect(block.querySelector('summary .te-dot')).toBeNull();
       expect(
@@ -508,15 +506,15 @@ describe('ChatAssistantRun', () => {
 
     it.each([
       [
-        'a failure as a quiet note beside the count',
+        'a failure as a highlighted note beside the count',
         [
           readChild({ id: 'read-ok', status: 'success' }),
           bashChild({ status: 'failed' }),
         ],
-        { kinds: ['read', 'bash'], count: '2 Tool calls', note: '1 failed' },
+        { tools: 'read, bash', count: '2 Tool calls', note: '1 failed' },
       ],
       [
-        'the most used Tools first, with their counts, and how many more',
+        'every Tool in the tooltip, most used first, with its count',
         [
           toolChild('grep', {}, { id: 'grep', status: 'success' }),
           ...['read-1', 'read-2', 'read-3'].map((id) =>
@@ -528,8 +526,7 @@ describe('ChatAssistantRun', () => {
           toolChild('glob', {}, { id: 'glob-2', status: 'success' }),
         ],
         {
-          kinds: ['read3', 'glob2', 'grep'],
-          more: '+2',
+          tools: 'read 3, glob 2, grep, bash, write',
           count: '8 Tool calls',
         },
       ],
@@ -551,7 +548,7 @@ describe('ChatAssistantRun', () => {
             },
           }),
         ],
-        { kinds: ['read', 'bash'], count: '2 Tool calls', time: 'took 5.0s' },
+        { tools: 'read, bash', count: '2 Tool calls', time: 'took 5.0s' },
       ],
       [
         'Thinking before and after a near-instant Tool call',
@@ -567,7 +564,7 @@ describe('ChatAssistantRun', () => {
           { ...reasoningItem('Check.', { id: 'after' }), durationMs: 1000 },
         ],
         {
-          kinds: ['read'],
+          tools: 'read',
           count: '1 Tool call',
           note: '2 thoughts',
           time: 'took 2.7s',
@@ -593,7 +590,7 @@ describe('ChatAssistantRun', () => {
           }),
         ],
         {
-          kinds: ['read', 'bash'],
+          tools: 'read, bash',
           count: '2 Tool calls',
           note: '1 thought',
           time: 'took 5.0s',
@@ -606,7 +603,7 @@ describe('ChatAssistantRun', () => {
           readChild({ status: 'success', durationMs: 1000 }),
         ],
         {
-          kinds: ['read'],
+          tools: 'read',
           count: '1 Tool call',
           note: '1 thought',
           time: 'took 2.7s',
@@ -619,7 +616,7 @@ describe('ChatAssistantRun', () => {
           readChild({ status: 'success', startedAt: '2026-06-09T12:00:00Z' }),
         ],
         {
-          kinds: ['read'],
+          tools: 'read',
           count: '1 Tool call',
           note: '1 thought',
           time: null,
@@ -628,16 +625,11 @@ describe('ChatAssistantRun', () => {
     ])('summarizes a finished group with %s', (_case, items, expected) => {
       run.mount({ item: assistantRun({ items }), chatWorkingMode: 'compact' });
 
-      expect(
-        Array.from(
-          workingBlock().querySelectorAll(
-            '.working-block__chip:not(.working-block__chip--more)',
-          ),
-          (kind) => kind.textContent.trim(),
-        ),
-      ).toEqual(expected.kinds);
-      expect(summaryText('.working-block__chip--more')).toBe(
-        expected.more ?? null,
+      // The line stays quiet; its tooltip names the Tools, most used first.
+      workingBlock().querySelector('summary').focus();
+      flushSync();
+      expect(document.querySelector('#app-tooltip').textContent).toContain(
+        expected.tools,
       );
       expect(summaryText('.working-block__count')).toBe(expected.count);
       expect(summaryText('.working-block__note')).toBe(expected.note ?? null);

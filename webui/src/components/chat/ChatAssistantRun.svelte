@@ -779,11 +779,11 @@
             class="working-block__summary tool-event-line"
             use:tooltip={() => workingGroupDetails(summary)}
           >
-            <!-- A heading over the rows it folds: a spinner and "Working…",
-                 or "Thinking…" while the Agent thinks, while it is still at it
-                 here, else a Tool icon; then how many calls, a chip per Tool
-                 used, how many thoughts and how long it took. Row states stay
-                 on the rows themselves. -->
+            <!-- A quiet heading over the rows it folds: a spinner and
+                 "Working…", or "Thinking…" while the Agent thinks, while it is
+                 still at it here, else a Tool icon; then how many calls and
+                 thoughts and how long it took. The Tools used are named in the
+                 tooltip; row states stay on the rows themselves. -->
             {#if summary.active}
               <svg
                 class="working-block__icon working-block__icon--active"
@@ -808,63 +808,49 @@
                 />
               </svg>
             {/if}
-            <span class="working-block__count">
-              {#if summary.toolCount > 0}
-                {summary.toolCount === 1
-                  ? t('chat.working.toolCallOne')
-                  : t('chat.working.toolCallCount', {
-                      count: summary.toolCount,
-                    })}
-              {:else}
-                {thoughtsLabel(summary.thoughtCount)}
-              {/if}
-            </span>
-            {#if summary.toolKinds.length > 0}
-              <span class="working-block__kinds">
-                {#each summary.toolKinds as kind (kind.name)}
-                  <span class="working-block__chip"
-                    >{kind.name}{#if kind.count > 1}<span
-                        class="working-block__chip-count">{kind.count}</span
-                      >{/if}</span
-                  >
-                {/each}
-                {#if summary.otherToolKinds.length > 0}
-                  <span class="working-block__chip working-block__chip--more"
-                    >{t('chat.working.moreTools', {
-                      count: summary.otherToolKinds.length,
-                    })}</span
-                  >
+            <span class="working-block__facts">
+              <span class="working-block__fact working-block__count">
+                {#if summary.toolCount > 0}
+                  {summary.toolCount === 1
+                    ? t('chat.working.toolCallOne')
+                    : t('chat.working.toolCallCount', {
+                        count: summary.toolCount,
+                      })}
+                {:else}
+                  {thoughtsLabel(summary.thoughtCount)}
                 {/if}
               </span>
-            {/if}
-            {#if summary.toolCount > 0 && summary.thoughtCount > 0}
-              <span class="working-block__note">
-                {thoughtsLabel(summary.thoughtCount)}
-              </span>
-            {/if}
-            {#if summary.failedCount > 0}
-              <span class="working-block__note">
-                {t('chat.working.failedCount', {
-                  count: summary.failedCount,
-                })}
-              </span>
-            {/if}
-            {#if summary.runningCount > 0}
-              <span class="working-block__note">
-                {t('chat.working.runningCount', {
-                  count: summary.runningCount,
-                })}
-              </span>
-            {/if}
-            {#if summary.durationLabel}
-              <span class="working-block__time">
-                {summary.active
-                  ? summary.durationLabel
-                  : t('chat.working.took', {
-                      duration: summary.durationLabel,
-                    })}
-              </span>
-            {/if}
+              {#if summary.toolCount > 0 && summary.thoughtCount > 0}
+                <span class="working-block__fact working-block__note">
+                  {thoughtsLabel(summary.thoughtCount)}
+                </span>
+              {/if}
+              {#if summary.failedCount > 0}
+                <span
+                  class="working-block__fact working-block__note working-block__note--failed"
+                >
+                  {t('chat.working.failedCount', {
+                    count: summary.failedCount,
+                  })}
+                </span>
+              {/if}
+              {#if summary.runningCount > 0}
+                <span class="working-block__fact working-block__note">
+                  {t('chat.working.runningCount', {
+                    count: summary.runningCount,
+                  })}
+                </span>
+              {/if}
+              {#if summary.durationLabel}
+                <span class="working-block__fact working-block__time">
+                  {summary.active
+                    ? summary.durationLabel
+                    : t('chat.working.took', {
+                        duration: summary.durationLabel,
+                      })}
+                </span>
+              {/if}
+            </span>
             <svg
               class="working-block__chevron"
               viewBox="0 0 16 16"

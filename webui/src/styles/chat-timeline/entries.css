@@ -218,22 +218,23 @@
   display: none;
 }
 
-/* A Working line sits flush with the Agent's text but reads as a control,
-   not prose: an icon, the call count, a chip per Tool used and the time.
-   It carries no status dot; each row keeps its own. The child selector
-   outweighs the shared `.tool-event-line`, which loads later. */
+/* A Working line sits flush with the Agent's text but stays behind it, as
+   one quiet meta line: an icon, then the counts and the time in one plain
+   style, separated by dots. It carries no status dot; each row keeps its
+   own. The child selector outweighs the shared `.tool-event-line`, which
+   loads later. */
 .working-block > .working-block__summary {
   min-width: 0;
   max-width: 100%;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
   padding: 2px 0;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
 }
 
-.working-block__summary:hover .working-block__count {
-  color: var(--text-hi);
+.working-block__summary:hover {
+  color: var(--text-med);
 }
 
 .working-block__summary:focus-visible {
@@ -278,57 +279,30 @@
 
 .working-block__label {
   flex-shrink: 0;
-  color: var(--text-hi);
-  font-weight: 500;
-}
-
-.working-block__count {
-  flex-shrink: 0;
   color: var(--text-med);
-  font-weight: 500;
-  white-space: nowrap;
 }
 
-.working-block__kinds {
+.working-block__facts {
   display: flex;
   min-width: 0;
-  gap: 5px;
   overflow: hidden;
+  gap: 6px;
 }
 
-.working-block__chip {
-  min-width: 0;
-  overflow: hidden;
-  padding: 0 6px;
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.working-block__summary:hover .working-block__chip {
-  background: var(--border);
-}
-
-.working-block__chip-count {
-  margin-left: 5px;
-  color: var(--text-lo);
-  font-variant-numeric: tabular-nums;
-}
-
-.working-block__chip--more {
-  flex-shrink: 0;
-  color: var(--text-lo);
-}
-
-.working-block__note,
-.working-block__time {
+.working-block__fact {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.working-block__fact + .working-block__fact::before {
+  margin-right: 6px;
+  color: var(--text-faint);
+  content: '·';
+}
+
+/* A failure is the one fact worth noticing while reading past the line. */
+.working-block__note--failed {
+  color: var(--red);
 }
 
 .working-block__time {
