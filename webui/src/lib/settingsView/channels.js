@@ -14,6 +14,18 @@ export const CHANNEL_PLATFORMS = Object.freeze([
 
 const EMAIL_IMAP_PORT = 993;
 const EMAIL_SMTP_PORT = 465;
+const EMAIL_FORM_FIELDS = {
+  email_address: 'address',
+  email_username: 'username',
+  imap_host: 'imap_host',
+  imap_port: 'imap_port',
+  smtp_host: 'smtp_host',
+  smtp_port: 'smtp_port',
+  smtp_security: 'smtp_security',
+  email_folders: 'folders',
+  require_sender_authentication: 'require_sender_authentication',
+  email_trusted_authserv_ids: 'trusted_authserv_ids',
+};
 export const EMAIL_SMTP_SECURITIES = Object.freeze(['', 'ssl', 'starttls']);
 
 export const CHANNEL_DM_SCOPE_PER_CONVERSATION = 'per_conversation';
@@ -79,6 +91,9 @@ function emailFormValues(email) {
       : 'INBOX',
     require_sender_authentication:
       source.require_sender_authentication !== false,
+    email_trusted_authserv_ids: Array.isArray(source.trusted_authserv_ids)
+      ? source.trusted_authserv_ids.join(', ')
+      : '',
   };
 }
 
@@ -333,6 +348,22 @@ export function buildChannelUpdatePayload(form, baseline = null) {
   if (baseline) {
     const previous = buildChannelUpdatePayload(baseline);
     for (const key of Object.keys(payload)) {
+      if (key === 'email' && baseline.platform === 'email') {
+        for (const [field, accountField] of Object.entries(EMAIL_FORM_FIELDS)) {
+          const derivedChoice =
+            field === 'email_username' || field === 'smtp_security';
+          if (
+            source[field] === baseline[field] ||
+            (!derivedChoice &&
+              JSON.stringify(payload.email[accountField]) ===
+                JSON.stringify(previous.email[accountField]))
+          ) {
+            delete payload.email[accountField];
+          }
+        }
+        if (Object.keys(payload.email).length === 0) delete payload.email;
+        continue;
+      }
       if (
         key !== 'id' &&
         JSON.stringify(payload[key]) === JSON.stringify(previous[key])
@@ -531,6 +562,9 @@ function emailSettings(source) {
     folders: folders.length > 0 ? folders : ['INBOX'],
     require_sender_authentication:
       source.require_sender_authentication !== false,
+    trusted_authserv_ids: String(source.email_trusted_authserv_ids ?? '')
+      .split(/[\s,;]+/u)
+      .filter(Boolean),
   };
 }
 

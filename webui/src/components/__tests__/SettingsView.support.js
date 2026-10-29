@@ -672,6 +672,9 @@ export function createSettingsRpcMock(options = {}) {
       channels[index] = {
         ...channels[index],
         ...params,
+        ...(params.email
+          ? { email: { ...channels[index].email, ...params.email } }
+          : {}),
         allowed_chat_ids: Array.isArray(params.allowed_chat_ids)
           ? [...params.allowed_chat_ids]
           : channels[index].allowed_chat_ids,

@@ -82,7 +82,9 @@ class ParsedMail:
         )
 
 
-def parse_mail(raw: bytes, *, fallback_message_id: str) -> ParsedMail:
+def parse_mail(
+    raw: bytes, *, fallback_message_id: str, trusted_authserv_ids: tuple[str, ...] = ()
+) -> ParsedMail:
     """Read one RFC 5322 mail; ``fallback_message_id`` stands in for a missing Message-ID."""
     message = BytesParser(policy=policy.default).parsebytes(raw)
     name, sender = _first_address(message, "From")
@@ -92,7 +94,7 @@ def parse_mail(raw: bytes, *, fallback_message_id: str) -> ParsedMail:
         message_id=message_id,
         sender=sender,
         sender_name=name,
-        sender_authenticated=sender_authenticated(message, sender),
+        sender_authenticated=sender_authenticated(message, sender, trusted_authserv_ids),
         automatic=is_automatic(message, sender),
         recipients=tuple(
             address
@@ -110,7 +112,9 @@ def parse_mail(raw: bytes, *, fallback_message_id: str) -> ParsedMail:
     )
 
 
-def sender_authenticated(message: Message, sender: str) -> bool:
+def sender_authenticated(
+    message: Message, sender: str, trusted_authserv_ids: tuple[str, ...] = ()
+) -> bool:
     """Whether the receiving server's topmost Authentication-Results vouches for the From.
 
     Authenticated means ``dmarc=pass`` for the From domain, or ``dkim=pass`` for
@@ -121,7 +125,11 @@ def sender_authenticated(message: Message, sender: str) -> bool:
     if not domain or not headers:
         return False
     # The authserv-id leads; result clauses follow, separated by semicolons.
-    clauses = _COMMENT.sub(" ", str(headers[0])).split(";")[1:]
+    parts = _COMMENT.sub(" ", str(headers[0])).split(";")
+    authserv = parts[0].strip().split()
+    if not authserv or authserv[0].lower() not in trusted_authserv_ids:
+        return False
+    clauses = parts[1:]
     for clause in clauses:
         result = _RESULT.match(clause)
         if result is None or result.group(2).lower() != "pass":
@@ -201,6 +209,7 @@ def build_mail(
     message["Subject"] = subject
     message["Date"] = format_datetime(now or datetime.now(UTC))
     message["Message-ID"] = make_msgid(domain=sender.rpartition("@")[2])
+    message["Auto-Submitted"] = "auto-replied" if in_reply_to is not None else "auto-generated"
     if in_reply_to is not None:
         message["In-Reply-To"] = in_reply_to
         message["References"] = " ".join((*references, in_reply_to))
@@ -247,7 +256,10 @@ def _sent_at(value: object) -> str | None:
         return None
     if sent.tzinfo is None:
         return None
-    return format_canonical_timestamp(sent.astimezone(UTC))
+    try:
+        return format_canonical_timestamp(sent.astimezone(UTC))
+    except OverflowError, ValueError:
+        return None
 
 
 def _body_text(message: EmailMessage | Message) -> tuple[str, bool]:
@@ -279,7 +291,10 @@ def _part_text(part: Message) -> str:
         return content
     payload = part.get_payload(decode=True)
     if isinstance(payload, bytes):
-        return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        try:
+            return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        except LookupError:
+            return payload.decode("utf-8", errors="replace")
     return ""
 
 
@@ -299,6 +314,22 @@ def _attachments(message: Message) -> list[ParsedAttachment]:
         return []
     attachments: list[ParsedAttachment] = []
     for part in message.iter_attachments():
+        if part.get_content_type() == "message/rfc822":
+            nested = part.get_payload()
+            if isinstance(nested, list):
+                for index, attached in enumerate(nested):
+                    if isinstance(attached, Message):
+                        attachments.append(
+                            ParsedAttachment(
+                                filename=part.get_filename() or f"forwarded-{index + 1}.eml",
+                                media_type="message/rfc822",
+                                data=attached.as_bytes(policy=policy.SMTP),
+                            )
+                        )
+            continue
+        if part.is_multipart():
+            attachments.extend(_attachments(part))
+            continue
         payload = part.get_payload(decode=True)
         if not isinstance(payload, bytes):
             continue

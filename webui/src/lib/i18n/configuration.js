@@ -1283,6 +1283,10 @@ export default Object.freeze({
     'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
   'settings.channels.server_url': 'Mattermost server URL',
   'settings.channels.email.address': 'Email address',
+  'settings.channels.email.trusted_authserv_ids':
+    'Trusted authentication servers',
+  'settings.channels.email.trusted_authserv_ids.description':
+    'Comma-separated authserv-id values confirmed by your receiving mail server administrator. That server must remove forged results claiming these names. An empty list authenticates no sender.',
   'settings.channels.email.username': 'Login name',
   'settings.channels.email.username.description':
     'Leave empty when it is the email address.',

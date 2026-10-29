@@ -217,6 +217,14 @@ def _add_email_arguments(parser: argparse.ArgumentParser) -> None:
         help="Folders to watch; default INBOX",
     )
     group.add_argument(
+        "--trusted-authserv-id",
+        dest="trusted_authserv_ids",
+        nargs="*",
+        metavar="<authserv-id>",
+        help="Trusted receiving-server Authentication-Results names; no values clears the list. "
+        "An empty list authenticates no sender",
+    )
+    group.add_argument(
         "--require-sender-authentication",
         choices=("true", "false"),
         help="Answer only mails whose sender domain the server verified; default true",

@@ -801,7 +801,7 @@ describe('channels', () => {
     });
   });
 
-  it('edits the email account as form fields and sends it whole', () => {
+  it('creates complete email accounts and updates only the edited account fields', () => {
     const account = {
       address: 'bot@example.com',
       username: 'bot@example.com',
@@ -812,6 +812,7 @@ describe('channels', () => {
       smtp_security: 'ssl',
       folders: ['INBOX', 'Invoices'],
       require_sender_authentication: true,
+      trusted_authserv_ids: ['mx.example.com'],
     };
     const [saved] = applyChannelPanelList(createChannelPanelState(), {
       channels: [
@@ -833,6 +834,7 @@ describe('channels', () => {
       smtp_port: '465',
       smtp_security: '',
       email_folders: 'INBOX, Invoices',
+      email_trusted_authserv_ids: 'mx.example.com',
     });
     expect(buildChannelCreatePayload(form).email).toEqual(account);
 
@@ -840,8 +842,26 @@ describe('channels', () => {
       buildChannelUpdatePayload({ ...form, smtp_port: '587' }, form),
     ).toEqual({
       id: 'mail',
-      email: { ...account, smtp_port: 587, smtp_security: 'starttls' },
+      email: { smtp_port: 587 },
     });
+    expect(
+      buildChannelUpdatePayload(
+        { ...form, smtp_port: '587', smtp_security: 'ssl' },
+        form,
+      ),
+    ).toEqual({ id: 'mail', email: { smtp_port: 587, smtp_security: 'ssl' } });
+    expect(
+      buildChannelUpdatePayload(
+        { ...form, email_address: 'new@example.com' },
+        form,
+      ),
+    ).toEqual({ id: 'mail', email: { address: 'new@example.com' } });
+    expect(
+      buildChannelUpdatePayload(
+        { ...form, email_trusted_authserv_ids: '' },
+        form,
+      ),
+    ).toEqual({ id: 'mail', email: { trusted_authserv_ids: [] } });
     expect(() =>
       buildChannelUpdatePayload({ ...form, imap_port: '99999' }, form),
     ).toThrow(/imap_port/u);
