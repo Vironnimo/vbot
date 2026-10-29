@@ -356,6 +356,7 @@ class ConversationController:
                         kind in {"connection_ready", "connected", "connection", "state", "snapshot"}
                         or "snapshot" in kind
                     ):
+                        self.app.suggestions.invalidate()
                         self.schedule_refresh()
                         self.app._start(
                             self.app._load_requests, group="requests-read", exclusive=True
@@ -363,6 +364,15 @@ class ConversationController:
                         self.load_secret_requests()
                     elif kind == "resource_changed":
                         resource = event.get("payload") or {}
+                        if resource.get("kind") in {
+                            "agents",
+                            "projects",
+                            "models",
+                            "providers",
+                            "commands",
+                            "skills",
+                        }:
+                            self.app.suggestions.invalidate()
                         if resource.get("kind") in {"agents", "projects", "settings", "models"} or (
                             resource.get("kind") in {"sessions", "queue"}
                             and self.event_targets_view(resource.get("scope") or {})
