@@ -159,17 +159,14 @@ export function sortEntries(entries) {
 
 /**
  * Listed entries the typed name prefix can complete to, case-insensitively.
- * Hidden entries match only once the prefix starts with a dot; directory
- * mode offers only directories.
+ * Hidden entries are included; directory mode offers only directories.
  */
 export function matchingEntries(entries, prefix, { mode = 'directory' } = {}) {
   const needle = String(prefix ?? '').toLowerCase();
-  const revealHidden = needle.startsWith('.');
   return sortEntries(
     (entries ?? []).filter(
       (entry) =>
         (mode !== 'directory' || entry.kind === 'directory') &&
-        (revealHidden || !entry.hidden) &&
         entry.name.toLowerCase().startsWith(needle),
     ),
   );
@@ -214,13 +211,10 @@ export function extendPrefix(matches, prefix) {
 
 /**
  * The dialog's view of a listing: entries containing the filter text,
- * hidden ones only when shown or when the filter starts with a dot.
+ * including hidden ones unless the user hides them. A dot-prefixed filter
+ * still reaches hidden entries.
  */
-export function filterEntries(
-  entries,
-  query = '',
-  { showHidden = false } = {},
-) {
+export function filterEntries(entries, query = '', { showHidden = true } = {}) {
   const needle = String(query ?? '')
     .trim()
     .toLowerCase();

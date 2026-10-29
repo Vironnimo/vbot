@@ -795,8 +795,8 @@ export default Object.freeze({
   'projects.manage.modelSearchPlaceholder': 'Filter models…',
   'projects.manage.modelSearchEmpty': 'No models match',
   'projects.manage.autoLoad': 'Additional file',
-  'projects.manage.autoLoadPlaceholder': 'Add a file path…',
-  'projects.manage.autoLoadAdd': 'Add',
+  'projects.manage.autoLoadPlaceholder': 'Type a file path and press Enter…',
+  'projects.manage.autoLoadBrowse': 'Add file…',
   'projects.manage.autoLoadRemove': 'Remove {file}',
   'projects.manage.autoLoadEmpty': 'No additional files',
   'projects.manage.allowedToolsHelp':

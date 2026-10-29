@@ -368,7 +368,7 @@ export default Object.freeze({
   'pathPicker.up': 'Up one folder',
   'pathPicker.filter': 'Filter this folder',
   'pathPicker.filterPlaceholder': 'Filter…',
-  'pathPicker.showHidden': 'Show hidden',
+  'pathPicker.hideHidden': 'Hide hidden files',
   'pathPicker.contents': 'Contents of {path}',
   'pathPicker.empty': 'This folder is empty.',
   'pathPicker.noFolders': 'This folder has no subfolders.',

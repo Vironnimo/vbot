@@ -14,6 +14,9 @@
   // absolute `root`, completion and browsing stay inside it and chosen values
   // are relative to it; typing an absolute path stays possible.
   // `projectShortcuts` adds the configured Projects to the dialog's places.
+  // `onSelect` reports a confirmed browser choice or a completed file
+  // suggestion, after onInput; typing and completing folders do not select.
+  // `browseLabel` gives Browse... a visible text label instead of an icon.
   // `startPath` is where an empty field starts: Browse… opens at its nearest
   // folder that lists, and ArrowDown offers that folder to complete from,
   // while the value stays empty (Re-point starts near a missing folder).
@@ -57,6 +60,8 @@
   let {
     value = '',
     onInput = noop,
+    onSelect = noop,
+    browseLabel = '',
     mode = 'directory',
     root = '',
     startPath = '',
@@ -309,6 +314,7 @@
       scheduleListing(next, { immediate: true });
     } else {
       stopSuggesting();
+      onSelect(next);
     }
   }
 
@@ -428,7 +434,9 @@
   function chooseFromBrowser(path) {
     if (disabled || !matchesContext(browserContext)) return;
     browsing = false;
-    onInput(trimTrailingSeparator(path));
+    const next = trimTrailingSeparator(path);
+    onInput(next);
+    onSelect(next);
   }
 
   async function loadProjectShortcuts() {
@@ -516,22 +524,26 @@
   />
   <Button
     variant="secondary"
-    icon
+    icon={!browseLabel}
     class="path-field__browse"
-    ariaLabel={t('pathPicker.browse')}
+    ariaLabel={browseLabel || t('pathPicker.browse')}
     tooltip={t('pathPicker.browseHint')}
     {disabled}
     onClick={openBrowser}
   >
-    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-      <path
-        d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.3"
-        stroke-linejoin="round"
-      />
-    </svg>
+    {#if browseLabel}
+      {browseLabel}
+    {:else}
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path
+          d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.3"
+          stroke-linejoin="round"
+        />
+      </svg>
+    {/if}
   </Button>
 </div>
 

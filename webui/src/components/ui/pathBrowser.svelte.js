@@ -46,7 +46,7 @@ export function createPathBrowser(
   let shortcuts = $state.raw([]);
   let separator = $state('/');
   let filter = $state('');
-  let showHidden = $state(false);
+  let showHidden = $state(true);
   let activeKey = $state('');
   // The trail as a path field: its text and why the last path did not open.
   let editingPath = $state(false);

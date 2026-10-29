@@ -2,7 +2,6 @@
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import InfoHint from '../ui/InfoHint.svelte';
-  import Button from '../ui/Button.svelte';
   import SortableList from '../ui/SortableList.svelte';
   import PathField from '../ui/PathField.svelte';
   import { tooltip } from '$lib/tooltip.js';
@@ -31,8 +30,8 @@
       : t('projects.instructions.mainNone'),
   );
 
-  function addAutoLoadEntry() {
-    const entry = projectsState.autoLoadDraft.trim();
+  function addAutoLoadEntry(path = projectsState.autoLoadDraft) {
+    const entry = path.trim();
     if (entry === '') {
       return;
     }
@@ -165,19 +164,13 @@
             value={projectsState.autoLoadDraft}
             placeholder={t('projects.manage.autoLoadPlaceholder')}
             ariaLabel={t('projects.manage.autoLoad')}
+            browseLabel={t('projects.manage.autoLoadBrowse')}
             onInput={(next) => {
               projectsState.autoLoadDraft = next;
             }}
+            onSelect={addAutoLoadEntry}
             onkeydown={handleAutoLoadKeydown}
           />
-          <Button
-            variant="secondary"
-            data-testid="project-auto-load-add"
-            disabled={projectsState.autoLoadDraft.trim().length === 0}
-            onClick={addAutoLoadEntry}
-          >
-            {t('projects.manage.autoLoadAdd')}
-          </Button>
         </div>
       </div>
     </div>

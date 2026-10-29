@@ -117,7 +117,8 @@ describe('PathField', () => {
       'C:/Users/me': { entries: [] },
     });
     const callerKeydown = vi.fn();
-    const input = render({ listDirectory, onkeydown: callerKeydown });
+    const onSelect = vi.fn();
+    const input = render({ listDirectory, onkeydown: callerKeydown, onSelect });
     input.focus();
 
     type(input, 'npx');
@@ -168,7 +169,7 @@ describe('PathField', () => {
     type(input, 'C:\\');
     await settle();
     expect(press(input, 'Tab').defaultPrevented).toBe(true);
-    expect(suggestions()).toEqual(['Users/', 'Windows/']);
+    expect(suggestions()).toEqual(['$Recycle.Bin/', 'Users/', 'Windows/']);
     press(input, 'Escape');
     expect(press(input, 'Tab').defaultPrevented).toBe(false);
 
@@ -182,6 +183,7 @@ describe('PathField', () => {
     input.blur();
     flushSync();
     expect(props.value).toBe('C:\\');
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('shows the end of a long path while the field has no focus', async () => {
@@ -380,6 +382,9 @@ describe('PathField', () => {
         crumb.textContent.trim(),
       ),
     ).toEqual(['Places', 'C:', 'work', 'vBot']);
+    expect(rows()).toEqual(['.git', 'webui']);
+    dialog.querySelector('.path-browser__hidden button').click();
+    flushSync();
     expect(rows()).toEqual(['webui']);
     dialog.querySelector('.path-browser__hidden button').click();
     flushSync();
@@ -616,6 +621,7 @@ describe('PathField', () => {
   });
 
   it('keeps a root, opens at the value and returns files relative to it', async () => {
+    const onSelect = vi.fn();
     const listDirectory = fakeServer(
       {
         'docs/a.md': listingFailure('not_a_directory'),
@@ -632,8 +638,13 @@ describe('PathField', () => {
       mode: 'file',
       root: 'C:/work/vBot',
       value: 'docs/a.md',
+      onSelect,
+      browseLabel: 'Add file',
     });
 
+    expect(
+      document.querySelector('.path-field__browse').textContent.trim(),
+    ).toBe('Add file');
     document.body.querySelector('.path-field__browse').click();
     await settle();
     const dialog = document.body.querySelector('.modal.path-browser');
@@ -676,8 +687,10 @@ describe('PathField', () => {
 
     dialog.querySelectorAll('.path-browser__row')[3].click();
     flushSync();
+    expect(onSelect).not.toHaveBeenCalled();
     dialog.querySelector('.modal-footer .btn-primary').click();
     flushSync();
     expect(props.value).toBe('docs/b.md');
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('docs/b.md');
   });
 });

@@ -416,10 +416,10 @@
               <label class="path-browser__hidden"
                 ><Toggle
                   size="sm"
-                  checked={browser.showHidden}
-                  ariaLabel={t('pathPicker.showHidden')}
-                  onChange={browser.setShowHidden}
-                />{t('pathPicker.showHidden')}</label
+                  checked={!browser.showHidden}
+                  ariaLabel={t('pathPicker.hideHidden')}
+                  onChange={(next) => browser.setShowHidden(!next)}
+                />{t('pathPicker.hideHidden')}</label
               >
             </div>
           {/if}

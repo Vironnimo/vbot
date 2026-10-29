@@ -51,7 +51,7 @@ describe('typed text', () => {
     expect(listingPathFor(parent, options)).toBe(expected);
   });
 
-  it('offers matching entries case-insensitively, hidden ones only after a dot', () => {
+  it('offers matching entries case-insensitively, including hidden ones', () => {
     const entries = [
       file('Readme.md'),
       dir('src'),
@@ -63,7 +63,7 @@ describe('typed text', () => {
     const names = (list) => list.map((entry) => entry.name);
 
     expect(names(matchingEntries(entries, 's', { mode: 'directory' }))).toEqual(
-      ['scripts', 'src'],
+      ['scripts', 'Secrets', 'src'],
     );
     expect(names(matchingEntries(entries, 'r', { mode: 'file' }))).toEqual([
       'Readme.md',
@@ -71,6 +71,14 @@ describe('typed text', () => {
     expect(names(matchingEntries(entries, '.', { mode: 'any' }))).toEqual([
       '.git',
       '.env',
+    ]);
+    expect(names(matchingEntries(entries, '', { mode: 'file' }))).toEqual([
+      '.git',
+      'scripts',
+      'Secrets',
+      'src',
+      '.env',
+      'Readme.md',
     ]);
   });
 
@@ -199,18 +207,20 @@ describe('listed paths', () => {
     const names = (list) => list.map((entry) => entry.name);
 
     expect(names(filterEntries(entries, 'DO'))).toEqual(['Docs', 'docker.yml']);
-    expect(names(filterEntries(entries, ''))).toEqual([
+    expect(names(filterEntries(entries, '', { showHidden: false }))).toEqual([
       'Docs',
       'docker.yml',
       'notes.txt',
     ]);
-    expect(names(filterEntries(entries, '', { showHidden: true }))).toEqual([
+    expect(names(filterEntries(entries, ''))).toEqual([
       '.cache',
       'Docs',
       'docker.yml',
       'notes.txt',
     ]);
-    expect(names(filterEntries(entries, '.ca'))).toEqual(['.cache']);
+    expect(names(filterEntries(entries, '.ca', { showHidden: false }))).toEqual(
+      ['.cache'],
+    );
   });
 
   it('sorts numbered names naturally', () => {

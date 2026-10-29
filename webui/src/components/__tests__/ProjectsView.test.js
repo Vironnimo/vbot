@@ -1174,39 +1174,114 @@ describe('ProjectsView auto-load files', () => {
     });
   });
 
-  it('adds and removes auto-load files through the list and saves them', async () => {
-    serveProject({ auto_load: ['AGENTS.md'] });
-    view.mount();
-    await selectDemo();
+  it.each(['typed path', 'completion', 'browser'])(
+    'adds and removes auto-load files through %s and auto-saves them',
+    async (method) => {
+      let record = serveProject({ auto_load: ['AGENTS.md'] });
+      setProjectMock.mockImplementation(async (_id, changes) => {
+        record = { ...record, ...changes };
+        return { project: record, scan: cleanScan() };
+      });
+      view.mount();
+      await selectDemo();
 
-    await waitForCondition(() => inputById('project-edit-auto-load'));
-    // Typed folders complete from the Project folder, relative to it.
-    inputById('project-edit-auto-load').focus();
-    setInputValue('project-edit-auto-load', 'docs/');
-    await waitForCondition(() =>
-      rpcMock.mock.calls.some(([method]) => method === 'filesystem.list'),
-    );
-    expect(rpcMock).toHaveBeenCalledWith('filesystem.list', {
-      path: 'docs',
-      root: 'C:/repos/default',
-      include_files: true,
-    });
-    setInputValue('project-edit-auto-load', 'docs/guide.md');
-    buttonByTestId('project-auto-load-add').click();
-    flushSync();
+      await waitForCondition(() => inputById('project-edit-auto-load'));
+      const catalogRpc = rpcMock.getMockImplementation();
+      rpcMock.mockImplementation((name, params) => {
+        if (name !== 'filesystem.list') return catalogRpc(name, params);
+        return Promise.resolve({
+          path: params.path,
+          entries:
+            params.path === ''
+              ? [{ name: '.context', kind: 'directory', hidden: true }]
+              : [{ name: 'guide.md', kind: 'file', hidden: false }],
+        });
+      });
 
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-auto-load-remove-1"]'),
-    );
-    buttonByTestId('project-auto-load-remove-0').click();
-    flushSync();
-    buttonByTestId('project-save-demo').click();
+      vi.useFakeTimers();
+      try {
+        const settle = async (ms = 200) => {
+          await vi.advanceTimersByTimeAsync(ms);
+          flushSync();
+        };
+        const input = inputById('project-edit-auto-load');
+        const enter = (options = {}) => {
+          input.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Enter',
+              bubbles: true,
+              cancelable: true,
+              ...options,
+            }),
+          );
+          flushSync();
+        };
+        const filePath = '.context/guide.md';
+        if (method === 'browser') {
+          document
+            .querySelector('.projects-file-add .path-field__browse')
+            .click();
+          await settle();
+          const folder = document.querySelector('.path-browser__row');
+          expect(folder.textContent.trim()).toBe('.context');
+          folder.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+          await settle();
+          document.querySelector('.path-browser__row').click();
+          flushSync();
+          expect(autoLoadNames()).toEqual(['AGENTS.md']);
+          document
+            .querySelector('.path-browser .modal-footer .btn-primary')
+            .click();
+          flushSync();
+          expect(document.querySelector('.path-browser')).toBeNull();
+        } else {
+          input.focus();
+          setInputValue(
+            'project-edit-auto-load',
+            method === 'completion' ? '.context/' : filePath,
+          );
+          expect(autoLoadNames()).toEqual(['AGENTS.md']);
+          if (method === 'completion') {
+            await settle();
+            expect(rpcMock).toHaveBeenCalledWith('filesystem.list', {
+              path: '.context',
+              root: 'C:/repos/default',
+              include_files: true,
+            });
+            input.dispatchEvent(
+              new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+            );
+            flushSync();
+          } else {
+            enter({ isComposing: true });
+            expect(autoLoadNames()).toEqual(['AGENTS.md']);
+          }
+          enter();
+        }
+        expect(autoLoadNames()).toEqual(['AGENTS.md', filePath]);
+        expect(input.value).toBe('');
+        await settle(AUTO_SAVE_WAIT_MS);
+        expect(setProjectMock).toHaveBeenCalledExactlyOnceWith('demo', {
+          auto_load: ['AGENTS.md', filePath],
+        });
 
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      auto_load: ['docs/guide.md'],
-    });
-  });
+        // Choosing a listed file again clears the draft without duplicating it.
+        setInputValue('project-edit-auto-load', filePath);
+        enter();
+        expect(autoLoadNames()).toEqual(['AGENTS.md', filePath]);
+        expect(input.value).toBe('');
+        buttonByTestId('project-auto-load-remove-0').click();
+        flushSync();
+        await settle(AUTO_SAVE_WAIT_MS);
+        expect(setProjectMock).toHaveBeenCalledTimes(2);
+        expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
+          auto_load: [filePath],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('moves auto-load files with Alt+Arrow keys, keeps focus, respects boundaries and auto-saves', async () => {
     const original = serveProject({
