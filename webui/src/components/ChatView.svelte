@@ -836,6 +836,9 @@
             sessionWaiting={sessionActivity?.[
               target.activeSessionState?.key ?? ''
             ]?.state === SESSION_WAITING}
+            sessionWorkStartedAt={sessionActivity?.[
+              target.activeSessionState?.key ?? ''
+            ]?.workStartedAt ?? null}
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
               chatController.loadRunHistory(

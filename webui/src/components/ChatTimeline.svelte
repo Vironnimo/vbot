@@ -6,6 +6,7 @@
     formatDate,
     groupTransientCards,
     liveClockCadenceMs,
+    runFooterGroups,
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
@@ -57,6 +58,10 @@
     // The Session waits for work that will wake it (Session activity); its
     // latest Run's footer says so.
     sessionWaiting = false,
+    // When the Session's current work span began while it is working or
+    // waiting (Session activity), else null; its latest Run's footer counts
+    // from there.
+    sessionWorkStartedAt = null,
     onNavigateToSubAgent = () => {},
     // Open in split view for Sub-Agent links (`{ label, open(target) }`, with
     // the link's `{ agentId, sessionId }` target); null offers no link menu.
@@ -86,8 +91,15 @@
   const timelineItems = $derived(
     timelineRowsForViewport(sourceTimelineItems, chatWorkingMode),
   );
+  // Keyed by source item id: every viewport part of a Run carries its Run's.
   const latestRunItemId = $derived(
-    timelineItems.findLast((item) => item.type === 'assistant_run')?.id ?? null,
+    sourceTimelineItems.findLast((item) => item.type === 'assistant_run')?.id ??
+      null,
+  );
+  const footerGroups = $derived(
+    runFooterGroups(sourceTimelineItems, {
+      workStartedAt: sessionWorkStartedAt,
+    }),
   );
 
   let nowMs = $state(Date.now());
@@ -622,7 +634,12 @@
         {subAgentStatuses}
         {backgroundCommandStatuses}
         {commandStatuses}
-        sessionWaiting={sessionWaiting && item.id === latestRunItemId}
+        sessionWaiting={sessionWaiting &&
+          (item.sourceItemId ?? item.id) === latestRunItemId}
+        sessionWorkStartedAt={(item.sourceItemId ?? item.id) === latestRunItemId
+          ? sessionWorkStartedAt
+          : null}
+        footerRuns={footerGroups.get(item.sourceItemId ?? item.id) ?? null}
         {nowMs}
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}

@@ -331,7 +331,7 @@ describe('ChatTimeline Runs', () => {
 
     const footer = document.querySelector('.run-footer');
     const toolTime = document.querySelector('.tool-event-line .te-time');
-    expect(footer.textContent).toContain(t('chat.runStatus.running'));
+    expect(footer.textContent).toContain(t('chat.runStatus.working'));
     expect(footer.textContent).toContain('5.0s');
     expect(toolTime.textContent).toBe('2.5s');
 
@@ -342,28 +342,43 @@ describe('ChatTimeline Runs', () => {
     expect(toolTime.textContent).toBe('3.0s');
   });
 
-  it('keeps the latest completed Run running while its Session waits', async () => {
+  it('shows one ticking footer for the Runs of a waiting work span', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-05T18:00:05.000Z'));
+    vi.setSystemTime(new Date('2026-08-05T18:00:15.000Z'));
+    const spanStart = '2026-08-05T18:00:00.010Z';
+    const finished = (id, start, end) =>
+      assistantRun(id, [], {
+        status: 'completed',
+        startTimestamp: `2026-08-05T${start}Z`,
+        endTimestamp: `2026-08-05T${end}Z`,
+        durationMs: 2000,
+        iterationCount: 2,
+        timing: { work_started_at: spanStart },
+      });
     const sessionState = timelineSession();
     sessionState.timelineItems = [
-      assistantRun('run-waiting', [], {
-        status: 'completed',
-        startTimestamp: '2026-08-05T18:00:00.000Z',
-        endTimestamp: '2026-08-05T18:00:02.000Z',
-        durationMs: 2000,
-      }),
+      finished('run-first', '18:00:00.000', '18:00:02.000'),
+      finished('run-woken', '18:00:08.000', '18:00:10.000'),
     ];
-    timeline.render(sessionState, { sessionWaiting: true });
+    timeline.render(sessionState, {
+      sessionWaiting: true,
+      sessionWorkStartedAt: spanStart,
+    });
 
-    const footer = document.querySelector('.run-footer');
-    expect(footer.textContent).toContain(t('chat.runStatus.running'));
-    expect(footer.textContent).toContain('5.0s');
+    const footers = document.querySelectorAll('.run-footer');
+    expect(footers).toHaveLength(1);
+    const footer = footers[0];
+    expect(
+      footer.closest('[data-timeline-item-id]').dataset.timelineItemId,
+    ).toBe('assistant-run-run-woken');
+    expect(footer.textContent).toContain(t('chat.runStatus.waiting'));
+    expect(footer.textContent).toContain('15s');
+    expect(footer.textContent).toContain(t('chat.runIterations', { count: 4 }));
 
     await vi.advanceTimersByTimeAsync(1000);
     flushSync();
 
-    expect(footer.textContent).toContain('6.0s');
+    expect(footer.textContent).toContain('16s');
     expect(footer.textContent).not.toContain(t('chat.runStatus.completed'));
   });
 
@@ -456,7 +471,7 @@ describe('ChatTimeline Runs', () => {
       );
       const run = notices[0].closest('.assistant-run');
       expect(run.textContent).toContain('Recovered');
-      expect(run.textContent.includes(t('chat.runStatus.running'))).toBe(
+      expect(run.textContent.includes(t('chat.runStatus.working'))).toBe(
         mode !== 'history',
       );
     },

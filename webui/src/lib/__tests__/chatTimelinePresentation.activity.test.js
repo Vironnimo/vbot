@@ -19,6 +19,7 @@ import {
   reflectionUndoErrorText,
   runChangeStats,
   runFooterDetails,
+  runFooterGroups,
   runFooterNotice,
   runFooterParts,
   sessionChangeStats,
@@ -86,7 +87,7 @@ describe('runFooterParts', () => {
     [
       'zero Iterations before the first Model response',
       { status: 'running', durationMs: null, iterationCount: 0 },
-      () => [status('running'), iterations(0)],
+      () => [status('working'), iterations(0)],
     ],
     [
       'the cancelled label before the runtime',
@@ -119,36 +120,92 @@ describe('runFooterParts', () => {
     [
       'no end time while the Run is running',
       { status: 'running', durationMs: null, endTimestamp: end },
-      () => [status('running')],
+      () => [status('working')],
     ],
   ])('shows %s', (_label, run, expected) => {
     expect(runFooterParts(run)).toEqual(expected());
   });
 
-  it('keeps the latest completed Run of a waiting Session running', () => {
-    const waiting = { waiting: true };
-    const start = '2026-08-05T18:19:52Z';
-    const nowMs = Date.parse(start) + 25_000;
-    const completed = {
-      status: 'completed',
-      startTimestamp: start,
-      durationMs: 8000,
-      iterationCount: 2,
-      endTimestamp: end,
-    };
-    expect(runFooterParts(completed, nowMs, waiting)).toEqual([
-      status('running'),
-      seconds('25'),
-      t('chat.runIterations', { count: 2 }),
+  it('shows the Runs of one work span as one piece of work', () => {
+    const spanStart = '2026-08-05T18:00:00.010Z';
+    const at = (time) => `2026-08-05T${time}Z`;
+    const ms = (time) => Date.parse(at(time));
+    const run = (id, start, finish, iterationCount) => ({
+      id,
+      type: 'assistant_run',
+      status: finish ? 'completed' : 'running',
+      startTimestamp: at(start),
+      endTimestamp: finish ? at(finish) : null,
+      durationMs: finish ? ms(finish) - ms(start) : null,
+      iterationCount,
+      timing: finish
+        ? { started_at: at(start), completed_at: at(finish) }
+        : null,
+    });
+    const withSpan = (item, workStartedAt) => ({
+      ...item,
+      timing: { ...item.timing, work_started_at: workStartedAt },
+    });
+    // An earlier piece of work, then a Run whose Sub-Agents woke it twice.
+    const before = withSpan(
+      run('before', '17:00:00', '17:01:00', 2),
+      at('16:59:59.990'),
+    );
+    const first = withSpan(run('first', '18:00:00', '18:05:00', 38), spanStart);
+    const second = withSpan(
+      run('second', '18:09:00', '18:10:00', 5),
+      spanStart,
+    );
+    const latest = run('latest', '18:12:00', null, 7);
+    const message = { id: 'message', type: 'message' };
+
+    const groups = runFooterGroups([before, first, message, second, latest], {
+      workStartedAt: spanStart,
+    });
+    expect(Object.fromEntries(groups)).toEqual({
+      before: [before],
+      first: [],
+      second: [],
+      latest: [first, second, latest],
+    });
+
+    const options = { workStartedAt: spanStart, runs: groups.get('latest') };
+    expect(runFooterParts(latest, ms('18:12:30'), options)).toEqual([
+      status('working'),
+      minutesSeconds(12, 30),
+      iterations(50),
     ]);
-    const details = runFooterDetails(completed, nowMs, waiting);
-    expect(details.title).toBe(status('running'));
-    expect(details.rows.map((row) => row.label)).toContain(
-      t('chat.details.runningFor'),
+    // Completed while background work it started still runs: Waiting,
+    // still counting from the start of the work.
+    const done = withSpan(run('latest', '18:12:00', '18:13:00', 7), spanStart);
+    const runs = [first, second, done];
+    expect(
+      runFooterParts(done, ms('18:14:00'), {
+        waiting: true,
+        workStartedAt: spanStart,
+        runs,
+      }),
+    ).toEqual([status('waiting'), minutesSeconds(14, 0), iterations(50)]);
+    // Finished: the whole span from its first Run's start to its last end.
+    expect(runFooterParts(done, ms('19:00:00'), { runs })).toEqual([
+      status('completed'),
+      minutesSeconds(13, 0),
+      iterations(50),
+      formatTime(at('18:13:00')),
+    ]);
+    const details = runFooterDetails(done, ms('19:00:00'), { runs });
+    expect(details.rows).toContainEqual({
+      label: t('chat.details.runs'),
+      value: '3',
+    });
+    expect(details.text).toBe(
+      t('chat.details.modelResponseCount', { count: 50 }),
     );
     // A Run that ended otherwise keeps its own outcome.
     expect(
-      runFooterParts({ status: 'cancelled', durationMs: 8000 }, 0, waiting),
+      runFooterParts({ status: 'cancelled', durationMs: 8000 }, 0, {
+        waiting: true,
+      }),
     ).toEqual([status('cancelled'), seconds('8.0')]);
   });
 
@@ -215,7 +272,7 @@ describe('runFooterParts', () => {
         },
         Date.parse('2026-08-05T18:00:05.250Z'),
       ),
-    ).toEqual([status('running'), seconds('5.3')]);
+    ).toEqual([status('working'), seconds('5.3')]);
   });
 });
 

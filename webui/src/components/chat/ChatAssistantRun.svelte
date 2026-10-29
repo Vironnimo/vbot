@@ -94,8 +94,14 @@
     backgroundCommandStatuses = null,
     commandStatuses = null,
     // This is the Session's latest Run and the Session waits for work that
-    // will wake it: a completed Run's footer keeps running.
+    // will wake it: a completed Run's footer says `Waiting` and keeps ticking.
     sessionWaiting = false,
+    // This is the Session's latest Run and the Session is working or
+    // waiting: when its work span began (Session activity), else null.
+    sessionWorkStartedAt = null,
+    // The Runs of this Run's work span whose footer it shows, ending with
+    // it (`runFooterGroups`); [] shows none, null shows this Run alone.
+    footerRuns = null,
     nowMs = Date.now(),
   } = $props();
 
@@ -875,34 +881,48 @@
         {@render runChild(group.child)}
       {/if}
     {/each}
-    {#if item.segment_tail !== false && runFooterParts( item, nowMs, { waiting: sessionWaiting } ).length > 0}
-      {@const footerParts = runFooterParts(item, nowMs, {
+    {#if item.segment_tail !== false}
+      <!-- The Runs of one work span show one footer, on the last one; an
+           earlier Run keeps only its own change statistics. -->
+      {@const footerOptions = {
         waiting: sessionWaiting,
-      })}
+        workStartedAt: sessionWorkStartedAt,
+        runs: footerRuns ?? [item],
+      }}
+      {@const footerParts =
+        footerOptions.runs.length > 0
+          ? runFooterParts(item, nowMs, footerOptions)
+          : []}
       {@const changeStats = runChangeStats(item)}
       {@const footerLabel = [
         ...footerParts,
         ...(changeStats ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
-      <div class="run-footer" aria-label={footerLabel}>
-        <button
-          type="button"
-          class="run-footer__summary"
-          use:tooltip={() =>
-            runFooterDetails(item, Date.now(), { waiting: sessionWaiting })}
-        >
-          {#each footerParts as footerPart, index (footerPart)}
-            {#if index > 0}
+      {#if footerLabel}
+        <div class="run-footer" aria-label={footerLabel}>
+          {#if footerParts.length > 0}
+            <button
+              type="button"
+              class="run-footer__summary"
+              use:tooltip={() =>
+                runFooterDetails(item, Date.now(), footerOptions)}
+            >
+              {#each footerParts as footerPart, index (footerPart)}
+                {#if index > 0}
+                  <span class="run-footer__sep" aria-hidden="true">·</span>
+                {/if}
+                <span class="run-footer__part">{footerPart}</span>
+              {/each}
+            </button>
+            {#if changeStats}
               <span class="run-footer__sep" aria-hidden="true">·</span>
             {/if}
-            <span class="run-footer__part">{footerPart}</span>
-          {/each}
-        </button>
-        {#if changeStats}
-          <span class="run-footer__sep" aria-hidden="true">·</span>
-          <ChangeStats stats={changeStats} class="run-footer__changes" />
-        {/if}
-      </div>
+          {/if}
+          {#if changeStats}
+            <ChangeStats stats={changeStats} class="run-footer__changes" />
+          {/if}
+        </div>
+      {/if}
       {#if runFooterNotice(item, nowMs)}
         <!-- Transient problem/liveness notices live on their own line so they
              can never push the stable footer parts onto a wrap line. -->
