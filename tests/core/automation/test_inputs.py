@@ -154,8 +154,11 @@ async def test_receipts_are_scoped_retryable_and_survive_a_service_restart(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_configuration_preserves_future_fields_and_revokes_secrets(tmp_path):
-    async with harness(tmp_path) as (_runtime, inputs, _store, _loop):
+@pytest.mark.parametrize("missing_overrides", [False, True])
+async def test_configuration_preserves_future_fields_and_revokes_secrets(
+    tmp_path, missing_overrides
+):
+    async with harness(tmp_path) as (runtime, inputs, store, loop):
         row = await inputs.configure(None, {"name": "Tasks", "agent_id": "coder"})
         identity = row["id"]
         original = await inputs.secret(identity)
@@ -167,10 +170,22 @@ async def test_configuration_preserves_future_fields_and_revokes_secrets(tmp_pat
         document = json.loads(path.read_text(encoding="utf-8"))
         document["future"] = {"keep": True}
         document["inputs"][0]["future"] = 42
+        if missing_overrides:
+            del document["inputs"][0]["run_overrides"]
         path.write_text(json.dumps(document), encoding="utf-8")
+        if missing_overrides:
+            inputs = DirectInputService(
+                tmp_path,
+                chat=loop,
+                sessions=runtime.chat_sessions,
+                resolver=runtime.agent_resolver,
+                secret_store=store,
+            )
         await inputs.configure(identity, {"enabled": False})
         saved = json.loads(path.read_text(encoding="utf-8"))
         assert saved["future"] == {"keep": True} and saved["inputs"][0]["future"] == 42
+        assert saved["inputs"][0]["enabled"] is False
+        assert saved["inputs"][0].get("run_overrides", {}) == {}
         assert not await inputs.authenticate(identity, f"Bearer {replacement}", submitting=True)
         assert await inputs.authenticate(identity, f"Bearer {replacement}", submitting=False)
         with pytest.raises(DirectInputError):

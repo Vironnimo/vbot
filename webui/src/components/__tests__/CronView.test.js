@@ -131,6 +131,26 @@ describe('CronView', () => {
     });
     flushSync();
     await waitForCondition(() => document.getElementById('task-input-name'));
+    inputById('task-input-name').value = 'Discarded name';
+    inputById('task-input-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    expect(keptDraft?.name).toBe('Discarded name');
+    inputById('task-input-name').value = '';
+    inputById('task-input-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    expect(keptDraft).toBeNull();
+    buttonByText(t('common.cancel')).click();
+    flushSync();
+    expect(navigation.place).toEqual(['inputs']);
+    expect(keptDraft).toBeNull();
+    buttonByText(t('common.create')).click();
+    flushSync();
+    await waitForCondition(() => document.getElementById('task-input-name'));
+    expect(inputById('task-input-name').value).toBe('');
     inputById('task-input-name').value = 'Program tasks';
     inputById('task-input-name').dispatchEvent(
       new Event('input', { bubbles: true }),

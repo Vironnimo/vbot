@@ -210,7 +210,7 @@ class DirectInputService:
         if any(item.severity == "error" for item in diagnostics):
             raise DirectInputError("Task input requires a name, Agent and valid execution settings")
         overrides = input_overrides(
-            {key: value for key, value in row["run_overrides"].items() if key in _OVERRIDES}
+            {key: value for key, value in row.get("run_overrides", {}).items() if key in _OVERRIDES}
         )
         agent = await self._resolver.resolve_agent_async(
             row.get("project_id"), row["agent_id"], run_overrides=overrides, require_model=False

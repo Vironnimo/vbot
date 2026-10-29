@@ -107,12 +107,11 @@
     return autosave.cancelPendingTimer;
   });
   $effect(() => {
-    if (creating && dirty) {
-      const draft = $state.snapshot(values);
-      untrack(() => {
-        newDraft = draft;
-      });
-    }
+    if (!creating) return;
+    const draft = dirty ? $state.snapshot(values) : null;
+    untrack(() => {
+      newDraft = draft;
+    });
   });
   $effect(() => {
     const place = navigation.place;
@@ -461,6 +460,7 @@
               onClick={() => {
                 if (dirty) confirmation = 'cancel';
                 else {
+                  newDraft = null;
                   creating = false;
                   navigation.navigate(['inputs']);
                 }
