@@ -246,6 +246,7 @@ class CanonicalSessionRecallBackend:
             "roles": sorted(set(request.roles)),
             "match_mode": request.match_mode,
             "order": request.order,
+            "history_id": self.sessions.history_id,
             "history": fingerprint,
         }
         # Offset and page size may change while traversing the same selection.
