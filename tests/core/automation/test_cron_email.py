@@ -185,6 +185,53 @@ async def test_a_matching_mail_is_stored_once_and_starts_one_run_with_escaped_da
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["reassignment", "rename"])
+async def test_new_mail_follows_the_channels_current_owner_after_a_complete_transition(
+    tmp_path: Path, transition: str
+) -> None:
+    service, _ = _service(tmp_path)
+    chats = FakeChats()
+    reference_lock = asyncio.Lock()
+    service.set_chat_delivery(chats, reference_lock=reference_lock)
+    previous = await _email_job(service)
+    entered = asyncio.Event()
+
+    async def accept(number: int) -> None:
+        entered.set()
+        await service.accept_mail(_mail(number))
+
+    async with reference_lock:
+        cancelled = asyncio.create_task(accept(1))
+        await entered.wait()
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        entered.clear()
+        chats.owners["mail-main"] = "agent-two"
+        arrival = asyncio.create_task(accept(2))
+        await entered.wait()
+        assert not arrival.done()
+        if transition == "rename":
+            await service.retarget_agent_async(previous, "agent-two")
+            current = previous
+        else:
+            current = (
+                await service.create_job(
+                    agent_id="agent-two",
+                    prompt="Read mail",
+                    schedule_type="email",
+                    email=CronEmailTrigger.parse("mail-main"),
+                )
+            ).id
+    await arrival
+    assert [item["text"] for item in _state(service, current)["mails"]] == ["Mail 2"]
+    if transition == "reassignment":
+        status = service.email_status(service.get_job(previous))
+        assert status is not None and status.waiting == 0
+    await service.aclose()
+
+
+@pytest.mark.asyncio
 async def test_waiting_mails_survive_a_restart_and_beyond_the_cap_the_oldest_drop(
     tmp_path: Path,
 ) -> None:

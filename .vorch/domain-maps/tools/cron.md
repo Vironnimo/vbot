@@ -70,6 +70,7 @@ The definition is 1044 estimated tokens (`python -m scripts.tool_lab definitions
 
 | Text | Reason |
 |---|---|
+| Delivery progress: `Delivery is blocked: ... Select a destination when retrying these messages.` | Missing platform bindings and platform changes cannot safely reuse opaque chat ids. Names the explicit retained-message repair instead of encouraging ordinary retries that cannot rebind a destination. |
 | `Completed or missed jobs are immutable history and cannot be changed. The job has finished; create a new job instead, or delete this one with {"action":"delete","id":"<id>"}.` | A finished job has no next fire; accepting an edit would falsely promise a reschedule and alter its history. The refusal applies to every effective edit, and gives the two supported next steps. |
 | `Waiting webhook requests could not be read; retrying without replacing them.` | The job is waiting for storage recovery, not an empty webhook queue. No sender acceptance or Model Run may overwrite unread acknowledged requests. |
 | `delivery_progress`: waiting and uncertain counts, retained error, last delivered time; `Delivery could not be confirmed. Check the chat before retrying this notification.` | A successful Run does not prove delivery. The result exposes delayed and ambiguous sends so the Agent can report them accurately; the user retries uncertain sends in Automations after checking the chat. |

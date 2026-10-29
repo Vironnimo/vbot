@@ -879,6 +879,7 @@ def _delivery(
         CronDelivery(
             kind="chat",
             channel_id=chat.channel_id,
+            platform=chat.platform,
             platform_target=chat.platform_target,
             thread_id=chat.thread_id,
         ),

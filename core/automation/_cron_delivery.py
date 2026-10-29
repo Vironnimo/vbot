@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from zoneinfo import ZoneInfo
@@ -62,6 +62,7 @@ class ChatDelivery(Protocol):
         *,
         thread_id: str | None = None,
         expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> None: ...
 
     async def record_outbound_note(
@@ -72,6 +73,8 @@ class ChatDelivery(Protocol):
         *,
         thread_id: str | None = None,
         skip_session_id: str | None = None,
+        expected_agent_id: str | None = None,
+        expected_platform: str | None = None,
     ) -> bool: ...
 
 
@@ -150,7 +153,9 @@ def completion_activity(job_of: Callable[[], CronJob | None]) -> CompletionActiv
     return decide
 
 
-async def check_chat_delivery(job: CronJob, chats: ChatDelivery | None) -> None:
+async def check_chat_delivery(
+    job: CronJob, chats: ChatDelivery | None, *, bind_platform: bool = False
+) -> None:
     """Refuse a chat delivery to a Channel that is missing or belongs to another Agent."""
     delivery = job.delivery
     if delivery is None or delivery.kind != "chat":
@@ -169,6 +174,12 @@ async def check_chat_delivery(job: CronJob, chats: ChatDelivery | None) -> None:
             f"delivery Channel {delivery.channel_id} belongs to Agent {channel.agent_id}, "
             f"not to {job.agent_id}"
         )
+    if bind_platform:
+        if delivery.platform is not None and delivery.platform != channel.platform:
+            raise CronJobValidationError(
+                "delivery Channel platform changed. Select the destination again."
+            )
+        job.delivery = replace(delivery, platform=channel.platform)
 
 
 async def check_email_channel(job: CronJob, chats: ChatDelivery | None) -> None:

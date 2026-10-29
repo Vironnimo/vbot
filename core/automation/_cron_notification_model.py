@@ -14,6 +14,8 @@ NOTIFICATION_FIELDS = frozenset(
         "agent_id",
         "channel_id",
         "platform_target",
+        "platform",
+        "platform_blocked",
         "thread_id",
         "text",
         "note",
@@ -49,11 +51,17 @@ class CronNotification:
     retry_after_at: str | None = None
     # Canonical UTC timestamp since which the message's Channel no longer exists.
     channel_missing_since: str | None = None
+    platform: str | None = None
+    platform_blocked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         if self.channel_missing_since is None:
             del data["channel_missing_since"]
+        if self.platform is None:
+            del data["platform"]
+        if not self.platform_blocked:
+            del data["platform_blocked"]
         return data
 
     def due(self, now: datetime) -> bool:
@@ -69,6 +77,12 @@ class CronNotification:
         for key in ("thread_id", "session_id", "error"):
             if value.get(key) is not None and not isinstance(value[key], str):
                 raise ValueError(f"notification {key} must be a string or null")
+        platform = value.get("platform")
+        if platform is not None and (not isinstance(platform, str) or not platform.strip()):
+            raise ValueError("notification platform must be a non-empty string or null")
+        platform_blocked = value.get("platform_blocked", False)
+        if not isinstance(platform_blocked, bool):
+            raise ValueError("notification platform_blocked must be a boolean")
         state = value.get("state", "pending")
         if state not in ("pending", "sending", "uncertain"):
             raise ValueError("notification state must be pending, sending or uncertain")
@@ -89,6 +103,8 @@ class CronNotification:
             error=value.get("error"),
             retry_after_at=value.get("retry_after_at"),
             channel_missing_since=value.get("channel_missing_since"),
+            platform=platform,
+            platform_blocked=platform_blocked,
         )
 
 
