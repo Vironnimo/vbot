@@ -10,11 +10,16 @@
     policyLabel,
   } from './NotificationPolicySelect.svelte';
   import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import Banner from '../ui/Banner.svelte';
   import { createSessionActions } from './actions.svelte.js';
   import { autofocusRename } from './presentation.js';
   import SessionCompactionPolicyDialog from './SessionCompactionPolicyDialog.svelte';
+
+  function autofocusRenameField(node) {
+    return autofocusRename(node.querySelector('input'));
+  }
 
   let {
     agentId,
@@ -112,18 +117,18 @@
   {#if expanded}
     <div id={bodyId} class="session-advanced__body">
       {#if actions.editingSessionId}
-        <input
-          class="s-input"
-          type="text"
-          value={actions.editValue}
-          maxlength={actions.SESSION_TITLE_MAX_LENGTH}
-          placeholder={t('sessions.rename_placeholder')}
-          aria-label={t('sessions.rename_label')}
-          disabled={actions.renameSaving}
-          oninput={(event) => (actions.editValue = event.currentTarget.value)}
-          onkeydown={actions.handleRenameKeydown}
-          use:autofocusRename
-        />
+        <div use:autofocusRenameField>
+          <TextField
+            type="text"
+            value={actions.editValue}
+            maxlength={actions.SESSION_TITLE_MAX_LENGTH}
+            placeholder={t('sessions.rename_placeholder')}
+            ariaLabel={t('sessions.rename_label')}
+            disabled={actions.renameSaving}
+            onInput={(value) => (actions.editValue = value)}
+            onkeydown={actions.handleRenameKeydown}
+          />
+        </div>
         <div class="session-advanced__actions">
           <Button
             variant="secondary"
