@@ -35,6 +35,7 @@ def make_queued_item(run: Run | None = None) -> SimpleNamespace:
         ("vbot", {}),
         (None, {"working_project_id": "work", "actor": "command"}),
         (None, {"working_project_id": None, "actor": "command"}),
+        (None, {"context_note_factory": lambda: "fresh context"}),
         (None, {"run_overrides": AgentOverrides(model="openai/gpt-mini", thinking_effort="low")}),
     ],
 )
@@ -188,6 +189,12 @@ _SENDER = MessageSender(id="50", display_name="Alice")
 _SURFACE = ReplySurface.channel(
     platform="telegram", platform_display_name="Telegram", channel_id="tg-main"
 )
+
+
+def _fresh_context() -> str:
+    return "fresh context"
+
+
 _VISIBLE = {"sender": None, "reply_surface": None, "project_id": None}
 _INTERNAL = {"internal": True, "reply_surface": None, "project_id": None}
 
@@ -196,6 +203,11 @@ _INTERNAL = {"internal": True, "reply_surface": None, "project_id": None}
     ("options", "forwarded"),
     [
         pytest.param({"sender": _SENDER}, {**_VISIBLE, "sender": _SENDER}, id="sender"),
+        pytest.param(
+            {"context_note_factory": _fresh_context},
+            {**_VISIBLE, "context_note_factory": _fresh_context},
+            id="context-at-start",
+        ),
         pytest.param(
             {"reply_surface": _SURFACE}, {**_VISIBLE, "reply_surface": _SURFACE}, id="reply-surface"
         ),

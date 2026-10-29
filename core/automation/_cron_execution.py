@@ -27,7 +27,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
     format_agent_address,
 )
-from core.runs import RunCancelledError, RunKind, WaitingWorkLimitError
+from core.runs import RunAdmissionBlockedError, RunCancelledError, RunKind, WaitingWorkLimitError
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
@@ -45,6 +45,10 @@ class CronRunOutcome:
     succeeded: bool
     admitted: bool
     retry_admission: bool = False
+
+
+class _EventFireInvalidatedError(RunAdmissionBlockedError):
+    """An unadmitted occurrence changed or expired while its Run waited."""
 
 
 class CronExecution:
@@ -166,6 +170,11 @@ class CronExecution:
                 run: Any | None = None
                 result: Any = None
                 firing_once_at = latest.run_at if latest.schedule_type == "once" else None
+                start_options: dict[str, Any] = {}
+                if event_claim is not None and event_due is not None:
+                    start_options["context_note_factory"] = partial(
+                        self._event_context_at_start, *event_claim, event_due
+                    )
                 try:
                     # Cron Runs never show as the Agent's running work; a job that
                     # delivers to vBot reports the finished Run there, decided by
@@ -189,6 +198,7 @@ class CronExecution:
                         ),
                         **_ceiling_kwargs(latest),
                         **_execution_kwargs(latest),
+                        **start_options,
                     )
                     admitted = True
                     if queue is not None and batch is not None:
@@ -216,6 +226,12 @@ class CronExecution:
                         result = await wait_for_run()
                 except asyncio.CancelledError:
                     raise
+                except _EventFireInvalidatedError:
+                    assert event_claim is not None
+                    await settle_before_cancelling(
+                        self._owner._scheduler._withdraw_event_fire(*event_claim)
+                    )
+                    return CronRunOutcome(succeeded=False, admitted=False)
                 except RunCancelledError as error:
                     baseline = self._failure_baseline(job.id)
                     if run is not None:
@@ -319,6 +335,19 @@ class CronExecution:
                 queue.release(job.id, batch)
             self._admitted_once_runs.pop(job.id, None)
             self._owner._executing_jobs.discard(job.id)
+
+    def _event_context_at_start(
+        self, before: CronJob, claimed: CronJob, due: _events.EventDue
+    ) -> str:
+        """Use only current in-memory state at the manager's synchronous start boundary."""
+        ready = self._owner._scheduler._current_event_fire(before, claimed, due)
+        if ready is None:
+            raise _EventFireInvalidatedError("The calendar occurrence no longer permits this Run")
+        latest, current = ready
+        late = _context.late_fire(_schedule.OwedFire(due_at=current.due_at), self._owner._timezone)
+        return self._owner._secret_masker().mask(
+            _context.run_context(latest, self._owner._timezone, late=late, event_due=current)
+        )
 
     async def _record_run_failure(self, job_id: str, error: BaseException) -> None:
         if self._note_run_failure(job_id, error):

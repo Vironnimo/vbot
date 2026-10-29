@@ -253,6 +253,10 @@ class RunAdmission:
     schedule_id: str | None = None
     notification_policy: Callable[[], str] | None = None
 
+    # Synchronous, in-memory preparation at the actual start, including Queue
+    # drain. May refuse before a Run exists; never retained by the created Run.
+    prepare_executor: Callable[[RunExecutor], RunExecutor] | None = None
+
 
 # Module-level singleton so ``admission`` can default without a call at the
 # signature (ruff B008); the instance is immutable.

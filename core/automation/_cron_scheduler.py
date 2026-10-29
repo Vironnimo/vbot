@@ -494,25 +494,8 @@ class CronScheduler:
             saved = await settle_before_cancelling(
                 self._owner._execution._save_jobs_after_fire(job.id)
             )
-            latest = self._owner._jobs.get(job.id)
-            if (
-                saved
-                and latest is not None
-                and latest.status == "active"
-                and job.id not in self._owner._pending_restarts
-                and all(getattr(latest, name) == getattr(before, name) for name in _SCHEDULE_FIELDS)
-            ):
-                unclaimed = self._owner._clone_job(latest)
-                unclaimed.covered_until = before.covered_until
-                unclaimed.event_progress = before.event_progress
-                current = self._owed_event_now(unclaimed)
-                if (
-                    current is not None
-                    and current.occurrence.id == due.occurrence.id
-                    and current.due_at == due.due_at
-                ):
-                    # Text or location edits keep the firing but refresh its context.
-                    ready = latest, current
+            if saved:
+                ready = self._current_event_fire(before, claimed, due)
         finally:
             if ready is None:
                 await settle_before_cancelling(self._withdraw_event_fire(before, claimed))
@@ -520,6 +503,32 @@ class CronScheduler:
             # A failed claim must neither start a Run nor spin on the same owed occurrence.
             await _timing._sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
         return ready
+
+    def _current_event_fire(
+        self, before: CronJob, claimed: CronJob, due: _events.EventDue
+    ) -> tuple[CronJob, _events.EventDue] | None:
+        """Validate a saved claim against the current catalog and admission clock."""
+        latest = self._owner._jobs.get(before.id)
+        if (
+            latest is None
+            or latest.status != "active"
+            or before.id in self._owner._pending_restarts
+            or any(getattr(latest, name) != getattr(before, name) for name in _SCHEDULE_FIELDS)
+            or (latest.covered_until, latest.event_progress)
+            != (claimed.covered_until, claimed.event_progress)
+        ):
+            return None
+        unclaimed = self._owner._clone_job(latest)
+        unclaimed.covered_until = before.covered_until
+        unclaimed.event_progress = before.event_progress
+        current = self._owed_event_now(unclaimed)
+        if (
+            current is None
+            or current.occurrence.id != due.occurrence.id
+            or current.due_at != due.due_at
+        ):
+            return None
+        return latest, current
 
     async def _withdraw_event_fire(self, before: CronJob, claimed: CronJob) -> None:
         """Take back only this unadmitted claim, preserving any newer scheduling edit."""

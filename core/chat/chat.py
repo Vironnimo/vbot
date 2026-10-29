@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_live_agent
@@ -345,6 +346,7 @@ class ChatLoop:
         continuation_source: RunContinuationSource | None = None,
         expected_session_generation_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        context_note_factory: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
@@ -376,6 +378,10 @@ class ChatLoop:
         a prepared note keeps its display record, and an internal Run stores it
         before its input note too.
 
+        ``context_note_factory`` replaces that note at actual Run start, after
+        any Queue wait. It must be synchronous and use only in-memory state;
+        it may refuse admission before a Run is created.
+
         ``permission_ceiling`` bounds this Run by the boundary of the Session
         that caused it (a Cron job's creator) on top of the Agent's own rules.
         It is joined into the Session's stored ceiling, so every later Run of
@@ -405,6 +411,7 @@ class ChatLoop:
             continuation_source=continuation_source,
             expected_session_generation_id=expected_session_generation_id,
             context_note=context_note,
+            context_note_factory=context_note_factory,
             permission_ceiling=permission_ceiling,
         )
 
@@ -456,6 +463,7 @@ class ChatLoop:
         schedule_id: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         context_note: str | ChatMessage | None = None,
+        context_note_factory: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
@@ -506,6 +514,7 @@ class ChatLoop:
             schedule_id=schedule_id,
             notification_policy=notification_policy,
             context_note=context_note,
+            context_note_factory=context_note_factory,
             permission_ceiling=permission_ceiling,
         )
 
@@ -532,6 +541,7 @@ class ChatLoop:
         schedule_id: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         context_note: str | ChatMessage | None = None,
+        context_note_factory: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
@@ -584,7 +594,11 @@ class ChatLoop:
                 _QueuedRunExecutor(self, request),
                 display_content=_display_content_preview(content),
                 editable=queue_content_is_editable(content),
-                steerable=request.supports_steering and run_kind == RunKind.USER,
+                steerable=(
+                    request.supports_steering
+                    and run_kind == RunKind.USER
+                    and context_note_factory is None
+                ),
                 internal=internal,
                 waiting_work_admission=waiting_work_admission,
                 admission=RunAdmission(
@@ -594,6 +608,7 @@ class ChatLoop:
                     completion_activity=completion_activity,
                     schedule_id=schedule_id,
                     notification_policy=notification_policy,
+                    prepare_executor=_context_preparer(context_note_factory),
                     expected_session_generation_id=session.generation_id,
                 ),
             )
@@ -753,6 +768,7 @@ class ChatLoop:
         continuation_source: RunContinuationSource | None = None,
         expected_session_generation_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        context_note_factory: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
@@ -877,7 +893,7 @@ class ChatLoop:
             try:
                 return await manager.start(
                     address,
-                    lambda run: self._execution._execute_run(run, request),
+                    _QueuedRunExecutor(self, request),
                     admission=RunAdmission(
                         working_project_id=working_project_id,
                         run_kind=run_kind,
@@ -885,6 +901,7 @@ class ChatLoop:
                         completion_activity=completion_activity,
                         schedule_id=schedule_id,
                         notification_policy=notification_policy,
+                        prepare_executor=_context_preparer(context_note_factory),
                         source_session_id=source_session_id,
                         parent_source=(
                             continuation_source.parent_source if continuation_source else None
@@ -1161,3 +1178,15 @@ def _reject_live_input(agent: Any, run_kind: RunKind) -> None:
 def _validate_run_tool_iteration_limit(max_tool_iterations: int | None) -> None:
     if max_tool_iterations is not None and max_tool_iterations < 0:
         raise ChatError("max tool iterations must not be negative")
+
+
+def _context_preparer(
+    factory: Callable[[], str] | None,
+) -> Callable[[RunExecutor], RunExecutor] | None:
+    """Resolve programmatic context once at Run start, after any Queue wait."""
+    return None if factory is None else partial(_prepare_context_input, factory)
+
+
+def _prepare_context_input(factory: Callable[[], str], executor: RunExecutor) -> RunExecutor:
+    assert isinstance(executor, _QueuedRunExecutor)
+    return replace(executor, request=replace(executor.request, context_note=factory()))

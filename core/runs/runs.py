@@ -1235,6 +1235,8 @@ class ChatRunManager:
         # The address is the single source of the run's identity: the project
         # anchor, agent, and session all come from it, so a drained queue item
         # can never start under a different anchor than it was enqueued for.
+        if admission.prepare_executor is not None:
+            executor = admission.prepare_executor(executor)
         run = Run(
             run_id=new_id("run"),
             agent_id=address.agent_id,

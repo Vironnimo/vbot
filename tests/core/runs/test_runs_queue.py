@@ -17,6 +17,7 @@ from core.runs import (
     Run,
     RunAdmission,
     RunExecutionOwner,
+    RunExecutor,
     RunStatus,
     WaitingWorkLimitError,
 )
@@ -55,18 +56,27 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
     active_execute, active_release = held("active")
     queued_execute, queued_release = held("queued")
     active_run = await manager.start(SESSION, active_execute)
+    prepared: list[RunExecutor] = []
+
+    def prepare(executor: RunExecutor) -> RunExecutor:
+        assert active_release.is_set()
+        prepared.append(executor)
+        return executor
+
     admission = RunAdmission(
         work_id="sub-work-one",
         contributes_to_agent_activity=False,
         source_session_id="source",
         parent_source=active_run.capture_continuation_source(),
         expected_session_generation_id="generation-one",
+        prepare_executor=prepare,
     )
     item = await manager.enqueue(
         SESSION, queued_execute, display_content="Queued next", admission=admission
     )
 
     assert item.future.done() is False
+    assert prepared == []
     assert item.admission is admission
     assert [
         queued.item_id for queued in manager.list_queued("coder", "session-one", project_id=None)
@@ -75,6 +85,7 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
     active_release.set()
     assert await active_run.wait() == "active"
     queued_run = await asyncio.wait_for(item.future, timeout=1)
+    assert prepared == [queued_execute]
     await asyncio.sleep(0)
 
     assert queued_run.status == RunStatus.RUNNING
@@ -494,14 +505,19 @@ async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
     assert manager.list_queued("coder", "session-one", project_id=None) == []
 
 
+@pytest.mark.parametrize("fault", ["validator", "preparer"])
 async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
     caplog: pytest.LogCaptureFixture,
+    fault: str,
 ) -> None:
     broken_work_id = "broken"
 
     def admission_validator(_address: SessionAddress, admission: RunAdmission) -> None:
-        if admission.work_id == broken_work_id and active_release.is_set():
+        if fault == "validator" and admission.work_id == broken_work_id and active_release.is_set():
             raise RuntimeError("validator exploded")
+
+    def prepare(_executor: RunExecutor) -> RunExecutor:
+        raise RuntimeError("validator exploded")
 
     manager = ChatRunManager(admission_validator=admission_validator)
     active_release = asyncio.Event()
@@ -518,7 +534,9 @@ async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
     broken_item = await manager.enqueue(
         address,
         queued_execute,
-        admission=RunAdmission(work_id=broken_work_id),
+        admission=RunAdmission(
+            work_id=broken_work_id, prepare_executor=prepare if fault == "preparer" else None
+        ),
     )
     healthy_item = await manager.enqueue(address, queued_execute)
 
