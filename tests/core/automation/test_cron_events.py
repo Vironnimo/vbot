@@ -514,7 +514,10 @@ async def test_an_unadmitted_event_stays_owed_and_retries_only_inside_its_window
 
 
 @pytest.mark.asyncio
-async def test_deleting_an_event_deletes_its_jobs(services: _Services, tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_at", [None, "calendar-save", "cron-lock"])
+async def test_deleting_an_event_deletes_its_jobs(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_at: str | None
+) -> None:
     event = services.calendar.create_event(**_SINGLE)
     other = services.calendar.create_event(title="Other", start="2030-01-11T09:00")
     second = await _event_job(services, event.id, "end")
@@ -522,10 +525,37 @@ async def test_deleting_an_event_deletes_its_jobs(services: _Services, tmp_path:
     services.clock.now = services.clock.now.replace(minute=5)
     first = await _event_job(services, event.id, "start - 1h")
 
-    removed = await services.calendar.delete_event(event.id, actor="test")
+    if cancel_at is None:
+        removed = await services.calendar.delete_event(event.id, actor="test")
+        # In the order the jobs were created.
+        assert removed == (BoundJob(second.id, second.name), BoundJob(first.id, first.name))
+    else:
+        entered, release = asyncio.Event(), asyncio.Event()
+        commit = services.calendar._commit_events
 
-    # In the order the jobs were created.
-    assert removed == (BoundJob(second.id, second.name), BoundJob(first.id, first.name))
+        async def paused_commit(events: Any) -> None:
+            if cancel_at == "calendar-save":
+                entered.set()
+                await release.wait()
+            await commit(events)
+            if cancel_at == "cron-lock":
+                entered.set()
+
+        monkeypatch.setattr(services.calendar, "_commit_events", paused_commit)
+        if cancel_at == "cron-lock":
+            await services.cron._edits.acquire()
+        task = asyncio.create_task(services.calendar.delete_event(event.id, actor="test"))
+        try:
+            await entered.wait()
+            task.cancel()
+        finally:
+            release.set()
+            if cancel_at == "cron-lock":
+                services.cron._edits.release()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert [item.id for item in CalendarService(tmp_path, tz=_ZONE).list_events()] == [other.id]
     restarted, _trigger = make_service(tmp_path, tz=_ZONE)
     assert [job.id for job in restarted.list_jobs()] == [kept.id]
 
