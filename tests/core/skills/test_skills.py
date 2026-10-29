@@ -2,6 +2,7 @@
 
 import logging
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -496,23 +497,52 @@ def test_roots_without_skill_packages_load_empty(tmp_path: Path) -> None:
         assert registry.diagnostics() == []
 
 
-def test_unreadable_skill_root_is_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fault", ["listing", "root_resolution", "file_resolution", "metadata"])
+@pytest.mark.parametrize("shared_scan", [False, True])
+def test_unreadable_skill_root_is_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    fault: str,
+    shared_scan: bool,
+) -> None:
     skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
+    blocked = write_skill(skills_dir, "blocked")
+    write_skill(skills_dir, "sibling")
+    other = tmp_path / "other"
+    write_skill(other, "healthy")
     original_iterdir = Path.iterdir
+    original_resolve = Path.resolve
 
     def fail_target_iterdir(path: Path):
-        if path == skills_dir:
+        if fault == "listing" and path == skills_dir:
             raise PermissionError("denied")
         return original_iterdir(path)
 
+    def resolve(path: Path, strict: bool = False) -> Path:
+        if (fault == "root_resolution" and path == skills_dir) or (
+            fault == "file_resolution" and path == blocked
+        ):
+            raise PermissionError("denied")
+        return original_resolve(path, strict=strict)
+
     monkeypatch.setattr(Path, "iterdir", fail_target_iterdir)
+    monkeypatch.setattr(Path, "resolve", resolve)
+    if fault == "metadata":
+        deny_access(blocked)
 
-    registry = SkillRegistry.load(skills_dir)
+    registry = SkillRegistry.load(
+        skills_dir, extra_dirs=[other], scan=SkillScan() if shared_scan else None
+    )
 
-    assert registry.list_all() == []
+    expected = {"healthy"}
+    if fault in {"file_resolution", "metadata"}:
+        expected.add("sibling")
+    assert {skill.name for skill in registry.list_all()} == expected
     [invalid] = registry.invalid_diagnostics()
-    assert "Cannot scan skill directory" in invalid.warnings[0]
+    assert invalid.path == (blocked if "sibling" in expected else skills_dir)
+    assert invalid.loadable is False
+    assert invalid.warnings
 
 
 def test_roots_load_in_order_with_origins_and_first_found_name_wins(tmp_path: Path) -> None:

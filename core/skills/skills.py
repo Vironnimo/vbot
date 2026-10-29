@@ -37,6 +37,7 @@ from core.skills.skill_validator import (
     parse_skill_front_matter,
     split_skill_document,
 )
+from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
@@ -347,13 +348,12 @@ class SkillRegistry:
         scan_roots = [skills_dir, *(extra_dirs or [])]
         origin_tags = list(origins) if origins is not None else []
         exclusion = _PackageExclusion(frozenset(excluded_packages or ()))
-        resolve: Callable[[Path], Path] = scan.resolve if scan is not None else Path.resolve
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
             source = (
                 package_sources[index]
                 if package_sources is not None and index < len(package_sources)
-                else ("folder", resolve(scan_root).as_posix())
+                else None
             )
             _load_skill_root(scan_root, skills, diagnostics, origin, exclusion, scan, source)
 
@@ -621,10 +621,17 @@ def _load_skill_root(
     scan: SkillScan | None = None,
     package_source: tuple[str, str | None] | None = None,
 ) -> None:
+    resolve: Callable[[Path], Path] = scan.resolve if scan is not None else Path.resolve
     try:
         skill_directories = (
             scan.directories(skills_dir) if scan is not None else _skill_directories(skills_dir)
         )
+        if not skill_directories:
+            return
+        package_source = package_source or ("folder", resolve(skills_dir).as_posix())
+        # A package root belongs to its parent home; ordinary roots own their
+        # candidates. Resolve once, with the same I/O isolation as enumeration.
+        home = resolve(skills_dir.parent if skill_directories == (skills_dir,) else skills_dir)
     except OSError as exc:
         warnings = [f"Cannot scan skill directory {skills_dir}: {exc}"]
         diagnostics.append(
@@ -639,17 +646,10 @@ def _load_skill_root(
         _log_validation_warnings(skills_dir.name, skills_dir, warnings)
         return
 
-    resolve: Callable[[Path], Path] = scan.resolve if scan is not None else Path.resolve
-    # Every package of a root shares one home (the root, or its parent for a
-    # package root): resolve it once, not once per package.
-    homes: dict[Path, Path] = {}
     for skill_dir in skill_directories:
-        parent = skill_dir.parent
-        if parent not in homes:
-            homes[parent] = resolve(parent)
         _load_skill_directory(
             skill_dir,
-            homes[parent],
+            home,
             skills,
             diagnostics,
             origin,
@@ -660,16 +660,14 @@ def _load_skill_root(
 
 
 def _skill_directories(root: Path) -> tuple[Path, ...]:
-    if not root.is_dir():
+    if not is_dir_strict(root):
         return ()
     # Shared layers select package roots, never the owner's entire home.
-    if (root / SKILL_FILENAME).is_file():
+    if is_file_strict(root / SKILL_FILENAME):
         return (root,)
-    return tuple(
-        path
-        for path in sorted(root.iterdir(), key=lambda path: path.name)
-        if path.is_dir() and (path / SKILL_FILENAME).is_file()
-    )
+    # Check each candidate in its own load boundary so one inaccessible child
+    # stays diagnostic without discarding its readable siblings.
+    return tuple(sorted(root.iterdir(), key=lambda path: path.name))
 
 
 def _load_skill_directory(
@@ -685,8 +683,11 @@ def _load_skill_directory(
     """Read one skill package directory (in the resolved ``home``) into the load state."""
     skill_file = skill_dir / SKILL_FILENAME
 
-    resolved_skill_file = scan.resolve(skill_file) if scan is not None else skill_file.resolve()
+    resolved_skill_file = skill_file
     try:
+        if not is_dir_strict(skill_dir) or not is_file_strict(skill_file):
+            return
+        resolved_skill_file = scan.resolve(skill_file) if scan is not None else skill_file.resolve()
         skill, result = (
             scan.metadata(skill_file, resolved_skill_file)
             if scan is not None
