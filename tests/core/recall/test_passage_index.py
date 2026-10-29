@@ -105,7 +105,15 @@ async def _apply(
     pruned: Sequence[str] = (),
     agent_id: str = "coder",
 ) -> None:
-    await index.apply(CatalogPlan(agent_id, project, tuple(pruned), tuple(changes)))
+    versions = await index.list_indexed_sessions(agent_id, project or None) if pruned else {}
+    await index.apply(
+        CatalogPlan(
+            agent_id,
+            project,
+            tuple((session_id, versions[session_id]) for session_id in pruned),
+            tuple(changes),
+        )
+    )
 
 
 async def _index(
@@ -514,14 +522,33 @@ async def test_refresh_keeps_unchanged_passages_and_drops_vanished_ones(
     index.close()
 
 
-async def test_refresh_skips_a_session_refreshed_by_another_writer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mutation", ["insert", "update", "prune"])
+async def test_refresh_skips_a_session_refreshed_by_another_writer(
+    tmp_path: Path, mutation: str
+) -> None:
     index = PassageIndex(tmp_path)
     await _index(index, {"one": [_passage("alpha")]})
+    stale = CatalogPlan(
+        "coder",
+        "",
+        (("one", ("generation", 1)),) if mutation == "prune" else (),
+        ()
+        if mutation == "prune"
+        else (
+            _change(
+                "one",
+                [],
+                revision=3,
+                previous=None if mutation == "insert" else ("generation", 1),
+            ),
+        ),
+    )
+    await _apply(index, _change("one", [_passage("beta")], revision=2, previous=("generation", 1)))
 
-    await _apply(index, _change("one", [_passage("beta")], revision=3, previous=None))
+    await index.apply(stale)
 
-    assert await index.list_indexed_sessions("coder") == {"one": ("generation", 1)}
-    assert set(_refs(index.path)) == {"alpha"}
+    assert await index.list_indexed_sessions("coder") == {"one": ("generation", 2)}
+    assert set(_refs(index.path)) == {"beta"}
     index.close()
 
 

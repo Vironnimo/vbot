@@ -230,7 +230,7 @@ class CatalogPlan:
 
     agent_id: str
     project: str
-    pruned: tuple[str, ...]
+    pruned: tuple[tuple[str, SessionVersion], ...]
     changes: tuple[SessionPassages, ...]
 
     @property
@@ -352,7 +352,12 @@ def plan_refresh(
         if batch is None:  # Only a stale cursor yields no batch; a full read has none.
             continue
         changes.append(_session_passages(session_id, previous, batch, incremental=incremental))
-    return CatalogPlan(agent_id, stored_scope(project_id), tuple(sorted(pruned)), tuple(changes))
+    return CatalogPlan(
+        agent_id,
+        stored_scope(project_id),
+        tuple((session_id, stamps[session_id].version) for session_id in sorted(pruned)),
+        tuple(changes),
+    )
 
 
 def _session_passages(
@@ -389,7 +394,10 @@ def apply_plan(connection: sqlite3.Connection, plan: CatalogPlan) -> list[int]:
     """
     released: set[int] = set()
     if plan.pruned:
-        released |= _delete_views(connection, plan.agent_id, plan.project, plan.pruned)
+        versions = dict(plan.pruned)
+        released |= _delete_views(
+            connection, plan.agent_id, plan.project, tuple(versions), expected_versions=versions
+        )
     added: list[int] = []
     for change in plan.changes:
         added.extend(_apply_change(connection, plan, change, released))
@@ -535,15 +543,23 @@ def delete_sessions(
 
 
 def _delete_views(
-    connection: sqlite3.Connection, agent_id: str, project: str, session_ids: Sequence[str]
+    connection: sqlite3.Connection,
+    agent_id: str,
+    project: str,
+    session_ids: Sequence[str],
+    *,
+    expected_versions: Mapping[str, SessionVersion] | None = None,
 ) -> set[int]:
     refs = [
         int(row[0])
         for row in connection.execute(
-            "SELECT session_ref FROM indexed_sessions WHERE project_id = ? AND agent_id = ? "
+            "SELECT session_ref, session_id, generation_id, history_revision "
+            "FROM indexed_sessions WHERE project_id = ? AND agent_id = ? "
             "AND session_id IN (SELECT value FROM json_each(?))",
             (project, agent_id, json.dumps(sorted(set(session_ids)))),
         )
+        if expected_versions is None
+        or expected_versions.get(str(row[1])) == (str(row[2]), int(row[3]))
     ]
     if not refs:
         return set()
@@ -740,7 +756,12 @@ class PassageCatalog:
         if not stamps:
             return
         evicted = [
-            CatalogPlan(agent_id, project, tuple(sorted(indexed)), ())
+            CatalogPlan(
+                agent_id,
+                project,
+                tuple((session_id, stamp.version) for session_id, stamp in sorted(indexed.items())),
+                (),
+            )
             for (project, agent_id), indexed in sorted(stamps.items())
         ]
         await self.write(lambda connection: [apply_plan(connection, plan) for plan in evicted])
