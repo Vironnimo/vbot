@@ -112,6 +112,7 @@ from core.automation._librarian_state import (
     _validate_state_document,
     validate_librarian_state_file,
 )
+from core.automation.learning import LearningUndoFailedError
 from core.config_validation import format_report_diagnostics, read_json_file
 from core.json_documents import write_json_document
 from core.prompts.briefs import librarian_brief
@@ -125,6 +126,7 @@ from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 if TYPE_CHECKING:
+    from core.automation.learning import LearningChanges
     from core.runtime.interfaces import RuntimeServices
     from core.skills import SkillRevision
 
@@ -203,6 +205,7 @@ class LibrarianService:
         runtime: RuntimeServices,
         *,
         authoring: SkillAuthoringService,
+        learning: LearningChanges,
         skills_dir: Callable[[str], Path],
         skill_usage: Callable[[], Awaitable[Sequence[SkillActivationUse]]],
         triggered_skill_names: Callable[[str], frozenset[str]],
@@ -226,6 +229,7 @@ class LibrarianService:
         """
         self._runtime = runtime
         self._authoring = authoring
+        self._learning = learning
         self._skills_dir = skills_dir
         self._skill_usage = skill_usage
         self._triggered_skill_names = triggered_skill_names
@@ -235,6 +239,7 @@ class LibrarianService:
         self._reviewing = reviewing
         self._clock = clock or (lambda: datetime.now(UTC))
         self._active: dict[str, _ActivePass] = {}
+        self._undo_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -254,11 +259,13 @@ class LibrarianService:
             task.cancel()
 
     async def aclose(self) -> None:
-        """Stop, then wait until every cancelled pass has ended."""
+        """Stop, then drain cancelled passes and admitted undo mutations."""
         tasks = self._tasks()
         self.stop()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks or self._undo_tasks:
+            await settle_before_cancelling(
+                asyncio.gather(*tasks, *self._undo_tasks, return_exceptions=True)
+            )
         self._task = None
         self._active.clear()
 
@@ -316,7 +323,13 @@ class LibrarianService:
             "last_pass": None if last_pass is None else last_pass.to_dict(),
             "passes": [record.to_dict() for record in passes],
             "next_due_at": next_due,
-            "changes": [revision.to_dict() for revision in changes],
+            "changes": [
+                {
+                    **revision.to_dict(),
+                    **({"skill_owner_id": owner} if owner != agent_id else {}),
+                }
+                for owner, revision in changes
+            ],
         }
 
     async def overview(self) -> dict[str, Any]:
@@ -367,6 +380,8 @@ class LibrarianService:
             raise LibrarianBusyError("The Librarian is shutting down.")
         if reason is not None:
             raise LibrarianUnavailableError(_unavailable_message(agent_id, reason, problem))
+        if self._undo_tasks:
+            raise LibrarianBusyError("A Librarian pass is being undone. Wait for it to finish.")
         if agent_id in self._active:
             raise LibrarianBusyError(f"A Librarian pass of Agent {agent_id} is already running.")
         if self._active:
@@ -387,6 +402,80 @@ class LibrarianService:
             self._guarded_pass(agent_id, active), name=f"librarian-pass:{agent_id}"
         )
         return await self.status(agent_id)
+
+    async def undo(self, agent_id: str, started_at: str) -> dict[str, Any]:
+        """Undo one retained pass, including aging and every shared Skill owner."""
+        if self._closed:
+            raise LibrarianBusyError("The Librarian is shutting down.")
+        agent = await self._identity_agent(agent_id)
+        if self._closed:
+            raise LibrarianBusyError("The Librarian is shutting down.")
+
+        async def undo_and_publish() -> dict[str, Any]:
+            try:
+                owners = await _LIBRARIAN_WORKERS.run(
+                    self._undo_pass, agent_id, started_at, agent.created_at, Path(agent.workspace)
+                )
+            except LearningUndoFailedError:
+                # A failed compensation can leave changes in any participating home.
+                homes = await _LIBRARIAN_WORKERS.run(self._recorded_homes, agent_id)
+                for owner in homes:
+                    self._skills_changed(owner)
+                self._announce()
+                raise
+            for owner in owners:
+                self._skills_changed(owner)
+            self._announce()
+            return await self.status(agent_id)
+
+        task = asyncio.create_task(undo_and_publish(), name=f"librarian-undo:{agent_id}")
+        self._undo_tasks.add(task)
+        task.add_done_callback(self._undo_tasks.discard)
+        return await settle_before_cancelling(task)
+
+    def _pass_to_undo(self, agent_id: str, started_at: str, agent_created_at: str) -> LibrarianPass:
+        """Resolve the exact pass while the caller holds the Agent lifecycle guard."""
+        self._require_original_agent(agent_id, agent_created_at)
+        if agent_id in self._active:
+            raise LibrarianBusyError("The Librarian pass is still running. Undo it after it ends.")
+        record = next(
+            (
+                item
+                for item in self._read_state(agent_id).settled().passes
+                if item.started_at == started_at
+            ),
+            None,
+        )
+        if record is None:
+            raise LibrarianUnavailableError(
+                "The Librarian pass is no longer in its history. Refresh the pass list."
+            )
+        return record
+
+    def _undo_pass(
+        self, agent_id: str, started_at: str, agent_created_at: str, workspace: Path
+    ) -> set[str]:
+        with self._runtime.agents.lifecycle_guard():
+            record = self._pass_to_undo(agent_id, started_at, agent_created_at)
+            owners = {owner for owner, _revision in self._pass_revisions(agent_id, record)}
+
+        def validate() -> None:
+            # Learning owns the lock order: undo lock, Agent guard, Project guard,
+            # authoring lock. Recheck the snapshot there, never invert that order.
+            if self._pass_to_undo(agent_id, started_at, agent_created_at) != record:
+                raise LibrarianUnavailableError(
+                    "The Librarian pass changed. Refresh the pass list before undoing it."
+                )
+
+        result = self._learning.undo(
+            agent_id,
+            record.run_id or f"librarian-pass:{agent_id}:{record.started_at}",
+            workspace=workspace,
+            actor="rpc",
+            skill_revisions={agent_id: record.archived_revisions},
+            validate=validate,
+        )
+        return owners if result.skills_changed else set()
 
     # -- schedule ----------------------------------------------------------------
 
@@ -492,7 +581,11 @@ class LibrarianService:
 
     def _busy(self, agent_id: str) -> bool:
         """Whether a pass runs, or the Agent or the Librarian has an active or queued Run."""
-        return bool(self._active) or self._agent_active(agent_id) or self._librarian_active()
+        return (
+            bool(self._active or self._undo_tasks)
+            or self._agent_active(agent_id)
+            or self._librarian_active()
+        )
 
     def _agent_active(self, agent_id: str) -> bool:
         """Whether the Agent has an active or queued Run, or a review is starting.
@@ -888,7 +981,7 @@ class LibrarianService:
 
     def _run_counts(self, agent_id: str, run_id: str) -> tuple[int, int, int]:
         """Count the Skills a consolidation Run created, changed and merged away."""
-        return _counts(self._recorded_revisions(agent_id), run_id)
+        return _counts(self._recorded_homes(agent_id), run_id)
 
     # -- state -------------------------------------------------------------------
 
@@ -944,16 +1037,26 @@ class LibrarianService:
                 data_dir=self._runtime.storage.data_dir,
             )
 
-    def _pass_revisions(self, agent_id: str, record: LibrarianPass | None) -> list[SkillRevision]:
+    def _pass_revisions(
+        self, agent_id: str, record: LibrarianPass | None
+    ) -> list[tuple[str, SkillRevision]]:
         """The Skill revisions a pass recorded, newest first."""
         if record is None:
             return []
         archived = set(record.archived_revisions)
-        return [
-            revision
-            for revision in reversed(self._recorded_revisions(agent_id))
-            if revision.id in archived or _by_run(revision, record.run_id)
+        revisions = [
+            (owner, revision)
+            for owner, history in self._recorded_homes(agent_id).items()
+            for revision in history
+            if (owner == agent_id and revision.id in archived) or _by_run(revision, record.run_id)
         ]
+        return sorted(revisions, key=lambda item: (item[1].at, item[1].id, item[0]), reverse=True)
+
+    def _recorded_homes(self, agent_id: str) -> dict[str, list[SkillRevision]]:
+        """Read each current owner's history once, independent of current shares."""
+        with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
+            owners = {agent.id for agent in self._runtime.agents.list_with_builtins()} | {agent_id}
+            return {owner: self._recorded_revisions(owner) for owner in sorted(owners)}
 
     def _recorded_revisions(self, agent_id: str) -> list[SkillRevision]:
         """The revisions the history of the Agent's private Skill home holds, oldest first.
@@ -969,13 +1072,13 @@ class LibrarianService:
     def _reported_passes(
         self, agent_id: str, passes: Sequence[LibrarianPass]
     ) -> tuple[LibrarianPass, ...]:
-        """Reconstruct interrupted Run counts for every status and overview row."""
-        if not any(record.outcome == "interrupted" for record in passes):
+        """Reconstruct Run counts, including shared writes absent from older pass records."""
+        if not any(record.run_id is not None for record in passes):
             return tuple(passes)
-        history = self._recorded_revisions(agent_id)
+        history = self._recorded_homes(agent_id)
         reported: list[LibrarianPass] = []
         for record in passes:
-            if record.outcome == "interrupted":
+            if record.run_id is not None:
                 created, changed, merged = _counts(history, record.run_id)
                 record = replace(record, created=created, changed=changed, merged=merged)
             reported.append(record)

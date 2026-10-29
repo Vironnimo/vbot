@@ -140,12 +140,21 @@ def _by_run(revision: SkillRevision, run_id: str | None) -> bool:
     return run_id is not None and revision.actor == "librarian" and revision.run_id == run_id
 
 
-def _counts(revisions: Sequence[SkillRevision], run_id: str | None) -> tuple[int, int, int]:
+def _counts(
+    homes: Mapping[str, Sequence[SkillRevision]], run_id: str | None
+) -> tuple[int, int, int]:
     """Count the Skills the consolidation Run ``run_id`` created, changed and merged away."""
-    written = [revision for revision in revisions if _by_run(revision, run_id)]
-    created = {revision.skill for revision in written if revision.kind == "create"}
-    merged = {revision.skill for revision in written if revision.reason == "absorbed"}
-    changed = {revision.skill for revision in written} - created - merged
+    written = [
+        (owner, revision)
+        for owner, revisions in homes.items()
+        for revision in revisions
+        if _by_run(revision, run_id)
+    ]
+    created = {(owner, revision.skill) for owner, revision in written if revision.kind == "create"}
+    merged = {
+        (owner, revision.skill) for owner, revision in written if revision.reason == "absorbed"
+    }
+    changed = {(owner, revision.skill) for owner, revision in written} - created - merged
     return len(created), len(changed), len(merged)
 
 
