@@ -496,6 +496,7 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
         sender=sender,
         reply_surface=group_surface,
         tool_restriction=("memory",),
+        context_note_factory=lambda: f"Context at start: {adapter.release_first_request.is_set()}",
     )
     resolved_session_id, updated_executor, updated_display = await loop.build_queue_update(
         "coder", "session-one", "edited channel text", queued, reply_surface=edit_surface
@@ -514,6 +515,9 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
     await (await queued.future).wait()
 
     messages = history(runtime)
+    assert [
+        message.content for message in messages if message.content == "Context at start: True"
+    ] == ["Context at start: True"]
     edited_user = next(
         message
         for message in messages

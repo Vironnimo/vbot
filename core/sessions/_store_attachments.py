@@ -102,7 +102,43 @@ def referenced(connection: sqlite3.Connection) -> frozenset[str]:
             "SELECT attachment_id FROM session_attachment_refs "
             "UNION SELECT attachment_id FROM session_accessor_input_attachments"
         )
-    )
+    ) | _pending_input_references(connection)
+
+
+def _pending_input_references(connection: sqlite3.Connection) -> frozenset[str]:
+    """Retain opaque pending bodies too, including those written before this reader.
+
+    The explicit index is supplied by callers and can omit inline handles and
+    paths. Only unfinished inputs need a body scan, never complete History;
+    snapshots use this same read without modifying their older saved indexes.
+    """
+    tables = {
+        str(row[0])
+        for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
+    }
+    if "session_accessor_inputs" not in tables:
+        return frozenset()
+    found: set[str] = set()
+    for table, columns in (
+        ("session_accessor_input_payloads", ("payload_json",)),
+        ("session_accessor_input_carriers", ("message_json", "notes_json")),
+    ):
+        if table not in tables:
+            continue
+        for row in connection.execute(
+            f"SELECT {', '.join('p.' + column for column in columns)} FROM {table} AS p "
+            "JOIN session_accessor_inputs AS i ON i.input_key = p.input_key "
+            "WHERE i.state IN ('queued', 'started')"
+        ):
+            for value in row:
+                if value is not None:
+                    try:
+                        found.update(attachment_ids(json.loads(value)))
+                    except ValueError as exc:
+                        raise sqlite3.DatabaseError(
+                            "Stored Accessor input contains invalid JSON"
+                        ) from exc
+    return frozenset(found)
 
 
 def snapshot_references(connection: sqlite3.Connection) -> frozenset[str]:
@@ -132,17 +168,18 @@ def snapshot_references(connection: sqlite3.Connection) -> frozenset[str]:
                     "SELECT DISTINCT attachment_id FROM session_accessor_input_attachments"
                 )
             )
-        return frozenset(indexed_ids)
+        return frozenset(indexed_ids) | _pending_input_references(connection)
     ids: set[str] = set()
     for _entry_key, value in _stored_values(connection):
         ids.update(attachment_ids(value))
-    return frozenset(ids)
+    return frozenset(ids) | _pending_input_references(connection)
 
 
 def unreferenced(
     connection: sqlite3.Connection, *, additional: Sequence[str] = ()
 ) -> tuple[str, ...]:
     """Known orphan ids and supplied candidates with no retained canonical owner."""
+    pending = _pending_input_references(connection)
     return tuple(
         str(row[0])
         for row in connection.execute(
@@ -156,6 +193,7 @@ def unreferenced(
             "WHERE queued.attachment_id = known.attachment_id) ORDER BY attachment_id",
             (json.dumps(additional),),
         )
+        if str(row[0]) not in pending
     )
 
 

@@ -50,7 +50,10 @@
   onMount(() => {
     if (source.trim()) void preview();
   });
-  onDestroy(() => clearTimeout(idTimer));
+  onDestroy(() => {
+    ++request;
+    clearTimeout(idTimer);
+  });
 
   const blocked = (server) => Boolean(server.error || server.conflict);
 
@@ -112,12 +115,15 @@
     const [file] = event.currentTarget.files ?? [];
     event.currentTarget.value = '';
     if (!file) return;
+    const current = ++request;
     try {
-      source = await file.text();
+      const text = await file.text();
+      if (current !== request) return;
+      source = text;
       servers = null;
       await preview();
     } catch (failure) {
-      previewError = failure.message;
+      if (current === request) previewError = failure.message;
     }
   }
 
@@ -187,6 +193,8 @@
                 value={source}
                 disabled={working}
                 onInput={(value) => {
+                  ++request;
+                  previewError = '';
                   source = value;
                 }}
               />{/snippet}

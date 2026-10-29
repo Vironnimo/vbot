@@ -223,6 +223,9 @@ async def menu(app: ConversationApp) -> None:
         )
         if view.key != key or not view.available:
             return
+        # A read started while the mutation was pending can still contain the
+        # previous settings. Its response must not replace this confirmed result.
+        view.refresh_revision += 1
         view.overrides = result.get("agent_overrides") or {}
     else:
         for field, replacement in changes.items():

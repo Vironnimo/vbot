@@ -73,6 +73,8 @@ export function createChannelsSettings(context) {
   // dropped, also when a newer read failed.
   let channelAgentsRequested = 0;
   let channelAgentsShown = 0;
+  let channelsRequested = 0;
+  let disposed = false;
   let pendingExternalReload = $state(false);
   let accessRevision = 0;
   let lastPanelActive = null;
@@ -94,6 +96,9 @@ export function createChannelsSettings(context) {
     return autosave.cancelPendingTimer;
   });
   onDestroy(() => {
+    disposed = true;
+    ++channelsRequested;
+    ++accessRevision;
     unregisterAutosave();
     autosave.cancelPendingTimer();
   });
@@ -336,6 +341,8 @@ export function createChannelsSettings(context) {
   }
 
   async function loadChannelsPanel() {
+    if (disposed) return;
+    const request = ++channelsRequested;
     channelPanelState = {
       ...channelPanelState,
       loading: true,
@@ -348,6 +355,7 @@ export function createChannelsSettings(context) {
         listAgents(),
         listChannels(),
       ]);
+      if (request !== channelsRequested) return;
       showChannelAgents(agentsRequest, agentsResult);
 
       const nextState = applyChannelPanelList(
@@ -379,6 +387,7 @@ export function createChannelsSettings(context) {
         rebaseChannelForm(editedChannel);
         await loadChannelAccess(editedChannel.id);
       }
+      if (request !== channelsRequested) return;
       // A Channel removed elsewhere takes its open edit form with it.
       if (
         channelFormVisible &&
@@ -390,6 +399,7 @@ export function createChannelsSettings(context) {
         cancelChannelFormNow();
       }
     } catch (error) {
+      if (request !== channelsRequested) return;
       channelPanelState = {
         ...channelPanelState,
         loading: false,
@@ -399,6 +409,7 @@ export function createChannelsSettings(context) {
   }
 
   async function loadChannelAccess(channelId) {
+    if (disposed) return;
     const request = ++accessRevision;
     try {
       const [access, catalog] = await Promise.all([
@@ -473,7 +484,7 @@ export function createChannelsSettings(context) {
   }
 
   function showChannelAgents(request, result) {
-    if (request < channelAgentsShown) return;
+    if (disposed || request < channelAgentsShown) return;
     channelAgentsShown = request;
     channelAgents = getAgentItems(result);
   }

@@ -152,6 +152,7 @@ class ConnectionController:
         # never replaces what the user chose. Never taken on the GUI thread.
         self._lock = threading.Lock()
         self._pending: state._LaunchConnect | state._PairingWait | None = None
+        self._connect_revision = 0
         self._worker: threading.Thread | None = None
         self._closed = False
         if access is not None:
@@ -318,10 +319,17 @@ class ConnectionController:
             location=location,
             started=self._clock(),
         )
+        return self._connect_launch(launch)
+
+    def _connect_launch(
+        self, launch: state._LaunchConnect, *, revision: int | None = None
+    ) -> DesktopProbeResult:
+        """Admit a launch or still-current sign-in recovery before probing."""
         with self._lock:
+            if self._closed or (revision is not None and revision != self._connect_revision):
+                return DesktopProbeResult(STATUS_SWITCH_CANCELLED, launch.target)
             self._end_pending_locked()
-            if not self._closed:
-                self._pending = launch
+            self._pending = launch
         attempt = self._attempt(launch.target, self._app_path(launch.open_session))
         with self._lock:
             if self._pending is not launch:
@@ -385,16 +393,19 @@ class ConnectionController:
         choice wins.
         """
 
-        self._end_pending("user_connect")
+        revision = self._end_pending("user_connect")
         target = self._build_target(host, port)
         attempt = self._attempt(target, self._app_path(None))
-        prepared = self._settle(target, attempt, label)
-        if prepared.offer is None or on_screen:
-            return prepared
-        with self._window_lock:
-            if self._offer is not None:
-                self._offer.screen_due = self._clock() + SIGN_IN_LANDING_SECONDS
-        return replace(prepared, offer=None, navigation_url=state.SIGN_IN_PAGE)
+        with self._lock:
+            if self._closed or revision != self._connect_revision:
+                return state._failed(attempt.result, STATUS_SWITCH_CANCELLED)
+            prepared = self._settle(target, attempt, label)
+            if prepared.offer is None or on_screen:
+                return prepared
+            with self._window_lock:
+                if self._offer is not None:
+                    self._offer.screen_due = self._clock() + SIGN_IN_LANDING_SECONDS
+            return replace(prepared, offer=None, navigation_url=state.SIGN_IN_PAGE)
 
     def start_pairing(self, host: str, port: Any, name: Any = None) -> state.PreparedConnection:
         """Ask the server for a pairing code with the device ``name`` the user confirmed.
@@ -405,7 +416,7 @@ class ConnectionController:
         for) and the screen shows a pairing that fails.
         """
 
-        self._end_pending("user_connect")
+        revision = self._end_pending("user_connect")
         target = self._build_target(host, port)
         address = target.address
         if address is None or self._access is None:
@@ -435,6 +446,8 @@ class ConnectionController:
             on_screen=True,
         )
         with self._lock:
+            if self._closed or revision != self._connect_revision:
+                return state._failed(result, STATUS_SWITCH_CANCELLED)
             self._wait_for_pairing_locked(wait)
         return state.PreparedConnection(
             result=result,
@@ -825,35 +838,46 @@ class ConnectionController:
         a server that keeps refusing never loops the window.
         """
 
-        with self._window_lock:
-            active = self._active_address
-            if self._lost_handled or active is None or active.origin != address.origin:
-                return
-            self._lost_handled = True
         with self._lock:
             if self._closed:
                 return
+            with self._window_lock:
+                active = self._active_address
+                if self._lost_handled or active is None or active.origin != address.origin:
+                    return
+                self._lost_handled = True
+            revision = self._connect_revision
         logger.info(
             "%s refused this Desktop's sign-in; connecting the window again", address.display
         )
         threading.Thread(
             target=self._reconnect,
-            args=(address,),
+            args=(address, revision),
             name="vbot-desktop-sign-in",
             daemon=True,
         ).start()
 
-    def _reconnect(self, address: ServerAddress) -> None:
+    def _reconnect(self, address: ServerAddress, revision: int) -> None:
         try:
-            self.launch_connect(address.bridge_host, address.port)
+            self._connect_launch(
+                state._LaunchConnect(
+                    target=DesktopTarget.for_address(address),
+                    label=None,
+                    open_session=None,
+                    location=None,
+                    started=self._clock(),
+                ),
+                revision=revision,
+            )
         except Exception:
             logger.exception("Desktop could not connect the window to %s again", address.display)
 
-    def _end_pending(self, reason: str) -> None:
+    def _end_pending(self, reason: str) -> int:
         with self._lock:
             if reason == "closed":
                 self._closed = True
             pending = self._end_pending_locked()
+            revision = self._connect_revision
         if isinstance(pending, state._LaunchConnect) and pending.waiting:
             logger.info(
                 "Desktop stopped waiting for %s (reason=%s)", pending.target.display, reason
@@ -864,8 +888,10 @@ class ConnectionController:
                 pending.target.display,
                 reason,
             )
+        return revision
 
     def _end_pending_locked(self) -> state._LaunchConnect | state._PairingWait | None:
+        self._connect_revision += 1
         pending, self._pending = self._pending, None
         if pending is not None:
             pending.stop.set()

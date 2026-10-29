@@ -126,7 +126,21 @@ def test_previously_admitted_blobs_are_reclaimed_without_expiring_fresh_uploads(
     assert sessions.unreferenced_attachment_ids() == ()
 
 
-@pytest.mark.parametrize("root", ["fork", "archive", "audit", "snapshot", "queued", "started"])
+@pytest.mark.parametrize(
+    "root",
+    [
+        "fork",
+        "archive",
+        "audit",
+        "snapshot",
+        "queued",
+        "started",
+        "queued-path",
+        "started-path",
+        "queued-carrier",
+        "snapshot-queued-path",
+    ],
+)
 @pytest.mark.asyncio
 async def test_retained_history_roots_keep_their_attachments(
     tmp_path: Path, sessions: ChatSessionManager, root: str, clock: datetime
@@ -136,16 +150,18 @@ async def test_retained_history_roots_keep_their_attachments(
         store.store("file.txt", b"content"), (clock - timedelta(days=20)).isoformat()
     )
     source = sessions.create("coder")
-    if root in {"queued", "started"}:
+    if "queued" in root or "started" in root:
         await sessions.accept_accessor_input_async(
             source.address,
             "input",
             request_hash="original",
-            payload={"content": "queued"},
+            payload={"content": f"Read {record.file_path}" if root.endswith("-path") else "queued"},
             queue_id="queue",
-            attachment_ids=(record.id,),
+            attachment_ids=(record.id,) if root in {"queued", "started"} else (),
+            fallback_input=ChatMessage.user(record.file_path) if root == "queued-carrier" else None,
         )
-        if root == "started":
+        assert record.id in sessions.referenced_attachment_ids()
+        if root.startswith("started"):
             await sessions.start_run(
                 Run(
                     run_id="started",
@@ -154,9 +170,18 @@ async def test_retained_history_roots_keep_their_attachments(
                     accessor_input_id="input",
                 )
             )
+        if root == "snapshot-queued-path":
+            assert create_data_snapshot(tmp_path, reason="test", databases=[sessions.database])
+            assert await sessions.remove_accessor_input_async(source.address, "input")
         _forget_prior_ownership(tmp_path, record.id)
         assert store.collect_session_orphans(sessions) == 0
         assert store.get(record.id) == record
+        if root == "queued-path":
+            await sessions.update_accessor_input_async(
+                source.address, "input", payload_patch={"content": "attachment removed"}
+            )
+            assert record.id not in sessions.referenced_attachment_ids()
+            assert store.collect_session_orphans(sessions) == 1
         return
     source.append(
         ChatMessage.user(

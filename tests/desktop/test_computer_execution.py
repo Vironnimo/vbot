@@ -15,7 +15,9 @@ from tests.resources.extensions.computer_use.computer_use_test_support import Fa
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.mark.parametrize("failure", ["cancel", "start_error", "disconnect", "shutdown"])
+@pytest.mark.parametrize(
+    "failure", ["cancel", "cancel_twice", "start_error", "disconnect", "shutdown"]
+)
 async def test_unfinished_native_hotkey_start_is_closed_before_control_returns(
     failure: str,
 ) -> None:
@@ -48,19 +50,23 @@ async def test_unfinished_native_hotkey_start_is_closed_before_control_returns(
     stopping = None
     try:
         await entered.wait()
-        if failure == "cancel":
+        if failure in {"cancel", "cancel_twice"}:
             call.cancel()
         elif failure in {"disconnect", "shutdown"}:
             stopping = asyncio.create_task(
                 computer.close() if failure == "shutdown" else computer.disconnected()
             )
         await asyncio.sleep(0)
+        if failure == "cancel_twice":
+            call.cancel()
+            await asyncio.sleep(0)
         assert not call.done()
     finally:
         release.set()
     try:
         expected = {
             "cancel": asyncio.CancelledError,
+            "cancel_twice": asyncio.CancelledError,
             "start_error": OSError,
             "disconnect": InputInterrupted,
             "shutdown": InputInterrupted,
@@ -110,6 +116,46 @@ async def test_disconnect_interrupts_native_input_and_fences_queued_operations()
     finally:
         await computer.close()
     assert target.closed
+
+
+async def test_cancelled_native_close_finishes_resource_cleanup() -> None:
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class DelayedTarget(FakeTarget):
+        @override
+        def release_all(self) -> None:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(1)
+            super().release_all()
+
+    target = DelayedTarget()
+    hotkeys: list[FakeHotkey] = []
+
+    def hotkey(callback):
+        result = FakeHotkey(callback)
+        hotkeys.append(result)
+        return result
+
+    computer = ComputerExecution(
+        lambda *_: None, target_factory=lambda: target, hotkey_factory=hotkey
+    )
+    await computer.execute("control", {"control_id": "ctl_first"})
+    closing = asyncio.create_task(computer.close())
+    try:
+        await entered.wait()
+        for _ in range(2):
+            closing.cancel()
+            await asyncio.sleep(0)
+            assert not closing.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    await computer.close()
+    assert target.closed and hotkeys[0].closed
+    assert target.released > 0 and target.activity[-1] is False
 
 
 async def test_native_stop_blocks_the_old_control_without_waiting_for_the_server() -> None:

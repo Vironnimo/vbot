@@ -308,12 +308,16 @@ class CalendarService(CalendarProjection):
         await self.load()
         async with self._edits:
             self._event(event_id)
-            remaining = {key: event for key, event in self._events.items() if key != event_id}
-            await settle_before_cancelling(self._commit_events(remaining))
-            _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
-            if self._event_jobs is None:
-                return ()
-            return await self._event_jobs.event_deleted(event_id, actor=actor)
+            return await settle_before_cancelling(self._delete_event(event_id, actor=actor))
+
+    async def _delete_event(self, event_id: str, *, actor: str) -> tuple[BoundJob, ...]:
+        """Finish the admitted deletion through its bound jobs before honoring cancellation."""
+        remaining = {key: event for key, event in self._events.items() if key != event_id}
+        await self._commit_events(remaining)
+        _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
+        if self._event_jobs is None:
+            return ()
+        return await self._event_jobs.event_deleted(event_id, actor=actor)
 
     # -- occurrences ------------------------------------------------------------------------
 

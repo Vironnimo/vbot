@@ -116,6 +116,31 @@ describe('SettingsView Channels', () => {
     ).toBe(false);
   });
 
+  it('drops an access read failure after disposing the channel panel', async () => {
+    const onToast = vi.fn();
+    const reading = Promise.withResolvers();
+    const backend = createSettingsRpcMock({
+      channels: [channelConfig('tg-assistant')],
+    });
+    rpcMock.mockImplementation((method, params) =>
+      method === 'channel.access.get'
+        ? reading.promise
+        : backend(method, params),
+    );
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast },
+    });
+    flushSync();
+    await openChannelsPanel();
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    await waitForCall('channel.access.get', { id: 'tg-assistant' });
+    mountedComponent = await cleanupSettingsViewHarness(mountedComponent);
+    reading.reject(new Error('obsolete access failure'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onToast).not.toHaveBeenCalled();
+  });
+
   it('shows durable group participants and updates identity and roles', async () => {
     await openChannels({
       channels: [channelConfig('tg-assistant')],
@@ -495,6 +520,56 @@ describe('SettingsView Channels', () => {
       document.getElementById('channel-agent-select').textContent,
     ).toContain('Assistant Work');
   });
+
+  it.each(['success', 'failure'])(
+    'keeps a saved channel state when an older list settles with %s',
+    async (outcome) => {
+      const props = reactiveProps({ channelsRefreshToken: 0 });
+      const backend = createSettingsRpcMock({
+        channels: [channelConfig('tg-assistant')],
+      });
+      let lists = 0;
+      let settleOldList;
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'channel.list' && ++lists === 2) {
+          const snapshot = structuredClone(await backend(method, params));
+          return new Promise((resolve, reject) => {
+            settleOldList = () =>
+              outcome === 'success'
+                ? resolve(snapshot)
+                : reject(new Error('obsolete list failure'));
+          });
+        }
+        return backend(method, params);
+      });
+      mountedComponent = mount(SettingsView, { target: document.body, props });
+      flushSync();
+      await openChannelsPanel();
+      props.channelsRefreshToken += 1;
+      flushSync();
+      await waitForCondition(() => settleOldList);
+
+      buttonByAriaLabel('Enable channel tg-assistant').click();
+      await waitForCondition(
+        () =>
+          buttonByAriaLabel('Enable channel tg-assistant').getAttribute(
+            'aria-checked',
+          ) === 'false',
+      );
+      settleOldList();
+      // Let the older promise finish, including its stale error path.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+      expect(lists).toBe(3);
+      expect(
+        buttonByAriaLabel('Enable channel tg-assistant').getAttribute(
+          'aria-checked',
+        ),
+      ).toBe('false');
+      expect(document.body.textContent).not.toContain('obsolete list failure');
+      expect(buttonByText('Add channel').disabled).toBe(false);
+    },
+  );
 
   it('names the Agents anew after an Agent change and keeps a new channel form', async () => {
     const agents = agentsPayload();

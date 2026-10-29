@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.performance import PerformanceService, count, record_duration, set_gauge
+from core.performance import performance as performance_module
 from core.performance._history import append_window
 from core.performance._monitor import StallRecord, StallThread
 
@@ -47,8 +48,9 @@ def _append(directory: Path, window: dict[str, Any], **limits: int) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("write_failure", [None, "before", "after"])
 async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_failure: str | None
 ) -> None:
     service = _service(tmp_path)
     service.start()
@@ -69,7 +71,16 @@ async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
             awaited_by=stack,
         )
     )
-    await service._write_window("interval")  # noqa: SLF001 - end the window now.
+    with monkeypatch.context() as patch:
+        if write_failure is not None:
+
+            def failed_append(*args: Any, **kwargs: Any) -> None:
+                if write_failure == "after":
+                    append_window(*args, **kwargs)
+                raise OSError("controlled history write failure")
+
+            patch.setattr(performance_module, "append_window", failed_append)
+        await service._write_window("interval")  # noqa: SLF001 - end the window now.
     record_duration("test.op", 5.0)
     count("test.events")
     await service.aclose()

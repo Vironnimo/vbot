@@ -22,6 +22,7 @@ import pytest
 
 import core.extensions._callbacks as extension_callbacks
 from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
+from core.tools import ToolRegistry
 from tests.core.extensions.extension_test_support import (
     RecordingResponder,
     tap,
@@ -126,12 +127,14 @@ async def test_blocked_sync_callbacks_reserve_worker_capacity_for_other_owners()
     lock = threading.Lock()
     active = 0
     maximum = 0
+    started = 0
     limit = extension_callbacks._OWNER_WORKER_LIMIT
 
     def blocked(_ctx: HookContext, **_payload: Any) -> None:
-        nonlocal active, maximum
+        nonlocal active, maximum, started
         with lock:
             active += 1
+            started += 1
             maximum = max(maximum, active)
             if active == limit:
                 loop.call_soon_threadsafe(entered.set)
@@ -157,9 +160,52 @@ async def test_blocked_sync_callbacks_reserve_worker_capacity_for_other_owners()
         await asyncio.wait_for(healthy.dispatch_run_start(_ctx(), session_id="s", agent_id="a"), 1)
         assert calls == ["ok"]
         assert maximum == limit
+        # Calls already running may finish; those still waiting for this
+        # owner's worker slots must not enter a retired registration.
+        blocked_registry.retire_registration()
     finally:
         release.set()
         await asyncio.gather(*tasks)
+    assert started == limit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retirement", ["reload", "disable"])
+async def test_a_waiting_hook_pipeline_does_not_start_removed_handlers(
+    tmp_path: Path, retirement: str
+) -> None:
+    for name in ("first", "second"):
+        write_extension(tmp_path, name, "def register(api): pass")
+    registry = ExtensionRegistry.load(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects: list[str] = []
+
+    async def first(_ctx: HookContext, *, messages: list) -> list:
+        entered.set()
+        await release.wait()
+        effects.append("running")
+        return [*messages, {"role": "user", "content": "running"}]
+
+    async def second(_ctx: HookContext, *, messages: list) -> list:
+        effects.append("retired")
+        return [*messages, {"role": "user", "content": "retired"}]
+
+    registry.install_handler("first", "context", first)
+    registry.install_handler("second", "context", second)
+    pending = asyncio.create_task(registry.dispatch_context(_ctx(), messages=[]))
+    try:
+        async with asyncio.timeout(1):
+            await entered.wait()
+            if retirement == "reload":
+                registry.retire_registration()
+            else:
+                assert await registry.deactivate("second", ToolRegistry())
+            release.set()
+            assert await pending == [{"role": "user", "content": "running"}]
+        assert effects == ["running"]
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
 
 
 @pytest.mark.asyncio

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, override
 
 import pytest
 import pytest_asyncio
@@ -421,6 +423,33 @@ async def test_a_session_that_loses_the_computer_is_told_once_and_sees_no_more_o
 
 
 @pytest.mark.asyncio
+async def test_native_output_spool_failure_keeps_the_process_manageable(
+    remote: tuple[TerminalManager, Link, AdapterFactory],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _manager, link, factory = remote
+
+    class FullSpool(io.BytesIO):
+        @override
+        def write(self, data: Any) -> int:
+            raise OSError(28, "controlled spool full")
+
+    spool = FullSpool()
+    monkeypatch.setattr(
+        terminal_execution, "tempfile", SimpleNamespace(TemporaryFile=lambda *_: spool)
+    )
+    await link.native.execute("start", {"process_id": "spool_failure", "command": "editor"})
+    params = {"process_id": "spool_failure"}
+    output = await link.native.execute("read", {**params, "offset": 0})
+    assert output["eof"] is True and output["error"] is not None
+    assert (await link.native.execute("status", params))["alive"] is True
+    assert (await link.native.execute("kill", params))["alive"] is False
+    assert (await link.native.execute("release", params))["released"] is True
+    assert not factory.adapters[0].alive and factory.adapters[0].closed
+    assert spool.closed and link.native.active_count == 0
+
+
+@pytest.mark.asyncio
 async def test_a_refused_native_spawn_is_a_definite_start_failure(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     tmp_path: Path,
@@ -438,9 +467,11 @@ async def test_a_refused_native_spawn_is_a_definite_start_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_close", [False, True])
 async def test_native_close_drains_a_cancelled_pending_launch(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     monkeypatch: pytest.MonkeyPatch,
+    cancel_close: bool,
 ) -> None:
     _manager, link, factory = remote
     entered, finish_spawn = threading.Event(), threading.Event()
@@ -460,10 +491,20 @@ async def test_native_close_drains_a_cancelled_pending_launch(
     with pytest.raises(asyncio.CancelledError):
         await launching
     closing = asyncio.create_task(link.native.close())
-    await asyncio.sleep(0)
-    assert not closing.done()
-    finish_spawn.set()
-    await closing
+    try:
+        await asyncio.sleep(0)
+        if cancel_close:
+            for _ in range(2):
+                closing.cancel()
+                await asyncio.sleep(0)
+        assert not closing.done()
+    finally:
+        finish_spawn.set()
+    if cancel_close:
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    else:
+        await closing
     assert len(factory.adapters) == 1
     assert not factory.adapters[0].alive
     assert factory.adapters[0].closed

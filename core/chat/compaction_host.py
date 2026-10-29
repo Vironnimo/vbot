@@ -608,7 +608,7 @@ class ChatCompactionHost:
             )
         if not committed:
             return False
-        context.image_budget = RequestImageBudget()
+        context.image_budget = request_state.image_budget or RequestImageBudget()
         if refresh is not None:
             await self._stamp_prompt_files_read(session.id, refresh)
             self.apply_prompt_refresh(context, refresh)
@@ -643,6 +643,10 @@ class ChatCompactionHost:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
+        delivery_pin = await self.sessions.run_async(
+            self.sessions.prompt_pin, session.address, PINNED_IMAGE_DELIVERY_SLOT
+        )
+        image_budget = (inputs.image_budget or RequestImageBudget()).new_epoch(delivery_pin)
         # The new epoch lists every Tool offered now and shows every dynamic
         # block as it renders now; the commit persists both pins. On-demand
         # Tools the Agent called in the ending epoch stay in its Tool list;
@@ -652,10 +656,14 @@ class ChatCompactionHost:
             agent,
             session,
             inputs=replace(
-                inputs, fresh_prompt_epoch=True, keep_listed_tools=called
+                inputs,
+                fresh_prompt_epoch=True,
+                keep_listed_tools=called,
+                image_budget=image_budget,
             ).with_session_messages([*session_messages, checkpoint]),
             live_messages=live_request_messages,
         )
+        projected_state = replace(projected_state, image_budget=image_budget)
         # The new prompt epoch has no measurement yet: a whole corrected estimate.
         context_tokens_after = await self.run_transform(
             accounting.estimate,
@@ -752,8 +760,12 @@ def _prompt_epoch(
         PINNED_THINKING_EFFORT_SLOT: (
             request_state.effort.pin.to_payload() if request_state.effort is not None else None
         ),
-        # Compacted history keeps every remaining image until a limit retires it anew.
-        PINNED_IMAGE_RETIREMENT_SLOT: None,
+        # The new epoch starts without old retirements, then applies its own limit.
+        PINNED_IMAGE_RETIREMENT_SLOT: (
+            request_state.image_budget.take_unsaved_pin()
+            if request_state.image_budget is not None
+            else None
+        ),
         PINNED_IMAGE_DELIVERY_SLOT: retain_delivery_pin(delivery_pin, request_state.messages),
     }
     if refresh is None:

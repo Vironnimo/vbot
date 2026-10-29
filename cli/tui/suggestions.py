@@ -34,6 +34,14 @@ class ComposerSuggestions:
         self.state = CompletionState()
         self.catalogs: dict[tuple[Any, ...], list[Any]] = {}
         self.loading: set[tuple[Any, ...]] = set()
+        self.catalog_revision = 0
+
+    def invalidate(self) -> None:
+        """Retire cached and pending catalogs after server changes or reconnect."""
+        self.catalog_revision += 1
+        self.catalogs.clear()
+        self.loading.clear()
+        self.refresh()
 
     def modal_owns_the_screen(self) -> bool:
         """Whether a modal screen holds the terminal, which keeps the popup out of it.
@@ -101,6 +109,7 @@ class ComposerSuggestions:
         if key in self.loading:
             return
         self.loading.add(key)
+        revision = self.catalog_revision
         if len(self.catalogs) > 40:
             self.catalogs.clear()
 
@@ -122,7 +131,10 @@ class ComposerSuggestions:
             except ClientError, OSError:
                 items = []
             finally:
-                self.loading.discard(key)
+                if revision == self.catalog_revision:
+                    self.loading.discard(key)
+            if revision != self.catalog_revision:
+                return
             self.catalogs[key] = list(items)
             if self.app.conversation is view and view.available:
                 self.refresh()

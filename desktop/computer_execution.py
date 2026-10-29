@@ -11,6 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 from resources.extensions.computer_use._remote_wire import (
     app_data,
     app_value,
@@ -91,7 +92,7 @@ class ComputerExecution:
             self._stop.set()
             # Do not release serialization while native input is still running.
             with contextlib.suppress(Exception):
-                await asyncio.shield(future)
+                await finish_despite_cancel(future)
             raise
 
     def _ensure_target(self) -> DesktopTarget:
@@ -309,6 +310,9 @@ class ComputerExecution:
         if self._closed:
             return
         self._closed = True
+        await settle_before_cancelling(self._close_resources())
+
+    async def _close_resources(self) -> None:
         await self.disconnected()
         if self._hotkey is not None:
             self._hotkey.close()

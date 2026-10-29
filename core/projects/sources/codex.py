@@ -98,7 +98,7 @@ class CodexAdapter:
                     ):
                         definitions.append((path, fields))
                     referenced.add(path)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RecursionError) as error:
             if selected is not None:
                 return [
                     unavailable(
@@ -116,7 +116,7 @@ class CodexAdapter:
                 continue
             try:
                 definitions.append((path, tomllib.loads(reading.read_text(path))))
-            except (OSError, ValueError) as error:
+            except (OSError, ValueError, RecursionError) as error:
                 name = path.stem if selected is None else selected.display_name
                 result.append(unavailable(self.source, path, name, str(error)))
         for path, fields in definitions:
@@ -146,7 +146,7 @@ class CodexAdapter:
                     },
                 )
                 result.append(agent)
-            except (OSError, ValueError) as error:
+            except (OSError, ValueError, RecursionError) as error:
                 name = fields.get("name") if selected is None else selected.display_name
                 result.append(
                     unavailable(

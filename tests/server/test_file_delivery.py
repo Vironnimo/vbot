@@ -716,10 +716,15 @@ def _file_urls(content: str) -> list[str]:
     return [f"{FILE_URL_PREFIX}{match.group(1)}" for match in _FILE_URL_PATTERN.finditer(content)]
 
 
-def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("redirect", ["file", "parent"])
+def test_tool_images_deliver_originals_and_remain_addressable_when_missing(
+    tmp_path: Path, redirect: str
+) -> None:
     from server.rpc.payloads import remove_opaque_provider_metadata
 
-    image = tmp_path / "original image.png"
+    originals = tmp_path / "originals"
+    originals.mkdir()
+    image = originals / "original image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
     # A downloaded image keeps the name of its address.
     display = {"media_files": [{"path": str(image), "kind": "image", "filename": "cat.png"}]}
@@ -759,6 +764,36 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
         restored = _visible_message(message, file_delivery=delivery)
         assert restored["tool_display"]["media"][0]["url"] != missing_url
         assert client.get(missing_url).content == image.read_bytes()
+        assistant = _assistant_payload(image)
+        assistant_url = _only_file_url(delivery.project_message(assistant)["content"])
+        private = tmp_path / "private"
+        private.mkdir()
+        target = private / image.name
+        target.write_bytes(b"private-sentinel")
+        retired = tmp_path / "retired"
+        if redirect == "file":
+            image.rename(retired)
+            link = image
+        else:
+            originals.rename(retired)
+            link = originals
+        try:
+            link.symlink_to(
+                target if redirect == "file" else private, target_is_directory=redirect == "parent"
+            )
+        except OSError:
+            pytest.skip("symlink creation is unavailable")
+        try:
+            assert client.get(assistant_url).status_code == 404
+            assert client.get(missing_url).status_code == 404
+            # A fresh History projection cannot renew authority for the target.
+            redirected = _visible_message(message, file_delivery=delivery)
+            assert client.get(redirected["tool_display"]["media"][0]["url"]).status_code == 404
+            assert delivery.project_message(assistant)["content"] == assistant["content"]
+            assert target.read_bytes() == b"private-sentinel"
+        finally:
+            link.unlink()
+            retired.rename(image if redirect == "file" else originals)
     restarted = _visible_message(message, file_delivery=FileDelivery(secret=b"restart"))
     assert restarted["tool_display"]["media"][0]["url"] != url
     assert "media_files" not in _visible_message(message)["tool_display"]

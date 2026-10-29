@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
 
 from core.tools.availability import ToolAccess
+from resources.extensions.mcp import client as mcp_client
+from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.extension import remote_tool_name
 from tests.resources.extensions.mcp.mcp_test_support import (
     allowed_tools,
@@ -24,6 +28,85 @@ async def _call(registry, host, target, arguments, ctx=None):
     if ctx is None:
         return await dispatch(registry, host, call)
     return await registry.dispatch(ctx, call, allowed_tools=["mcp_example"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("waiting", ["connection", "queue", "roots"])
+async def test_schema_change_before_transmission_never_sends_prepared_call(
+    context_service, host, server, monkeypatch, waiting
+):
+    service, registry, runner, _ = context_service
+    monkeypatch.setattr(mcp_client, "CONNECTION_CONCURRENCY", 1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    @server.tool()
+    def mutate(value: str) -> str:
+        effects.append(value)
+        return value
+
+    @server.tool()
+    async def hold() -> str:
+        entered.set()
+        await release.wait()
+        return "done"
+
+    async def transport(stack):
+        return server
+
+    monkeypatch.setattr(runner._transport, "open", transport)
+    monkeypatch.setattr(runner, "invoke", ConnectionRunner.invoke.__get__(runner))
+    pending = []
+    try:
+        async with asyncio.timeout(5):
+            await runner.invoke("catalog", {})
+            if waiting == "queue":
+                pending.append(asyncio.create_task(runner.invoke("tools/call", {"name": "hold"})))
+                await entered.wait()
+            elif waiting == "connection":
+                connected = runner._connected
+
+                async def connect():
+                    entered.set()
+                    await release.wait()
+                    return await connected()
+
+                monkeypatch.setattr(runner, "_connected", connect)
+            else:
+
+                async def roots_changed():
+                    entered.set()
+                    await release.wait()
+
+                monkeypatch.setattr(runner._protocol, "_notify_roots_changed", roots_changed)
+
+            ctx = replace(context(host), tool_name=remote_tool_name("example", "mutate"))
+            call = asyncio.create_task(
+                registry.dispatch(ctx, {"value": "prepared"}, allowed_tools(registry, host))
+            )
+            pending.append(call)
+            if waiting == "queue":
+                while runner._queue.empty():
+                    await asyncio.sleep(0)
+            else:
+                await entered.wait()
+            runner.catalog = deepcopy(runner.catalog)
+            tool = next(item for item in runner.catalog["tools"] if item["name"] == "mutate")
+            tool["inputSchema"]["properties"]["value"]["description"] = "Changed meaning"
+            service._publish(runner, runner.catalog)
+            release.set()
+            result = await call
+            assert result["error"]["code"] == "mcp_tool_changed"
+            assert effects == []
+            assert (
+                await registry.dispatch(ctx, {"value": "fresh"}, allowed_tools(registry, host))
+            )["ok"]
+            assert effects == ["fresh"]
+    finally:
+        release.set()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 @pytest.mark.asyncio

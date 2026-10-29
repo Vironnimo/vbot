@@ -606,6 +606,53 @@ def _eventually(condition: Callable[[], bool]) -> None:
         time.sleep(0.005)
 
 
+@pytest.mark.parametrize("pending", ["probe", "pairing_start"])
+@pytest.mark.parametrize("supersede", ["connect", "close"])
+def test_a_superseded_connect_cannot_activate_or_start_pairing(
+    rig: SignInRig, monkeypatch: pytest.MonkeyPatch, pending: str, supersede: str
+) -> None:
+    controller = rig.controller
+    active: list[str] = []
+    controller.set_active_server_listener(active.append)
+
+    def newer_choice() -> None:
+        if supersede == "close":
+            controller.close()
+        else:
+            controller.prepare_connect(*NAS)
+
+    def probe(target: DesktopTarget) -> DesktopProbeResult:
+        if pending == "probe" and target.host == CLOUD.host:
+            newer_choice()
+        return DesktopProbeResult(PROBE_WEBUI_AVAILABLE, target)
+
+    monkeypatch.setattr(controller, "_probe", probe)
+    if pending == "probe":
+        prepared = controller.prepare_connect(CLOUD_HOST, 443)
+    else:
+        start = rig.access.start_pairing
+
+        def start_pairing(address: ServerAddress, name: Any = None):
+            request = start(address, name)
+            newer_choice()
+            return request
+
+        monkeypatch.setattr(rig.access, "start_pairing", start_pairing)
+        prepared = controller.start_pairing(CLOUD_HOST, 443)
+
+    controller.close()
+    assert prepared.status == "server_switch_cancelled"
+    assert prepared.navigation_url is None
+    assert prepared.pairing is None
+    assert rig.window.loaded_urls == []
+    assert rig.window.loaded_html == []
+    assert active == (["http://nas.lan:8420/"] if supersede == "connect" else [])
+    assert controller.active_target() == (NAS if supersede == "connect" else None)
+    assert desktop_servers.resolve_last_used(rig.settings_file) == (
+        ServerEntry(*NAS) if supersede == "connect" else None
+    )
+
+
 def test_a_server_without_sign_in_opens_directly(tmp_path: Path) -> None:
     rig = SignInRig(tmp_path, FakeAccessServer(), access_mode="lan")
 
@@ -852,25 +899,57 @@ def test_a_cancelled_pairing_leaves_the_window_alone(rig: SignInRig) -> None:
     assert rig.window.loaded_urls == []
 
 
+@pytest.mark.parametrize("recovery", ["current", "new_connect", "closed"])
 def test_a_lost_sign_in_offers_pairing_in_the_window_once(
-    rig: SignInRig, caplog: pytest.LogCaptureFixture
+    rig: SignInRig, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, recovery: str
 ) -> None:
     rig.pair_earlier()
     rig.controller.launch_connect(CLOUD_HOST, None)
     rig.ticket_redirected()
     # Another server's refusal is not the window's concern.
     rig.access.rejected("https://elsewhere.example.com/", None)
+    entered, release = threading.Event(), threading.Event()
+    threads: list[threading.Thread] = []
+    reconnect = rig.controller._reconnect
+
+    def delayed_reconnect(address: ServerAddress, revision: int) -> None:
+        threads.append(threading.current_thread())
+        entered.set()
+        assert release.wait(5)
+        reconnect(address, revision)
+
+    monkeypatch.setattr(rig.controller, "_reconnect", delayed_reconnect)
 
     with caplog.at_level(logging.INFO, logger="vbot.desktop.connection"):
         # A native request (Voice, dictation) is refused: the server revoked this Desktop.
         assert rig.access.rejected(CLOUD.url, rig.access.header(CLOUD.url)) is False
-        rig.window.wait_for_loads(2)
+        try:
+            assert entered.wait(5)
+            if recovery == "new_connect":
+                monkeypatch.setattr(
+                    rig.controller, "_probe", probe_returning(PROBE_WEBUI_AVAILABLE)
+                )
+                rig.controller.prepare_connect(*NAS)
+            elif recovery == "closed":
+                rig.controller.close()
+        finally:
+            release.set()
+            for thread in threads:
+                thread.join(5)
+                assert not thread.is_alive()
         # Further refusals do not connect the window again.
         rig.access.rejected(CLOUD.url, None)
     rig.controller.close()
 
-    [page] = rig.window.loaded_html
-    assert CLOUD_OFFER in page
+    if recovery == "current":
+        [page] = rig.window.loaded_html
+        assert CLOUD_OFFER in page
+    else:
+        assert rig.window.loaded_html == []
+        assert len(rig.window.loaded_urls) == 1
+        assert rig.controller.active_target() == (
+            NAS if recovery == "new_connect" else (CLOUD_HOST, 443)
+        )
     assert rig.server.pairings == {}
     reconnects = [
         record for record in caplog.records if "connecting the window again" in record.message

@@ -659,6 +659,7 @@ class ConversationApp(App[int]):
 
     @work(group="refresh", exclusive=True, exit_on_error=False)
     async def action_refresh(self) -> None:
+        self.suggestions.invalidate()
         if self.conversation:
             await self._guard(self.navigation.refresh(self.conversation))
         else:

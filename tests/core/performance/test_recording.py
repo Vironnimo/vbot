@@ -123,7 +123,16 @@ def test_event_buffer_is_bounded_and_marks_truncation() -> None:
     recording = _recording(max_events=3)
     for index in range(10):
         start = 100.0 + index / 10
-        recording.add_span("rpc", start, start + 0.01, name="r", category="rpc", args=None)
+        recording.add_span(f"rpc-{index}", start, start + 0.01, name="r", category="rpc", args=None)
+        span = recording.open_span(f"worker-{index}", start)
+        if span is not None:
+            recording.close_span(
+                span, start, start + 0.01, name="w", category="worker", args=None, keep=True
+            )
+        recording.counter("level", index, f"counter-{index}", start)
+        recording.add_instant(f"event-{index}", start, name="event", category="test", args=None)
+        recording.add_stall({"duration_ms": 300}, start, f"stall-{index}")
+        recording.observe("test.kept", 1)
 
     status = recording.status(101.0)
 
@@ -131,6 +140,10 @@ def test_event_buffer_is_bounded_and_marks_truncation() -> None:
     assert recording.truncated is True
     assert status["event_count"] == 3
     assert status["truncated"] is True
+    # The event cap also bounds its auxiliary trace identity/overlap state.
+    assert len(recording._tracks) <= 3
+    assert sum(len(track.lanes) for track in recording._tracks.values()) <= 3
+    assert recording.summary()["metrics"]["test.kept"]["count"] == 10
 
 
 def test_gauges_emit_counters_and_keep_window_maxima() -> None:

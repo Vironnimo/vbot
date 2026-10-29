@@ -517,21 +517,79 @@ def test_get_refuses_a_corrupt_sidecar(tmp_path: Path, corrupt: Callable[[bytes]
         store.get(record.id)
 
 
-@pytest.mark.parametrize("unreadable", [False, True], ids=["missing", "unreadable"])
+@pytest.mark.parametrize("failure", ["missing", "unreadable", "linked-blob", "linked-sidecar"])
 def test_get_rejects_unavailable_blob_with_existing_sidecar(
-    tmp_path: Path, unreadable: bool, deny_access
+    tmp_path: Path, failure: str, deny_access
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"missing blob")
-    if unreadable:
+    target = tmp_path / "private"
+    if failure == "unreadable":
         deny_access(Path(record.file_path))
-    else:
+    elif failure == "missing":
         Path(record.file_path).unlink()
+    else:
+        path = Path(record.file_path)
+        if failure == "linked-sidecar":
+            path = path.with_suffix(".json")
+        path.rename(target)
+        try:
+            path.symlink_to(target)
+        except OSError:
+            pytest.skip("symlink creation is unavailable")
 
     with pytest.raises(AttachmentError) as failed:
         store.get(record.id)
-    assert isinstance(failed.value, AttachmentNotFoundError) != unreadable
-    assert isinstance(failed.value.__cause__, OSError) == unreadable
+    assert isinstance(failed.value, AttachmentNotFoundError) == (failure == "missing")
+    assert isinstance(failed.value.__cause__, OSError) == (failure == "unreadable")
+    with pytest.raises(AttachmentError):
+        store.set_transcription(record.id, "must not cache into a redirected attachment")
+    if failure.startswith("linked-"):
+        assert target.is_file()
+        if failure == "linked-sidecar":
+            assert "transcription" not in json.loads(target.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("redirect", ["attachment-folder", "artifacts-parent", "configured-root"])
+def test_attachment_paths_allow_configured_aliases_but_refuse_redirected_managed_children(
+    tmp_path: Path, redirect: str
+) -> None:
+    data = tmp_path / "data"
+    store = AttachmentStore(data)
+    record = store.store("notes.txt", b"keep me")
+    folder = Path(record.file_path).parent
+    redirected = folder if redirect == "attachment-folder" else folder.parent
+    if redirect == "configured-root":
+        redirected = data
+    private = tmp_path / "private"
+    redirected.rename(private)
+    try:
+        redirected.symlink_to(private, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    original = {p.relative_to(private): p.read_bytes() for p in private.rglob("*") if p.is_file()}
+    try:
+        if redirect == "configured-root":
+            assert store.get(record.id) == record
+            assert store.set_transcription(record.id, "cached").transcription == "cached"
+            another = store.store("another.txt", b"new upload")
+            store.delete(another.id)
+            store.delete(record.id)
+            assert list((private / "artifacts" / "attachments").iterdir()) == []
+            return
+        with pytest.raises(AttachmentError):
+            store.get(record.id)
+        with pytest.raises(AttachmentError):
+            store.set_transcription(record.id, "must not cache")
+        with pytest.raises(AttachmentError):
+            store.store("new.txt", b"must not write")
+        with pytest.raises(AttachmentError):
+            store.delete(record.id)
+        assert {
+            p.relative_to(private): p.read_bytes() for p in private.rglob("*") if p.is_file()
+        } == original
+    finally:
+        redirected.unlink()
 
 
 def test_get_accepts_uppercase_attachment_id(tmp_path: Path) -> None:

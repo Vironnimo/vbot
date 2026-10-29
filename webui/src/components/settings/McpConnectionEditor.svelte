@@ -28,6 +28,8 @@
     save,
   } = $props();
   let advancedOpen = $state(false);
+  let filling = $state(false);
+  let editingBlocked = $derived(panelState.busy || filling);
   let errorBanner = $state();
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
@@ -88,6 +90,16 @@
   function close() {
     draft = null;
   }
+  // Preview replaces the connection fields, so keep them stable until it
+  // returns. Cancelling the editor stays available during this read.
+  async function fill(text) {
+    filling = true;
+    try {
+      await quickFill(text);
+    } finally {
+      filling = false;
+    }
+  }
   // The browser reports the first invalid field when Save is clicked; one
   // inside the closed Advanced settings opens them first so it can show.
   function revealInvalid(event) {
@@ -118,7 +130,7 @@
         <div class="modal-body mcp-editor">
           {#if !original}
             <div class="s-group">
-              <McpQuickFill disabled={panelState.busy} onFill={quickFill} />
+              <McpQuickFill disabled={editingBlocked} onFill={fill} />
             </div>
           {/if}
           {#each fillNotes as note, noteIndex (noteIndex)}
@@ -153,7 +165,7 @@
                     code
                     aria-describedby={`${componentId}-name-desc`}
                     value={draft.id}
-                    disabled={panelState.busy || Boolean(original)}
+                    disabled={editingBlocked || Boolean(original)}
                     required
                     pattern={'[a-z][a-z0-9_]{0,31}'}
                     onInput={(value) => set('id', value)}
@@ -176,7 +188,7 @@
                     ariaLabelledby={`${componentId}-transport-label`}
                     value={draft.transport}
                     options={transportOptions}
-                    disabled={panelState.busy}
+                    disabled={editingBlocked}
                     onValueChange={(value) => set('transport', value)}
                   />
                 </div>
@@ -203,7 +215,7 @@
                     id={`${componentId}-description`}
                     aria-describedby={`${componentId}-description-desc`}
                     value={draft.description}
-                    disabled={panelState.busy}
+                    disabled={editingBlocked}
                     maxlength={MCP_DESCRIPTION_MAX_LENGTH}
                     onInput={(value) => set('description', value)}
                   />
@@ -240,7 +252,7 @@
                       mode="file"
                       aria-describedby={`${componentId}-command-desc`}
                       value={draft.command}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       required
                       onInput={(value) => set('command', value)}
                     />
@@ -265,7 +277,7 @@
                           code
                           ariaLabel={t('mcp.argument', { number: index + 1 })}
                           value={argument}
-                          disabled={panelState.busy}
+                          disabled={editingBlocked}
                           onInput={(value) =>
                             set(
                               'args',
@@ -276,7 +288,7 @@
                         />
                         <Button
                           variant="tertiary"
-                          disabled={panelState.busy}
+                          disabled={editingBlocked}
                           ariaLabel={t('mcp.removeArgument', {
                             number: index + 1,
                           })}
@@ -293,7 +305,7 @@
                     <div class="mcp-list__add">
                       <Button
                         variant="secondary"
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onClick={() => set('args', [...draft.args, ''])}
                         >{t('mcp.addArgument')}</Button
                       >
@@ -314,7 +326,7 @@
                       code
                       value={draft.url}
                       required
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       onInput={(value) => set('url', value)}
                     />
                   </div>
@@ -329,7 +341,7 @@
                     <Toggle
                       id={`${componentId}-oauth`}
                       checked={draft.oauth}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       ariaLabel={t('mcp.oauth')}
                       onChange={(value) => set('oauth', value)}
                     />
@@ -382,7 +394,7 @@
                       step="any"
                       required
                       value={draft.timeout}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       onInput={(value) => set('timeout', value)}
                     />
                   </div>
@@ -397,7 +409,7 @@
                     <Toggle
                       id={`${componentId}-enabled`}
                       checked={draft.enabled}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       ariaLabel={t('mcp.enabled')}
                       onChange={(value) => set('enabled', value)}
                     />
@@ -423,7 +435,7 @@
                       ariaLabelledby={`${componentId}-sampling-label`}
                       value={draft.sampling}
                       options={samplingOptions}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       onValueChange={(value) => set('sampling', value)}
                     />
                   </div>
@@ -447,7 +459,7 @@
                       ariaLabelledby={`${componentId}-roots-label`}
                       value={draft.roots}
                       options={rootsOptions}
-                      disabled={panelState.busy}
+                      disabled={editingBlocked}
                       onValueChange={(value) => set('roots', value)}
                     />
                   </div>
@@ -465,7 +477,7 @@
                         mode="directory"
                         projectShortcuts
                         value={draft.cwd}
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onInput={(value) => set('cwd', value)}
                       />
                     </div>
@@ -493,7 +505,7 @@
                         type="url"
                         code
                         value={draft.oauth_redirect_uri}
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onInput={(value) => set('oauth_redirect_uri', value)}
                       />
                     </div>
@@ -515,7 +527,7 @@
                         id={`${componentId}-client-id`}
                         code
                         value={draft.oauth_client_id}
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onInput={(value) => set('oauth_client_id', value)}
                       />
                     </div>
@@ -542,7 +554,7 @@
                         type="url"
                         code
                         value={draft.oauth_client_metadata_url}
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onInput={(value) =>
                           set('oauth_client_metadata_url', value)}
                       />
@@ -570,7 +582,7 @@
                           aria-describedby={`${componentId}-client-secret-desc`}
                           code
                           value={draft.oauth_client_secret}
-                          disabled={panelState.busy}
+                          disabled={editingBlocked}
                           pattern="[A-Za-z_][A-Za-z0-9_]*"
                           onInput={(value) => set('oauth_client_secret', value)}
                         />
@@ -592,7 +604,7 @@
                         aria-describedby={`${componentId}-scopes-desc`}
                         code
                         value={draft.oauth_scopes}
-                        disabled={panelState.busy}
+                        disabled={editingBlocked}
                         onInput={(value) => set('oauth_scopes', value)}
                       />
                     </div>
@@ -625,7 +637,7 @@
                             })}
                             value={entry.name}
                             required
-                            disabled={panelState.busy}
+                            disabled={editingBlocked}
                             onInput={(value) =>
                               setMapping(mapping.key, index, 'name', value)}
                           />
@@ -639,13 +651,13 @@
                             })}
                             value={entry.value}
                             required={mapping.key !== 'environment'}
-                            disabled={panelState.busy}
+                            disabled={editingBlocked}
                             onInput={(value) =>
                               setMapping(mapping.key, index, 'value', value)}
                           />
                           <Button
                             variant="tertiary"
-                            disabled={panelState.busy}
+                            disabled={editingBlocked}
                             ariaLabel={t('mcp.removeEntry', {
                               group: mapping.label,
                               number: index + 1,
@@ -663,7 +675,7 @@
                       <div class="mcp-list__add">
                         <Button
                           variant="secondary"
-                          disabled={panelState.busy}
+                          disabled={editingBlocked}
                           onClick={() =>
                             set(mapping.key, [
                               ...draft[mapping.key],
@@ -701,7 +713,7 @@
           <Button
             variant="primary"
             type="submit"
-            disabled={panelState.busy}
+            disabled={editingBlocked}
             loading={panelState.busy}>{t('mcp.save')}</Button
           >
         </div>

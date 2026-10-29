@@ -25,6 +25,30 @@ Programmatic Tool calls (`ToolContext.programmatic`, `tools/registry-dispatch.md
 
 ## Connection lifecycle and call outcomes
 
+Management `save` accepts an optional `base`: `null` requires a missing id; an
+object is the expected previous connection configuration. Both configurations
+normalize through the same validator, and the saved value is compared under the
+connection mutation lock before persistence, credentials or runner changes.
+A mismatch raises the existing `SettingsConflictError` (`settings_conflict` over
+RPC) and changes nothing. Omitting `base` retains create-or-replace behavior.
+The WebUI sends its editor baseline, so two creates or edits cannot overwrite one
+another after an earlier list read. Coverage: `test_save_compares_its_base_atomically_before_any_change`.
+
+Connection management admits work under its per-connection lock. Once admitted,
+configuration persistence, runner replacement and Tool publication settle together
+before caller cancellation propagates; a cancelled lock waiter changes nothing.
+Service shutdown closes admission and drains these changes before closing runners
+and recovery storage, so an old save cannot land after the replacement service loads.
+During that drain the retiring service accepts no new Tool call or catalog publication.
+Coverage: `test_admitted_connection_changes_settle_before_cancellation_and_shutdown`.
+
+An invocation retains its known remote input schema before connection and queue
+waits. Immediately before sending `tools/call`, after any roots notification, the
+protocol compares it with the current catalog; a changed or removed schema returns
+the existing `mcp_tool_changed` refusal without a remote effect. Resuming an existing
+server task still reads that task's result and does not send the original call.
+Coverage: `test_schema_change_before_transmission_never_sends_prepared_call`.
+
 Unsubscribing also settles a subscription still awaiting its acknowledgement;
 one removed after acknowledgement but before its caller resumes cannot become a
 retained subscription again. The same URI can be subscribed explicitly afterwards.

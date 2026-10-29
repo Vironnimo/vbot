@@ -32,6 +32,7 @@ from core.tools.terminal_backend import (
 )
 from core.utils.file_status import is_dir_strict
 from core.utils.processes import process_tree_runs
+from core.utils.workers import settle_before_cancelling
 
 _MAX_PROCESSES = 32
 _MAX_RETAINED_PROCESSES = 128
@@ -103,7 +104,7 @@ class _Process:
                     self._end += len(data)
                     self._base = max(0, self._end - _MAX_OUTPUT_BYTES)
                     self._condition.notify_all()
-        except EOFError, OSError:
+        except EOFError:
             pass
         except Exception as error:
             self._error = str(error)
@@ -315,6 +316,9 @@ class TerminalCapability:
 
     async def close(self) -> None:
         self._closed = True
+        await settle_before_cancelling(self._close_resources())
+
+    async def _close_resources(self) -> None:
         async with self._lock:
             # A cancelled call can leave its native spawn in flight. Its task
             # still owns publication, and must settle before close returns.

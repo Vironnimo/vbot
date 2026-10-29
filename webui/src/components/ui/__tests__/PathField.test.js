@@ -229,34 +229,87 @@ describe('PathField', () => {
     expect(scrolled).toBe(640);
   });
 
-  it('shows only the newest listing and says when a folder cannot be read', async () => {
-    let finishSlow;
-    const listDirectory = vi.fn(({ path }) => {
-      if (path === '/slow') {
-        return new Promise((resolve) => {
-          finishSlow = () => resolve({ entries: [dir('stale')] });
-        });
+  it.each(['typing', 'loaded value'])(
+    'shows only the current listing after %s and explains read failures',
+    async (change) => {
+      let finishSlow;
+      const listDirectory = vi.fn(({ path }) => {
+        if (path === '/slow') {
+          return new Promise((resolve) => {
+            finishSlow = () => resolve({ entries: [dir('stale')] });
+          });
+        }
+        if (path === '/root')
+          return Promise.reject(listingFailure('unreadable'));
+        return Promise.resolve({ entries: [dir('fresh')] });
+      });
+      const input = render({ listDirectory });
+      input.focus();
+
+      type(input, '/slow/s');
+      await settle();
+      if (change === 'typing') type(input, '/fast/');
+      else {
+        props.value = '/fast/';
+        flushSync();
       }
-      if (path === '/root') return Promise.reject(listingFailure('unreadable'));
-      return Promise.resolve({ entries: [dir('fresh')] });
-    });
-    const input = render({ listDirectory });
-    input.focus();
+      await settle();
+      finishSlow();
+      await settle();
+      expect(suggestions()).toEqual(change === 'typing' ? ['fresh/'] : []);
+      if (change === 'loaded value') {
+        press(input, 'ArrowDown');
+        await settle();
+        expect(suggestions()).toEqual(['fresh/']);
+      }
 
-    type(input, '/slow/s');
-    await settle();
-    type(input, '/fast/');
-    await settle();
-    finishSlow();
-    await settle();
-    expect(suggestions()).toEqual(['fresh/']);
+      type(input, '/root/');
+      await settle();
+      expect(document.body.querySelector('.path-field__note').textContent).toBe(
+        'vBot is not allowed to read this folder.',
+      );
+    },
+  );
 
-    type(input, '/root/');
-    await settle();
-    expect(document.body.querySelector('.path-field__note').textContent).toBe(
-      'vBot is not allowed to read this folder.',
-    );
-  });
+  it.each(['root', 'disabled'])(
+    'retires a browser and its pending listing when %s changes',
+    async (change) => {
+      const pending = Promise.withResolvers();
+      const listDirectory = vi.fn(async ({ path }) => ({
+        path,
+        entries: [dir('old-folder')],
+      }));
+      const onInput = vi.fn();
+      render({ value: 'folder', root: 'C:/old', listDirectory, onInput });
+      document.querySelector('.path-field__browse').click();
+      await settle();
+      expect(
+        document.querySelector('.path-browser__row').textContent,
+      ).toContain('old-folder');
+      const changeContext = () => {
+        if (change === 'root') props.root += '-new';
+        else props.disabled = true;
+        flushSync();
+      };
+      changeContext();
+      expect(document.querySelector('.path-browser')).toBeNull();
+      expect(onInput).not.toHaveBeenCalled();
+
+      // A retired initial read must not start parent-folder fallback after
+      // closing; that read still belongs to the previous filesystem context.
+      props.disabled = false;
+      flushSync();
+      listDirectory.mockImplementationOnce(() => pending.promise);
+      document.querySelector('.path-field__browse').click();
+      await settle();
+      changeContext();
+      pending.reject(listingFailure('not_found'));
+      await settle();
+      expect(document.querySelector('.path-browser')).toBeNull();
+      expect(listDirectory).toHaveBeenCalledTimes(2);
+      expect(onInput).not.toHaveBeenCalled();
+    },
+  );
 
   it('browses from the places to a chosen folder in the server separators', async () => {
     listProjects.mockResolvedValue({

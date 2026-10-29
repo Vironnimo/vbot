@@ -637,7 +637,7 @@ async def test_subscribe_tails_only_the_open_entry_and_the_appended_bytes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["truncated", "replaced"])
+@pytest.mark.parametrize("change", ["truncated", "replaced", "replaced_same_stamp"])
 async def test_subscribe_resets_when_the_file_shrinks_or_is_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -650,10 +650,20 @@ async def test_subscribe_resets_when_the_file_shrinks_or_is_replaced(
             return
         # A replacement larger than the old file still counts as a new file.
         replacement = live.path.with_name("replacement")
+        original = live.path.stat()
         lines = [_line(second, f"Replaced {second}") for second in range(5, 9)]
+        if change == "replaced_same_stamp":
+            lines = [_line(0, "Other"), _line(1, "Content")]
         replacement.write_bytes(_text(*lines).encode())
+        if change == "replaced_same_stamp":
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            assert replacement.stat().st_size == original.st_size
         os.replace(replacement, live.path)
-        live.changed()
+        if change == "replaced_same_stamp":
+            # Empty watch batches must detect replacement from file identity.
+            live.watch.changes.put_nowait(set())
+        else:
+            live.changed()
 
     try:
         event = await live.next_after(stream, rewrite)
@@ -938,8 +948,9 @@ async def test_cancel_watcher_task_logs_a_real_crash_before_suppressing(
 
 
 @pytest.mark.asyncio
-async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("ending", ["crash", "close"])
+async def test_an_ended_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, ending: str
 ) -> None:
     monkeypatch.setattr(log_viewer_module, "LOG_SUBSCRIBER_QUEUE_SIZE", 1)
     logs_dir = tmp_path / "logs"
@@ -967,7 +978,10 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
         )
         watch.changes.put_nowait({(Change.modified, str(log_file))})
         await _until(crashed_queue.full)
-        watch.changes.put_nowait(RuntimeError("awatch exploded"))
+        if ending == "crash":
+            watch.changes.put_nowait(RuntimeError("awatch exploded"))
+        else:
+            await viewer.aclose()
         await _until(lambda: viewer.watcher_count == 0)
 
         # The stream ends, so the socket closes and the accessor reconnects,
@@ -999,9 +1013,10 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
         for record in caplog.records
         if record.name == "vbot.log_viewer" and record.levelno == logging.ERROR
     ]
-    assert len(crash_records) == 1
-    assert crash_records[0].exc_info is not None
-    assert log_file.name in crash_records[0].getMessage()
+    assert len(crash_records) == (1 if ending == "crash" else 0)
+    if crash_records:
+        assert crash_records[0].exc_info is not None
+        assert log_file.name in crash_records[0].getMessage()
 
 
 @pytest.mark.asyncio

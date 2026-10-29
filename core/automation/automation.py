@@ -239,6 +239,7 @@ class TriggerService:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         context_note: str | None = None,
+        context_note_factory: Callable[[], str] | None = None,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
         notification_policy: Callable[[], str] | None = None,
@@ -277,6 +278,8 @@ class TriggerService:
             schedule_id,
             notification_policy,
         )
+        if context_note_factory is not None:
+            run_kwargs["context_note_factory"] = context_note_factory
         if run_overrides is not None and not run_overrides.is_empty:
             run_kwargs["run_overrides"] = run_overrides
         if session_id is None:

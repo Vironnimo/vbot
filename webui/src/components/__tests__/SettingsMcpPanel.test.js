@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -232,6 +232,7 @@ describe('MCP management surface', () => {
           command: 'uvx',
           args: ['blender-mcp'],
         }),
+        base: null,
       },
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -268,26 +269,48 @@ describe('MCP management surface', () => {
       credential_environment: { TOKEN: 'TEST_KEY' },
     });
   });
-  it('retains the editor and displays save failures', async () => {
-    const handler = rpc.getMockImplementation();
-    rpc.mockImplementation((method, params) =>
-      params?.operation === 'save'
-        ? Promise.reject(new Error('test-owned-save-error'))
-        : handler(method, params),
-    );
-    component = mount(Panel, { target: document.body });
-    await settle();
-    button('Add MCP connection').click();
-    await settle();
-    input('Connection name', 'example');
-    input('Program', 'python');
-    submit();
-    await settle();
-    expect(
-      document.querySelector('[role="dialog"] [role="alert"]').textContent,
-    ).toContain('test-owned-save-error');
-    expect(field('Connection name').value).toBe('example');
-  });
+  it.each([null, 'settings_conflict'])(
+    'retains the editor after a save failure (%s)',
+    async (code) => {
+      const handler = rpc.getMockImplementation();
+      rpc.mockImplementation((method, params) => {
+        if (params?.operation !== 'save') return handler(method, params);
+        if (code)
+          records = [
+            {
+              id: 'example',
+              configuration: { ...original, command: 'other-client' },
+              state: 'connected',
+            },
+          ];
+        return Promise.reject(
+          Object.assign(new Error('test-owned-save-error'), { code }),
+        );
+      });
+      component = mount(Panel, { target: document.body });
+      await settle();
+      button('Add MCP connection').click();
+      await settle();
+      input('Connection name', 'example');
+      input('Program', 'python');
+      submit();
+      await settle();
+      expect(
+        document.querySelector('[role="dialog"] [role="alert"]').textContent,
+      ).toContain(code ? t('mcp.duplicate') : 'test-owned-save-error');
+      expect(field('Connection name').value).toBe('example');
+      expect(field('Program').value).toBe('python');
+      if (code) {
+        // No live invalidation arrived: the refusal itself refreshes the
+        // roster, so the offered existing connection is current on reopen.
+        button('Cancel').click();
+        await settle();
+        button('Edit').click();
+        await settle();
+        expect(field('Program').value).toBe('other-client');
+      }
+    },
+  );
   it('uses a write-only password field and clears it after saving', async () => {
     records = [
       {
@@ -638,6 +661,7 @@ describe('MCP management surface', () => {
     expect(listener).toBeNull();
   });
   it('fills a new connection from a pasted URL and hands setup text to the import', async () => {
+    const reading = Promise.withResolvers();
     const sse = {
       id: 'remote',
       transport: 'sse',
@@ -648,7 +672,8 @@ describe('MCP management surface', () => {
     const handler = rpc.getMockImplementation();
     rpc.mockImplementation(async (method, params) => {
       if (params?.operation !== 'import') return handler(method, params);
-      if (params.arguments.source.startsWith('https://'))
+      if (params.arguments.source.startsWith('https://')) {
+        await reading.promise;
         return {
           servers: [
             {
@@ -662,6 +687,7 @@ describe('MCP management surface', () => {
             },
           ],
         };
+      }
       return {
         servers: ['one', 'two'].map((name) => ({
           name,
@@ -682,9 +708,21 @@ describe('MCP management surface', () => {
     input('Command line or URL (optional)', 'https://mcp.example.com/sse');
     button('Fill in').click();
     await settle();
+    // This preview replaces the connection fields. Editing or saving them
+    // before it returns would lose edits or save a different connection.
+    expect(field('Program').disabled).toBe(true);
+    expect(field('Connection name').disabled).toBe(true);
+    expect(document.querySelector('button[type="submit"]').disabled).toBe(true);
+    expect(button('Cancel').disabled).toBe(false);
+    reading.resolve();
+    await settle();
     const dialog = document.querySelector('[role="dialog"]');
     expect(field('Connection name').value).toBe('studio');
     expect(field('Server URL').value).toBe('https://mcp.example.com/sse');
+    expect(field('Server URL').disabled).toBe(false);
+    expect(document.querySelector('button[type="submit"]').disabled).toBe(
+      false,
+    );
     expect(dialog.textContent).toContain('test-owned-warning');
     expect(dialog.textContent).toContain('Legacy SSE is deprecated');
     input('Command line or URL (optional)', 'test-owned-setup');
@@ -695,6 +733,60 @@ describe('MCP management surface', () => {
     );
     expect(button('Import 2')).toBeTruthy();
   });
+  it.each(
+    ['text', 'file', 'close'].flatMap((newer) =>
+      ['success', 'failure'].map((outcome) => ({ newer, outcome })),
+    ),
+  )(
+    'ignores an old file $outcome after newer $newer input',
+    async ({ newer, outcome }) => {
+      const reading = Promise.withResolvers();
+      const handler = rpc.getMockImplementation();
+      rpc.mockImplementation(async (method, params) =>
+        params?.operation === 'import'
+          ? { servers: [] }
+          : handler(method, params),
+      );
+      component = mount(Panel, { target: document.body });
+      await settle();
+      button('Import').click();
+      await settle();
+      const fileInput = document.querySelector('input[type="file"]');
+      const pick = (text) => {
+        Object.defineProperty(fileInput, 'files', {
+          configurable: true,
+          value: [{ text }],
+        });
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      pick(() => reading.promise);
+      if (newer === 'text') {
+        const source = document.querySelector('textarea');
+        source.value = 'newer setup text';
+        source.dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (newer === 'file') {
+        pick(async () => 'newer file');
+      } else {
+        button('Cancel').click();
+      }
+      await settle();
+      if (outcome === 'success') reading.resolve('obsolete file');
+      else reading.reject(new Error('obsolete file failure'));
+      await settle();
+      expect(
+        rpc.mock.calls
+          .filter(([, params]) => params?.operation === 'import')
+          .map(([, params]) => params.arguments.source),
+      ).toEqual(newer === 'file' ? ['newer file'] : []);
+      expect(document.body.textContent).not.toContain('obsolete file failure');
+      if (newer === 'text')
+        expect(document.querySelector('textarea').value).toBe(
+          'newer setup text',
+        );
+      if (newer === 'close')
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
   it('changes nothing when the editor closed while its fill was read', async () => {
     const reading = Promise.withResolvers();
     const handler = rpc.getMockImplementation();

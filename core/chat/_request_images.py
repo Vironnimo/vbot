@@ -158,6 +158,13 @@ class RequestImageBudget:
         self._retired |= _retirement_addresses(retirement_pin)
         self._delivered.update(_delivery_keys(delivery_pin))
 
+    def new_epoch(self, delivery_pin: JsonObject | None) -> RequestImageBudget:
+        """Project a fresh epoch without changing this epoch's retirement state."""
+        budget = RequestImageBudget()
+        budget.restore(None, delivery_pin)
+        budget._delivered.update(self._delivered)
+        return budget
+
     def take_unsaved_pin(self) -> JsonObject | None:
         """Return the pin value once new retirements need persisting, else ``None``."""
         if not self._unsaved:

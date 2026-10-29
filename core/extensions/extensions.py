@@ -9,6 +9,7 @@ touch the live dispatch table directly.
 
 from __future__ import annotations
 
+import inspect
 import time
 import uuid
 from collections import defaultdict
@@ -793,11 +794,29 @@ class ExtensionRegistry:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""
         _run_coroutine_to_completion(self.fire_shutdown())
 
+    async def _invoke_hook(
+        self,
+        event: str,
+        extension_name: str,
+        handler: HookHandler,
+        ctx: HookContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        def current() -> bool:
+            return any(
+                name == extension_name and candidate is handler
+                for name, candidate in self._handlers.get(event, ())
+            )
+
+        return await invoke_hook_fail_open(
+            event, extension_name, _guard_current_handler(handler, current), ctx, payload
+        )
+
     async def dispatch_run_start(self, ctx: HookContext, *, session_id: str, agent_id: str) -> None:
         """Observer event: run all ``run_start`` handlers; ignore return values."""
         payload = {"session_id": session_id, "agent_id": agent_id}
         for extension_name, handler in self._handlers.get("run_start", []):
-            await invoke_hook_fail_open("run_start", extension_name, handler, ctx, payload)
+            await self._invoke_hook("run_start", extension_name, handler, ctx, payload)
 
     async def dispatch_run_end(
         self, ctx: HookContext, *, session_id: str, agent_id: str, outcome: str
@@ -805,7 +824,7 @@ class ExtensionRegistry:
         """Observer event: run all ``run_end`` handlers; ignore return values."""
         payload = {"session_id": session_id, "agent_id": agent_id, "outcome": outcome}
         for extension_name, handler in self._handlers.get("run_end", []):
-            await invoke_hook_fail_open("run_end", extension_name, handler, ctx, payload)
+            await self._invoke_hook("run_end", extension_name, handler, ctx, payload)
 
     async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list:
         """Pipeline event: each handler may replace the running message list.
@@ -825,7 +844,7 @@ class ExtensionRegistry:
         current = [dict(message) for message in messages]
         for extension_name, handler in handlers:
             payload = {"messages": current}
-            result = await invoke_hook_fail_open("context", extension_name, handler, ctx, payload)
+            result = await self._invoke_hook("context", extension_name, handler, ctx, payload)
             if result is _HANDLER_FAILED:
                 continue
             if isinstance(result, list):
@@ -858,9 +877,7 @@ class ExtensionRegistry:
                 "tool_call_id": tool_call_id,
                 "input": current_input,
             }
-            decision = await invoke_hook_fail_open(
-                "tool_call", extension_name, handler, ctx, payload
-            )
+            decision = await self._invoke_hook("tool_call", extension_name, handler, ctx, payload)
             if decision is _HANDLER_FAILED or decision is None:
                 continue
             if isinstance(decision, Modify):
@@ -916,7 +933,7 @@ class ExtensionRegistry:
                 "input": input,
                 "result": current,
             }
-            hook_result = await invoke_hook_fail_open(
+            hook_result = await self._invoke_hook(
                 "tool_result", extension_name, handler, ctx, payload
             )
             if hook_result is _HANDLER_FAILED or hook_result is None:
@@ -948,7 +965,9 @@ class ExtensionRegistry:
         started_at = time.perf_counter()
         try:
             await invoke_isolated_handler(
-                handler,
+                _guard_current_handler(
+                    handler, lambda: self._interaction_handlers.get(prefix) is entry
+                ),
                 event,
                 responder,
                 extension_name=extension_name,
@@ -969,6 +988,31 @@ class ExtensionRegistry:
                 started_at=started_at,
             )
         return True
+
+
+def _guard_current_handler(
+    handler: Callable[..., Any], current: Callable[[], bool]
+) -> Callable[..., Any]:
+    """Check registration at invocation, including after worker admission waits.
+
+    A running handler may finish; one waiting behind another callback or for a
+    worker must not start after its registration has been removed.
+    """
+    if inspect.iscoroutinefunction(handler):
+
+        async def asynchronous(*args: Any, **kwargs: Any) -> Any:
+            if not current():
+                return _HANDLER_FAILED
+            return await handler(*args, **kwargs)
+
+        return asynchronous
+
+    def synchronous(*args: Any, **kwargs: Any) -> Any:
+        if not current():
+            return _HANDLER_FAILED
+        return handler(*args, **kwargs)
+
+    return synchronous
 
 
 __all__ = [

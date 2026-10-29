@@ -20,12 +20,14 @@ The `performance.*` RPC shapes and errors, the Recording and History Window file
 
 History Windows are appended to `<data_dir>/artifacts/performance/history/<YYYY-MM-DD>.jsonl`, one compact JSON line per window in the file of its UTC end date; a line torn by a crash is skipped on read and the next line starts fresh. After each append, day files older than 14 days or beyond 64 MB in total (oldest first, never the current day) are deleted. A heavily used server writes roughly 3-6 MB per day (about 25-40 KB per window with 200-300 active metrics); idle windows are small. Like Recordings they are diagnostics outside the JSON document contract (`json-documents.md`). Placement is owned by Storage (`storage.md`).
 
+A failed History Window append retains that captured window, including its peaks and stalls, for retry before the next window is captured. Retrying an already complete last line does not duplicate it, including when the earlier write reported failure after publication. Recording stop similarly becomes owned pending work before waiting for its worker: caller cancellation waits for publication, and service shutdown drains requested stops as well as automatic stops.
+
 ## Trace events
 
 Each Track emits a `process_name` metadata event and each Lane a `thread_name` (`lane <n>`); spans are `X` events with `cat` = first metric segment; gauges and `event_loop.lag` are `C` counters; stalls are process-scoped `i` events named `event_loop.stall` with `duration_ms`, `gc_ms`, `cpu_window_ms`, `loop_cpu_ms`, `samples`, `awaited_by` and `threads` args; counted occurrences with a track are process-scoped `i` events named after their counter (an accepted client report is a `webui.reports` event on the `webui` Track with `rpcs`, `long_tasks`, `long_task_max_ms` and `invalidations` args); garbage collections of at least 1 ms are `gc gen<n>` spans on the `runtime` Track.
 
 ## Costs and limits
 
-- A Recording buffers at most 500,000 events (roughly 75-175 MB in memory) and sets `truncated` when full; histograms continue. Trace JSON is written off the Event Loop in 1000-event chunks.
+- A Recording buffers at most 500,000 events (roughly 75-175 MB in memory) and sets `truncated` when full; no further Track or Lane state is allocated, while histogram and gauge summaries continue. Trace JSON is written off the Event Loop in 1000-event chunks.
 - A span appears only if it began inside the Recording; `measure` blocks open when the Recording stops are dropped from the trace but still counted in histograms.
 - Ending a History Window copies every histogram once and runs on the `performance` worker pool: about 10 ms for 300 active metrics. Tracking gauge peaks for windows adds about 30 ns to `set_gauge`.

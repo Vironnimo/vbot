@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, override
 from unittest.mock import ANY
 
@@ -167,9 +168,30 @@ async def test_an_at_token_offers_server_files_and_enter_mentions_the_path() -> 
 
 
 @pytest.mark.asyncio
-async def test_the_model_argument_offers_models_and_choosing_one_sends_the_command() -> None:
+@pytest.mark.parametrize("read_state", ["cached", "pending"])
+@pytest.mark.parametrize("invalidation", ["models", "reconnect"])
+async def test_the_model_argument_offers_models_and_choosing_one_sends_the_command(
+    read_state: str, invalidation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     server = Server()
     app = ConversationApp(server, agent_id="main")
+    release_first = asyncio.Event()
+    if read_state == "cached":
+        release_first.set()
+    model_reads = 0
+    rpc = server.rpc
+
+    async def changing_catalog(method: str, params=None):
+        nonlocal model_reads
+        if method == "model.list":
+            model_reads += 1
+            if model_reads == 1:
+                await release_first.wait()
+                return {"models": [{"id": "provider/old"}]}
+            return {"models": [{"id": "provider/current"}]}
+        return await rpc(method, params)
+
+    monkeypatch.setattr(server, "rpc", changing_catalog)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         editor = app.query_one("#composer", TextArea)
@@ -177,14 +199,27 @@ async def test_the_model_argument_offers_models_and_choosing_one_sends_the_comma
         editor.insert("/model ")
         await pilot.pause()
         await pilot.pause()
+        assert model_reads == 1
+        assert app.suggestions.state.pending is (read_state == "pending")
+
+        await server.bus.put(
+            {"type": "connection_ready"}
+            if invalidation == "reconnect"
+            else {"type": "resource_changed", "payload": {"kind": "models"}}
+        )
+        await pilot.pause()
+        assert model_reads == 2
+        release_first.set()
+        await pilot.pause()
         assert _bar(app).has_class("visible")
+        assert [item.value for item in app.suggestions.state.suggestions] == ["provider/current"]
 
         await pilot.press("enter")
         await server.sent.wait()
         await pilot.pause()
 
         stream = next(params for method, params in server.calls if method == "chat.stream")
-        assert stream["content"] == "/model openai/gpt-5.2"
+        assert stream["content"] == "/model provider/current"
         assert editor.text == ""
 
 

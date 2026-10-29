@@ -224,8 +224,9 @@ def test_agent_exclusions_narrow_its_allowlist_and_own_skills_but_never_project_
     assert {"alpha", "two-private"} <= granted("p", "two")
 
 
+@pytest.mark.parametrize("discovery", ["context", "inventory"])
 def test_scoped_skill_registries_stay_cached_until_their_sources_are_invalidated(
-    runtime: Runtime, tmp_path: Path
+    runtime: Runtime, tmp_path: Path, discovery: str
 ) -> None:
     data_dir = runtime.storage.data_dir
     runtime.agents.create("two", "Two")
@@ -255,13 +256,34 @@ def test_scoped_skill_registries_stay_cached_until_their_sources_are_invalidated
     main_skills = runtime.skills_for(None, "main")
     main_project_skills = runtime.skills_for(project_id, "main")
 
-    # A project invalidation rescans the project and the Agent registries that
-    # embed it, for example after the working directory moved.
+    # A changed Project record invalidates its embedded registries even when
+    # the writer is not an RPC with an explicit invalidation callback.
     runtime.projects.update(project_id, cwd=str(repo_b))
-    runtime.invalidate_project_skills(project_id)
     assert runtime.project_skill_names(project_id) == frozenset({"skill-b"})
     assert runtime.skills_for(project_id) is not project_skills
     assert runtime.skills_for(project_id, "main") is not main_project_skills
+    assert runtime.skills_for(None, "main") is main_skills
+    project_skills = runtime.skills_for(project_id)
+
+    # Both readers discover new Sources and persist them. Live activation must
+    # agree with their catalog rather than keep a formerly complete cache.
+    main_project_skills = runtime.skills_for(project_id, "main")
+    write_skill(repo_b / ".claude" / "skills", "discovered", "New Source.")
+    if discovery == "context":
+        assert "discovered" in {skill.name for skill in runtime.project_context_skills(project_id)}
+    else:
+        [row] = runtime.skill_inventory()["projects"]
+        assert "discovered" in {skill["name"] for skill in row["skills"]}
+    current = runtime.skills_for(project_id, "main")
+    assert current is not main_project_skills
+    assert "discovered" in current.always_allowed
+    assert "discovered" in runtime.project_skill_names(project_id)
+    sources = [source.to_dict() for source in runtime.projects.get(project_id).sources]
+    for source in sources:
+        if source["id"] == "claude.skills":
+            source["enabled"] = False
+    runtime.projects.update(project_id, sources=sources)
+    assert "discovered" not in _names(runtime.skills_for(project_id, "main"))
     assert runtime.skills_for(None, "main") is main_skills
     project_skills = runtime.skills_for(project_id)
 

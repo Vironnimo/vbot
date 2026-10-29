@@ -18,14 +18,16 @@ import asyncio
 import copy
 import importlib
 import json
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from http import HTTPStatus
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
+from core.storage import SettingsConflictError
 from core.tools.availability import resolve_tool_access
 from core.tools.contracts import declared_parameters
 from core.tools.tools import (
@@ -34,6 +36,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.workers import settle_before_cancelling
 
 from ._arguments import browse_normalizer, connection_display
 from ._catalog import CatalogSummaries, catalog_summary
@@ -143,6 +146,9 @@ class MCPService:
         # The hosted services the user can add in one step (``catalog.json``).
         self.connectors = ConnectorCatalog(())
         self._closed = False
+        self._closing = False
+        self._changes: set[asyncio.Task[dict[str, Any]]] = set()
+        self._close_task: asyncio.Task[None] | None = None
         self._startup_error: str | None = None
         self.recovery: TaskRecovery | None = None
 
@@ -180,6 +186,14 @@ class MCPService:
         await self.recovery.resume(self.runners)
 
     async def close(self) -> None:
+        if self._close_task is None:
+            self._closing = True
+            self._close_task = asyncio.create_task(self._close(), name="mcp-close")
+        await settle_before_cancelling(self._close_task)
+
+    async def _close(self) -> None:
+        if self._changes:
+            await asyncio.gather(*self._changes, return_exceptions=True)
         self._closed = True
         if self.recovery is not None:
             await self.recovery.close()
@@ -224,6 +238,21 @@ class MCPService:
             if not entry.users:
                 del self._runner_locks[identifier]
 
+    async def _change_connection(
+        self,
+        identifier: str,
+        change: Callable[[], Coroutine[Any, Any, dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """Keep admitted persistence, runner replacement and publication together."""
+        async with self._connection_lock(identifier):
+            if self._closing:
+                raise ValueError("MCP Extension is not running")
+            self._host()
+            task = asyncio.create_task(change(), name=f"mcp-change:{identifier}")
+            self._changes.add(task)
+            task.add_done_callback(self._changes.discard)
+            return await settle_before_cancelling(task)
+
     def _host(self) -> ExtensionHost:
         if self.host is None or self._closed:
             raise ValueError("MCP Extension is not running")
@@ -258,7 +287,7 @@ class MCPService:
         ``None`` means no catalog has arrived yet on this runner: ``target`` keeps
         listing the last known Tool names and no remote Tool is registered.
         """
-        if self._closed or self.runners.get(runner.id) is not runner:
+        if self._closing or self._closed or self.runners.get(runner.id) is not runner:
             return
         removed = runner.id not in self.connections
         if catalog is not None and not removed:
@@ -327,7 +356,7 @@ class MCPService:
         Both leave nothing to run; checked before any effect so neither reads as
         an access denial or an unknown outcome.
         """
-        if self.host is None or self._closed:
+        if self.host is None or self._closing or self._closed:
             return tool_failure("mcp_request_failed", MCP_MESSAGES["not_running"], retryable=True)
         if connection not in self.connections:
             return tool_failure(
@@ -641,6 +670,7 @@ class MCPService:
             InvalidToolResultError,
             InvocationNotSentError,
             SubscriptionEndedError,
+            ToolChangedError,
             UnsupportedOperationError,
         )
 
@@ -648,6 +678,15 @@ class MCPService:
             payload = await runner.invoke(operation, arguments, context)
         except UnsupportedOperationError:
             return unsupported_operation(operation)
+        except ToolChangedError:
+            return tool_failure(
+                "mcp_tool_changed",
+                MCP_MESSAGES["tool_changed"].format(
+                    tool=arguments["name"],
+                    describe=compact(describe_call(f"tool:{arguments['name']}")),
+                    connection=runner.id,
+                ),
+            )
         except InvocationNotSentError as error:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
@@ -744,51 +783,68 @@ class MCPService:
         *,
         replace: bool = True,
         credentials: dict[str, str | None] | None = None,
+        base: dict[str, Any] | None | EllipsisType = ...,
     ) -> dict[str, Any]:
         config = validate_connection(value)
+        if base is not ... and base is not None:
+            base = validate_connection(base)
         identifier = config["id"]
-        # The connection's lock spans the replacement of its runner; the saved
-        # connections are locked only while they change, so closing this runner
-        # never holds up changes to other connections.
-        async with self._connection_lock(identifier):
-            async with self._lock:
-                previous = self.connections.get(identifier)
-                if previous is not None and not replace:
-                    raise ValueError(f"MCP connection {identifier} already exists")
-                # Import credentials belong to the admitted connection save.
-                # A competing import that loses this id must leave them alone.
-                if credentials:
-                    self._check_import_credentials(credentials)
-                written: dict[str, str] = {}
-                saving = False
-                try:
-                    for name, secret in (credentials or {}).items():
-                        if secret:
-                            written[name] = secret
-                            self._host().set_credential(name, secret)
-                    saving = True
-                    await self._store_connections({**self.connections, identifier: config})
-                except BaseException:
-                    if written:
-                        await self._rollback_import_credentials(written, check_saved=saving)
-                    raise
-            runner = self.runners.get(identifier)
-            if (
-                runner is not None
-                and previous is not None
-                and _without_description(previous) == _without_description(config)
-            ):
-                # Only the description changed: republish it and keep the connection.
-                runner.config = config
-                self._publish(runner, runner.catalog or None)
-            else:
-                await self._stop(identifier)
-                if previous is not None and _signs_in_elsewhere(previous, config):
-                    self.management._forget_sign_in(identifier)
-                # A disabled connection keeps its connection Tool, not ready.
-                runner = self._runner(config)
-                if config["enabled"]:
-                    runner.start()
+        return await self._change_connection(
+            identifier,
+            lambda: self._save_connection(
+                config, replace=replace, credentials=credentials, base=base
+            ),
+        )
+
+    async def _save_connection(
+        self,
+        config: dict[str, Any],
+        *,
+        replace: bool,
+        credentials: dict[str, str | None] | None,
+        base: dict[str, Any] | None | EllipsisType,
+    ) -> dict[str, Any]:
+        identifier = config["id"]
+        async with self._lock:
+            previous = self.connections.get(identifier)
+            if base is not ... and previous != base:
+                raise SettingsConflictError((f"MCP connection {identifier}",))
+            if previous is not None and not replace:
+                raise ValueError(f"MCP connection {identifier} already exists")
+            # Import credentials belong to the admitted connection save.
+            # A competing import that loses this id must leave them alone.
+            if credentials:
+                self._check_import_credentials(credentials)
+            written: dict[str, str] = {}
+            saving = False
+            try:
+                for name, secret in (credentials or {}).items():
+                    if secret:
+                        written[name] = secret
+                        self._host().set_credential(name, secret)
+                saving = True
+                await self._store_connections({**self.connections, identifier: config})
+            except BaseException:
+                if written:
+                    await self._rollback_import_credentials(written, check_saved=saving)
+                raise
+        runner = self.runners.get(identifier)
+        if (
+            runner is not None
+            and previous is not None
+            and _without_description(previous) == _without_description(config)
+        ):
+            # Only the description changed: republish it and keep the connection.
+            runner.config = config
+            self._publish(runner, runner.catalog or None)
+        else:
+            await self._stop(identifier)
+            if previous is not None and _signs_in_elsewhere(previous, config):
+                self.management._forget_sign_in(identifier)
+            # A disabled connection keeps its connection Tool, not ready.
+            runner = self._runner(config)
+            if config["enabled"]:
+                runner.start()
         if self.recovery is not None:
             await self.recovery.resume(self.runners)
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
@@ -838,34 +894,38 @@ class MCPService:
 
     async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]
-        async with self._connection_lock(identifier):
-            async with self._lock:
-                config = copy.deepcopy(self._connection(identifier))
-                records = dict(self.connections)
-                if operation == "remove":
-                    records.pop(identifier)
-                elif operation in {"enable", "disable"}:
-                    config["enabled"] = operation == "enable"
-                    records[identifier] = config
-                await self._store_connections(records)
+        return await self._change_connection(
+            identifier, lambda: self._mutate_connection(operation, identifier)
+        )
+
+    async def _mutate_connection(self, operation: str, identifier: str) -> dict[str, Any]:
+        async with self._lock:
+            config = copy.deepcopy(self._connection(identifier))
+            records = dict(self.connections)
             if operation == "remove":
-                # Closing can yield while the old Tools are still registered.
-                # Publish the actual refusal before any concurrent call sees them.
-                runner = self.runners.get(identifier)
-                if runner is not None:
-                    self._publish(runner, runner.catalog or None)
-                self.catalogs.forget(identifier)
-                await self._stop(identifier)
-                self.management._forget_sign_in(identifier)
-            elif operation == "disable":
-                # Its Tools stay registered but not ready, so the Agent no longer
-                # sees them and naming one says the connection is disabled.
-                await self._replace_runner(identifier, config)
-            else:
-                runner = self._runner(config)
-                # Republished, its Tools no longer say the connection is disabled.
+                records.pop(identifier)
+            elif operation in {"enable", "disable"}:
+                config["enabled"] = operation == "enable"
+                records[identifier] = config
+            await self._store_connections(records)
+        if operation == "remove":
+            # Closing can yield while the old Tools are still registered.
+            # Publish the actual refusal before any concurrent call sees them.
+            runner = self.runners.get(identifier)
+            if runner is not None:
                 self._publish(runner, runner.catalog or None)
-                runner.start()
+            self.catalogs.forget(identifier)
+            await self._stop(identifier)
+            self.management._forget_sign_in(identifier)
+        elif operation == "disable":
+            # Its Tools stay registered but not ready, so the Agent no longer
+            # sees them and naming one says the connection is disabled.
+            await self._replace_runner(identifier, config)
+        else:
+            runner = self._runner(config)
+            # Republished, its Tools no longer say the connection is disabled.
+            self._publish(runner, runner.catalog or None)
+            runner.start()
         if self.recovery is not None:
             await self.recovery.resume(self.runners)
         self.api.logger.info(
@@ -917,7 +977,8 @@ class MCPService:
         finally:
             if self.recovery is not None and identifier not in self.connections:
                 await self.recovery.stop_connection(identifier, remove=True)
-            self.api.operations.replace_tools(identifier, [])
+            if not self._closing:
+                self.api.operations.replace_tools(identifier, [])
 
 
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:

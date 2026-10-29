@@ -15,6 +15,7 @@ from core.chat._effort_epoch import EffortPin
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
+from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ToolCall
 from core.chat.wire_shaping import PINNED_IMAGE_DELIVERY_SLOT, PINNED_IMAGE_RETIREMENT_SLOT
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
@@ -99,6 +100,120 @@ async def test_compaction_rescans_skills_into_the_new_epoch(tmp_path: Path, manu
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:2"
     assert runtime.chat_sessions.seen_skills(session.address) == frozenset({"one", "two"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("manual", "image_limit", "stale"),
+    [(False, None, False), (True, None, False), (False, 2, False), (False, 2, True)],
+    ids=["automatic", "manual", "new-count-limit", "stale-keeps-old-budget"],
+)
+async def test_compaction_image_epoch_matches_its_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    manual: bool,
+    image_limit: int | None,
+    stale: bool,
+) -> None:
+    class ImageResolver:
+        async def resolve_messages(self, messages, **_kwargs):
+            return [
+                {
+                    **message,
+                    "content": [
+                        {
+                            "type": "media",
+                            "media_type": "image/png",
+                            "base64": "AAAA" + block["attachment_id"],
+                        }
+                        if block.get("type") == "media"
+                        else block
+                        for block in message["content"]
+                    ],
+                }
+                if message.get("role") == "user" and isinstance(message.get("content"), list)
+                else message
+                for message in messages
+            ]
+
+    def image_count(messages):
+        return sum(
+            block.get("type") == "media"
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+        )
+
+    runtime = compaction_runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="images")
+    session.append(
+        ChatMessage.user(
+            [
+                MediaBlock(
+                    type="media",
+                    attachment_id=str(index),
+                    filename="image.png",
+                    media_type="image/png",
+                )
+                for index in range(3)
+            ]
+        )
+    )
+    service = StubCompactionService(
+        should_auto=True,
+        checkpoint=ChatMessage.compaction_checkpoint(
+            summary="Kept the image task.", projection=session.load(), compacted_token_count=8000
+        ),
+    )
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    loop._requests.media._attachment_resolver = cast(Any, ImageResolver())
+    context = await run_context(
+        loop, Run(run_id="image-run", agent_id="coder", session_id=session.id), session
+    )
+    old_budget = context.image_budget
+    original = context.request_state.messages
+    old_budget.record_delivered(original)
+    # A body-size rejection retires one old image, even without a count limit.
+    limited = old_budget.shrink(original, max_bytes=1_000_000)
+    assert image_count(limited) == 2
+    context.request_state = replace(context.request_state, messages=limited)
+    await loop._requests.persist_image_retirement(session, old_budget)
+    context.primary_target = replace(context.primary_target, max_request_images=image_limit)
+    projected = []
+    project = loop._compaction_runs._host.project_post_compaction_request
+
+    async def capture_projection(**kwargs):
+        checkpoint, state = await project(**kwargs)
+        projected.append(state)
+        if stale:
+            await session.append_async(ChatMessage.user("A concurrent input"))
+        return checkpoint, state
+
+    monkeypatch.setattr(
+        loop._compaction_runs._host, "project_post_compaction_request", capture_projection
+    )
+    if manual:
+        assert await loop.compact_session("coder", session.id) == "Context compacted."
+    else:
+        rebuilt = await compact_context(loop, context)
+        assert context.image_budget is (old_budget if stale else projected[-1].image_budget)
+        assert image_count(rebuilt.messages) == (2 if stale else 1 if image_limit else 3)
+    expected = 2 if stale else 1 if image_limit else 3
+    reloaded = await loop._requests.build_request_state(
+        runtime.agents.get("coder"),
+        session,
+        inputs=RequestBuildInputs(max_request_images=image_limit),
+    )
+    assert image_count(reloaded.messages) == expected
+    fork = await runtime.chat_sessions.fork(session.address)
+    fork_request = await loop._requests.build_request_state(
+        runtime.agents.get("coder"), fork, inputs=RequestBuildInputs(max_request_images=image_limit)
+    )
+    assert image_count(fork_request.messages) == expected
+    assert image_count(old_budget.project(original)) == 2
+    assert any(message.role == "compaction_checkpoint" for message in session.load()) is not stale
+    if not stale:
+        assert image_count(projected[-1].messages) == expected
 
 
 @pytest.mark.asyncio

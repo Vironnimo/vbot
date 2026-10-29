@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from core.automation import TriggerService
+from core.automation import _cron_events as cron_events
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
     CronJob,
@@ -24,7 +26,9 @@ from core.automation.cron import (
 from core.calendar import BoundJob, CalendarService, EventJobTargetMissingError
 from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
 from core.runs import RunKind, WaitingWorkLimitError
+from core.sessions import SessionAddress
 from tests.core.automation.cron_test_support import make_service
+from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
 _ZONE = "Europe/Berlin"
 _PROMPT = "Prepare the meeting."
@@ -514,7 +518,10 @@ async def test_an_unadmitted_event_stays_owed_and_retries_only_inside_its_window
 
 
 @pytest.mark.asyncio
-async def test_deleting_an_event_deletes_its_jobs(services: _Services, tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_at", [None, "calendar-save", "cron-lock"])
+async def test_deleting_an_event_deletes_its_jobs(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_at: str | None
+) -> None:
     event = services.calendar.create_event(**_SINGLE)
     other = services.calendar.create_event(title="Other", start="2030-01-11T09:00")
     second = await _event_job(services, event.id, "end")
@@ -522,10 +529,37 @@ async def test_deleting_an_event_deletes_its_jobs(services: _Services, tmp_path:
     services.clock.now = services.clock.now.replace(minute=5)
     first = await _event_job(services, event.id, "start - 1h")
 
-    removed = await services.calendar.delete_event(event.id, actor="test")
+    if cancel_at is None:
+        removed = await services.calendar.delete_event(event.id, actor="test")
+        # In the order the jobs were created.
+        assert removed == (BoundJob(second.id, second.name), BoundJob(first.id, first.name))
+    else:
+        entered, release = asyncio.Event(), asyncio.Event()
+        commit = services.calendar._commit_events
 
-    # In the order the jobs were created.
-    assert removed == (BoundJob(second.id, second.name), BoundJob(first.id, first.name))
+        async def paused_commit(events: Any) -> None:
+            if cancel_at == "calendar-save":
+                entered.set()
+                await release.wait()
+            await commit(events)
+            if cancel_at == "cron-lock":
+                entered.set()
+
+        monkeypatch.setattr(services.calendar, "_commit_events", paused_commit)
+        if cancel_at == "cron-lock":
+            await services.cron._edits.acquire()
+        task = asyncio.create_task(services.calendar.delete_event(event.id, actor="test"))
+        try:
+            await entered.wait()
+            task.cancel()
+        finally:
+            release.set()
+            if cancel_at == "cron-lock":
+                services.cron._edits.release()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert [item.id for item in CalendarService(tmp_path, tz=_ZONE).list_events()] == [other.id]
     restarted, _trigger = make_service(tmp_path, tz=_ZONE)
     assert [job.id for job in restarted.list_jobs()] == [kept.id]
 
@@ -689,3 +723,96 @@ async def test_projection_shows_each_due_time_with_its_event_and_occurrence(
         for day in ("07", "14")
     ]
     assert services.cron.next_fire_at(job) == _local("2030-01-07T08:45").isoformat()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize("change", ["remove", "later", "expire", "disable", "context"])
+async def test_queued_event_is_revalidated_at_actual_run_start(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path / "chat",
+        agent=StubAgent(id="agent-one", model="openai/gpt-5.2"),
+        adapter=adapter,
+    )
+    session = runtime.chat_sessions.create("agent-one", session_id="main")
+    loop = build_chat_loop(runtime)
+    trigger = TriggerService(loop, runtime.chat_runs, cast(Any, runtime))
+    services.cron._trigger_service = trigger
+    event = services.calendar.create_event(**_DAILY)
+    job = await _event_job(services, event.id, session_id=session.id)
+    services.clock.now = _local("2030-01-10T09:00")
+    due = cron_events.owed_occurrence(services.calendar, event, job, services.clock.now)
+    assert due is not None
+    released, queued = asyncio.Event(), asyncio.Event()
+
+    async def busy(_run: Any) -> None:
+        await released.wait()
+
+    active = await runtime.chat_runs.start(SessionAddress(None, "agent-one", session.id), busy)
+    enqueue = loop.queue_run
+
+    async def observe_queue(*args: Any, **kwargs: Any) -> Any:
+        item = await enqueue(*args, **kwargs)
+        queued.set()
+        return item
+
+    monkeypatch.setattr(loop, "queue_run", observe_queue)
+    task = asyncio.create_task(services.cron._execution._trigger_job_run(job, event_due=due))
+    try:
+        await queued.wait()
+        occurrence_id = f"{event.id}_20300110T0900"
+        if change == "remove":
+            await services.calendar.delete_occurrence(occurrence_id)
+        elif change == "later":
+            await services.calendar.update_occurrence(occurrence_id, start="2030-01-10T11:00")
+        elif change == "expire":
+            services.clock.now = _local("2030-01-10T11:00")
+        elif change == "disable":
+            await services.cron.disable_job(job.id)
+        else:
+            await services.calendar.update_occurrence(occurrence_id, location="New room")
+            services.clock.now = _local("2030-01-10T09:05")
+        released.set()
+        await active.wait()
+        outcome = await task
+        assert outcome.admitted is (change == "context")
+        stored = make_service(tmp_path, tz=_ZONE)[0].get_job(job.id)
+        assert stored.consecutive_failures == 0
+        if change == "context":
+            assert len(adapter.requests) == 1
+            notes = [message.content for message in session.load_active() if message.role == "note"]
+            assert any(
+                "New room" in str(note) and "2030-01-10T09:05" in str(note) for note in notes
+            )
+        else:
+            assert adapter.requests == []
+            assert stored.event_progress is None
+            if change == "later":
+                # Withdrawal does not consume the moved occurrence, including on restart.
+                restarted, _ = make_service(tmp_path, tz=_ZONE, calendar=services.calendar)
+                services.clock.now = _local("2030-01-10T11:00")
+                moved = cron_events.owed_occurrence(
+                    services.calendar,
+                    services.calendar.get_event(event.id),
+                    restarted.get_job(job.id),
+                    services.clock.now,
+                )
+                assert moved is not None and moved.occurrence.id == occurrence_id
+                restarted._trigger_service = trigger
+                resumed = await restarted._execution._trigger_job_run(
+                    restarted.get_job(job.id), event_due=moved
+                )
+                assert resumed.admitted is True
+                assert len(adapter.requests) == 1
+                progress = make_service(tmp_path, tz=_ZONE)[0].get_job(job.id).event_progress
+                assert progress is not None and progress.occurrence_ids == (occurrence_id,)
+    finally:
+        released.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await runtime.chat_runs.aclose()
+        runtime.chat_sessions.close()

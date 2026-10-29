@@ -175,30 +175,59 @@ describe('MCP settings', () => {
     draft.environment.push({ name: 'LANG', value: 'en' });
     expect(() => mcpConfiguration(draft)).toThrow();
   });
-  it('does not overwrite a connection created by another client', async () => {
-    const operation = vi
-      .fn()
-      .mockResolvedValue({ connections: [{ id: 'example', configuration }] });
-    const state = setup(operation);
-    expect(await controller.save(mcpDraft(configuration), null)).toBe(false);
-    expect(operation.mock.calls.map((call) => call[1])).toEqual(['list']);
-    expect(state().error).toBeTruthy();
-  });
-  it('keeps the draft unsaved when the existing connection changed elsewhere', async () => {
-    const operation = vi.fn().mockResolvedValue({
-      connections: [
-        {
-          id: 'example',
-          configuration: { ...configuration, command: 'changed' },
-        },
-      ],
-    });
-    setup(operation);
-    expect(await controller.save(mcpDraft(configuration), configuration)).toBe(
-      false,
-    );
-    expect(operation).toHaveBeenCalledTimes(1);
-  });
+  it.each(['create', 'edit'])(
+    'keeps the first writer and the second draft when two clients %s together',
+    async (mode) => {
+      const original = mode === 'edit' ? clone(configuration) : null;
+      let saved = clone(original);
+      const operation = vi.fn(async (_extension, name, args) => {
+        if (name === 'save') {
+          // The owner checks base while committing; an omitted base still
+          // permits its public create-or-replace operation.
+          if (
+            Object.hasOwn(args, 'base') &&
+            JSON.stringify(args.base) !== JSON.stringify(saved)
+          )
+            throw Object.assign(new Error('saved record changed'), {
+              code: 'settings_conflict',
+            });
+          saved = clone(args.connection);
+        }
+        return {
+          connections: saved
+            ? [{ id: saved.id, configuration: clone(saved) }]
+            : [],
+        };
+      });
+      const first = createMcpSettings({ operation, onChange: () => {} });
+      const state = setup(operation);
+      const secondDraft = mcpDraft({ ...configuration, command: 'second' });
+      try {
+        expect(
+          await Promise.all([
+            first.save(
+              mcpDraft({ ...configuration, command: 'first' }),
+              original,
+            ),
+            controller.save(secondDraft, original),
+          ]),
+        ).toEqual([true, false]);
+        expect(saved.command).toBe('first');
+        expect(secondDraft.command).toBe('second');
+        expect(state().connections[0].configuration.command).toBe('first');
+        expect(state().error).toBe(
+          t(mode === 'edit' ? 'mcp.changed' : 'mcp.duplicate'),
+        );
+        expect(
+          operation.mock.calls
+            .filter(([, name]) => name === 'save')
+            .map(([, , args]) => args.base),
+        ).toEqual([original, original]);
+      } finally {
+        first.dispose();
+      }
+    },
+  );
   it('saves through the management operation then reconciles the server record', async () => {
     let records = [];
     const operation = vi.fn(async (_extension, name, args) => {
@@ -216,6 +245,7 @@ describe('MCP settings', () => {
     expect(await controller.save(mcpDraft(configuration), null)).toBe(true);
     expect(operation).toHaveBeenCalledWith('mcp', 'save', {
       connection: configuration,
+      base: null,
     });
     expect(state().connections[0].configuration).toEqual(configuration);
   });

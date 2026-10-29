@@ -27,6 +27,7 @@ from ._calls import (
     _CURRENT_CALL,
     InvalidToolResultError,
     SubscriptionEndedError,
+    ToolChangedError,
     UnsupportedOperationError,
     _Call,
 )
@@ -296,6 +297,13 @@ class ConnectionProtocol:
                 ),
                 {},
             )
+            call = _CURRENT_CALL.get()
+            if (
+                call is not None
+                and call.input_schema is not None
+                and tool.get("inputSchema") != call.input_schema
+            ):
+                raise ToolChangedError(arguments["name"])
             # From 2026-07-28 the server decides; the Tasks extension's claim drives its task.
             if client.protocol_version < DISCOVERY_PROTOCOL_VERSION and (
                 tool.get("execution", {}).get("taskSupport") == "required" or "task" in arguments

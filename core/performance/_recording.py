@@ -119,7 +119,7 @@ class Recording:
     def open_span(self, track: str, started: float) -> OpenSpan | None:
         """Hold the lowest free lane of ``track`` for a span starting now."""
         with self._lock:
-            if self._closed:
+            if not self._accepts_events():
                 return None
             state = self._track(track)
             tid = self._free_lane(state, started)
@@ -160,7 +160,7 @@ class Recording:
         if started < self.started_perf:
             return
         with self._lock:
-            if self._closed:
+            if not self._accepts_events():
                 return
             state = self._track(track)
             tid = self._free_lane(state, started)
@@ -190,7 +190,7 @@ class Recording:
     ) -> None:
         """Emit one process-scoped instant event on ``track``."""
         with self._lock:
-            if self._closed:
+            if not self._accepts_events():
                 return
             pid = self._track(track).pid
             self._append(("i", pid, 0, self._ts(at), None, name, category, args))
@@ -205,7 +205,7 @@ class Recording:
     def counter(self, name: str, value: float, track: str, at: float) -> None:
         """Emit one counter sample without touching the window statistics."""
         with self._lock:
-            if self._closed:
+            if not self._accepts_events():
                 return
             pid = self._track(track).pid
             self._append(("C", pid, 0, self._ts(at), None, name, "gauge", {"value": value}))
@@ -218,6 +218,8 @@ class Recording:
             if self._closed:
                 return
             self._stalls.append(dict(record))
+            if not self._accepts_events():
+                return
             pid = self._track(track).pid
             args = {
                 key: record.get(key)
@@ -275,6 +277,15 @@ class Recording:
             state = self._tracks[track] = _Track(pid=len(self._tracks) + 1)
             self._append(("M", state.pid, 0, 0, None, "process_name", None, {"name": track}))
         return state
+
+    def _accepts_events(self) -> bool:
+        """Check the buffer before allocating track or lane state; caller holds the lock."""
+        if self._closed:
+            return False
+        if len(self._events) >= self._max_events:
+            self._truncated = True
+            return False
+        return True
 
     def _free_lane(self, state: _Track, started: float) -> int:
         for tid, lane in enumerate(state.lanes):
