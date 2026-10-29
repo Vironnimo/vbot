@@ -16,6 +16,7 @@ from core.automation import _cron_timing as cron_timing
 from core.automation._cron_email import EMAIL_STATE_DIR_NAME
 from core.automation._cron_inbox import InboxState, state_path
 from core.automation.cron import (
+    CronDelivery,
     CronEmailTrigger,
     CronJobValidationError,
     CronService,
@@ -370,6 +371,160 @@ async def test_failed_email_channel_change_keeps_the_waiting_mail(
     assert service.get_job(job_id).email == CronEmailTrigger.parse("mail-main")
     assert [row["text"] for row in _state(service, job_id)["mails"]] == ["Mail 1"]
     await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failed", "completed"])
+async def test_email_channel_edit_preserves_a_run_finishing_during_its_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    service, trigger = _service(tmp_path)
+    service.set_chat_delivery(
+        FakeChats(
+            owners={"mail-main": "agent-one", "mail-new": "agent-one", "tg-main": "agent-one"}
+        )
+    )
+    job_id = await _email_job(
+        service,
+        remaining_runs=1 if outcome == "completed" else 3,
+        delivery=CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat"),
+    )
+    running, finish_run, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    checkpoint, finish_edit = asyncio.Event(), asyncio.Event()
+    fire = service._execution._trigger_job_run
+
+    async def tracked_fire(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await fire(*args, **kwargs)
+        finally:
+            finished.set()
+
+    async def admit(*_args: Any, **_kwargs: Any) -> Any:
+        async def wait() -> Any:
+            running.set()
+            await finish_run.wait()
+            if outcome == "failed":
+                raise RuntimeError("model unavailable")
+            return SimpleNamespace(content="Keep this result.")
+
+        return SimpleNamespace(id="run-review", session_id="session-review", wait=wait)
+
+    trigger.trigger_run.side_effect = admit
+    monkeypatch.setattr(service._execution, "_trigger_job_run", tracked_fire)
+    service.start()
+    if outcome == "failed":
+        service._jobs[job_id].consecutive_failures = 4
+    # Keep delivery pending so the edit must preserve its exact durable record.
+    await service._notifications.aclose()
+    edit = None
+    try:
+        await service.accept_mail(_mail())
+        await asyncio.wait_for(running.wait(), timeout=_TIMEOUT_SECONDS)
+        write = service._emails._write
+
+        async def hold_checkpoint(state: InboxState[Any]) -> None:
+            checkpoint.set()
+            await finish_edit.wait()
+            await write(state)
+
+        monkeypatch.setattr(service._emails, "_write", hold_checkpoint)
+        edit = asyncio.create_task(
+            service.update_job(job_id, email=CronEmailTrigger.parse("mail-new"))
+        )
+        await asyncio.wait_for(checkpoint.wait(), timeout=_TIMEOUT_SECONDS)
+        finish_run.set()
+        await asyncio.wait_for(finished.wait(), timeout=_TIMEOUT_SECONDS)
+        before = service.get_job(job_id)
+        assert before.last_outcome == ("failed" if outcome == "failed" else "success")
+        assert before.last_completed_at is not None
+        assert len(before.notifications) == 1
+        assert before.status == ("active" if outcome == "success" else outcome)
+        finish_edit.set()
+        if outcome == "completed":
+            with pytest.raises(CronJobValidationError):
+                await edit
+        else:
+            returned = await edit
+            assert returned.last_result == before.last_result
+            assert returned.status == before.status
+        after = service.get_job(job_id)
+        for field in (
+            "last_outcome",
+            "last_result",
+            "last_completed_at",
+            "notifications",
+            "remaining_runs",
+            "status",
+            "consecutive_failures",
+            "last_error",
+        ):
+            assert getattr(after, field) == getattr(before, field), field
+        persisted, _ = _service(tmp_path)
+        try:
+            saved = persisted.get_job(job_id)
+            assert saved.notifications == before.notifications
+            assert saved.status == before.status
+            assert saved.last_result == before.last_result
+        finally:
+            await persisted.aclose()
+    finally:
+        finish_run.set()
+        finish_edit.set()
+        if edit is not None:
+            await asyncio.gather(edit, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intermediate", ["cron", "email"])
+async def test_returning_to_a_channel_after_interrupted_cleanup_retires_its_old_mail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, intermediate: str
+) -> None:
+    service, _ = _service(tmp_path)
+    owners = {"mail-main": "agent-one", "mail-new": "agent-one"}
+    service.set_chat_delivery(FakeChats(owners=owners))
+    job_id = await _email_job(service)
+    await service.accept_mail(_mail())
+    saved, release = asyncio.Event(), asyncio.Event()
+    save_edit = service._save_edit
+
+    async def hold_edit(undo: Any) -> None:
+        await save_edit(undo)
+        saved.set()
+        await release.wait()
+
+    monkeypatch.setattr(service, "_save_edit", hold_edit)
+    fields: dict[str, Any] = (
+        {"schedule_type": "cron", "cron_expression": "0 9 * * *"}
+        if intermediate == "cron"
+        else {"email": CronEmailTrigger.parse("mail-new")}
+    )
+    edit = asyncio.create_task(service.update_job(job_id, **fields))
+    restart_root = tmp_path / "restart"
+    try:
+        await asyncio.wait_for(saved.wait(), timeout=_TIMEOUT_SECONDS)
+        shutil.copytree(service._cron_dir, restart_root / "cron")
+    finally:
+        release.set()
+        await edit
+        await service.aclose()
+
+    restarted, trigger = _service(restart_root)
+    restarted.set_chat_delivery(FakeChats(owners=owners))
+    scripted_runs(trigger, (RunStatus.COMPLETED, "[SILENT]"))
+    try:
+        await restarted.update_job(
+            job_id, schedule_type="email", email=CronEmailTrigger.parse("mail-main")
+        )
+        status = restarted.email_status(restarted.get_job(job_id))
+        assert status is not None and status.waiting == 0
+        restarted.start()
+        await restarted.accept_mail(_mail(2))
+        await _until(restarted, lambda: restarted.get_job(job_id).last_outcome == "success")
+        assert trigger.trigger_run.await_count == 1
+        assert [record["text"] for record in _records(_note(trigger))] == ["Mail 2"]
+    finally:
+        await restarted.aclose()
 
 
 @pytest.mark.asyncio
