@@ -25,6 +25,7 @@ from desktop.dictation.insertion import (
     INSERT_FAILED,
     INSERT_PASTED,
 )
+from desktop.dictation.pieces import PieceCutter
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import SpeechServerRejected
 from tests.desktop.hotkey_test_support import FakeHotkeyApi
@@ -485,6 +486,7 @@ def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
 )
 def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     make_rig: Any,
+    monkeypatch: pytest.MonkeyPatch,
     options: dict[str, float],
     budget: int,
     script: list[np.ndarray],
@@ -497,6 +499,23 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     rig.server.budget_bytes = budget
     if budget_ready != "immediate":
         rig.server.release_budget.clear()
+    captured = threading.Event()
+    if budget_ready == "after-recording":
+        expected_energy = sum(_energy(part) for part in script)
+        received_energy = 0
+        original_add = PieceCutter.add
+
+        def observe_add(cutter: PieceCutter, pcm: bytes, rate: int, seconds: float) -> Any:
+            nonlocal received_energy
+            result = original_add(cutter, pcm, rate, seconds)
+            received_energy += int(
+                np.abs(np.frombuffer(pcm, dtype=np.int16).astype(np.int64)).sum()
+            )
+            if received_energy >= expected_energy:
+                captured.set()
+            return result
+
+        monkeypatch.setattr(PieceCutter, "add", observe_add)
     rig.sd.feed(LEAD_IN, *script)
     rig.controller.set_server_url(SERVER_URL)
 
@@ -504,6 +523,7 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     if budget_ready != "immediate":
         wait_until(lambda: rig.sd.drained)
         if budget_ready == "after-recording":
+            wait_until(captured.is_set)
             rig.press()
             wait_until(lambda: rig.controller.status()["state"] == "transcribing")
         rig.server.release_budget.set()
