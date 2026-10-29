@@ -5,11 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
 from core.model_tasks import MusicOptionError, MusicService
 from core.model_tasks.constants import TASK_MUSIC_GENERATION
+from core.model_tasks.music import MusicConfigurationError
+from core.utils.errors import ConfigError
 
 
 class _ModelTasks:
@@ -34,6 +37,21 @@ class _ModelTasks:
                 supported_parameters=(),
             )
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [ConfigError, KeyError])
+async def test_client_preparation_preserves_configuration_error(
+    error_type: type[Exception],
+) -> None:
+    service = MusicService(_ModelTasks(), cast(Any, None))
+    failure = error_type("Connection or Account removed during preparation")
+    with (
+        patch("core.model_tasks.music.ProviderMusicClient.from_runtime", side_effect=failure),
+        pytest.raises(MusicConfigurationError) as caught,
+    ):
+        await service.generate("Calm piano")
+    assert caught.value.__cause__ is failure
 
 
 @pytest.mark.asyncio

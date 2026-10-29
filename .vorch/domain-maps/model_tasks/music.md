@@ -6,6 +6,8 @@ Task-gated reference for the `music_generation` Task Model and OpenRouter Music 
 
 `core/model_tasks/music.py` owns binding resolution, image-input compatibility, local reference-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/music_providers.py` owns the OpenRouter Chat Completions audio-stream wire and Base64 audio assembly. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
 
+A Connection or Account that disappears during client preparation is a `MusicConfigurationError`, preserving the Tool's unavailable-Model guidance before any generation request is sent.
+
 ## Model Classification
 
 OpenRouter exposes Music and conversational Audio Models through the same `output_modalities=audio` filter and currently supplies no first-class Music task tag. The OpenRouter normalizer therefore assigns `music_generation` only to the provider's distinct Music capability signature `text+image->text+audio` with exact text/image inputs and text/audio outputs. Generic Audio Models such as GPT Audio remain `audio_generation` only. This rule is deliberately provider-specific and conservative; do not derive Music globally from audio output.
