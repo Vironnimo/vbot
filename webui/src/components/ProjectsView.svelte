@@ -24,6 +24,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import ProjectOverviewPanel from './projects/ProjectOverviewPanel.svelte';
+  import ProjectDefaultsPanel from './projects/ProjectDefaultsPanel.svelte';
   import ProjectTeamPanel from './projects/ProjectTeamPanel.svelte';
   import ProjectContextPanel from './projects/ProjectContextPanel.svelte';
   import ProjectMemoryPanel from './projects/ProjectMemoryPanel.svelte';
@@ -449,9 +450,7 @@
             <ProjectOverviewPanel
               bind:projectsState
               {projectsController}
-              {onNavigateToSettingsPanel}
               {handleManualSave}
-              {trackModelDropdownOpen}
             >
               {#snippet repositoryActions()}
                 <div class="detail-btns">
@@ -474,47 +473,80 @@
                   </Button>
                 </div>{/snippet}
             </ProjectOverviewPanel>
-            <ProjectTeamPanel
-              bind:findingsExpanded
-              bind:projectsState
-              {projectsController}
-              {trackModelDropdownOpen}
-              {updateToolAccessOverride}
-              {clearOverride}
-              {navigateToExtensions}
+            <div
+              class="projects-part"
+              role="group"
+              aria-labelledby="project-part-context"
             >
-              {#snippet scanAction()}
-                <Button
-                  variant="tertiary"
-                  data-testid="project-repository-rescan"
-                  loading={projectsState.scanRefreshRequested}
-                  disabled={projectsState.scanLoading}
-                  onClick={refreshScan}
-                >
-                  {projectsState.scanRefreshRequested
-                    ? t('projects.repository.rescanning')
-                    : t('projects.repository.rescan')}
-                </Button>{/snippet}
-            </ProjectTeamPanel>
-            <ProjectContextPanel bind:projectsState {projectsController} />
-            <ProjectMemoryPanel
-              projectId={selectedProject.project_id}
-              enabled={projectsState.editForm.memory_enabled}
-              onEnabledChange={(value) =>
-                (projectsState.editForm.memory_enabled = value)}
-              refreshToken={memoriesRefreshToken}
-              {onToast}
-            />
-            <ProjectAccessPanel
-              {projectsState}
-              {projectsController}
-              {navigateToExtensions}
-              {onToast}
-              {onOpenSkill}
-              {skillsRefreshToken}
-              {agentsRefreshToken}
-              {projectsRefreshToken}
-            />
+              <header class="projects-part__head">
+                <p class="projects-part__title" id="project-part-context">
+                  {t('projects.part.context')}
+                </p>
+                <p class="projects-part__desc">
+                  {t('projects.part.contextSummary')}
+                </p>
+              </header>
+              <ProjectContextPanel bind:projectsState {projectsController} />
+              <ProjectMemoryPanel
+                projectId={selectedProject.project_id}
+                enabled={projectsState.editForm.memory_enabled}
+                onEnabledChange={(value) =>
+                  (projectsState.editForm.memory_enabled = value)}
+                refreshToken={memoriesRefreshToken}
+                {onToast}
+              />
+              <ProjectAccessPanel
+                {projectsState}
+                {projectsController}
+                {onToast}
+                {onOpenSkill}
+                {skillsRefreshToken}
+                {agentsRefreshToken}
+                {projectsRefreshToken}
+              />
+            </div>
+            <div
+              class="projects-part"
+              role="group"
+              aria-labelledby="project-part-team"
+            >
+              <header class="projects-part__head">
+                <p class="projects-part__title" id="project-part-team">
+                  {t('projects.part.team')}
+                </p>
+                <p class="projects-part__desc">
+                  {t('projects.part.teamSummary')}
+                </p>
+              </header>
+              <ProjectDefaultsPanel
+                bind:projectsState
+                {projectsController}
+                {onNavigateToSettingsPanel}
+                {trackModelDropdownOpen}
+              />
+              <ProjectTeamPanel
+                bind:findingsExpanded
+                bind:projectsState
+                {projectsController}
+                {trackModelDropdownOpen}
+                {updateToolAccessOverride}
+                {clearOverride}
+                {navigateToExtensions}
+              >
+                {#snippet scanAction()}
+                  <Button
+                    variant="tertiary"
+                    data-testid="project-repository-rescan"
+                    loading={projectsState.scanRefreshRequested}
+                    disabled={projectsState.scanLoading}
+                    onClick={refreshScan}
+                  >
+                    {projectsState.scanRefreshRequested
+                      ? t('projects.repository.rescanning')
+                      : t('projects.repository.rescan')}
+                  </Button>{/snippet}
+              </ProjectTeamPanel>
+            </div>
             <div class="management-footer">
               <SaveStatus
                 type="submit"

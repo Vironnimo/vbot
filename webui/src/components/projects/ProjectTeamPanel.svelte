@@ -18,6 +18,7 @@
   import {
     memberFieldIsOverridden,
     projectAgentTargetSummary,
+    projectTeamToolNames,
   } from '$lib/projectsView.js';
   import Dropdown from '../Dropdown.svelte';
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
@@ -43,6 +44,9 @@
     clearOverride,
     navigateToExtensions,
   } = $props();
+
+  // A Team override may name any Project-configurable Tool.
+  let teamToolNames = $derived(projectTeamToolNames(projectsState.toolCatalog));
 
   function agentTargetPolicyText(member) {
     const summary = projectAgentTargetSummary(member, projectsState.activeTeam);
@@ -690,7 +694,7 @@
                     <ToolAccessEditor
                       value={overrideDraft(member.agent_id).tool_access}
                       tools={projectsState.toolCatalog}
-                      ceiling={projectsState.editForm.allowed_tools}
+                      ceiling={teamToolNames}
                       memoryPromptMode="off"
                       projectMemoryEnabled={projectsState.editForm
                         .memory_enabled &&

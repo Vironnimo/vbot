@@ -112,7 +112,6 @@ describe('Projects controller loading', () => {
       sources: [],
       model_mappings: {},
       auto_load: [],
-      allowed_tools: [],
       skills_bundled_enabled: [],
       skills_global_enabled: [],
       skills_project_disabled: [],
@@ -141,7 +140,6 @@ describe('Projects controller loading', () => {
     expect(state.availableModels).toEqual([{ id: 'm' }]);
     expect(state.availableConnections).toEqual([]);
     expect(state.toolCatalog).toEqual([]);
-    expect(state.defaultProjectTools).toEqual([]);
   });
 
   it('rejects an older Projects list response after a newer load wins', async () => {
@@ -262,7 +260,7 @@ describe('Projects controller editing', () => {
     sources: [],
     model_mappings: {},
     auto_load: ['AGENTS.md'],
-    allowed_tools: ['read', 'edit'],
+    skills_global_enabled: ['pdf', 'deploy'],
   };
 
   // Each case edits the form of the stored Project above (plus `stored`
@@ -405,16 +403,16 @@ describe('Projects controller editing', () => {
       { default_thinking_effort: 'low' },
     ],
     [
-      'nothing for reordered whitelist tools',
+      'nothing for reordered whitelist Skills',
       {},
-      { allowed_tools: ['edit', 'read'] },
+      { skills_global_enabled: ['deploy', 'pdf'] },
       null,
     ],
     [
-      'an empty Tool Whitelist as every tool off',
+      'an empty Skill whitelist as every global Skill off',
       {},
-      { allowed_tools: [] },
-      { allowed_tools: [] },
+      { skills_global_enabled: [] },
+      { skills_global_enabled: [] },
     ],
     [
       'changed Skill rules',
@@ -610,21 +608,6 @@ describe('Projects controller editing', () => {
     expect(state.editForm.display_name).toBe('Draft');
     expect(controller.pendingChanges()).toEqual({ display_name: 'Draft' });
     controller.destroy();
-  });
-
-  it('changes whitelist membership idempotently', async () => {
-    const { controller, state } = await loadedController({
-      allowed_tools: ['read'],
-    });
-
-    controller.updateListField('allowed_tools', 'read', true);
-    controller.updateListField('allowed_tools', 'bash', false);
-    controller.updateListField('allowed_tools', '  ', true);
-    expect(state.editForm.allowed_tools).toEqual(['read']);
-
-    controller.updateListField('allowed_tools', ' edit ', true);
-    controller.updateListField('allowed_tools', 'read', false);
-    expect(state.editForm.allowed_tools).toEqual(['edit']);
   });
 
   it('preserves duplicate auto-load entries and rejects invalid or busy moves', () => {
@@ -1343,21 +1326,16 @@ describe('Project scan projections', () => {
           detail: 'another collision',
           agent_id: 'dup2',
         },
-        {
-          type: 'unavailable_tool',
-          detail: 'extension tool is unavailable',
-        },
       ],
     });
 
     expect(report.clean).toBe(false);
-    expect(report.findingCount).toBe(6);
+    expect(report.findingCount).toBe(5);
     expect(report.groups.map((group) => group.type)).toEqual([
       'slug_collision',
       'unslugifiable_name',
       'bad_model',
       'orphan',
-      'unavailable_tool',
     ]);
     expect(report.groups[0].findings).toHaveLength(2);
   });

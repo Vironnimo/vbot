@@ -61,14 +61,25 @@ describe('ProjectsView list and selection', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Repository',
-      'Agent defaults',
-      'Team',
       'Instructions',
       'Commands at Session start',
       'Project Memory',
-      'Tools',
       'Skills',
+      'Defaults',
+      'Agents',
     ]);
+    // Below the Repository, what every Agent in the Project shares comes
+    // before what only the repository's Team uses.
+    expect(
+      Array.from(document.querySelectorAll('.projects-part')).map((part) =>
+        part.getAttribute('aria-labelledby'),
+      ),
+    ).toEqual(['project-part-context', 'project-part-team']);
+    expect(
+      document
+        .querySelector('#project-section-defaults')
+        .closest('[aria-labelledby="project-part-team"]'),
+    ).not.toBeNull();
 
     // Editing keeps the one continuous page; no topic switch replaces the form.
     const name = inputById('project-edit-name');
@@ -79,9 +90,10 @@ describe('ProjectsView list and selection', () => {
     ).filter((panel) => !panel.hidden);
     expect(visible.map((panel) => panel.id)).toEqual([
       'project-detail-panel-overview',
-      'project-detail-panel-team',
       'project-detail-panel-context',
       'project-detail-panel-access',
+      'project-detail-panel-defaults',
+      'project-detail-panel-team',
     ]);
     expect(
       buttonByTestId('project-repository-rescan').closest(
@@ -1251,157 +1263,8 @@ describe('ProjectsView auto-load files', () => {
   });
 });
 
-describe('ProjectsView Tool and Skill whitelists', () => {
+describe('ProjectsView Skill whitelist', () => {
   const view = setupProjectsViewSuite();
-
-  it('groups the Tool Whitelist by registry family and omits tools Projects cannot configure', async () => {
-    serveProject({ allowed_tools: ['read', 'bash'] }, { skills: {} });
-    mockCatalogs({
-      tools: [
-        { name: 'read', family: 'files' },
-        { name: 'edit', family: 'files' },
-        { name: 'bash', family: 'execution' },
-        { name: 'process', family: 'execution' },
-        ...['ha_get_state', 'ha_call_service'].map((name) => ({
-          name,
-          family: 'extension:homeassistant:home_assistant',
-          family_label: 'Home Assistant',
-        })),
-        { name: 'status', family: null },
-        { name: 'memory', family: null, project_configurable: false },
-        // Only the Live voice Agents use the Live call Tools.
-        { name: 'send_message', family: 'live', constraints: ['live_call'] },
-      ],
-      defaultProjectTools: ['read'],
-    });
-    view.mount();
-    await selectDemo();
-    await waitForCondition(() => toggleByAriaLabel('Toggle tool read'));
-
-    const headings = Array.from(
-      document.querySelectorAll(
-        '#project-detail-panel-access .s-check-group__title',
-      ),
-    ).map((heading) => heading.textContent.trim());
-    expect(headings).toEqual([
-      'Files',
-      'Execution',
-      'Home Assistant',
-      'Individual Tools',
-    ]);
-    // Project configurability is server-owned metadata, not a name list.
-    expect(toggleByAriaLabel('Toggle tool memory')).toBeNull();
-    expect(toggleByAriaLabel('Toggle tool send_message')).toBeNull();
-
-    const search = document.querySelector(
-      '#project-detail-panel-access input[type="search"]',
-    );
-    search.value = 'edit';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    document.querySelector('[aria-label="All Files Tools"]').click();
-    flushSync();
-    buttonByTestId('project-save-demo').click();
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      allowed_tools: ['read', 'bash', 'edit'],
-    });
-  });
-
-  it('keeps a persisted unavailable tool removable and toggles single tools', async () => {
-    serveProject(
-      { allowed_tools: ['read', 'disabled_extension_tool'] },
-      {
-        report: {
-          clean: false,
-          findings: [
-            {
-              type: 'unavailable_tool',
-              detail: 'The Extension tool is not currently registered.',
-            },
-          ],
-        },
-        skills: {},
-      },
-    );
-    mockCatalogs({ tools: ['read', 'edit'], defaultProjectTools: ['read'] });
-    view.mount();
-    await selectDemo();
-    await waitForCondition(() =>
-      toggleByAriaLabel('Toggle tool disabled_extension_tool'),
-    );
-    const unavailableToggle = toggleByAriaLabel(
-      'Toggle tool disabled_extension_tool',
-    );
-    expect(
-      unavailableToggle
-        .closest('.tool-access-chip-wrap')
-        .classList.contains('is-unavailable'),
-    ).toBe(true);
-
-    unavailableToggle.click();
-    toggleByAriaLabel('Toggle tool edit').click();
-    flushSync();
-    buttonByTestId('project-save-demo').click();
-
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      allowed_tools: ['read', 'edit'],
-    });
-  });
-
-  it('renders a not-ready tool greyed with the shared notice and extensions link', async () => {
-    const navigateMock = vi.fn();
-    serveProject({ allowed_tools: ['read'] }, { skills: {} });
-    mockCatalogs({
-      tools: [
-        { name: 'read', ready: true },
-        {
-          name: 'home_assistant',
-          ready: false,
-          readiness_hint: 'Set the Home Assistant token first.',
-          extension: 'homeassistant',
-        },
-      ],
-      defaultProjectTools: ['read'],
-    });
-    view.mount({ onNavigateToSettingsPanel: navigateMock });
-    await selectDemo();
-    await waitForCondition(() =>
-      toggleByAriaLabel('Toggle tool home_assistant'),
-    );
-
-    expect(document.body.textContent).toContain(
-      'Set the Home Assistant token first.',
-    );
-    expect(toggleByAriaLabel('Toggle tool home_assistant').disabled).toBe(
-      false,
-    );
-    buttonWithTextContent('Open Extensions').click();
-    flushSync();
-    expect(navigateMock).toHaveBeenCalledWith('extensions');
-  });
-
-  it('resets the tool whitelist to the base list', async () => {
-    serveProject({ allowed_tools: ['read', 'edit', 'grep'] }, { skills: {} });
-    mockCatalogs({
-      tools: ['read', 'edit', 'grep'],
-      defaultProjectTools: ['read'],
-    });
-    view.mount();
-    await selectDemo();
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-tools-reset"]'),
-    );
-    buttonByTestId('project-tools-reset').click();
-    flushSync();
-    buttonByTestId('project-save-demo').click();
-
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      allowed_tools: ['read'],
-    });
-  });
 
   it('defaults project Skills on and bundled or global Skills off, and persists exceptions', async () => {
     serveProject(

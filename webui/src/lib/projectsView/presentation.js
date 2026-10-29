@@ -42,7 +42,6 @@ export function createProjectEditForm(project = null) {
     memory_enabled: project?.memory_enabled !== false,
     // Edited as text, one command per line.
     context_commands: normalizeStringList(project?.context_commands).join('\n'),
-    allowed_tools: [...(project?.allowed_tools ?? [])],
     skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
     skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
     skills_project_disabled: [...(project?.skills_project_disabled ?? [])],
@@ -95,7 +94,6 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
     pendingOverrideReset: null,
     overrideBusyKey: '',
     toolCatalog: [],
-    defaultProjectTools: [],
     rePointProject: null,
     rePointCwd: '',
     rePointing: false,
@@ -124,8 +122,6 @@ const FINDING_TYPE_BAD_MODEL = 'bad_model';
 
 const FINDING_TYPE_ORPHAN = 'orphan';
 
-const FINDING_TYPE_UNAVAILABLE_TOOL = 'unavailable_tool';
-
 // Stable display order for grouped findings, so the report always lists the
 // same finding kinds in the same order regardless of server ordering.
 const FINDING_TYPES = Object.freeze([
@@ -133,7 +129,6 @@ const FINDING_TYPES = Object.freeze([
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
   FINDING_TYPE_BAD_MODEL,
   FINDING_TYPE_ORPHAN,
-  FINDING_TYPE_UNAVAILABLE_TOOL,
   'invalid_source',
   'skill_collision',
 ]);
@@ -160,11 +155,9 @@ const PROJECT_SAMPLING_FIELDS = Object.freeze([
   'default_top_p',
 ]);
 
-// The list-valued whitelist fields, diffed by SET (order-insensitive) so a
-// reorder alone never counts as a change. Tool/skill names are unordered membership
-// sets; an empty list is a real value (e.g. every tool off).
+// The list-valued Skill whitelist fields, diffed by SET (order-insensitive) so
+// a reorder alone never counts as a change; an empty list is a real value.
 const WHITELIST_LIST_FIELDS = Object.freeze([
-  'allowed_tools',
   'skills_bundled_enabled',
   'skills_global_enabled',
   'skills_project_disabled',
@@ -293,9 +286,9 @@ export function buildManageProjectPayload(formValues, project) {
     }
   }
 
-  // The Tool/Skill Whitelist lists are membership sets: send a field only when its
-  // set actually changed, so toggling tools/skills persists but a mere reorder does
-  // not. An empty list (e.g. every tool off) is a real value and is sent as `[]`.
+  // The Skill Whitelist lists are membership sets: send a field only when its
+  // set actually changed, so toggling Skills persists but a mere reorder does
+  // not. An empty list is a real value and is sent as `[]`.
   for (const field of WHITELIST_LIST_FIELDS) {
     const next = normalizeStringList(formValues?.[field]);
     const current = normalizeStringList(project?.[field]);
@@ -313,65 +306,14 @@ export function buildManageProjectPayload(formValues, project) {
   return changes;
 }
 
-// Build the tool toggle rows for the editor: every server-marked Project-configurable
-// catalog tool (without the Live call Tools, which only the Live voice Agents use)
-// with whether it is in the project's current Tool Whitelist. The
-// tool-catalog RPC owns that policy, so new tools and policy changes appear without a
-// frontend name list. Rows are sorted by
-// name for a stable display. Each row carries the tool's readiness fields
-// (`ready`/`readiness_hint`/`extension`) so a not-ready tool renders the shared
-// "currently unavailable" notice (its toggle stays functional — the whitelist is
-// independent of readiness).
-export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
-  const enabled = new Set(normalizeStringList(allowedTools));
-  const byName = new Map();
-  for (const tool of toolCatalogForEditor(catalog)) {
-    const name = asText(tool.name).trim();
-    if (
-      name.length === 0 ||
-      tool.project_configurable === false ||
-      byName.has(name)
-    ) {
-      continue;
-    }
-    byName.set(name, {
-      name,
-      family: tool.family ?? null,
-      family_label: tool.family_label ?? null,
-      description: tool.description,
-      enabled: enabled.has(name),
-      ready: tool.ready !== false,
-      readiness_hint: tool.readiness_hint ?? null,
-      extension: tool.extension ?? null,
-    });
-  }
-
-  // Keep persisted entries that disappeared from the live catalog visible and
-  // removable. This is common when an Extension is temporarily disabled: the
-  // backend deliberately preserves the permission, reports it as unavailable,
-  // and only rejects *new* unknown grants. A stale row therefore stays on and
-  // gets the shared not-ready treatment until the tool returns or the user turns
-  // it off. Project-excluded names are included only through this recovery path;
-  // they can never be newly selected from the catalog.
-  for (const name of enabled) {
-    if (byName.has(name)) {
-      continue;
-    }
-    byName.set(name, {
-      name,
-      family: null,
-      family_label: null,
-      description: '',
-      enabled: true,
-      ready: false,
-      readiness_hint: null,
-      extension: null,
-      registered: false,
-    });
-  }
-  return Array.from(byName.values()).sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+// The Tools a Team member's override may name: every catalog Tool the server
+// marks Project-configurable (Identity-only, follower, Memory-mode and
+// Session-grant Tools never are), without the Live call Tools.
+export function projectTeamToolNames(catalog = []) {
+  return toolCatalogForEditor(catalog)
+    .filter((tool) => tool.project_configurable !== false)
+    .map((tool) => asText(tool.name).trim())
+    .filter((name) => name.length > 0);
 }
 
 // Build the skill toggle sections for the editor from a project's skill pool and
@@ -433,24 +375,6 @@ export function buildSkillToggleSections({
         enabled: enabledGlobal.has(skill.name),
       })),
   };
-}
-
-// Add or remove a name from a list (returns a new normalized list), the single
-// primitive the editor's toggle handlers use to mutate a whitelist field.
-export function setListMembership(list, name, include) {
-  const normalized = normalizeStringList(list);
-  const target = asText(name).trim();
-  if (!target) {
-    return normalized;
-  }
-  const has = normalized.includes(target);
-  if (include && !has) {
-    return [...normalized, target];
-  }
-  if (!include && has) {
-    return normalized.filter((item) => item !== target);
-  }
-  return normalized;
 }
 
 // Normalize the scan response's skill pool into the editor's `{name, description}`
@@ -605,7 +529,6 @@ export function normalizeProject(project) {
       main_file: optionalText(project?.instruction_status?.main_file),
       missing: normalizeStringList(project?.instruction_status?.missing),
     },
-    allowed_tools: normalizeStringList(project?.allowed_tools),
     skills_bundled_enabled: normalizeStringList(
       project?.skills_bundled_enabled,
     ),

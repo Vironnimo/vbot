@@ -117,7 +117,6 @@ function mockCatalogs({
   connections = [],
   settings = { defaults: { agent: {} } },
   tools = [],
-  defaultProjectTools = [],
 } = {}) {
   rpcMock.mockImplementation((method) => {
     if (method === 'model.list') {
@@ -136,7 +135,6 @@ function mockCatalogs({
             ? { name: tool, description: '' }
             : { description: '', ...tool },
         ),
-        default_project_tools: defaultProjectTools,
       });
     }
     return Promise.resolve({});

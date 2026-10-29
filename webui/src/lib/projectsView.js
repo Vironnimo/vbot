@@ -5,7 +5,7 @@ export {
   createProjectsState,
   PROJECT_THINKING_EFFORT_NO_DEFAULT,
   PROJECT_THINKING_EFFORT_OPTIONS,
-  buildToolToggleList,
+  projectTeamToolNames,
   buildSkillToggleSections,
   hasManageChanges,
   buildDefaultAgentOptions,

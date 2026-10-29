@@ -677,7 +677,7 @@ describe('ProjectsView Team', () => {
         ...overrides,
       });
     serveProject(
-      { allowed_tools: ['bash', 'read'] },
+      {},
       {
         team: [
           toolMember({
@@ -697,11 +697,11 @@ describe('ProjectsView Team', () => {
       },
     );
     mockCatalogs({
-      tools: ['bash', 'read'],
-      defaultProjectTools: ['bash', 'read'],
+      // An override never names a Tool Projects cannot configure.
+      tools: ['bash', 'read', { name: 'memory', project_configurable: false }],
     });
     setOverrideMock.mockResolvedValue({
-      project: project({ project_id: 'demo', allowed_tools: ['bash', 'read'] }),
+      project: project({ project_id: 'demo' }),
       scan: cleanScan({
         team: [
           toolMember({
@@ -726,6 +726,7 @@ describe('ProjectsView Team', () => {
         '[data-tool-name="read"][data-tool-access-toggle]',
       ),
     );
+    expect(document.querySelector('[data-tool-name="memory"]')).toBeNull();
     document.querySelector('[data-tool-name="bash"]').click();
     flushSync();
     document.querySelector('[data-tool-name="read"]').click();

@@ -17,9 +17,15 @@ export default Object.freeze({
   'toolAccess.access.selected': 'Allowed while selected',
   'agents.storageDetails': 'Workspace & advanced',
   'projects.repositorySection': 'Repository',
-  'projects.defaultsSection': 'Agent defaults',
+  'projects.defaultsSection': 'Defaults',
   'projects.defaultsSummary':
     'Shared starting values for the Team. Individual Agents can override them.',
+  'projects.part.context': 'Working context',
+  'projects.part.contextSummary':
+    'Applies to every Agent that works in this project.',
+  'projects.part.team': 'Team',
+  'projects.part.teamSummary':
+    'Applies only to the Agents from the repository.',
   'projects.repositoryActions': 'Repository management',
   'skills.descriptionLabel': 'When to use this skill',
   'skills.descriptionHelp':
@@ -799,12 +805,6 @@ export default Object.freeze({
   'projects.manage.autoLoadAdd': 'Add',
   'projects.manage.autoLoadRemove': 'Remove {file}',
   'projects.manage.autoLoadEmpty': 'No additional files',
-  'projects.manage.allowedToolsHelp':
-    'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
-  'projects.manage.resetDefaults': 'Reset to defaults',
-  'projects.manage.toggleTool': 'Toggle tool {name}',
-  'projects.manage.unavailableToolHint':
-    'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
   'projects.manage.allowedSkillsHelp':
     'Project skills are active by default; bundled and global skills are opt-in.',
   'projects.manage.saveError': 'Project changes could not be saved.',
@@ -856,10 +856,9 @@ export default Object.freeze({
     "One command per line. When a new Session starts in this Project, they run in the Project folder in the Agents' shell, and the Agent gets their output with its first message. At most 10 commands, 60 seconds each.",
   'projects.contextCommands.placeholder': 'git status --short',
   'projects.instructions.missing': 'Not found',
-  'projects.detail.sectionTeam': 'Team',
+  'projects.detail.sectionTeam': 'Agents',
   'projects.detail.teamInfo':
     'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
-  'projects.detail.sectionTools': 'Tools',
   'projects.detail.sectionSkills': 'Skills',
   'projects.detail.empty': 'Select a project to view and edit it.',
   'projects.repository.rescan': 'Rescan repository',
@@ -888,7 +887,7 @@ export default Object.freeze({
     'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
   'projects.team.toolAccessOverride': 'Tool access override',
   'projects.team.toolAccessOverrideHelp':
-    'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
+    'This replaces the repository Agent policy completely. It may allow a Tool the Agent file blocks or any other vBot Tool.',
   'projects.team.toolOverrideActive': 'Override active',
   'projects.team.repositoryPolicyActive': 'Repository policy',
   'projects.team.deniedToolsBaseline': 'Repository baseline blocks: {tools}',
@@ -966,7 +965,6 @@ export default Object.freeze({
   'projects.report.group.unslugifiable_name': 'Unusable agent names',
   'projects.report.group.bad_model': 'Unconfigured models',
   'projects.report.group.orphan': 'Orphaned pointers',
-  'projects.report.group.unavailable_tool': 'Unavailable tools',
   'projects.report.finding.agent': 'Agent {agentId}',
   'projects.report.finding.source': 'Source: {source}',
   'projects.rePoint.title': 'Repository not found',
