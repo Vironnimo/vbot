@@ -540,6 +540,8 @@ def provider_runtime_for(runtime: Any) -> ProviderRuntime:
 
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
+        self._started = True
+        self._startup_id = "stub-startup"
         self._provider_runtime: ProviderRuntime | None = None
         # Connection ids the stub's credential resolver reports as disabled.
         self.disabled_connections: set[str] = set()
