@@ -907,10 +907,9 @@ class FileDelivery:
             path = Path(claims["path"])
             if not path.is_absolute():
                 return None
-            resolved = path.resolve(strict=True)
         except OSError, RuntimeError, UnicodeDecodeError, ValueError:
             return None
-        return self._presentation_for_path(str(resolved))
+        return self._presentation_for_path(str(path))
 
     def _mint_token(self, path: Path) -> str:
         # Browsers may reuse an already-decoded image at the same URL even with
@@ -939,7 +938,10 @@ class FileDelivery:
             if not path.is_absolute():
                 return None
             resolved = path.resolve(strict=True)
-            if not resolved.is_file():
+            # History and capabilities name the original's canonical location.
+            # A later symlink/junction must not redirect that authority to a
+            # different file, including when History is projected again.
+            if resolved != path or not resolved.is_file():
                 return None
             with resolved.open("rb") as file_handle:
                 probe = file_handle.read(FILE_SNIFF_BYTES)
