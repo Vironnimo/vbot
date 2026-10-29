@@ -469,6 +469,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
         "core.utils.ids",
         "core.utils.logging",
         "core.utils.processes",
+        "core.utils.workers",
     }
 
     for module in modules:
