@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import stat
 import zlib
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -37,7 +38,7 @@ from core.json_documents import (
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import VBotError
-from core.utils.file_status import is_file_strict
+from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -251,10 +252,12 @@ class AttachmentStore:
         stored_filename = _filename_with_extension(filename, canonical_extension)
 
         stored_at = datetime.now(UTC).isoformat()
+        self._require_canonical_directory()
         try:
             self._attachments_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise AttachmentError("Cannot create the attachment folder") from exc
+        self._require_canonical_directory()
 
         def claim(candidate: str) -> bool:
             # The exclusively created sidecar is the id's only uniqueness claim and
@@ -320,7 +323,10 @@ class AttachmentStore:
     def _get_record(self, attachment_id: str, *, require_blob: bool) -> AttachmentRecord:
 
         normalized_id = _normalize_attachment_id(attachment_id)
+        self._require_canonical_directory()
         sidecar_path = self._sidecar_path(normalized_id)
+        if not self._regular_file_exists(sidecar_path):
+            raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
         try:
             data = load_validated_json_file(
                 sidecar_path, validate_attachment_metadata_data, missing_ok=True
@@ -341,13 +347,8 @@ class AttachmentStore:
             )
 
         blob_path = self._blob_path(normalized_id, metadata["media_type"])
-        if require_blob:
-            try:
-                blob_exists = is_file_strict(blob_path)
-            except OSError as exc:
-                raise AttachmentError(f"Cannot check attachment blob {blob_path}: {exc}") from exc
-            if not blob_exists:
-                raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
+        if require_blob and not self._regular_file_exists(blob_path):
+            raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
 
         return AttachmentRecord(
             id=normalized_id,
@@ -382,6 +383,7 @@ class AttachmentStore:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
         normalized_id = _normalize_attachment_id(attachment_id)
+        self._require_canonical_directory()
         blob_paths = (
             self._attachments_dir / f"{normalized_id}{extension}"
             for extension in _CANONICAL_BLOB_EXTENSIONS
@@ -395,6 +397,30 @@ class AttachmentStore:
                 raise AttachmentError(
                     f"Cannot delete attachment file {target_path}: {exc}"
                 ) from exc
+
+    def _require_canonical_directory(self) -> None:
+        """A missing directory is fine; redirecting managed storage is not."""
+        try:
+            status = stat_or_none(self._attachments_dir, follow_symlinks=False)
+            canonical = DataDirectoryLayout(self._data_dir.expanduser().resolve()).attachments
+            if self._attachments_dir.resolve() != canonical or (
+                status is not None and (is_link_status(status) or not stat.S_ISDIR(status.st_mode))
+            ):
+                raise AttachmentError("Attachment storage is redirected or is not a directory")
+        except OSError as exc:
+            raise AttachmentError("Cannot check the attachment folder") from exc
+
+    @staticmethod
+    def _regular_file_exists(path: Path) -> bool:
+        try:
+            status = stat_or_none(path, follow_symlinks=False)
+        except OSError as exc:
+            raise AttachmentError(f"Cannot check attachment file {path}: {exc}") from exc
+        if status is None:
+            return False
+        if is_link_status(status) or not stat.S_ISREG(status.st_mode):
+            raise AttachmentError(f"Attachment file is not a regular file: {path}")
+        return True
 
     def _blob_path(self, attachment_id: str, media_type: str) -> Path:
         extension = canonical_extension_for_media_type(media_type)
