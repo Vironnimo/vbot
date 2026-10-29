@@ -267,9 +267,15 @@ class DebugTraceStore:
             raise
         # Should checking the published file fail, the previous catalog stays
         # and no longer matches it: the next operation reads it and sweeps.
-        _LOADED_INDEXES[self._index_path] = _LoadedIndex(self._index_stamp(), retained, True)
-        for pruned_id in pruned:
-            self._trace_path(pruned_id).unlink(missing_ok=True)
+        try:
+            _LOADED_INDEXES[self._index_path] = _LoadedIndex(self._index_stamp(), retained, True)
+            for pruned_id in pruned:
+                self._trace_path(pruned_id).unlink(missing_ok=True)
+        except OSError:
+            # Publication succeeded, but a transient sharing lock can leave
+            # a pruned capture behind. Reconcile those orphans on the next save.
+            _LOADED_INDEXES.pop(self._index_path, None)
+            raise
 
     def _list(self) -> list[dict[str, Any]]:
         try:

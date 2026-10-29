@@ -337,16 +337,44 @@ class TestGetTrace:
 
 
 class TestRetentionPruning:
-    def test_keeps_traces_up_to_the_limit_and_then_deletes_the_oldest(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("cleanup_failure", [False, True])
+    def test_keeps_traces_up_to_the_limit_and_then_deletes_the_oldest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_failure: bool
+    ) -> None:
         store = DebugTraceStore(tmp_path, trace_limit=3)
         for day, trace_id in enumerate((TRACE_ID_1, TRACE_ID_2, TRACE_ID_3), start=1):
             store.save_trace(trace_id, _make_trace_data(trace_id, f"2025-01-0{day}T00:00:00Z"))
         assert len(store.get_traces()) == 3
 
-        store.save_trace(TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z"))
+        oldest = store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json"
+        if cleanup_failure:
+            unlink = Path.unlink
+
+            def locked_unlink(path: Path, *args, **kwargs) -> None:
+                if path == oldest:
+                    raise PermissionError("controlled sharing lock")
+                unlink(path, *args, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(Path, "unlink", locked_unlink)
+                with pytest.raises(PermissionError):
+                    store.save_trace(
+                        TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z")
+                    )
+            assert oldest.exists()
+        else:
+            store.save_trace(TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z"))
 
         assert {t["trace_id"] for t in store.get_traces()} == {TRACE_ID_2, TRACE_ID_3, TRACE_ID_4}
-        assert not (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").exists()
+        if cleanup_failure:
+            next_id = uuid4().hex
+            store.save_trace(next_id, _make_trace_data(next_id, "2025-01-05T00:00:00Z"))
+            assert {path.stem for path in oldest.parent.glob("*.json")} == {
+                TRACE_ID_3,
+                TRACE_ID_4,
+                next_id,
+            }
+        assert not oldest.exists()
 
 
 # ---------------------------------------------------------------------------
