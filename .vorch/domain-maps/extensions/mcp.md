@@ -25,6 +25,14 @@ Programmatic Tool calls (`ToolContext.programmatic`, `tools/registry-dispatch.md
 
 ## Connection lifecycle and call outcomes
 
+Connection management admits work under its per-connection lock. Once admitted,
+configuration persistence, runner replacement and Tool publication settle together
+before caller cancellation propagates; a cancelled lock waiter changes nothing.
+Service shutdown closes admission and drains these changes before closing runners
+and recovery storage, so an old save cannot land after the replacement service loads.
+During that drain the retiring service accepts no new Tool call or catalog publication.
+Coverage: `test_admitted_connection_changes_settle_before_cancellation_and_shutdown`.
+
 Unsubscribing also settles a subscription still awaiting its acknowledgement;
 one removed after acknowledgement but before its caller resumes cannot become a
 retained subscription again. The same URI can be subscribed explicitly afterwards.

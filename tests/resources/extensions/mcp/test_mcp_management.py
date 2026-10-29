@@ -7,6 +7,7 @@ import importlib.util
 import json
 import logging
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -219,6 +220,89 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "disable", "remove"])
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_admitted_connection_changes_settle_before_cancellation_and_shutdown(
+    host, monkeypatch, operation, shutdown
+):
+    service, registry = await start_service(host)
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    await service.management.manage("save", {"connection": _CONNECTION})
+    original_runner = service.runners["example"]
+    original_runner.state = "connected"
+    original_runner.catalog = _CATALOG
+    service._publish(original_runner, _CATALOG)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    save = service.store.save
+
+    def held_save(records):
+        save(records)
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=5)
+
+    monkeypatch.setattr(service.store, "save", held_save)
+    arguments = (
+        {"connection": {**_CONNECTION, "command": "replacement"}}
+        if operation == "save"
+        else {"id": "example"}
+    )
+    changing = asyncio.create_task(service.management.manage(operation, arguments))
+    closing = None
+    waiting = None
+    try:
+        await entered.wait()
+        # A request still waiting for this connection can be cancelled without
+        # changing its configuration later.
+        waiting = asyncio.create_task(
+            service.management.manage(
+                "save", {"connection": {**_CONNECTION, "command": "cancelled"}}
+            )
+        )
+        await asyncio.sleep(0)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        changing.cancel()
+        await asyncio.sleep(0)
+        changing.cancel()
+        assert not changing.done()
+        if shutdown:
+            closing = asyncio.create_task(service.close())
+            await asyncio.sleep(0)
+            assert not closing.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await changing
+        if closing is not None:
+            await closing
+        saved = service.store.load()
+        assert saved == service.connections
+        assert original_runner.state == "disconnected"
+        if operation == "remove":
+            assert "example" not in saved
+        elif operation == "save":
+            assert saved["example"]["command"] == "replacement"
+        else:
+            assert saved["example"]["enabled"] is False
+        if shutdown:
+            assert service.runners == {}
+        elif operation == "remove":
+            assert "mcp_example" not in _tool_names(registry)
+        else:
+            assert service.runners["example"] is not original_runner
+            if operation == "disable":
+                assert not _tool_names(registry, ready_only=True)
+    finally:
+        release.set()
+        await asyncio.gather(changing, *([waiting] if waiting else []), return_exceptions=True)
+        if closing is not None:
+            await closing
         await service.close()
 
 

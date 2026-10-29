@@ -372,6 +372,8 @@ class ConnectionManagement:
 
     async def manage(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self._service._host()
+        if self._service._closing:
+            raise ValueError("MCP Extension is not running")
         if self._service._startup_error is not None:
             raise ValueError(self._service._startup_error)
         if operation == "list":
@@ -407,77 +409,77 @@ class ConnectionManagement:
             return self._inspect(identifier, arguments)
         if operation in {"enable", "disable", "remove"}:
             return await self._service._mutate(operation, config)
-        async with self._service._connection_lock(identifier):
-            config = self._service._connection(identifier)
-            if operation == "credential":
-                if arguments["key"] not in _credential_names(config):
-                    raise ValueError("Credential must be referenced by this MCP connection")
-                self._service._host().set_credential(arguments["key"], arguments["value"])
-                # The variable name only: never its value.
-                self._service.api.logger.info(
-                    "MCP connection credential %s (connection=%s variable=%s)",
-                    "set" if arguments["value"] else "cleared",
-                    identifier,
-                    arguments["key"],
-                )
-                await self._service._stop(identifier)
-                self._service._runner(config)
-                self._service._connection_changed(identifier)
-                return {
-                    "id": identifier,
-                    "credential": arguments["key"],
-                    "set": bool(arguments["value"]),
-                }
-            if operation == "reauthorize":
-                if not config.get("oauth"):
-                    raise ValueError("MCP connection does not sign in with OAuth")
-                await self._service._stop(identifier)
-                self._forget_sign_in(identifier)
-                self._service._connection_changed(identifier)
-                self._service.api.logger.info(
-                    "MCP connection signed out (connection=%s)", identifier
-                )
-                runner = self._service._runner(config)
-                if config["enabled"]:
-                    runner.start()
-                return self._status(identifier)
-            if operation == "disconnect":
-                previous = self._service.runners.get(identifier)
-                await self._service._stop(identifier)
-                self._service._runner(config)
-                if previous is not None and previous.state != "disconnected":
-                    self._service.api.logger.info(
-                        "MCP connection disconnected (connection=%s)", identifier
-                    )
-                return self._status(identifier)
-            if not config["enabled"]:
-                raise ValueError("MCP connection is disabled")
+        return await self._service._change_connection(
+            identifier, lambda: self._manage_connection(operation, identifier, arguments)
+        )
+
+    async def _manage_connection(
+        self, operation: str, identifier: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        config = self._service._connection(identifier)
+        if operation == "credential":
+            if arguments["key"] not in _credential_names(config):
+                raise ValueError("Credential must be referenced by this MCP connection")
+            self._service._host().set_credential(arguments["key"], arguments["value"])
+            # The variable name only: never its value.
+            self._service.api.logger.info(
+                "MCP connection credential %s (connection=%s variable=%s)",
+                "set" if arguments["value"] else "cleared",
+                identifier,
+                arguments["key"],
+            )
+            await self._service._stop(identifier)
+            self._service._runner(config)
+            self._service._connection_changed(identifier)
+            return {
+                "id": identifier,
+                "credential": arguments["key"],
+                "set": bool(arguments["value"]),
+            }
+        if operation == "reauthorize":
+            if not config.get("oauth"):
+                raise ValueError("MCP connection does not sign in with OAuth")
+            await self._service._stop(identifier)
+            self._forget_sign_in(identifier)
+            self._service._connection_changed(identifier)
+            self._service.api.logger.info("MCP connection signed out (connection=%s)", identifier)
             runner = self._service._runner(config)
-            if operation == "connect":
-                if runner.state not in {"connecting", "connected"}:
-                    # A connection that then fails logs its own WARNING.
-                    self._service.api.logger.info(
-                        "MCP connection started (connection=%s)", identifier
-                    )
+            if config["enabled"]:
                 runner.start()
-                return self._status(identifier)
-            if operation == "reconnect":
-                # A new client and, for a local server, a new process.
-                (await self._service._replace_runner(identifier, config)).start()
+            return self._status(identifier)
+        if operation == "disconnect":
+            previous = self._service.runners.get(identifier)
+            await self._service._stop(identifier)
+            self._service._runner(config)
+            if previous is not None and previous.state != "disconnected":
                 self._service.api.logger.info(
-                    "MCP connection restarted (connection=%s)", identifier
+                    "MCP connection disconnected (connection=%s)", identifier
                 )
-                return self._status(identifier)
-            if operation == "events":
-                return runner.events(arguments.get("after", 0))
-            if operation == "test":
-                return self._service.jobs.start(check_connection(runner))
-            if operation in {"invoke", "explore"}:
-                return self._service.jobs.start(
-                    invoke_for_agent(
-                        self._service._host(), self._service.api.operations, runner, arguments
-                    )
+            return self._status(identifier)
+        if not config["enabled"]:
+            raise ValueError("MCP connection is disabled")
+        runner = self._service._runner(config)
+        if operation == "connect":
+            if runner.state not in {"connecting", "connected"}:
+                # A connection that then fails logs its own WARNING.
+                self._service.api.logger.info("MCP connection started (connection=%s)", identifier)
+            runner.start()
+            return self._status(identifier)
+        if operation == "reconnect":
+            # A new client and, for a local server, a new process.
+            (await self._service._replace_runner(identifier, config)).start()
+            self._service.api.logger.info("MCP connection restarted (connection=%s)", identifier)
+            return self._status(identifier)
+        if operation == "events":
+            return runner.events(arguments.get("after", 0))
+        if operation == "test":
+            return self._service.jobs.start(check_connection(runner))
+        if operation in {"invoke", "explore"}:
+            return self._service.jobs.start(
+                invoke_for_agent(
+                    self._service._host(), self._service.api.operations, runner, arguments
                 )
+            )
         raise ValueError(f"Unknown MCP management operation: {operation}")
 
     def _status(self, identifier: str) -> dict[str, Any]:
