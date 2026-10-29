@@ -91,6 +91,7 @@ class _Plan:
     root_project_id: str | None = None
     # A Workspace an older vBot moved into the archive: its payload tree and its destination.
     workspace_move: tuple[Path, Path] | None = None
+    source_created_at: str | None = None
 
 
 @dataclass
@@ -139,6 +140,8 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
     target = plan.check.target_id
     renamed = target != entry.subject_id
     restore_plan: dict[str, Any] = {"target_id": target, "strip_channel_keys": renamed}
+    if entry.kind in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT):
+        restore_plan["source_created_at"] = plan.source_created_at
     if entry.kind == ARCHIVE_KIND_AGENT:
         restore_plan["workspace"] = plan.workspace
         restore_plan["root_project_id"] = plan.root_project_id
@@ -253,6 +256,9 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
             services.agents.complete_restore_files(
                 target,
                 source_id=entry.subject_id,
+                expected_created_at=(
+                    plan.get("source_created_at") if isinstance(plan, Mapping) else None
+                ),
                 workspace=plan.get("workspace") if isinstance(plan, Mapping) else None,
                 root_project_id=(
                     plan.get("root_project_id", entry.facts.get("root_project_id"))
@@ -264,7 +270,13 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
             config_problem = str(error)
     elif not agent and config_problem is None:
         try:
-            services.projects.complete_restore_files(target, source_id=entry.subject_id)
+            services.projects.complete_restore_files(
+                target,
+                source_id=entry.subject_id,
+                expected_created_at=(
+                    plan.get("source_created_at") if isinstance(plan, Mapping) else None
+                ),
+            )
         except ProjectError as error:
             config_problem = str(error)
     if config_problem is not None:
@@ -530,6 +542,7 @@ def _plan_agent(
         workspace=workspace,
         root_project_id=root,
         workspace_move=workspace_move,
+        source_created_at=agent.created_at,
     )
 
 
@@ -649,7 +662,12 @@ def _plan_project(
                 project_id=owner.project_id,
                 cwd=project.cwd,
             )
-    return _Plan(_checked(entry, target, findings), entry, source)
+    return _Plan(
+        _checked(entry, target, findings),
+        entry,
+        source,
+        source_created_at=None if project is None else project.created_at,
+    )
 
 
 def _check_session(

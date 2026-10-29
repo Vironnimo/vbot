@@ -292,6 +292,7 @@ def complete_restore_files(
     target_id: str,
     *,
     source_id: str,
+    expected_created_at: str | None,
     workspace: str | None,
     root_project_id: str | None,
 ) -> None:
@@ -301,6 +302,16 @@ def complete_restore_files(
         data = load_validated_agent_json(store._agent_dir(target_id) / "agent.json")
         if data["id"] not in (source_id, target_id):
             raise AgentError(f"Agent restore target belongs to another Agent: {target_id}")
+        try:
+            if not isinstance(expected_created_at, str):
+                raise ValueError
+            parse_timestamp(expected_created_at)
+            if data.get("created_at") != expected_created_at:
+                raise ValueError
+        except ValueError as error:
+            raise AgentError(
+                f"The restore target cannot be verified as the archived Agent: {target_id}"
+            ) from error
         restored = _restored_agent(
             store, data, target_id, workspace=workspace, root_project_id=root_project_id
         )
