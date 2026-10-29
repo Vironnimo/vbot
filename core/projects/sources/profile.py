@@ -35,6 +35,26 @@ class ToolRule:
     allowed: bool
 
 
+# The vBot Tools a Profile without an explicit Tool list gets: the counterparts
+# of a coding agent's built-in Tools plus vBot's own display Tools. A foreign
+# Agent without a Tool list has every Tool of its own coding agent, not every
+# vBot Tool; anything else reaches a Team member through a vBot override.
+DEFAULT_PROFILE_TOOLS: tuple[str, ...] = (
+    "read",
+    "apply_patch",
+    "search_files",
+    "bash",
+    "terminal",
+    "web_fetch",
+    "web_search",
+    "subagent",
+    "skill",
+    "status",
+    "show_widget",
+    "portal",
+)
+
+
 @dataclass(frozen=True)
 class AgentProfile:
     agent_id: str
@@ -45,6 +65,7 @@ class AgentProfile:
     body: str
     source: str
     source_path: Path
+    # An explicit Tool list; ``None`` means ``DEFAULT_PROFILE_TOOLS``.
     allowed_tools: frozenset[str] | None = None
     denied_tools: frozenset[str] = frozenset()
     tool_rules: tuple[ToolRule, ...] = ()
@@ -63,6 +84,14 @@ class AgentProfile:
     # yet such as ``.claude/settings.local.json``: a restricted Session of the
     # member may read them where its rules allow but never change them.
     rule_files: tuple[Path, ...] = ()
+
+    @property
+    def tools(self) -> tuple[str, ...]:
+        """The Tools this Profile starts from, before its rules and denials."""
+        if self.allowed_tools is None:
+            return DEFAULT_PROFILE_TOOLS
+        known = tuple(name for name in DEFAULT_PROFILE_TOOLS if name in self.allowed_tools)
+        return (*known, *sorted(self.allowed_tools - set(known)))
 
     @property
     def status(self) -> str:

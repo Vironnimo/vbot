@@ -50,14 +50,6 @@ AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
-# Tool allowlists generally use ``*`` as the all-tools wildcard, but a Project
-# Tool Whitelist is a security ceiling assembled from explicit tool names. Keep
-# the spelling in the low-level settings contract so both raw ``project.json``
-# validation and the Project entity reject the same forbidden value without an
-# import cycle through ``core.tools``.
-PROJECT_TOOL_ALLOWLIST_WILDCARD = "*"
-
-
 # Appearance chat-width preference (the WebUI chat reading-column width). The
 # constant lives here, not in normalizers.py, so the public update parser can
 # validate membership without a circular import (normalizers imports settings).

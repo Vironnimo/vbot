@@ -30,6 +30,7 @@ from core.debug import store as debug_store
 from core.model_tasks import SpeechService
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
+from core.projects import PROJECT_FORMAT_VERSION
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.providers.providers import ProviderRegistry
@@ -201,7 +202,7 @@ async def test_start_modes_split_staging_cleanup_conversion_and_database_release
     await verification.aclose()
     assert not killed.exists()
     assert set(RETIRED_CANONICAL_DATABASES) <= registered()
-    assert version(converted) == 2
+    assert version(converted) == PROJECT_FORMAT_VERSION
 
     # Normal startup never converts.
     unconverted = older_project("unconverted")

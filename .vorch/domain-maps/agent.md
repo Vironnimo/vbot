@@ -36,7 +36,7 @@ Creation, the Librarian's Skill subject and the Live Agents -> `agent/builtin-ag
 
 ## Uniform Agent Resolution
 
-Run paths resolve through one seam, `AgentResolver.resolve_agent(project_id, agent_id)` (owned by `core/projects/`; details in `projects/resolution.md`) - never `runtime.agents.get(...)` directly. Identity branch (`project_id=None`): this domain's store, unchanged behavior. Project branch synthesizes a workspace-less Project Agent from the Team scan whose policy computes inside the Project Tool Whitelist (repository denials narrow; a vBot override fully replaces scanned policy within the ceiling).
+Run paths resolve through one seam, `AgentResolver.resolve_agent(project_id, agent_id)` (owned by `core/projects/`; details in `projects/resolution.md`) - never `runtime.agents.get(...)` directly. Identity branch (`project_id=None`): this domain's store, unchanged behavior. Project branch synthesizes a workspace-less Project Agent from the Team scan whose Tools come from its repository definition or the Default Profile Tools (repository denials narrow; a vBot override fully replaces scanned policy).
 
 Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_agent` using an exact canonical Session generation. `core/agents/temporary.py` owns their immutable configuration and indexed bindings, `core/agents/temporary_execution.py` their execution groups (-> `agent/temporary-agents.md`). Team freshness and the Project Agent Model and scalar chains are owned by `projects/resolution.md`; Identity Agents keep their two-tier injection (Data Model).
 

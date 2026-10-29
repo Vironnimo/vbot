@@ -70,7 +70,6 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "--auto-instructions", "off",
         "--folder-instructions", "on",
         "--memory", "off",
-        "--allowed-tools", "read", "bash",
         "--enabled-bundled-skills", "vbot-docs",
     )  # fmt: skip
 
@@ -91,7 +90,6 @@ def test_project_add_sends_every_option_and_previews_the_scan(
                 "auto_instructions": False,
                 "folder_instructions": True,
                 "memory_enabled": False,
-                "allowed_tools": ["read", "bash"],
                 "skills_bundled_enabled": ["vbot-docs"],
             },
         )
@@ -255,18 +253,16 @@ def test_project_show_renders_the_team_and_the_default_knobs(
         ),
         pytest.param(
             (
-                "--allowed-tools", "read", "bash",
                 "--enabled-bundled-skills", "vbot-docs",
                 "--enabled-global-skills", "glossary",
                 "--disabled-project-skills", "unsafe-skill",
             ),
             {
-                "allowed_tools": ["read", "bash"],
                 "skills_bundled_enabled": ["vbot-docs"],
                 "skills_global_enabled": ["glossary"],
                 "skills_project_disabled": ["unsafe-skill"],
             },
-            id="tool-and-skill-policy",
+            id="skill-policy",
         ),
         pytest.param(
             ("--auto-instructions", "off", "--folder-instructions", "off"),
@@ -315,7 +311,6 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
         "--context-commands",
         "--auto-instructions",
         "--folder-instructions",
-        "--allowed-tools",
         "--enabled-bundled-skills",
         "--enabled-global-skills",
         "--disabled-project-skills",

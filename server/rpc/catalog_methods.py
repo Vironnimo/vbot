@@ -15,7 +15,6 @@ from core.projects import (
     resolve_prompt_project,
     resolve_skill_scope,
 )
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
 from core.tools.availability import activation_sources
 from core.tools.on_demand import always_loaded_tools
@@ -46,8 +45,8 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "tool.list does not accept params")
     try:
-        # All registered tools (readiness default off): the picker and Project Tool
-        # Whitelist editor see every tool and style a not-ready one from the per-tool
+        # All registered tools (readiness default off): the Tool access editors see
+        # every tool and style a not-ready one from the per-tool
         # ``ready``/``readiness_hint`` fields, rather than the tool vanishing. The
         # model-facing surfaces (provider/prompt definitions) still filter readiness.
         tools = state.runtime.tools.list_tools(
@@ -57,17 +56,11 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
         _validate_tool_relationships(tools)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    # ``default_project_tools`` is the project Tool Whitelist base list — the editor
-    # uses it as the "reset to defaults" target and to mark default-on tools, so the
-    # base list stays a single server-side constant rather than a duplicated literal.
-    return {
-        "tools": [_project_annotated_tool_response(tool) for tool in tools],
-        "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
-    }
+    return {"tools": [_project_annotated_tool_response(tool) for tool in tools]}
 
 
 def _project_annotated_tool_response(tool: Any) -> JsonObject:
-    """Project the generic Tool plus server-owned Project configurability policy."""
+    """Project the generic Tool plus whether a Team member's override may name it."""
     response = _tool_response(tool)
     reason = project_tool_configurability_reason(
         activation=tool.activation,

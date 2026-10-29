@@ -25,12 +25,12 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   file_state)` registers `edit` and `write` in the `files` family with activation
   `follows` -> `apply_patch` and `catalog_visible=False`: they are active exactly
   when `apply_patch` is, a denial of `apply_patch` removes them, and neither
-  appears in `tool.list`, so the Tool picker and the Project Tool Whitelist show
+  appears in `tool.list`, so the Tool pickers show
   only `apply_patch` (one user-visible switch). A fixed Tool set
   (`ToolAccess.fixed`) with `apply_patch` gets them as well. A persisted `denied: ["edit"]` still vetoes `edit`; the route then
   keeps `apply_patch` (`offer_edit_dialect`). Coverage:
   `test_edit_tools.py::test_edit_and_write_are_available_exactly_when_apply_patch_is`,
-  `test_projects.py` (not in `PROJECT_DEFAULT_ALLOWED_TOOLS`).
+  `test_resolver_config_agent.py` (not in `DEFAULT_PROFILE_TOOLS`).
 - **Dialect helpers** (exported from `core.tools`): `edit_dialect(family)` returns
   `patch` for a casefolded family that starts with `gpt` (not `gpt-oss`), equals
   `o` or starts with `o-`, else `replace` (an unknown family included).

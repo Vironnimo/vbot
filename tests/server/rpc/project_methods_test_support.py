@@ -12,11 +12,11 @@ from core.agents.agents import AgentStore
 from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences
 from core.database import SnapshotBarrier, write_bootstrap_marker
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentResolver,
     ModelConfigurationChecker,
 )
+from core.projects.sources import DEFAULT_PROFILE_TOOLS
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
@@ -212,7 +212,7 @@ def _make_state(
         # ``skill_manage`` are registered but intentionally not Project-eligible.
         tools=_FakeTools(
             {
-                *PROJECT_DEFAULT_ALLOWED_TOOLS,
+                *DEFAULT_PROFILE_TOOLS,
                 "memory",
                 "skill_manage",
             }

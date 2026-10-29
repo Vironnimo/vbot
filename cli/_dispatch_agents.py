@@ -322,7 +322,6 @@ def _apply_project_instruction_switches(args: argparse.Namespace, target: dict[s
 
 def _apply_project_capability_fields(args: argparse.Namespace, target: dict[str, Any]) -> None:
     mappings = {
-        "allowed_tools": "allowed_tools",
         "enabled_bundled_skills": "skills_bundled_enabled",
         "enabled_global_skills": "skills_global_enabled",
         "disabled_project_skills": "skills_project_disabled",

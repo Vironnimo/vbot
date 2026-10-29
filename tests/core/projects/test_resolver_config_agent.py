@@ -22,7 +22,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
 
 from .resolver_test_support import (
-    PROJECT_DEFAULT_ALLOWED_TOOLS,
+    DEFAULT_PROFILE_TOOLS,
     AgentStore,
     ConfigAgent,
     Path,
@@ -55,15 +55,14 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.id == "builder"
     assert runtime_agent.model == "openai/gpt-5.2"
     assert runtime_agent.body == "You build.\n"
-    # Project Agents have no personal Workspace or Memory. With no agent
-    # denials the effective tools are exactly the project Tool Whitelist ceiling;
-    # skills stay wildcard until Phase 3 wires the project skill rule.
+    # Project Agents have no personal Workspace or Memory. A repository Agent
+    # without a Tool list starts from the default Profile Tools.
     assert runtime_agent.workspace == ""
     assert runtime_agent.memory_prompt_mode == "off"
     assert runtime_agent.project_memory_enabled is True
     assert runtime_agent.tool_access == ToolAccess(
         mode="selected",
-        allowed=tuple(PROJECT_DEFAULT_ALLOWED_TOOLS),
+        allowed=DEFAULT_PROFILE_TOOLS,
     )
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
@@ -151,7 +150,6 @@ def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(
     project = _project(projects, repo)
     project = projects.update(
         project.project_id,
-        allowed_tools=["read", "grep"],
         skills_global_enabled=["global-skill"],
         skills_project_disabled=["disabled-skill"],
     )
@@ -281,16 +279,15 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
         sessions.close()
 
 
-_BASE_TOOLS = tuple(PROJECT_DEFAULT_ALLOWED_TOOLS)
+_BASE_TOOLS = DEFAULT_PROFILE_TOOLS
 
 
 @pytest.mark.parametrize(
-    ("permission", "allowed_tools", "tool_access"),
+    ("permission", "tool_access"),
     [
         # permission.edit covers file mutation, so it removes apply_patch.
         pytest.param(
             {"edit": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"},
-            None,
             ToolAccess(
                 mode="selected",
                 allowed=tuple(
@@ -304,7 +301,6 @@ _BASE_TOOLS = tuple(PROJECT_DEFAULT_ALLOWED_TOOLS)
         ),
         pytest.param(
             {"task": "deny"},
-            None,
             ToolAccess(
                 mode="selected",
                 allowed=tuple(tool for tool in _BASE_TOOLS if tool != "subagent"),
@@ -312,27 +308,17 @@ _BASE_TOOLS = tuple(PROJECT_DEFAULT_ALLOWED_TOOLS)
             ),
             id="builder-denial",
         ),
-        # The ceiling is the hard cap even without an Agent denial.
-        pytest.param(
-            None,
-            ["read", "grep"],
-            ToolAccess(mode="selected", allowed=("read", "grep")),
-            id="narrowed-ceiling",
-        ),
     ],
 )
-def test_repository_denials_narrow_the_project_tool_ceiling(
+def test_repository_denials_narrow_the_default_profile_tools(
     agents: AgentStore,
     projects: ProjectStore,
     repo: Path,
     permission: dict[str, str] | None,
-    allowed_tools: list[str] | None,
     tool_access: ToolAccess,
 ) -> None:
     _write_agent(repo, "builder.md", model="openai/gpt-5.2", permission=permission)
     _project(projects, repo)
-    if allowed_tools is not None:
-        projects.update("vbot", allowed_tools=allowed_tools)
     resolver = _resolver(agents, projects, _openai_configured())
 
     actual = resolver.resolve_agent("vbot", "builder").tool_access
@@ -498,7 +484,8 @@ def test_a_restricted_member_cannot_write_a_definition_that_would_replace_its_ow
     [
         pytest.param(
             "all",
-            ToolAccess(mode="selected", allowed=("analyze_image",), granted=("analyze_image",)),
+            # A Team member's override has no ceiling: all means every Tool.
+            ToolAccess(mode="all", granted=("analyze_image",)),
             ("analyze_image",),
             id="all",
         ),
@@ -520,11 +507,10 @@ def test_opt_in_grant_survives_project_resolution_and_reset(
     usable: tuple[str, ...],
 ) -> None:
     # An opt-in Tool such as the image-analysis vision exception needs an explicit
-    # grant on top of the Project Tool Whitelist.
+    # grant, which the default Profile Tools never carry.
     tools = [SimpleNamespace(name="analyze_image", requires_opt_in=True)]
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    projects.update("vbot", allowed_tools=["analyze_image"])
     resolver = _resolver(agents, projects, _openai_configured())
     policy: dict[str, Any] = {"mode": mode, "granted": ["analyze_image"]}
     if mode == "selected":
@@ -541,7 +527,7 @@ def test_opt_in_grant_survives_project_resolution_and_reset(
     assert granted == granted_access
     assert resolve_tool_access(granted, tools, "off").allowed_tools == usable
     assert effective == {"value": policy, "source": "override"}
-    assert reset == ToolAccess(mode="selected", allowed=("analyze_image",))
+    assert reset == ToolAccess(mode="selected", allowed=DEFAULT_PROFILE_TOOLS)
 
 
 def test_effective_agent_targets_are_materialized_from_current_project_team(

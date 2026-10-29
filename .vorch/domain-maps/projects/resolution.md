@@ -1,6 +1,6 @@
 # Project Agent Resolution
 
-Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, capability ceilings, working-Project helpers, or which instruction files Project Context loads.
+Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, Tool and Skill policy, working-Project helpers, or which instruction files Project Context loads.
 
 ## Uniform Resolution Seam
 
@@ -75,23 +75,19 @@ A Team member's `rule_files` are its profile, the profile's own `AgentProfile.ru
 
 ## Effective Capabilities
 
-Project capability configuration is a ceiling, not another fallback chain.
+Tool and Skill access are no fallback chain: the Project's Skill selection is a ceiling, and Tools come from the Team member's own definition unless a vBot override replaces it.
 
 A Project Agent's `project_memory_enabled` selection defaults to true and a Boolean per-Agent override can disable it; resolution and effective-config provenance expose that choice. The separate Project-wide `memory_enabled` switch remains the outer gate for rendering and Tool access (`memory.md`), without changing the Agent's personal `memory_prompt_mode: off` or giving it a Workspace.
 
 Without a vBot Tool override, effective Tool policy is:
 
 ```text
-Project allowed_tools AND Profile allowlist/rules - Profile denials
+(Profile allowlist, or the Default Profile Tools when it names none) - Profile denials
 ```
 
-With `overrides.<agent_id>.tool_access`, effective Tool policy is instead:
+The Default Profile Tools (`DEFAULT_PROFILE_TOOLS`, `core/projects/sources/profile.py`; `AgentProfile.tools` applies them) are the vBot counterparts of a coding agent's built-in Tools - `read`, `apply_patch`, `search_files`, `bash`, `terminal`, `web_fetch`, `web_search`, `subagent`, `skill` - plus `status`, `show_widget` and `portal` (user decision 2026-10-29). `apply_patch` is the edit capability (its followers `edit` and `write` are not configurable, `tools/edit.md`); `background_tasks` follows `bash` and `subagent` and needs no entry (`tools/shell.md`).
 
-```text
-vBot Tool Access Policy  AND  Project allowed_tools
-```
-
-The override fully replaces repository denials and may therefore re-enable a repo-denied Tool, but it cannot grant a directly configurable Tool omitted by the Project. `mode: all` means the complete Project Tool Whitelist subject to explicit opt-in. `tool_access.granted` survives this materialization, must stay inside the ceiling, and never comes from whitelist membership. `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active in-ceiling lead and absolute `denied` names apply after every activation source. Keep foreign permission parsing in adapters and this final policy construction in the resolver.
+With `overrides.<agent_id>.tool_access`, that vBot Tool Access Policy is the effective Tool policy as stored. It fully replaces repository denials and may re-enable a repo-denied Tool or add any other Tool; there is no Project Tool ceiling (user decision 2026-10-29: Permission Rules bound what Tools may do). `mode: all` means every Tool subject to explicit opt-in; Identity-only Tools stay unavailable because a Team member has no Workspace (`tools/access-policy.md`). `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active lead and absolute `denied` names apply after every activation source. Keep foreign permission parsing in adapters and this final policy construction in the resolver (`_project_agent_tool_access`, `_resolution_values.py`).
 
 Effective Skills are:
 
@@ -107,11 +103,11 @@ The same exact effective names form the temporary Skill grant when an Identity S
 
 Effective additional Agent targets are the current Project Team, excluding the calling Agent, filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means every other Team member; a result with no members means self-only, not that either Sub-Agent Tool is unavailable. When a Sub-Agent Tool is available, the resolver projects these additional targets into the synthesized config Agent's root `tools.subagent.allowed_agents` block; Tool availability remains owned by the effective `tool_access`, and disabling the Tool omits that runtime block without altering the repository target rules that will be applied again when the Tool returns. A Project Agent cannot address an Identity Agent or another Project even if its source policy is broad, because Project scope is the hard outer boundary.
 
-Imported allowlists (including empty) and denials select the Agent's own Tools as an ordinary `selected` policy, so followers and the Session's grants (`message_parent`, an Extension's private Tools) still activate; how foreign settings become Tools is in `scanning.md` -> Translation and access. Unavailable Profiles cannot run. Explicit vBot overrides replace import restrictions within the ceiling.
+Imported allowlists (including empty) and denials select the Agent's own Tools as an ordinary `selected` policy, so followers and the Session's grants (`message_parent`, an Extension's private Tools) still activate; how foreign settings become Tools is in `scanning.md` -> Translation and access. Unavailable Profiles cannot run. Explicit vBot overrides replace import restrictions.
 
 Profile Skill rules narrow the effective Skills. Permitted available preloads include Skill instruction bodies in the Agent body, using existing `skill_content` framing and the origin directory. Missing, unavailable or oversized Skills are not loaded. Ordinary Agent-body prompt pins keep this stable during the Prompt Epoch.
 
-`prepare_temporary_config` consumes the same Profile and translation against the owner's selection instead of Project ceilings. It snapshots resolved Model/scalars, restrictions and instructions before binding creation. A Model wish that resolves to no usable Model, with no Project or global default either, leaves the participant on its own Model. The original `repository_profile_request` makes replays idempotent across repository edits. The resolved Tool policy stays in the protected binding; an owner's `fixed` selection stays fixed.
+`prepare_temporary_config` consumes the same Profile and translation with the owner's selection as the Tool ceiling: it takes the Default Profile Tools' place and bounds the Profile allowlist and a Team override (`all` becomes the owner's selection), and the Project's Skill rule does not apply. It snapshots resolved Model/scalars, restrictions and instructions before binding creation. A Model wish that resolves to no usable Model, with no Project or global default either, leaves the participant on its own Model. The original `repository_profile_request` makes replays idempotent across repository edits. The resolved Tool policy stays in the protected binding; an owner's `fixed` selection stays fixed.
 
 ## Working Project resolution
 
@@ -137,7 +133,7 @@ The instructions of Project Context (GLOSSARY -> Project Context) are `Project.i
 `preview_temporary_agent` and persisted temporary-Agent resolution share
 `_require_temporary_project`: both check that the selected Project exists and
 keep the configured Tool selection, Skill allowlist and prompt blocks unchanged,
-because Project ceilings bound only the Team (`projects.md`); preview constructs
+because the Project's Skill rule bounds only the Team (`projects.md`); preview constructs
 no Session binding. Evidence: `core/projects/resolver.py`,
 `tests/core/projects/test_resolver_config_agent.py`, `tests/core/agents/test_temporary.py`
 and `tests/core/runtime/test_runtime_extension_host.py`.
@@ -145,14 +141,14 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 - Add or reorder a fallback tier only in the resolver and update `effective_config()` provenance, RPC/UI presentation, and tests together.
 - Change model availability in the shared Models/Providers checker, not by adding a Project-only exception.
 - Change repository field interpretation in the Source adapter; resolution should consume the common `AgentProfile` representation.
-- Change Project defaults, override storage, or ceiling configuration in the configuration/persistence path; the resolver consumes the validated Project value.
+- Change Project defaults, override storage, or the Skill selection in the configuration/persistence path; the resolver consumes the validated Project value.
 - Keep Identity Agent and Project Agent resolution behind the same public seam so Chat, Sessions, Queue, Cron, and other Run producers do not develop incompatible rules.
 
 ## Source & Tests
 
 - Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agent chain (bindings, repository Profiles, previews): `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
-- Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
+- Tool and Skill policy, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
 - Project entity and override contract: `core/projects/projects.py`
 - Repository inputs: `core/projects/sources/`

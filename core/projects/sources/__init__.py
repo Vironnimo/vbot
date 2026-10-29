@@ -16,6 +16,7 @@ from core.projects.sources.catalog import (
     skill_roots,
 )
 from core.projects.sources.profile import (
+    DEFAULT_PROFILE_TOOLS,
     AgentProfile,
     AgentTargetRule,
     SourceSelection,
@@ -27,6 +28,7 @@ __all__ = [
     "AgentAdapter",
     "AgentProfile",
     "AgentTargetRule",
+    "DEFAULT_PROFILE_TOOLS",
     "DetectedSource",
     "FOLDER_SOURCE_PREFIX",
     "SOURCE_CATALOG",

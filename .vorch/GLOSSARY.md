@@ -54,7 +54,7 @@ Moving the current Session, with its id and full history, to another Agent with 
 A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Provider Adapter.
 
 ## Access Mode
-Which clients a vBot server admits and whether they must sign in: `local`, `lan` or `authenticated`, chosen by the host for each server start (`access.md`). Not an Agent's Tool access, a Project's capability ceiling, or the server's startup mode.
+Which clients a vBot server admits and whether they must sign in: `local`, `lan` or `authenticated`, chosen by the host for each server start (`access.md`). Not an Agent's Tool access, a Project's Skill selection, or the server's startup mode.
 
 ## Device
 A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`, with its own revocable token (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
@@ -90,7 +90,7 @@ A value such as a password, API key or login that the user gives an Agent to use
 An Identity Agent's own home for its identity and Memory files (`agent.md`). Not a Project, even when its path equals one, and not a Session owner; a Session of an Identity Agent works in it only when it has no Working Project.
 
 ## Project
-A registered repository that Agents work in, with its Sources, Team, defaults and capability ceilings; vBot keeps the Project's runtime state in its data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+A registered repository that Agents work in, with its Sources, Team, defaults, Skill selection and Team overrides; vBot keeps the Project's runtime state in its data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
 
 ## Working Project
 The Project a Session works in for its whole life: its file and shell work, Project Skills and Project Context come from that repository (`sessions/ownership.md`). Not the Default Project, which only seeds new Sessions, and not the Session's addressing Project, which stays empty for an Identity Agent's Session working in a Project.

@@ -128,7 +128,6 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
         encoding="utf-8",
     )
     runtime.projects.create("repo", "Repo", tmp_path)
-    runtime.projects.update("repo", allowed_tools=[])
     host = _owner_host(runtime, "swarm")
     assert host.temporary_agents is not None
     profile = {
@@ -177,9 +176,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     write_skill(runtime.global_skills_dir, "global-skill", "global sentinel")
     runtime.reload_skills()
     runtime.projects.create("project-a", "Project A", repo)
-    project = runtime.projects.update(
-        "project-a", allowed_tools=["read"], skills_global_enabled=["global-skill"]
-    )
+    project = runtime.projects.update("project-a", skills_global_enabled=["global-skill"])
     host = _owner_host(runtime, "swarm")
     assert host.catalog is not None
 
@@ -191,7 +188,6 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             "name": "Project A",
             "cwd": project.cwd,
             "agent_profiles": [],
-            "allowed_tools": ["read"],
             "allowed_skills": ["global-skill", "project-skill"],
         }
     ]
@@ -364,9 +360,8 @@ async def test_temporary_group_preflight_validates_participants_before_opening(
             assert not set(denied) & set(capability.tool_names)
             await groups.open_group(group_id)
 
-        # A Project's Tool whitelist bounds its Team, not a participant's selection.
+        # A Project does not bound a participant's Tool selection.
         runtime.projects.create("narrow", "Narrow", valid_cwd)
-        runtime.projects.update("narrow", allowed_tools=["read"])
         await groups.create(
             "in-project",
             "peer",

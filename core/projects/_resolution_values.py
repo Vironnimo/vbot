@@ -1,4 +1,4 @@
-"""Project capability ceilings, scalar fallback and effective provenance."""
+"""Project Agent Tool and Skill policy, scalar fallback and effective provenance."""
 
 from __future__ import annotations
 
@@ -34,12 +34,15 @@ if TYPE_CHECKING:
     from core.tools.availability import ToolAccess
 
 
-def _project_agent_tool_access(project: Project, scanned: AgentProfile) -> ToolAccess:
-    """Return the Project-scoped Tool policy for one Project Agent.
+def _project_agent_tool_access(
+    project: Project, scanned: AgentProfile, ceiling: tuple[str, ...] | None = None
+) -> ToolAccess:
+    """Return the Tool policy of one Team member, or of a temporary participant.
 
-    A vBot override replaces the repository-scanned Tool policy. ``all`` is
-    materialized against the Project Tool Whitelist so the shared runtime resolver
-    never interprets it as every Tool registered in the whole vBot instance.
+    A vBot override replaces the repository-scanned Tool policy. A Team member
+    has no ceiling: without an override it starts from its Profile's Tools. A
+    temporary participant passes its owner's selection as ``ceiling``, which
+    bounds the override (``all`` becomes that selection) and the Profile alike.
     """
 
     from core.tools.availability import ToolAccess, normalize_tool_access
@@ -47,23 +50,22 @@ def _project_agent_tool_access(project: Project, scanned: AgentProfile) -> ToolA
     raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
     if raw_override is not None:
         override = normalize_tool_access(raw_override)
-        if override.mode == "none":
+        if ceiling is None or override.mode == "none":
             return override
         if override.mode == "all":
             return ToolAccess(
                 mode="selected",
-                allowed=tuple(project.allowed_tools),
+                allowed=ceiling,
                 denied=override.denied,
                 granted=override.granted,
             )
         return replace(
-            override,
-            allowed=tuple(name for name in override.allowed if name in project.allowed_tools),
+            override, allowed=tuple(name for name in override.allowed if name in ceiling)
         )
 
     if scanned.unavailable_reason:
         return ToolAccess(mode="none")
-    return profile_tool_access(scanned, tuple(project.allowed_tools))
+    return profile_tool_access(scanned, scanned.tools if ceiling is None else ceiling)
 
 
 def profile_tool_access(scanned: AgentProfile, selection: tuple[str, ...]) -> ToolAccess:

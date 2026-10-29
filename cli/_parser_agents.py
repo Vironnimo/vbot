@@ -648,9 +648,6 @@ def _add_project_instruction_arguments(
 
 def _add_project_capability_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--allowed-tools", nargs="*", help="Replace the Project-wide tool allowlist"
-    )
-    parser.add_argument(
         "--enabled-bundled-skills",
         nargs="*",
         metavar="<skill>",

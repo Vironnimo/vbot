@@ -417,7 +417,7 @@ class ExtensionHostFactory:
         }
         # Private capabilities are granted by the owner; profiles may only deny
         # them. The ordinary selection applies as configured, also inside a
-        # Project, whose Tool whitelist bounds only its Team.
+        # Project.
         assert self._extensions is not None
         record = next(
             item for item in self._extensions.records() if item.name == binding.owner_name
@@ -693,7 +693,6 @@ class ExtensionHostFactory:
                         for member in self.agent_resolver.cached_scan(project).team
                         if not member.unavailable_reason
                     ],
-                    "allowed_tools": list(project.allowed_tools),
                     "allowed_skills": effective_project_allowed_skills(
                         project, self.project_skill_names(project.project_id)
                     ),
