@@ -59,8 +59,35 @@
       !values.delivery_channel_id &&
       agentChannels.length === 1
     ) {
-      editor.updateFormField('delivery_channel_id', agentChannels[0].id);
+      chooseChannel(agentChannels[0].id);
     }
+    if (kind === CRON_DELIVERY_CHAT && values.delivery_channel_id)
+      chooseChannel(values.delivery_channel_id);
+  }
+
+  function rememberPlatform() {
+    const channel = agentChannels.find(
+      (item) => item.id === values.delivery_channel_id,
+    );
+    if (channel) editor.updateFormField('delivery_platform', channel.platform);
+  }
+
+  function chooseChannel(channelId) {
+    const channel = agentChannels.find((item) => item.id === channelId);
+    if (
+      channelId !== values.delivery_channel_id ||
+      channel?.platform !== values.delivery_platform
+    ) {
+      editor.updateFormField('delivery_platform_target', '');
+      editor.updateFormField('delivery_thread_id', '');
+    }
+    editor.updateFormField('delivery_channel_id', channelId);
+    rememberPlatform();
+  }
+
+  function updateTarget(field, value) {
+    editor.updateFormField(field, value);
+    rememberPlatform();
   }
 </script>
 
@@ -124,8 +151,7 @@
                 (editor.isCreating && editor.submittingForm)}
               triggerClass="cron-dropdown"
               listClass="cron-dropdown-list"
-              onValueChange={(next) =>
-                editor.updateFormField('delivery_channel_id', next)}
+              onValueChange={chooseChannel}
             />
           </div>
         </div>
@@ -149,8 +175,7 @@
               value={values.delivery_platform_target}
               placeholder={t('cron.form.deliveryChatPlaceholder')}
               disabled={editor.isCreating && editor.submittingForm}
-              onInput={(next) =>
-                editor.updateFormField('delivery_platform_target', next)}
+              onInput={(next) => updateTarget('delivery_platform_target', next)}
             />
             <datalist id="cron-job-delivery-chats">
               {#each chatSuggestions as chatId (chatId)}
@@ -177,8 +202,7 @@
               value={values.delivery_thread_id}
               placeholder={t('cron.form.deliveryThreadPlaceholder')}
               disabled={editor.isCreating && editor.submittingForm}
-              onInput={(next) =>
-                editor.updateFormField('delivery_thread_id', next)}
+              onInput={(next) => updateTarget('delivery_thread_id', next)}
             />
           </div>
         </div>
