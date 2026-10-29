@@ -8,7 +8,7 @@ import logging
 import smtplib
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -92,6 +92,7 @@ class FakeMailbox:
         self.selected = ""
         self.idling = threading.Event()
         self.interrupted = threading.Event()
+        self.closed = False
 
     def status(self, folder: str) -> FolderStatus:
         mailbox = self.folders[folder]
@@ -115,7 +116,7 @@ class FakeMailbox:
         self.interrupted.set()
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
 
 class FakeEngine:
@@ -429,19 +430,54 @@ async def test_replies_thread_and_own_mails_are_skipped(harness: Harness) -> Non
 
 
 @pytest.mark.asyncio
-async def test_stop_ends_a_waiting_idle_at_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("phase", ["opening", "idle", "cleanup"])
+async def test_stop_closes_the_mailbox_and_interrupts_a_waiting_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     mailbox = FakeMailbox({"INBOX": FakeFolder()}, supports_idle=True)
     adapter, *_rest = make_adapter(tmp_path, mailbox=mailbox)
-    task = asyncio.create_task(adapter.start())
-    await wait_until(mailbox.idling.is_set, timeout=2)
+    opened = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    closing = asyncio.Event()
+    allow_close = asyncio.Event()
+    run_io = email_module._IO_POOL.run
 
-    task.cancel()
+    async def wait_for_close(function: Any, *args: Any, **kwargs: Any) -> Any:
+        if function == mailbox.close:
+            closing.set()
+            await allow_close.wait()
+        return await run_io(function, *args, **kwargs)
+
+    def connect(_settings: EmailSettings, _password: str) -> FakeMailbox:
+        loop.call_soon_threadsafe(opened.set)
+        assert release.wait(2)
+        return mailbox
+
+    if phase == "opening":
+        monkeypatch.setattr(adapter, "_open_mailbox", connect)
+    elif phase == "cleanup":
+        monkeypatch.setattr(email_module._IO_POOL, "run", wait_for_close)
+    task = asyncio.create_task(adapter.start())
+    try:
+        if phase == "opening":
+            async with asyncio.timeout(2):
+                await opened.wait()
+        else:
+            await wait_until(mailbox.idling.is_set, timeout=2)
+        task.cancel()
+        if phase == "cleanup":
+            async with asyncio.timeout(2):
+                await closing.wait()
+            task.cancel()
+    finally:
+        release.set()
+        allow_close.set()
     async with asyncio.timeout(2):
         with pytest.raises(asyncio.CancelledError):
             await task
-    assert mailbox.interrupted.is_set()
+    assert mailbox.interrupted.is_set() is (phase != "opening")
+    assert mailbox.closed
 
 
 class FakeImapClient:
@@ -450,6 +486,7 @@ class FakeImapClient:
 
     def __init__(self, host: str, port: int, **_kwargs: Any) -> None:
         self.commands: list[tuple[Any, ...]] = []
+        self.closed = False
         FakeImapClient.last = self
 
     def login(self, username: str, password: str) -> None:
@@ -474,6 +511,9 @@ class FakeImapClient:
 
     def logout(self) -> None:
         pass
+
+    def shutdown(self) -> None:
+        self.closed = True
 
     last: FakeImapClient
 
@@ -505,9 +545,31 @@ def test_imap_mailbox_reads_without_changing_the_mailbox() -> None:
     assert not any("STORE" in command for command in commands)
 
 
+@pytest.mark.usefixtures("imap_client")
+@pytest.mark.parametrize("phase", ["login-network", "login-refused", "logout"])
+def test_imap_connection_closes_after_setup_or_logout_failure(
+    monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    def fail(*_args: Any) -> None:
+        if phase == "login-refused":
+            raise imaplib.IMAP4.error("refused")
+        raise OSError("connection lost")
+
+    if phase == "logout":
+        monkeypatch.setattr(FakeImapClient, "logout", fail)
+        ImapMailbox(_SETTINGS, "secret").close()
+    else:
+        monkeypatch.setattr(FakeImapClient, "login", fail)
+        with pytest.raises(ChannelError) as raised:
+            ImapMailbox(_SETTINGS, "secret")
+        assert raised.value.retryable is (phase == "login-network")
+    assert FakeImapClient.last.closed
+
+
 class FakeSmtp:
     fail: tuple[str, Any] = ("", None)
     sent: list[bytes] = []
+    closed = False
 
     def __init__(self, host: str, port: int, **_kwargs: Any) -> None:
         self._step("connect")
@@ -522,7 +584,7 @@ class FakeSmtp:
         return (code if name == step and isinstance(code, int) else 250), b""
 
     def starttls(self, **_kwargs: Any) -> None:
-        pass
+        self._step("tls")
 
     def login(self, username: str, password: str) -> None:
         self._step("login")
@@ -538,20 +600,32 @@ class FakeSmtp:
         FakeSmtp.sent.append(message)
 
     def quit(self) -> None:
-        pass
+        self._step("quit")
+
+    def close(self) -> None:
+        FakeSmtp.closed = True
 
 
 @pytest.mark.parametrize(
     ("fail", "retryable", "possibly_delivered"),
     [
         (("connect", OSError("refused")), True, False),
+        (("tls", OSError("closed")), True, False),
         (("login", smtplib.SMTPAuthenticationError(535, b"no")), False, False),
         (("mail", 451), True, False),
         (("rcpt", 550), False, False),
         (("data", smtplib.SMTPDataError(554, b"spam")), False, False),
         (("data", smtplib.SMTPServerDisconnected("gone")), False, True),
     ],
-    ids=["connect", "login", "sender-4xx", "recipient-5xx", "data-refused", "data-unconfirmed"],
+    ids=[
+        "connect",
+        "tls",
+        "login",
+        "sender-4xx",
+        "recipient-5xx",
+        "data-refused",
+        "data-unconfirmed",
+    ],
 )
 def test_send_smtp_classifies_its_failures_for_delivery(
     monkeypatch: pytest.MonkeyPatch,
@@ -560,15 +634,34 @@ def test_send_smtp_classifies_its_failures_for_delivery(
     possibly_delivered: bool,
 ) -> None:
     monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSmtp)
+    monkeypatch.setattr(smtplib, "SMTP", FakeSmtp)
     monkeypatch.setattr(FakeSmtp, "fail", fail)
     monkeypatch.setattr(FakeSmtp, "sent", [])
+    monkeypatch.setattr(FakeSmtp, "closed", False)
     message = BytesParser(policy=policy.default).parsebytes(make_mail(sender="bot@example.com"))
 
     with pytest.raises(ChannelError) as raised:
-        send_smtp(_SETTINGS, "secret", cast(EmailMessage, message))
+        settings = replace(_SETTINGS, smtp_security="starttls") if fail[0] == "tls" else _SETTINGS
+        send_smtp(settings, "secret", cast(EmailMessage, message))
 
     assert (raised.value.retryable, raised.value.possibly_delivered) == (
         retryable,
         possibly_delivered,
     )
     assert FakeSmtp.sent == []
+    assert FakeSmtp.closed is (fail[0] != "connect")
+
+
+def test_confirmed_smtp_delivery_stays_successful_when_quit_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSmtp)
+    monkeypatch.setattr(FakeSmtp, "fail", ("quit", OSError("connection lost")))
+    monkeypatch.setattr(FakeSmtp, "sent", [])
+    monkeypatch.setattr(FakeSmtp, "closed", False)
+    message = BytesParser(policy=policy.default).parsebytes(make_mail(sender="bot@example.com"))
+
+    send_smtp(_SETTINGS, "secret", cast(EmailMessage, message))
+
+    assert len(FakeSmtp.sent) == 1
+    assert FakeSmtp.closed

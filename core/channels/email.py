@@ -59,7 +59,7 @@ from core.channels.mail import InboundMailSink
 from core.chat.content_blocks import ContentBlock
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("channels.email")
 _IO_POOL = BoundedWorkerPool(name="channel-email-io", max_workers=8)
@@ -122,14 +122,23 @@ class EmailChannelAdapter(ChannelAdapter):
     @override
     async def start(self) -> None:
         self._engine.attach(self)
+        mailbox: MailboxConnection | None = None
+
+        def connect() -> None:
+            # The pool settles a started worker before propagating cancellation.
+            # Keep the connection here so that cancellation cannot lose its result.
+            nonlocal mailbox
+            mailbox = self._open_mailbox(self._settings, self._password)
+
         try:
-            mailbox = await _IO_POOL.run(self._open_mailbox, self._settings, self._password)
-        except ChannelError:
-            raise
-        except Exception:
-            raise ChannelError("Email connection failed", retryable=True) from None
-        self._mailbox = mailbox
-        try:
+            try:
+                await _IO_POOL.run(connect)
+            except ChannelError:
+                raise
+            except Exception:
+                raise ChannelError("Email connection failed", retryable=True) from None
+            assert mailbox is not None
+            self._mailbox = mailbox
             # The first pass also proves that every folder exists.
             handled = await self._sync(mailbox)
             self._connected = True
@@ -144,8 +153,9 @@ class EmailChannelAdapter(ChannelAdapter):
         finally:
             self._connected = False
             self._mailbox = None
-            with contextlib.suppress(Exception):
-                await _IO_POOL.run(mailbox.close)
+            if mailbox is not None:
+                with contextlib.suppress(Exception):
+                    await settle_before_cancelling(_IO_POOL.run(mailbox.close))
 
     @override
     async def stop(self) -> None:
