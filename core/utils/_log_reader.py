@@ -492,6 +492,7 @@ def _file_metadata_changed(file_path: Path, tail: _LogTail) -> bool:
         return tail.exists
     return (
         not tail.exists
+        or (file_stat.st_dev, file_stat.st_ino) != tail.identity
         or file_stat.st_size != tail.size
         or file_stat.st_mtime_ns != tail.modified_ns
     )

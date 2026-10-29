@@ -637,7 +637,7 @@ async def test_subscribe_tails_only_the_open_entry_and_the_appended_bytes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["truncated", "replaced"])
+@pytest.mark.parametrize("change", ["truncated", "replaced", "replaced_same_stamp"])
 async def test_subscribe_resets_when_the_file_shrinks_or_is_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -650,10 +650,20 @@ async def test_subscribe_resets_when_the_file_shrinks_or_is_replaced(
             return
         # A replacement larger than the old file still counts as a new file.
         replacement = live.path.with_name("replacement")
+        original = live.path.stat()
         lines = [_line(second, f"Replaced {second}") for second in range(5, 9)]
+        if change == "replaced_same_stamp":
+            lines = [_line(0, "Other"), _line(1, "Content")]
         replacement.write_bytes(_text(*lines).encode())
+        if change == "replaced_same_stamp":
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            assert replacement.stat().st_size == original.st_size
         os.replace(replacement, live.path)
-        live.changed()
+        if change == "replaced_same_stamp":
+            # Empty watch batches must detect replacement from file identity.
+            live.watch.changes.put_nowait(set())
+        else:
+            live.changed()
 
     try:
         event = await live.next_after(stream, rewrite)
