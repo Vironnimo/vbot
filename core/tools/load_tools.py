@@ -81,7 +81,9 @@ _SELECT_PREFIX = "select:"
 _QUOTES = "\"'`"
 
 _LOADED = "- {name}: loaded"
-_ALREADY_AVAILABLE = "- {name}: already available; call it directly"
+_ALREADY_AVAILABLE = (
+    "- {name}: already callable, also when your Tool list does not show it; call it by name"
+)
 _NOT_LOADABLE = "- {name}: not available to load"
 _UNAVAILABLE = "- {name}: listed, but cannot be used right now; continue without it"
 _UNAVAILABLE_HINT = "- {name}: listed, but cannot be used right now ({hint}); continue without it"
@@ -89,7 +91,10 @@ _UNAVAILABLE_CODE = "tool_unavailable"
 _NOTHING_LOADED = "Nothing was loaded."
 _LOADABLE_LIST = "Tools you can load: {names}."
 _SECTION = "Tool: {name}\nDescription: {description}\nParameters (JSON Schema): {schema}"
-_CALL_LOADED = "Call the loaded Tools by name with normal Tool calls."
+_CALL_LOADED = (
+    "Call the loaded Tools by name with normal Tool calls, also when your Tool list does not "
+    "show them."
+)
 _EMPTY_CALL = "Nothing was loaded: the call named no Tool."
 _NONE_FOUND = "Nothing was loaded: no Tool named {names} can be loaded."
 _ALL_AVAILABLE = "Every Tool you can use is already available; call it directly by name."

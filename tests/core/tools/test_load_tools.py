@@ -107,7 +107,10 @@ _FETCH_SECTION = (
     'Parameters (JSON Schema): {"type":"object","properties":{"url":{"type":"string",'
     '"description":"Page address."}},"required":["url"]}'
 )
-_CALL_LOADED = "Call the loaded Tools by name with normal Tool calls."
+_CALL_LOADED = (
+    "Call the loaded Tools by name with normal Tool calls, also when your Tool list does not "
+    "show them."
+)
 
 
 @pytest.mark.asyncio
@@ -131,7 +134,7 @@ async def test_each_name_reports_its_outcome_in_call_order() -> None:
     assert result["ok"] is True
     assert _text(result) == "\n\n".join(
         [
-            "- read: already available; call it directly\n"
+            "- read: already callable, also when your Tool list does not show it; call it by name\n"
             "- web_search: loaded\n"
             "- nope: not available to load\n"
             "Tools you can load: web_fetch.",
@@ -169,8 +172,9 @@ async def test_already_available_tools_succeed_with_nothing_to_load() -> None:
     result = await _load({"names": ["read", "web_fetch"]}, loadable=("web_search",))
 
     assert _text(result) == (
-        "- read: already available; call it directly\n"
-        "- web_fetch: already available; call it directly"
+        "- read: already callable, also when your Tool list does not show it; call it by name\n"
+        "- web_fetch: already callable, also when your Tool list does not show it; "
+        "call it by name"
     )
 
 

@@ -862,10 +862,12 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
         "Description: Search the web. Returns ranked hits.\n"
         'Parameters (JSON Schema): {"type":"object","properties":{"query":{"type":"string"}},'
         '"required":["query"],"additionalProperties":false}\n\n'
-        "Call the loaded Tools by name with normal Tool calls."
+        "Call the loaded Tools by name with normal Tool calls, also when your Tool list does not "
+        "show them."
     )
     assert _loaded_text(second_load).startswith(
-        "- search: already available; call it directly\n- fetch: loaded\n\nTool: fetch\n"
+        "- search: already callable, also when your Tool list does not show it; "
+        "call it by name\n- fetch: loaded\n\nTool: fetch\n"
     )
 
 
