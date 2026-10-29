@@ -20,6 +20,7 @@ from core.memory import (
 )
 from core.memory._history import MemoryHistory
 from core.tools.file_state import FileRead
+from core.utils import atomic as atomic_module
 
 _TOOL = MemoryWriter(
     agent_id="coder", actor="tool", session_id="s-1", run_id="r-1", run_kind="user"
@@ -439,8 +440,12 @@ def test_revert_does_not_confuse_a_changed_occurrence_with_an_identical_survivor
     assert service.recorded_revisions("coder") == revisions
 
 
+@pytest.mark.parametrize("failure_stage", ["before_write", "after_replace"])
 def test_a_revert_whose_write_fails_changes_nothing(
-    service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    service: MemoryService,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
 ) -> None:
     service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
     service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
@@ -448,7 +453,20 @@ def test_a_revert_whose_write_fails_changes_nothing(
     revisions = service.history(workspace, "coder")
 
     with monkeypatch.context() as patch:
-        _fail_writes(patch, lambda path: path.name == "MEMORY.md")
+        if failure_stage == "before_write":
+            _fail_writes(patch, lambda path: path.name == "MEMORY.md")
+        else:
+            flush = atomic_module._fsync_replace_directories
+            failed = False
+
+            def fail_after_replace(temporary: Path, target: Path) -> None:
+                nonlocal failed
+                if target.name == "MEMORY.md" and not failed:
+                    failed = True
+                    raise OSError(errno.EIO, "Directory flush failed after replacement")
+                flush(temporary, target)
+
+            patch.setattr(atomic_module, "_fsync_replace_directories", fail_after_replace)
         with pytest.raises(MemoryError) as failure:
             service.revert(workspace, [1, 2], writer=_RPC)
 
@@ -460,8 +478,9 @@ def test_a_revert_whose_write_fails_changes_nothing(
     assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
 
 
+@pytest.mark.parametrize("outside_edit", [False, True])
 def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
-    service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch, outside_edit: bool
 ) -> None:
     service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
     service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
@@ -471,6 +490,11 @@ def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
         # Only the first write succeeds: USER.md is reverted, then writing
         # MEMORY.md and restoring USER.md fail.
         writes.append(path)
+        if outside_edit:
+            if path.name == "MEMORY.md":
+                (workspace / "USER.md").write_bytes(b"- Later user edit.\n")
+                return True
+            return False
         return len(writes) > 1
 
     with monkeypatch.context() as patch:
@@ -479,13 +503,17 @@ def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
             service.revert(workspace, [1, 2], writer=_RPC)
 
     assert incomplete.value.changed == ("user",)
+    if outside_edit:
+        assert [path.name for path in writes] == ["USER.md", "MEMORY.md"]
     assert service.entries_at(workspace, "coder", None) == {
-        "user": [],
+        "user": ["Later user edit."] if outside_edit else [],
         "agent": ["Uses pytest."],
     }
     # The scope left reverted is recorded, so reverting again takes back only the rest.
     [recorded] = incomplete.value.revisions
-    assert service.history(workspace, "coder")[2:] == [recorded]
+    later = service.history(workspace, "coder")[2:]
+    assert later[:1] == [recorded]
+    assert [revision.kind for revision in later[1:]] == (["external"] if outside_edit else [])
     assert (recorded.id, recorded.scope, recorded.kind, recorded.reverts) == (
         3,
         "user",
@@ -493,7 +521,10 @@ def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
         (1,),
     )
     assert service.revert(workspace, [2], writer=_RPC).changed == ("agent",)
-    assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
+    assert service.entries_at(workspace, "coder", None) == {
+        "user": ["Later user edit."] if outside_edit else [],
+        "agent": [],
+    }
 
 
 def _memory_files(workspace: Path) -> dict[str, bytes]:

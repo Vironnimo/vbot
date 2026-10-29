@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.skills import _history as history_module
+from core.skills import _revert as revert_module
 from core.skills._history import SkillHistory
 from core.skills.authoring import (
     HUMAN_WRITER,
@@ -18,6 +19,7 @@ from core.skills.authoring import (
     SkillAuthoringService,
     SkillProtectedError,
     SkillRevertConflictError,
+    SkillRevertIncompleteError,
     SkillWriter,
 )
 from tests.directory_links import link_directory
@@ -519,6 +521,53 @@ def test_revert_returns_files_to_their_earlier_text(
     # Reverting the creation of a file removes it.
     service.revert(root, [5], writer=HUMAN_WRITER)
     assert not (root / "demo" / "references" / "b.md").exists()
+
+
+@pytest.mark.parametrize("outside_change", [None, "edit", "remove"])
+def test_failed_revert_restores_only_its_own_file_changes(
+    service: SkillAuthoringService,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outside_change: str | None,
+) -> None:
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    service.write_file(root, "demo", "references/first.md", "first before\n", writer=AGENT)
+    service.write_file(root, "demo", "references/second.md", "second before\n", writer=AGENT)
+    first = service.write_file(root, "demo", "references/first.md", "first after\n", writer=AGENT)
+    second = service.write_file(
+        root, "demo", "references/second.md", "second after\n", writer=AGENT
+    )
+    second_path = root / "demo" / "references" / "second.md"
+    write = revert_module.atomic_write_bytes
+
+    def fail_second_write(path: Path, data: bytes) -> None:
+        if path.name == "first.md":
+            if outside_change == "edit":
+                second_path.write_bytes(b"Later user edit.\n")
+            elif outside_change == "remove":
+                second_path.unlink()
+            raise OSError("controlled second-step failure")
+        write(path, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(revert_module, "atomic_write_bytes", fail_second_write)
+        with pytest.raises(SkillAuthoringError) as error:
+            service.revert(
+                root, [int(first.revision or 0), int(second.revision or 0)], writer=HUMAN_WRITER
+            )
+
+    assert (root / "demo" / "references" / "first.md").read_bytes() == b"first after\n"
+    if outside_change is None:
+        assert not isinstance(error.value, SkillRevertIncompleteError)
+        assert second_path.read_bytes() == b"second after\n"
+    else:
+        assert isinstance(error.value, SkillRevertIncompleteError)
+        assert error.value.skill_names == ("demo",)
+        if outside_change == "edit":
+            assert second_path.read_bytes() == b"Later user edit.\n"
+        else:
+            assert not second_path.exists()
+        assert service.history(root)[0].actor == "external"
 
 
 def test_revert_refuses_to_overwrite_a_later_change_and_changes_nothing(

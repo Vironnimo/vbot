@@ -405,24 +405,36 @@ def _content(root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]
     after: dict[str, FileState] = {}
     for path, text in step.writes.items():
         target = _package_path(package, path, step.target.id)
-        previous = target.read_bytes() if target.is_file() else None
+        try:
+            previous = target.read_bytes()
+        except FileNotFoundError:
+            previous = None
         state = file_state(target)
         if state is not None:
             before[path] = state
-        undo.append((step.skill, partial(_put, target, previous)))
+        written = text.encode("utf-8") if text is not None else None
+        undo.append((step.skill, partial(_put, target, previous, written)))
         if text is None:
             target.unlink(missing_ok=True)
             _remove_empty_parents(target.parent, package)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(target, text.encode("utf-8"))
-            written = file_state(target)
-            if written is not None:
-                after[path] = written
+            written_state = file_state(target)
+            if written_state is not None:
+                after[path] = written_state
     step.records, step.texts = diff_states(_digests(before), after)
 
 
-def _put(target: Path, data: bytes | None) -> None:
+def _put(target: Path, data: bytes | None, written: bytes | None) -> None:
+    try:
+        current = target.read_bytes()
+    except FileNotFoundError:
+        current = None
+    if current == data:
+        return
+    if current != written:
+        raise OSError(f"Skill file changed before it could be restored: {target}")
     if data is None:
         target.unlink(missing_ok=True)
     else:
