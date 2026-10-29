@@ -28,6 +28,6 @@ Each Track emits a `process_name` metadata event and each Lane a `thread_name` (
 
 ## Costs and limits
 
-- A Recording buffers at most 500,000 events (roughly 75-175 MB in memory) and sets `truncated` when full; histograms continue. Trace JSON is written off the Event Loop in 1000-event chunks.
+- A Recording buffers at most 500,000 events (roughly 75-175 MB in memory) and sets `truncated` when full; no further Track or Lane state is allocated, while histogram and gauge summaries continue. Trace JSON is written off the Event Loop in 1000-event chunks.
 - A span appears only if it began inside the Recording; `measure` blocks open when the Recording stops are dropped from the trace but still counted in histograms.
 - Ending a History Window copies every histogram once and runs on the `performance` worker pool: about 10 ms for 300 active metrics. Tracking gauge peaks for windows adds about 30 ns to `set_gauge`.
