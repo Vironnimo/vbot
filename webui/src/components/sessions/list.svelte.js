@@ -24,8 +24,7 @@ import {
 
 const SESSION_INITIAL_DISPLAY_LIMIT = 35;
 const SESSION_DISPLAY_INCREMENT = 20;
-// The newest Sessions a Project group shows, and how many more each
-// "Show more" adds.
+// The newest Sessions a Project group shows, and the step for More/Less.
 export const PROJECT_GROUP_PAGE_SIZE = 5;
 
 // Owns authoritative Session-list snapshots, selection and pagination for
@@ -55,6 +54,15 @@ export function createSessionList(context) {
   );
   // The by-Project view: the groups of `session.project_groups`.
   let projectState = $state({ groups: [], loading: false, error: null });
+  let visibleProjectState = $derived({
+    ...projectState,
+    groups: projectState.groups.map((group) => ({
+      ...group,
+      sessions: group.sessions.slice(0, group.displayCount),
+      hasMore:
+        group.sessions.length > group.displayCount || group.nextCursor !== null,
+    })),
+  });
   let loadingMoreGroupKey = $state(null);
 
   let loadedListKey = '';
@@ -400,7 +408,10 @@ export function createSessionList(context) {
         return;
       }
       projectState = {
-        groups: applyProjectGroups(result),
+        groups: applyProjectGroups(result).map((group) => ({
+          ...group,
+          displayCount: PROJECT_GROUP_PAGE_SIZE,
+        })),
         loading: false,
         error: null,
       };
@@ -415,9 +426,42 @@ export function createSessionList(context) {
     }
   };
 
+  const setGroupDisplayCount = (projectId, displayCount) => {
+    projectState = {
+      ...projectState,
+      groups: projectState.groups.map((group) =>
+        group.projectId === projectId
+          ? {
+              ...group,
+              displayCount: Math.min(displayCount, group.sessions.length),
+            }
+          : group,
+      ),
+    };
+  };
+
+  const showLessInGroup = (group) => {
+    if (loadingMoreGroupKey !== null) return;
+    setGroupDisplayCount(
+      group.projectId,
+      Math.max(
+        PROJECT_GROUP_PAGE_SIZE,
+        group.sessions.length - PROJECT_GROUP_PAGE_SIZE,
+      ),
+    );
+  };
+
   const loadMoreInGroup = async (group) => {
-    const cursor = group.nextCursor;
-    if (cursor === null || loadingMoreGroupKey !== null) {
+    const cached = projectState.groups.find(
+      (entry) => entry.projectId === group.projectId,
+    );
+    if (!cached || loadingMoreGroupKey !== null) {
+      return;
+    }
+    const displayCount = group.sessions.length + PROJECT_GROUP_PAGE_SIZE;
+    const cursor = cached.nextCursor;
+    if (cached.sessions.length >= displayCount || cursor === null) {
+      setGroupDisplayCount(group.projectId, displayCount);
       return;
     }
     const requestVersion = loadVersion;
@@ -439,6 +483,7 @@ export function createSessionList(context) {
           page,
         ),
       };
+      setGroupDisplayCount(group.projectId, displayCount);
     } catch (error) {
       if (requestVersion === loadVersion) {
         projectState = { ...projectState, error: error.message };
@@ -494,7 +539,7 @@ export function createSessionList(context) {
       return remainingSessionCount;
     },
     get projectState() {
-      return projectState;
+      return visibleProjectState;
     },
     get loadingMoreGroupKey() {
       return loadingMoreGroupKey;
@@ -502,6 +547,7 @@ export function createSessionList(context) {
     loadSessions,
     loadMoreSessions,
     loadMoreInGroup,
+    showLessInGroup,
     handleSelectSession,
     rowSelected,
   };

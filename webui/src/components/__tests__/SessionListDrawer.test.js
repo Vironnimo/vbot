@@ -727,7 +727,7 @@ describe('SessionListDrawer by Project', () => {
     session_id: 'build-1',
   };
 
-  const serveGroups = (totalCount = 3) =>
+  const serveGroups = (totalCount = 3, additionalSessions = []) =>
     api.listSessionProjectGroups.mockResolvedValue({
       groups: [
         {
@@ -743,6 +743,7 @@ describe('SessionListDrawer by Project', () => {
               agent_address: 'builder@vbot',
               last_active_at: '2026-05-11T00:00:00+00:00',
             }),
+            ...additionalSessions,
           ],
           next_cursor: vbotCursor,
           total_count: totalCount,
@@ -780,8 +781,16 @@ describe('SessionListDrawer by Project', () => {
       (item) => item.textContent.trim(),
     );
 
-  it('groups every Agent’s Sessions by Project and continues a group with its cursor', async () => {
-    serveGroups(8);
+  it('groups every Agent’s Sessions by Project and adjusts visible rows in steps of five', async () => {
+    serveGroups(
+      12,
+      Array.from({ length: 3 }, (_, index) =>
+        session(`recent-${index}`, {
+          agent_address: 'alpha',
+          last_active_at: '2026-05-10T00:00:00+00:00',
+        }),
+      ),
+    );
     const lastPageCursor = { ...vbotCursor, session_id: 'older-4' };
     api.listProjectSessions
       .mockResolvedValueOnce({
@@ -789,12 +798,15 @@ describe('SessionListDrawer by Project', () => {
           session(`older-${index}`, { agent_address: 'builder@vbot' }),
         ),
         next_cursor: lastPageCursor,
-        total_count: 8,
+        total_count: 12,
       })
       .mockResolvedValueOnce({
-        sessions: [session('oldest', { agent_address: 'builder@vbot' })],
+        sessions: [
+          session('oldest-1', { agent_address: 'builder@vbot' }),
+          session('oldest-2', { agent_address: 'builder@vbot' }),
+        ],
         next_cursor: null,
-        total_count: 8,
+        total_count: 12,
       });
     const onFiltersChange = vi.fn();
     drawer.mount({
@@ -833,7 +845,14 @@ describe('SessionListDrawer by Project', () => {
       'Idle',
       t('sessions.projects.other'),
     ]);
-    expect(groupRows('vBot')).toEqual(['Planning', 'Build']);
+    expect(groupRows('vBot')).toEqual([
+      'Planning',
+      'Build',
+      'recent-0',
+      'recent-1',
+      'recent-2',
+    ]);
+    expect(group('vBot').querySelector('.session-group__less')).toBeNull();
     // The row names its Agent only in its details card.
     expect(document.querySelector('.session-group .session-row__agent')).toBe(
       null,
@@ -854,24 +873,72 @@ describe('SessionListDrawer by Project', () => {
     ).toBe(true);
 
     buttonByText(
-      t('sessions.projects.showMore', { count: 5, total: 8 }),
+      t('sessions.projects.showMore', { count: 7, total: 12 }),
     ).click();
     flushSync();
-    await waitForCondition(() => groupRows('vBot').length === 7);
+    await waitForCondition(() => groupRows('vBot').length === 10);
     expect(api.listProjectSessions).toHaveBeenLastCalledWith(
       'vbot',
       expect.objectContaining({ limit: 5, cursor: vbotCursor }),
     );
+    buttonByText(t('sessions.projects.less')).click();
+    flushSync();
+    expect(groupRows('vBot')).toHaveLength(5);
     buttonByText(
-      t('sessions.projects.showMore', { count: 1, total: 8 }),
+      t('sessions.projects.showMore', { count: 7, total: 12 }),
     ).click();
     flushSync();
-    await waitForCondition(() => groupRows('vBot').length === 8);
+    expect(groupRows('vBot')).toHaveLength(10);
+    expect(api.listProjectSessions).toHaveBeenCalledTimes(1);
+    buttonByText(
+      t('sessions.projects.showMore', { count: 2, total: 12 }),
+    ).click();
+    flushSync();
+    await waitForCondition(() => groupRows('vBot').length === 12);
     expect(api.listProjectSessions).toHaveBeenLastCalledWith(
       'vbot',
       expect.objectContaining({ limit: 5, cursor: lastPageCursor }),
     );
     expect(group('vBot').querySelector('.session-group__more')).toBeNull();
+
+    // Less removes five actual rows, including after a partial final page.
+    buttonByText(t('sessions.projects.less')).click();
+    flushSync();
+    expect(groupRows('vBot')).toHaveLength(7);
+    expect(
+      buttonByText(t('sessions.projects.showMore', { count: 5, total: 12 })),
+    ).not.toBeNull();
+    buttonByText(t('sessions.projects.less')).click();
+    flushSync();
+    expect(groupRows('vBot')).toHaveLength(5);
+    expect(group('vBot').querySelector('.session-group__less')).toBeNull();
+    expect(groupRows(t('sessions.projects.other'))).toEqual(['Chat']);
+
+    // Re-expanding uses the cached pages and restores their order.
+    buttonByText(
+      t('sessions.projects.showMore', { count: 7, total: 12 }),
+    ).click();
+    flushSync();
+    expect(groupRows('vBot')).toHaveLength(10);
+    buttonByText(
+      t('sessions.projects.showMore', { count: 2, total: 12 }),
+    ).click();
+    flushSync();
+    expect(groupRows('vBot')).toEqual([
+      'Planning',
+      'Build',
+      'recent-0',
+      'recent-1',
+      'recent-2',
+      'older-0',
+      'older-1',
+      'older-2',
+      'older-3',
+      'older-4',
+      'oldest-1',
+      'oldest-2',
+    ]);
+    expect(api.listProjectSessions).toHaveBeenCalledTimes(2);
 
     const vbotToggle = group('vBot').querySelector('.session-group__toggle');
     vbotToggle.click();
