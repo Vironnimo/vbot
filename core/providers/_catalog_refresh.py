@@ -225,17 +225,37 @@ async def _publish_model_db_refresh(
     """
 
     staged: list[ModelDatabaseRefresh] = []
+    providers = runtime._providers
+    storage = runtime._storage
+    configurations = {
+        provider_id: providers.get(provider_id) for provider_id in providers.list_ids()
+    }
 
     def stage() -> None:
         # Retain the result inside the worker: a cancelled caller still owns
         # the staged directory after cancellation waits for staging to finish.
         staged.append(begin())
 
+    def commit(database_refresh: ModelDatabaseRefresh, outcome: _RefreshOutcome) -> None:
+        # Configurations are immutable registry records. A reload, deletion or
+        # data-directory rebind supersedes every result fetched under this snapshot.
+        # Check in the actual worker, after any executor/admission wait. The caller
+        # holds configuration publication until commit and live reload both finish.
+        if (
+            runtime._providers is not providers
+            or runtime._storage is not storage
+            or set(providers.list_ids()) != configurations.keys()
+            or any(providers.get(key) is not config for key, config in configurations.items())
+        ):
+            raise ConfigError(
+                "Provider configuration changed during Model refresh; retry the refresh"
+            )
+        database_refresh.commit(providers=outcome.providers, canonical=outcome.canonical)
+
     async def publish(database_refresh: ModelDatabaseRefresh, outcome: _RefreshOutcome) -> None:
-        await _MODEL_DB_WORKERS.run(
-            database_refresh.commit, providers=outcome.providers, canonical=outcome.canonical
-        )
-        changed = await _reload_runtime_model_registry(runtime, runtime._storage.resources_dir)
+        async with runtime.model_configuration_publication_async():
+            await _MODEL_DB_WORKERS.run(commit, database_refresh, outcome)
+            changed = await _reload_runtime_model_registry(runtime, runtime._storage.resources_dir)
         if notify_changed and changed:
             runtime._notify_catalog_changed()
 

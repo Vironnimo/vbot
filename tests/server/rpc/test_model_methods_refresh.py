@@ -33,6 +33,7 @@ from core.providers.providers import ProviderRegistry
 from core.providers.token_store import OAuthToken
 from core.runtime import Runtime
 from core.utils.config import Config
+from core.utils.errors import ConfigError
 from core.utils.retry import MAX_RETRIES, retry_async
 from server.events import ServerEventBus
 from tests.server.rpc.oauth_provider_test_support import (
@@ -234,8 +235,9 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fake_discovery")
 @pytest.mark.parametrize("cancel_during", ["stage", "commit"])
+@pytest.mark.parametrize("cancellation", ["caller", "shutdown"])
 async def test_refresh_cancellation_settles_publication_and_discards_staging(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_during: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_during: str, cancellation: str
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     state = make_state(tmp_path, StubAdapter())
@@ -267,19 +269,150 @@ async def test_refresh_cancellation_settles_publication_and_discards_staging(
     monkeypatch.setattr(_catalog_refresh, "begin_runtime_model_database_refresh", stage)
     monkeypatch.setattr(ModelDatabaseRefresh, "commit", publish)
     task = asyncio.create_task(rpc_result(state, "model.refresh_db", provider_id="openrouter"))
+    shutdown: asyncio.Task[None] | None = None
     try:
         await entered.wait()
-        task.cancel()
+        if cancellation == "shutdown":
+            shutdown = asyncio.create_task(state.runtime.shutdown_catalog_refreshes())
+            await asyncio.sleep(0)
+            assert not shutdown.done()
+        else:
+            task.cancel()
     finally:
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
+    if shutdown is not None:
+        await shutdown
+        with pytest.raises(ConfigError):
+            await state.runtime.refresh_model_database(provider_id="openrouter")
     assert len(staged) == 1
     assert not staged[0].resources_dir.exists()
     if cancel_during == "commit":
         assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
     else:
         assert not state.runtime.storage.layout.models.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize("change", ["replace", "delete"])
+async def test_a_provider_change_supersedes_its_inflight_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    await rpc_result(state, "model.refresh_db", provider_id="openrouter")
+    catalog = state.runtime.storage.layout.models / "openrouter.json"
+    before = catalog.read_bytes()
+    manifest = state.runtime.storage.layout.models / "manifest.json"
+    manifest_before = manifest.read_bytes()
+    events_before = list(resource_changes(state))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_discovery(*args: Any, **kwargs: Any) -> JsonObject:
+        entered.set()
+        await release.wait()
+        return await fake_refresh_models(*args, **kwargs)
+
+    monkeypatch.setattr(discovery, "refresh_models", held_discovery)
+    task = asyncio.create_task(state.runtime.refresh_model_database(provider_id="openrouter"))
+    await entered.wait()
+    if change == "replace":
+        replacement = openrouter_provider()
+        replacement.base_url = "https://replacement.invalid/v1"
+        state.runtime.providers.add(replacement)
+    else:
+        state.runtime.providers._providers.pop("openrouter")
+    release.set()
+    with pytest.raises(ConfigError):
+        await task
+    assert catalog.read_bytes() == before
+    assert manifest.read_bytes() == manifest_before
+    assert resource_changes(state) == events_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize("publication_phase", ["queued", "commit", "reload"])
+async def test_provider_reload_waits_for_admitted_catalog_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_phase: str
+) -> None:
+    resources = tmp_path / "resources"
+    (resources / "providers").mkdir(parents=True)
+    copy2(_REPO_RESOURCES / "providers/openrouter.json", resources / "providers")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    monkeypatch.setenv("RESOURCES_PATH", str(resources))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    runtime = Runtime(Config(data_dir=data_dir), safe_startup_mode="test")
+    runtime.start()
+    entered, release = asyncio.Event(), asyncio.Event()
+    worker_release = threading.Event()
+    loop = asyncio.get_running_loop()
+    worker_run = _catalog_refresh._MODEL_DB_WORKERS.run
+    commit = ModelDatabaseRefresh.commit
+    reload_registry = _catalog_refresh._reload_runtime_model_registry
+
+    async def queued(operation: Any, *args: Any, **kwargs: Any) -> Any:
+        if publication_phase == "queued" and operation.__name__ == "commit":
+            entered.set()
+            await release.wait()
+        return await worker_run(operation, *args, **kwargs)
+
+    def committing(self: ModelDatabaseRefresh, *args: Any, **kwargs: Any) -> Any:
+        if publication_phase == "commit":
+            loop.call_soon_threadsafe(entered.set)
+            assert worker_release.wait(5)
+        return commit(self, *args, **kwargs)
+
+    async def reloading(*args: Any, **kwargs: Any) -> bool:
+        if publication_phase == "reload":
+            entered.set()
+            await release.wait()
+        return await reload_registry(*args, **kwargs)
+
+    monkeypatch.setattr(_catalog_refresh._MODEL_DB_WORKERS, "run", queued)
+    monkeypatch.setattr(ModelDatabaseRefresh, "commit", committing)
+    monkeypatch.setattr(_catalog_refresh, "_reload_runtime_model_registry", reloading)
+    refresh = asyncio.create_task(runtime.refresh_model_database(provider_id="openrouter"))
+    reload_task: asyncio.Task[None] | None = None
+    original_provider = runtime.providers.get("openrouter")
+    try:
+        await entered.wait()
+        runtime.storage.save_custom_provider_settings(
+            "new-provider",
+            {
+                "name": "New Provider",
+                "adapter": "openai_compatible",
+                "base_url": "https://new.invalid/v1",
+                "auth": "none",
+                "models": {"new-model": {"capabilities": {}}},
+            },
+        )
+        reload_task = asyncio.create_task(runtime.reload_custom_providers_async())
+        await asyncio.sleep(0)
+        assert not reload_task.done()
+        assert runtime.providers.get("openrouter") is original_provider
+        with pytest.raises(ConfigError):
+            runtime.reload_custom_providers()
+        release.set()
+        worker_release.set()
+        await refresh
+        await reload_task
+        assert runtime.providers.get("new-provider").base_url == "https://new.invalid/v1"
+        assert runtime.models.get("new-provider", "new-model").model_id == "new-model"
+        assert runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
+    finally:
+        release.set()
+        worker_release.set()
+        await asyncio.gather(
+            refresh, *([reload_task] if reload_task else []), return_exceptions=True
+        )
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio

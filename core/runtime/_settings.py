@@ -265,20 +265,21 @@ def reload_custom_providers(runtime: Runtime) -> None:
     """Reload Settings-owned Provider, Model and wire profile overlays in place."""
 
     runtime._ensure_started()
-    runtime._provider_reload_generation = object()
-    resources_path = _resolve_resources_path(runtime.config)
-    custom_providers = runtime.storage.load_custom_providers_settings()
-    runtime.providers.reload(
-        resources_path,
-        custom_providers=custom_providers,
-        tolerate_invalid=True,
-    )
-    runtime.models.reload(
-        resources_path,
-        runtime_models_dir=runtime.storage.layout.models,
-        custom_providers=custom_providers,
-    )
-    runtime._provider_operations().reload_custom_wire_profiles(custom_providers)
+    with runtime._provider_operations().model_configuration_publication():
+        runtime._provider_reload_generation = object()
+        resources_path = _resolve_resources_path(runtime.config)
+        custom_providers = runtime.storage.load_custom_providers_settings()
+        runtime.providers.reload(
+            resources_path,
+            custom_providers=custom_providers,
+            tolerate_invalid=True,
+        )
+        runtime.models.reload(
+            resources_path,
+            runtime_models_dir=runtime.storage.layout.models,
+            custom_providers=custom_providers,
+        )
+        runtime._provider_operations().reload_custom_wire_profiles(custom_providers)
 
 
 async def reload_custom_providers_async(runtime: Runtime) -> None:
@@ -288,17 +289,18 @@ async def reload_custom_providers_async(runtime: Runtime) -> None:
     storage, providers, models = runtime.storage, runtime.providers, runtime.models
     provider_runtime = runtime._provider_operations()
     resources_path = _resolve_resources_path(runtime.config)
-    custom = await _RUNTIME_WORKERS.run(storage.load_custom_providers_settings)
-    if not runtime._started or generation is not runtime._provider_reload_generation:
-        return
-    await providers.reload_async(resources_path, custom_providers=custom, tolerate_invalid=True)
-    if not runtime._started or generation is not runtime._provider_reload_generation:
-        return
-    await models.reload_async(
-        resources_path, runtime_models_dir=storage.layout.models, custom_providers=custom
-    )
-    if runtime._started and generation is runtime._provider_reload_generation:
-        provider_runtime.reload_custom_wire_profiles(custom)
+    async with provider_runtime.model_configuration_publication_async():
+        custom = await _RUNTIME_WORKERS.run(storage.load_custom_providers_settings)
+        if not runtime._started or generation is not runtime._provider_reload_generation:
+            return
+        await providers.reload_async(resources_path, custom_providers=custom, tolerate_invalid=True)
+        if not runtime._started or generation is not runtime._provider_reload_generation:
+            return
+        await models.reload_async(
+            resources_path, runtime_models_dir=storage.layout.models, custom_providers=custom
+        )
+        if runtime._started and generation is runtime._provider_reload_generation:
+            provider_runtime.reload_custom_wire_profiles(custom)
 
 
 def reload_keep_awake(runtime: Runtime, settings: Mapping[str, Any] | None = None) -> None:

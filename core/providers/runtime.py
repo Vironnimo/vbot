@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import UTC, tzinfo
 from pathlib import Path
 from typing import Any, cast
@@ -57,6 +57,7 @@ from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 _LOGGER = get_logger("providers.runtime")
 
@@ -84,7 +85,10 @@ class ProviderRuntime:
         self._resources_path = resources_path
         self._logger = logger
         self._catalog_refresh_lock: asyncio.Lock | None = None
-        self._catalog_refresh_tasks: set[asyncio.Task[None]] = set()
+        self._catalog_refresh_tasks: set[asyncio.Task[Any]] = set()
+        self._catalog_refresh_closed = False
+        self._configuration_publication_lock = threading.Lock()
+        self._async_configuration_publication_lock = asyncio.Lock()
         self._catalog_changed_callbacks: list[Callable[[], None]] = []
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
@@ -361,6 +365,27 @@ class ProviderRuntime:
         )
 
     @asynccontextmanager
+    async def model_configuration_publication_async(self) -> AsyncIterator[None]:
+        """Serialize catalog commit/reload with live Provider configuration publication.
+
+        Discovery does not hold this guard. Async publishers wait for each other;
+        a synchronous publisher already in progress refuses this attempt safely.
+        """
+        async with self._async_configuration_publication_lock:
+            with self.model_configuration_publication():
+                yield
+
+    @contextmanager
+    def model_configuration_publication(self) -> Iterator[None]:
+        """Guard synchronous configuration publication without blocking an Event Loop."""
+        if not self._configuration_publication_lock.acquire(blocking=False):
+            raise ConfigError("Provider configuration is being published; retry the reload")
+        try:
+            yield
+        finally:
+            self._configuration_publication_lock.release()
+
+    @asynccontextmanager
     async def model_database_refresh(self) -> AsyncIterator[None]:
         """Serialize complete catalog refreshes from staging through live reload.
 
@@ -371,7 +396,16 @@ class ProviderRuntime:
         if self._catalog_refresh_lock is None:
             self._catalog_refresh_lock = asyncio.Lock()
         async with self._catalog_refresh_lock:
-            yield
+            if self._catalog_refresh_closed:
+                raise ConfigError("Provider catalog refresh is shutting down")
+            task = asyncio.current_task()
+            if task is not None:
+                self._catalog_refresh_tasks.add(task)
+            try:
+                yield
+            finally:
+                if task is not None:
+                    self._catalog_refresh_tasks.discard(task)
 
     async def refresh_model_database(
         self, *, provider_id: str | None = None, target: str = "runtime"
@@ -403,6 +437,7 @@ class ProviderRuntime:
         task.add_done_callback(self._catalog_refresh_tasks.discard)
 
     def cancel_catalog_refreshes(self) -> None:
+        self._catalog_refresh_closed = True
         for task in tuple(self._catalog_refresh_tasks):
             task.cancel()
 
@@ -410,7 +445,7 @@ class ProviderRuntime:
         tasks = tuple(self._catalog_refresh_tasks)
         self.cancel_catalog_refreshes()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await settle_before_cancelling(asyncio.gather(*tasks, return_exceptions=True))
             self._catalog_refresh_tasks.difference_update(tasks)
 
     def add_catalog_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
