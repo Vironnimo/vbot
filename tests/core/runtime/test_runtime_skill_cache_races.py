@@ -289,6 +289,8 @@ def test_credential_reload_updates_existing_skill_registries(
     [
         ("project", "package", False),
         ("project", "policy", True),
+        ("project", "cwd", False),
+        ("rooted_agent", "cwd", False),
         ("agent", "package", True),
         ("rooted_agent", "environment", False),
     ],
@@ -356,6 +358,10 @@ def test_scoped_scan_rechecks_changes_before_cache_publication(
                         SkillPackageRef("home", "turned-off"), disabled=True
                     )
                     runtime.reload_skills()
+                elif change == "cwd":
+                    newer = tmp_path / "newer"
+                    write_skill(newer / ".opencode" / "skills", "newer", "Moved Source.")
+                    runtime.projects.update(project.project_id, cwd=str(newer))
                 else:
                     runtime.storage.set_data_dir_credential(key, "test-value")
                     runtime.reload_environment_credentials()
@@ -372,6 +378,8 @@ def test_scoped_scan_rechecks_changes_before_cache_publication(
                 elif change == "policy":
                     with pytest.raises(KeyError):
                         result.get("turned-off")
+                elif change == "cwd":
+                    assert result.get("newer").description == "Moved Source."
                 else:
                     assert result.availability_for("changing", ["*"]).state == "available"
             finally:

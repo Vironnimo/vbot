@@ -60,6 +60,21 @@ class _ProjectSkillBundle:
     # The Project record the bundle was built from, Sources included.
     project: Project
 
+    def matches_configuration(self, project: Project) -> bool:
+        """Whether the current record still resolves the same Skill roots and grants.
+
+        Discovery can persist new Sources outside the RPC invalidation path.
+        Timestamps are not inputs, including defaults on older hand-written records.
+        """
+        return (
+            self.project.cwd == project.cwd
+            and self.project.display_name == project.display_name
+            and self.project.sources == project.sources
+            and self.project.skills_project_disabled == project.skills_project_disabled
+            and self.project.skills_global_enabled == project.skills_global_enabled
+            and self.project.skills_bundled_enabled == project.skills_bundled_enabled
+        )
+
     def same_as(self, other: _ProjectSkillBundle) -> bool:
         """Whether ``other`` leaves this bundle and its dependent registries current."""
         return (
@@ -466,6 +481,10 @@ class SkillRuntime:
         The identity-store existence check below is defense in depth against a stray
         ``agents/<id>/skills`` directory that belongs to no stored agent.
         """
+        # An inventory or explicit Project Context read can discover and persist
+        # Sources without the Project RPC. Validate that layer before reusing an
+        # Agent registry which embeds its packages and grants.
+        project_bundle = self._project_skill_bundle(project_id) if project_id is not None else None
         agent = self._agents.find(identity_agent_id) if identity_agent_id is not None else None
         if agent is not None:
             exclusions = frozenset(agent.excluded_skills)
@@ -476,9 +495,9 @@ class SkillRuntime:
                 or self._receives_shared_skills(agent.id)
             ):
                 return self._agent_skill_registry(project_id, agent.id, exclusions)
-        if project_id is None:
+        if project_bundle is None:
             return self._skills
-        return self._project_skill_bundle(project_id).registry
+        return project_bundle.registry
 
     def refresh_skills_for(
         self, project_id: str | None, identity_agent_id: str | None = None
@@ -515,9 +534,9 @@ class SkillRuntime:
         lists. This is the same Project policy used for Config Agents and the
         temporary Project grant applied to Identity Runs.
         """
-        project = self._projects.refresh_sources(project_id)
+        self._projects.refresh_sources(project_id)
         bundle = self._project_skill_bundle(project_id)
-        allowed_names = set(effective_project_allowed_skills(project, bundle.names))
+        allowed_names = set(effective_project_allowed_skills(bundle.project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
     def inspect_skill(self, entry_id: str) -> dict[str, Any]:
@@ -676,6 +695,10 @@ class SkillRuntime:
                     return cached
                 generation = self._cache_generation
             registry = self._build_agent_skill_registry(project_id, agent_id, exclusions)
+            if project_id is not None:
+                # A Source refresh may have changed the record during this scan
+                # without going through a caller that invalidates our caches.
+                self._project_skill_bundle(project_id)
             with self._cache_lock:
                 if generation == self._cache_generation:
                     current = self._agent_skills.get(key)
@@ -965,12 +988,17 @@ class SkillRuntime:
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
         while True:
+            project = self._projects.get(project_id)
             with self._cache_lock:
                 cached = self._project_skills.get(project_id)
-                if cached is not None:
+                if cached is not None and cached.matches_configuration(project):
                     return cached
+                if cached is not None:
+                    self.invalidate_project_skills(project_id)
                 generation = self._cache_generation
             bundle = self._build_project_skill_bundle(project_id)
+            if not bundle.matches_configuration(self._projects.get(project_id)):
+                continue
             with self._cache_lock:
                 if generation == self._cache_generation:
                     return self._project_skills.setdefault(project_id, bundle)
