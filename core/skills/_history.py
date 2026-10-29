@@ -145,6 +145,7 @@ class SkillRevision:
     session_id: str | None = None
     run_id: str | None = None
     run_kind: str | None = None
+    subject_created_at: str | None = None
     origin: str | None = None
     created_at: str | None = None
     pinned: bool | None = None
@@ -411,6 +412,7 @@ class SkillHistory:
         session_id: str | None = None,
         run_id: str | None = None,
         run_kind: str | None = None,
+        subject_created_at: str | None = None,
         origin: str | None = None,
         created_at: str | None = None,
         pinned: bool | None = None,
@@ -433,6 +435,7 @@ class SkillHistory:
                 session_id=session_id,
                 run_id=run_id,
                 run_kind=run_kind,
+                subject_created_at=subject_created_at,
                 origin=origin,
                 created_at=created_at,
                 pinned=pinned,
@@ -514,6 +517,7 @@ class SkillHistory:
         session_id: str | None = None,
         run_id: str | None = None,
         run_kind: str | None = None,
+        subject_created_at: str | None = None,
         origin: str | None = None,
         created_at: str | None = None,
         pinned: bool | None = None,
@@ -544,6 +548,7 @@ class SkillHistory:
             session_id=session_id,
             run_id=run_id,
             run_kind=run_kind,
+            subject_created_at=subject_created_at,
             origin=origin,
             created_at=created_at,
             pinned=pinned,
@@ -765,6 +770,7 @@ def _line(revision: SkillRevision, texts: Mapping[str, str]) -> dict[str, Any]:
         "session_id",
         "run_id",
         "run_kind",
+        "subject_created_at",
         "origin",
         "created_at",
         "pinned",
@@ -803,6 +809,7 @@ def _parse_revision(line: bytes) -> SkillRevision | None:
             session_id=_optional_text(data.get("session_id")),
             run_id=_optional_text(data.get("run_id")),
             run_kind=_optional_text(data.get("run_kind")),
+            subject_created_at=_optional_text(data.get("subject_created_at")),
             origin=_optional_member(data.get("origin"), frozenset(SKILL_ACTORS)),
             created_at=_optional_text(data.get("created_at")),
             pinned=_optional_bool(data.get("pinned")),

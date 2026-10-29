@@ -69,6 +69,7 @@ class SkillRevisions:
                         session_id=writer.session_id,
                         run_id=writer.run_id,
                         run_kind=writer.run_kind,
+                        subject_created_at=writer.subject_created_at,
                         pinned=pinned,
                     ).id
             except OSError as error:
@@ -218,7 +219,13 @@ class SkillRevisions:
                     history,
                     history.home,
                     revision_ids,
-                    RevertActor(writer.actor, writer.session_id, writer.run_id, writer.run_kind),
+                    RevertActor(
+                        writer.actor,
+                        writer.session_id,
+                        writer.run_id,
+                        writer.run_kind,
+                        writer.subject_created_at,
+                    ),
                     related=related,
                 )
 
@@ -282,6 +289,7 @@ class SkillRevisions:
                 session_id=writer.session_id,
                 run_id=writer.run_id,
                 run_kind=writer.run_kind,
+                subject_created_at=writer.subject_created_at,
                 **fields,
             ).id
         except Exception as error:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -55,11 +56,13 @@ def summary(service: SkillAuthoringService, root: Path, name: str | None = None)
     ]
 
 
+@pytest.mark.parametrize("subject_created_at", [None, "2026-10-29T12:00:00.000001Z"])
 def test_every_write_records_its_writer_and_files(
-    service: SkillAuthoringService, root: Path
+    service: SkillAuthoringService, root: Path, subject_created_at: str | None
 ) -> None:
-    service.create(root, "demo", skill_document(), writer=AGENT)
-    service.write_file(root, "demo", "references/notes.md", "notes\r\n", writer=AGENT)
+    writer = replace(AGENT, subject_created_at=subject_created_at)
+    service.create(root, "demo", skill_document(), writer=writer)
+    service.write_file(root, "demo", "references/notes.md", "notes\r\n", writer=writer)
     service.rewrite(root, "demo", "SKILL.md", lambda text: text + "More.\n", writer=HUMAN_WRITER)
     result = service.remove_file(root, "demo", "references/notes.md", writer=HUMAN_WRITER)
 
@@ -74,6 +77,20 @@ def test_every_write_records_its_writer_and_files(
     assert len(service.history(root, limit=2)) == 2
     first, second, *_ = history_lines(root)
     assert (first["session_id"], first["run_id"], first["run_kind"]) == ("s-1", "r-1", "user")
+    assert first.get("subject_created_at") == second.get("subject_created_at") == subject_created_at
+    assert "subject_created_at" not in history_lines(root)[2]
+    # Decode the durable format from a different path, without the writer's cache.
+    reopened = root.parent / "reopened" / "skills"
+    reopened.parent.mkdir()
+    shutil.copyfile(root.parent / "skill-history.jsonl", reopened.parent / "skill-history.jsonl")
+    loaded = SkillHistory(reopened).revisions()
+    assert [revision.subject_created_at for revision in loaded] == [
+        subject_created_at,
+        subject_created_at,
+        None,
+        None,
+    ]
+    assert "subject_created_at" not in loaded[0].to_dict()
     # A file change records the hash before, the hash after and the exact text after.
     [created] = second["files"]
     assert (created["path"], created["change"], created["before"]) == (

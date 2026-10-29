@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -194,6 +194,7 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
+    resolve_subject_created_at: Callable[[str], str | None] | None = None,
     resolve_global_skills_dir: Callable[[], Path] | None = None,
     publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None = None,
 ) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], _Outcome]:
@@ -224,6 +225,9 @@ def make_skill_manage_handler(
 
     ``on_changed()`` optionally reports each successful mutation, after the
     affected scoped caches were invalidated, so open Skill views can refresh.
+
+    ``resolve_subject_created_at(agent_id)`` captures the Skill subject's current
+    Agent identity for history attribution, including writes to another home.
 
     ``resolve_global_skills_dir()`` returns the global home. With it, an attended
     Agent's edit, patch, write_file and remove_file reach a global Skill the
@@ -271,6 +275,8 @@ def make_skill_manage_handler(
         writer = skill_writer(context)
         # The Skills of the calling Agent, or of the Agent a Librarian Session maintains.
         owner_id = context.skill_subject_id
+        if resolve_subject_created_at is not None:
+            writer = replace(writer, subject_created_at=resolve_subject_created_at(owner_id))
         try:
             call = _read_call(arguments)
             own_root = resolve_agent_skills_dir(owner_id)
@@ -611,6 +617,7 @@ def register_skill_manage_tool(
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
+    resolve_subject_created_at: Callable[[str], str | None] | None = None,
     run_started_at: Callable[[str], str | None] | None = None,
     follow_merge: SkillMergeFollower | None = None,
     resolve_global_skills_dir: Callable[[], Path] | None = None,
@@ -640,6 +647,7 @@ def register_skill_manage_tool(
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
         on_changed=on_changed,
+        resolve_subject_created_at=resolve_subject_created_at,
         resolve_global_skills_dir=resolve_global_skills_dir,
         publish_skill=publish_skill,
     )

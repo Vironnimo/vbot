@@ -71,6 +71,7 @@ class RevertActor:
     session_id: str | None = None
     run_id: str | None = None
     run_kind: str | None = None
+    subject_created_at: str | None = None
 
 
 @dataclass
@@ -138,6 +139,7 @@ def revert_revisions(
                     session_id=actor.session_id,
                     run_id=actor.run_id,
                     run_kind=actor.run_kind,
+                    subject_created_at=actor.subject_created_at,
                     origin=step.origin,
                     created_at=step.created_at,
                     pinned=step.pinned,
