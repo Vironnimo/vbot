@@ -17,7 +17,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from collections.abc import Callable, Collection, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from threading import RLock
 
@@ -140,7 +140,10 @@ class SkillAuthoringService:
             try:
                 _atomic_write_styled(skill_file, document, "\n")
             except OSError:
-                shutil.rmtree(skill_dir, ignore_errors=True)
+                # The failed atomic write cleans up its own temporary file.
+                # Never remove files an outside writer added after our mkdir.
+                with suppress(OSError):
+                    skill_dir.rmdir()
                 raise
             revision = self._revisions._commit(
                 history,
