@@ -138,6 +138,8 @@ Remote Agent terminals currently require full access. Existing Permission Rules 
 
 ## Permission Rules
 
+Workdir selection, including omitted and `project:<id>` paths, checks permission before filesystem probing; see `tools/shell.md` -> Execution lifecycle.
+
 A restricted Session's terminal is checked in `_terminal_permissions.py` with the Runtime's `CommandChecker` (`permissions.md` -> Command checks; `register_terminal_tool(..., command_checker=)`). Tests: `test_terminal_permissions.py`; marks and shell kinds also in `test_terminal_launch.py`.
 
 - `start`: the program and its arguments are one command (`check_argv`, deny and `listed` rules, vBot CLI, paths), the workdir a `start_dir`. A shell that starts with vBot's integration (`integrated_shell_kind`: PowerShell, cmd, POSIX bash/zsh; not fish, not bash on Windows) runs nothing by itself, so only its folder is checked, as for the shell Tool; a shell prompt without integration (`starts_shell_prompt`: also `sh`, `wsl`, ...) is refused, since its lines could not be checked. The environment is confined (`terminal_environment(..., confined=True)`, without the credentials vBot knows, which `TerminalManager(credential_names=)` supplies; `tools/shell.md` -> Environment layers), and the terminal keeps the Session's layers without their source as `TerminalLaunch`/`TerminalInfo.permission_scope` (`permission_scope()`, canonical JSON per layer; `None` for full access and operator starts).

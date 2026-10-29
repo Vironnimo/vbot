@@ -969,9 +969,9 @@ def _resolve_workdir(
     workdir_value: str | None,
 ) -> Path:
     if workdir_value is None:
-        return context.effective_cwd.resolve()
+        return context.resolve_path(context.effective_cwd, access="start_dir")
     if is_project_workdir(workdir_value):
-        return project_workdir(projects, workdir_value)
+        return project_workdir(projects, workdir_value, permissions=context.permissions)
     return context.resolve_path(workdir_value, access="start_dir")
 
 
