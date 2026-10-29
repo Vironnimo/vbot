@@ -638,6 +638,7 @@ describe('MCP management surface', () => {
     expect(listener).toBeNull();
   });
   it('fills a new connection from a pasted URL and hands setup text to the import', async () => {
+    const reading = Promise.withResolvers();
     const sse = {
       id: 'remote',
       transport: 'sse',
@@ -648,7 +649,8 @@ describe('MCP management surface', () => {
     const handler = rpc.getMockImplementation();
     rpc.mockImplementation(async (method, params) => {
       if (params?.operation !== 'import') return handler(method, params);
-      if (params.arguments.source.startsWith('https://'))
+      if (params.arguments.source.startsWith('https://')) {
+        await reading.promise;
         return {
           servers: [
             {
@@ -662,6 +664,7 @@ describe('MCP management surface', () => {
             },
           ],
         };
+      }
       return {
         servers: ['one', 'two'].map((name) => ({
           name,
@@ -682,9 +685,21 @@ describe('MCP management surface', () => {
     input('Command line or URL (optional)', 'https://mcp.example.com/sse');
     button('Fill in').click();
     await settle();
+    // This preview replaces the connection fields. Editing or saving them
+    // before it returns would lose edits or save a different connection.
+    expect(field('Program').disabled).toBe(true);
+    expect(field('Connection name').disabled).toBe(true);
+    expect(document.querySelector('button[type="submit"]').disabled).toBe(true);
+    expect(button('Cancel').disabled).toBe(false);
+    reading.resolve();
+    await settle();
     const dialog = document.querySelector('[role="dialog"]');
     expect(field('Connection name').value).toBe('studio');
     expect(field('Server URL').value).toBe('https://mcp.example.com/sse');
+    expect(field('Server URL').disabled).toBe(false);
+    expect(document.querySelector('button[type="submit"]').disabled).toBe(
+      false,
+    );
     expect(dialog.textContent).toContain('test-owned-warning');
     expect(dialog.textContent).toContain('Legacy SSE is deprecated');
     input('Command line or URL (optional)', 'test-owned-setup');
@@ -695,6 +710,60 @@ describe('MCP management surface', () => {
     );
     expect(button('Import 2')).toBeTruthy();
   });
+  it.each(
+    ['text', 'file', 'close'].flatMap((newer) =>
+      ['success', 'failure'].map((outcome) => ({ newer, outcome })),
+    ),
+  )(
+    'ignores an old file $outcome after newer $newer input',
+    async ({ newer, outcome }) => {
+      const reading = Promise.withResolvers();
+      const handler = rpc.getMockImplementation();
+      rpc.mockImplementation(async (method, params) =>
+        params?.operation === 'import'
+          ? { servers: [] }
+          : handler(method, params),
+      );
+      component = mount(Panel, { target: document.body });
+      await settle();
+      button('Import').click();
+      await settle();
+      const fileInput = document.querySelector('input[type="file"]');
+      const pick = (text) => {
+        Object.defineProperty(fileInput, 'files', {
+          configurable: true,
+          value: [{ text }],
+        });
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      pick(() => reading.promise);
+      if (newer === 'text') {
+        const source = document.querySelector('textarea');
+        source.value = 'newer setup text';
+        source.dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (newer === 'file') {
+        pick(async () => 'newer file');
+      } else {
+        button('Cancel').click();
+      }
+      await settle();
+      if (outcome === 'success') reading.resolve('obsolete file');
+      else reading.reject(new Error('obsolete file failure'));
+      await settle();
+      expect(
+        rpc.mock.calls
+          .filter(([, params]) => params?.operation === 'import')
+          .map(([, params]) => params.arguments.source),
+      ).toEqual(newer === 'file' ? ['newer file'] : []);
+      expect(document.body.textContent).not.toContain('obsolete file failure');
+      if (newer === 'text')
+        expect(document.querySelector('textarea').value).toBe(
+          'newer setup text',
+        );
+      if (newer === 'close')
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
   it('changes nothing when the editor closed while its fill was read', async () => {
     const reading = Promise.withResolvers();
     const handler = rpc.getMockImplementation();
