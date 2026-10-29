@@ -606,6 +606,53 @@ def _eventually(condition: Callable[[], bool]) -> None:
         time.sleep(0.005)
 
 
+@pytest.mark.parametrize("pending", ["probe", "pairing_start"])
+@pytest.mark.parametrize("supersede", ["connect", "close"])
+def test_a_superseded_connect_cannot_activate_or_start_pairing(
+    rig: SignInRig, monkeypatch: pytest.MonkeyPatch, pending: str, supersede: str
+) -> None:
+    controller = rig.controller
+    active: list[str] = []
+    controller.set_active_server_listener(active.append)
+
+    def newer_choice() -> None:
+        if supersede == "close":
+            controller.close()
+        else:
+            controller.prepare_connect(*NAS)
+
+    def probe(target: DesktopTarget) -> DesktopProbeResult:
+        if pending == "probe" and target.host == CLOUD.host:
+            newer_choice()
+        return DesktopProbeResult(PROBE_WEBUI_AVAILABLE, target)
+
+    monkeypatch.setattr(controller, "_probe", probe)
+    if pending == "probe":
+        prepared = controller.prepare_connect(CLOUD_HOST, 443)
+    else:
+        start = rig.access.start_pairing
+
+        def start_pairing(address: ServerAddress, name: Any = None):
+            request = start(address, name)
+            newer_choice()
+            return request
+
+        monkeypatch.setattr(rig.access, "start_pairing", start_pairing)
+        prepared = controller.start_pairing(CLOUD_HOST, 443)
+
+    controller.close()
+    assert prepared.status == "server_switch_cancelled"
+    assert prepared.navigation_url is None
+    assert prepared.pairing is None
+    assert rig.window.loaded_urls == []
+    assert rig.window.loaded_html == []
+    assert active == (["http://nas.lan:8420/"] if supersede == "connect" else [])
+    assert controller.active_target() == (NAS if supersede == "connect" else None)
+    assert desktop_servers.resolve_last_used(rig.settings_file) == (
+        ServerEntry(*NAS) if supersede == "connect" else None
+    )
+
+
 def test_a_server_without_sign_in_opens_directly(tmp_path: Path) -> None:
     rig = SignInRig(tmp_path, FakeAccessServer(), access_mode="lan")
 
