@@ -269,3 +269,22 @@ export function markCronRead(
     options,
   );
 }
+
+export function listTaskInputs(options = {}) {
+  return rpc('input.list', {}, options);
+}
+export function createTaskInput(params, options = {}) {
+  return rpc('input.create', params, options);
+}
+export function updateTaskInput(params, options = {}) {
+  return rpc('input.update', params, options);
+}
+export function deleteTaskInput(id, options = {}) {
+  return rpc('input.delete', { id }, options);
+}
+export function getTaskInputSecret(id, options = {}) {
+  return rpc('input.secret', { id }, options);
+}
+export function rotateTaskInputSecret(id, options = {}) {
+  return rpc('input.rotate_secret', { id }, options);
+}

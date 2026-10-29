@@ -57,6 +57,7 @@ from server._app_lifecycle import (
 from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
 from server._computer_socket import serve_computer_socket
 from server._cron_webhooks import register_webhook_routes, webhook_base_url
+from server._direct_inputs import register_input_routes
 from server._http_dependencies import (
     _FASTAPI_IMPORT_ERROR,
     FastAPI,
@@ -399,6 +400,7 @@ def create_app(
     app.add_middleware(AccessGuard, service=access_service, file_delivery=file_delivery)
     register_access_routes(app, access_service)
     register_webhook_routes(app, access_service)
+    register_input_routes(app, access_service)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -921,6 +923,9 @@ def _bind_webhook_url(runtime: Any, access: AccessConfig, server_bind: ServerBin
     except AttributeError, RuntimeError:
         return
     cron_service.bind_webhook_url(*webhook_base_url(access, server_bind))
+    inputs = getattr(runtime, "_direct_inputs", None)
+    if inputs is not None:
+        inputs.bind_url(*webhook_base_url(access, server_bind))
 
 
 def _publish_secret_changes(app: Any, app_runtime: Any) -> None:

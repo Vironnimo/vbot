@@ -41,6 +41,7 @@ from server.events import (
     RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_CHANNELS,
     RESOURCE_KIND_CRON,
+    RESOURCE_KIND_INPUTS,
     RESOURCE_KIND_SESSIONS,
 )
 from server.rpc.agent_refs import (
@@ -346,6 +347,9 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
         publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     if result.cron_job_ids:
         publish_resource_changed(state, RESOURCE_KIND_CRON)
+    if result.input_ids:
+        response["rename"]["inputs_updated"] = list(result.input_ids)
+        publish_resource_changed(state, RESOURCE_KIND_INPUTS)
     return response
 
 

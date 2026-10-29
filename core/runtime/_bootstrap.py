@@ -27,6 +27,7 @@ from core.automation import (
     ReflectionService,
     TriggerService,
 )
+from core.automation.inputs import DirectInputService
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, CommandDispatcher
@@ -807,9 +808,17 @@ def bootstrap(runtime: Runtime) -> None:
             secret_masker=lambda: runtime.agent_secrets.masker,
         )
         runtime._calendar_service.bind_event_jobs(runtime._cron_service)
+        runtime._direct_inputs = DirectInputService(
+            runtime._storage.data_dir,
+            chat=runtime._chat_loop,
+            sessions=runtime._chat_sessions,
+            resolver=runtime._agent_resolver,
+            secret_store=runtime._storage.secrets,
+        )
         runtime._automation_references = AutomationReferences(
             bootstrap=runtime._bootstrap_service,
             cron=runtime._cron_service,
+            inputs=runtime._direct_inputs,
         )
         runtime._librarian_service = _librarian_service(runtime)
         runtime._archive = ArchiveService(_archive_services(runtime))

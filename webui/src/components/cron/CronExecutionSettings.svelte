@@ -25,7 +25,13 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
 
-  let { editor, agentOptions = [], agents = [], projects = [] } = $props();
+  let {
+    editor,
+    agentOptions = [],
+    agents = [],
+    projects = [],
+    taskInput = false,
+  } = $props();
   let values = $derived(editor.formValues);
   let address = $derived(parseAgentAddress(values.agent_id));
   let existing = $derived(values.session_mode === 'existing');
@@ -280,27 +286,32 @@
           />
         </div>
       </div>
-      <div class="s-row">
-        <div class="s-row-info">
-          <label class="s-row-label" for="cron-session-mode"
-            >{t('cron.execution.sessionMode')}</label
-          >
+      {#if !taskInput}
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="cron-session-mode"
+              >{t('cron.execution.sessionMode')}</label
+            >
+          </div>
+          <div class="s-row-control">
+            <Dropdown
+              id="cron-session-mode"
+              disabled={busy}
+              value={values.session_mode}
+              options={[
+                { value: 'new', label: t('cron.execution.newSession') },
+                {
+                  value: 'existing',
+                  label: t('cron.execution.existingSession'),
+                },
+              ]}
+              ariaLabel={t('cron.execution.sessionMode')}
+              onValueChange={(value) =>
+                editor.updateFormField('session_mode', value)}
+            />
+          </div>
         </div>
-        <div class="s-row-control">
-          <Dropdown
-            id="cron-session-mode"
-            disabled={busy}
-            value={values.session_mode}
-            options={[
-              { value: 'new', label: t('cron.execution.newSession') },
-              { value: 'existing', label: t('cron.execution.existingSession') },
-            ]}
-            ariaLabel={t('cron.execution.sessionMode')}
-            onValueChange={(value) =>
-              editor.updateFormField('session_mode', value)}
-          />
-        </div>
-      </div>
+      {/if}
       {#if existing}
         <div class="s-row">
           <div class="s-row-info">

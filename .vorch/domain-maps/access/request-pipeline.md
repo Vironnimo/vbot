@@ -24,7 +24,7 @@ For capability routes in `authenticated` mode, `FileDelivery.access_claims` veri
 
 ## Principal
 
-`server/access/_principal.py`: `host` (the local access token), `device` (a paired Device) or `open` (a request admitted in `local`/`lan` without a valid credential). A capability request in `authenticated` mode acts for its signed issuer (above); there an exempt request without a valid credential, and every Cron webhook request, has no principal (`None`). Logs, a Device's `approved_by` and a ticket's issuer name a principal by its `actor`: the device id, `host` or `open`.
+`server/access/_principal.py`: `host` (the local access token), `device` (a paired Device) or `open` (a request admitted in `local`/`lan` without a valid credential). A capability request in `authenticated` mode acts for its signed issuer (above); there an exempt request without a valid credential, and every Cron webhook or Task input request, has no principal (`None`). Logs, a Device's `approved_by` and a ticket's issuer name a principal by its `actor`: the device id, `host` or `open`.
 
 ## Live connections
 
@@ -36,9 +36,11 @@ Every HTTP response gets `X-Content-Type-Options: nosniff`, HSTS (`max-age=31536
 
 ## Exempt routes
 
-The exempt set today: `/health`, `GET /api/auth/status`, `POST /api/auth/pair/start|poll`, `GET /api/oauth/callback` (the `SameSite=Strict` cookie is not sent on the cross-site return; the pending sign-in's state protects it), `POST /_vbot/control/shutdown` (its control secret protects it), `GET /auth/ticket/<ticket>` (the guard also exempts HEAD there; no handler answers it), GET/HEAD of `/api/files/<cap>`, `/api/preview-assets/<cap>/<path>`, `/api/extension-assets/<cap>/<path>`, `/api/extension-runs/<cap>/events|timeline` and `/api/widgets/<cap>`, and `POST /api/hooks/<job id>` (`_rules.is_webhook_route`). Capability routes are exempt from Bearer/cookie requirements, not from the signed-issuer checks above. Any other method or shape under these prefixes is `protected`.
+The exempt set today: `/health`, `GET /api/auth/status`, `POST /api/auth/pair/start|poll`, `GET /api/oauth/callback` (the `SameSite=Strict` cookie is not sent on the cross-site return; the pending sign-in's state protects it), `POST /_vbot/control/shutdown` (its control secret protects it), `GET /auth/ticket/<ticket>` (the guard also exempts HEAD there; no handler answers it), GET/HEAD of `/api/files/<cap>`, `/api/preview-assets/<cap>/<path>`, `/api/extension-assets/<cap>/<path>`, `/api/extension-runs/<cap>/events|timeline` and `/api/widgets/<cap>`, and `POST /api/hooks/<job id>` (`_rules.is_webhook_route`), `POST /api/inputs/<input id>` and `GET /api/inputs/<input id>/requests/<request id>`. Capability routes are exempt from Bearer/cookie requirements, not from the signed-issuer checks above. Any other method or shape under these prefixes is `protected`.
 
 A Cron webhook request passes the peer, transport and Host rules like any request, then the guard hands it on with no principal and without `authenticate`: its `Authorization` header carries the job's secret, so it is never read, refused or counted as a vBot credential. The route then applies `AccessService.admit_webhook` (its own per-client and overall request windows and a refusal window), the 256 KB body limit and the job's secret (`automation/cron-webhooks.md` -> Route and authentication).
+
+Task input submission and status routes also verify their own scoped Bearer secret without a Device principal; other shapes remain protected (`automation/direct-inputs.md`). They share ingress request/refusal limits with Cron webhooks.
 
 ## Refusal reasons
 

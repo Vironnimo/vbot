@@ -35,7 +35,7 @@ Split an oversized source file into focused internal units behind the owning mod
 
 **Extensions:** API 22 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 
-**Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials, OAuth tokens and Cron webhook secrets (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
+**Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials, OAuth tokens and ingress secrets (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
 
 ## Domain Maps
 
@@ -72,7 +72,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion, Agent Secrets |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
-| automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
+| automation.md | `core/automation/` | Task inputs, Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
 | calendar.md | `core/calendar/` | Local events, recurrence, occurrence changes, Cron projection, calendar Tool |
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |

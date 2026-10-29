@@ -68,6 +68,7 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
     runtime.cron_service._notifications.stage(finished, "Done.")
     await runtime.cron_service._save_jobs_async()
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
+    await runtime.direct_inputs.configure(None, {"name": "Build tasks", "agent_id": "coder"})
     # An Agent-wide Secret given in the Session (a grant path through it) and a
     # Session Secret.
     lifetimes: tuple[tuple[str, Lifetime], ...] = (("GITHUB", "permanent"), ("SCRATCH", "session"))
@@ -95,6 +96,7 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
     assert [job.agent_id for job in jobs if job.status == "completed"] == ["coder"]
     assert [item.agent_id for job in jobs for item in job.notifications] == [agent_id]
     assert [job.agent_id for job in runtime.bootstrap_service.list_jobs()] == [agent_id]
+    assert [row["agent_id"] for row in runtime.direct_inputs.list_inputs()] == [agent_id]
     secrets = runtime.agent_secrets
     kept = SessionAddress(None, agent_id, "kept")
     assert [secret.name for secret in secrets.usable(kept)] == ["GITHUB", "SCRATCH"]
@@ -266,6 +268,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
         else:
             outcome = await runtime.rename_agent("coder", "researcher")
             assert outcome.agent.id == "researcher"
+            assert len(outcome.input_ids) == 1
             assert outcome.channel_ids == ("tg-coder",)
             assert len(outcome.cron_job_ids) == len(outcome.bootstrap_job_ids) == 1
 

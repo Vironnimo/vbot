@@ -91,6 +91,8 @@ class AccessorInputs:
         session_id: str | None = None,
         new_session: bool = False,
         agent_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
+        input_source_id: str | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
         fast_mode: bool = False,
@@ -118,6 +120,8 @@ class AccessorInputs:
                     session_id=session_id,
                     new_session=new_session,
                     agent_overrides=agent_overrides,
+                    run_overrides=run_overrides,
+                    input_source_id=input_source_id,
                     working_project_id=working_project_id,
                     ephemeral=ephemeral,
                     fast_mode=fast_mode,
@@ -144,6 +148,8 @@ class AccessorInputs:
         session_id: str | None,
         new_session: bool,
         agent_overrides: AgentOverrides | None,
+        run_overrides: AgentOverrides | None,
+        input_source_id: str | None,
         working_project_id: WorkingProjectChoice,
         ephemeral: bool,
         fast_mode: bool,
@@ -178,7 +184,7 @@ class AccessorInputs:
                     ephemeral=ephemeral,
                     fast_mode=fast_mode,
                     execution=execution,
-                    actor="rpc",
+                    actor=f"input:{input_source_id}" if input_source_id else "rpc",
                 )
                 if new_session
                 else None
@@ -198,14 +204,17 @@ class AccessorInputs:
                     raise SessionNotFoundError("Session generation changed before input acceptance")
                 await self.loop._reject_owner_managed_session(project_id, agent_id, session_id)
                 agent = await resolver.resolve_agent_async(
-                    project_id, agent_id, session_id=session_id
+                    project_id, agent_id, session_id=session_id, run_overrides=run_overrides
                 )
                 working = await resolver.resolve_working_project_async(
                     project_id, agent, session_id=session_id
                 )
             else:
                 agent = await resolver.resolve_agent_async(
-                    project_id, agent_id, new_session_overrides=new.agent_overrides
+                    project_id,
+                    agent_id,
+                    new_session_overrides=new.agent_overrides,
+                    run_overrides=run_overrides,
                 )
                 working = await resolver.resolve_working_project_async(
                     project_id, agent, requested=new.working_project_id
@@ -238,19 +247,34 @@ class AccessorInputs:
                 input_origin=input_origin,
                 reply_surface=reply_surface,
                 context_note=context_note,
+                run_overrides=run_overrides,
             )
             payload = _payload(request, working)
+            session_agent = agent
+            if run_overrides is not None and not run_overrides.is_empty:
+                session_agent = await resolver.resolve_agent_async(
+                    project_id,
+                    agent_id,
+                    session_id=session_id if new is None else None,
+                    new_session_overrides=new.agent_overrides if new else None,
+                    require_model=False,
+                )
             if new is not None:
                 session = await sessions.create_async(
                     agent_id,
                     session_id=new.session_id,
                     project_id=project_id,
                     actor=new.actor,
-                    metadata=new.metadata(agent, None),
+                    metadata={
+                        **new.metadata(session_agent, None),
+                        **({"input_source_id": input_source_id} if input_source_id else {}),
+                    },
                     working_project_id=_stored_working_project(project_id, working),
                 )
             else:
-                await sessions.run_async(resolver.capture_session_settings, session.address, agent)
+                await sessions.run_async(
+                    resolver.capture_session_settings, session.address, session_agent
+                )
             queue_id = new_id("que")
 
             async def accept() -> None:
@@ -472,6 +496,11 @@ def _payload(request: _RunRequest, working_project_id: str | None) -> dict[str, 
         "context_note": note.to_dict() if isinstance(note, ChatMessage) else note,
         "working_project_id": working_project_id,
         "steering": request.session_message,
+        **(
+            {"run_overrides": request.run_overrides.as_dict()}
+            if request.run_overrides is not None
+            else {}
+        ),
     }
 
 
@@ -491,6 +520,9 @@ def _request(payload: dict[str, Any], *, fallback_notes: Sequence[ChatMessage] =
         note = next((saved for saved in fallback_notes if saved.content == note), note)
     return _RunRequest(
         content=message.content,
+        run_overrides=AgentOverrides.from_stored(payload["run_overrides"])
+        if "run_overrides" in payload
+        else None,
         sender=message.sender,
         input_origin=message.input_origin,
         reply_surface=ReplySurface(kind=surface) if surface is not None else None,

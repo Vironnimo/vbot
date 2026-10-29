@@ -1,4 +1,32 @@
 export default Object.freeze({
+  'inputs.title': 'Task inputs',
+  'inputs.create': 'Create task input',
+  'inputs.empty': 'Let a program give an Agent a task',
+  'inputs.description':
+    'Each authenticated request supplies its own prompt. New tasks start new Sessions; send a returned session_id to continue that conversation.',
+  'inputs.name': 'Name',
+  'inputs.enabled': 'Accept tasks',
+  'inputs.overrides':
+    'Execution settings inherit from the Agent. Request overrides take precedence over this input’s defaults and apply to that Run only.',
+  'inputs.required':
+    'Enter a name, choose an Agent and select its Working Project or Workspace.',
+  'inputs.deleteTitle': 'Delete task input “{name}”?',
+  'inputs.deleteBody':
+    'Its URL and secret stop accepting requests. Accepted tasks and their Sessions are kept.',
+  'inputs.replaceDraftTitle': 'Replace the unfinished Automation?',
+  'inputs.replaceDraftBody': 'The unfinished form will be discarded.',
+  'inputs.request': 'Send a task',
+  'inputs.requestHelp':
+    'POST JSON with prompt. The response contains request_id, session_id, status_url and, once started, run_id. Use a unique Idempotency-Key for each task and reuse it when retrying that task.',
+  'inputs.result': 'Read status and result',
+  'inputs.resultHelp':
+    'GET the returned status_url with the same secret. Terminal responses include status and content. Add wait: true to a submission to wait up to 30 seconds (wait_timeout_seconds accepts up to 60); a timeout returns the same accepted task with HTTP 202.',
+  'inputs.followup': 'Continue a Session with request overrides',
+  'inputs.followupHelp':
+    'Use a session_id returned by this input. run_overrides accepts model, thinking_effort or thinking_effort_default: true. These choices do not change the Agent or Session defaults.',
+  'inputs.samplePrompt': 'Check this task and report the result.',
+  'inputs.sampleFollowup': 'Check it again with these additional details.',
+
   'cron.runs.expand': 'Show Runs for {name}',
   'cron.runs.collapse': 'Hide Runs for {name}',
   'cron.runs.empty': 'No Runs yet',
@@ -551,7 +579,7 @@ export default Object.freeze({
   'terminals.deleteGroupAction': 'Delete group…',
   'cron.title': 'Automations',
   'cron.categories.schedules': 'Schedules',
-  'cron.categories.webhooks': 'Webhooks',
+  'cron.categories.webhooks': 'Event webhooks',
   'cron.execution.title': 'Execution',
   'cron.execution.description':
     'Choose who runs this Automation and where its work belongs.',

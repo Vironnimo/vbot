@@ -38,7 +38,12 @@ import {
   rotateCronWebhookSecret,
 } from '$lib/api.js';
 import { describeCron } from './presentation.js';
-import { WEBHOOKS, automationCategory, automationPlace } from './navigation.js';
+import {
+  INPUTS,
+  WEBHOOKS,
+  automationCategory,
+  automationPlace,
+} from './navigation.js';
 
 // The place segment of a new job's form; any other segment is a job id.
 export const NEW_JOB_PLACE = 'new';
@@ -97,14 +102,15 @@ export function createCronEditor(context) {
 
   const autosave = createDebouncedAutosave({
     getSnapshot: () => ({ jobId: selectedJobId, values: formValues }),
-    hasChanges: () => !isCreating && isDirty,
+    hasChanges: () => context.category !== INPUTS && !isCreating && isDirty,
     save: () => persistForm(),
   });
 
   const unregisterAutosave = autosaveContext.register(autosave.participant);
 
   $effect(() => {
-    if (isCreating || !isDirty || submittingForm) return;
+    if (context.category === INPUTS || isCreating || !isDirty || submittingForm)
+      return;
     autosave.scheduleRun();
     return autosave.cancelPendingTimer;
   });
@@ -118,7 +124,7 @@ export function createCronEditor(context) {
   // draft, and opening the new job's form again continues it. Only Cancel,
   // a reset and a successful Save discard it.
   $effect(() => {
-    if (!isCreating) return;
+    if (context.category === INPUTS || !isCreating) return;
     const draft = isDirty ? $state.snapshot(formValues) : null;
     untrack(() => {
       context.newJobDraft = draft;

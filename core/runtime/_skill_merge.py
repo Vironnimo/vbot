@@ -60,6 +60,7 @@ async def follow_skill_merge(
         triggers = tuple(
             SkillReference(reference.kind, reference.id, reference.name)
             for reference in automations
+            if reference.kind != "input"
         )
 
         def prepare_and_delete() -> tuple[tuple[SkillReference, ...], tuple[str, ...], bool]:

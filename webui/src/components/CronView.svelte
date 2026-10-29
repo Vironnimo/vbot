@@ -1,4 +1,5 @@
 <script>
+  import DirectInputsView from './cron/DirectInputsView.svelte';
   import CronRunHistory from './cron/CronRunHistory.svelte';
   import NotificationPolicySelect from './sessions/NotificationPolicySelect.svelte';
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
@@ -61,6 +62,7 @@
   import {
     SCHEDULES,
     WEBHOOKS,
+    INPUTS,
     automationCategory,
     readAutomationPlace,
   } from './cron/navigation.js';
@@ -80,6 +82,7 @@
     activityError = '',
     onOpenSession = noop,
     onRefreshActivity = noop,
+    subscribeAgentRenames = null,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
   } = $props();
@@ -165,6 +168,7 @@
   let categoryTabs = $derived([
     { id: SCHEDULES, label: t('cron.categories.schedules') },
     { id: WEBHOOKS, label: t('cron.categories.webhooks') },
+    { id: INPUTS, label: t('inputs.title') },
   ]);
   let createTitle = $derived(
     category === WEBHOOKS
@@ -214,6 +218,10 @@
         jobs,
       );
       category = selectedCategory;
+      if (category === INPUTS) {
+        void loadProjectTeams();
+        return;
+      }
       showPlace(target);
       showJobInPlace();
     });
@@ -275,6 +283,7 @@
   }
 
   function showJobInPlace() {
+    if (category === INPUTS) return;
     const shown = editor.isCreating ? NEW_JOB_PLACE : editor.selectedJobId;
     const next = shown ? [category, shown] : [category];
     if (navigation.place.join('/') !== next.join('/')) {
@@ -486,669 +495,703 @@
       onChange={showCategory}
     />
   </div>
-  <div
-    class="cron-layout"
-    role="tabpanel"
-    id={`automation-categories-panel-${category}`}
-    aria-labelledby={`automation-categories-tab-${category}`}
-  >
-    <aside
-      class="cron-list-pane secondary-pane"
-      aria-labelledby="cron-list-title"
+  {#if category === INPUTS}
+    <DirectInputsView
+      {navigation}
+      agents={viewState.agents}
+      projects={projectCatalog}
+      {agentOptions}
+      {subscribeAgentRenames}
+      bind:newDraft={newJobDraft}
+      refreshToken={cronRefreshToken}
+      {serverUnavailable}
+    />
+  {:else}
+    <div
+      class="cron-layout"
+      role="tabpanel"
+      id={`automation-categories-panel-${category}`}
+      aria-labelledby={`automation-categories-tab-${category}`}
     >
-      <div class="pane-header secondary-pane__header">
-        <span id="cron-list-title" class="secondary-pane__title">
-          {t('cron.title')}
-        </span>
-        <div class="pane-header-actions">
-          <Button
-            variant="tertiary"
-            icon
-            ariaLabel={createTitle}
-            tooltip={createTitle}
-            disabled={!hasAgents}
-            onClick={editor.startCreate}
-          >
-            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-              <path d="M7 1.5v11M1.5 7h11" />
-            </svg>
-          </Button>
-        </div>
-      </div>
-
-      <div class="cron-list-scroll secondary-pane__scroll secondary-list">
-        {#if activityError && !serverUnavailable}
-          <Banner variant="error">{activityError}</Banner>
-          <Button variant="tertiary" onClick={onRefreshActivity}
-            >{t('common.retry')}</Button
-          >
-        {/if}
-        {#if viewState.agentsError && !serverUnavailable}
-          <div class="cron-load-error">
-            <Banner variant="error" role="alert">
-              {viewState.agentsError}
-            </Banner>
-            <Button variant="secondary" onClick={loadAgents}>
-              {t('common.retry')}
-            </Button>
-          </div>
-        {:else if !serverUnavailable && !hasAgents && !viewState.loadingAgents}
-          <p class="cron-list-state cron-list-state--warn" role="status">
-            {t('cron.noAgents')}
-          </p>
-        {/if}
-
-        {#if isLoading && !serverUnavailable}
-          <p class="cron-list-state" role="status">
-            {t('cron.loading')}
-          </p>
-        {:else if viewState.jobsError && !serverUnavailable}
-          <div class="cron-load-error">
-            <Banner variant="error" role="alert">
-              {viewState.jobsError}
-            </Banner>
-            <Button variant="secondary" onClick={() => loadJobs()}>
-              {t('common.retry')}
-            </Button>
-          </div>
-        {:else if categoryJobs.length === 0}
-          <EmptyState
-            density="compact"
-            description={category === WEBHOOKS
-              ? t('cron.webhooks.emptyTitle')
-              : t('cron.emptyTitle')}
-          />
-        {:else}
-          <ul class="cron-list" aria-label={t('cron.list.ariaLabel')}>
-            {#each categoryJobs as job (job.id)}
-              <li>
-                <div class="cron-item-row">
-                  <button
-                    type="button"
-                    class="cron-expand"
-                    aria-expanded={Boolean(expandedJobs[job.id])}
-                    aria-controls={`cron-runs-${job.id}`}
-                    aria-label={expandedJobs[job.id]
-                      ? t('cron.runs.collapse', { name: job.name })
-                      : t('cron.runs.expand', { name: job.name })}
-                    onclick={() =>
-                      (expandedJobs[job.id] = !expandedJobs[job.id])}
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      width="14"
-                      height="14"
-                      aria-hidden="true"
-                      ><path
-                        d={expandedJobs[job.id]
-                          ? 'm4 6 4 4 4-4'
-                          : 'm6 4 4 4-4 4'}
-                      /></svg
-                    >
-                  </button>
-                  <button
-                    type="button"
-                    class="cron-item secondary-list__item"
-                    class:active={!editor.isCreating &&
-                      job.id === editor.selectedJobId}
-                    data-testid={`cron-item-${job.id}`}
-                    use:tooltip={() => scheduleRowDetails(job, { agentLabel })}
-                    onclick={() => editor.selectJob(job)}
-                    oncontextmenu={(event) => openMenu(job, event)}
-                    onkeydown={(event) => {
-                      if (isContextMenuKey(event)) openMenu(job, event);
-                    }}
-                  >
-                    <span class="cron-item-inner">
-                      <span class="cron-item-head">
-                        <span
-                          class="cron-status-dot cron-status-dot--{statusChipVariant(
-                            job,
-                          )}"
-                          role="img"
-                          aria-label={statusLabel(job.status)}
-                        ></span>
-                        <span class="cron-item-name">
-                          {job.name}
-                        </span>
-                        {#if job.unread_alert || (scheduleActivity[job.id]?.visible_unread_count ?? scheduleActivity[job.id]?.unread_count) > 0}
-                          <span
-                            class="cron-item-alert"
-                            role="img"
-                            aria-label={job.unread_alert
-                              ? t('cron.alert.unread')
-                              : t('notifications.unread')}
-                            data-testid={`cron-item-alert-${job.id}`}
-                          ></span>
-                        {/if}
-                      </span>
-                      <span class="cron-item-detail">
-                        {listRowDetail(job, viewState.systemTimezone)}
-                      </span>
-                    </span>
-                  </button>
-                </div>
-                <div id={`cron-runs-${job.id}`}>
-                  {#if expandedJobs[job.id]}
-                    <CronRunHistory
-                      jobId={job.id}
-                      activity={scheduleActivity[job.id] ?? {}}
-                      {onOpenSession}
-                      onRead={onRefreshActivity}
-                    />
-                  {/if}
-                </div>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-    </aside>
-
-    {#if !editor.showDetailForm}
-      <div class="cron-detail-pane">
-        <EmptyState
-          fill
-          class="master-detail-empty"
-          title={categoryJobs.length === 0
-            ? category === WEBHOOKS
-              ? t('cron.webhooks.emptyDetailTitle')
-              : t('cron.emptyDetailTitle')
-            : t('cron.selectTitle')}
-          description={!serverUnavailable && !hasAgents
-            ? t('cron.noAgents')
-            : category === WEBHOOKS
-              ? t('cron.webhooks.emptySubtitle')
-              : t('cron.emptySubtitle')}
-        >
-          {#snippet actions()}
+      <aside
+        class="cron-list-pane secondary-pane"
+        aria-labelledby="cron-list-title"
+      >
+        <div class="pane-header secondary-pane__header">
+          <span id="cron-list-title" class="secondary-pane__title">
+            {t('cron.title')}
+          </span>
+          <div class="pane-header-actions">
             <Button
-              variant={categoryJobs.length === 0 ? 'primary' : 'secondary'}
+              variant="tertiary"
+              icon
+              ariaLabel={createTitle}
+              tooltip={createTitle}
               disabled={!hasAgents}
               onClick={editor.startCreate}
             >
-              {createTitle}
+              <svg
+                viewBox="0 0 14 14"
+                width="14"
+                height="14"
+                aria-hidden="true"
+              >
+                <path d="M7 1.5v11M1.5 7h11" />
+              </svg>
             </Button>
-          {/snippet}
-        </EmptyState>
-      </div>
-    {:else}
-      {#key editor.isCreating ? 'cron-create' : editor.selectedJobId}
-        <div class="cron-detail-pane">
-          <form
-            class="cron-detail-scroll page-scroll"
-            onsubmit={editor.submitForm}
-          >
-            <div class="detail-top">
-              <div>
-                <h2 class="detail-heading view-header__title">
-                  {editor.detailTitle}
-                </h2>
-                {#if editor.isCreating}
-                  <div class="detail-sub">
-                    {t('cron.detail.createSubtitle')}
-                  </div>
-                {/if}
-              </div>
+          </div>
+        </div>
 
-              <div class="detail-btns">
-                {#if !editor.isCreating && editor.selectedJob}
-                  <!-- The Enabled switch already says active or paused; the
-                       chip only names states the switch cannot. -->
-                  {#if headerStatusVisible(editor.selectedJob)}
-                    <StatusChip variant={statusChipVariant(editor.selectedJob)}>
-                      {statusLabel(editor.selectedJob.status)}
-                    </StatusChip>
-                  {/if}
-                  {#if !isTerminalJob(editor.selectedJob)}
-                    <label class="cron-enabled-control">
-                      <span>{t('cron.actions.enabled')}</span>
-                      <Toggle
-                        checked={editor.selectedJob.status ===
-                          CRON_STATUS_ACTIVE}
-                        ariaLabel={editor.selectedJob.status ===
-                        CRON_STATUS_ACTIVE
-                          ? t('cron.actions.disableJob', {
-                              id: editor.selectedJob.id,
-                            })
-                          : t('cron.actions.enableJob', {
-                              id: editor.selectedJob.id,
-                            })}
-                        disabled={editor.submittingForm ||
-                          editor.mutatingJobId === editor.selectedJob.id}
-                        data-testid={`cron-toggle-${editor.selectedJob.id}`}
-                        onChange={() => editor.toggleJob(editor.selectedJob)}
-                      />
-                    </label>
-                  {/if}
-                {/if}
-              </div>
+        <div class="cron-list-scroll secondary-pane__scroll secondary-list">
+          {#if activityError && !serverUnavailable}
+            <Banner variant="error">{activityError}</Banner>
+            <Button variant="tertiary" onClick={onRefreshActivity}
+              >{t('common.retry')}</Button
+            >
+          {/if}
+          {#if viewState.agentsError && !serverUnavailable}
+            <div class="cron-load-error">
+              <Banner variant="error" role="alert">
+                {viewState.agentsError}
+              </Banner>
+              <Button variant="secondary" onClick={loadAgents}>
+                {t('common.retry')}
+              </Button>
             </div>
+          {:else if !serverUnavailable && !hasAgents && !viewState.loadingAgents}
+            <p class="cron-list-state cron-list-state--warn" role="status">
+              {t('cron.noAgents')}
+            </p>
+          {/if}
 
-            {#if !editor.isCreating && editor.selectedJob}
-              <div class="s-group cron-overview">
-                <div class="cron-summary" aria-label={t('cron.detail.summary')}>
-                  <div class="cron-summary-item">
-                    <span class="cron-summary-label">
-                      {t('cron.detail.nextFire')}
-                    </span>
-                    <strong class="cron-summary-value">
-                      {nextRunText(editor.selectedJob)}
-                    </strong>
-                    <span class="cron-summary-support">
-                      {viewState.systemTimezone}
-                    </span>
-                  </div>
-                  <div class="cron-summary-item">
-                    <span class="cron-summary-label">
-                      {t('cron.detail.cadence')}
-                    </span>
-                    <strong class="cron-summary-value cron-summary-value--wrap">
-                      {scheduleSummary(editor.selectedJob)}
-                    </strong>
-                    {#if scheduleTechnicalValue(editor.selectedJob)}
-                      <span
-                        class="cron-summary-support"
-                        class:cron-summary-support--mono={editor.selectedJob
-                          .schedule_type === 'cron'}
+          {#if isLoading && !serverUnavailable}
+            <p class="cron-list-state" role="status">
+              {t('cron.loading')}
+            </p>
+          {:else if viewState.jobsError && !serverUnavailable}
+            <div class="cron-load-error">
+              <Banner variant="error" role="alert">
+                {viewState.jobsError}
+              </Banner>
+              <Button variant="secondary" onClick={() => loadJobs()}>
+                {t('common.retry')}
+              </Button>
+            </div>
+          {:else if categoryJobs.length === 0}
+            <EmptyState
+              density="compact"
+              description={category === WEBHOOKS
+                ? t('cron.webhooks.emptyTitle')
+                : t('cron.emptyTitle')}
+            />
+          {:else}
+            <ul class="cron-list" aria-label={t('cron.list.ariaLabel')}>
+              {#each categoryJobs as job (job.id)}
+                <li>
+                  <div class="cron-item-row">
+                    <button
+                      type="button"
+                      class="cron-expand"
+                      aria-expanded={Boolean(expandedJobs[job.id])}
+                      aria-controls={`cron-runs-${job.id}`}
+                      aria-label={expandedJobs[job.id]
+                        ? t('cron.runs.collapse', { name: job.name })
+                        : t('cron.runs.expand', { name: job.name })}
+                      onclick={() =>
+                        (expandedJobs[job.id] = !expandedJobs[job.id])}
+                    >
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="14"
+                        height="14"
+                        aria-hidden="true"
+                        ><path
+                          d={expandedJobs[job.id]
+                            ? 'm4 6 4 4 4-4'
+                            : 'm6 4 4 4-4 4'}
+                        /></svg
                       >
-                        {scheduleTechnicalValue(editor.selectedJob)}
+                    </button>
+                    <button
+                      type="button"
+                      class="cron-item secondary-list__item"
+                      class:active={!editor.isCreating &&
+                        job.id === editor.selectedJobId}
+                      data-testid={`cron-item-${job.id}`}
+                      use:tooltip={() =>
+                        scheduleRowDetails(job, { agentLabel })}
+                      onclick={() => editor.selectJob(job)}
+                      oncontextmenu={(event) => openMenu(job, event)}
+                      onkeydown={(event) => {
+                        if (isContextMenuKey(event)) openMenu(job, event);
+                      }}
+                    >
+                      <span class="cron-item-inner">
+                        <span class="cron-item-head">
+                          <span
+                            class="cron-status-dot cron-status-dot--{statusChipVariant(
+                              job,
+                            )}"
+                            role="img"
+                            aria-label={statusLabel(job.status)}
+                          ></span>
+                          <span class="cron-item-name">
+                            {job.name}
+                          </span>
+                          {#if job.unread_alert || (scheduleActivity[job.id]?.visible_unread_count ?? scheduleActivity[job.id]?.unread_count) > 0}
+                            <span
+                              class="cron-item-alert"
+                              role="img"
+                              aria-label={job.unread_alert
+                                ? t('cron.alert.unread')
+                                : t('notifications.unread')}
+                              data-testid={`cron-item-alert-${job.id}`}
+                            ></span>
+                          {/if}
+                        </span>
+                        <span class="cron-item-detail">
+                          {listRowDetail(job, viewState.systemTimezone)}
+                        </span>
                       </span>
+                    </button>
+                  </div>
+                  <div id={`cron-runs-${job.id}`}>
+                    {#if expandedJobs[job.id]}
+                      <CronRunHistory
+                        jobId={job.id}
+                        activity={scheduleActivity[job.id] ?? {}}
+                        {onOpenSession}
+                        onRead={onRefreshActivity}
+                      />
                     {/if}
                   </div>
-                  <div class="cron-summary-item">
-                    <span class="cron-summary-label">
-                      {t('cron.detail.lastResult')}
-                    </span>
-                    <strong class="cron-summary-value">
-                      {outcomeLabel(
-                        editor.selectedJob.last_outcome,
-                        editor.selectedJob.last_run_silent,
-                      )}
-                    </strong>
-                    <span class="cron-summary-support">
-                      {lastResultSupport(editor.selectedJob)}
-                    </span>
-                  </div>
-                  <div class="cron-summary-item">
-                    <span class="cron-summary-label">
-                      {t('cron.detail.target')}
-                    </span>
-                    <strong class="cron-summary-value">
-                      {agentLabel(editor.selectedJob.agent_id)}
-                    </strong>
-                    <span class="cron-summary-support">
-                      {sessionSummary(editor.selectedJob)}
-                    </span>
-                  </div>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      </aside>
+
+      {#if !editor.showDetailForm}
+        <div class="cron-detail-pane">
+          <EmptyState
+            fill
+            class="master-detail-empty"
+            title={categoryJobs.length === 0
+              ? category === WEBHOOKS
+                ? t('cron.webhooks.emptyDetailTitle')
+                : t('cron.emptyDetailTitle')
+              : t('cron.selectTitle')}
+            description={!serverUnavailable && !hasAgents
+              ? t('cron.noAgents')
+              : category === WEBHOOKS
+                ? t('cron.webhooks.emptySubtitle')
+                : t('cron.emptySubtitle')}
+          >
+            {#snippet actions()}
+              <Button
+                variant={categoryJobs.length === 0 ? 'primary' : 'secondary'}
+                disabled={!hasAgents}
+                onClick={editor.startCreate}
+              >
+                {createTitle}
+              </Button>
+            {/snippet}
+          </EmptyState>
+        </div>
+      {:else}
+        {#key editor.isCreating ? 'cron-create' : editor.selectedJobId}
+          <div class="cron-detail-pane">
+            <form
+              class="cron-detail-scroll page-scroll"
+              onsubmit={editor.submitForm}
+            >
+              <div class="detail-top">
+                <div>
+                  <h2 class="detail-heading view-header__title">
+                    {editor.detailTitle}
+                  </h2>
+                  {#if editor.isCreating}
+                    <div class="detail-sub">
+                      {t('cron.detail.createSubtitle')}
+                    </div>
+                  {/if}
                 </div>
 
-                <details class="s-disclosure cron-execution-details">
-                  <summary>
-                    {t('cron.detail.executionDetails')}
-                  </summary>
-                  <dl class="s-disclosure__body cron-execution-grid">
-                    <div>
-                      <dt>{t('cron.detail.lastAttempt')}</dt>
-                      <dd>
-                        {displayValue(
-                          editor.selectedJob.last_attempt_at_display,
-                        )}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>{t('cron.detail.lastFired')}</dt>
-                      <dd>
-                        {displayValue(editor.selectedJob.last_fired_at_display)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>
-                        {t('cron.detail.lastCompleted')}
-                      </dt>
-                      <dd>
-                        {displayValue(
-                          editor.selectedJob.last_completed_at_display,
-                        )}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>{t('cron.detail.lastRun')}</dt>
-                      <dd class="cron-execution-grid__id">
-                        {displayValue(editor.selectedJob.last_run_id)}
-                      </dd>
-                    </div>
-                    {#if editor.selectedJob.watch}
-                      <div>
-                        <dt>{t('cron.detail.lastCheck')}</dt>
-                        <dd>
-                          {displayValue(
-                            editor.selectedJob.last_checked_at_display,
-                          )}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t('cron.detail.lastChange')}</dt>
-                        <dd>
-                          {displayValue(
-                            editor.selectedJob.last_changed_at_display,
-                          )}
-                        </dd>
-                      </div>
+                <div class="detail-btns">
+                  {#if !editor.isCreating && editor.selectedJob}
+                    <!-- The Enabled switch already says active or paused; the
+                       chip only names states the switch cannot. -->
+                    {#if headerStatusVisible(editor.selectedJob)}
+                      <StatusChip
+                        variant={statusChipVariant(editor.selectedJob)}
+                      >
+                        {statusLabel(editor.selectedJob.status)}
+                      </StatusChip>
                     {/if}
-                    <div>
-                      <dt>{t('cron.detail.failures')}</dt>
-                      <dd>{editor.selectedJob.consecutive_failures}</dd>
-                    </div>
-                    <div>
-                      <dt>
-                        {t('cron.detail.remainingRuns')}
-                      </dt>
-                      <dd>{remainingRunsLabel(editor.selectedJob)}</dd>
-                    </div>
-                    <div>
-                      <dt>{t('cron.detail.scheduleId')}</dt>
-                      <dd class="cron-execution-grid__id">
-                        {editor.selectedJob.id}
-                      </dd>
-                    </div>
-                  </dl>
-                </details>
+                    {#if !isTerminalJob(editor.selectedJob)}
+                      <label class="cron-enabled-control">
+                        <span>{t('cron.actions.enabled')}</span>
+                        <Toggle
+                          checked={editor.selectedJob.status ===
+                            CRON_STATUS_ACTIVE}
+                          ariaLabel={editor.selectedJob.status ===
+                          CRON_STATUS_ACTIVE
+                            ? t('cron.actions.disableJob', {
+                                id: editor.selectedJob.id,
+                              })
+                            : t('cron.actions.enableJob', {
+                                id: editor.selectedJob.id,
+                              })}
+                          disabled={editor.submittingForm ||
+                            editor.mutatingJobId === editor.selectedJob.id}
+                          data-testid={`cron-toggle-${editor.selectedJob.id}`}
+                          onChange={() => editor.toggleJob(editor.selectedJob)}
+                        />
+                      </label>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
 
-                <!-- The latest answer that was not silent; a silent Run
-                     keeps the one before it. -->
-                {#if editor.selectedJob.last_result}
-                  <details class="s-disclosure cron-last-answer">
-                    <summary>
-                      {t('cron.detail.lastAnswer')}
-                      {#if editor.selectedJob.last_result.at_display}
-                        <span class="s-disclosure__meta cron-last-answer__time">
-                          {editor.selectedJob.last_result.at_display}
+              {#if !editor.isCreating && editor.selectedJob}
+                <div class="s-group cron-overview">
+                  <div
+                    class="cron-summary"
+                    aria-label={t('cron.detail.summary')}
+                  >
+                    <div class="cron-summary-item">
+                      <span class="cron-summary-label">
+                        {t('cron.detail.nextFire')}
+                      </span>
+                      <strong class="cron-summary-value">
+                        {nextRunText(editor.selectedJob)}
+                      </strong>
+                      <span class="cron-summary-support">
+                        {viewState.systemTimezone}
+                      </span>
+                    </div>
+                    <div class="cron-summary-item">
+                      <span class="cron-summary-label">
+                        {t('cron.detail.cadence')}
+                      </span>
+                      <strong
+                        class="cron-summary-value cron-summary-value--wrap"
+                      >
+                        {scheduleSummary(editor.selectedJob)}
+                      </strong>
+                      {#if scheduleTechnicalValue(editor.selectedJob)}
+                        <span
+                          class="cron-summary-support"
+                          class:cron-summary-support--mono={editor.selectedJob
+                            .schedule_type === 'cron'}
+                        >
+                          {scheduleTechnicalValue(editor.selectedJob)}
                         </span>
                       {/if}
-                    </summary>
-                    <p class="s-disclosure__body cron-last-answer__text">
-                      {editor.selectedJob.last_result.text}
-                    </p>
-                  </details>
-                {/if}
-              </div>
+                    </div>
+                    <div class="cron-summary-item">
+                      <span class="cron-summary-label">
+                        {t('cron.detail.lastResult')}
+                      </span>
+                      <strong class="cron-summary-value">
+                        {outcomeLabel(
+                          editor.selectedJob.last_outcome,
+                          editor.selectedJob.last_run_silent,
+                        )}
+                      </strong>
+                      <span class="cron-summary-support">
+                        {lastResultSupport(editor.selectedJob)}
+                      </span>
+                    </div>
+                    <div class="cron-summary-item">
+                      <span class="cron-summary-label">
+                        {t('cron.detail.target')}
+                      </span>
+                      <strong class="cron-summary-value">
+                        {agentLabel(editor.selectedJob.agent_id)}
+                      </strong>
+                      <span class="cron-summary-support">
+                        {sessionSummary(editor.selectedJob)}
+                      </span>
+                    </div>
+                  </div>
 
-              {#if editor.selectedJob.unread_alert}
-                <!-- Stays until marked read, or the job's next success (or retried delivery). -->
-                <Banner
-                  variant="error"
-                  role="alert"
-                  data-testid="cron-unread-alert"
-                >
-                  <div>
-                    <p>{editor.selectedJob.unread_alert.message}</p>
-                    {#if editor.selectedJob.unread_alert.at_display}
-                      <p class="cron-alert-time">
-                        {t('cron.alert.at', {
-                          time: editor.selectedJob.unread_alert.at_display,
-                        })}
+                  <details class="s-disclosure cron-execution-details">
+                    <summary>
+                      {t('cron.detail.executionDetails')}
+                    </summary>
+                    <dl class="s-disclosure__body cron-execution-grid">
+                      <div>
+                        <dt>{t('cron.detail.lastAttempt')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_attempt_at_display,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t('cron.detail.lastFired')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_fired_at_display,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>
+                          {t('cron.detail.lastCompleted')}
+                        </dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_completed_at_display,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t('cron.detail.lastRun')}</dt>
+                        <dd class="cron-execution-grid__id">
+                          {displayValue(editor.selectedJob.last_run_id)}
+                        </dd>
+                      </div>
+                      {#if editor.selectedJob.watch}
+                        <div>
+                          <dt>{t('cron.detail.lastCheck')}</dt>
+                          <dd>
+                            {displayValue(
+                              editor.selectedJob.last_checked_at_display,
+                            )}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>{t('cron.detail.lastChange')}</dt>
+                          <dd>
+                            {displayValue(
+                              editor.selectedJob.last_changed_at_display,
+                            )}
+                          </dd>
+                        </div>
+                      {/if}
+                      <div>
+                        <dt>{t('cron.detail.failures')}</dt>
+                        <dd>{editor.selectedJob.consecutive_failures}</dd>
+                      </div>
+                      <div>
+                        <dt>
+                          {t('cron.detail.remainingRuns')}
+                        </dt>
+                        <dd>{remainingRunsLabel(editor.selectedJob)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('cron.detail.scheduleId')}</dt>
+                        <dd class="cron-execution-grid__id">
+                          {editor.selectedJob.id}
+                        </dd>
+                      </div>
+                    </dl>
+                  </details>
+
+                  <!-- The latest answer that was not silent; a silent Run
+                     keeps the one before it. -->
+                  {#if editor.selectedJob.last_result}
+                    <details class="s-disclosure cron-last-answer">
+                      <summary>
+                        {t('cron.detail.lastAnswer')}
+                        {#if editor.selectedJob.last_result.at_display}
+                          <span
+                            class="s-disclosure__meta cron-last-answer__time"
+                          >
+                            {editor.selectedJob.last_result.at_display}
+                          </span>
+                        {/if}
+                      </summary>
+                      <p class="s-disclosure__body cron-last-answer__text">
+                        {editor.selectedJob.last_result.text}
                       </p>
-                    {/if}
-                  </div>
-                  <Button
-                    disabled={Boolean(editor.mutatingJobId)}
-                    onClick={() => editor.acknowledgeAlert(editor.selectedJob)}
+                    </details>
+                  {/if}
+                </div>
+
+                {#if editor.selectedJob.unread_alert}
+                  <!-- Stays until marked read, or the job's next success (or retried delivery). -->
+                  <Banner
+                    variant="error"
+                    role="alert"
+                    data-testid="cron-unread-alert"
                   >
-                    {t('cron.alert.acknowledge')}
-                  </Button>
-                </Banner>
-              {/if}
-              {#if editor.selectedJob.delivery_progress.waiting}
-                <Banner
-                  variant={editor.selectedJob.delivery_progress.uncertain
-                    ? 'error'
-                    : 'warn'}
-                  role="status"
-                  data-testid="cron-delivery-progress"
-                >
-                  <div>
-                    <p>
-                      {t('cron.delivery.waiting', {
-                        count: editor.selectedJob.delivery_progress.waiting,
-                      })}
-                    </p>
-                    {#if editor.selectedJob.delivery_progress.uncertain}
-                      <p>{t('cron.delivery.uncertain')}</p>
-                    {:else if editor.selectedJob.delivery_progress.error}
-                      <p>{editor.selectedJob.delivery_progress.error}</p>
-                    {/if}
-                    {#if editor.selectedJob.delivery_progress.platform_blocked}
-                      <p>
-                        {t('cron.delivery.platformBlocked', {
-                          count:
-                            editor.selectedJob.delivery_progress
-                              .platform_blocked,
-                        })}
-                      </p>
-                    {/if}
-                    {#if editor.selectedJob.delivery_progress.dropped}
-                      <p>
-                        {t('cron.delivery.dropped', {
-                          count: editor.selectedJob.delivery_progress.dropped,
-                        })}
-                      </p>
-                    {/if}
-                  </div>
-                  <Button
-                    disabled={Boolean(editor.mutatingJobId)}
-                    onClick={() => editor.retryDelivery(editor.selectedJob)}
-                  >
-                    {editor.selectedJob.delivery_progress.uncertain
-                      ? t('cron.delivery.checkedRetry')
-                      : t('cron.delivery.retry')}
-                  </Button>
-                  {#if editor.selectedJob.delivery_progress.platform_blocked}
+                    <div>
+                      <p>{editor.selectedJob.unread_alert.message}</p>
+                      {#if editor.selectedJob.unread_alert.at_display}
+                        <p class="cron-alert-time">
+                          {t('cron.alert.at', {
+                            time: editor.selectedJob.unread_alert.at_display,
+                          })}
+                        </p>
+                      {/if}
+                    </div>
                     <Button
                       disabled={Boolean(editor.mutatingJobId)}
-                      onClick={() => (deliveryRepairJob = editor.selectedJob)}
+                      onClick={() =>
+                        editor.acknowledgeAlert(editor.selectedJob)}
                     >
-                      {t('cron.delivery.chooseTarget')}
+                      {t('cron.alert.acknowledge')}
                     </Button>
-                  {/if}
-                </Banner>
-              {/if}
-              {#if editor.selectedJob.last_error}
-                <Banner variant="error" role="status">
-                  {editor.selectedJob.last_error}
-                </Banner>
-              {/if}
-              <!-- Cleared by the next successful check. -->
-              {#if editor.selectedJob.watch && editor.selectedJob.last_check_error}
-                <Banner
-                  variant="error"
-                  role="status"
-                  data-testid="cron-check-error"
-                >
-                  {editor.selectedJob.last_check_error}
-                </Banner>
-              {/if}
-            {/if}
-
-            <section
-              class="s-section cron-task-section"
-              aria-labelledby="cron-section-task"
-            >
-              <header class="s-section__head">
-                <h3 class="s-section__title" id="cron-section-task">
-                  {t('cron.sections.task')}
-                </h3>
-              </header>
-              <p class="s-section__desc">
-                {t('cron.sections.taskSubtitle')}
-              </p>
-              <div class="s-section__body">
-                <div class="s-group">
-                  <div class="s-row">
-                    <div class="s-row-info">
-                      <label class="s-row-label" for="cron-job-name">
-                        {t('cron.form.name')}
-                      </label>
-                    </div>
-                    <div class="s-row-control">
-                      <TextField
-                        id="cron-job-name"
-                        value={editor.formValues.name}
-                        placeholder={t('cron.form.namePlaceholder')}
-                        disabled={editor.isCreating && editor.submittingForm}
-                        onInput={(value) =>
-                          editor.updateFormField('name', value)}
-                      />
-                    </div>
-                  </div>
-
-                  <div class="s-row s-row--stacked cron-prompt-row">
-                    <label class="s-row-label" for="cron-job-prompt">
-                      {t('cron.form.prompt')}
-                      <span class="cron-required" aria-hidden="true">*</span>
-                    </label>
-                    <TextArea
-                      id="cron-job-prompt"
-                      class="cron-prompt-editor"
-                      value={editor.formValues.prompt}
-                      rows={8}
-                      placeholder={t('cron.form.promptPlaceholder')}
-                      disabled={editor.isCreating && editor.submittingForm}
-                      onInput={(value) =>
-                        editor.updateFormField('prompt', value)}
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <CronExecutionSettings
-              {editor}
-              {agentOptions}
-              agents={viewState.agents}
-              projects={projectCatalog}
-            />
-
-            {#if !editor.isWebhookSchedule}
-              <CronTimingSettings
-                {editor}
-                {channels}
-                systemTimezone={viewState.systemTimezone}
-              />
-            {/if}
-
-            {#if canWatch(editor.formValues.schedule_type)}
-              <CronWatchSettings {editor} />
-            {/if}
-
-            {#if editor.isWebhookSchedule}
-              <CronWebhookSettings
-                {editor}
-                systemTimezone={viewState.systemTimezone}
-              />
-            {/if}
-
-            <section
-              class="s-section"
-              aria-labelledby="cron-notifications-title"
-            >
-              <header class="s-section__head">
-                <h3 class="s-section__title" id="cron-notifications-title">
-                  {t('notifications.label')}
-                </h3>
-              </header>
-              <div class="s-section__body">
-                <div class="s-group">
-                  <div class="s-row">
-                    <div class="s-row-info">
-                      <p class="s-row-desc">
-                        {t('notifications.scheduleHelp')}
+                  </Banner>
+                {/if}
+                {#if editor.selectedJob.delivery_progress.waiting}
+                  <Banner
+                    variant={editor.selectedJob.delivery_progress.uncertain
+                      ? 'error'
+                      : 'warn'}
+                    role="status"
+                    data-testid="cron-delivery-progress"
+                  >
+                    <div>
+                      <p>
+                        {t('cron.delivery.waiting', {
+                          count: editor.selectedJob.delivery_progress.waiting,
+                        })}
                       </p>
-                    </div>
-                    <div class="s-row-control">
-                      <NotificationPolicySelect
-                        value={editor.formValues.notification_policy}
-                        onChange={(value) =>
-                          editor.updateFormField('notification_policy', value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-            <CronDeliverySettings {editor} {channels} />
-
-            <!-- Identifier and deletion close the page, after everything the
-                 user edits. -->
-            {#if !editor.isCreating && editor.selectedJob}
-              <div class="s-group cron-technical-group">
-                <details class="s-disclosure cron-technical-details">
-                  <summary>
-                    {t('cron.detail.technicalDetails')}
-                  </summary>
-                  <div class="s-disclosure__body cron-technical-content">
-                    <div class="cron-technical-id">
-                      <span class="cron-technical-label">
-                        {t('cron.detail.scheduleId')}
-                      </span>
-                      <code>{editor.selectedJob.id}</code>
+                      {#if editor.selectedJob.delivery_progress.uncertain}
+                        <p>{t('cron.delivery.uncertain')}</p>
+                      {:else if editor.selectedJob.delivery_progress.error}
+                        <p>{editor.selectedJob.delivery_progress.error}</p>
+                      {/if}
+                      {#if editor.selectedJob.delivery_progress.platform_blocked}
+                        <p>
+                          {t('cron.delivery.platformBlocked', {
+                            count:
+                              editor.selectedJob.delivery_progress
+                                .platform_blocked,
+                          })}
+                        </p>
+                      {/if}
+                      {#if editor.selectedJob.delivery_progress.dropped}
+                        <p>
+                          {t('cron.delivery.dropped', {
+                            count: editor.selectedJob.delivery_progress.dropped,
+                          })}
+                        </p>
+                      {/if}
                     </div>
                     <Button
-                      variant="danger"
-                      ariaLabel={t('cron.actions.deleteJob', {
-                        id: editor.selectedJob.id,
-                      })}
-                      data-testid={`cron-delete-${editor.selectedJob.id}`}
-                      disabled={editor.submittingForm ||
-                        editor.mutatingJobId === editor.selectedJob.id}
-                      onClick={() => editor.deleteJob(editor.selectedJob)}
+                      disabled={Boolean(editor.mutatingJobId)}
+                      onClick={() => editor.retryDelivery(editor.selectedJob)}
                     >
-                      {t('common.delete')}
+                      {editor.selectedJob.delivery_progress.uncertain
+                        ? t('cron.delivery.checkedRetry')
+                        : t('cron.delivery.retry')}
                     </Button>
+                    {#if editor.selectedJob.delivery_progress.platform_blocked}
+                      <Button
+                        disabled={Boolean(editor.mutatingJobId)}
+                        onClick={() => (deliveryRepairJob = editor.selectedJob)}
+                      >
+                        {t('cron.delivery.chooseTarget')}
+                      </Button>
+                    {/if}
+                  </Banner>
+                {/if}
+                {#if editor.selectedJob.last_error}
+                  <Banner variant="error" role="status">
+                    {editor.selectedJob.last_error}
+                  </Banner>
+                {/if}
+                <!-- Cleared by the next successful check. -->
+                {#if editor.selectedJob.watch && editor.selectedJob.last_check_error}
+                  <Banner
+                    variant="error"
+                    role="status"
+                    data-testid="cron-check-error"
+                  >
+                    {editor.selectedJob.last_check_error}
+                  </Banner>
+                {/if}
+              {/if}
+
+              <section
+                class="s-section cron-task-section"
+                aria-labelledby="cron-section-task"
+              >
+                <header class="s-section__head">
+                  <h3 class="s-section__title" id="cron-section-task">
+                    {t('cron.sections.task')}
+                  </h3>
+                </header>
+                <p class="s-section__desc">
+                  {t('cron.sections.taskSubtitle')}
+                </p>
+                <div class="s-section__body">
+                  <div class="s-group">
+                    <div class="s-row">
+                      <div class="s-row-info">
+                        <label class="s-row-label" for="cron-job-name">
+                          {t('cron.form.name')}
+                        </label>
+                      </div>
+                      <div class="s-row-control">
+                        <TextField
+                          id="cron-job-name"
+                          value={editor.formValues.name}
+                          placeholder={t('cron.form.namePlaceholder')}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(value) =>
+                            editor.updateFormField('name', value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div class="s-row s-row--stacked cron-prompt-row">
+                      <label class="s-row-label" for="cron-job-prompt">
+                        {t('cron.form.prompt')}
+                        <span class="cron-required" aria-hidden="true">*</span>
+                      </label>
+                      <TextArea
+                        id="cron-job-prompt"
+                        class="cron-prompt-editor"
+                        value={editor.formValues.prompt}
+                        rows={8}
+                        placeholder={t('cron.form.promptPlaceholder')}
+                        disabled={editor.isCreating && editor.submittingForm}
+                        onInput={(value) =>
+                          editor.updateFormField('prompt', value)}
+                      />
+                    </div>
                   </div>
-                </details>
-              </div>
-            {/if}
+                </div>
+              </section>
 
-            {#if editor.formErrorMessage}
-              <div class="cron-form-error">
-                <Banner variant="error" role="alert">
-                  {editor.formErrorMessage}
-                </Banner>
-              </div>
-            {/if}
+              <CronExecutionSettings
+                {editor}
+                {agentOptions}
+                agents={viewState.agents}
+                projects={projectCatalog}
+              />
 
-            <div class="cron-detail-footer">
-              {#if editor.isCreating}
-                <Button
-                  variant="secondary"
-                  disabled={editor.submittingForm}
-                  onClick={editor.cancelCreate}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  variant="primary"
-                  type="submit"
-                  disabled={editor.submittingForm}
-                >
-                  {editor.submittingForm
-                    ? t('common.saving')
-                    : t('common.save')}
-                </Button>
-              {:else}
-                <SaveStatus
-                  type="submit"
-                  saving={editor.submittingForm}
-                  pending={editor.isDirty}
+              {#if !editor.isWebhookSchedule}
+                <CronTimingSettings
+                  {editor}
+                  {channels}
+                  systemTimezone={viewState.systemTimezone}
                 />
               {/if}
-            </div>
-          </form>
-        </div>
-      {/key}
-    {/if}
-  </div>
+
+              {#if canWatch(editor.formValues.schedule_type)}
+                <CronWatchSettings {editor} />
+              {/if}
+
+              {#if editor.isWebhookSchedule}
+                <CronWebhookSettings
+                  {editor}
+                  systemTimezone={viewState.systemTimezone}
+                />
+              {/if}
+
+              <section
+                class="s-section"
+                aria-labelledby="cron-notifications-title"
+              >
+                <header class="s-section__head">
+                  <h3 class="s-section__title" id="cron-notifications-title">
+                    {t('notifications.label')}
+                  </h3>
+                </header>
+                <div class="s-section__body">
+                  <div class="s-group">
+                    <div class="s-row">
+                      <div class="s-row-info">
+                        <p class="s-row-desc">
+                          {t('notifications.scheduleHelp')}
+                        </p>
+                      </div>
+                      <div class="s-row-control">
+                        <NotificationPolicySelect
+                          value={editor.formValues.notification_policy}
+                          onChange={(value) =>
+                            editor.updateFormField(
+                              'notification_policy',
+                              value,
+                            )}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <CronDeliverySettings {editor} {channels} />
+
+              <!-- Identifier and deletion close the page, after everything the
+                 user edits. -->
+              {#if !editor.isCreating && editor.selectedJob}
+                <div class="s-group cron-technical-group">
+                  <details class="s-disclosure cron-technical-details">
+                    <summary>
+                      {t('cron.detail.technicalDetails')}
+                    </summary>
+                    <div class="s-disclosure__body cron-technical-content">
+                      <div class="cron-technical-id">
+                        <span class="cron-technical-label">
+                          {t('cron.detail.scheduleId')}
+                        </span>
+                        <code>{editor.selectedJob.id}</code>
+                      </div>
+                      <Button
+                        variant="danger"
+                        ariaLabel={t('cron.actions.deleteJob', {
+                          id: editor.selectedJob.id,
+                        })}
+                        data-testid={`cron-delete-${editor.selectedJob.id}`}
+                        disabled={editor.submittingForm ||
+                          editor.mutatingJobId === editor.selectedJob.id}
+                        onClick={() => editor.deleteJob(editor.selectedJob)}
+                      >
+                        {t('common.delete')}
+                      </Button>
+                    </div>
+                  </details>
+                </div>
+              {/if}
+
+              {#if editor.formErrorMessage}
+                <div class="cron-form-error">
+                  <Banner variant="error" role="alert">
+                    {editor.formErrorMessage}
+                  </Banner>
+                </div>
+              {/if}
+
+              <div class="cron-detail-footer">
+                {#if editor.isCreating}
+                  <Button
+                    variant="secondary"
+                    disabled={editor.submittingForm}
+                    onClick={editor.cancelCreate}
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    disabled={editor.submittingForm}
+                  >
+                    {editor.submittingForm
+                      ? t('common.saving')
+                      : t('common.save')}
+                  </Button>
+                {:else}
+                  <SaveStatus
+                    type="submit"
+                    saving={editor.submittingForm}
+                    pending={editor.isDirty}
+                  />
+                {/if}
+              </div>
+            </form>
+          </div>
+        {/key}
+      {/if}
+    </div>
+  {/if}
 
   {#if deliveryRepairJob}
     <CronDeliveryRetryDialog

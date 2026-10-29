@@ -288,6 +288,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_cron_jobs_file,
         validate_librarian_state_file,
     )
+    from core.automation.inputs import validate_inputs_file
     from core.calendar import validate_calendar_events_file
     from core.channels import validate_channel_file
     from core.computers._store import validate_computers_file
@@ -318,6 +319,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "project": validate_project_file,
         "project_order": validate_project_order_file,
         "cron_jobs": validate_cron_jobs_file,
+        "direct_inputs": validate_inputs_file,
         "bootstrap_jobs": validate_bootstrap_jobs_file,
         "calendar_events": validate_calendar_events_file,
         "skill_policy": validate_skill_policy_file,

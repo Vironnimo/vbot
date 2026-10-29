@@ -14,6 +14,7 @@ from server.access._rules import (
     classify_route,
     host_header_name,
     is_capability_route,
+    is_task_input_route,
     is_webhook_route,
     request_host,
 )
@@ -117,7 +118,10 @@ class AccessGuard:
             service.refused(facts.refusal, facts, path)
             await _refuse(scope, receive, send, 403, ACCESS_DENIED, "Access denied")
             return
-        if scope_type == "http" and is_webhook_route(str(scope.get("method") or ""), path):
+        method = str(scope.get("method") or "")
+        if scope_type == "http" and (
+            is_webhook_route(method, path) or is_task_input_route(method, path)
+        ):
             # Its Authorization header carries a webhook secret, never a vBot
             # credential: the route checks it and acts for no principal.
             scope[PRINCIPAL_SCOPE_KEY] = None

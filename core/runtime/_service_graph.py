@@ -23,6 +23,7 @@ from core.automation import (
     ReflectionService,
     TriggerService,
 )
+from core.automation.inputs import DirectInputService
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
@@ -169,6 +170,7 @@ class RuntimeServiceGraph:
         self._recall: RecallIntegration | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
+        self._direct_inputs: DirectInputService | None = None
         self._calendar_service: CalendarService | None = None
         self._bootstrap_service: BootstrapService | None = None
         self._automation_references: AutomationReferences | None = None
@@ -434,6 +436,9 @@ class RuntimeServiceGraph:
         lambda runtime: runtime._channel_service, "Channel service not available"
     )
 
+    direct_inputs: _StartedService[DirectInputService] = _StartedService(
+        lambda runtime: runtime._direct_inputs, "Task inputs not available"
+    )
     cron_service: _StartedService[CronService] = _StartedService(
         lambda runtime: runtime._cron_service, "Cron service not available"
     )

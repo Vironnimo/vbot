@@ -812,6 +812,7 @@
           {#snippet children(Component)}
             <Component
               navigation={navigator.view('cron')}
+              subscribeAgentRenames={selection.subscribeAgentRenames}
               bind:newJobDraft={cronNewJobDraft}
               scheduleActivity={schedules.jobs}
               activityError={schedules.error}

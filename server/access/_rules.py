@@ -336,6 +336,14 @@ def is_webhook_route(method: str, path: str) -> bool:
     return method == "POST" and _WEBHOOK_ROUTE.fullmatch(path) is not None
 
 
+def is_task_input_route(method: str, path: str) -> bool:
+    """The exact shapes whose Bearer credential belongs to a Task input."""
+    return bool(
+        (method == "POST" and re.fullmatch(r"/api/inputs/[^/]+", path))
+        or (method == "GET" and re.fullmatch(r"/api/inputs/[^/]+/requests/[^/]+", path))
+    )
+
+
 def is_server_path(path: str) -> bool:
     """Whether an absolute request path belongs to a reserved server namespace."""
     return any(
@@ -347,7 +355,11 @@ def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
     """Whether a route needs a principal in ``authenticated`` mode. Fails closed."""
     if scope_type != "http":
         return "protected"
-    if (method, path) in _EXEMPT_ROUTES or is_webhook_route(method, path):
+    if (
+        (method, path) in _EXEMPT_ROUTES
+        or is_webhook_route(method, path)
+        or is_task_input_route(method, path)
+    ):
         return "exempt"
     if method in {"GET", "HEAD"}:
         ticket = path.removeprefix(TICKET_PATH_PREFIX)

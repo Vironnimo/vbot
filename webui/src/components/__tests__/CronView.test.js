@@ -94,6 +94,106 @@ describe('CronView', () => {
     return mountedComponent;
   }
 
+  it('keeps direct task drafts across tabs, creates without a fixed prompt and autosaves defaults', async () => {
+    const fallback = createAgentListRpcMock();
+    let inputRows = [];
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'input.list') return { inputs: inputRows };
+      if (method === 'project.list') return { projects: [] };
+      if (method === 'model.list') return { models: [] };
+      if (method === 'connection.list') return { connections: [] };
+      if (method === 'input.create' || method === 'input.update') {
+        const row = {
+          ...params,
+          id: 'input-one',
+          path: '/api/inputs/input-one',
+          url: 'https://vbot.example/api/inputs/input-one',
+          reach: 'internet',
+        };
+        inputRows = [row];
+        return { input: row };
+      }
+      return fallback(method, params);
+    });
+    const navigation = createStandaloneNavigation(['inputs', 'new']);
+    let keptDraft = null;
+    mountedComponent = mount(CronView, {
+      target: document.body,
+      props: {
+        navigation,
+        get newJobDraft() {
+          return keptDraft;
+        },
+        set newJobDraft(value) {
+          keptDraft = value;
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(() => document.getElementById('task-input-name'));
+    inputById('task-input-name').value = 'Program tasks';
+    inputById('task-input-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    chooseOption('cron-form-agent', 'Agent Alpha');
+    expect(document.getElementById('cron-session-mode')).toBeNull();
+    expect(document.getElementById('cron-job-prompt')).toBeNull();
+    navigation.navigate(['schedules']);
+    flushSync();
+    expect(keptDraft).toMatchObject({
+      name: 'Program tasks',
+      schedule_type: 'input',
+    });
+    navigation.navigate(['inputs', 'new']);
+    flushSync();
+    await waitForCondition(
+      () =>
+        document.getElementById('task-input-name')?.value === 'Program tasks',
+    );
+    const advanced = document.querySelector('.cron-advanced');
+    advanced.open = true;
+    advanced.dispatchEvent(new Event('toggle'));
+    flushSync();
+    await waitForCondition(() => document.getElementById('cron-run-effort'));
+    chooseOption('cron-run-effort', t('chat.sessionSettings.providerDefault'));
+    document
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    flushSync();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'input.create'),
+    );
+    const submitted = rpcMock.mock.calls.find(
+      ([method]) => method === 'input.create',
+    )[1];
+    expect(submitted).toMatchObject({
+      name: 'Program tasks',
+      agent_id: 'agent-alpha',
+      working_project_id: null,
+      run_overrides: { thinking_effort_default: true },
+    });
+    expect(submitted).not.toHaveProperty('prompt');
+    await waitForCondition(() => navigation.place[1] === 'input-one');
+    expect(keptDraft).toBeNull();
+    expect(document.body.textContent).toContain('/api/inputs/input-one');
+    inputById('task-input-name').value = 'Renamed input';
+    inputById('task-input-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    document
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    flushSync();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'input.update'),
+    );
+    expect(
+      rpcMock.mock.calls.find(([method]) => method === 'input.update')[1],
+    ).toMatchObject({ id: 'input-one', name: 'Renamed input' });
+  });
+
   it('requires an explicit Project for new Sessions and pins a chosen Session with its own Model settings', async () => {
     const pinned = {
       id: 'ses-pinned',
