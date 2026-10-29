@@ -85,7 +85,7 @@ async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_LEARNING_UNDO_CONFLICT, str(exc), data=exc.to_dict()) from exc
     except LearningUndoFailedError as exc:
         # It may have written before it failed, so open views refresh.
-        _announce(state, agent_id, memory=True, skills=True)
+        _announce(state, agent_id, memory=True, skills=True, skill_owner_ids=None)
         publish_resource_changed(state, RESOURCE_KIND_MEMORIES)
         raise _map_expected_error(exc) from exc
     except Exception as exc:
@@ -97,6 +97,11 @@ async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
         skills=result.skills_changed,
         project_ids={
             change.project_id for change in result.changes.changes if change.project_id is not None
+        },
+        skill_owner_ids={
+            change.skill_owner_id or agent_id
+            for change in result.changes.changes
+            if change.store == "skill"
         },
     )
     response: JsonObject = result.changes.to_dict()
@@ -120,6 +125,7 @@ def _announce(
     memory: bool,
     skills: bool,
     project_ids: Iterable[str] = (),
+    skill_owner_ids: Iterable[str] | None = (),
 ) -> None:
     if memory:
         publish_resource_changed(state, RESOURCE_KIND_MEMORIES, scope={"agent_id": agent_id})
@@ -128,7 +134,11 @@ def _announce(
                 state, RESOURCE_KIND_MEMORIES, scope={"project_id": project_id}
             )
     if skills:
-        state.runtime.invalidate_agent_skills(agent_id)
+        if skill_owner_ids is None:
+            state.runtime.invalidate_agent_skills(None)
+        else:
+            for owner_id in sorted(set(skill_owner_ids) | {agent_id}):
+                state.runtime.invalidate_agent_skills(owner_id)
         publish_resource_changed(state, RESOURCE_KIND_SKILLS)
 
 

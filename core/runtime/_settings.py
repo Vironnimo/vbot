@@ -220,6 +220,7 @@ def publish_skills(runtime: Runtime, skills: SkillRegistry, *, generation: objec
                 runtime._resolve_shared_skills_dir,
                 runtime._resolve_external_skill_scope,
                 lifecycle_guard=runtime.agents.lifecycle_guard,
+                resolve_subject_created_at=runtime.agents.capture_creation_identity,
                 on_changed=runtime._notify_skills_changed,
                 run_started_at=runtime.run_started_at,
                 follow_merge=runtime.follow_skill_merge,

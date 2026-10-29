@@ -554,6 +554,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._resolve_shared_skills_dir,
             runtime._resolve_external_skill_scope,
             lifecycle_guard=runtime._agents.lifecycle_guard,
+            resolve_subject_created_at=runtime._agents.capture_creation_identity,
             on_changed=runtime._notify_skills_changed,
             run_started_at=runtime.run_started_at,
             follow_merge=runtime.follow_skill_merge,
@@ -665,7 +666,7 @@ def bootstrap(runtime: Runtime) -> None:
                 and runtime._librarian_service.running(agent_id)
             ),
         )
-        # What a Run changed in Memory and the Agent's own Skills, and its undo.
+        # What a Run changed in Memory and own/shared Skills, and its undo.
         assert runtime._memory_service is not None
         assert runtime._skill_authoring is not None
         assert runtime._chat_run_manager is not None
@@ -679,6 +680,12 @@ def bootstrap(runtime: Runtime) -> None:
                 for project in runtime.projects.list()
             },
             project_guard=runtime._projects.configuration_guard,
+            skill_homes=lambda: {
+                agent.id: runtime.agent_skills_dir(agent.id)
+                for agent in runtime.agents.list_with_builtins()
+            },
+            agent_guard=runtime._agents.lifecycle_guard,
+            subject_created_at=lambda agent_id: runtime.agents.get(agent_id).created_at,
         )
         runtime._session_title_service = SessionTitleService(
             runtime, usage_recorder=runtime._usage_recorder
@@ -847,7 +854,9 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._channel_service.relay_completion_run
         )
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
-        runtime._cron_service.set_chat_delivery(runtime._channel_service)
+        runtime._cron_service.set_chat_delivery(
+            runtime._channel_service, reference_lock=runtime._automation_references.lock
+        )
         runtime._channel_service.set_mail_sink(runtime._cron_service)
         runtime._watch_checks = WatchCheckRunner(
             agent_resolver=runtime._agent_resolver,

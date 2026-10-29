@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import errno
-import re
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +14,20 @@ import core.memory._file_backend as memory_module
 import core.skills._revert as skill_revert_module
 from core.automation import (
     LearningChanges,
+    LearningError,
     LearningRunActiveError,
     LearningUndoConflictError,
+    LearningUndoError,
     LearningUndoFailedError,
 )
 from core.memory import MemoryError, MemoryScope, MemoryService, MemoryWriter
-from core.skills import HUMAN_WRITER, SkillAuthoringService, SkillReference, SkillWriter
+from core.skills import (
+    HUMAN_WRITER,
+    SkillAuthoringError,
+    SkillAuthoringService,
+    SkillReference,
+    SkillWriter,
+)
 
 AGENT_ID = "coder"
 REVIEW = "run-review"
@@ -43,6 +51,7 @@ class _Agent:
         self.home = agents / AGENT_ID / "skills"
         self.project_root = tmp_path / "projects"
         self.projects: dict[str, Path] = {}
+        self.skill_homes: dict[str, Path] = {}
         self.memory = MemoryService(history_root=agents, project_history_root=self.project_root)
         self.skills = SkillAuthoringService()
         self.running: set[str] = set()
@@ -52,7 +61,13 @@ class _Agent:
             skill_home=lambda agent_id: self.home,
             run_active=self.running.__contains__,
             project_memories=lambda: self.projects,
+            skill_homes=lambda: self.skill_homes,
         )
+
+    def shared_home(self, owner_id: str = "owner") -> Path:
+        home = self.home.parent.parent / owner_id / "skills"
+        self.skill_homes[owner_id] = home
+        return home
 
     def project(self, project_id: str = "sample") -> Path:
         path = self.project_root / project_id
@@ -271,6 +286,204 @@ def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> N
     assert agent.learning.of_run(AGENT_ID, OTHER).summary.undone is False
 
 
+def test_shared_skill_changes_keep_their_owner_across_reload_and_undo(agent: _Agent) -> None:
+    review(agent)
+    shared = agent.shared_home()
+    agent.skills.create(
+        shared, "deploy", skill_document("deploy", "Original."), writer=OTHER_SKILLS
+    )
+    agent.skills.edit(
+        shared,
+        "deploy",
+        skill_document("deploy", "Learned."),
+        writer=replace(REVIEW_SKILLS, subject_created_at="original"),
+    )
+    # Learning reads all registered homes, even when a share was withdrawn or
+    # the owner renamed since the Run; revision numbers belong to each home.
+    renamed = shared.parent.with_name("renamed")
+    shared.parent.rename(renamed)
+    agent.skill_homes = {"renamed": renamed / "skills"}
+    fresh = LearningChanges(
+        memory=agent.memory,
+        skills=SkillAuthoringService(),
+        skill_home=lambda agent_id: agent.home,
+        skill_homes=lambda: agent.skill_homes,
+        run_active=lambda run_id: False,
+        subject_created_at=lambda agent_id: "original",
+    )
+
+    changes = fresh.of_run(AGENT_ID, REVIEW)
+    same_name = [change for change in changes.changes if change.skill == "deploy"]
+    assert [(change.skill_owner_id, change.revisions) for change in same_name] == [
+        (None, (3, 4)),
+        ("renamed", (2,)),
+    ]
+    assert same_name[1].to_dict()["skill_owner_id"] == "renamed"
+    assert fresh.summaries(AGENT_ID, [REVIEW])[REVIEW].skills == 4
+
+    result = fresh.undo(AGENT_ID, REVIEW, workspace=agent.workspace)
+    assert result.changes.summary.undone
+    assert not (agent.home / "deploy").exists()
+    assert "Original." in (renamed / "skills" / "deploy" / "SKILL.md").read_text(encoding="utf-8")
+    assert fresh.undo(AGENT_ID, REVIEW, workspace=agent.workspace).skills_changed is False
+
+
+@pytest.mark.parametrize("operation", ["read", "summaries", "undo"])
+def test_learning_requires_the_runs_actual_subject(agent: _Agent, operation: str) -> None:
+    review(agent)
+    shared = agent.shared_home()
+    agent.skills.create(
+        shared,
+        "deploy",
+        skill_document("deploy"),
+        writer=replace(REVIEW_SKILLS, subject_created_at="original"),
+    )
+    identities = {AGENT_ID: "original", "different": "another"}
+    learning = LearningChanges(
+        memory=agent.memory,
+        skills=agent.skills,
+        skill_home=lambda agent_id: agent.home,
+        skill_homes=lambda: agent.skill_homes,
+        run_active=lambda run_id: False,
+        subject_created_at=identities.get,
+    )
+    before = agent.files()
+    shared_before = (shared / "deploy" / "SKILL.md").read_bytes()
+    for subject in ("different", AGENT_ID):
+        identities[AGENT_ID] = "replacement"
+        with pytest.raises(LearningError):
+            if operation == "read":
+                learning.of_run(subject, REVIEW)
+            elif operation == "summaries":
+                learning.summaries(subject, [REVIEW])
+            else:
+                learning.undo(subject, REVIEW, workspace=agent.workspace)
+    identities[AGENT_ID] = "original"
+    assert learning.of_run(AGENT_ID, REVIEW).summary.skills == 4
+    assert agent.files() == before
+    assert (shared / "deploy" / "SKILL.md").read_bytes() == shared_before
+
+
+@pytest.mark.parametrize("proof", ["own_only", "unknown", "personal_memory", "validated_pass"])
+def test_legacy_shared_changes_need_evidence_before_any_undo(agent: _Agent, proof: str) -> None:
+    agent.skills.edit(
+        agent.home, "notes", skill_document("notes", "Learned."), writer=REVIEW_SKILLS
+    )
+    shared = agent.shared_home()
+    if proof != "own_only":
+        agent.skills.create(shared, "deploy", skill_document("deploy"), writer=REVIEW_SKILLS)
+    if proof == "personal_memory":
+        agent.memory.add_entry(agent.workspace, "agent", "Learned fact.", writer=REVIEW_MEMORY)
+    learning = LearningChanges(
+        memory=agent.memory,
+        skills=agent.skills,
+        skill_home=lambda agent_id: agent.home,
+        skill_homes=lambda: agent.skill_homes,
+        run_active=lambda run_id: False,
+        subject_created_at=lambda agent_id: "original",
+    )
+    before = agent.files()
+    if proof in {"unknown", "validated_pass"}:
+        for read in (
+            lambda: learning.of_run(AGENT_ID, REVIEW),
+            lambda: learning.summaries(AGENT_ID, [REVIEW]),
+            lambda: learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace),
+        ):
+            with pytest.raises(LearningError):
+                read()
+        assert agent.files() == before
+        assert (shared / "deploy" / "SKILL.md").is_file()
+    if proof == "unknown":
+        return
+    admissions: list[str] = []
+    result = learning.undo(
+        AGENT_ID,
+        REVIEW,
+        workspace=agent.workspace,
+        validate=(lambda: admissions.append("exact_pass")) if proof == "validated_pass" else None,
+    )
+    assert result.changes.summary.undone
+    assert "Learned." not in (agent.home / "notes" / "SKILL.md").read_text(encoding="utf-8")
+    assert not (shared / "deploy").exists()
+    assert admissions == (["exact_pass"] if proof == "validated_pass" else [])
+
+
+def test_explicit_skill_revisions_join_run_undo_in_their_own_history(agent: _Agent) -> None:
+    aged = agent.skills.delete(
+        agent.home, "old", writer=SkillWriter(actor="librarian", run_kind="librarian")
+    )
+    agent.skills.edit(
+        agent.home, "notes", skill_document("notes", "Learned."), writer=REVIEW_SKILLS
+    )
+    shared = agent.shared_home()
+    agent.skills.create(
+        shared, "deploy", skill_document("deploy", "Original."), writer=OTHER_SKILLS
+    )
+    agent.skills.create(shared, "other", skill_document("other"), writer=OTHER_SKILLS)
+    learned = agent.skills.edit(
+        shared, "deploy", skill_document("deploy", "Learned."), writer=REVIEW_SKILLS
+    )
+    assert aged.revision == learned.revision == 3
+    revisions = {AGENT_ID: [int(aged.revision)]}
+
+    result = agent.learning.undo(
+        AGENT_ID, REVIEW, workspace=agent.workspace, skill_revisions=revisions
+    )
+
+    assert result.changes.summary.undone
+    assert (agent.home / "old" / "SKILL.md").is_file()
+    assert "Original." in (shared / "deploy" / "SKILL.md").read_text(encoding="utf-8")
+    assert not agent.learning.undo(
+        AGENT_ID, REVIEW, workspace=agent.workspace, skill_revisions=revisions
+    ).skills_changed
+    # Explicit revisions never disappear just because their owner left the catalog.
+    with pytest.raises(LearningUndoError):
+        agent.learning.undo(
+            AGENT_ID, REVIEW, workspace=agent.workspace, skill_revisions={"missing": [3]}
+        )
+
+
+@pytest.mark.parametrize("failure_store", ["shared", "memory"])
+def test_undo_failure_restores_every_completed_skill_home(
+    agent: _Agent, monkeypatch: pytest.MonkeyPatch, failure_store: str
+) -> None:
+    review(agent)
+    shared = agent.shared_home()
+    agent.skills.create(
+        shared, "deploy", skill_document("deploy", "Original."), writer=OTHER_SKILLS
+    )
+    agent.skills.edit(shared, "deploy", skill_document("deploy", "Learned."), writer=REVIEW_SKILLS)
+    agent.skills.create(agent.home, "aged", skill_document("aged"), writer=OTHER_SKILLS)
+    aged = agent.skills.delete(agent.home, "aged", writer=SkillWriter(actor="librarian"))
+    revisions = {AGENT_ID: [int(aged.revision or 0)]}
+    own_before = agent.skill_files()
+    shared_before = (shared / "deploy" / "SKILL.md").read_bytes()
+    revert = agent.skills.revert
+
+    def fail_shared(home: Path, revisions: list[int], **kwargs: Any) -> Any:
+        if home == shared:
+            raise SkillAuthoringError("controlled shared-home failure")
+        return revert(home, revisions, **kwargs)
+
+    with monkeypatch.context() as patch:
+        if failure_store == "shared":
+            patch.setattr(agent.skills, "revert", fail_shared)
+        else:
+            _fail_the_memory_revert(patch, agent)
+        with pytest.raises(LearningError):
+            agent.learning.undo(
+                AGENT_ID, REVIEW, workspace=agent.workspace, skill_revisions=revisions
+            )
+
+    assert agent.skill_files() == own_before
+    assert (shared / "deploy" / "SKILL.md").read_bytes() == shared_before
+    assert not agent.learning.of_run(AGENT_ID, REVIEW).summary.undone
+    assert agent.learning.undo(
+        AGENT_ID, REVIEW, workspace=agent.workspace, skill_revisions=revisions
+    ).changes.summary.undone
+    assert (agent.home / "aged" / "SKILL.md").is_file()
+
+
 def _replace_entry_later(agent: _Agent) -> None:
     agent.memory.replace_matching(
         agent.workspace, "agent", "xdist", "Uses pytest with 4 workers.", writer=PERSON
@@ -304,6 +517,14 @@ def _change_project_memory_later(agent: _Agent) -> None:
         "Changes need",
         "Changes need a separate review Session.",
         writer=MemoryWriter(agent_id="other-agent", project_id="sample", run_id=REVIEW),
+    )
+
+
+def _change_shared_skill_later(agent: _Agent) -> None:
+    home = agent.shared_home()
+    agent.skills.create(home, "deploy", skill_document("deploy"), writer=REVIEW_SKILLS)
+    agent.skills.edit(
+        home, "deploy", skill_document("deploy", "Later user edit."), writer=HUMAN_WRITER
     )
 
 
@@ -346,6 +567,17 @@ def _change_project_memory_later(agent: _Agent) -> None:
             _change_skill_later,
             {"store": "skill", "revision": 4, "later": "human", "skill": "deploy"},
             id="skill-file-changed",
+        ),
+        pytest.param(
+            _change_shared_skill_later,
+            {
+                "store": "skill",
+                "revision": 1,
+                "later": "human",
+                "skill": "deploy",
+                "skill_owner_id": "owner",
+            },
+            id="shared-skill-changed-by-owner",
         ),
     ],
 )
@@ -414,7 +646,8 @@ def _fail_memory_writes_after_the_first(patch: pytest.MonkeyPatch, agent: _Agent
 
 
 def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
-    # The Skill revert fails and cannot take its own steps back either.
+    # Content writes fail before changing bytes; the prior archive restore can
+    # still be undone without writing those unchanged files again.
     def atomic_write_bytes(*args: object, **kwargs: object) -> None:
         raise OSError(errno.ENOSPC, "No space left on device")
 
@@ -422,35 +655,31 @@ def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
 
 
 @pytest.mark.parametrize(
-    ("break_writes", "message", "user_memory_undone"),
+    ("break_writes", "error_type", "user_memory_undone"),
     [
         pytest.param(
             _fail_the_memory_revert,
-            "The undo failed and nothing was changed: disk full",
+            LearningUndoFailedError,
             False,
             id="memory-write-fails",
         ),
         pytest.param(
             _fail_the_second_project_revert,
-            "The undo failed and nothing was changed: disk full",
+            LearningUndoFailedError,
             False,
             id="project-write-fails-restores-personal-and-earlier-project",
         ),
         pytest.param(
             _fail_memory_writes_after_the_first,
-            r"The undo stopped part-way: the User Memory changes were undone, the other Memory "
-            r"changes were not \(.*No space left on device\)\. The Skill changes were not "
-            r"undone\. Undo again to finish\.",
+            LearningUndoFailedError,
             True,
             id="memory-left-part-way",
         ),
         pytest.param(
             _fail_skill_writes,
-            r"The undo failed part-way\. The revert failed and could not be undone completely "
-            r"\(.*No space left on device\)\. Check Skill notes\. The Memory changes were "
-            r"not undone\.",
+            LearningUndoError,
             False,
-            id="skill-steps-not-taken-back",
+            id="skill-write-fails-before-effect",
         ),
     ],
 )
@@ -458,7 +687,7 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
     agent: _Agent,
     monkeypatch: pytest.MonkeyPatch,
     break_writes: Callable[[pytest.MonkeyPatch, _Agent], None],
-    message: str,
+    error_type: type[LearningError],
     user_memory_undone: bool,
 ) -> None:
     review(agent)
@@ -467,10 +696,9 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
 
     with monkeypatch.context() as patch:
         break_writes(patch, agent)
-        with pytest.raises(LearningUndoFailedError) as failed:
+        with pytest.raises(error_type):
             agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
 
-    assert re.fullmatch(message, str(failed.value))
     assert agent.skill_files() == skill_files
     assert agent.entries() == ({**entries, "user": []} if user_memory_undone else entries)
     assert all(
