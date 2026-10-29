@@ -1,6 +1,8 @@
 """PowerShell's console host adapter and its disposable compiled-assembly cache.
 
-The C# host remains owned by the shell runner. Loading its compiled bytes avoids
+The C# host remains owned by the shell runner, and so does the check for writes
+to read-only variables it compiles with it (``_powershell.py``, Prepare): compiled,
+it walks the command without a script block call for each node. Loading its compiled bytes avoids
 compiler initialization and its allocations in every command process. Cache
 failures must not change a command's execution, output or status; in-memory compilation is
 the fallback. No cache data is part of the installation or canonical data store.
@@ -12,10 +14,12 @@ import hashlib
 
 HOST_SOURCE = r"""using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Management.Automation;
 using System.Management.Automation.Host;
+using System.Management.Automation.Language;
 using System.Management.Automation.Runspaces;
 public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
     readonly PSHost inner;
@@ -87,6 +91,49 @@ public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession
     public void PushRunspace(Runspace runspace) =>
         ((IHostSupportsInteractiveSession)inner).PushRunspace(runspace);
     public void PopRunspace() => ((IHostSupportsInteractiveSession)inner).PopRunspace();
+}
+public static class VBotUnwritableVariables {
+    public static ParseError[] Find(ScriptBlockAst root, PSVariableIntrinsics variables) {
+        var errors = new List<ParseError>();
+        foreach (var found in root.FindAll(ast => ast is VariableExpressionAst, true)) {
+            var node = (VariableExpressionAst)found;
+            var path = node.VariablePath;
+            if (!path.IsVariable) continue;
+            Ast target = node, parent = node.Parent;
+            while ((parent is AttributedExpressionAst attributed && attributed.Child == target) ||
+                parent is ArrayLiteralAst) {
+                target = parent;
+                parent = parent.Parent;
+            }
+            var written = false;
+            if (parent is AssignmentStatementAst assignment) written = assignment.Left == target;
+            else if (parent is UnaryExpressionAst unary) {
+                var kind = unary.TokenKind;
+                written = kind == TokenKind.PlusPlus || kind == TokenKind.MinusMinus ||
+                    kind == TokenKind.PostfixPlusPlus || kind == TokenKind.PostfixMinusMinus;
+            }
+            else if (parent is ForEachStatementAst loop) written = loop.Variable == node;
+            else if (parent is ParameterAst parameter) written = parameter.Name == node;
+            if (!written) continue;
+            var name = path.UserPath.Substring(path.UserPath.LastIndexOf(':') + 1);
+            var variable = variables.Get(name);
+            var fixedValue = ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant;
+            if (variable == null || (variable.Options & fixedValue) == 0) continue;
+            var everywhere = (variable.Options & ScopedItemOptions.AllScope) != 0;
+            if (!everywhere && !path.IsGlobal && !path.IsScript) {
+                Ast scope = node.Parent;
+                while (scope != null && !(scope is ScriptBlockAst) &&
+                    !(scope is FunctionDefinitionAst)) {
+                    scope = scope.Parent;
+                }
+                if (scope != root) continue;
+            }
+            var message = "Cannot overwrite variable " + variable.Name +
+                " because it is read-only or constant.";
+            errors.Add(new ParseError(node.Extent, "VariableNotWritable", message));
+        }
+        return errors.ToArray();
+    }
 }
 """
 

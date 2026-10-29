@@ -66,7 +66,9 @@ setup by PowerShell's own parser: ``using`` statements, ``#requires``, a
 ``param`` block and named blocks keep their meaning, a syntax error is reported
 as PowerShell's own ParserError in English, and nothing runs. Incomplete input,
 such as a trailing backtick or an unclosed string, is reported the same way,
-where ``pwsh -Command`` exits with 1 without a word.
+where ``pwsh -Command`` exits with 1 without a word. So is an assignment to a
+read-only or constant variable such as ``$home``, which PowerShell reports only
+where it runs, going on with the variable's old value (user decision 2026-10-29).
 
 Running. The command's text runs unchanged as its own script in a fresh
 runspace, in its global scope, as in ``pwsh -Command``:
@@ -171,6 +173,17 @@ OUTPUT_WIDTH_STATEMENT = (
 # statement in its block except a bare return or an exit, no later named block
 # that runs statements, no finally block after it, and no loop it does not end on
 # every pass. A program in the command's own last statement skips the walk.
+#
+# Prepare also finds the command's assignments to read-only or constant variables
+# (VBotUnwritableVariables, compiled with the host), such as `$home = ...`,
+# `foreach ($home in ...)` or `param($home)`.
+# Each fails only where it runs, and the command goes on with the variable's old
+# value: on 2026-10-29 `$home = '<folder>'; Remove-Item -Recurse $home` deleted
+# the user's profile. Every such target, in code that runs or not, becomes a parse
+# error at the variable with PowerShell's own message, so nothing runs. Whether a
+# variable is read-only comes from the command's runspace. One without AllScope,
+# such as $Error, fails only in the command's own scope: a function or script
+# block assigns a local one. A check that fails itself refuses nothing.
 RUNNER_KEY = "vBot.PowerShell"
 RUNNER_STATEMENTS = r"""& {
     $state = @{ Host = [VBotPowerShellHost]::new($Host); Profile = $PROFILE }
@@ -217,6 +230,8 @@ RUNNER_STATEMENTS = r"""& {
         # the same distinction between no input and a standalone invocation.
         $ast = [System.Management.Automation.Language.Parser]::ParseInput(
             $text, [ref]$null, [ref]$null)
+        $state.Refused = [System.Management.Automation.Language.ParseError[]]@(
+            try { [VBotUnwritableVariables]::Find($ast, $state.Variables) } catch {})
         $usesInput = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
@@ -532,9 +547,10 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
 REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
 # Parse the command after the setup: a syntax error is thrown as PowerShell reports
 # its own, and nothing runs. The runner prepares the command's pipeline and its
-# hook; the bootstrap's variables are removed, without the cmdlet, which would load
-# its module first; and the command runs in the global scope with an empty $Error,
-# as in a new shell. The runner exits with its code.
+# hook, and refuses an assignment to a read-only variable the same way; the
+# bootstrap's variables are removed, without the cmdlet, which would load its
+# module first; and the command runs in the global scope with an empty $Error, as
+# in a new shell. The runner exits with its code.
 RUN_STATEMENTS = r"""$__vbotParseErrors = $null
 $null = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
@@ -542,6 +558,10 @@ if ($__vbotParseErrors) {
     throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
 }
 & ([AppDomain]::CurrentDomain.GetData('{key}').Prepare) $__vbotCommand
+if ([AppDomain]::CurrentDomain.GetData('{key}').Refused.Count) {
+    throw [System.Management.Automation.ParseException]::new(
+        [AppDomain]::CurrentDomain.GetData('{key}').Refused)
+}
 $ExecutionContext.SessionState.InvokeProvider.Item.Remove('Variable:\__vbot*', $false)
 $Error.Clear()
 . ([AppDomain]::CurrentDomain.GetData('{key}').Run)

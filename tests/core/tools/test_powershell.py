@@ -319,6 +319,29 @@ _PRINTED_ERROR_TEXT = "; ".join(
                 "You must provide a value expression following the '+' operator.",
             ),
         ),
+        # An assignment to a read-only or constant variable, which PowerShell reports
+        # only where it runs, fails the same way, also as a loop variable in code
+        # that never runs; $Error has no AllScope, so a function assigns a local one.
+        (
+            "'silenced-sentinel'\n$home = 'elsewhere'",
+            1,
+            (
+                "ParserError",
+                "2 |  $home = 'elsewhere'",
+                "Cannot overwrite variable HOME because it is read-only or constant.",
+            ),
+        ),
+        (
+            "'silenced-sentinel'\nfunction f { foreach ($global:PID in 1) {} }",
+            1,
+            ("ParserError", "Cannot overwrite variable PID because it is read-only or constant."),
+        ),
+        (
+            "function f { $Error = 'local'; $Error }\n$env:HOME = 'env'; $null = 1; $args = 2\n"
+            "$sb = { param($x = $home) $x }\n\"$(f)-$env:HOME-$(& $sb 'arg')\"",
+            0,
+            ("local-env-arg",),
+        ),
         # An unknown pipeline command exits instead of waiting for input.
         (
             "Get-ChildItem . | vbot_missing_pipeline_command",
@@ -446,6 +469,9 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "requires",
         "english-messages-own-culture",
         "parse-error",
+        "read-only-assignment",
+        "read-only-loop-variable-in-uncalled-code",
+        "writable-assignments",
         "unknown-pipeline-command",
         "shown-error",
         "error-between-rows",
