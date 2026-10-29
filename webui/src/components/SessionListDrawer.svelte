@@ -807,21 +807,32 @@
             {t('sessions.projects.empty')}
           </p>
         {/if}
-        {#if group.nextCursor !== null}
-          <button
-            type="button"
-            class="session-group__more"
-            disabled={list.loadingMoreGroupKey !== null}
-            onclick={() => list.loadMoreInGroup(group)}
-          >
-            {t('sessions.projects.showMore', {
-              count: Math.min(
-                PROJECT_GROUP_PAGE_SIZE,
-                Math.max(group.totalCount - group.sessions.length, 0),
-              ),
-              total: group.totalCount,
-            })}
-          </button>
+        {#if group.hasMore || group.sessions.length > PROJECT_GROUP_PAGE_SIZE}
+          <div class="session-group__paging">
+            {#if group.hasMore}
+              <button
+                type="button"
+                class="session-group__more"
+                disabled={list.loadingMoreGroupKey !== null}
+                onclick={() => list.loadMoreInGroup(group)}
+              >
+                {t('sessions.projects.showMore', {
+                  count: Math.max(group.totalCount - group.sessions.length, 0),
+                  total: group.totalCount,
+                })}
+              </button>
+            {/if}
+            {#if group.sessions.length > PROJECT_GROUP_PAGE_SIZE}
+              <button
+                type="button"
+                class="session-group__less"
+                disabled={list.loadingMoreGroupKey !== null}
+                onclick={() => list.showLessInGroup(group)}
+              >
+                {t('sessions.projects.less')}
+              </button>
+            {/if}
+          </div>
         {/if}
       </div>
     {/if}
