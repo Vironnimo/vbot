@@ -24,7 +24,7 @@
   // The dialog is moved to <body> before it renders, so the form dialog it
   // may open from neither styles nor submits it; Modal keeps only the newest
   // dialog answering Escape and Tab.
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
 
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
@@ -89,6 +89,7 @@
       onEditNewName: focusNewName,
     },
   );
+  onDestroy(() => browser.dispose());
 
   function focusPathInput(text) {
     void tick().then(() => {

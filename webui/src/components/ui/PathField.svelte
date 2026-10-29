@@ -93,6 +93,16 @@
   let panelStyle = $state('');
   let listingTimer = null;
   let listingToken = 0;
+  let completionContext = null;
+  let browserContext = null;
+
+  function pickerContext(text = value) {
+    return [text, root, mode, startPath, listDirectory, createDirectory];
+  }
+
+  function matchesContext(previous, current = pickerContext()) {
+    return previous?.every((entry, index) => entry === current[index]);
+  }
 
   let listboxId = $derived(`${id || componentId}-suggestions`);
   let showsOptions = $derived(panelOpen && matches.length > 0);
@@ -137,6 +147,7 @@
     clearTimeout(listingTimer);
     listingTimer = null;
     listingToken += 1;
+    completionContext = pickerContext(text);
     const token = listingToken;
     const params = listingParams(text);
     if (!params) {
@@ -161,7 +172,12 @@
     } catch (error) {
       reason = listingErrorReason(error);
     }
-    if (token !== listingToken || !isFocused()) return;
+    if (
+      token !== listingToken ||
+      !matchesContext(completionContext) ||
+      !isFocused()
+    )
+      return;
 
     activeIndex = -1;
     if (reason) {
@@ -195,6 +211,7 @@
     clearTimeout(listingTimer);
     listingTimer = null;
     listingToken += 1;
+    completionContext = pickerContext();
     const token = listingToken;
     for (const { path } of browseStartPaths(startPath, { root })) {
       let listing = null;
@@ -208,7 +225,12 @@
       } catch (error) {
         reason = listingErrorReason(error);
       }
-      if (token !== listingToken || !isFocused()) return;
+      if (
+        token !== listingToken ||
+        !matchesContext(completionContext) ||
+        !isFocused()
+      )
+        return;
       if (reason) {
         if (parentMayList(reason)) continue;
         return;
@@ -263,6 +285,7 @@
   }
 
   function stopSuggesting() {
+    completionContext = null;
     clearTimeout(listingTimer);
     listingTimer = null;
     listingToken += 1;
@@ -279,6 +302,7 @@
   }
 
   function accept(entry) {
+    if (disabled || !matchesContext(completionContext)) return;
     const next = completeTypedPath(value, entry);
     setText(next);
     if (entry.kind === 'directory') {
@@ -397,10 +421,12 @@
 
   function openBrowser() {
     stopSuggesting();
+    browserContext = pickerContext();
     browsing = true;
   }
 
   function chooseFromBrowser(path) {
+    if (disabled || !matchesContext(browserContext)) return;
     browsing = false;
     onInput(trimTrailingSeparator(path));
   }
@@ -416,8 +442,21 @@
       }));
   }
 
+  // Suggestions and browser rows belong to the value and filesystem that
+  // opened them. A reloaded form or changed root must not reuse that choice.
   $effect(() => {
-    if (disabled) stopSuggesting();
+    const current = pickerContext();
+    if (
+      disabled ||
+      (completionContext && !matchesContext(completionContext, current))
+    ) {
+      listings.clear();
+      stopSuggesting();
+    }
+    if (browsing && (disabled || !matchesContext(browserContext, current))) {
+      browsing = false;
+      browserContext = null;
+    }
   });
 
   // A value set from outside (a chosen or loaded path) shows its end.

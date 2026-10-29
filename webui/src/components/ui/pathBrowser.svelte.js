@@ -538,6 +538,9 @@ export function createPathBrowser(
       return emptyText;
     },
     start,
+    dispose() {
+      ++loadToken;
+    },
     refresh,
     openFolder,
     openPlaces,
