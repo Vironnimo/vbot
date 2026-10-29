@@ -64,6 +64,7 @@ def test_append_returns_every_record_since_the_cursor(manager) -> None:
         [ChatMessage.assistant(model="test", content="second")],
         since=initial.cursor,
         metadata_update={"context_commands_ran": {"note_id": "saved-note"}},
+        expected_generation_id=session.generation_id,
     )
 
     assert delta is not None
@@ -78,6 +79,13 @@ def test_append_returns_every_record_since_the_cursor(manager) -> None:
     # Invalid metadata rolls back the accompanying history and cursor too.
     with pytest.raises(ChatSessionError):
         session.append_many([ChatMessage.note("rejected")], metadata_update={"seen_skills": []})
+    with pytest.raises(SessionNotFoundError):
+        session.append_many(
+            [ChatMessage.note("wrong generation")],
+            metadata_update={"other": 2},
+            expected_generation_id="retired",
+        )
+    assert manager.metadata_value(session.address, "other") == 1
     unchanged = session.load_since()
     assert unchanged is not None and unchanged.cursor == latest.cursor
 

@@ -525,6 +525,7 @@ class SessionStore:
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
         metadata_update: JsonObject | None = None,
+        expected_generation_id: str | None = None,
     ) -> SessionReadBatch | None:
         """Append Messages in one transaction.
 
@@ -541,6 +542,10 @@ class SessionStore:
         """
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
+            if expected_generation_id is not None:
+                state = _store_values._require_live(connection, address)
+                if state["generation_id"] != expected_generation_id:
+                    raise SessionNotFoundError("The target Session was replaced")
             steering = None
             if accessor_input_ids:
                 if not messages:

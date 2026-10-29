@@ -6,6 +6,7 @@ import asyncio
 import threading
 from collections.abc import Callable
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -29,6 +30,7 @@ from core.runs import (
 )
 from core.secrets._references import SecretMasker
 from core.sessions import SessionAddress, SessionNotFoundError
+from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -498,7 +500,7 @@ async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
     await trigger_service.aclose()
 
 
-@pytest.mark.parametrize("waiting_for", ["active_run", "blocked_admission"])
+@pytest.mark.parametrize("waiting_for", ["active_run", "blocked_admission", "renamed"])
 async def test_completion_delivery_aclose_persists_pending_results_and_rejects_later_ones(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, waiting_for: str
 ) -> None:
@@ -530,7 +532,13 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
     )
     trigger_service.set_owned_completion_validator(_OwnerAdmission(_LIVE_OWNER))
     origin_id = origin_run.id if origin_run is not None else "origin"
-    pending = _submit(trigger_service, "bash:pending-at-shutdown", "pending result", origin_id)
+    pending = trigger_service.submit_completion(
+        session.address,
+        notice_id="bash:pending-at-shutdown",
+        origin_run_id=origin_id,
+        body="pending result",
+        expected_session_generation_id=session.generation_id,
+    )
     owned = trigger_service.submit_completion(
         SessionAddress(None, "coder", "session-one"),
         notice_id="owned:pending-at-shutdown",
@@ -543,6 +551,9 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
         if origin_run is not None or backoff_waits:
             break
     assert backoff_waits == ([] if origin_run is not None else [0.25])
+    if waiting_for == "renamed":
+        await sessions.run_async(sessions.retarget_identity_agent_sessions, "coder", "renamed")
+        session = sessions.get(SessionAddress(None, "renamed", "session-one"))
 
     await trigger_service.aclose()
 
@@ -602,14 +613,14 @@ async def test_closing_during_a_reminder_write_persists_it_once(
     origin = await _user_cancelled_origin(manager)
     entered = threading.Event()
     release = threading.Event()
-    original_add_note = ChatSession.add_note
+    original_append = ChatSession.append_many
 
-    def held_add_note(chat_session: ChatSession, content: str, **options: Any) -> None:
+    def held_append(chat_session: ChatSession, messages: list[ChatMessage], **options: Any) -> None:
         entered.set()
         release.wait(5)
-        original_add_note(chat_session, content, **options)
+        original_append(chat_session, messages, **options)
 
-    monkeypatch.setattr(ChatSession, "add_note", held_add_note)
+    monkeypatch.setattr(ChatSession, "append_many", held_append)
     delivery = _submit(service, "bash:closing", "written while closing", origin.id)
     assert await asyncio.to_thread(entered.wait, 5)
 
@@ -679,7 +690,158 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     assert "hunter2" not in completion_loop.start_run.await_args.args[1] + notes[0]
 
 
-@pytest.mark.parametrize("failure_boundary", ["read", "append"])
+@pytest.mark.parametrize("boundary", ["followup", "read", "append"])
+@pytest.mark.parametrize("transition", ["rename", "replace"])
+async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, transition: str
+) -> None:
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/test"),
+        adapter=StubAdapter([{"content": "Done", "tool_calls": None}]),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime)
+    service = TriggerService(
+        loop, runtime.chat_runs, cast(Any, runtime), sessions=runtime.chat_sessions
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    first = True
+
+    async def pause_once() -> None:
+        nonlocal first
+        if first:
+            first = False
+            entered.set()
+            await release.wait()
+
+    if boundary == "followup":
+        start = loop.start_run
+
+        async def held_start(*args: Any, **options: Any) -> Run:
+            await pause_once()
+            return await start(*args, **options)
+
+        monkeypatch.setattr(loop, "start_run", held_start)
+    elif boundary == "read":
+        get = runtime.chat_sessions.get_async
+
+        async def held_get(address: SessionAddress) -> ChatSession:
+            await pause_once()
+            return await get(address)
+
+        monkeypatch.setattr(runtime.chat_sessions, "get_async", held_get)
+    else:
+        append = ChatSession.append_many_async
+
+        async def held_append(
+            chat_session: ChatSession, messages: list[ChatMessage], **options: Any
+        ) -> Any:
+            await pause_once()
+            return await append(chat_session, messages, **options)
+
+        monkeypatch.setattr(ChatSession, "append_many_async", held_append)
+    delivery = service.submit_completion(
+        session.address,
+        notice_id="lifecycle-result",
+        origin_run_id="original-run",
+        body="Result belongs to the original conversation",
+        expected_session_generation_id=session.generation_id,
+        wake=boundary == "followup",
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        async with runtime.chat_runs.agent_admission_guard("coder", project_id=None):
+            if transition == "rename":
+                # This is the Agent-store rename's real Session transaction; it
+                # does not acquire the async per-Session write lock.
+                await runtime.chat_sessions.run_async(
+                    runtime.chat_sessions.retarget_identity_agent_sessions, "coder", "renamed"
+                )
+                runtime.agents._agent = replace(runtime.agents._agent, id="renamed")
+                target = SessionAddress(None, "renamed", "session-one")
+                runtime.chat_sessions.create("coder", session_id="session-one")
+            else:
+                await runtime.chat_sessions.run_async(runtime.chat_sessions.delete, session.address)
+                runtime.chat_sessions.create("coder", session_id="session-one")
+                target = session.address
+        release.set()
+        if transition == "replace":
+            with pytest.raises(SessionNotFoundError):
+                await asyncio.wait_for(delivery, timeout=1)
+            assert runtime.chat_sessions.get(target).load() == []
+        else:
+            await asyncio.wait_for(delivery, timeout=1)
+            notes = _notes(runtime.chat_sessions.get(target))
+            assert sum("Result belongs to the original conversation" in note for note in notes) == 1
+            assert runtime.chat_sessions.get(target).generation_id == session.generation_id
+            assert runtime.chat_sessions.get(session.address).load() == []
+    finally:
+        release.set()
+        await service.aclose()
+        await runtime.chat_runs.aclose()
+        runtime.chat_sessions.close()
+
+
+async def test_a_moved_unread_completion_uses_the_receiving_runs_request_counter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = ChatRunManager()
+    canonical = ChatSessionManager(tmp_path)
+    session = canonical.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(cast(Any, loop), manager, cast(Any, Mock()), sessions=canonical)
+    origin, origin_release = await _active_origin(manager)
+    origin.iteration_count = 3
+    result = service.submit_completion(
+        session.address,
+        notice_id="unread-before-rename",
+        origin_run_id=origin.id,
+        body="Persisted result",
+        expected_session_generation_id=session.generation_id,
+    )
+    assert await service.deliver_background_completions(origin, session) is not None
+    await result
+    entered, release, moved, consumed = (asyncio.Event() for _ in range(4))
+
+    async def unavailable_old_address(*args: Any, **kwargs: Any) -> Run:
+        entered.set()
+        await release.wait()
+        raise SessionNotFoundError("the Session moved during preflight")
+
+    start = AsyncMock(side_effect=unavailable_old_address)
+    monkeypatch.setattr(loop, "start_run", start)
+    target = SessionAddress(None, "renamed", "session-one")
+
+    def changed(address: SessionAddress) -> None:
+        if address == target:
+            (moved if service.pending_completion_wakes(target) else consumed).set()
+
+    service.add_completion_changed_callback(changed)
+    origin_release.set()
+    await origin.wait()
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await canonical.run_async(canonical.retarget_identity_agent_sessions, "coder", "renamed")
+    target_release = asyncio.Event()
+
+    async def receiving(run: Run) -> None:
+        await target_release.wait()
+        run.iteration_count = 1
+
+    receiver = await manager.start(target, receiving)
+    release.set()
+    await asyncio.wait_for(moved.wait(), timeout=1)
+    target_release.set()
+    await receiver.wait()
+    await asyncio.wait_for(consumed.wait(), timeout=1)
+    assert start.await_count == 1
+    assert len(_notes(canonical.get(target))) == 1
+    await service.aclose()
+    await manager.aclose()
+    canonical.close()
+
+
+@pytest.mark.parametrize("failure_boundary", ["read", "append", "generation"])
 async def test_completion_fallback_retries_transient_persistence_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -687,7 +849,7 @@ async def test_completion_fallback_retries_transient_persistence_failure(
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="session-one")
+    session = sessions.create("coder", session_id="session-one")
     completion_loop = SimpleNamespace(
         start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
     )
@@ -697,15 +859,17 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         cast(Any, Mock()),
         sessions=sessions,
     )
-    original_add_note = ChatSession.add_note
+    original_append = ChatSession.append_many
     attempts = 0
 
-    def add_note_with_transient_failure(session: ChatSession, content: str, **options: Any) -> None:
+    def append_with_transient_failure(
+        session: ChatSession, messages: list[ChatMessage], **options: Any
+    ) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise ChatSessionError("temporary append failure")
-        original_add_note(session, content, **options)
+        original_append(session, messages, **options)
 
     original_get = sessions.get_async
 
@@ -716,10 +880,21 @@ async def test_completion_fallback_retries_transient_persistence_failure(
             raise OSError("temporary read failure")
         return await original_get(address)
 
+    original_generation_address = sessions.generation_address
+
+    def generation_with_transient_failure(generation: str) -> SessionAddress | None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary generation read failure")
+        return original_generation_address(generation)
+
     if failure_boundary == "read":
         monkeypatch.setattr(sessions, "get_async", get_with_transient_failure)
+    elif failure_boundary == "append":
+        monkeypatch.setattr(ChatSession, "append_many", append_with_transient_failure)
     else:
-        monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
+        monkeypatch.setattr(sessions, "generation_address", generation_with_transient_failure)
     delays: list[float] = []
 
     async def record_wait(delay: float) -> None:
@@ -732,10 +907,13 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         notice_id="bash:retry",
         origin_run_id="origin-run",
         body="retry this result",
+        expected_session_generation_id=session.generation_id
+        if failure_boundary == "generation"
+        else None,
     )
     await asyncio.wait_for(delivery, timeout=5)
 
-    assert attempts == 2
+    assert attempts == (3 if failure_boundary == "generation" else 2)
     assert delays == [0.25]
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
@@ -952,14 +1130,16 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
         monkeypatch.setattr(loop, "start_run", held_start)
     else:
         origin_id = (await _user_cancelled_origin(manager)).id
-        add_note_async = ChatSession.add_note_async
+        append_many_async = ChatSession.append_many_async
 
-        async def held_add_note(chat_session: ChatSession, content: str, **options: Any) -> None:
+        async def held_note_append(
+            chat_session: ChatSession, messages: list[ChatMessage], **options: Any
+        ) -> None:
             entered.set()
             await release.wait()
-            await add_note_async(chat_session, content, **options)
+            await append_many_async(chat_session, messages, **options)
 
-        monkeypatch.setattr(ChatSession, "add_note_async", held_add_note)
+        monkeypatch.setattr(ChatSession, "append_many_async", held_note_append)
 
     result = _submit(service, "bash:claimed", "claimed result", origin_id)
     if origin is not None:
