@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Iterator, MutableMapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, override
+from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
 import pytest
@@ -245,6 +246,8 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
         ("POST", "/api/auth/pair/poll"),
         ("GET", "/api/oauth/callback"),
         ("POST", "/api/hooks/{job_id}"),
+        ("POST", "/api/inputs/{input_id}"),
+        ("GET", "/api/inputs/{input_id}/requests/{request_id}"),
         ("POST", "/_vbot/control/shutdown"),
         ("GET", "/auth/ticket/{ticket}"),
         ("HEAD", "/auth/ticket/{ticket}"),
@@ -1282,6 +1285,32 @@ def test_a_webhook_request_proves_its_job_secret_instead_of_a_vbot_credential(
     assert not any("invalid_token" in line for line in refusals)
     assert _WEBHOOK_SECRET not in caplog.text
     assert "opened" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("POST", "/api/inputs/in_test"), ("GET", "/api/inputs/in_test/requests/req_test")],
+)
+def test_task_input_secrets_are_not_counted_as_device_credentials(served, caplog, method, path):
+    from types import SimpleNamespace
+
+    receipt = {"status": "queued", "status_url": "/api/inputs/in_test/requests/req_test"}
+    inputs = SimpleNamespace(
+        authenticate=AsyncMock(return_value=True),
+        submit=AsyncMock(return_value=receipt),
+        result=AsyncMock(return_value=receipt),
+    )
+    _app, client = served(_authenticated(), direct_inputs=inputs)
+    for _ in range(24):
+        response = client.request(
+            method,
+            path,
+            json={"prompt": "task"} if method == "POST" else None,
+            headers={**_INTERNET, "Authorization": "Bearer vbi_test-secret"},
+        )
+        assert response.status_code == (202 if method == "POST" else 200)
+    assert "invalid_token" not in caplog.text
+    assert "vbi_test-secret" not in caplog.text
 
 
 def test_webhook_requests_are_capped_in_size_and_rate_per_client(

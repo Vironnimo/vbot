@@ -209,3 +209,5 @@ Before a trustworthy final `stop`, when readable reasoning or answer content alr
 - Interruption: notice rendering in `wire_shaping.py`, Stream draft in `_stream_draft.py`; tests in `test_chat_loop_interruption.py`, `test_stream_draft.py` and `test_wire_shaping_requests.py`.
 - Streaming and cancellation: `core/chat/streaming.py`, `request_runner.py`, `_agentic_progression.py`; tests in `test_streaming.py`, `test_streaming_recovery.py`, `test_chat_loop_streaming.py`, `test_chat_loop_stream_recovery.py`, and `test_chat_loop_stream_cancellation.py`.
 - Shared recovery: `core/chat/recovery.py`; `test_recovery.py` and `test_chat_loop_recovery_budget.py` cover combined budgets, deadlines, cancellation, nested retry ownership, fallback, output integrity, and Tool side-effect boundaries.
+
+Task inputs submit ordinary durable Accessor input with optional Run overrides. Chat serializes those overrides with the accepted input and restores them after restart; they do not become Session defaults. A new Task input Session records its `input_source_id` in its creating write, and continuation checks retain the expected Session generation (`automation/direct-inputs.md`).

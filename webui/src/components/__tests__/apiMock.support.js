@@ -51,6 +51,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       Promise.resolve({ state: 'available', reason: null, credentials: [] }),
     setCredential: (name, value) => call('secrets.set', { name, value }),
     unsetCredential: (name) => call('secrets.unset', { name }),
+    listTaskInputs: () => call('input.list'),
+    createTaskInput: (params) => call('input.create', params),
+    updateTaskInput: (params) => call('input.update', params),
+    deleteTaskInput: (id) => call('input.delete', { id }),
+    getTaskInputSecret: (id) => call('input.secret', { id }),
+    rotateTaskInputSecret: (id) => call('input.rotate_secret', { id }),
     listAgents: () => call('agent.list'),
     reorderAgents: (agentIds, expectedRevision) =>
       call('agent.reorder', {

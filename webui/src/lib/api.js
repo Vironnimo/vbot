@@ -318,3 +318,12 @@ export {
   createServerDirectory,
   listServerDirectory,
 } from './api/filesystem.js';
+
+export {
+  listTaskInputs,
+  createTaskInput,
+  updateTaskInput,
+  deleteTaskInput,
+  getTaskInputSecret,
+  rotateTaskInputSecret,
+} from './api/automation.js';

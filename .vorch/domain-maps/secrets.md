@@ -1,6 +1,6 @@
 # Secrets
 
-The Secret Store: credentials, OAuth tokens and Cron webhook secrets of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced; and Agent Secrets, kept in the same store.
+The Secret Store: credentials, OAuth tokens and ingress secrets of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced; and Agent Secrets, kept in the same store.
 
 ## Overview
 
@@ -9,9 +9,9 @@ The Secret Store: credentials, OAuth tokens and Cron webhook secrets of a data d
 `store.py` owns store state, key opening, transactions and process locking; `_document.py` owns the document schema, structural validation and decoding. Public store exports remain in `store.py`.
 
 - Owns: `secrets.json` (format, reads, writes, reset), `secrets.lock`, key creation and lookup, entry encryption, credential-name folding, plaintext import/retirement, the health projection.
-- Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`, webhook entries named by Cron), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
+- Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`, ingress entries named by Automation), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
 
-Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), and `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`); `CronService` uses `webhook_secrets` directly, wired by Runtime with `set_webhook_secrets(storage.secrets)` (`automation/cron-webhooks.md`), and `AgentSecrets(storage.secrets)` uses `agent_secrets`. Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
+Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), and `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`); `CronService` and `DirectInputService` use `webhook_secrets` (`automation/cron-webhooks.md`, `automation/direct-inputs.md`), and `AgentSecrets(storage.secrets)` uses `agent_secrets`. Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
 
 Agent Secrets (`agent_secrets.py` and its helpers) decide which values exist, who may use them where, and what masking replaces. Where values go is not owned here: Tools declare sink arguments and the Tool registry substitutes (`tools.md` -> Contracts), Chat and Compaction apply the masker, Extensions contribute Secret Sources. The `secrets` Tool, `/secret` and the RPCs live with their callers (`secrets/agent-secrets.md` -> Source).
 
@@ -39,7 +39,7 @@ The record of an unfinished plaintext conversion: which files it imported and th
 - `key`: `{id, protection, check, wrapped?}`. `protection` is `dpapi` or `key_file`; `check` is a sealed constant that proves a key belongs to this store; `wrapped` is the DPAPI-wrapped data key (DPAPI only).
 - `credentials`: environment-variable name -> sealed value.
 - `oauth_tokens`: token id (`<provider>-<connection>[--<account>]`) -> sealed token document text (the OAuth token JSON format stays owned by `token_store.py`).
-- `webhook_secrets`: Cron job id (`sha256-<hex digest>` for an id outside `ENTRY_NAME_PATTERN`) -> that webhook job's secret. A job's secret follows the job (`automation/cron-webhooks.md` -> Secrets); because restores keep the live store, a restored `jobs.json` whose webhook job has no entry refuses its requests until the secret is rotated.
+- `webhook_secrets`: Task input id (`automation/direct-inputs.md`) or Cron job id (`sha256-<hex digest>` for an id outside `ENTRY_NAME_PATTERN`) -> that webhook job's secret. A job's secret follows the job (`automation/cron-webhooks.md` -> Secrets); because restores keep the live store, a restored `jobs.json` whose webhook job has no entry refuses its requests until the secret is rotated.
 - `agent_secrets`: Secret id -> sealed Agent Secret record, metadata and values together (`secrets/agent-secrets.md` -> Records).
 - `plaintext_import`: the Import record, only while a conversion is unfinished.
 

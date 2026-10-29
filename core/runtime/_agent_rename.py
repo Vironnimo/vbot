@@ -31,6 +31,7 @@ from core.agents import Agent, AgentRename, AgentStore
 from core.automation import BootstrapService, CronService
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
+from core.automation.inputs import DirectInputService
 from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.secrets.agent_secrets import AgentSecrets
@@ -61,6 +62,7 @@ class AgentRenameServices:
     portals: PortalRegistry | None
     # Agent Secret grants to the Agent and its Sessions.
     secrets: AgentSecrets | None = None
+    inputs: DirectInputService | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ class AgentRenameOutcome:
     session_link_count: int
     terminal_count: int
     command_count: int
+    input_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class _References:
     bootstrap_job_ids: tuple[str, ...]
     terminal_count: int = 0
     command_count: int = 0
+    input_ids: tuple[str, ...] = ()
 
 
 async def rename_identity_agent(
@@ -130,6 +134,12 @@ async def identity_agent_references(
     if services.secrets is not None:
         references.extend(
             f"secret:{secret.name}" for secret in services.secrets.naming_identity_agent(agent_id)
+        )
+    if services.inputs is not None:
+        references.extend(
+            f"input:{row['id']}"
+            for row in services.inputs.list_inputs()
+            if row["agent_id"] == agent_id and row.get("project_id") is None
         )
     return tuple(sorted(references))
 
@@ -205,6 +215,7 @@ async def _rename_and_retarget(
         session_link_count=result.session_link_count,
         terminal_count=references.terminal_count,
         command_count=references.command_count,
+        input_ids=references.input_ids,
     )
     _LOGGER.info(
         "Agent renamed (agent=%s new_agent=%s sessions=%s channels=%s cron=%s "
@@ -277,12 +288,16 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
     bootstrap_job_ids = _identity_job_ids(services.bootstrap, source, TERMINAL_BOOTSTRAP_STATUSES)
     for job_id in bootstrap_job_ids:
         services.bootstrap.retarget_agent(job_id, target)
+    input_ids = (
+        services.inputs.retarget_agent(source, target) if services.inputs is not None else ()
+    )
     if services.secrets is not None:
         services.secrets.retarget_agent(source, target)
     return _References(
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
         bootstrap_job_ids=bootstrap_job_ids,
+        input_ids=input_ids,
     )
 
 
@@ -305,6 +320,11 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
     for job_id in bootstrap_job_ids:
         # Bootstrap changes its jobs synchronously on the Event Loop.
         services.bootstrap.retarget_agent(job_id, target)
+    input_ids = (
+        await services.sessions.run_async(services.inputs.retarget_agent, source, target)
+        if services.inputs is not None
+        else ()
+    )
     if services.secrets is not None:
         # A Secret Store write blocks.
         await asyncio.to_thread(services.secrets.retarget_agent, source, target)
@@ -320,6 +340,7 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
         bootstrap_job_ids=bootstrap_job_ids,
+        input_ids=input_ids,
         terminal_count=terminal_count,
         command_count=command_count,
     )

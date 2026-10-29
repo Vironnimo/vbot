@@ -90,7 +90,7 @@ How the access guard classifies a request by whether it needs a credential: `exe
 ## Constraints & Gotchas
 
 - New server routes belong under `/api`, `/ws`, `/_vbot`, `/auth` or `/health`. Every other GET/HEAD is `shell`, served without credentials in `authenticated` mode. `_rules.py::is_server_path` shares `_SERVER_NAMESPACES` between the guard and WebUI fallback; extend that list for a new namespace. For the same reason FastAPI's `/docs`, `/redoc` and `/openapi.json` are disabled.
-- An exempt route is added only as an exact `(method, path)` in `_EXEMPT_ROUTES`, as a GET/HEAD capability route shape in `_CAPABILITY_ROUTES` whose handler verifies its own HMAC (in `authenticated` mode the guard also verifies its recipient grant, `server/browser-capabilities.md`), or as the Cron webhook shape `POST /api/hooks/<job id>`, which skips step 3: its `Authorization` carries the job's secret. Other methods or shapes under these prefixes are `protected`. The exempt set: `access/request-pipeline.md` -> Exempt routes.
+- Exempt routes are exact method/path entries, verified GET/HEAD capability shapes, Cron webhook POSTs, or Task input submission/status shapes (`automation/direct-inputs.md`). Capability and ingress handlers verify their own grants/secrets; all other methods/shapes remain protected. Capability routes in authenticated mode also check recipient grants (`server/browser-capabilities.md`); the full exempt set is in `access/request-pipeline.md`.
 - Direct TLS serves HTTPS and plain HTTP on one listener (`tls.py`); the guard admits plain HTTP only from loopback in `authenticated` mode, so local tools keep `http://127.0.0.1:<port>`.
 - A reverse proxy on the same computer that adds no forwarding header is indistinguishable from a local client. In `local`/`lan` such a setup publishes the server without login; only `authenticated` mode is safe behind any proxy (proxy setup: `access/server-setup.md`).
 - `lan` trusts the source address. Anything that forwards outside traffic with a private or loopback source address (router port forwarding with source NAT, Windows `netsh interface portproxy`, Docker's userland proxy, SSH or VPN tunnels ending on the host) admits those clients without login. Reach vBot from outside the home network only in `authenticated` mode.
@@ -102,6 +102,8 @@ Tests: `tests/server/test_access.py`, `test_access_lifecycle.py`, `test_tls.py`,
 ## References
 
 Read these only when your task matches - not by default.
+
+- Task input route exemptions, per-input secrets and request/result access -> `automation/direct-inputs.md`
 
 - Building or changing an accessor's sign-in (pairing, login tickets, the device cookie, accepted Host names, handling 401/403/429/503 and WebSocket 4401/4403/4503, the local access token), or changing `/api/auth/*`, `/auth/ticket/*`, `auth.login_ticket` or the `devices.*` RPCs -> `access/accessor-contracts.md`
 - Changing the guard's peer, forwarding-header, Host, credential, exempt-route or response-header rules, or the refusal reasons (`_rules.py`, `_guard.py`, `AccessService.authenticate`) -> `access/request-pipeline.md`

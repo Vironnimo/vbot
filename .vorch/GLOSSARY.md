@@ -41,6 +41,9 @@ An Assistant answer that is exactly `[SILENT]`: it stays in the Session for the 
 ## Queue
 A Session's ordered waiting work: messages and other Run requests that arrive while the Session is busy wait there and start as Runs one after another (`runs.md`). Not a background job system or a Provider's request queue.
 
+## Task input
+A configured entry through which a program gives a fixed Agent concrete tasks to execute (`automation/direct-inputs.md`). Not an event webhook, whose configured reaction determines what to do with incoming event data.
+
 ## Steer
 Delivering a queued User message into the Session's active Run, where the Model sees it at its next request, instead of waiting for a Run of its own (`runs/queue-and-admission.md` -> Steering). Not a new Run, and not a Cancel.
 

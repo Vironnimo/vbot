@@ -13,6 +13,7 @@ from core.activity import SessionActivity
 from core.chat.errors import ChatError
 from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.session_peers import SessionPeers
+from core.projects import AgentOverrides
 from core.runs import ChatRunManager, RunAdmission, RunCancelledError, RunKind
 from core.sessions import ChatSession
 from core.sessions.errors import AccessorInputConflictError, SessionNotFoundError
@@ -69,7 +70,9 @@ async def _harness(data_dir, adapter):
         runtime.chat_sessions.close()
 
 
-async def _submit(loop, input_id, content, *, session_id=None, new_session=False):
+async def _submit(
+    loop, input_id, content, *, session_id=None, new_session=False, run_overrides=None
+):
     return await loop.submit_accessor_input(
         "coder",
         content,
@@ -77,6 +80,7 @@ async def _submit(loop, input_id, content, *, session_id=None, new_session=False
         request_hash=f"original-{input_id}",
         session_id=session_id,
         new_session=new_session,
+        run_overrides=run_overrides,
         reply_surface=ReplySurface.webui(),
     )
 
@@ -191,7 +195,13 @@ async def test_queue_restart_preserves_edit_removal_and_steering_priority(tmp_pa
         active = await _submit(loop, "active", "active input", new_session=True)
         await asyncio.wait_for(adapter.entered.wait(), 3)
         address = active.record.address
-        edited = await _submit(loop, "edit", "before", session_id=address.session_id)
+        edited = await _submit(
+            loop,
+            "edit",
+            "before",
+            session_id=address.session_id,
+            run_overrides=AgentOverrides(model="openai/recovered", thinking_effort="high"),
+        )
         removed = await _submit(loop, "remove", "removed input", session_id=address.session_id)
         selected = await _submit(loop, "selected", "selected input", session_id=address.session_id)
         assert await loop.update_accessor_queued(address, edited.record.queue_id, "after")
@@ -222,6 +232,8 @@ async def test_queue_restart_preserves_edit_removal_and_steering_priority(tmp_pa
         } == stable_ids
         assert records[0].run_status == "cancelled"
         assert len(resumed.requests) == 2
+        assert resumed.requests[1]["model_id"] == "recovered"
+        assert resumed.requests[1]["kwargs"]["thinking_effort"] == "high"
         history = runtime.chat_sessions.get(records[0].address).load()
         assert [message.content for message in history if message.role == "user"] == [
             "active input",

@@ -26,9 +26,10 @@ from core.skills import rename_skill_triggers, triggered_skill_names
 if TYPE_CHECKING:
     from core.automation.bootstrap import BootstrapService
     from core.automation.cron import CronService
+    from core.automation.inputs import DirectInputService
     from core.sessions import SessionAddress
 
-AutomationKind = Literal["bootstrap", "cron"]
+AutomationKind = Literal["bootstrap", "cron", "input"]
 
 # Whether a target (Agent id, Project id or None, selected Session id or None) counts.
 _Selector = Callable[[str, str | None, str | None], bool]
@@ -90,9 +91,11 @@ class AutomationReferences:
         *,
         bootstrap: BootstrapService,
         cron: CronService,
+        inputs: DirectInputService | None = None,
     ) -> None:
         self._bootstrap = bootstrap
         self._cron = cron
+        self._inputs = inputs
         self.lock = asyncio.Lock()
 
     def agent_references(self, agent_id: str) -> tuple[AutomationReference, ...]:
@@ -118,6 +121,12 @@ class AutomationReferences:
             for job in self._cron.list_jobs()
             if self._cron.can_fire(job) and self._cron.references_project(job, project_id)
         )
+        if self._inputs is not None:
+            references.extend(
+                AutomationReference("input", row["id"], row["name"])
+                for row in self._inputs.list_inputs()
+                if project_id in (row.get("project_id"), row.get("working_project_id"))
+            )
         return tuple(sorted(references, key=lambda reference: reference.label))
 
     def session_references(self, address: SessionAddress) -> tuple[AutomationReference, ...]:
@@ -192,6 +201,12 @@ class AutomationReferences:
             for job in self._cron.list_jobs()
             if selects(job.agent_id, job.project_id, job.session_id) and self._cron.can_fire(job)
         )
+        if self._inputs is not None:
+            automations.extend(
+                _LiveAutomation(AutomationReference("input", row["id"], row["name"]), lambda: ())
+                for row in self._inputs.list_inputs()
+                if selects(row["agent_id"], row.get("project_id"), None)
+            )
         return automations
 
 

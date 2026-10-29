@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, override
+from unittest.mock import AsyncMock
 
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
@@ -17,6 +19,7 @@ class ServerStubRuntime(StubRuntime):
 
     def __init__(self, data_dir: Path, **services: Any) -> None:
         super().__init__(data_dir, StubAdapter())
+        self.direct_inputs = SimpleNamespace(authenticate=AsyncMock(return_value=False))
         self.bootstrap_activated = False
         self.stopped = False
         for name, service in services.items():

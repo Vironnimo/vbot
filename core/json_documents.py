@@ -75,6 +75,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "project": "projects/*/project.json",
         "project_order": "projects/order.json",
         "cron_jobs": "cron/jobs.json",
+        "direct_inputs": "automation/inputs.json",
         "bootstrap_jobs": "bootstrap/jobs.json",
         "calendar_events": "calendar/events.json",
         "skill_policy": "skills/policy.json",

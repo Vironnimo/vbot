@@ -60,6 +60,7 @@ Temporary Session bindings, delivery receipts, Run execution owners and group ti
 - `sessions` stores one row per generation, with exactly one live row per public address and any number of archived generations. Entries, Runs, lineage, prompt state and owned relations reference the immutable surrogate `session_key`, so Agent renames and Session moves update one row.
 - `finish_run` returns the committed Chat History cursor; only then does Run management publish a persistence acknowledgement. Startup settles started Runs as `interrupted` (`process_restart`) without replay; unstarted Accessor receipts remain recoverable, and Sessions writes their terminal line, which the Run manager never sees (`sessions/runs.md`).
 - Missing live-address reads raise the typed `SessionNotFoundError` (a `ChatSessionError` subtype), allowing disposable consumers to distinguish a concurrent delete/archive race from storage failure.
+- Task input provenance (`input_source_id`) is created with its Session and stripped on every fork; it authorizes continuation only through that input (`automation/direct-inputs.md`).
 - Channel conversation pointers, conversation kinds and group participants are Channel state in `channels.db`, not Session metadata (Channel metadata keys: `channels.md`).
 
 ## Interfaces
