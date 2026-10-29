@@ -26,6 +26,7 @@ from core.model_tasks._live_openai import (
 from core.model_tasks._live_wire import (
     WireCaption,
     WireClosed,
+    WireConnection,
     WireDelegation,
     WireProblem,
     WireSendError,
@@ -482,6 +483,116 @@ async def test_lost_control_channel_ends_with_unconfirmed_close():
     )
 
     assert await _collect(wire) == [WireClosed(reason=None, usage=None, confirmed=False)]
+
+
+@pytest.mark.asyncio
+async def test_control_reattachment_keeps_turn_state_and_does_not_replay_commands():
+    first = FakeSocket(
+        [
+            {"type": "turn.created", "turn": {"id": "t1", "role": "user", "transcript": "Hello"}},
+            None,
+        ]
+    )
+    second = FakeSocket(
+        [
+            {"type": "turn.delta", "turn_id": "t1", "delta": " world"},
+            {"type": "session.closed", "reason": "client_request"},
+        ]
+    )
+    reconnect = AsyncMock(return_value=second)
+    wire = OpenAILiveWire(
+        call_id="rtc_1", answer_sdp=ANSWER, socket=first, dialect="codex", reconnect=reconnect
+    )
+    await wire.deliver_result("d1", "Already delivered")
+    assert await _collect(wire) == [
+        WireCaption("user", "Hello", final=False),
+        WireConnection(True),
+        WireConnection(False),
+        WireCaption("user", "Hello world", final=False),
+        WireClosed("client_request", None, confirmed=True),
+    ]
+    reconnect.assert_awaited_once()
+    assert first.closed and not second.sent
+    await wire.aclose()
+
+
+@pytest.mark.asyncio
+async def test_control_reconnect_has_a_finite_retry_budget(monkeypatch: pytest.MonkeyPatch):
+    import core.model_tasks._live_openai as module
+
+    monkeypatch.setattr(module, "_sleep", AsyncMock())
+    reconnect = AsyncMock(side_effect=OSError("offline"))
+    wire = OpenAILiveWire(
+        call_id="rtc_1",
+        answer_sdp=ANSWER,
+        socket=FakeSocket([None]),
+        dialect="codex",
+        reconnect=reconnect,
+    )
+    assert await _collect(wire) == [WireConnection(True), WireClosed(None, None, confirmed=False)]
+    assert reconnect.await_count == 3
+    await wire.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reattachment_rebuilds_token_headers_without_creating_another_call():
+    route = respx.post(CODEX_CALLS_URL).respond(
+        201, text=ANSWER, headers={"location": "/v1/realtime/calls/rtc_same"}
+    )
+    runtime = _runtime(_subscription_token())
+    getter = AsyncMock(side_effect=[_subscription_token("old"), _subscription_token("new")])
+    runtime.prepare_provider_http = lambda connection: (getter, task_http_transport(connection))
+    connect = AsyncMock(
+        side_effect=[
+            FakeSocket([None]),
+            FakeSocket([{"type": "session.closed", "reason": "client_request"}]),
+        ]
+    )
+    wire = await open_openai_live_wire(
+        runtime,
+        parse_task_model_target_id("openai/gpt-live-1-codex::subscription"),
+        offer_sdp=OFFER,
+        instructions="test",
+        voice="cove",
+        connect=connect,
+    )
+    await _collect(wire)
+    assert route.call_count == 1 and connect.await_count == 2
+    first, second = connect.call_args_list
+    assert first.args == second.args
+    assert first.kwargs["additional_headers"]["chatgpt-account-id"] == "old"
+    assert second.kwargs["additional_headers"]["chatgpt-account-id"] == "new"
+    assert (
+        first.kwargs["additional_headers"]["session-id"]
+        == second.kwargs["additional_headers"]["session-id"]
+    )
+    await wire.aclose()
+
+
+@pytest.mark.asyncio
+async def test_closing_while_reattaching_retires_a_late_socket():
+    entered, release = asyncio.Event(), asyncio.Event()
+    late = FakeSocket()
+
+    async def reconnect():
+        entered.set()
+        await release.wait()
+        return late
+
+    wire = OpenAILiveWire(
+        call_id="rtc_1",
+        answer_sdp=ANSWER,
+        socket=FakeSocket([None]),
+        dialect="codex",
+        reconnect=reconnect,
+    )
+    events = asyncio.create_task(_collect(wire))
+    await entered.wait()
+    await wire.aclose()
+    release.set()
+    await asyncio.wait_for(events, 1)
+    assert late.closed
 
 
 @pytest.mark.asyncio

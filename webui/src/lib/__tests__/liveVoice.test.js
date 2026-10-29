@@ -603,6 +603,34 @@ describe('Live call frames', () => {
     expect(f.state.phase).toBe('live');
   });
 
+  it('pauses media while provider control reconnects and preserves other holds', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'connection', reconnecting: true });
+    f.frame({ type: 'connection', reconnecting: true });
+    expect(f.state).toMatchObject({
+      phase: 'live',
+      held: true,
+      reconnecting: true,
+    });
+    expect(f.track.enabled).toBe(false);
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'reconnecting',
+      severity: 'warn',
+    });
+    f.controller.hold('recording');
+    f.frame({ type: 'connection', reconnecting: false });
+    expect(f.state.reconnecting).toBe(false);
+    expect(f.track.enabled).toBe(false);
+    f.controller.release('recording');
+    expect(f.track.enabled).toBe(true);
+    expect(f.api.startLiveCall).toHaveBeenCalledOnce();
+    expect(f.onNotice).toHaveBeenLastCalledWith({
+      code: 'reconnected',
+      severity: 'info',
+    });
+  });
+
   it('replaces open caption turns with each snapshot and closes them when final', async () => {
     const f = liveFixture();
     await f.goLive();

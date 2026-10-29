@@ -1,4 +1,4 @@
-"""The vBot backend of a Live call: one backend Session, one Chat Run per request."""
+"""The vBot backend of a Live call: one backend Session with shared, steerable Chat Runs."""
 
 from __future__ import annotations
 
@@ -64,13 +64,17 @@ class FakeChat:
         self.answer = "Started Coder on the task."
         self.hold = False
 
-    async def start_run(self, agent_id: str, content: str, **options: Any) -> FakeRun:
+    async def queue_run(self, agent_id: str, content: str, **options: Any) -> Any:
         self.started.append({"agent_id": agent_id, "content": content, **options})
-        run = FakeRun(len(self.runs) + 1, list(self.events), self.answer)
-        self.runs.append(run)
-        if not self.hold:
-            run.finish()
-        return run
+        run = self.runs[-1] if self.runs and not self.runs[-1].done.is_set() else None
+        if run is None:
+            run = FakeRun(len(self.runs) + 1, list(self.events), self.answer)
+            self.runs.append(run)
+            if not self.hold:
+                run.finish()
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(run)
+        return SimpleNamespace(future=future)
 
 
 class FakeSessions:
@@ -148,6 +152,7 @@ async def test_the_first_request_creates_the_backend_session_and_each_runs_in_it
         "vBot right now (the overview, taken just before this request):\nAgents: Coder\n\n"
         "Refs earlier results named (still valid as targets):\n- s1: Session at Coder"
     )
+    assert all(started["steering"] for started in chat.started)
     assert chat.started[1]["content"] == UNWORDED_REQUEST
     assert chat.started[1]["context_note"].endswith("Conversation:\n(nothing said)")
     assert first == second == f"Started Coder on the task.\n{EFFECTS} nothing."
@@ -168,7 +173,14 @@ async def test_the_answer_ends_with_what_the_tools_changed() -> None:
         *(_result("stop", _ok(f"Stopped s{index}.")) for index in range(8)),
     ]
 
-    answer = await backend.answer(_prepared(BackendRequest(request="Do it all")))
+    progress: list[str] = []
+
+    async def report(text: str) -> None:
+        progress.append(text)
+
+    answer = await backend.answer(
+        _prepared(BackendRequest(request="Do it all")), on_progress=report
+    )
 
     # Lookups change nothing; at most 8 effects are named.
     assert answer == (
@@ -176,10 +188,13 @@ async def test_the_answer_ends_with_what_the_tools_changed() -> None:
         "send_message failed: s9 does not exist. | Stopped s0. | Stopped s1. | Stopped s2. | "
         "Stopped s3. | Stopped s4. | and 3 more"
     )
+    assert len(progress) == 11
+    assert all(text.startswith(EFFECTS) for text in progress)
+    assert "Started s2" in progress[0]
 
 
 @pytest.mark.asyncio
-async def test_requests_wait_for_the_previous_one_before_they_are_prepared() -> None:
+async def test_new_requests_steer_the_active_run_and_share_its_outcome() -> None:
     backend, chat, *_ = _backend()
     chat.hold = True
     prepared: list[str] = []
@@ -193,18 +208,46 @@ async def test_requests_wait_for_the_previous_one_before_they_are_prepared() -> 
 
     first = asyncio.create_task(backend.answer(prepare("first")))
     second = asyncio.create_task(backend.answer(prepare("second")))
-    while not chat.runs:
-        await asyncio.sleep(0)
-    await asyncio.sleep(0.01)
-
-    # The second request is gathered only after the first finished, from what it left.
-    assert prepared == ["first"]
-    chat.runs[0].finish()
-    while len(chat.runs) < 2:
+    while len(chat.started) < 2:
         await asyncio.sleep(0)
     assert prepared == ["first", "second"]
-    chat.runs[1].finish()
-    await asyncio.gather(first, second)
+    assert len(chat.runs) == 1
+    assert not first.done() and not second.done()
+    chat.runs[0].finish()
+    answers = await asyncio.gather(first, second)
+    assert answers[0] == answers[1]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_effects_are_forwarded_before_the_run_finishes() -> None:
+    backend, chat, *_ = _backend()
+    chat.hold = True
+    chat.events = [_result("start_agent_session", _ok("Started s2 at Coder."))]
+    reported = asyncio.Event()
+
+    async def report(text: str) -> None:
+        reported.set()
+
+    answer = asyncio.create_task(
+        backend.answer(_prepared(BackendRequest(request="Start Coder")), on_progress=report)
+    )
+    await asyncio.wait_for(reported.wait(), 1)
+    assert not answer.done()
+    chat.runs[0].finish()
+    await answer
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_last_waiter_stops_its_run() -> None:
+    backend, chat, *_ = _backend()
+    chat.hold = True
+    answer = asyncio.create_task(backend.answer(_prepared(BackendRequest(request="Wait"))))
+    while not backend._outcomes:
+        await asyncio.sleep(0)
+    answer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await answer
+    assert chat.runs[0].cancel_requested
 
 
 @pytest.mark.asyncio
@@ -223,17 +266,33 @@ async def test_a_slow_request_is_stopped_and_reported() -> None:
 
 
 @pytest.mark.asyncio
-async def test_closing_stops_the_running_request_and_refuses_later_ones() -> None:
+@pytest.mark.parametrize("admitting", [False, True])
+async def test_closing_stops_the_running_request_and_refuses_later_ones(
+    admitting: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     backend, chat, *_ = _backend()
     chat.hold = True
+    entered, release = asyncio.Event(), asyncio.Event()
+    queue = chat.queue_run
+
+    async def admit(*args: Any, **kwargs: Any) -> Any:
+        item = await queue(*args, **kwargs)
+        entered.set()
+        await release.wait()
+        return item
+
+    if admitting:
+        monkeypatch.setattr(chat, "queue_run", admit)
 
     running = asyncio.create_task(backend.answer(_prepared(BackendRequest(request="Wait"))))
     while not chat.runs:
         await asyncio.sleep(0)
     await backend.aclose()
+    release.set()
 
+    answer = await running
     assert chat.runs[0].cancel_requested
-    assert (await running).startswith("The request was stopped before it finished.")
+    assert answer.startswith("The request was stopped before it finished.")
     later = await backend.answer(_prepared(BackendRequest(request="Again")))
     assert later == "The request was stopped before it finished. Nothing was retried."
     assert len(chat.runs) == 1

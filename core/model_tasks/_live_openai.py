@@ -23,6 +23,7 @@ verified live yet; the parser accepts the Responses item and flat forms.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import re
@@ -33,7 +34,7 @@ from uuid import uuid4
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from core.model_tasks._live_wire import (
     MEDIA_WEBRTC,
@@ -41,6 +42,7 @@ from core.model_tasks._live_wire import (
     PlaybackReceipt,
     WireCaption,
     WireClosed,
+    WireConnection,
     WireDelegation,
     WireEvent,
     WireProblem,
@@ -70,6 +72,9 @@ PUBLIC_SESSIONS_ENDPOINT = "/live/sessions"
 _CREATE_TIMEOUT_SECONDS = 30.0
 _CONTROL_OPEN_TIMEOUT_SECONDS = 10.0
 _CONTROL_MAX_FRAME_BYTES = 8 * 1024 * 1024
+_CONTROL_RECONNECT_SECONDS = 10.0
+_CONTROL_RECONNECT_ATTEMPTS = 3
+_sleep = asyncio.sleep
 # Codex appends accept at most 500 bytes of text; the public API 500 tokens.
 _CODEX_APPEND_MAX_BYTES = 500
 _PUBLIC_APPEND_MAX_BYTES = 1500
@@ -154,11 +159,21 @@ async def open_openai_live_wire(
         socket = await _join_control(connect or websocket_connect, control_url, headers)
     except Exception as exc:
         raise ControlJoinError(call_id, type(exc).__name__) from exc
+
+    async def rejoin() -> Any:
+        headers = (
+            await client._codex_headers()
+            if client.dialect == DIALECT_CODEX
+            else await client._public_headers()
+        )
+        return await _join_control(connect or websocket_connect, control_url, headers)
+
     return OpenAILiveWire(
         call_id=call_id,
         answer_sdp=answer_sdp,
         socket=socket,
         dialect=client.dialect,
+        reconnect=rejoin,
     )
 
 
@@ -299,11 +314,24 @@ async def _join_control(connect: WebSocketConnector, url: str, headers: dict[str
 class OpenAILiveWire:
     """A joined GPT-Live call in one of the two OpenAI dialects."""
 
-    def __init__(self, *, call_id: str, answer_sdp: str, socket: Any, dialect: str) -> None:
+    def __init__(
+        self,
+        *,
+        call_id: str,
+        answer_sdp: str,
+        socket: Any,
+        dialect: str,
+        reconnect: Callable[[], Awaitable[Any]] | None = None,
+    ) -> None:
         self._call_id = call_id
         self._answer_sdp = answer_sdp
         self._socket = socket
         self._dialect = dialect
+        self._reconnect = reconnect
+        self._closed = False
+        self._closing = False
+        self._ready = asyncio.Event()
+        self._ready.set()
         self._normalizer: _CodexEvents | _PublicEvents = (
             _CodexEvents() if dialect == DIALECT_CODEX else _PublicEvents()
         )
@@ -324,23 +352,70 @@ class OpenAILiveWire:
         return False
 
     async def events(self) -> AsyncIterator[WireEvent]:
-        try:
-            async for frame in self._socket:
-                if not isinstance(frame, str) or _is_audio_frame(frame):
-                    continue
-                try:
-                    event = json.loads(frame)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                for normalized in [*self._normalizer.normalize(event), *self._calls(event)]:
-                    yield normalized
-                    if isinstance(normalized, WireClosed):
-                        return
-        except ConnectionClosed:
-            pass
+        losses_without_events = 0
+        while not self._closed:
+            try:
+                async for frame in self._socket:
+                    if not isinstance(frame, str):
+                        continue
+                    if _is_audio_frame(frame):
+                        losses_without_events = 0
+                        continue
+                    try:
+                        event = json.loads(frame)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    losses_without_events = 0
+                    for normalized in [*self._normalizer.normalize(event), *self._calls(event)]:
+                        yield normalized
+                        if isinstance(normalized, WireClosed):
+                            return
+            except ConnectionClosed, OSError:
+                pass
+            if self._closed or self._closing or self._reconnect is None:
+                break
+            losses_without_events += 1
+            if losses_without_events > _CONTROL_RECONNECT_ATTEMPTS:
+                break
+            self._ready.clear()
+            yield WireConnection(reconnecting=True)
+            if not await self._reattach():
+                break
+            yield WireConnection(reconnecting=False)
         yield WireClosed(reason=None, usage=None, confirmed=False)
+
+    async def _reattach(self) -> bool:
+        assert self._reconnect is not None
+        try:
+            async with asyncio.timeout(_CONTROL_RECONNECT_SECONDS):
+                with contextlib.suppress(Exception):
+                    await self._socket.close()
+                for attempt in range(_CONTROL_RECONNECT_ATTEMPTS):
+                    if self._closed:
+                        return False
+                    try:
+                        socket = await self._reconnect()
+                    except InvalidStatus as exc:
+                        # Auth, permission and an ended session require a new
+                        # call; reconnecting never recreates or replays one.
+                        if exc.response.status_code not in {408, 429, 500, 502, 503, 504}:
+                            return False
+                    except OSError, ConnectionClosed, TimeoutError:
+                        pass
+                    else:
+                        if self._closed:
+                            await socket.close()
+                            return False
+                        self._socket = socket
+                        self._ready.set()
+                        return True
+                    if attempt + 1 < _CONTROL_RECONNECT_ATTEMPTS:
+                        await _sleep(0.25 * 2**attempt)
+        except TimeoutError:
+            pass
+        return False
 
     def _calls(self, event: JsonObject) -> list[WireEvent]:
         calls: list[WireEvent] = []
@@ -412,13 +487,25 @@ class OpenAILiveWire:
             )
 
     async def request_close(self) -> None:
+        self._closing = True
         await self._send({"type": "session.close"})
 
     async def aclose(self) -> None:
+        self._closed = True
+        self._ready.set()
         with contextlib.suppress(Exception):
             await self._socket.close()
 
     async def _send(self, event: JsonObject) -> None:
+        if self._closed:
+            raise WireSendError("Live control channel is closed")
+        try:
+            async with asyncio.timeout(_CONTROL_RECONNECT_SECONDS):
+                await self._ready.wait()
+        except TimeoutError as exc:
+            raise WireSendError("Live control channel did not reconnect") from exc
+        if self._closed:
+            raise WireSendError("Live control channel is closed")
         try:
             await self._socket.send(json.dumps(event, ensure_ascii=False))
         except ConnectionClosed as exc:
@@ -493,8 +580,15 @@ def _problem(event: JsonObject) -> WireProblem:
     error = event.get("error")
     error = error if isinstance(error, dict) else {}
     code = error.get("code") or error.get("type") or "unknown"
+    code = code if isinstance(code, str) else "unknown"
     message = error.get("message")
-    return WireProblem(code=str(code), message=message if isinstance(message, str) else "")
+    # These reject one command without invalidating the running session.
+    local_errors = {"invalid_value", "invalid_event", "invalid_event_type"}
+    return WireProblem(
+        code=str(code),
+        message=message if isinstance(message, str) else "",
+        fatal=code not in local_errors,
+    )
 
 
 class _CodexEvents:

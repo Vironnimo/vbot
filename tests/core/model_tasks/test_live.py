@@ -23,8 +23,10 @@ from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
     WireClosed,
+    WireConnection,
     WireDelegation,
     WirePlaybackClear,
+    WireProblem,
     WireSendError,
     WireStarted,
     WireToolCall,
@@ -174,18 +176,27 @@ class FakeBackend:
         self.closed = False
         self.session_id: str | None = None
         self.on_session: Callable[[], None] | None = None
+        self.progress: str | None = None
         self._turn = asyncio.Lock()
 
-    async def answer(self, prepare: Callable[[], Awaitable[BackendRequest]]) -> str:
+    async def answer(
+        self,
+        prepare: Callable[[], Awaitable[BackendRequest]],
+        *,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
         async with self._turn:
             self.requests.append(await prepare())
+            index = len(self.requests)
             if self.session_id is None:
                 self.session_id = "backend-1"
                 assert self.on_session is not None
                 self.on_session()
             self.started.set()
-            await self.release.wait()
-            return f"answer {len(self.requests)}"
+        if on_progress is not None and self.progress is not None:
+            await on_progress(self.progress)
+        await self.release.wait()
+        return f"answer {index}"
 
     async def aclose(self, *, finish_request: bool = False) -> None:
         if finish_request:
@@ -361,7 +372,7 @@ async def test_the_accessor_learns_the_sessions_once_each_exists():
     wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
     call, _voice = _call(wire, host, backend)
     wire.push(WireStarted(None), WireDelegation("d1", "One"), WireDelegation("d2", "Two"))
-    await _until(lambda: len(wire.results()) == 2)
+    await _until(lambda: "d2" in wire.results())
     await call.close()
 
     voice_session = {"agent_id": "live-voice", "session_id": "voice-1"}
@@ -571,9 +582,10 @@ async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
 
 
 @pytest.mark.asyncio
-async def test_requests_run_one_after_another_while_the_conversation_continues():
+async def test_new_requests_reach_the_backend_before_earlier_work_finishes():
     wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
     backend.release.clear()
+    backend.progress = "Confirmed effect"
     call, _voice = _call(wire, host, backend)
 
     wire.push(
@@ -582,19 +594,19 @@ async def test_requests_run_one_after_another_while_the_conversation_continues()
         WireDelegation("item_1", "Read the chat"),
     )
     await _until(lambda: len(backend.requests) == 1)
+    await _until(lambda: "Confirmed effect" in wire.results().get("item_1", ""))
     host.state = "Terminals: t1"
     wire.push(
         WireCaption("user", "Also, start Codex", final=True),
         WireDelegation("item_2", "Start Codex"),
     )
-    await _until(lambda: host.of_type("caption")[-1]["text"] == "Also, start Codex")
-    await asyncio.sleep(0.02)
+    await _until(lambda: len(backend.requests) == 2)
 
-    # The second request waits for the first and then starts from the state it left.
-    assert len(backend.requests) == 1
+    # A later request can steer the backend while earlier work is still running.
     assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
     backend.release.set()
-    await _until(lambda: len(wire.results()) == 2)
+    await _until(lambda: wire.results().get("item_2") == "answer 2")
+    assert ("result", "item_1", "answer 1") not in wire.sent
     assert [request.request for request in backend.requests] == ["Read the chat", "Start Codex"]
     # Each request carries only what was said since the previous one.
     assert [request.conversation for request in backend.requests] == [
@@ -604,6 +616,27 @@ async def test_requests_run_one_after_another_while_the_conversation_continues()
     assert backend.requests[1].state == "Terminals: t1"
     assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
     await call.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fatal", [False, True])
+async def test_provider_errors_are_visible_and_fatal_errors_end_the_call(fatal: bool, caplog):
+    wire, host = FakeWire(), FakeHost()
+    call, voice = _call(wire, host)
+    wire.push(WireStarted(None), WireProblem("probe", "private provider text", fatal=fatal))
+    await _until(lambda: bool(host.of_type("error")))
+    assert host.of_type("error") == [{"type": "error", "code": "provider_error", "fatal": fatal}]
+    assert "private provider text" not in caplog.text
+    if fatal:
+        await asyncio.wait_for(call.wait_closed(), 1)
+        assert host.of_type("closed")[0]["reason"] == "provider_error"
+        assert host.of_type("state")[-1]["phase"] == "failed"
+        assert voice.finished[0] is not None
+    else:
+        wire.push(WireConnection(True), WireConnection(False))
+        await _until(lambda: len(host.of_type("connection")) == 2)
+        assert host.of_type("state")[-1]["phase"] == "live"
+        await call.close()
 
 
 @pytest.mark.asyncio

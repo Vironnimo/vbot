@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from core.chat._message_history import _append_input_origin_note, _append_reply_surface_note
+from core.chat._message_history import (
+    _add_context_note,
+    _append_input_origin_note,
+    _append_reply_surface_note,
+)
 from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import (
     RequestBuildInputs,
@@ -94,6 +98,7 @@ async def persist_steering_input(
         session, request.reply_surface, messages=context.session_snapshot.active_messages
     )
     _append_input_origin_note(session, request.input_origin)
+    _add_context_note(session, request.context_note)
     if reply_to_user:
         session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
     if not request.session_message:

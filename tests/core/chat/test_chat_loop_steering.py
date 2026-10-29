@@ -283,6 +283,40 @@ async def test_stop_during_speech_to_text_keeps_the_voice_message(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_live_input_steers_with_its_conversation_snapshot(tmp_path: Path) -> None:
+    adapter = PausedAdapter(
+        [{"content": "Before", "tool_calls": None}, {"content": "Corrected", "tool_calls": None}]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Original", session_id="one", run_kind=RunKind.LIVE)
+    await adapter.entered.wait()
+    item = await loop.queue_run(
+        "coder",
+        "Use Thursday instead",
+        session_id="one",
+        run_kind=RunKind.LIVE,
+        input_origin="live_voice",
+        context_note="Live context snapshot",
+        steering=True,
+    )
+    assert item.steering and not item.future.done()
+    adapter.release.set()
+    result = await asyncio.wait_for(run.wait(), 5)
+    assert result.content == "Corrected"
+    assert item.future.result() is run
+    history = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    note = next(message for message in history if message.content == "Live context snapshot")
+    correction = next(message for message in history if message.content == "Use Thursday instead")
+    assert note.role == "note" and note.run_id == correction.run_id == run.id
+    assert history.index(note) < history.index(correction)
+    assert "Live context snapshot" in str(adapter.requests[1]["messages"])
+
+
+@pytest.mark.asyncio
 async def test_steering_reaches_an_internal_system_run(tmp_path: Path) -> None:
     adapter = PausedAdapter(
         [{"content": "Reviewed", "tool_calls": None}, {"content": "Adjusted", "tool_calls": None}]

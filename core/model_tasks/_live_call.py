@@ -10,8 +10,8 @@ live while work runs; results return through the wire in order of completion.
 
 The call is the :class:`core.tools.live.LiveToolHost` of both Sessions: their
 Live Tool calls go to the server's :class:`LiveCallHost`, and ``vbot_request``
-to the backend Agent (:class:`LiveBackend`), which answers one request at a
-time with what happened since the previous one.
+to the backend Agent (:class:`LiveBackend`), whose active Run accepts new
+input with what happened since the previous request.
 
 Commands to the wire are serialized so chunked appends never interleave. Relay
 media flows outside that lock: microphone audio goes through a bounded backlog
@@ -47,6 +47,7 @@ from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
     WireClosed,
+    WireConnection,
     WireDelegation,
     WireEvent,
     WirePlaybackClear,
@@ -77,7 +78,7 @@ MAX_CONCURRENT_DELEGATIONS = 4
 START_TIMEOUT_SECONDS = 45.0
 CLOSE_TIMEOUT_SECONDS = 8.0
 DELEGATION_TIMEOUT_SECONDS = 240.0
-# A request can wait for the previous one; its answer may take longer than a Tool.
+# Request admission and steering may add time beyond the backend Run's own budget.
 _REQUEST_EXTRA_SECONDS = 15.0
 # Public-dialect delegations carry no text; their request is the user's
 # final transcript, which can arrive after the delegation. A transcript that
@@ -121,6 +122,7 @@ _NO_BACKEND = "Nothing answers requests in this call, so nothing was done."
 _FAILURES = {
     "connection_lost": "The connection to the voice model was lost.",
     "start_timeout": "The voice model's audio did not connect in time.",
+    "provider_error": "The voice provider could not continue the call.",
 }
 # Microphone audio waiting for the provider socket; older audio is dropped.
 _AUDIO_BACKLOG_BYTES = 2000 * RELAY_BYTES_PER_MS
@@ -189,6 +191,8 @@ class LiveCallSession:
         self._send_lock = asyncio.Lock()
         self._delegation_slots = asyncio.Semaphore(MAX_CONCURRENT_DELEGATIONS)
         self._busy = 0
+        self._delegation_ids: set[str] = set()
+        self._latest_delegation_id: str | None = None
         # What was said and the updates since the previous request, for the backend.
         self._said: list[tuple[str, str]] = []
         self._partial: dict[str, str] = {}
@@ -385,7 +389,9 @@ class LiveCallSession:
         elif isinstance(event, WireCaption):
             self._on_caption(event)
         elif isinstance(event, WireDelegation):
-            if not self._closing:
+            if not self._closing and event.delegation_id not in self._delegation_ids:
+                self._delegation_ids.add(event.delegation_id)
+                self._latest_delegation_id = event.delegation_id
                 self._spawn(self._delegate(event), name=f"live-call-delegation:{self._log_id}")
         elif isinstance(event, WireToolCall):
             if not self._closing:
@@ -394,14 +400,16 @@ class LiveCallSession:
             self._usage = event.usage
             self._save_usage()
         elif isinstance(event, WireProblem):
-            # The Provider's own text names the cause (for example an unreachable
-            # hosted backend); it carries no credentials.
             _LOGGER.warning(
-                "Live provider reported an error (call=%s code=%s message=%r)",
+                "Live provider reported an error (call=%s fatal=%s)",
                 self._log_id,
-                event.code,
-                event.message[:200],
+                event.fatal,
             )
+            self._publish({"type": "error", "code": "provider_error", "fatal": event.fatal})
+            if event.fatal:
+                self._spawn(self._abort("provider_error"), name=f"live-call-failure:{self._log_id}")
+        elif isinstance(event, WireConnection):
+            self._publish({"type": "connection", "reconnecting": event.reconnecting})
 
     def _on_caption(self, event: WireCaption) -> None:
         if event.role == "user":
@@ -449,7 +457,9 @@ class LiveCallSession:
             return live_failure("no_backend", _NO_BACKEND)
         self._set_busy(1)
         try:
-            answer = await backend.answer(lambda: self._backend_request(request))
+            answer = await backend.answer(
+                lambda: self._backend_request(request), on_progress=self._backend_progress
+            )
         except Exception as exc:
             _LOGGER.warning(
                 "Live request failed unexpectedly (call=%s error_type=%s)",
@@ -489,12 +499,31 @@ class LiveCallSession:
 
     # -- Model calls --------------------------------------------------------
 
+    async def _backend_progress(self, text: str) -> None:
+        delegation_id = self._latest_delegation_id
+        if delegation_id is None or self._closing:
+            return
+
+        async def send() -> None:
+            if self._latest_delegation_id == delegation_id and not self._closing:
+                update = f"{LIVE_UPDATE_PREFIX}: " + json.dumps(
+                    {"confirmed_tool_result": text}, ensure_ascii=False
+                )
+                await self._wire.deliver_result(delegation_id, update)
+
+        await self._send_command(send)
+
     async def _delegate(self, event: WireDelegation) -> None:
         """Answer one native delegation; the voice model always gets an answer."""
         arguments = {"request": event.request} if event.request else {}
         result = await self._call_text(event.delegation_id, TOOL_VBOT_REQUEST, arguments)
         answer = _answer_text(result) if result is not None else _DELEGATION_FAILED
-        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+
+        async def send() -> None:
+            if self._latest_delegation_id == event.delegation_id:
+                await self._wire.deliver_result(event.delegation_id, answer)
+
+        await self._send_command(send)
 
     async def _run_tool(self, event: WireToolCall) -> None:
         """Run one Tool call of a Model; it always gets a result."""
@@ -688,14 +717,20 @@ class LiveCallSession:
         else:
             reason = "connection_lost"
         usage = (closed.usage if closed is not None else None) or self._usage
-        failed = reason in {"connection_lost", "start_timeout"}
+        failed = reason in _FAILURES
         try:
             if self._usage_accounting is not None:
                 await self._usage_accounting.finish(
                     self._usage_call_id,
                     usage=usage,
                     status="failed" if failed else "completed",
-                    failure="timeout" if reason == "start_timeout" else "network",
+                    failure=(
+                        "timeout"
+                        if reason == "start_timeout"
+                        else "provider"
+                        if reason == "provider_error"
+                        else "network"
+                    ),
                 )
         except Exception:
             _LOGGER.error(
@@ -717,7 +752,7 @@ class LiveCallSession:
             finally:
                 # An owner abort can arrive while transport cleanup is waiting.
                 reason = self._abort_reason or reason
-                failed = reason in {"connection_lost", "start_timeout"}
+                failed = reason in _FAILURES
                 self._set_phase("failed" if failed else "closed")
                 self._publish({"type": "closed", "reason": reason, "usage": usage})
                 # A lost connection or a start timeout is a failed call.
@@ -823,6 +858,7 @@ class LiveCallSession:
                 await send()
             return True
         except WireSendError:
+            self._publish({"type": "error", "code": "notification_failed", "fatal": False})
             return False
         except Exception as exc:
             _LOGGER.warning(

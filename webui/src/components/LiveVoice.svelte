@@ -123,6 +123,8 @@
     idle: () => t('live.notice.idle'),
     expired: () => t('live.notice.expired'),
     idle_warning: () => t('live.notice.idleWarning'),
+    reconnecting: () => t('live.state.reconnecting'),
+    reconnected: () => t('live.notice.reconnected'),
   };
   const TOAST_VARIANTS = { error: 'error', warn: 'warn', info: 'info' };
 
@@ -240,15 +242,17 @@
       ? t('live.state.connecting')
       : voice.phase === 'closing'
         ? t('live.state.closing')
-        : idleLeft
-          ? t('live.state.idle', { time: idleLeft })
-          : expiryLeft
-            ? t('live.state.expiring', { time: expiryLeft })
-            : voice.held
-              ? recording && !voiceStatus?.recording
-                ? t('live.state.heldRecording')
-                : t('live.state.held')
-              : (caption?.text ?? t('live.state.listening')),
+        : voice.reconnecting
+          ? t('live.state.reconnecting')
+          : idleLeft
+            ? t('live.state.idle', { time: idleLeft })
+            : expiryLeft
+              ? t('live.state.expiring', { time: expiryLeft })
+              : voice.held
+                ? recording && !voiceStatus?.recording
+                  ? t('live.state.heldRecording')
+                  : t('live.state.held')
+                : (caption?.text ?? t('live.state.listening')),
   );
   const captionRole = $derived(
     idleLeft || expiryLeft
