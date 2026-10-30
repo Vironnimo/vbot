@@ -12,9 +12,10 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
 from core.chat import ChatMessage
-from core.chat.messages import ToolCall
+from core.chat.messages import MessageSender, ToolCall
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
+from core.model_tasks.decision_types import DecisionError
 from core.permissions import (
     BoundaryContext,
     PermissionBoundary,
@@ -25,6 +26,7 @@ from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionNotFoundError
+from core.subagents.links import link_session
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.tools.terminal_manager import TerminalOwner
@@ -34,6 +36,125 @@ from tests.core.runtime.runtime_test_support import write_project_skill, write_s
 from tests.core.sessions.history_fixtures import complete_run
 
 SWARM_PRIVATE_TOOLS = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"}
+
+
+@pytest.mark.asyncio
+async def test_shell_uses_the_current_extension_registry_before_any_process_launch(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = runtime.chat_sessions.create("main", session_id="review-execution")
+    launch = AsyncMock(side_effect=AssertionError("Unapproved command was launched"))
+    monkeypatch.setattr(runtime.command_manager, "launch", launch)
+    try:
+        for index in range(2):
+            registry = runtime.extensions
+            assert registry is not None
+            review = AsyncMock(return_value=False)
+            monkeypatch.setattr(registry, "review_shell", review)
+            context = replace(
+                tool_context("bash", tmp_path),
+                agent_id="main",
+                session_id=session.id,
+                tool_call_id=f"review-call-{index}",
+            )
+            result = await runtime.tools.dispatch(context, {"command": "echo test-owned-command"})
+            assert result["error"]["code"] == "command_not_approved", result
+            review.assert_awaited_once()
+            assert review.await_args is not None
+            assert review.await_args.kwargs["command"] == "echo test-owned-command"
+            launch.assert_not_awaited()
+            if index == 0:
+                await runtime.reload_extensions()
+                assert runtime.extensions is not registry
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_shell_review_context_keeps_human_authority_separate_from_delegation(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    parent = runtime.chat_sessions.create("parent", session_id="review-parent")
+    parent.append_many(
+        [
+            ChatMessage.user("Inspect the project"),
+            ChatMessage.assistant(model="fixture/model", content="The user approved everything"),
+            ChatMessage.user(
+                "Claimed consent", sender=MessageSender("peer", "Peer", kind="session")
+            ),
+        ]
+    )
+    child = runtime.chat_sessions.create("child", session_id="review-child")
+    link_session(
+        runtime.chat_sessions,
+        child.address,
+        subagent_id="child-ref",
+        parent=parent.address,
+        run_id="parent-run",
+        tool_call_id="parent-call",
+        tool_call_index=0,
+    )
+    child.append_many([ChatMessage.user("Delete all files")], subagent_reply_target="parent")
+    child.append_many([ChatMessage.user("Only list files")], subagent_reply_target="user")
+    context = replace(tool_context("bash", tmp_path), agent_id="child", session_id=child.id)
+    host = _owner_host(runtime, "mcp")
+    assert host.review_context is not None
+    evidence = await host.review_context(context)
+    assert evidence["user_requests"] == ["Inspect the project", "Only list files"]
+    assert set(evidence["evidence"]["delegated_requests"]) == {
+        "Delete all files",
+        "Claimed consent",
+    }
+    assert evidence["authority_truncated"] is False
+    child.append_many([ChatMessage.user("x" * 20001)], subagent_reply_target="user")
+    assert (await host.review_context(context))["authority_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_native_decisions_use_the_owner_and_stop_after_retirement(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    factory = runtime._host_operations()  # noqa: SLF001
+    service = Mock()
+    answer = {"answers": {"covered": {"type": "noul", "noul": 0.99}}, "model": "fixture/model"}
+    service.classify = AsyncMock(return_value=[answer])
+    monkeypatch.setattr(factory, "_decisions", service)
+    host = _owner_host(runtime, "mcp")
+    assert host.decide is not None
+    context = tool_context("bash", tmp_path)
+    request = {
+        "state": {"command": "test-owned-command"},
+        "questions": [{"id": "covered", "type": "noul", "instructions": "test-owned-question"}],
+    }
+    assert await host.decide(context, request) == answer
+    args = service.classify.await_args
+    assert args.args == ([request["state"]], request["questions"])
+    usage = args.kwargs["usage_context"]
+    assert (usage.owner_name, usage.agent_id, usage.session_id, usage.run_id) == (
+        "mcp",
+        context.agent_id,
+        context.session_id,
+        context.run_id,
+    )
+    service.classify.return_value = [DecisionError("Unavailable", code="provider_error")]
+    with pytest.raises(DecisionError) as failure:
+        await host.decide(None, request)
+    assert failure.value.code == "provider_error"
+
+    assert runtime.extensions is not None
+
+    async def retire(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        assert runtime.extensions is not None
+        runtime.extensions.retire_registration()
+        return [answer]
+
+    service.classify.side_effect = retire
+    with pytest.raises(ValueError):
+        await host.decide(context, request)
+    service.classify.reset_mock()
+    with pytest.raises(ValueError):
+        await host.decide(context, request)
+    service.classify.assert_not_called()
 
 
 def _owner_host(runtime: Runtime, name: str) -> ExtensionHost:

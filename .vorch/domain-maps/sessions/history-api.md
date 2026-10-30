@@ -31,6 +31,8 @@ Their optional `expected_generation_id` checks the live target within that same 
 
 `SessionConversationPage` also carries current cursor floors and independent latest human task, conversation/response sequence and terminal Run-summary markers. Those facts cover the whole current view, not only its returned page; incoming peer messages never replace the human task or count as the recipient's response. Source: `_store_conversation.py`; contracts: `tests/core/sessions/test_conversation_page.py`.
 
+Each `SessionConversationMessage` retains the entry's stamped `subagent_reply_target` as well as sender kind/id. Consumers evaluating human authority can therefore distinguish Parent-generated input in a Sub-Agent from actual user input even when the former has no MessageSender (`extensions/shell-review.md` -> Execution integration).
+
 ## Compaction commit
 
 `commit_compaction(checkpoint, *, since, epoch: PromptEpoch)` appends a `compaction_checkpoint` only while `since` still names the newest entry (same generation, at or above the cursor floor, same `next_seq` and last entry id); otherwise it writes nothing and returns `None`. In the same transaction it replaces the named prompt pins (`epoch.pins`; `None` removes a slot), replaces the seen Skills when `epoch.seen_skills` is given, and leaves the prompt-cache affinity id unchanged; it returns the delta after `since` as a `SessionReadBatch`.

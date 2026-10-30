@@ -51,7 +51,7 @@ def conversation_page(
     columns = (
         "e.seq, e.entry_id, e.role, e.created_at, "
         f"substr({_TEXT}, 1, {max_text_chars + 1}) AS text, "
-        f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id"
+        f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id, e.subagent_reply_target"
     )
     rows = _store_lineage.ordered_rows(
         connection,
@@ -126,4 +126,7 @@ def _message(row: sqlite3.Row, limit: int) -> SessionConversationMessage:
         truncated=len(text) > limit,
         sender_kind=str(row["sender_kind"]) if row["sender_kind"] is not None else None,
         sender_id=str(row["sender_id"]) if row["sender_id"] is not None else None,
+        subagent_reply_target=(
+            str(row["subagent_reply_target"]) if row["subagent_reply_target"] is not None else None
+        ),
     )

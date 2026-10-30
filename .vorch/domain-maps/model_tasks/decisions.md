@@ -11,6 +11,8 @@
 
 ## Native routes and Settings
 
+Extensions use the same executor through owner-bound `host.decide` (`extensions/host.md` -> Native Decisions). The bundled Shell Review policy consumes native probabilities; its authorization rules and failure handling belong to `extensions/shell-review.md`.
+
 `DecisionWire` is independent of the Chat protocol. It declares the native protocol, an absolute endpoint path at the configured Provider origin, an optional Model-specific `state_field`, and explicitly allowed task controls (`../providers/wire-profiles.md`). A compatible Provider can declare the same implemented protocol; adding a Provider never requires a second DecisionService or a Chat-completion simulation.
 
 | Bundled Provider / Connection | Protocol and endpoint | Settings controls |

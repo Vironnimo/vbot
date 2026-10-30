@@ -18,6 +18,9 @@ from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
 from core.extensions.databases import ExtensionDatabases
 from core.extensions.operations import ExtensionHost
+from core.model_tasks.decision_types import DecisionError
+from core.model_tasks.decisions import DecisionService
+from core.model_tasks.task_execution import TaskUsageContext
 from core.models.models import ModelRegistry
 from core.models.query import ModelQuery
 from core.permissions import PermissionBoundary, PermissionCeiling
@@ -27,6 +30,7 @@ from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
+from core.runtime._shell_review_context import shell_review_context
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     LoggerProtocol,
@@ -150,6 +154,7 @@ class ExtensionHostFactory:
         get_title_service: Callable[[], SessionTitleService | None],
         session_boundary: SessionBoundaryBuilder,
         logger: LoggerProtocol | None,
+        decisions: DecisionService | None = None,
     ) -> None:
         self._host = host
         self._ensure_started = ensure_started
@@ -180,6 +185,7 @@ class ExtensionHostFactory:
         self._get_title_service = get_title_service
         self._session_boundary = session_boundary
         self.logger = logger
+        self._decisions = decisions
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
         self.databases = ExtensionDatabases(host.data_dir)
@@ -224,6 +230,8 @@ class ExtensionHostFactory:
         state_dir.mkdir(parents=True, exist_ok=True)
         return replace(
             self._host,
+            decide=lambda context, request: self._decide(identity, context, request),
+            review_context=lambda context: self._review_context(identity, context),
             sample=self._guard_host_async_call(identity, self._host.sample),
             resolve_agent=self._guard_host_call(identity, self._host.resolve_agent),
             resolve_tool_agent=self._guard_host_call(identity, self._host.resolve_tool_agent),
@@ -276,6 +284,46 @@ class ExtensionHostFactory:
             return handler(*args, **kwargs)
 
         return call
+
+    async def _decide(
+        self, identity: Any, context: ToolContext | None, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One native Decision request, attributed to its declaring Extension."""
+        self._require_registration(identity)
+        if self._decisions is None:
+            raise DecisionError("The Decision Model is unavailable.", code="not_configured")
+        if set(request) - {"state", "questions", "context"} or "state" not in request:
+            raise DecisionError("Supply state, questions and optional context.")
+        outcomes = await self._decisions.classify(
+            [request["state"]],
+            request.get("questions"),
+            context=request.get("context"),
+            usage_context=TaskUsageContext(
+                owner_name=identity.name,
+                agent_id=context.agent_id if context else None,
+                project_id=context.project_id if context else None,
+                session_id=context.session_id if context else None,
+                run_id=context.run_id if context else None,
+                group_id=(
+                    context.execution_owner.group_id
+                    if context and context.execution_owner
+                    else None
+                ),
+            ),
+        )
+        self._require_registration(identity)
+        result = outcomes[0]
+        if isinstance(result, DecisionError):
+            raise result
+        return result
+
+    async def _review_context(self, identity: Any, context: ToolContext) -> dict[str, Any]:
+        self._require_registration(identity)
+        result = await self.chat_sessions.run_async(
+            shell_review_context, self.chat_sessions, context, self.tools.secret_masker
+        )
+        self._require_registration(identity)
+        return result
 
     def _guard_host_async_call[**P, T](
         self, identity: Any, handler: Callable[P, Awaitable[T]]

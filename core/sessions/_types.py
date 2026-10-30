@@ -497,6 +497,7 @@ class SessionConversationMessage:
     truncated: bool
     sender_kind: str | None = None
     sender_id: str | None = None
+    subagent_reply_target: str | None = None
 
 
 @dataclass(frozen=True)

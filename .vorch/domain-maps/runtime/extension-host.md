@@ -12,6 +12,10 @@ The Runtime side of the Extension host: `ExtensionHostFactory` and its temporary
 
 ## Prompt blocks and sampling
 
+Native Decision calls are a separate host capability: `_extension_host.py` delegates one item to the injected `DecisionService`, records the declaring Extension's Usage and rechecks registration after the await (`extensions/host.md` -> Native Decisions). It never routes through Chat sampling.
+
+`_shell_review_context.py` reads bounded canonical conversation projections on the Sessions pool for `host.review_context`, retaining human/peer/Parent provenance and known ancestor generations (`extensions/shell-review.md` -> Execution integration). It never promotes Assistant text or a delegated instruction to human consent.
+
 The storage scope adapter and Tool/Extension Prompt-block contributions live together in `_prompt_blocks.py`; bootstrap and reload use the same projection.
 
 Extension sampling (`_extension_sampling.py`) resolves the Agent, Model route and Adapter off the Event Loop. It retains the Adapter and UsageRecorder across awaits, so cancellation and readiness withdrawal still finish Usage accounting and close the acquired Adapter; it records its own exposed Adapter request, and it retains its injected recorder through readiness withdrawal during shutdown.

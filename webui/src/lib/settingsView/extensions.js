@@ -264,7 +264,7 @@ export function buildExtensionsUpdate(saved, { configs = {}, toggle } = {}) {
 
 // --- Extension settings schema (form helpers) ---------------------------------
 
-const SCHEMA_FIELD_TYPES = ['text', 'number', 'toggle', 'secret'];
+const SCHEMA_FIELD_TYPES = ['text', 'textarea', 'number', 'toggle', 'secret'];
 
 /**
  * Normalize a raw ``settings_schema`` list into display-ready field descriptors,

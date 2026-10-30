@@ -13,7 +13,7 @@ import inspect
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -88,7 +88,7 @@ from core.utils.workers import BoundedWorkerPool
 if TYPE_CHECKING:
     from core.chat.commands import CommandDispatcher
     from core.recall.recall import RecallBackendRegistry
-    from core.tools.tools import ToolRegistry
+    from core.tools.tools import ToolContext, ToolRegistry
 
 _LOGGER = get_logger("extensions")
 _LOAD_WORKERS = BoundedWorkerPool(name="extension-load", max_workers=1)
@@ -907,6 +907,23 @@ class ExtensionRegistry:
                 type(decision).__name__,
             )
         return ToolCallDecision(effective_input=current_input)
+
+    async def review_shell(
+        self,
+        context: ToolContext,
+        arguments: dict[str, Any],
+        *,
+        command: str,
+        shell: str,
+        cwd: Path,
+        environment: Mapping[str, str],
+    ) -> bool:
+        """Review one final prepared invocation before Secrets or execution."""
+        from core.extensions._shell_review import review_shell
+
+        return await review_shell(
+            self, context, arguments, command=command, shell=shell, cwd=cwd, environment=environment
+        )
 
     async def dispatch_tool_result(
         self,

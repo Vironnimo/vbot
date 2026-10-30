@@ -73,6 +73,10 @@ class ExtensionHost:
     resolve_permissions: Callable[[str | None, str], Awaitable[PermissionBoundary]] | None = None
     # API v21: shared native capability routing; no Runtime or transport access.
     computers: ComputerRegistry | None = None
+    # API v23: one native judgment through the configured Decision Model.
+    # The owner-bound implementation records Usage and rejects retired hosts.
+    decide: Callable[[ToolContext | None, JsonObject], Awaitable[JsonObject]] | None = None
+    review_context: Callable[[ToolContext], Awaitable[JsonObject]] | None = None
 
 
 @dataclass(frozen=True)

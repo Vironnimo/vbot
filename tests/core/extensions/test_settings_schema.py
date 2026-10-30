@@ -44,6 +44,10 @@ _REJECTED_SCHEMAS: dict[str, tuple[Any, str]] = {
         "cannot declare a default",
     ),
     "text default not a string": ([_field(default=1)], "default must be a string"),
+    "textarea default not a string": (
+        [_field(type="textarea", default=1)],
+        "default must be a string",
+    ),
     "number default not a number": (
         [_field(key="port", type="number", default="80")],
         "default must be a number",
@@ -87,6 +91,7 @@ def test_valid_schema_round_trip() -> None:
             {"key": "port", "type": "number", "label": "Port", "default": 8123},
             {"key": "verbose", "type": "toggle", "label": "Verbose", "default": False},
             {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+            {"key": "policy", "type": "textarea", "label": "Policy", "default": "line 1\nline 2"},
         ]
     )
 
@@ -103,6 +108,7 @@ def test_valid_schema_round_trip() -> None:
     assert fields[2].default is False
     assert fields[3].env_key == "HASS_TOKEN"
     assert fields[3].default is None
+    assert fields[4].default == "line 1\nline 2"
 
 
 def test_config_validation_accepts_a_matching_config_and_names_each_violation() -> None:
@@ -112,19 +118,26 @@ def test_config_validation_accepts_a_matching_config_and_names_each_violation() 
             {"key": "port", "type": "number", "label": "Port"},
             {"key": "verbose", "type": "toggle", "label": "Verbose"},
             {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+            {"key": "policy", "type": "textarea", "label": "Policy"},
         ]
     )
     rejected: dict[str, tuple[dict[str, Any], str]] = {
         "unknown key": ({"url": "http://x", "extra": 1}, "unknown settings key"),
         "secret in config": ({"url": "http://x", "token": "abc"}, "stored in the Secret Store"),
         "text type mismatch": ({"url": 5}, "must be a string"),
+        "textarea type mismatch": ({"url": "http://x", "policy": 5}, "must be a string"),
         "number is a bool": ({"url": "http://x", "port": True}, "must be a number"),
         "toggle type mismatch": ({"url": "http://x", "verbose": "yes"}, "must be a boolean"),
         "required missing": ({"port": 80}, "is required"),
         "required empty string": ({"url": "   "}, "is required"),
     }
 
-    assert validate_extension_config(schema, {"url": "http://x", "port": 80, "verbose": True}) == []
+    assert (
+        validate_extension_config(
+            schema, {"url": "http://x", "port": 80, "verbose": True, "policy": "first\nsecond"}
+        )
+        == []
+    )
     outcomes = {
         case: any(fragment in error for error in validate_extension_config(schema, config))
         for case, (config, fragment) in rejected.items()
