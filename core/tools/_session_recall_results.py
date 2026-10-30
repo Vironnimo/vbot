@@ -200,9 +200,8 @@ def _search_data(
             )
     else:
         guidance.append(
-            "These are selected excerpts and context, not a full transcript. Use them for "
-            "focused answers; inspect the saved transcript when complete wording "
-            "or later revisions matter."
+            "These are selected excerpts and context, not a full transcript, and a later "
+            "Message can revise them."
         )
     if has_more:
         wider = (
