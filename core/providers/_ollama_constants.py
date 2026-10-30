@@ -30,6 +30,8 @@ _CAPABILITY_COMPLETION = "completion"
 
 _CAPABILITY_EMBEDDING = "embedding"
 
+_CAPABILITY_DECISION = "decision"
+
 OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
 
 # Local Ollama and Ollama Cloud serve their OpenAI-compatible API under /v1.

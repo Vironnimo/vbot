@@ -69,7 +69,32 @@
             "name": "Beam"
         },
         "clef:27b": {
-            "name": "Clef 27B"
+            "name": "Clef 27B",
+            "context_window": 65536,
+            "capabilities": {
+                "vision": true,
+                "tools": false,
+                "json_mode": false,
+                "reasoning": {"supported": false},
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["decisions"],
+                "task_types": ["image_input", "decision"],
+                "task_options": {
+                    "decision": {
+                        "pricing": {
+                            "source": "ollama-cloud:clef/pricing",
+                            "rates": {"input": 0.24, "output": null}
+                        },
+                        "limits": {
+                            "max_questions": 64,
+                            "max_choices": 255,
+                            "max_levels": 10,
+                            "max_input_tokens": 65536,
+                            "max_request_bytes": 13631488
+                        }
+                    }
+                }
+            }
         },
         "deepseek-v4.1-flash:1017": {
             "name": "DeepSeek V4.1 Flash 1017"

@@ -160,31 +160,64 @@ def test_output_modalities_derive_task_types(
     assert not absent & set(model.capabilities.task_types)
 
 
+@pytest.mark.parametrize("output_modalities", [["embeddings"], ["decisions"], ["text"]])
 @pytest.mark.parametrize(
-    ("output_modalities", "prompt", "expected_input"),
+    ("pricing", "expected_rates"),
     [
-        pytest.param(["embeddings"], "0.00000002", 0.02, id="per-token-to-per-million"),
-        pytest.param(["embeddings"], "0", 0.0, id="free-is-a-real-zero"),
-        pytest.param(["embeddings"], "-1", None, id="variable-price-router"),
-        pytest.param(["embeddings"], "n/a", None, id="malformed"),
-        # Chat Models keep the models.dev price the refresh projects.
-        pytest.param(["text"], "0.000003", None, id="chat-model"),
+        pytest.param(
+            {
+                "prompt": "0.00000002",
+                "completion": "0.00000003",
+                "input_cache_read": "0.000000005",
+                "input_cache_write": "0.00000004",
+            },
+            (0.02, 0.03, 0.005, 0.04),
+            id="per-token-to-per-million",
+        ),
+        pytest.param(
+            {"prompt": "0", "completion": "0"}, (0.0, 0.0, None, None), id="free-is-a-real-zero"
+        ),
+        pytest.param(
+            {"prompt": "0.000003"}, (3.0, None, None, None), id="unreported-rates-stay-unknown"
+        ),
+        pytest.param(
+            {"prompt": "-1", "completion": "0"},
+            (None, 0.0, None, None),
+            id="variable-input-price-stays-unknown",
+        ),
+        pytest.param({"prompt": "-1"}, None, id="variable-price-router"),
+        pytest.param({"prompt": "n/a"}, None, id="malformed"),
+        pytest.param(
+            {
+                "prompt": "NaN",
+                "completion": True,
+                "input_cache_read": "-1",
+                "input_cache_write": "Infinity",
+            },
+            None,
+            id="invalid-rates",
+        ),
+        pytest.param({"prompt": "1e999999999999999999999"}, None, id="out-of-range"),
     ],
 )
-def test_embedding_models_carry_their_catalog_input_price(
-    output_modalities: list[str], prompt: str, expected_input: float | None
+def test_native_task_models_carry_their_catalog_token_prices(
+    output_modalities: list[str],
+    pricing: dict[str, Any],
+    expected_rates: tuple[float | None, ...] | None,
 ) -> None:
     raw = raw_openrouter_model(output_modalities=output_modalities)
-    raw["pricing"] = {"prompt": prompt, "completion": "0"}
+    raw["pricing"] = pricing
 
     model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
 
-    if expected_input is None:
+    # Chat Models keep the models.dev price the refresh projects.
+    if expected_rates is None or output_modalities == ["text"]:
         assert model.pricing is None
     else:
         assert model.pricing is not None
         assert model.pricing.source == "openrouter:anthropic/claude-sonnet-4"
-        assert (model.pricing.rates.input, model.pricing.rates.output) == (expected_input, None)
+        rates = model.pricing.rates
+        assert (rates.input, rates.output, rates.cache_read, rates.cache_write) == expected_rates
 
 
 @pytest.mark.parametrize(

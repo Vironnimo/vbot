@@ -2,6 +2,11 @@
   "format_version": 1,
   "_comment": "Ollama native /api/chat. Ollama rejects think on Models that cannot reason, so the control is sent only to Models the catalog marks as reasoning.",
   "defaults": {
+    "decision": {
+      "protocol": "system_one",
+      "endpoint": "/v1/systemone",
+      "allowed_options": ["keep_alive"]
+    },
     "reasoning": {"supported": false}
   },
   "rules": [

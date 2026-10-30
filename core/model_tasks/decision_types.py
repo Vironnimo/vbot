@@ -122,7 +122,12 @@ def validate_answers(payload: Any, questions: list[dict[str, Any]]) -> dict[str,
     for question in questions:
         identifier, kind = question["id"], question["type"]
         answer = answers[identifier]
-        if not isinstance(answer, dict) or answer.get("type") != kind:
+        if not isinstance(answer, dict):
+            raise invalid()
+        if answer.get("type") == "refusal":
+            result[identifier] = {"type": "refusal"}
+            continue
+        if answer.get("type") != kind:
             raise invalid()
         normalized: dict[str, Any] = {"type": kind}
         if kind == "noul":
@@ -155,15 +160,28 @@ def validate_answers(payload: Any, questions: list[dict[str, Any]]) -> dict[str,
                     raise invalid()
                 normalized["probabilities"] = dict(probabilities)
         result[identifier] = normalized
-    usage = payload.get("usage")
+    usage = payload.get("usage", {})
     if not isinstance(usage, dict):
         raise invalid()
     normalized_usage: dict[str, Any] = {}
     for key in ("input_tokens", "output_tokens"):
+        if key not in usage:
+            continue
         value = usage.get(key)
         if not isinstance(value, int) or not finite_number(value):
             raise invalid()
         normalized_usage[key] = value
+    for details_key, wire_key, canonical_key in (
+        ("input_tokens_details", "cached_tokens", "cache_read_tokens"),
+        ("input_tokens_details", "cache_write_tokens", "cache_write_tokens"),
+        ("output_tokens_details", "reasoning_tokens", "reasoning_tokens"),
+    ):
+        details = usage.get(details_key)
+        if isinstance(details, dict) and wire_key in details:
+            value = details[wire_key]
+            if not isinstance(value, int) or not finite_number(value):
+                raise invalid()
+            normalized_usage[canonical_key] = value
     if "cost" in usage:
         if not finite_number(usage["cost"]):
             raise invalid()

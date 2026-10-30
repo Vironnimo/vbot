@@ -15,6 +15,9 @@ import httpx
 import pytest
 import respx
 
+from core.database import write_bootstrap_marker
+from core.model_tasks.decision_pricing import price_decision_usage, pricing_for_decision
+from core.model_tasks.decision_profile import decision_profile
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.embeddings import EmbeddingService
 from core.model_tasks.embeddings_providers import EmbeddingUsage
@@ -26,10 +29,13 @@ from core.model_tasks.speech import SpeechService
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext, task_usage
 from core.model_tasks.video import VideoService
 from core.model_tasks.video_providers import ProviderVideoClient
+from core.models.models import ModelRegistry
+from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import StaticTokenGetter
+from core.providers.wire_profile import DecisionWire
 from core.usage import UsageRecorder
 from tests.core.model_tasks.model_tasks_test_support import task_http_transport
 from tests.core.usage.usage_test_support import read_ledger
@@ -109,6 +115,13 @@ class _Bindings:
 
     def image_profile(self, target: Any) -> Any:
         return build_image_profile(self.model_for_target(target), "openrouter")
+
+    def decision_profile(self, target: Any) -> Any:
+        return decision_profile(
+            self.model_for_target(target),
+            DecisionWire(protocol="system_one", endpoint="/api/alpha/decisions"),
+            target.connection_id,
+        )
 
 
 def _audio() -> bytes:
@@ -350,6 +363,74 @@ async def test_local_cancelled_attempt_stays_unknown_and_cost_projection_keeps_s
     assert records[0].model == "local/tts" and records[0].status == "cancelled"
     assert "input_tokens" not in records[0].usage
     assert task_usage({"cost": {"total_usd": 1}})["cost"] == {"total_usd": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("usage", "with_task_price", "expected_amount", "expected_source"),
+    [
+        ({"input_tokens": 1000, "output_tokens": 7}, True, 0.0001, "catalog"),
+        ({"input_tokens": 272001, "output_tokens": 0}, True, 0.0544002, "catalog"),
+        (
+            {
+                "input_tokens": 1000,
+                "output_tokens": 0,
+                "input_tokens_details": {"cached_tokens": 200, "cache_write_tokens": 300},
+            },
+            True,
+            0.0000895,
+            "catalog",
+        ),
+        ({"input_tokens": 1000, "output_tokens": 0, "cost": 0.3}, True, 0.3, "provider"),
+        ({"input_tokens": 1000, "output_tokens": 0}, False, None, "unknown"),
+    ],
+    ids=["short", "long-context", "cache-buckets", "provider-charge", "no-task-price"],
+)
+async def test_decision_consumption_values_the_task_without_falling_back_to_chat_prices(
+    tmp_path: Path,
+    usage: dict[str, Any],
+    with_task_price: bool,
+    expected_amount: float | None,
+    expected_source: str,
+) -> None:
+    models = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+    model = models.get("openai", "gpt-6-luna")
+    pricing = pricing_for_decision(model) if with_task_price else None
+    assert model.pricing is not None and model.pricing.rates.output != 0
+    write_bootstrap_marker(tmp_path)
+    recorder = UsageRecorder(
+        tmp_path / "model-usage.db",
+        pricing_lookup=lambda _: TokenPricing("chat-fixture", TokenRates(input=50, output=90)),
+    )
+    try:
+        observer = TaskUsage(
+            recorder, "decision", parse_task_model_target_id("openai/gpt-6-luna::api-key")
+        )
+        call_id = await observer.start()
+        measured = dict(usage)
+        valued = price_decision_usage(measured, pricing)
+        assert measured == usage
+        await observer.finish(call_id, usage=valued)
+        _, records = read_ledger(recorder)
+        assert len(records) == 1
+        cost = records[0].usage["cost"]
+        assert cost["source"] == expected_source
+        if expected_amount is None:
+            assert cost["amount_usd"] is None
+        else:
+            assert cost["amount_usd"] == pytest.approx(expected_amount)
+        if expected_source == "catalog":
+            assert cost["pricing"]["source"] == "openai:decisions/gpt-6-luna"
+            assert "reported_cost_usd" not in records[0].usage
+        if "input_tokens_details" in usage:
+            assert records[0].usage["cache_read_tokens"] == 200
+            assert records[0].usage["cache_write_tokens"] == 300
+        if with_task_price:
+            await observer.update(call_id, {"output_tokens": 8})
+            _, updated = read_ledger(recorder)
+            assert updated[0].usage["cost"] == cost
+    finally:
+        recorder.close()
 
 
 @pytest.mark.parametrize(

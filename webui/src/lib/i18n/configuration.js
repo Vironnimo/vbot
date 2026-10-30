@@ -858,6 +858,16 @@ export default Object.freeze({
   'settings.specializedModels.decision': 'Decision model',
   'settings.specializedModels.decisionHelp':
     'Answers the questions of the classify Tool: a probability of yes, one of the given options, or a level on a scale.',
+  'settings.specializedModels.decisionYesNo': 'Yes/no',
+  'settings.specializedModels.decisionChoice': 'Choice',
+  'settings.specializedModels.decisionScore': 'Score',
+  'settings.specializedModels.decisionInputLimit':
+    'Input: up to {count} tokens',
+  'settings.specializedModels.decisionQuestionLimit':
+    'Questions: up to {count}',
+  'settings.specializedModels.decisionChoiceLimit': 'Choices: up to {count}',
+  'settings.specializedModels.decisionLevelLimit': 'Levels: up to {count}',
+  'settings.specializedModels.decisionInputPrice': '{price} / 1M input tokens',
   'settings.providers.title': 'Providers',
   'settings.providers.noneConnected':
     'No providers connected yet. Add one to make its models available.',

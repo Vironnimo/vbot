@@ -17,6 +17,9 @@ An AI endpoint at one Provider, with its own id, capabilities and context window
 ## Reasoning
 A Model's capability to reason internally before its final answer, which an Agent's thinking effort steers where the Model supports it (`models.md`, `providers.md`). Not Chain of Thought (CoT), the reasoning output itself (`providers.md`).
 
+## Decision Model
+A native Model endpoint that evaluates supplied evidence against typed questions and returns probabilities, choices or scores instead of generated text (`model_tasks/decisions.md`). Not a Chat Model prompted to produce JSON.
+
 ## Archive Entry
 The restorable unit a delete creates: deleting an Identity Agent, Project or Session archives it with its Sessions and files instead of erasing it, and the entry is later restored or purged as a whole (`archive.md`). Not a hidden live resource, a compressed file, or a deleted Skill, which moves into its Skill home's own archive (`skills.md` -> Skill Archive).
 

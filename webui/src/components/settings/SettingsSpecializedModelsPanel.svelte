@@ -12,6 +12,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import { getLocalSpeechMemory, unloadLocalSpeech } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { describeDecisionModel } from '$lib/taskModelSettings.js';
   import { createViewVisibility } from '$lib/viewVisibility.svelte.js';
 
   const noop = () => {};
@@ -146,6 +147,8 @@
     {@const localSpeech =
       ['speech_to_text', 'text_to_speech'].includes(row.taskType) &&
       selectedTarget?.kind === 'local'}
+    {@const decisionFacts =
+      row.taskType === 'decision' ? describeDecisionModel(selectedTarget) : ''}
     <div class="s-row s-task-model-row">
       <div class="s-row-info">
         <div class="s-row-label">
@@ -159,6 +162,11 @@
         </div>
         {#if row.description}
           <div class="s-row-desc">{row.description()}</div>
+        {/if}
+        {#if decisionFacts}
+          <div class="s-row-desc" data-decision-target-facts>
+            {decisionFacts}
+          </div>
         {/if}
       </div>
       <div class="s-row-control s-row-control--task-model">

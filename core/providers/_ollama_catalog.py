@@ -15,6 +15,7 @@ from core.models.models import (
 )
 from core.providers._ollama_constants import (
     _CAPABILITY_COMPLETION,
+    _CAPABILITY_DECISION,
     _CAPABILITY_EMBEDDING,
     _CAPABILITY_THINKING,
     _CAPABILITY_TOOLS,
@@ -31,10 +32,14 @@ def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
     return Model(
         model_id=model.model_id,
         name=model.name,
-        capabilities=_ollama_capabilities(
-            model.model_id,
-            _capability_names(show_response.get("capabilities")),
-            show_response.get("thinking"),
+        capabilities=(
+            _ollama_capabilities(
+                model.model_id,
+                _capability_names(show_response.get("capabilities")),
+                show_response.get("thinking"),
+            )
+            if isinstance(show_response.get("capabilities"), list)
+            else model.capabilities
         ),
         context_window=_context_window_from_show(show_response),
         max_output_tokens=model.max_output_tokens,
@@ -63,10 +68,24 @@ def _ollama_capabilities(
     text Model until ``/api/show`` reports them.
     """
 
+    vision = _CAPABILITY_VISION in capability_names
+    if _CAPABILITY_DECISION in capability_names:
+        # Decision checkpoints may inherit chat capabilities from their base
+        # model. Their native scoring route produces decisions, not chat text.
+        inputs: tuple[str, ...] = ("text", "image") if vision else ("text",)
+        if "audio" in capability_names:
+            inputs += ("audio",)
+        return Capabilities(
+            vision=vision,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            input_modalities=inputs,
+            output_modalities=("decisions",),
+        )
     embedding = _CAPABILITY_EMBEDDING in capability_names
     if embedding and _CAPABILITY_COMPLETION not in capability_names:
         return text_embedding_capabilities()
-    vision = _CAPABILITY_VISION in capability_names
     return Capabilities(
         vision=vision,
         tools=_CAPABILITY_TOOLS in capability_names,

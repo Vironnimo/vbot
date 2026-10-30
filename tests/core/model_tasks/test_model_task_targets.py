@@ -18,9 +18,11 @@ from core.model_tasks import (
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
     TaskModelService,
+    TaskModelValidationError,
 )
 from core.model_tasks.constants import TASK_DECISION
 from core.models.pricing import TokenPricing
+from core.providers.wire_profile import DecisionWire, WireProfile
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
     _live_voice_registry,
@@ -59,10 +61,11 @@ from tests.core.model_tasks.model_tasks_test_support import (
             [("openrouter/text-to-video::api-key", "Text to Video")],
             id="video-generation",
         ),
-        # vBot's Decisions wire is verified only for TypeSafe Jev.
         pytest.param(
             TASK_DECISION,
             [
+                ("openrouter/cloudflare/clef::api-key", "Cloudflare: Clef"),
+                ("openrouter/future/decider::api-key", "Future Decider"),
                 ("openrouter/typesafe/jev-1.14::api-key", "TypeSafe: Jev 1.14"),
                 ("openrouter/~typesafe/jev-latest::api-key", "TypeSafe: Jev Latest"),
             ],
@@ -96,8 +99,9 @@ def test_list_targets_offers_only_models_tagged_for_the_task(
             _model("typesafe/jev-1.14", (TASK_DECISION,), name="TypeSafe: Jev 1.14"),
             _model("~typesafe/jev-latest", (TASK_DECISION,), name="TypeSafe: Jev Latest"),
             _model("cloudflare/clef", (TASK_DECISION,), name="Cloudflare: Clef"),
-            # Jev's Chat router is no Jev release, whatever its tags.
-            _model("typesafe/jev-router", (TASK_DECISION,), name="TypeSafe: Jev Router"),
+            _model("future/decider", (TASK_DECISION,), name="Future Decider"),
+            # Jev Router's catalog describes a Chat Model, not native Decisions.
+            _model("typesafe/jev-router", ("chat", "text_output"), name="TypeSafe: Jev Router"),
         ]
     )
     service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
@@ -253,6 +257,127 @@ _OPENAI_TWO_CONNECTIONS = _provider(
 _TRANSCRIBE = "openrouter/openai/gpt-4o-transcribe"
 
 
+def test_decision_targets_require_the_connections_native_route() -> None:
+    target = "openai/gpt-6-luna::api-key"
+    binding = {"target": target, "options": {}}
+    service = TaskModelService(
+        _Providers([_OPENAI_TWO_CONNECTIONS]),
+        _Models(
+            [
+                _model(
+                    "gpt-6-luna",
+                    ("chat", "text_output", TASK_DECISION),
+                    name="GPT-6 Luna",
+                    provider_id="openai",
+                )
+            ]
+        ),
+        _Credentials({"openai:api-key", "openai:subscription"}),
+        _Storage({TASK_DECISION: binding}),
+    )
+
+    targets = service.list_targets(TASK_DECISION)
+
+    assert [(candidate.id, candidate.connection_id) for candidate in targets] == [
+        (target, "openai:api-key")
+    ]
+    assert service.binding_is_usable(TASK_DECISION)
+    service.validate_execution_target(service.binding_for(TASK_DECISION))
+    with pytest.raises(TaskModelValidationError):
+        service.validate_binding(
+            TASK_DECISION, {"target": "openai/gpt-6-luna::subscription", "options": {}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("wire", "tagged", "credentialed", "usable"),
+    [
+        pytest.param(
+            DecisionWire(protocol="system_one", endpoint="/v1/systemone"),
+            True,
+            True,
+            True,
+            id="system-one-compatible-provider",
+        ),
+        pytest.param(
+            DecisionWire(protocol="openai_decisions", endpoint="/v1/decisions"),
+            True,
+            True,
+            True,
+            id="openai-decisions-compatible-provider",
+        ),
+        pytest.param(DecisionWire(), True, True, False, id="no-native-route"),
+        pytest.param(
+            DecisionWire(protocol="system_one"), True, True, False, id="no-route-endpoint"
+        ),
+        pytest.param(
+            DecisionWire(protocol="system_one", endpoint="/v1/systemone"),
+            False,
+            True,
+            False,
+            id="chat-model-without-decision-capability",
+        ),
+        pytest.param(
+            DecisionWire(protocol="system_one", endpoint="/v1/systemone"),
+            True,
+            False,
+            False,
+            id="no-usable-credentials",
+        ),
+    ],
+)
+def test_decision_selection_and_execution_share_the_native_route_gate(
+    wire: DecisionWire, tagged: bool, credentialed: bool, usable: bool
+) -> None:
+    target = "new-provider/next-model::api-key"
+
+    def resolve(provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        assert (provider_id, connection_id) == ("new-provider", "api-key")
+        assert model_id in {"next-model", "no-native-route"}
+        return WireProfile(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            model_id=model_id,
+            protocol="chat_completions",
+            decision=wire if model_id == "next-model" else DecisionWire(),
+        )
+
+    service = TaskModelService(
+        _Providers([_provider("new-provider", "New Provider", [("api-key", "API Key")])]),
+        _Models(
+            [
+                _model(
+                    "next-model",
+                    (TASK_DECISION,) if tagged else ("chat", "text_output"),
+                    provider_id="new-provider",
+                    name="Next Model",
+                ),
+                # A hidden namesake must not change the selectable Model's label.
+                _model(
+                    "no-native-route",
+                    (TASK_DECISION,),
+                    provider_id="new-provider",
+                    name="Next Model",
+                ),
+            ]
+        ),
+        _Credentials({"new-provider:api-key"} if credentialed else set()),
+        _Storage({TASK_DECISION: {"target": target, "options": {}}}),
+        wire_profile_resolver=resolve,
+    )
+
+    assert [
+        (candidate.id, candidate.label) for candidate in service.list_targets(TASK_DECISION)
+    ] == ([(target, "New Provider / Next Model")] if usable else [])
+    assert service.binding_is_usable(TASK_DECISION) is usable
+    binding = service.binding_for(TASK_DECISION)
+    if usable:
+        service.validate_execution_target(binding)
+    else:
+        with pytest.raises(TaskModelValidationError):
+            service.validate_execution_target(binding)
+
+
 @pytest.mark.parametrize(
     ("providers", "granted", "models", "expected"),
     [
@@ -397,6 +522,72 @@ def test_list_targets_merges_local_targets_with_provider_targets() -> None:
         ("local", "local/whisper-local"),
         ("provider", "openrouter/openai/gpt-4o-transcribe::api-key"),
     ]
+
+
+def test_decision_targets_carry_published_limits_and_prices_without_reusing_chat_context() -> None:
+    limited = _model(
+        "example/limited-decision",
+        (TASK_DECISION,),
+        name="Limited Decision",
+        output_modalities=("decisions",),
+        task_options={
+            TASK_DECISION: {
+                "limits": {
+                    "max_input_tokens": 4096,
+                    "max_questions": 20,
+                    "max_choices": 32,
+                    "max_levels": 5,
+                }
+            }
+        },
+    )
+    limited.pricing = TokenPricing.from_cost({"input": 0.12}, source="openrouter:decision")
+    decision_only = _model(
+        "future/decision-only",
+        (TASK_DECISION,),
+        name="Decision Only",
+        output_modalities=("decisions",),
+    )
+    chat_and_decision = _model(
+        "future/chat-and-decision",
+        ("chat", "text_output", TASK_DECISION),
+        name="Chat and Decision",
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models([limited, decision_only, chat_and_decision]),
+        _Credentials(),
+        _Storage(),
+    )
+
+    facts = {target.id: target.to_dict()["facts"] for target in service.list_targets(TASK_DECISION)}
+
+    assert facts == {
+        "openrouter/example/limited-decision::api-key": {
+            "question_types": ["yes_no", "choice", "score"],
+            "max_input_tokens": 4096,
+            "max_questions": 20,
+            "max_choices": 32,
+            "max_levels": 5,
+            "input_price_per_million": 0.12,
+        },
+        "openrouter/future/decision-only::api-key": {
+            "question_types": ["yes_no", "choice", "score"],
+            "max_input_tokens": 128000,
+            "max_questions": None,
+            "max_choices": None,
+            "max_levels": None,
+            "input_price_per_million": None,
+        },
+        "openrouter/future/chat-and-decision::api-key": {
+            "question_types": ["yes_no", "choice", "score"],
+            "max_input_tokens": None,
+            "max_questions": None,
+            "max_choices": None,
+            "max_levels": None,
+            "input_price_per_million": None,
+        },
+    }
 
 
 def test_embedding_targets_carry_selection_facts() -> None:

@@ -335,6 +335,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._models,
             runtime._provider_credentials,
             runtime._storage,
+            wire_profile_resolver=runtime.wire_profile,
             local_targets=LocalTaskTargetRegistry(
                 [*local_speech.targets.descriptors(), *local_embeddings.targets.descriptors()]
             ),

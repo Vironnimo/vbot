@@ -14,11 +14,12 @@ from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import ToolContext, ToolDisplay, ToolRegistry, tool_failure, tool_success
 
 CLASSIFY_DESCRIPTION = (
-    "Classify texts with a separate, fast decision model. For each item it answers your "
-    "questions with a probability of yes, one of your options, or a level on your scale. Use "
+    "Classify texts with a separate decision model. For each item it answers your "
+    "questions with a probability of yes, one of your options, or an expected level on your "
+    "scale. Use "
     "it to filter, sort or label many texts, or to get a probability instead of judging "
-    "yourself. It sees only what you pass, gives no reasons, and cannot count, calculate or "
-    "compare dates."
+    "yourself. It sees only what you pass and gives no reasons. Use code for exact counts, "
+    "calculations and date comparisons."
 )
 CLASSIFY_PARAMETERS: dict[str, Any] = {
     "type": "object",
@@ -54,7 +55,9 @@ CLASSIFY_PARAMETERS: dict[str, Any] = {
                         "enum": ["yes_no", "choice", "score"],
                         "description": (
                             "yes_no: probability of yes, 0 to 1. choice: one label from "
-                            "options. score: a level number from levels, starting at 0."
+                            "options. score: an expected level, starting at 0; it can fall "
+                            "between levels. Use choice with an unknown option when the item "
+                            "might not answer the question."
                         ),
                     },
                     "instructions": {
@@ -66,7 +69,8 @@ CLASSIFY_PARAMETERS: dict[str, Any] = {
                         "description": (
                             "Required for choice: each label mapped to what it means, e.g. "
                             '{"bug":"Broken functionality","other":"Anything else"}. Include '
-                            "a catch-all label when no option might fit."
+                            "an unknown option for insufficient information and a separate "
+                            "catch-all label for cases outside your categories."
                         ),
                     },
                     "levels": {
@@ -132,7 +136,7 @@ def register_classify_tool(registry: ToolRegistry, service: DecisionService) -> 
         CLASSIFY_DESCRIPTION,
         CLASSIFY_PARAMETERS,
         handler,
-        summary="Label or filter many texts with a fast separate model.",
+        summary="Label or filter many texts with a separate decision model.",
         family="execution",
         open_input_schema=True,
         argument_normalizer=_normalize_classify_arguments,
@@ -194,6 +198,8 @@ def _excerpt(item: Any) -> str:
 
 
 def _answer_text(question: dict[str, Any], answer: dict[str, Any]) -> str:
+    if answer.get("type") == "refusal":
+        return "not answered: the model declined this question"
     kind = question["type"]
     if kind == "yes_no":
         return f"probability of yes {_number(answer['noul'])}"

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from core.model_tasks.constants import (
+    TASK_DECISION,
     TASK_IMAGE_GENERATION,
     TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
@@ -26,6 +27,7 @@ from core.model_tasks.options import (
     validate_task_model_options,
 )
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.wire_profile import DecisionWire
 
 
 def test_field_types_are_the_renderable_set_and_render_hints_pass_through() -> None:
@@ -229,6 +231,50 @@ def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None
 
     assert schema.task_type == "future_task"
     assert schema.fields == ()
+
+
+@pytest.mark.parametrize(
+    ("wire", "expected", "valid"),
+    [
+        (None, [], {}),
+        (DecisionWire(), [], {}),
+        (
+            DecisionWire(protocol="system_one", allowed_options=("provider_options",)),
+            ["provider_options"],
+            {"provider_options": {"only": ["test-endpoint"]}},
+        ),
+        (
+            DecisionWire(protocol="system_one", allowed_options=("keep_alive",)),
+            ["keep_alive"],
+            {"keep_alive": "5m"},
+        ),
+        (
+            DecisionWire(protocol="openai_decisions", allowed_options=("prompt_cache_key",)),
+            ["prompt_cache_key"],
+            {"prompt_cache_key": "test-cache-group"},
+        ),
+    ],
+    ids=["unknown-wire", "unsupported-wire", "routing", "local-lifetime", "cache-group"],
+)
+def test_decision_options_match_the_native_wire_without_generation_controls(
+    wire: DecisionWire | None, expected: list[str], valid: dict[str, Any]
+) -> None:
+    schema = option_schema_for(
+        TASK_DECISION, "test-provider", "test-provider/model::test", decision_wire=wire
+    )
+
+    assert [field.name for field in schema.fields] == expected
+    validate_task_model_options(schema, valid)
+    for unsupported in ("extra_options", "temperature", "max_tokens", "thinking_effort"):
+        with pytest.raises(TaskModelOptionValidationError):
+            validate_task_model_options(schema, {unsupported: {}})
+    if "provider_options" in expected:
+        with pytest.raises(TaskModelOptionValidationError):
+            validate_task_model_options(schema, {"provider_options": []})
+    if "prompt_cache_key" in expected:
+        validate_task_model_options(schema, {"prompt_cache_key": "x" * 64})
+        with pytest.raises(TaskModelOptionValidationError):
+            validate_task_model_options(schema, {"prompt_cache_key": "x" * 65})
 
 
 # ---------------------------------------------------------------------------

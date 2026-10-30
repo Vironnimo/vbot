@@ -62,6 +62,8 @@ def _model(
         provider_id=provider_id,
         model_id=model_id,
         name=name,
+        family="",
+        metadata={},
         context_window=128000,
         connections=connections,
         # Mirror Model.allows_connection so target expansion sees the real rule.
@@ -73,7 +75,7 @@ def _model(
             vision=False,
             tools=False,
             json_mode=False,
-            reasoning=SimpleNamespace(supported=False),
+            reasoning=ReasoningCapabilities(supported=False),
             supported_voices=supported_voices,
             supported_parameters=supported_parameters,
             task_options=task_options or {},

@@ -10,14 +10,15 @@ providers whose APIs publish nothing); TTS voices come from
 ``supported_parameters``. This module owns only render hints (labels,
 descriptions, control types) — the per-model facts live in the model DB.
 
-Every provider target also gets an ``extra_options`` JSON escape hatch merged
+Media provider targets also get an ``extra_options`` JSON escape hatch merged
 into the provider request by the wire layer, so an option vBot does not
 surface is usable without a code change. Video fields come from OpenRouter's
 dedicated Video catalog; Music exposes only sampling controls published by its
 Model. Live voice renders its voice, delegating backend Model, and that
 backend's reasoning effort from its ``live_voice`` facts; backend choices
 depend on the Model registry and the target's Connection, so its schema
-carries no ``extra_options``."""
+carries no ``extra_options``. Decision targets expose only the options their
+native wire explicitly supports, without generation controls or an escape hatch."""
 
 from __future__ import annotations
 
@@ -74,6 +75,7 @@ from core.model_tasks._option_types import (
     _extra_options_field,
 )
 from core.model_tasks.constants import (
+    TASK_DECISION,
     TASK_IMAGE_GENERATION,
     TASK_LIVE_VOICE,
     TASK_MUSIC_GENERATION,
@@ -84,6 +86,7 @@ from core.model_tasks.constants import (
 )
 from core.model_tasks.image_profile import ImageWire, build_image_profile, image_wire
 from core.models import Model
+from core.providers.wire_profile import DecisionWire
 
 __all__ = [
     "ALLOWED_OPTION_TYPES",
@@ -173,6 +176,14 @@ def validate_task_model_options(
                 )
             continue
         _validate_task_model_option_value(schema.task_type, field, value)
+        if (
+            schema.task_type == TASK_DECISION
+            and field.name == "prompt_cache_key"
+            and len(value) > 64
+        ):
+            raise TaskModelOptionValidationError(
+                "decision option 'prompt_cache_key' accepts at most 64 characters"
+            )
 
 
 def _validate_task_model_option_value(
@@ -226,6 +237,7 @@ def option_schema_for(
     *,
     model: Model | None = None,
     wire: ImageWire | None = None,
+    decision_wire: DecisionWire | None = None,
 ) -> TaskModelOptionSchema:
     """Return a model-aware option schema for *task_type* and *provider_id*.
 
@@ -237,6 +249,8 @@ def option_schema_for(
 
     *wire* is the image wire serving the
     target's Connection; without it, the Provider's default wire applies.
+    *decision_wire* is the selected Connection's native Decision route; its
+    explicit option allowlist is the whole Decision settings surface.
     """
 
     if task_type == TASK_LIVE_VOICE:
@@ -244,6 +258,12 @@ def option_schema_for(
             task_type=task_type,
             target=target,
             fields=_live_voice_fields(model),
+        )
+    if task_type == TASK_DECISION:
+        return TaskModelOptionSchema(
+            task_type=task_type,
+            target=target,
+            fields=_decision_fields(decision_wire),
         )
     if task_type == TASK_SPEECH_TO_TEXT:
         fields = _speech_to_text_fields(provider_id, model)
@@ -267,6 +287,39 @@ def option_schema_for(
         target=target,
         fields=(*fields, _extra_options_field()),
     )
+
+
+def _decision_fields(wire: DecisionWire | None) -> tuple[TaskModelOptionField, ...]:
+    """Render only the native Decision route's explicitly supported options."""
+
+    if wire is None or wire.protocol == "none":
+        return ()
+    fields = (
+        TaskModelOptionField(
+            name="provider_options",
+            type="json",
+            label="Routing options",
+            default={},
+            description="Overrides the Provider's routing settings for Decision requests.",
+        ),
+        TaskModelOptionField(
+            name="keep_alive",
+            type="text",
+            label="Keep Model loaded",
+            placeholder="Provider default",
+            description=(
+                "How long the local Model stays loaded, for example 5m. "
+                "Use 0 to unload after each request."
+            ),
+        ),
+        TaskModelOptionField(
+            name="prompt_cache_key",
+            type="text",
+            label="Prompt cache key",
+            description="Optional cache grouping key, at most 64 characters.",
+        ),
+    )
+    return tuple(field for field in fields if field.name in wire.allowed_options)
 
 
 def _text_embedding_fields(

@@ -20,6 +20,45 @@
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
         "api-key": 1050000
+      },
+      "capabilities": {
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "decision"
+        ],
+        "task_options": {
+          "decision": {
+            "pricing": {
+              "source": "openai:decisions/gpt-6-luna",
+              "rates": {
+                "input": 0.1,
+                "output": 0,
+                "cache_read": 0.01,
+                "cache_write": 0.125,
+                "tiers": [
+                  {
+                    "tier": {
+                      "type": "context",
+                      "size": 272000
+                    },
+                    "input": 0.2,
+                    "output": 0,
+                    "cache_read": 0.02,
+                    "cache_write": 0.25
+                  }
+                ]
+              }
+            },
+            "limits": {
+              "max_questions": 400,
+              "max_choices": 255,
+              "max_levels": 10
+            }
+          }
+        }
       }
     },
     "gpt-6-sol": {
