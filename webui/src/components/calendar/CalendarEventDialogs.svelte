@@ -163,6 +163,13 @@
               placeholder={t('calendar.form.titlePlaceholder')}
             />
           </FormField>
+          {#if !values.all_day}
+            <p class="calendar-detail-meta">
+              {t('calendar.form.timezone', {
+                zone: values.timezone || viewState.systemTimeZone,
+              })}
+            </p>
+          {/if}
           <div class="calendar-form-when" class:is-all-day={values.all_day}>
             <FormField
               label={values.all_day

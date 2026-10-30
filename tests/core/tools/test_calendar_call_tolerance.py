@@ -67,13 +67,13 @@ def _fields(event: CalendarEvent) -> dict[str, Any]:
             {"title": "Dentist", "end": "2030-01-10T16:30:00"},
         ),
         (
-            # A time in another zone becomes the same instant in server time.
+            # A named event zone retains its own local clock.
             {
                 "action": "create",
                 "summary": "Dentist",
                 "start": {"dateTime": "2030-01-10T09:00:00", "timeZone": "America/New_York"},
             },
-            {"title": "Dentist"},
+            {"title": "Dentist", "start": "2030-01-10T09:00:00", "end": "2030-01-10T10:00:00"},
         ),
         (
             {
@@ -134,7 +134,6 @@ def _fields(event: CalendarEvent) -> dict[str, Any]:
                 "start": "2030-01-10T15:00",
                 "sendUpdates": "none",
                 "colorId": "5",
-                "reminders": {"useDefault": True},
             },
             {"title": "Dentist"},
         ),
@@ -231,7 +230,7 @@ def test_query_dialects_search(tool: CalendarTool, call: dict[str, Any]) -> None
 
     text = tool.succeeded(call)
 
-    assert "events: 1" in text and "title: Dentist" in text
+    assert "occurrences: 1" in text and "title: Dentist" in text
 
 
 @pytest.mark.parametrize("action", ["find_free", "freebusy"])
@@ -408,7 +407,7 @@ def test_attendees_of_an_update_without_id_name_the_list_call_instead_of_a_call(
     message = tool.refused({"action": "update", "title": "Review", "attendees": ["tom"]})
 
     assert "Send:" not in message
-    assert '{"action":"list","query":"Review"}' in message
+    assert '{"action":"search","query":"Review"}' in message
 
 
 @pytest.mark.parametrize(
@@ -450,7 +449,7 @@ def test_attendees_of_an_update_without_id_name_the_list_call_instead_of_a_call(
             },
             'calendar was not run: "end" and "duration" give different ends: {"action":"create",'
             '"title":"X","start":"2030-01-10T15:00","end":"2030-01-10T16:00"} or '
-            '{"action":"create","title":"X","start":"2030-01-10T15:00","end":"2030-01-10T15:30"}',
+            '{"action":"create","title":"X","start":"2030-01-10T15:00","end":"2030-01-10T15:30:00"}',
         ),
         (
             {"action": "create", "id": "evt_1", "title": "X", "start": "2030-01-10T15:00"},
@@ -481,3 +480,32 @@ def test_conflicting_zone_aliases_do_not_choose_one_for_a_mutation(tool: Calenda
             "tz": "America/New_York",
         }
     )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"status": "cancelled"}, {"transparency": "transparent"}, {"reminders": {"useDefault": True}}],
+)
+def test_unsupported_effects_are_refused_before_creating_an_event(
+    tool: CalendarTool, extra: dict[str, Any]
+) -> None:
+    tool.refused({"action": "create", "title": "Note", "start": "2030-01-01T09:00", **extra})
+
+
+def test_text_payloads_are_preserved_and_equivalent_end_formats_are_accepted(
+    tool: CalendarTool,
+) -> None:
+    tool.succeeded(
+        {
+            "action": "create",
+            "title": "None",
+            "description": "TBD",
+            "location": "???",
+            "start": "2030-01-01T09:00",
+            "end": "2030-01-01T10:00:00",
+            "duration": 60,
+        }
+    )
+    event = tool.only_event()
+    assert (event.title, event.description, event.location) == ("None", "TBD", "???")
+    assert event.end == "2030-01-01T10:00:00"

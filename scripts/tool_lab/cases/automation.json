@@ -995,7 +995,9 @@
    "name": "classify: canonical question (needs a Decision model)",
    "tool": "classify",
    "arguments": {
-    "items": ["The build failed twice today with the same timeout."],
+    "items": [
+     "The build failed twice today with the same timeout."
+    ],
     "questions": [
      {
       "id": "flaky",
@@ -1062,7 +1064,7 @@
    "expect": {
     "ok": true,
     "contains": [
-     "events: 1",
+     "occurrences: 1",
      "window: 2031-03-01 to 2031-03-31",
      "title: Review"
     ]
@@ -1093,8 +1095,8 @@
     "ok": true,
     "contains": [
      "free: 2",
-     "2031-04-10T00:00 to 2031-04-10T15:00 (15h)",
-     "2031-04-10T16:00 to 2031-04-11T00:00 (8h)"
+     "2031-04-10T00:00+02:00 to 2031-04-10T15:00+02:00 (15h)",
+     "2031-04-10T16:00+02:00 to 2031-04-11T00:00+02:00 (8h)"
     ]
    }
   },
@@ -1123,10 +1125,11 @@
    "expect": {
     "ok": true,
     "contains": [
-     "rrule: FREQ=WEEKLY;BYDAY=MO,WE",
-     "occurrences:",
-     "_20310602T0900 2031-06-02T09:00",
-     "_20310604T0900 2031-06-04T09:00"
+     "occurrences: 2",
+     "_20310602T0900",
+     "start: 2031-06-02T09:00+02:00",
+     "_20310604T0900",
+     "start: 2031-06-04T09:00+02:00"
     ]
    }
   },
@@ -1267,7 +1270,7 @@
    }
   },
   {
-   "name": "calendar: delete by title names the list call",
+   "name": "calendar: delete by title names global search",
    "tool": "calendar",
    "arguments": {
     "action": "delete",
@@ -1277,7 +1280,7 @@
     "ok": false,
     "error_code": "invalid_arguments",
     "contains": [
-     "delete needs the event \"id\"; {\"action\":\"list\",\"query\":\"orthodontist\"} shows events and their ids",
+     "delete needs the event \"id\"; {\"action\":\"search\",\"query\":\"orthodontist\"} shows events and their ids",
      "Send: {\"action\":\"delete\",\"id\":\"<event id from list>\"}"
     ]
    }

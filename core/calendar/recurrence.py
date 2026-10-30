@@ -70,7 +70,9 @@ def parse_date_string(value: object, *, field_name: str) -> date:
         raise CalendarValidationError(f"{field_name} must be a date in YYYY-MM-DD form") from error
 
 
-def normalize_rrule(value: object, *, start: datetime, zone: ZoneInfo | None) -> str | None:
+def normalize_rrule(
+    value: object, *, start: datetime, zone: ZoneInfo | None, anchor_utc: str | None = None
+) -> str | None:
     """Validate one RRULE text for an event starting at ``start``; return its stored form.
 
     ``start`` is the event's naive local start, midnight for an all-day event;
@@ -95,18 +97,20 @@ def normalize_rrule(value: object, *, start: datetime, zone: ZoneInfo | None) ->
     _check_parts(parts, all_day=zone is None)
     if not text.isascii():
         raise CalendarValidationError(f"rrule must be plain ASCII text {_RULE_EXAMPLE}")
-    rule = _build(parts, start, zone)
+    rule = _build(parts, start, zone, anchor_utc)
     _check_first_occurrence(rule, parts, start, zone)
     ordered = {"FREQ": parts["FREQ"]} | parts
     return ";".join(f"{key}={item}" for key, item in ordered.items())
 
 
-def build_rule(rule_text: str, start: datetime, zone: ZoneInfo | None) -> rrulebase:
+def build_rule(
+    rule_text: str, start: datetime, zone: ZoneInfo | None, anchor_utc: str | None = None
+) -> rrulebase:
     """The dateutil rule of a stored RRULE for an event starting at ``start``.
 
     ``start`` and ``zone`` mean what they mean for :func:`normalize_rrule`.
     """
-    return _build(_rule_parts(rule_text), start, zone)
+    return _build(_rule_parts(rule_text), start, zone, anchor_utc)
 
 
 def resolve_local_span(
@@ -169,45 +173,84 @@ def _check_whole_number(parts: dict[str, str], key: str, maximum: int) -> None:
         raise CalendarValidationError(f"rrule {key} must be a whole number from 1 to {maximum}")
 
 
-def _build(parts: dict[str, str], start: datetime, zone: ZoneInfo | None) -> rrulebase:
-    expanded = ";".join(f"{key}={item}" for key, item in parts.items() if key != "UNTIL")
+def _build(
+    parts: dict[str, str], start: datetime, zone: ZoneInfo | None, anchor_utc: str | None = None
+) -> rrulebase:
+    anchor = None if anchor_utc is None else datetime.fromisoformat(anchor_utc)
+    exact_start = (
+        zone is not None
+        and anchor is not None
+        and (start.replace(tzinfo=zone, fold=0).astimezone(UTC) != anchor)
+    )
+    # COUNT counts actual starts, including when the selected second fold excludes
+    # another BYMINUTE candidate whose first fold lies before DTSTART.
+    expanded = ";".join(
+        f"{key}={item}"
+        for key, item in parts.items()
+        if key != "UNTIL" and not (exact_start and key == "COUNT")
+    )
     try:
         rule = cast(rrule, rrulestr(f"{_PREFIX}{expanded}", dtstart=start))
     except (ValueError, TypeError) as error:
         raise CalendarValidationError(f"rrule is not valid: {error}") from error
     until = parts.get("UNTIL")
-    if until is None:
-        return rule
-    limit = _until(until, zone)
-    if limit.tzinfo is not None:
+    limit = None if until is None else _until(until, zone)
+    if limit is not None and limit.tzinfo is None:
+        rule = rule.replace(until=limit)
+        limit = None
+    if limit is not None or exact_start:
         assert zone is not None
-        return _UtcUntilRule(rule, limit, zone)
-    return rule.replace(until=limit)
+        count = int(parts["COUNT"]) if exact_start and "COUNT" in parts else None
+        return _InstantRule(rule, start, anchor, limit, zone, count)
+    return rule
 
 
-class _UtcUntilRule(rrulebase):
-    """Keep local rule keys, but bound each resolved start by the UTC instant.
+class _InstantRule(rrulebase):
+    """Keep local rule keys, but bound resolved starts by exact DTSTART and UNTIL.
 
     Local order is not UTC order inside a forward gap: an excluded shifted
     start may precede another valid start. Stop only beyond the largest legal
     UTC offset, and filter rather than stopping at the first excluded start.
     """
 
-    def __init__(self, rule: rrule, until: datetime, zone: ZoneInfo) -> None:
+    def __init__(
+        self,
+        rule: rrule,
+        start: datetime,
+        anchor: datetime | None,
+        until: datetime | None,
+        zone: ZoneInfo,
+        count: int | None,
+    ) -> None:
         super().__init__()
-        local_limit = until.replace(tzinfo=None)
-        margin = min(timedelta(days=1), datetime.max - local_limit)
-        self._rule = rule.replace(until=local_limit + margin)
+        if until is not None:
+            local_limit = until.replace(tzinfo=None)
+            margin = min(timedelta(days=1), datetime.max - local_limit)
+            rule = rule.replace(until=local_limit + margin)
+        self._rule = rule
+        self._start = start
+        self._anchor = anchor
         self._until = until
         self._zone = zone
+        self._count = count
 
     @override
     def __iter__(self) -> Iterator[datetime]:
         count = 0
         for moment in self._rule:
-            if moment.replace(tzinfo=self._zone, fold=0).astimezone(UTC) <= self._until:
-                count += 1
-                yield moment
+            instant = (
+                self._anchor
+                if moment == self._start and self._anchor is not None
+                else moment.replace(tzinfo=self._zone, fold=0).astimezone(UTC)
+            )
+            if self._anchor is not None and instant < self._anchor:
+                continue
+            if self._until is not None and instant > self._until:
+                continue
+            count += 1
+            yield moment
+            if self._count is not None and count >= self._count:
+                break
         self._len = count
 
 

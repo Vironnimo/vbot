@@ -84,6 +84,7 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
         "end_utc": "2026-09-03T14:00:00+00:00",
         "original_start": None,
         "overridden": False,
+        "timezone": "Europe/Berlin",
     }
     assert len(window["events"]) == 1
     assert window["cron"] == [
@@ -109,17 +110,27 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
 
 
 @pytest.mark.asyncio
-async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamespace) -> None:
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+async def test_calendar_event_create_update_delete_roundtrip(
+    state: SimpleNamespace, timezone: str | None
+) -> None:
     # Deleting an event deletes the cron jobs bound to it and reports them.
     event_jobs = SimpleNamespace(
         check_event_change=AsyncMock(),
         event_deleted=AsyncMock(return_value=(BoundJob("cron_1", "Prepare"),)),
     )
     state.runtime.calendar_service.bind_event_jobs(event_jobs)
-    created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
+    fields = {**_WEEKLY_STANDUP, **({"timezone": timezone} if timezone else {})}
+    created = await rpc_result(state, "calendar.create", **fields)
     event_id = created["event"]["id"]
     updated = await rpc_result(
-        state, "calendar.update", id=event_id, title="Daily", location=None, rrule="FREQ=DAILY"
+        state,
+        "calendar.update",
+        id=event_id,
+        title="Daily",
+        location=None,
+        rrule="FREQ=DAILY",
+        timezone="Asia/Tokyo",
     )
     deleted = await rpc_result(state, "calendar.delete", id=event_id)
 
@@ -127,7 +138,7 @@ async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamesp
     assert (event["start"], event["end"], event["tz_name"]) == (
         "2026-08-31T09:00:00",
         "2026-08-31T09:30:00",
-        "Europe/Berlin",
+        timezone or "Europe/Berlin",
     )
     assert (event["description"], event["location"], event["rrule"]) == (
         "Status round.",
@@ -141,6 +152,7 @@ async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamesp
         {},
     )
     changed = updated["event"]
+    assert (changed["start"], changed["tz_name"]) == (event["start"], "Asia/Tokyo")
     assert (changed["title"], changed["location"], changed["rrule"]) == (
         "Daily",
         None,
@@ -185,6 +197,8 @@ async def test_occurrence_id_changes_or_removes_one_occurrence(state: SimpleName
             "title": "Planning",
             "start": "2026-09-08T14:00:00",
             "end": "2026-09-08T14:30:00",
+            "start_utc": "2026-09-08T12:00:00+00:00",
+            "end_utc": "2026-09-08T12:30:00+00:00",
         }
     }
     assert removed["deleted"] is True

@@ -120,7 +120,7 @@ class TestCreateEvent:
             pytest.param({"title": "  "}, "title", id="empty-title"),
             pytest.param({"start": "next tuesday"}, "start", id="invalid-start"),
             pytest.param({"end": "2026-09-14T08:00"}, "end must be after start", id="end-first"),
-            pytest.param({"end": "2026-09-15"}, "end must be a date-time", id="end-kind"),
+            pytest.param({"end": "2026-09-15"}, "end", id="end-kind"),
             pytest.param({"end": "2026-10-20T09:00"}, "at most 30 days", id="too-long"),
             pytest.param({"start": "0999-01-01T09:00"}, "between the years", id="year"),
             pytest.param({"location": "x" * 501}, "location must not exceed", id="location"),
@@ -209,6 +209,12 @@ class TestUpdateEvent:
                 ("2026-09-20T10:00:00", "2026-09-20T11:00:00"),
                 id="kind-switch-takes-the-default",
             ),
+            pytest.param(
+                ("2030-01-01T09:00", "2030-01-01T09:15"),
+                "2030-10-27T02:10+01:00",
+                ("2030-10-27T02:10:00", "2030-10-27T02:25:00"),
+                id="chosen-second-overlap-keeps-length",
+            ),
         ],
     )
     def test_new_start_alone_moves_the_end(
@@ -223,6 +229,10 @@ class TestUpdateEvent:
         updated = asyncio.run(service.update_event(event.id, start=start))
 
         assert (updated.start, updated.end) == expected
+        if start.endswith("+01:00"):
+            assert service.get_occurrence(updated.id).end_utc == datetime(
+                2030, 10, 27, 1, 25, tzinfo=UTC
+            )
 
     @pytest.mark.parametrize(
         ("created", "change", "fields", "exdates", "overrides"),
@@ -309,9 +319,19 @@ class TestUpdateEvent:
         changed = asyncio.run(service.update_event(event.id, **fields))
 
         assert changed.exdates == exdates
-        assert changed.overrides == {
-            key: {"title": "Kept", **value} for key, value in overrides.items()
-        }
+        expected_overrides = {key: {"title": "Kept", **value} for key, value in overrides.items()}
+        for value in expected_overrides.values():
+            if "T" in value.get("start", ""):
+                from zoneinfo import ZoneInfo
+
+                for name in ("start", "end"):
+                    value[name + "_utc"] = (
+                        datetime.fromisoformat(value[name])
+                        .replace(tzinfo=ZoneInfo("Europe/Berlin"))
+                        .astimezone(UTC)
+                        .isoformat()
+                    )
+        assert changed.overrides == expected_overrides
         for key in exdates:
             with pytest.raises(CalendarEventNotFoundError):
                 service.get_occurrence(occurrence_id(event.id, key))
@@ -402,6 +422,8 @@ class TestOccurrences:
                 "location": "Hall",
                 "start": "2030-01-15T14:00:00",
                 "end": "2030-01-15T14:30:00",
+                "start_utc": "2030-01-15T13:00:00+00:00",
+                "end_utc": "2030-01-15T13:30:00+00:00",
             }
         }
         assert [
@@ -871,3 +893,108 @@ async def test_async_changes_publish_after_storage_settles_even_if_cancelled(
         "update": ["After"],
         "delete": [],
     }[operation]
+
+
+@pytest.mark.parametrize("rrule", [None, "FREQ=YEARLY"])
+@pytest.mark.parametrize(
+    ("start", "end", "first", "last"),
+    [
+        (
+            "2026-10-25T02:30+01:00",
+            "2026-10-25T03:30+01:00",
+            "2026-10-25T01:30+00:00",
+            "2026-10-25T02:30+00:00",
+        ),
+        (
+            "2026-10-25T02:45+02:00",
+            "2026-10-25T02:15+01:00",
+            "2026-10-25T00:45+00:00",
+            "2026-10-25T01:15+00:00",
+        ),
+        (
+            "2026-10-25T02:30+02:00",
+            "2026-10-25T02:45+01:00",
+            "2026-10-25T00:30+00:00",
+            "2026-10-25T01:45+00:00",
+        ),
+    ],
+)
+def test_exact_overlap_endpoints_survive_persistence_and_edits(
+    tmp_path, rrule, start, end, first, last
+):
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    event = service.create_event(title="Overlap", start=start, end=end, rrule=rrule)
+    target = occurrence_id(event.id, event.start) if rrule else event.id
+    reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
+    item = reloaded.get_occurrence(target)
+    assert (item.start_utc, item.end_utc) == (
+        datetime.fromisoformat(first),
+        datetime.fromisoformat(last),
+    )
+    # Known local fields stay readable by older Calendar implementations too.
+    assert datetime.fromisoformat(event.end) > datetime.fromisoformat(event.start)
+    asyncio.run(reloaded.update_event(event.id, title="Renamed"))
+    assert reloaded.get_occurrence(target).start_utc == item.start_utc
+    asyncio.run(reloaded.update_event(event.id, timezone="Europe/Berlin"))
+    unchanged = reloaded.get_occurrence(target)
+    assert (unchanged.start_utc, unchanged.end_utc) == (item.start_utc, item.end_utc)
+    asyncio.run(
+        reloaded.update_event(event.id, end="2026-10-25T04:00+01:00", timezone="Europe/Berlin")
+    )
+    changed = reloaded.get_occurrence(target)
+    assert changed.start_utc == item.start_utc
+    assert changed.end_utc == datetime(2026, 10, 25, 3, tzinfo=UTC)
+    if rrule:
+        asyncio.run(
+            reloaded.update_occurrence(
+                target, start="2026-10-25T02:10+01:00", end="2026-10-25T02:25+01:00"
+            )
+        )
+        moved = CalendarService(tmp_path, tz="Europe/Berlin").get_occurrence(target)
+        assert (
+            moved.start_utc.hour,
+            moved.start_utc.minute,
+            moved.end_utc.hour,
+            moved.end_utc.minute,
+        ) == (1, 10, 1, 25)
+
+
+def test_endpoint_metadata_survives_old_text_edits_and_invalidates_after_old_time_edits(tmp_path):
+    import json
+
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    event = service.create_event(
+        title="Overlap", start="2026-10-25T02:30+01:00", end="2026-10-25T03:30+01:00"
+    )
+    path = tmp_path / "calendar" / "events.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["events"][0]["title"] = "Older writer changed the title"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert (
+        CalendarService(tmp_path, tz="Europe/Berlin").get_occurrence(event.id).start_utc.hour == 1
+    )
+    raw["events"][0].update(start="2026-10-25T10:00:00", end="2026-10-25T11:00:00")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    current = CalendarService(tmp_path, tz="Europe/Berlin")
+    assert len(current.list_events()) == 1
+    assert current.get_occurrence(event.id).start_utc.hour == 9
+    asyncio.run(current.update_event(event.id, description="Still editable"))
+    assert "endpoints" not in json.loads(path.read_text(encoding="utf-8"))["events"][0]
+
+
+def test_named_event_zone_keeps_weekly_clock_across_different_dst_dates(tmp_path):
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    event = service.create_event(
+        title="New York",
+        start="2030-03-03T09:00",
+        timezone="America/New_York",
+        rrule="FREQ=WEEKLY;COUNT=6",
+    )
+    restarted = CalendarService(tmp_path, tz="Asia/Tokyo")
+    starts = list(
+        restarted.iter_occurrences(restarted.get_event(event.id), datetime(2030, 3, 1, tzinfo=UTC))
+    )
+    assert [item.start[11:16] for item in starts] == ["09:00"] * 6
+    assert [item.start_utc.hour for item in starts] == [14, 13, 13, 13, 13, 13]
+    changed = asyncio.run(restarted.update_event(event.id, timezone="Europe/Berlin"))
+    assert (changed.start, changed.tz_name) == ("2030-03-03T09:00:00", "Europe/Berlin")

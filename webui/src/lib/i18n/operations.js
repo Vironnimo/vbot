@@ -366,6 +366,7 @@ export default Object.freeze({
   'calendar.form.optional': 'Optional',
   'calendar.form.startDate': 'Start date',
   'calendar.form.startTime': 'Start time',
+  'calendar.form.timezone': 'Times in {zone}',
   'calendar.form.endDate': 'End date',
   'calendar.form.endTime': 'End time',
   'calendar.form.firstDay': 'First day',

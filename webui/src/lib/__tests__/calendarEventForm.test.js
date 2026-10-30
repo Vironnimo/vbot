@@ -26,7 +26,7 @@ function event(fields) {
 }
 
 describe('calendar event form', () => {
-  it('shows a timed event on the server wall clock and an all-day end as its last day', () => {
+  it('shows a timed event in its own zone and an all-day end as its last day', () => {
     // 09:00 in Berlin summer time is 07:00 UTC, the server zone here.
     expect(
       eventFormValues(
@@ -40,9 +40,9 @@ describe('calendar event form', () => {
     ).toMatchObject({
       all_day: false,
       start_date: '2026-09-07',
-      start_time: '07:00',
+      start_time: '09:00',
       end_date: '2026-09-07',
-      end_time: '08:30',
+      end_time: '10:30',
       freq: 'none',
     });
     // The stored end of an all-day event is exclusive.
@@ -136,7 +136,8 @@ describe('calendar event form', () => {
       '03:30',
       '03:30',
       '04:30',
-      '07:30',
+      '2026-03-08T07:30:00.000Z',
+      '2026-03-08T09:00:00.000Z',
     ],
     [
       'Europe/Berlin',
@@ -145,7 +146,8 @@ describe('calendar event form', () => {
       '03:30',
       '03:30',
       '04:30',
-      '01:30',
+      '2026-03-29T01:30:00.000Z',
+      '2026-03-29T03:00:00.000Z',
     ],
     [
       'Australia/Lord_Howe',
@@ -154,7 +156,8 @@ describe('calendar event form', () => {
       '03:15',
       '02:45',
       '03:45',
-      '15:45',
+      '2026-10-03T15:45:00.000Z',
+      '2026-10-03T18:00:00.000Z',
     ],
     [
       'Europe/Berlin',
@@ -163,11 +166,12 @@ describe('calendar event form', () => {
       '03:30',
       '02:30',
       '03:30',
-      '00:30',
+      '2026-10-25T00:30:00.000Z',
+      '2026-10-25T04:00:00.000Z',
     ],
   ])(
     'edits a resolved DST span in %s without rewriting an untouched series',
-    (zone, day, startTime, endTime, shownStart, shownEnd, utcStart) => {
+    (zone, day, startTime, endTime, shownStart, shownEnd, utcStart, utcEnd) => {
       const stored = event({
         start: `${day}T${startTime}:17`,
         end: `${day}T${endTime}:17`,
@@ -181,7 +185,7 @@ describe('calendar event form', () => {
         end_date: day,
         end_time: shownEnd,
       });
-      expect(eventFormValues(stored, 'UTC').start_time).toBe(utcStart);
+      expect(eventFormValues(stored, 'UTC').start_time).toBe(shownStart);
       expect(eventFormProblem(baseline)).toBe('');
       // Keeping times and rule out of a title-only patch preserves the
       // nominal recurring time, seconds and original RRULE in storage.
@@ -194,8 +198,8 @@ describe('calendar event form', () => {
       expect(
         eventFormPayload({ ...baseline, end_time: '05:00' }, { baseline }),
       ).toEqual({
-        start: `${day}T${shownStart}:00`,
-        end: `${day}T05:00:00`,
+        start: utcStart,
+        end: utcEnd,
       });
     },
   );
@@ -289,5 +293,40 @@ describe('calendar event form', () => {
     };
 
     expect(eventFormProblem(values, options)).toBe(problem);
+  });
+});
+
+it('preserves an exact overlap interval while editing other fields', () => {
+  const stored = event({
+    start: '2026-10-25T02:45:00',
+    end: '2026-10-25T03:15:00',
+    start_utc: '2026-10-25T00:45:00+00:00',
+    end_utc: '2026-10-25T01:15:00+00:00',
+    tz_name: 'Europe/Berlin',
+  });
+  const values = eventFormValues(stored, 'Europe/Berlin');
+  expect(values).toMatchObject({ start_time: '02:45', end_time: '02:15' });
+  expect(eventFormProblem(values)).toBe('');
+  expect(
+    eventFormPayload({ ...values, title: 'Updated' }, { baseline: values }),
+  ).toEqual({ title: 'Updated' });
+  expect(eventFormProblem({ ...values, end_time: '01:00' })).toBe('end');
+});
+
+it('keeps an unchanged exact endpoint when only the other time is edited', () => {
+  const stored = event({
+    start: '2026-10-25T02:30:00',
+    end: '2026-10-25T03:30:00',
+    start_utc: '2026-10-25T01:30:00+00:00',
+    end_utc: '2026-10-25T02:30:00+00:00',
+    tz_name: 'Europe/Berlin',
+  });
+  const baseline = eventFormValues(stored, 'Asia/Tokyo');
+  expect(baseline.start_time).toBe('02:30');
+  expect(
+    eventFormPayload({ ...baseline, end_time: '04:00' }, { baseline }),
+  ).toEqual({
+    start: '2026-10-25T01:30:00+00:00',
+    end: '2026-10-25T03:00:00.000Z',
   });
 });

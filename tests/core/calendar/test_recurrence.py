@@ -56,6 +56,11 @@ def test_rule_text_is_stored_in_one_form(
         ("2030-01-10T09:00", "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30", "produces no occurrence"),
         ("2030-01-10T09:00", "FREQ=DAILY;UNTIL=20300101", "before its first occurrence"),
         ("2026-03-29T02:30", "FREQ=DAILY;UNTIL=20260329T011500Z", "before its first occurrence"),
+        (
+            "2026-10-25T02:00+01:00",
+            "FREQ=DAILY;UNTIL=20261025T003000Z",
+            "before its first occurrence",
+        ),
     ],
 )
 def test_invalid_rule_is_refused_without_storing(
@@ -288,3 +293,21 @@ def test_all_day_rule_repeats_whole_days(service: CalendarService) -> None:
         ("2026-09-24", "2026-09-26"),
     ]
     assert all(item.all_day for item in occurrences)
+
+
+@pytest.mark.parametrize("ending", ["COUNT=3", "UNTIL=20261026T013000Z"])
+def test_explicit_second_fold_bounds_actual_series_starts(service, ending):
+    event = service.create_event(
+        title="Second fold",
+        start="2026-10-25T02:00+01:00",
+        end="2026-10-25T03:00+01:00",
+        rrule=f"FREQ=DAILY;BYHOUR=2;BYMINUTE=0,30;{ending}",
+    )
+    lower, upper = service.parse_window("2026-10-24", "2026-10-27")
+    items = service.occurrences_in_window(lower, upper)
+    assert [item.start_utc.isoformat() for item in items] == [
+        "2026-10-25T01:00:00+00:00",
+        "2026-10-26T01:00:00+00:00",
+        "2026-10-26T01:30:00+00:00",
+    ]
+    assert items[0].event_id == event.id

@@ -791,8 +791,8 @@ describe('CalendarView', () => {
         {
           id: 'evt-1_20260923T0900',
           title: 'Standup with guests',
-          start: '2026-09-23T10:00:00',
-          end: '2026-09-23T10:30:00',
+          start: '2026-09-23T10:00:00.000Z',
+          end: '2026-09-23T10:30:00.000Z',
         },
       ]);
     });

@@ -53,7 +53,7 @@ def test_pages_preserve_every_occurrence_and_the_original_query(tool, monkeypatc
         occurrence_id(event.id, (datetime(2030, 1, 1, 9) + timedelta(days=day)).isoformat())
         for day in range(800)
     }
-    ids = [line.split()[0] for line in "".join(bodies).splitlines() if line.startswith("  evt_")]
+    ids = [line[4:] for line in "".join(bodies).splitlines() if line.startswith("id: ")]
     assert len(ids) == len(expected)
     assert set(ids) == expected
 
@@ -101,7 +101,7 @@ def test_query_reads_full_override_beyond_the_old_occurrence_limit(tool):
         }
     )
     assert data["ok"]
-    assert data["data"]["events"] == 1
+    assert data["data"]["occurrences"] == 1
     assert description in data["data"]["content"]
 
 
@@ -139,5 +139,54 @@ def test_free_time_pages_cover_a_large_period_without_losing_gaps(tool, monkeypa
     assert len(bodies) > 1
     assert count == len(lines) == 1001
     assert len(set(lines)) == len(lines)
-    assert lines[0].startswith("2030-01-01T01:00 to 2030-01-01T12:00")
-    assert "2033-01-01T00:00" in lines[-1]
+    assert lines[0].startswith("2030-01-01T01:00+01:00 to 2030-01-01T12:00+01:00")
+    assert "2033-01-01T00:00+01:00" in lines[-1]
+
+
+@pytest.mark.parametrize("action", ["get", "search"])
+def test_fragmented_record_keeps_its_clock_and_rejects_malformed_positions(
+    tool, monkeypatch, action
+):
+    import base64
+    import json
+
+    monkeypatch.setattr("core.tools.calendar.datetime", clock_at(datetime(2030, 1, 1, tzinfo=UTC)))
+    event = tool.service.create_event(title="Daily", start="2030-01-01T09:00", rrule="FREQ=DAILY")
+    asyncio.run(
+        tool.cron.create_job(
+            agent_id="agent-one",
+            name="Long bound job",
+            prompt="Prepare",
+            schedule_type="event",
+            event_id=event.id,
+            event_edge="start",
+            event_offset_minutes=-10,
+        )
+    )
+    monkeypatch.setattr(tool.cron, "format_schedule", lambda job: "start - 10m " + "detail " * 1000)
+    call = {"action": action, **({"id": event.id} if action == "get" else {})}
+    expected, _ = tool.call(call)
+    assert expected["ok"]
+    monkeypatch.setattr("core.tools._calendar_pages.PAGE_MAX_CHARACTERS", 2500)
+    parts = []
+    saved_cursor = None
+    while True:
+        result, text = tool.call(call)
+        assert result["ok"], text
+        assert len(text) <= 2500
+        parts.append(result["data"].get("content", ""))
+        if result["data"]["complete"]:
+            break
+        saved_cursor = result["data"]["next_cursor"]
+        monkeypatch.setattr(
+            "core.tools.calendar.datetime", clock_at(datetime(2030, 1, 2, tzinfo=UTC))
+        )
+        call = {"action": action, "cursor": saved_cursor}
+    assert "".join(parts) == expected["data"]["content"]
+    assert len(parts) > 1 and saved_cursor is not None
+    if action == "search":
+        payload = json.loads(base64.urlsafe_b64decode(saved_cursor))
+        payload["position"] = ["bad-time", event.id]
+        forged = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        failed, _ = tool.call({"action": action, "cursor": forged})
+        assert failed["error"]["code"] == "invalid_arguments"

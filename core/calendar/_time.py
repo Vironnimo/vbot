@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tzlocal import get_localzone
@@ -29,7 +29,29 @@ def _resolve_zone(tz_name: str) -> ZoneInfo:
     try:
         return ZoneInfo(tz_name)
     except (ZoneInfoNotFoundError, ValueError, TypeError) as error:
-        raise CalendarValidationError(f"tz is not a known IANA timezone: {tz_name}") from error
+        raise CalendarValidationError(
+            f"timezone is not a known IANA timezone: {tz_name}"
+        ) from error
+
+
+def span_length(
+    start: str, end: str, start_utc: str | None = None, end_utc: str | None = None
+) -> timedelta:
+    """Nominal wall-clock length, or elapsed length for an interval crossing back over itself."""
+    length = datetime.fromisoformat(end) - datetime.fromisoformat(start)
+    if length <= timedelta(0) and start_utc is not None and end_utc is not None:
+        return datetime.fromisoformat(end_utc) - datetime.fromisoformat(start_utc)
+    return length
+
+
+def input_span(
+    start: datetime, end: datetime, zone: ZoneInfo, *, explicit_end: bool = False
+) -> tuple[str, str]:
+    """Resolve both endpoints, retaining explicit overlap instants and gap wall-clock lengths."""
+    first = start.replace(tzinfo=zone).astimezone(UTC)
+    shift = first.astimezone(zone).replace(tzinfo=None) - start
+    last = end if explicit_end else (end + shift).replace(fold=end.fold)
+    return first.isoformat(), last.replace(tzinfo=zone).astimezone(UTC).isoformat()
 
 
 def _parse_iso_datetime(value: str, *, field_name: str) -> datetime:

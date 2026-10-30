@@ -1,7 +1,8 @@
 """Calendar event records, occurrence values and the persisted ``calendar/events.json`` format.
 
 A timed event keeps its start and end as naive local wall-clock times in its
-own IANA zone (``tz_name``), the server zone when it was created. An all-day
+own IANA zone (``tz_name``), defaulting to the application zone at creation.
+Optional exact endpoints preserve explicitly selected DST overlap instants. An all-day
 event keeps dates, with an exclusive end, and has no zone: its days start at
 local midnight in the server zone. A repeating event keeps one RFC 5545 RRULE;
 its occurrences are named by their original start in the event's own form,
@@ -13,9 +14,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from core.calendar._time import _resolve_zone, _utc_now_iso
 from core.calendar.errors import CalendarStorageError, CalendarValidationError
@@ -59,7 +61,9 @@ CALENDAR_EVENTS_FORMAT_VERSION = 2
 # The format of earlier vBot versions, whose events this version ignores.
 LEGACY_CALENDAR_EVENTS_FORMAT_VERSION = 1
 
-OVERRIDE_FIELDS = frozenset(("title", "description", "location", "start", "end"))
+OVERRIDE_FIELDS = frozenset(
+    ("title", "description", "location", "start", "end", "start_utc", "end_utc")
+)
 _EVENT_FIELDS = frozenset(
     (
         "id",
@@ -69,6 +73,7 @@ _EVENT_FIELDS = frozenset(
         "start",
         "end",
         "tz_name",
+        "endpoints",
         "rrule",
         "exdates",
         "overrides",
@@ -76,8 +81,18 @@ _EVENT_FIELDS = frozenset(
         "updated_at",
     )
 )
+_ENDPOINT_SHAPE = json_object({"start", "end", "start_local", "end_local", "timezone"})
 CALENDAR_EVENT_SHAPE = json_object(
-    _EVENT_FIELDS, {"overrides": json_map(json_object(OVERRIDE_FIELDS))}
+    _EVENT_FIELDS,
+    {
+        "endpoints": _ENDPOINT_SHAPE,
+        "overrides": json_map(
+            json_object(
+                (OVERRIDE_FIELDS - {"start_utc", "end_utc"}) | {"endpoints"},
+                {"endpoints": _ENDPOINT_SHAPE},
+            )
+        ),
+    },
 )
 CALENDAR_EVENTS_SHAPE = json_document(
     {"events"}, {"events": json_list(CALENDAR_EVENT_SHAPE, key="id")}
@@ -113,6 +128,7 @@ class EventOccurrence:
     end_utc: datetime
     original_start: str | None
     overridden: bool
+    timezone: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +160,8 @@ class CalendarEvent:
     overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+    start_utc: str | None = None
+    end_utc: str | None = None
 
     @property
     def all_day(self) -> bool:
@@ -157,7 +175,7 @@ class CalendarEvent:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CalendarEvent to its persisted JSON form."""
-        return {
+        data = {
             "id": self.id,
             "title": self.title,
             "description": self.description,
@@ -171,6 +189,13 @@ class CalendarEvent:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        data["overrides"] = {
+            key: _encode_endpoints(dict(value), self.tz_name)
+            for key, value in self.overrides.items()
+        }
+        return _encode_endpoints(
+            {**data, "start_utc": self.start_utc, "end_utc": self.end_utc}, self.tz_name
+        )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> CalendarEvent:
@@ -187,11 +212,48 @@ class CalendarEvent:
             rrule=payload.get("rrule"),
             exdates=[str(value) for value in payload.get("exdates") or []],
             overrides={
-                str(key): dict(value) for key, value in (payload.get("overrides") or {}).items()
+                str(key): _decode_override(value, payload.get("tz_name"))
+                for key, value in (payload.get("overrides") or {}).items()
             },
             created_at=created_at,
             updated_at=str(payload.get("updated_at") or created_at),
+            start_utc=_read_endpoints(payload, payload.get("tz_name"))[0],
+            end_utc=_read_endpoints(payload, payload.get("tz_name"))[1],
         )
+
+
+def _encode_endpoints(data: dict[str, Any], timezone: str | None) -> dict[str, Any]:
+    first, last = data.pop("start_utc", None), data.pop("end_utc", None)
+    if first is not None and last is not None:
+        data["endpoints"] = {
+            "start": first,
+            "end": last,
+            "start_local": data["start"],
+            "end_local": data["end"],
+            "timezone": timezone,
+        }
+    return data
+
+
+def _read_endpoints(data: dict[str, Any], timezone: str | None) -> tuple[str | None, str | None]:
+    value = data.get("endpoints")
+    if not isinstance(value, dict):
+        return None, None
+    if (value.get("start_local"), value.get("end_local"), value.get("timezone")) != (
+        data.get("start"),
+        data.get("end"),
+        timezone,
+    ):
+        return None, None
+    return value.get("start"), value.get("end")
+
+
+def _decode_override(value: dict[str, Any], timezone: str | None) -> dict[str, Any]:
+    result = {key: item for key, item in value.items() if key != "endpoints"}
+    first, last = _read_endpoints(value, timezone)
+    if first is not None or last is not None:
+        result.update(start_utc=first, end_utc=last)
+    return result
 
 
 def occurrence_id(event_id: str, key: str) -> str:
@@ -326,7 +388,7 @@ def _validate_event_data(diagnostics: list[JsonDiagnostic], item_path: str, item
         if not isinstance(override, dict):
             add_error(diagnostics, override_path, "must be an object")
             continue
-        for field_name in OVERRIDE_FIELDS:
+        for field_name in OVERRIDE_FIELDS - {"start_utc", "end_utc"}:
             _validate_optional_string(
                 diagnostics, f"{override_path}.{field_name}", override.get(field_name)
             )
@@ -370,7 +432,7 @@ def _check_event(event: CalendarEvent) -> None:
     zone = None if event.tz_name is None else _resolve_zone(event.tz_name)
     start = _stored_time(event.start, "start", all_day=all_day)
     end = _stored_time(event.end, "end", all_day=all_day)
-    _check_span(start, end, all_day=all_day)
+    _check_stored_span(start, end, event.start_utc, event.end_utc, all_day=all_day, zone=zone)
     if all_day and end == start:
         raise CalendarValidationError("end must be after start")
     if event.rrule is None:
@@ -379,7 +441,7 @@ def _check_event(event: CalendarEvent) -> None:
                 "only a repeating event has removed or changed occurrences"
             )
         return
-    if normalize_rrule(event.rrule, start=start, zone=zone) is None:
+    if normalize_rrule(event.rrule, start=start, zone=zone, anchor_utc=event.start_utc) is None:
         raise CalendarValidationError("rrule must not be empty")
     if len(event.exdates) > MAX_EXDATES_PER_EVENT:
         raise CalendarValidationError(
@@ -393,10 +455,12 @@ def _check_event(event: CalendarEvent) -> None:
         _stored_time(key, "exdate", all_day=all_day)
     for key, override in event.overrides.items():
         _stored_time(key, "changed occurrence", all_day=all_day)
-        _check_override(override, all_day=all_day)
+        _check_override(override, all_day=all_day, zone=zone)
 
 
-def _check_override(override: dict[str, Any], *, all_day: bool) -> None:
+def _check_override(
+    override: dict[str, Any], *, all_day: bool, zone: ZoneInfo | None = None
+) -> None:
     unknown = sorted(set(override) - OVERRIDE_FIELDS)
     if unknown:
         raise CalendarValidationError(f"unknown occurrence fields: {', '.join(unknown)}")
@@ -407,10 +471,19 @@ def _check_override(override: dict[str, Any], *, all_day: bool) -> None:
             _optional_text(override[name], name, limit)
     if ("start" in override) != ("end" in override):
         raise CalendarValidationError("a changed occurrence gives start and end together")
+    if ("start_utc" in override or "end_utc" in override) and "start" not in override:
+        raise CalendarValidationError("UTC occurrence endpoints need start and end")
     if "start" in override:
         start = _stored_time(override["start"], "start", all_day=all_day)
         end = _stored_time(override["end"], "end", all_day=all_day)
-        _check_span(start, end, all_day=all_day)
+        _check_stored_span(
+            start,
+            end,
+            override.get("start_utc"),
+            override.get("end_utc"),
+            all_day=all_day,
+            zone=zone,
+        )
         if all_day and end == start:
             raise CalendarValidationError("end must be after start")
 
@@ -446,6 +519,49 @@ def _check_span(start: datetime, end: datetime, *, all_day: bool) -> None:
         raise CalendarValidationError(
             f"a timed event lasts at most {MAX_DURATION_MINUTES // 1440} days"
         )
+
+
+def _check_stored_span(
+    start: datetime,
+    end: datetime,
+    start_utc: str | None,
+    end_utc: str | None,
+    *,
+    all_day: bool,
+    zone: ZoneInfo | None = None,
+) -> None:
+    if (start_utc is None) != (end_utc is None):
+        raise CalendarValidationError("start_utc and end_utc must be supplied together")
+    if start_utc is not None and end_utc is not None:
+        if all_day:
+            raise CalendarValidationError("an all-day event has dates, not UTC endpoints")
+        try:
+            first, last = datetime.fromisoformat(start_utc), datetime.fromisoformat(end_utc)
+        except (TypeError, ValueError) as error:
+            raise CalendarValidationError("UTC endpoints must be ISO 8601 timestamps") from error
+        if first.utcoffset() != timedelta(0) or last.utcoffset() != timedelta(0):
+            raise CalendarValidationError("UTC endpoints must carry the UTC offset")
+        _check_span(first, last, all_day=False)
+        if zone is not None:
+
+            def wall(moment: datetime) -> datetime:
+                return moment.astimezone(zone).replace(tzinfo=None)
+
+            # Force a UTC round-trip, including nonexistent local wall times.
+            normalized_start = wall(start.replace(tzinfo=zone).astimezone(UTC))
+            shift = normalized_start - start
+            possible_ends = {
+                wall(value.replace(tzinfo=zone).astimezone(UTC)) for value in (end, end + shift)
+            }
+            backwards_overlap = wall(last) <= wall(first) and last - first == end - start
+            if wall(first) != normalized_start or (
+                wall(last) not in possible_ends and not backwards_overlap
+            ):
+                raise CalendarValidationError(
+                    "UTC endpoints disagree with the event's local times and timezone"
+                )
+    else:
+        _check_span(start, end, all_day=all_day)
 
 
 def _required_text(value: object, field_name: str, max_length: int) -> str:
