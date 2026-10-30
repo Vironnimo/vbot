@@ -21,6 +21,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 
 ## Contract
 
+Every explicit edit target is preflighted together before any file change.
+
 - **Activation follows `apply_patch`.** `register_edit_tools(registry, *,
   file_state)` registers `edit` and `write` in the `files` family with activation
   `follows` -> `apply_patch` and `catalog_visible=False`: they are active exactly

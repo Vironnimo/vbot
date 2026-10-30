@@ -18,10 +18,13 @@ from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget, PreparedImage
 from core.debug import DebugContext
 from core.model_tasks.artifacts import (
+    BeforeOutputWrite,
     OutputWriteError,
     ensure_output_dir,
+    guarded_artifact_path,
     os_error_reason,
     persist_artifacts,
+    prepare_guarded_output_dir,
 )
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_profile import ImageCallOptionError, ImageProfile
@@ -658,6 +661,7 @@ class ImageService:
         call_options: Mapping[str, Any] | None = None,
         source_paths: Sequence[str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
+        before_output_write: BeforeOutputWrite | None = None,
     ) -> tuple[ImageArtifact, ...]:
         """Generate images and persist them in the caller-owned output directory.
 
@@ -665,14 +669,46 @@ class ImageService:
         raises :class:`OutputDirectoryError` without paying for images.
         """
 
-        directory = await persist_artifacts(ensure_output_dir, output_dir)
+        directory = (
+            await prepare_guarded_output_dir(output_dir, before_output_write)
+            if before_output_write is not None
+            else await persist_artifacts(ensure_output_dir, output_dir)
+        )
         result = await self.generate(
             prompt,
             call_options=call_options,
             source_paths=source_paths,
             usage_context=usage_context,
         )
-        return await persist_artifacts(_write_image_batch, result, directory)
+        if before_output_write is None:
+            return await persist_artifacts(_write_image_batch, result, directory)
+        extension = _extension_for_media_type(result.media_type)
+        artifacts: list[ImageArtifact] = []
+        for index, image_bytes in enumerate(result.images):
+
+            def write(
+                path: Path, *, data: bytes = image_bytes, item_index: int = index
+            ) -> ImageArtifact:
+                return _write_image_artifact(
+                    data,
+                    output_dir=directory,
+                    extension=extension,
+                    media_type=result.media_type,
+                    index=item_index,
+                    revised_prompt=result.revised_prompt,
+                    file_path=path,
+                )
+
+            artifact = await guarded_artifact_path(
+                directory,
+                "img",
+                extension,
+                before_output_write,
+                write,
+                saved=tuple(item.file_path for item in artifacts),
+            )
+            artifacts.append(artifact)
+        return tuple(artifacts)
 
 
 def _write_image_batch(result: ImageGenerationResult, directory: Path) -> tuple[ImageArtifact, ...]:
@@ -915,11 +951,18 @@ def _write_image_artifact(
     media_type: str,
     index: int,
     revised_prompt: str | None = None,
+    file_path: Path | None = None,
 ) -> ImageArtifact:
     """Write one generated image without overwriting an existing workspace file."""
 
     try:
-        file_path = write_id_file(output_dir, "img", f".{extension}", payload)
+        if file_path is None:
+            file_path = write_id_file(output_dir, "img", f".{extension}", payload)
+        else:
+            with file_path.open("xb") as stream:
+                stream.write(payload)
+    except FileExistsError:
+        raise
     except OSError as exc:
         raise OutputWriteError(output_dir, os_error_reason(exc)) from exc
     width, height = _pixel_size(payload)

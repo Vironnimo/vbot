@@ -63,6 +63,7 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
         "last_sequence": 4,
         "replay_status": "fresh",
         "active_runs": [],
+        "permissions_approvals": {"revision": 0, "requests": []},
         "queues": [],
         "session_activity": [],
     }
@@ -193,6 +194,9 @@ async def test_websocket_reconnects_if_retention_overflows_during_hello(
     app.state.event_bus = bus
     app.state.client_registry = ClientRegistry()
     app.state.server_identity = {"version": "1", "started_at": "2026-01-01T00:00:00.000000Z"}
+    app.state.chat_runs = SimpleNamespace(
+        approvals_snapshot=lambda: {"revision": 0, "requests": []}
+    )
     monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
     monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
     frames: list[dict[str, Any]] = []
@@ -401,6 +405,9 @@ async def test_shared_socket_closes_subscription_immediately(
     app.state.event_bus = bus
     app.state.client_registry = ClientRegistry()
     app.state.server_identity = {"version": "1.0", "started_at": "2026-01-01T00:00:00.000000Z"}
+    app.state.chat_runs = SimpleNamespace(
+        approvals_snapshot=lambda: {"revision": 0, "requests": []}
+    )
     monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
     monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
     held_streams: list[Any] = []

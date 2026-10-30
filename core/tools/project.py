@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.memory import MemoryError, MemoryService
-from core.permissions import PermissionDenied
+from core.permissions import PermissionDenied, run_permission_decision
 from core.projects import (
     InvalidProjectIdError,
     Project,
@@ -22,9 +22,10 @@ from core.projects import (
     ProjectStore,
 )
 from core.settings import PROJECT_ID_PATTERN
+from core.tools._permission_preflight import authorize_paths
 from core.tools.arguments import required_string
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
-from core.tools.contracts import compile_tool_contract
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.file_state import FileRead, FileReadState
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.tools import (
@@ -38,6 +39,7 @@ from core.tools.tools import (
     display_notice,
     display_text,
     offload_tool_handler,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -117,7 +119,7 @@ def make_project_handler(
 
         project_path = model_path(project.cwd)
         # Loading reads the Project's files, so the rules must permit reading its folder.
-        refusal = context.permissions.check_path(project.cwd, "read")
+        refusal = context.permission_access.check_path(project.cwd, "read")
         if refusal is not None:
             raise PermissionDenied(refusal)
         status = stat_or_none(project.cwd)
@@ -145,7 +147,9 @@ def make_project_handler(
         permitted: list[str] = []
         for name in project.instruction_files:
             path = Path(project.cwd) / name
-            if context.permissions.check_path(path, "read") is None:
+            if context.permissions.check_path(path, "read") is None or (
+                context.permission_access.search_read_allowed(path, project.cwd)
+            ):
                 permitted.append(name)
             else:
                 refused.append(f"Not included: {model_path(path)} {_REFUSED_FILE}")
@@ -385,6 +389,36 @@ def register_project_tool(
             parameters=parameters,
         )
 
+    async def preflight(context: ToolContext, arguments: JsonObject) -> None:
+        project_id = arguments.get("project_id")
+        if context.project_id is not None or not isinstance(project_id, str):
+            return
+        project_id = project_id.strip()
+        if PROJECT_ID_PATTERN.fullmatch(project_id) is None:
+            return
+        try:
+            project = await run_tool_worker(projects.get, project_id)
+        except Exception:
+            # The handler owns the Project-specific failure and logging.
+            return
+        await authorize_paths(
+            context, [(project.cwd, "read", {"filtered": True})], arguments=arguments
+        )
+
+        async def unchanged() -> None:
+            try:
+                current = await run_permission_decision(lambda: projects.get(project_id))
+            except (ProjectError, OSError) as error:
+                raise ToolContractError(
+                    "The Project changed while it was being loaded. Call project again."
+                ) from error
+            if current.cwd != project.cwd:
+                raise ToolContractError(
+                    "The Project changed while it was being loaded. Call project again."
+                )
+
+        context.add_permission_recheck(unchanged)
+
     registry.register(
         PROJECT_TOOL_NAME,
         PROJECT_TOOL_DESCRIPTION,
@@ -398,6 +432,7 @@ def register_project_tool(
         constraints=("identity_agent",),
         open_input_schema=True,
         argument_normalizer=_normalize_project_arguments,
+        preflight=preflight,
         definition_profile_resolver=profile,
         announce_changes=("parameters.project_id",),
         result_schema={

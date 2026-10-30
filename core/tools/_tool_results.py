@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from core.permissions import PermissionDenied
+from core.tools._tool_context import (
+    ToolApprovalCancelledError,
+    ToolAuthorityUnavailableError,
+    ToolSecretCommitError,
+)
 from core.tools._tool_definitions import (
     InvalidToolResultError,
     SessionToolUnavailableError,
@@ -113,6 +118,12 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
     Building the envelope never raises, even for an exception without a message.
     """
     name = model_tool_name(tool_name)
+    if isinstance(error, ToolSecretCommitError):
+        return tool_failure("secret_unavailable", f"{name} was not run: {error}")
+    if isinstance(error, ToolAuthorityUnavailableError):
+        return error.result
+    if isinstance(error, ToolApprovalCancelledError):
+        return tool_failure("cancelled_by_user", f"{name} was not run: the user cancelled it.")
     if isinstance(error, ToolContractError):
         return tool_failure(
             "invalid_arguments",

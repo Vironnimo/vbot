@@ -376,6 +376,7 @@ class _VideoService:
         call_options: dict[str, object],
         frame_paths: dict[str, Path],
         usage_context: object = None,
+        before_output_write: object = None,
     ) -> object:
         if self.error is not None:
             raise self.error
@@ -408,6 +409,7 @@ class _MusicService:
         output_dir: Path,
         source_paths: tuple[Path, ...],
         usage_context: object = None,
+        before_output_write: object = None,
     ) -> object:
         if self.error is not None:
             raise self.error

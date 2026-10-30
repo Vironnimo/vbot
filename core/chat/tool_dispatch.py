@@ -28,7 +28,7 @@ from core.chat._tool_context import (
     _runtime_allowed_tools as _runtime_allowed_tools,
 )
 from core.chat._tool_registry import TOOL_REMOVED_ERROR_CODE as TOOL_REMOVED_ERROR_CODE
-from core.chat._tool_registry import _EmittingToolRegistry, _safe_schema_fingerprint
+from core.chat._tool_registry import _EmittingToolRegistry, _leaving_call, _safe_schema_fingerprint
 from core.chat._tool_result_projection import (
     _read_media_outputs,
     _tool_display_payload,
@@ -100,6 +100,28 @@ class ToolRound:
             result_payloads=context,
         )
         workspace = _agent_workspace(agent, context.data_root)
+
+        async def request_approval(tool_context, reason, requirements, arguments, cwd):
+            payload = {
+                "tool_call_id": tool_context.tool_call_id,
+                "tool_name": tool_context.tool_name,
+                "execution": tool_context.execution,
+                "reason": reason,
+                "requirements": [item.to_dict() for item in requirements],
+                "arguments": arguments,
+                "cwd": str(cwd) if cwd is not None else None,
+            }
+
+            safe_payload = _leaving_call(
+                self._registry._secret_masker(), tool_context.mask_prepared_secrets(payload)
+            )
+            safe_payload["display_redacted"] = safe_payload != payload
+            checks = [key for item in requirements for key in item.suppression_keys()]
+            rejected = [item.suppression_key for item in requirements]
+            manager = context.approval_manager
+            assert manager is not None
+            return await manager.request_approval(run, safe_payload, checks, rejected)
+
         config = ToolExecutionConfig(
             agent_id=run.agent_id,
             session_id=run.session_id,
@@ -126,6 +148,8 @@ class ToolRound:
             run_kind=run.run_kind,
             subagent_session=context.subagent_session,
             permissions=context.permissions,
+            approval_hook=request_approval if context.approval_manager is not None else None,
+            approval_refresh_hook=context.approval_refresh_hook,
             execution=context.execution,
             reply_surface=context.reply_surface,
             allowed_tools=_dispatch_allowed_tools(

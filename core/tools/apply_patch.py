@@ -28,6 +28,7 @@ from core.tools._patch_requests import (
     patch_operations,
 )
 from core.tools._patch_syntax import _HEADER, _Operation, _PatchError, quoted
+from core.tools._permission_preflight import authorize_paths
 from core.tools.arguments import split_text_lines
 from core.tools.contracts import ToolContractError
 from core.tools.file_state import FileReadState
@@ -218,6 +219,15 @@ _HIDDEN_ARGUMENT_KEYS = (
 )
 
 
+async def _preflight_patch(context: ToolContext, arguments: JsonObject) -> None:
+    try:
+        paths = patch_targets(arguments)
+    except ValueError, _PatchError:
+        # The handler reports malformed patches without touching any file.
+        return
+    await authorize_paths(context, [(path, "write", {}) for path in paths], arguments=arguments)
+
+
 def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadState) -> None:
     registry.register(
         APPLY_PATCH_TOOL_NAME,
@@ -227,6 +237,7 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         family="files",
         open_input_schema=True,
         argument_normalizer=_normalize_call,
+        preflight=_preflight_patch,
         unadvertised_parameters=PATCH_HIDDEN_PARAMETERS,
         secret_sinks={"patch": "files"},
         result_schema={"type": "object", "required": ["content"]},

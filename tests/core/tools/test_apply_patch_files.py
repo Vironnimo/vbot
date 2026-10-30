@@ -11,19 +11,50 @@ import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from core.permissions import PermissionDenied
 from core.sessions import SessionAddress
 from core.tools import _file_changes as file_changes_module
 from core.tools import file_state as file_state_module
 from core.tools._patch_report import edit_outcome
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
+from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text, update
 from tests.core.tools.file_state_test_support import held_by_another_program
 
 BOM = b"\xef\xbb\xbf"
+
+
+@pytest.mark.asyncio
+async def test_patch_hard_denial_precedes_any_approval_or_change(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside.txt"
+    forbidden = work / "forbidden.txt"
+    boundary = restricted(work, deny=["Edit({workdir}/forbidden.txt)"])
+    requests: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        requests.append(requirements)
+        return True
+
+    async def refresh() -> tuple[Any, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    ctx = context(work, permissions=boundary, approval_hook=approve, approval_refresh_hook=refresh)
+    patch = (
+        f"*** Begin Patch\n*** Add File: {outside}\n+outside\n"
+        f"*** Add File: {forbidden}\n+forbidden\n*** End Patch"
+    )
+    with pytest.raises(PermissionDenied):
+        await registry().dispatch(ctx, {"patch": patch})
+    assert requests == [] and not outside.exists() and not forbidden.exists()
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from core.permissions import PermissionDenied
 from core.sessions import SessionAddress
+from core.tools._permission_preflight import authorize_accesses
 from core.tools.call_syntax import SpellingAliases, is_placeholder, normalize_call_arguments
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.portal_registry import (
@@ -212,14 +213,26 @@ async def _open(
             "invalid_arguments",
             f"Nothing was opened. Port {port} does not exist; pass a port from 1 to 65535.",
         )
+    if portals.is_own_port(port):
+        error = PortalError("own_port", f"Port {port} is served by vBot itself")
+        return tool_failure(error.code, _open_refusal(error, port, portals.list(owner)))
     # Before any listener is bound or the port probed: a restricted Agent reaches
     # localhost only where its web rules allow, the same decision as `curl localhost:<port>`.
-    if (refused := context.permissions.check_url(f"http://localhost:{port}/")) is not None:
+    url = f"http://localhost:{port}/"
+    await authorize_accesses(context, [], [url], arguments=arguments)
+    await context.revalidate_permissions()
+    if (refused := context.permission_access.check_url(url)) is not None:
         raise PermissionDenied(replace(refused, target=f"localhost:{port}"))
     title = arguments.get("title") or f"localhost:{port}"
     path = arguments.get("path") or "/"
     try:
-        portal, opened = await portals.open(owner, target_port=port, title=title, path=path)
+        portal, opened = await portals.open(
+            owner,
+            target_port=port,
+            title=title,
+            path=path,
+            before_open=context.revalidate_permissions,
+        )
     except PortalError as exc:
         return tool_failure(exc.code, _open_refusal(exc, port, portals.list(owner)))
     context.show_display_portal(portal.id, portal.title, portal.target_port)

@@ -26,6 +26,7 @@ from core.tools._image_inputs import (
     UnusableImageError,
     normalize_generate_music_arguments,
     normalize_generate_video_arguments,
+    preflight_image_paths,
     resolve_local_image,
     resolve_local_images,
 )
@@ -37,6 +38,8 @@ from core.tools._media_failures import (
     unavailable_message,
     unfinished_job_message,
 )
+from core.tools._media_permissions import check_generated_output
+from core.tools._permission_preflight import authorize_paths
 from core.tools.arguments import optional_bool, optional_int, optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -307,10 +310,20 @@ def make_generate_video_handler(video_service: Any):
         except UnusableImageError as problem:
             return tool_failure(problem.code, str(problem), retryable=False)
 
+        root = optional_string(arguments.get("output_dir"), field_name="output_dir") or (
+            (context.workspace if context.project_id is None else context.effective_cwd)
+            / _VIDEO_DIRECTORY_NAME
+        )
+
+        async def before_output_write(path: Path) -> None:
+            await check_generated_output(context, root, path)
+
+        await context.revalidate_permissions()
         try:
             artifact = await video_service.generate_artifact(
                 prompt,
                 output_dir=output_dir,
+                before_output_write=before_output_write,
                 call_options=call_options,
                 frame_paths=frame_paths,
                 usage_context=TaskUsageContext(
@@ -361,10 +374,20 @@ def make_generate_music_handler(music_service: Any):
             except UnusableImageError as problem:
                 return tool_failure(problem.code, str(problem), retryable=False)
 
+        root = optional_string(arguments.get("output_dir"), field_name="output_dir") or (
+            (context.workspace if context.project_id is None else context.effective_cwd)
+            / _MUSIC_DIRECTORY_NAME
+        )
+
+        async def before_output_write(path: Path) -> None:
+            await check_generated_output(context, root, path)
+
+        await context.revalidate_permissions()
         try:
             artifact = await music_service.generate_artifact(
                 prompt,
                 output_dir=output_dir,
+                before_output_write=before_output_write,
                 source_paths=source_paths,
                 usage_context=TaskUsageContext(
                     agent_id=context.agent_id,
@@ -428,7 +451,7 @@ def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: st
     # The default is checked like an explicit folder (``image.py``).
     base = context.workspace if context.project_id is None else context.effective_cwd
     default = base / default_name
-    refusal = context.permissions.check_path(default, "write")
+    refusal = context.permission_access.check_path(default, "write")
     if refusal is not None:
         raise PermissionDenied(refusal)
     return default
@@ -440,6 +463,46 @@ def _artifact_payload(artifact: Any) -> JsonObject:
         "media_type": artifact.media_type,
         "size_bytes": artifact.size_bytes,
     }
+
+
+async def _preflight_media(
+    context: ToolContext, arguments: JsonObject, *, default_name: str
+) -> None:
+    prompt = arguments.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return
+    output: str | Path | None = optional_string(
+        arguments.get("output_dir"), field_name="output_dir"
+    )
+    if not output:
+        base = context.workspace if context.project_id is None else context.effective_cwd
+        output = base / default_name
+    paths: list[str] = []
+    try:
+        if "source_images" in arguments:
+            paths.extend(preflight_image_paths(arguments["source_images"], "source_images"))
+        for name in ("first_frame", "last_frame"):
+            if arguments.get(name) is not None:
+                paths.extend(preflight_image_paths([arguments[name]], name))
+    except UnusableImageError:
+        return
+    await authorize_paths(
+        context,
+        [(output, "write", {}), *((path, "read", {}) for path in paths)],
+        arguments=arguments,
+    )
+
+
+async def _preflight_video(context: ToolContext, arguments: JsonObject) -> None:
+    try:
+        _video_call_options(arguments)
+    except ValueError:
+        return
+    await _preflight_media(context, arguments, default_name=_VIDEO_DIRECTORY_NAME)
+
+
+async def _preflight_music(context: ToolContext, arguments: JsonObject) -> None:
+    await _preflight_media(context, arguments, default_name=_MUSIC_DIRECTORY_NAME)
 
 
 def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> None:
@@ -454,6 +517,7 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
         family="media",
         open_input_schema=True,
         argument_normalizer=_normalize_video_arguments,
+        preflight=_preflight_video,
         result_schema={
             "type": "object",
             "properties": {
@@ -496,6 +560,7 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
         family="media",
         open_input_schema=True,
         argument_normalizer=_normalize_music_arguments,
+        preflight=_preflight_music,
         result_schema={
             "type": "object",
             "properties": {

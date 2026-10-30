@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from core.tools._search_confinement import Confinement, permitted, scope_confinement
+from core.tools._search_confinement import Confinement, scope_confinement
 from core.tools._search_query import SearchQuery, glob_separators
 from core.tools.file_state import os_error_reason
 
@@ -578,7 +578,13 @@ class SearchExecution:
         self.budget = budget
         self.cwd = cwd
         self.permissions = context.permissions
+        self.roots: list[Path] = []
         self._confinements: dict[tuple[Path, tuple[str, ...]], Confinement] = {}
+
+    def _allowed(self, path: Path) -> bool:
+        return self.permissions.check_path(path, "read") is None or any(
+            self.context.permission_access.search_read_allowed(path, root) for root in self.roots
+        )
 
     def _confinement(self, scope: Scope) -> Confinement:
         """The excluding globs and path filter of ``scope`` under the Run's rules."""
@@ -592,13 +598,16 @@ class SearchExecution:
         if not self._confinement(scope).filtered:
             return _judge(outcome, scope, self.cwd)
         return _judge(
-            outcome, scope, self.cwd, lambda path: permitted(self.permissions, scope, path)
+            outcome,
+            scope,
+            self.cwd,
+            lambda path: self._allowed(Path(os.path.normpath(scope.cwd / os.fsdecode(path)))),
         )
 
     def _readable(self, paths: list[Path], scope: Scope) -> list[Path]:
         if not self._confinement(scope).filtered:
             return paths
-        return [path for path in paths if self.permissions.check_path(path, "read") is None]
+        return [path for path in paths if self._allowed(path)]
 
     def _filtered(self, result: ScanResult, scope: Scope) -> ScanResult:
         """Leave out the entries and ignored paths of ``result`` the rules refuse to read.
@@ -607,7 +616,9 @@ class SearchExecution:
         """
         if self._confinement(scope).filtered:
             kept = [
-                entry for entry in result.entries if permitted(self.permissions, scope, entry[0])
+                entry
+                for entry in result.entries
+                if self._allowed(Path(os.path.normpath(scope.cwd / os.fsdecode(entry[0]))))
             ]
             if result.files_searched is not None:
                 removed = len(result.entries) - len(kept)

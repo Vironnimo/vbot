@@ -90,6 +90,25 @@ class BoundedWorkerPool:
         cannot stop a worker thread safely; waiting keeps the semaphore honest and
         prevents callers from treating an in-flight mutation as abandoned.
         """
+        return await self._run_with_guard(None, function, arguments, keyword_arguments)
+
+    async def run_guarded[WorkerResult](
+        self,
+        guard: Callable[[], Awaitable[None]],
+        function: Callable[..., WorkerResult],
+        *arguments: Any,
+        **keyword_arguments: Any,
+    ) -> WorkerResult:
+        """Run a guard after admission and immediately before submitting the worker."""
+        return await self._run_with_guard(guard, function, arguments, keyword_arguments)
+
+    async def _run_with_guard[WorkerResult](
+        self,
+        guard: Callable[[], Awaitable[None]] | None,
+        function: Callable[..., WorkerResult],
+        arguments: tuple[Any, ...],
+        keyword_arguments: dict[str, Any],
+    ) -> WorkerResult:
         semaphore = self._semaphore()
         entered = perf_counter()
         self._count_waiting(1)
@@ -107,6 +126,8 @@ class BoundedWorkerPool:
             )
             self._count_active(1)
             try:
+                if guard is not None:
+                    await guard()
                 return await self._run_admitted(function, arguments, keyword_arguments)
             finally:
                 self._count_active(-1)

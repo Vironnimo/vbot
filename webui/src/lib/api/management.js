@@ -6,6 +6,10 @@ import {
   requirePlainObject,
 } from './transport.js';
 
+export function resolvePermissionApproval(id, decision) {
+  return rpc('permissions.resolve', { id, decision });
+}
+
 // Settings and pickers ask for the same catalogs in one render turn. Share
 // only a read in flight: subsequent reads still observe the server anew.
 const pendingCatalogReads = new Map();

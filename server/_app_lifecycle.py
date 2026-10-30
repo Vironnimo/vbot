@@ -88,6 +88,11 @@ def _initialize_app_state(
     # Bridges still publishing, per Session: activity changes wait for them.
     app.state.run_event_bridges = {}
     app.state.session_activity_publications = {}
+    app.state.approvals_bridge_unsubscribe = _app_chat_runs(
+        app.state
+    ).add_approvals_changed_callback(
+        lambda snapshot: app.state.event_bus.publish("permissions_approvals", snapshot)
+    )
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.session_activity_bridge_unsubscribe = _register_session_activity_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
@@ -175,6 +180,10 @@ async def _warm_statistics_index(service: Any) -> None:
 
 
 def _unregister_run_event_bridge(state: Any) -> None:
+    approvals_unsubscribe = state.approvals_bridge_unsubscribe
+    if approvals_unsubscribe is not None:
+        approvals_unsubscribe()
+    state.approvals_bridge_unsubscribe = None
     unsubscribe = state.run_event_bridge_unsubscribe
     if unsubscribe is not None:
         unsubscribe()

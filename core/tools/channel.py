@@ -29,6 +29,7 @@ from core.tools._channel_send_arguments import (
     render_call,
     stand_in_message_refusal,
 )
+from core.tools._permission_preflight import authorize_paths
 from core.tools.arguments import optional_string
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.tools import (
@@ -44,13 +45,19 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.paths import file_url_path
 
 if TYPE_CHECKING:
     from core.channels import ChannelService
     from core.sessions import ChatSessionManager
 
 
-from core.tools._channel_payloads import _build_buttons, _build_checklist, _build_file_data
+from core.tools._channel_payloads import (
+    _WEB_ADDRESS,
+    _build_buttons,
+    _build_checklist,
+    _build_file_data,
+)
 from core.tools._channel_targets import (
     _SEND_FIELDS,
     _list_targets,
@@ -283,6 +290,26 @@ def _channel_send_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayP
     return tuple(parts)
 
 
+async def _preflight_channel_files(context: ToolContext, arguments: JsonObject) -> None:
+    if arguments.get(ACTION_FIELD) == "list":
+        return
+    raw = arguments.get("file_paths")
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        return
+    paths: list[str] = []
+    for item in raw:
+        path = item.strip()
+        if path.lower().startswith("file://"):
+            local = file_url_path(path)
+            if local is None:
+                return
+            path = local
+        elif _WEB_ADDRESS.match(path):
+            return
+        paths.append(path)
+    await authorize_paths(context, [(path, "read", {}) for path in paths], arguments=arguments)
+
+
 def register_channel_send_tool(
     registry: ToolRegistry,
     channel_service: ChannelService,
@@ -314,6 +341,7 @@ def register_channel_send_tool(
         open_input_schema=True,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
         argument_normalizer=_normalize_channel_send_arguments,
+        preflight=_preflight_channel_files,
         result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
@@ -355,6 +383,7 @@ async def _handle_channel_send_tool(
                 agent_id=context.agent_id,
                 session_id=context.session_id,
             )
+        await context.revalidate_permissions()
         await _finish_despite_run_cancel(
             context,
             channel_service.send(

@@ -12,7 +12,7 @@ as :class:`OutputWriteError`.
 from __future__ import annotations
 
 import errno
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +49,46 @@ async def persist_artifacts[Result](
 ) -> Result:
     """Run one complete persistence operation; admitted writes settle on cancellation."""
     return await _PERSISTENCE_WORKERS.run(operation, *args, **kwargs)
+
+
+type BeforeOutputWrite = Callable[[Path], Awaitable[None]]
+
+
+async def guarded_artifact_path[Result](
+    directory: Path,
+    prefix: str,
+    extension: str,
+    before_output_write: BeforeOutputWrite,
+    write: Callable[[Path], Result],
+    *,
+    saved: tuple[Path, ...] = (),
+) -> Result:
+    """Authorize the concrete name before the exclusive write, retrying collisions."""
+    while True:
+        # The first 60 bits of an unclaimed id are a candidate, not a claim.
+        # The worker opens it exclusively; a collision is checked again with a
+        # fresh candidate before any write.
+        identifier = new_id(prefix)[: len(prefix) + 13]
+        path = directory / f"{identifier}.{extension}"
+
+        async def guard(path: Path = path) -> None:
+            try:
+                await before_output_write(path)
+            except Exception as exc:
+                raise OutputWriteError(
+                    directory, str(exc) or "output access changed", saved=saved
+                ) from exc
+
+        try:
+            return await _PERSISTENCE_WORKERS.run_guarded(guard, write, path)
+        except FileExistsError:
+            continue
+        except OutputWriteError as exc:
+            if exc.saved == saved:
+                raise
+            raise OutputWriteError(exc.directory, exc.reason, saved=saved) from exc
+        except OSError as exc:
+            raise OutputWriteError(directory, os_error_reason(exc), saved=saved) from exc
 
 
 TASK_ARTIFACT_FORMAT_VERSION = 1
@@ -273,7 +313,7 @@ class OutputWriteError(TaskError):
         super().__init__(f"Generated media could not be saved in {directory}: {reason}")
 
 
-def ensure_output_dir(output_dir: str | Path) -> Path:
+def ensure_output_dir(output_dir: str | Path, *, probe_path: Path | None = None) -> Path:
     """Create the caller-selected output folder before a billed request is sent.
 
     Exclusively create a write-only empty probe, matching artifact permissions.
@@ -283,8 +323,20 @@ def ensure_output_dir(output_dir: str | Path) -> Path:
     directory = Path(output_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        probe = write_id_file(directory, ".vb", ".tmp", b"")
     except FileExistsError:
+        raise OutputDirectoryError(directory, "a file with that name exists") from None
+    except OSError as exc:
+        raise OutputDirectoryError(directory, os_error_reason(exc)) from exc
+    try:
+        if probe_path is None:
+            probe = write_id_file(directory, ".vb", ".tmp", b"")
+        else:
+            with probe_path.open("xb"):
+                pass
+            probe = probe_path
+    except FileExistsError:
+        if probe_path is not None:
+            raise
         raise OutputDirectoryError(directory, "a file with that name exists") from None
     except OSError as exc:
         raise OutputDirectoryError(directory, os_error_reason(exc)) from exc
@@ -293,19 +345,46 @@ def ensure_output_dir(output_dir: str | Path) -> Path:
     return directory
 
 
+async def prepare_guarded_output_dir(
+    output_dir: str | Path, before_output_preflight: BeforeOutputWrite
+) -> Path:
+    """Check the concrete probe after admission before creating the folder or probe."""
+    directory = Path(output_dir)
+    while True:
+        identifier = new_id(".vb")[: len(".vb") + 13]
+        probe = directory / f"{identifier}.tmp"
+
+        async def guard(probe: Path = probe) -> None:
+            await before_output_preflight(probe)
+
+        try:
+            return await _PERSISTENCE_WORKERS.run_guarded(
+                guard, ensure_output_dir, directory, probe_path=probe
+            )
+        except FileExistsError:
+            continue
+
+
 def write_generated_media_artifact(
     payload: bytes,
     *,
     output_dir: str | Path,
     extension: str,
     media_type: str,
+    file_path: Path | None = None,
 ) -> GeneratedMediaArtifact:
     """Write generated media exclusively, never overwriting an existing file."""
 
     destination = Path(output_dir)
     try:
         prefix = "vid" if media_type.startswith("video/") else "mus"
-        file_path = write_id_file(destination, prefix, f".{extension}", payload)
+        if file_path is None:
+            file_path = write_id_file(destination, prefix, f".{extension}", payload)
+        else:
+            with file_path.open("xb") as stream:
+                stream.write(payload)
+    except FileExistsError:
+        raise
     except OSError as exc:
         raise OutputWriteError(destination, os_error_reason(exc)) from exc
     return GeneratedMediaArtifact(

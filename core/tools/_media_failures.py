@@ -196,9 +196,9 @@ def output_failure_message(error: OutputDirectoryError | OutputWriteError, *, pr
     saved = (
         "Files saved before the failure: "
         + ", ".join(model_path(path) for path in error.saved)
-        + "."
+        + ". A partial file may remain."
         if error.saved
-        else "No file was saved."
+        else "No complete file was saved. A partial file may remain."
     )
     folder = model_path(error.directory)
     return (

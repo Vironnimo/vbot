@@ -149,7 +149,8 @@ async def test_python_launch_uses_existing_command_rules_and_confined_environmen
         {"code": "print(1)"},
         ["execute_code", "bash"],
     )
-    assert analyzer.argvs == [((sys.executable, "-c", "print(1)"), tmp_path)]
+    assert analyzer.argvs
+    assert all(call == ((sys.executable, "-c", "print(1)"), tmp_path) for call in analyzer.argvs)
     assert launched is not denied
     if denied:
         assert result["error"]["code"] == "permission_denied", result

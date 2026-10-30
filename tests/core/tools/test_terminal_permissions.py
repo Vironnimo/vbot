@@ -3,6 +3,7 @@ status check against its Permission Rules (``_terminal_permissions``)."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,20 +14,26 @@ import core.tools.terminal as terminal_module
 import core.tools.terminal_manager as manager_module
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
+from core.secrets.agent_secrets import AgentSecrets
+from core.sessions import SessionAddress
 from core.tools import _workdir
 from core.tools._terminal_permissions import permission_scope
 from core.tools._terminal_shell_state import ShellState
+from core.tools.terminal import register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
-from core.tools.tools import JsonObject
+from core.tools.tools import JsonObject, ToolRegistry
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
     fake_checker,
     plan,
     restricted,
 )
+from tests.core.secrets.secrets_test_support import data_directory, open_store
+from tests.core.secrets.test_agent_secrets import Clock
 from tests.core.tools.shell_test_support import FakeProjects
 from tests.core.tools.terminal_helpers import call, make_context, manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 __all__ = ["manager"]
 
@@ -219,6 +226,82 @@ async def test_a_restricted_shell_starts_confined_and_its_prompt_lines_are_check
     checked = len(analyzer.lines)
     assert (await send(text="y\n"))["ok"] is True
     assert len(analyzer.lines) == checked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("competing", [False, True])
+async def test_terminal_secret_is_consumed_only_after_approval_and_checks_actual_input(
+    manager: tuple[TerminalManager, AdapterFactory],
+    work: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    competing: bool,
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
+    terminal_manager, factory = manager
+    factory.initial_output = _prompt(work)
+    analyzer = FakeAnalyzer(plan("echo actual-secret"))
+    checker = fake_checker(analyzer)
+    boundary = restricted(work, commands="listed")
+    secrets = AgentSecrets(open_store(tmp_path, data_directory(tmp_path)), clock=Clock())
+    secrets.reload()
+    secrets.create(
+        name="TOKEN",
+        kind="token",
+        values={"value": "echo actual-secret"},
+        actor="user",
+        lifetime="once",
+        session_id="session-a",
+        agents=["agent-a@project-a"],
+        sinks=["terminal"],
+    )
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    register_terminal_tool(
+        registry, terminal_manager, ProjectStore(tmp_path / "data"), command_checker=checker
+    )
+    base = make_context(work, permissions=boundary)
+    started = await dispatch_as_executor(registry, base, {"action": "start"})
+    assert started["ok"], started
+    terminal_id = started["data"]["terminal_id"]
+    requests: list[Any] = []
+    decision = False
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, arguments: Any, _cwd: Any
+    ) -> bool:
+        requests.append((requirements, arguments))
+        assert "actual-secret" not in str(arguments)
+        if decision and competing:
+            secrets.substitute(
+                SessionAddress("project-a", "agent-a", "session-a"), "{{secret:TOKEN}}", "terminal"
+            )
+        return decision
+
+    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    def input_context() -> Any:
+        return replace(
+            make_context(work, permissions=boundary),
+            approval_hook=approve,
+            approval_refresh_hook=refresh,
+        )
+
+    arguments = {"action": "input", "terminal_id": terminal_id, "data": "{{secret:TOKEN}}\r"}
+    refused = await dispatch_as_executor(registry, input_context(), arguments)
+    assert not refused["ok"] and factory.adapters[0].writes == []
+    assert secrets.lookup(SessionAddress("project-a", "agent-a", "session-a"), "TOKEN") is not None
+    assert analyzer.lines[-1][0] == "echo actual-secret"
+    assert requests[0][1]["data"] == "{{secret:TOKEN}}\r"
+    decision = True
+    accepted = await dispatch_as_executor(registry, input_context(), arguments)
+    if competing:
+        assert accepted["error"]["code"] == "secret_unavailable"
+        assert factory.adapters[0].writes == []
+    else:
+        assert accepted["ok"] and factory.adapters[0].writes == ["echo actual-secret\r"]
+    assert secrets.lookup(SessionAddress("project-a", "agent-a", "session-a"), "TOKEN") is None
 
 
 @pytest.mark.asyncio

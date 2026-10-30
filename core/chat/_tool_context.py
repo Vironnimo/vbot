@@ -63,6 +63,10 @@ class ToolDispatchContext:
     # The Run's Permission Boundary, which every Tool Call checks its accesses
     # against. Required: a dispatch that forgets it must not run unrestricted.
     permissions: PermissionBoundary
+    approval_refresh_hook: Callable[[], Awaitable[tuple[PermissionBoundary, JsonObject]]] | None = (
+        None
+    )
+    approval_manager: Any | None = None
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     project_cwd: Path | None = None
     project_id: str | None = None

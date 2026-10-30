@@ -747,6 +747,7 @@ def create_app(
                 "last_sequence": last_sequence_at_hello,
                 "replay_status": replay_status,
                 "active_runs": active_runs,
+                "permissions_approvals": _app_chat_runs(websocket.app.state).approvals_snapshot(),
                 "queues": _queues_snapshot(websocket.app.state),
                 "session_activity": _session_activity_snapshot(websocket.app.state),
                 "server": websocket.app.state.server_identity,

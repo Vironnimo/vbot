@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import errno
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_from_bytes
@@ -22,6 +23,7 @@ from core.attachments import attachments as attachment_module
 from core.model_tasks import ImageReadError
 from core.tools._public_http import PublicResponse
 from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
+from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.image_test_support import (
     PNG,
     ImageService,
@@ -115,6 +117,41 @@ class _Call:
     def stored(self) -> list[Path]:
         folder = self.store._attachments_dir
         return sorted(folder.glob("att_*.*")) if folder.exists() else []
+
+
+@pytest.mark.asyncio
+async def test_mixed_image_approval_is_batched_and_does_not_grant_redirects(
+    tmp_path: Path, web: _Web
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    local = write_image(tmp_path / "outside.png")
+    start = "https://first.example/start"
+    redirect = "https://second.example/image.png"
+    web.responses[start] = make_result(status_code=302, headers={"Location": redirect}, url=start)
+    web.image(redirect, PNG)
+    call = _Call(work)
+    boundary = restricted(work, web="listed")
+    requests: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        assert web.requested == []
+        requests.append(requirements)
+        return True
+
+    async def refresh() -> tuple[Any, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    call.context = replace(
+        call.context, permissions=boundary, approval_hook=approve, approval_refresh_hook=refresh
+    )
+    result = await call([str(local), start])
+    assert result["error"]["code"] == "permission_denied"
+    assert len(requests) == 1 and {item.kind for item in requests[0]} == {"path", "url"}
+    assert [url for url, _ in web.requested] == [start]
+    assert call.contents() is None and call.stored() == []
 
 
 @pytest.mark.asyncio

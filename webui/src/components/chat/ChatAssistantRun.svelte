@@ -1,4 +1,5 @@
 <script>
+  import { getContext } from 'svelte';
   import Banner from '../ui/Banner.svelte';
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
@@ -104,6 +105,12 @@
     footerRuns = null,
     nowMs = Date.now(),
   } = $props();
+
+  const approvals = getContext('permissionApprovals');
+  const waitingForApproval = $derived(
+    approvals?.requests?.some((request) => request.run_id === item.runId) ??
+      false,
+  );
 
   // Disclosure and pending-action state lives in the timeline's view state,
   // so it survives this Run being unmounted and mounted again.
@@ -799,9 +806,11 @@
                 <path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" />
               </svg>
               <span class="working-block__label">
-                {summary.thinking
-                  ? t('chat.working.thinking')
-                  : t('chat.working.active')}
+                {waitingForApproval
+                  ? t('approvals.waitingStatus')
+                  : summary.thinking
+                    ? t('chat.working.thinking')
+                    : t('chat.working.active')}
               </span>
             {:else}
               <svg
@@ -893,9 +902,13 @@
         footerOptions.runs.length > 0
           ? runFooterParts(item, nowMs, footerOptions)
           : []}
+      {@const shownFooterParts =
+        waitingForApproval && footerParts.length
+          ? [t('approvals.waitingStatus'), ...footerParts.slice(1)]
+          : footerParts}
       {@const changeStats = runChangeStats(item)}
       {@const footerLabel = [
-        ...footerParts,
+        ...shownFooterParts,
         ...(changeStats ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
       {#if footerLabel}
@@ -907,7 +920,7 @@
               use:tooltip={() =>
                 runFooterDetails(item, Date.now(), footerOptions)}
             >
-              {#each footerParts as footerPart, index (footerPart)}
+              {#each shownFooterParts as footerPart, index (footerPart)}
                 {#if index > 0}
                   <span class="run-footer__sep" aria-hidden="true">·</span>
                 {/if}

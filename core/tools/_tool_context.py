@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -9,11 +10,17 @@ import re
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.computers import normalize_execution
-from core.permissions import PermissionBoundary, PermissionDenied
-from core.runs import RunExecutionOwner, RunKind
+from core.permissions import (
+    ApprovalRequirement,
+    PermissionBoundary,
+    PermissionDenied,
+    PermissionGrant,
+)
+from core.runs import RunExecutionOwner, RunKind, is_unattended_run_kind
+from core.secrets._references import map_strings
 from core.skills.policy import SkillPackageRef
 from core.tools._display_diff import (
     MAX_DISPLAY_DIFF_LINES,
@@ -59,6 +66,22 @@ def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     # Single quotes are legal on Windows. POSIX also permits double quotes and
     # backslashes. Existence must not redirect a missing literal to another file.
     return path
+
+
+class ToolApprovalCancelledError(Exception):
+    """Only this Tool's pending approval was cancelled by the user."""
+
+
+class ToolSecretCommitError(Exception):
+    """A prepared Secret changed or became unavailable before its use."""
+
+
+class ToolAuthorityUnavailableError(Exception):
+    """A prepared Tool lost readiness while it waited."""
+
+    def __init__(self, result: JsonObject) -> None:
+        super().__init__("Tool is no longer ready")
+        self.result = result
 
 
 class UnusablePathError(ToolContractError):
@@ -158,6 +181,11 @@ ToolCancelCheckHook = Callable[[], bool]
 ToolCallCancelRegistrar = Callable[[str, ToolCancelCallback], None]
 ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
+ToolApprovalHook = Callable[
+    ["ToolContext", str, Sequence[ApprovalRequirement], JsonObject, Path | None], Awaitable[bool]
+]
+ToolApprovalRefreshHook = Callable[[], Awaitable[tuple[PermissionBoundary, JsonObject]]]
+ToolApprovalWaitHook = Callable[[Awaitable[bool]], Awaitable[bool]]
 
 
 # (skill_name, wrapped_content, loaded_package) -> newly_activated. The content
@@ -182,6 +210,7 @@ ToolResultPayloadHook = Callable[[str, str, Any], str]
 # What a Tool does with a path it resolves; see ``ToolContext.resolve_path``.
 type PathResolveAccess = Literal["read", "write", "start_dir", "display"]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
+ToolPreflight = Callable[["ToolContext", JsonObject], Awaitable[None]]
 ToolCallHook = Callable[["ToolContext", str, JsonObject, Sequence[Any]], Awaitable[JsonObject]]
 
 
@@ -203,6 +232,25 @@ class ToolContext:
     # a caller that forgets the boundary fails the type check instead of running
     # with full access; a caller outside any Agent passes ``UNRESTRICTED``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    approval_hook: ToolApprovalHook | None = field(default=None, repr=False, compare=False)
+    approval_refresh_hook: ToolApprovalRefreshHook | None = field(
+        default=None, repr=False, compare=False
+    )
+    approval_wait_hook: ToolApprovalWaitHook | None = field(default=None, repr=False, compare=False)
+    permission_access: PermissionGrant = field(init=False, repr=False, compare=False)
+    public_arguments: JsonObject = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    secret_commit_hook: Callable[[], Awaitable[None]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    authority_recheck: Callable[[], None] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    approval_rejected: bool = field(default=False, init=False, repr=False, compare=False)
+    _permission_rechecks: list[Callable[[], Awaitable[None]]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
     # Operator-selected computer authority, captured for this Tool round.
     # Model arguments can select only within these Session grants.
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
@@ -338,6 +386,9 @@ class ToolContext:
     # reference text it replaced: the file edit Tools match old text that holds
     # the reference text itself (``secrets/agent-secrets.md`` -> References and sinks).
     secret_literals: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    prepared_secret_literals: dict[str, str] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     # The widget the call shows inline in the chat, recorded via ``show_display_widget``;
     # empty when it shows none.
     presentation_widget: JsonObject = field(default_factory=dict, repr=False, compare=False)
@@ -352,6 +403,134 @@ class ToolContext:
         repr=False,
         compare=False,
     )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "permission_access",
+            PermissionGrant(
+                self.permissions, computer_id=str(self.execution.get("computer_id", "server"))
+            ),
+        )
+
+    async def request_approval(
+        self,
+        reason: str,
+        requirements: Sequence[ApprovalRequirement],
+        *,
+        arguments: JsonObject,
+        cwd: Path | None = None,
+    ) -> bool:
+        """Ask for this prepared invocation, without holding execution slots."""
+        if self.approval_hook is None or self.is_cancelled():
+            return False
+        waiting = asyncio.ensure_future(
+            self.approval_hook(self, reason, requirements, arguments, cwd)
+        )
+        # The wrapper includes slot reacquisition; stopping the Tool must also
+        # interrupt that wait after the approval Future has already settled.
+        finishing = (
+            asyncio.ensure_future(self.approval_wait_hook(waiting))
+            if self.approval_wait_hook
+            else waiting
+        )
+
+        def cancel_wait() -> None:
+            if not finishing.done():
+                finishing.cancel()
+            if not waiting.done():
+                waiting.cancel()
+
+        self.on_cancel(cancel_wait)
+        try:
+            allowed = await finishing
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if (
+                finishing.cancelled()
+                and self.was_cancelled_by_user()
+                and not self.is_cancelled()
+                and current is not None
+                and not current.cancelling()
+            ):
+                raise ToolApprovalCancelledError from None
+            raise
+        if self.is_cancelled():
+            raise asyncio.CancelledError
+        if self.was_cancelled_by_user():
+            raise ToolApprovalCancelledError
+        if not allowed and not self.is_cancelled() and not is_unattended_run_kind(self.run_kind):
+            object.__setattr__(self, "approval_rejected", True)
+        return allowed and not self.is_cancelled()
+
+    def mask_prepared_secrets[T](self, value: T) -> T:
+        """Mask exact values prepared for this call, including short values and TOTP."""
+
+        def hide(text: str) -> str:
+            for literal, reference in sorted(
+                self.prepared_secret_literals.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                if literal:
+                    text = text.replace(literal, reference)
+            return text
+
+        return cast(T, map_strings(value, hide))
+
+    async def commit_prepared_secrets(self) -> None:
+        """Atomically consume deferred Secret grants immediately before their effect."""
+        if self.secret_commit_hook is not None:
+            await self.secret_commit_hook()
+
+    def add_permission_recheck(self, callback: Callable[[], Awaitable[None]]) -> None:
+        self._permission_rechecks.append(callback)
+
+    async def revalidate_permissions(self, *, enforce_cancel: bool = True) -> None:
+        """Recheck live authority and each prepared access without asking again."""
+        if enforce_cancel and self.is_cancelled():
+            raise asyncio.CancelledError
+        if enforce_cancel and self.was_cancelled_by_user():
+            raise ToolApprovalCancelledError
+        if self.authority_recheck is not None:
+            self.authority_recheck()
+        if not self._permission_rechecks:
+            return
+        if self.approval_refresh_hook is not None:
+            boundary, execution = await self.approval_refresh_hook()
+            if normalize_execution(execution) != normalize_execution(self.execution):
+                raise ToolContractError(
+                    "The Computer changed while the Tool was waiting. Call it again."
+                )
+            object.__setattr__(self, "permissions", boundary)
+            self.permission_access.boundary = boundary
+        for callback in self._permission_rechecks:
+            await callback()
+        if enforce_cancel and self.is_cancelled():
+            raise asyncio.CancelledError
+        if enforce_cancel and self.was_cancelled_by_user():
+            raise ToolApprovalCancelledError
+        if self.authority_recheck is not None:
+            self.authority_recheck()
+
+    async def authorize(
+        self,
+        requirements: Sequence[ApprovalRequirement],
+        *,
+        reason: str,
+        arguments: JsonObject,
+        cwd: Path | None = None,
+    ) -> bool:
+        """Approve exact missing accesses, then refresh the Run's authority."""
+        if not await self.request_approval(reason, requirements, arguments=arguments, cwd=cwd):
+            return False
+        if self.approval_refresh_hook is None:
+            return False
+        boundary, execution = await self.approval_refresh_hook()
+        if normalize_execution(execution) != normalize_execution(self.execution):
+            return False
+        object.__setattr__(self, "permissions", boundary)
+        self.permission_access.boundary = boundary
+        self.permission_access.approve(requirements)
+        return True
 
     @property
     def skill_subject_id(self) -> str:
@@ -368,30 +547,8 @@ class ToolContext:
         """
         return self.cwd if self.cwd is not None else self.workspace
 
-    def resolve_path(
-        self,
-        path: str | Path,
-        *,
-        access: PathResolveAccess,
-        follow_final_link: bool = True,
-    ) -> Path:
-        """Resolve one user-supplied path against this call's working directory.
-
-        ``access`` says what the call does with the path: ``read``, ``write`` or
-        ``start_dir`` (a process starts there) are checked against
-        :attr:`permissions` and raise :class:`~core.permissions.PermissionDenied`
-        before anything touches the target; ``display`` (a path only shown, or one
-        whose access another check covers) is never checked.
-
-        ``follow_final_link=False`` resolves only the parent directory, so a final
-        symbolic link or junction names the link entry itself (as Delete or Move
-        of that entry requires) and the final name keeps the requested spelling.
-        A path containing NUL is refused before anything touches the filesystem.
-        A ``file:`` URL names its local path. :class:`UnusablePathError` refuses,
-        also before any access, a path that would lead elsewhere than it names:
-        a file on another computer, and on Windows a ``:`` inside a name or a
-        drive letter without ``/`` after it (another drive's current folder).
-        """
+    def path_target(self, path: str | Path, *, access: PathResolveAccess) -> Path:
+        """Interpret an explicit Tool path while retaining its lexical identity."""
         if "\x00" in str(path):
             name = model_tool_name(self.tool_name)
             raise ToolContractError(
@@ -425,8 +582,35 @@ class ToolContext:
             )
         if problem is not None:
             raise UnusablePathError(self.tool_name, str(path), problem)
+        return target
+
+    def resolve_path(
+        self,
+        path: str | Path,
+        *,
+        access: PathResolveAccess,
+        follow_final_link: bool = True,
+    ) -> Path:
+        """Resolve one user-supplied path against this call's working directory.
+
+        ``access`` says what the call does with the path: ``read``, ``write`` or
+        ``start_dir`` (a process starts there) are checked against
+        :attr:`permissions` and raise :class:`~core.permissions.PermissionDenied`
+        before anything touches the target; ``display`` (a path only shown, or one
+        whose access another check covers) is never checked.
+
+        ``follow_final_link=False`` resolves only the parent directory, so a final
+        symbolic link or junction names the link entry itself (as Delete or Move
+        of that entry requires) and the final name keeps the requested spelling.
+        A path containing NUL is refused before anything touches the filesystem.
+        A ``file:`` URL names its local path. :class:`UnusablePathError` refuses,
+        also before any access, a path that would lead elsewhere than it names:
+        a file on another computer, and on Windows a ``:`` inside a name or a
+        drive letter without ``/`` after it (another drive's current folder).
+        """
+        target = self.path_target(path, access=access)
         if access != "display" and self.permissions.restricted:
-            refusal = self.permissions.check_path(target, access, base=self.effective_cwd)
+            refusal = self.permission_access.check_path(target, access, base=self.effective_cwd)
             if refusal is not None:
                 raise PermissionDenied(refusal)
         if follow_final_link or target.name in {"", ".", ".."}:
@@ -436,7 +620,7 @@ class ToolContext:
         if not resolved.is_absolute():
             # ntpath.realpath falls back to a drive-relative result for a stream
             # name below a missing folder.
-            colon = any(":" in name for name in _names(candidate))
+            colon = any(":" in name for name in _names(target))
             raise UnusablePathError(
                 self.tool_name, str(path), _COLON_IN_NAME if colon else _NO_FULL_PATH
             )
@@ -786,6 +970,10 @@ class ToolExecutionConfig:
     data_root: Path
     # See ``ToolContext.permissions``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    approval_hook: ToolApprovalHook | None = field(default=None, repr=False, compare=False)
+    approval_refresh_hook: ToolApprovalRefreshHook | None = field(
+        default=None, repr=False, compare=False
+    )
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # Completed Agentic Loop Iteration that produced this execution group.
     iteration_number: int = 0

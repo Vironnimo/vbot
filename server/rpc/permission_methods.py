@@ -11,7 +11,7 @@ Agent reads.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.chat import session_permissions
 from core.permissions import (
@@ -40,6 +40,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_agent_address,
     _required_session_address,
+    _required_string,
 )
 
 JsonObject = dict[str, Any]
@@ -254,10 +255,30 @@ def _rules_or_none(stored: dict[str, Any] | None) -> PermissionRules | None:
     return normalize_permission_rules(stored) if stored is not None else None
 
 
+async def _pending_approvals(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "permissions.pending")
+    return cast(JsonObject, state.chat_runs.approvals_snapshot())
+
+
+async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "decision"}, "permissions.resolve")
+    request_id = _required_string(params, "id")
+    decision = _required_string(params, "decision")
+    if decision not in {"allow", "reject"}:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "decision must be allow or reject")
+    if not state.chat_runs.resolve_approval(request_id, decision):
+        raise RpcError(
+            "approval_not_found", "The approval request is no longer pending", routine=True
+        )
+    return {"resolved": True}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the Permission Rules RPC handlers."""
 
     return {
+        "permissions.pending": _pending_approvals,
+        "permissions.resolve": _resolve_approval,
         "permissions.validate": _validate_permission_rules,
         "permissions.session": _session_permissions,
         "permissions.clear_session_ceiling": _clear_session_ceiling,

@@ -329,3 +329,5 @@ export {
   getTaskInputSecret,
   rotateTaskInputSecret,
 } from './api/automation.js';
+
+export { resolvePermissionApproval } from './api/management.js';

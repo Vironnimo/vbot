@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.permissions import PermissionBoundary, PermissionDenied
+from core.permissions import PermissionBoundary, PermissionDenied, PermissionGrant
 from core.tools._path_suggestions import corrected_paths, refused_note
 from core.tools._search_query import (
     SearchArgumentError,
@@ -40,7 +40,12 @@ class _Roots:
     missing: list[tuple[str, Path]] = field(default_factory=list)
 
 
-def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundary) -> _Roots:
+def _resolve_roots(
+    query: SearchQuery,
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
+) -> _Roots:
     """Resolve the requested roots; a missing path is reported, never replaced.
 
     A missing path written with glob characters, braces or commas runs as what
@@ -48,7 +53,7 @@ def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundar
     ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both. A
     missing path written as ``!vendor/**`` is the excluding glob it reads as.
     """
-    _local_globs(query, cwd, permissions)
+    _local_globs(query, cwd, permissions, grant)
     roots = _Roots()
     excluded = False
     for raw in query.roots or [str(cwd)]:
@@ -58,11 +63,19 @@ def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundar
                 f'path must name a file or directory; received "{raw}". Omit path to search '
                 "the working directory."
             )
-        resolved = _checked(_absolute(text, cwd), permissions)
-        if _exists(resolved):
-            _add(roots.paths, resolved)
-            continue
-        alternatives = _existing_alternatives(text, cwd, permissions)
+        candidate = _absolute(text, cwd)
+        # A glob or list has no literal-root grant when preflight interpreted its
+        # explicit component roots. Do not probe that ungranted spelling.
+        interpreted = bool(_GLOB_CHARACTERS.search(text) or "{" in text or "," in text)
+        allowed = (grant or permissions).check_path(candidate, "read") is None
+        if allowed or not interpreted:
+            resolved = _checked(candidate, permissions, grant)
+            if _exists(resolved):
+                _add(roots.paths, resolved)
+                continue
+        else:
+            resolved = candidate
+        alternatives = _existing_alternatives(text, cwd, permissions, grant)
         if alternatives:
             for path in alternatives:
                 _add(roots.paths, path)
@@ -76,7 +89,7 @@ def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundar
             )
             excluded = True
             continue
-        base = _glob_root(text, cwd, query, permissions)
+        base = _glob_root(text, cwd, query, permissions, grant)
         if base is not None:
             _add(roots.paths, base)
             continue
@@ -180,7 +193,12 @@ def _nothing_searched(warnings: list[str], roots: _Roots, query: SearchQuery) ->
     return f"{' '.join(warnings)} Nothing was searched. {fix}"
 
 
-def _local_globs(query: SearchQuery, cwd: Path, permissions: PermissionBoundary) -> None:
+def _local_globs(
+    query: SearchQuery,
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
+) -> None:
     """Read globs written as absolute paths as the globs they select.
 
     ripgrep matches globs against paths below the searched directory, so an
@@ -192,7 +210,9 @@ def _local_globs(query: SearchQuery, cwd: Path, permissions: PermissionBoundary)
     outside: Path | None = None
     for glob in query.globs:
         negated = glob.startswith("!")
-        split = _absolute_glob(glob_separators(glob[1:] if negated else glob), cwd, permissions)
+        split = _absolute_glob(
+            glob_separators(glob[1:] if negated else glob), cwd, permissions, grant
+        )
         if split is None:
             globs.append(glob)
             continue
@@ -216,7 +236,7 @@ def _local_globs(query: SearchQuery, cwd: Path, permissions: PermissionBoundary)
 
 
 def _absolute_glob(
-    glob: str, cwd: Path, permissions: PermissionBoundary
+    glob: str, cwd: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
 ) -> tuple[Path, str] | None:
     """Split an absolute glob into its existing fixed directory and the glob below it.
 
@@ -237,22 +257,26 @@ def _absolute_glob(
     anchored = cwd.joinpath(*parts[1:fixed])
     if os.name != "nt" and _readable_dir(anchored, permissions):
         return None
-    if not _readable_dir(base, permissions):
+    if not _readable_dir(base, permissions, grant):
         return None
     return base, "/".join(parts[fixed:])
 
 
-def _readable_dir(path: Path, permissions: PermissionBoundary) -> bool:
-    return permissions.check_path(path, "read") is None and is_dir_strict(path)
+def _readable_dir(
+    path: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
+) -> bool:
+    return (grant or permissions).check_path(path, "read") is None and is_dir_strict(path)
 
 
 def _absolute(text: str, cwd: Path) -> Path:
     return Path(os.path.abspath(cwd / Path(text).expanduser()))
 
 
-def _checked(path: Path, permissions: PermissionBoundary) -> Path:
+def _checked(
+    path: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
+) -> Path:
     """Return ``path``, or refuse the call when the rules refuse reading it."""
-    refusal = permissions.check_path(path, "read")
+    refusal = (grant or permissions).check_path(path, "read")
     if refusal is not None:
         raise PermissionDenied(refusal)
     return path
@@ -273,7 +297,9 @@ def _add(paths: list[Path], path: Path) -> None:
         paths.append(path)
 
 
-def _existing_alternatives(text: str, cwd: Path, permissions: PermissionBoundary) -> list[Path]:
+def _existing_alternatives(
+    text: str, cwd: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
+) -> list[Path]:
     """Return the paths a brace or comma list names, when every one of them exists."""
     if "{" in text:
         alternatives = _expand_brace_alternations(text)
@@ -283,19 +309,25 @@ def _existing_alternatives(text: str, cwd: Path, permissions: PermissionBoundary
         return []
     if len(alternatives) < 2 or not all(alternatives):
         return []
-    paths = [_checked(_absolute(alternative, cwd), permissions) for alternative in alternatives]
+    paths = [
+        _checked(_absolute(alternative, cwd), permissions, grant) for alternative in alternatives
+    ]
     return paths if all(_exists(path) for path in paths) else []
 
 
 def _glob_root(
-    text: str, cwd: Path, query: SearchQuery, permissions: PermissionBoundary
+    text: str,
+    cwd: Path,
+    query: SearchQuery,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
 ) -> Path | None:
     """Search a path written as a glob, such as src/**/*.py, as its directory and glob."""
     if query.globs or not _GLOB_CHARACTERS.search(text):
         return None
     parts = Path(text).parts
     fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
-    base = _checked(_absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd), permissions)
+    base = _checked(_absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd), permissions, grant)
     if not is_dir_strict(base):
         return None
     remainder = "/".join(parts[fixed:])

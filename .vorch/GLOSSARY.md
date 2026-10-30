@@ -87,7 +87,7 @@ The stretch of a Session from its start or a successful Compaction to the next o
 A function vBot offers its Agents, with a name, description and JSON Schema parameters, callable during a Run when the Agent's Tool access allows it (`tools.md`). Not a tool of the coding agent's own harness.
 
 ## Permission Rules
-An Agent's optional rule set that limits which paths its Tools may read or change, which shell commands they may run and which hosts they may reach; an Agent without one has full access (`permissions.md`). Not the Tool Access Policy (which Tools an Agent has), the server's Access Mode, or an OS sandbox.
+An Agent's optional rule set that limits which paths its Tools may read or change, which shell commands they may run and which hosts those commands may reach; an Agent without one has full access (`permissions.md`). Not the Tool Access Policy (which Tools an Agent has), the server's Access Mode, or an OS sandbox.
 
 ## Agent Secret
 A value such as a password, API key or login that the user gives an Agent to use by reference without the Agent seeing it; vBot inserts the value only where a Tool accepts it (`secrets.md`). Not the Secret Store's credentials or OAuth tokens, such as Provider keys, which vBot itself uses and no Agent can reference.

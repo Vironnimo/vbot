@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from core.model_tasks.artifacts import (
+    BeforeOutputWrite,
     GeneratedMediaArtifact,
     ensure_output_dir,
+    guarded_artifact_path,
     persist_artifacts,
+    prepare_guarded_output_dir,
     write_generated_media_artifact,
 )
 from core.model_tasks.constants import TASK_VIDEO_GENERATION
@@ -281,6 +284,7 @@ class VideoService:
         call_options: Mapping[str, Any] | None = None,
         frame_paths: Mapping[str, str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
+        before_output_write: BeforeOutputWrite | None = None,
     ) -> GeneratedMediaArtifact:
         """Generate one Video and persist it in the caller-owned directory.
 
@@ -288,13 +292,32 @@ class VideoService:
         raises :class:`OutputDirectoryError` without paying for a video.
         """
 
-        directory = await persist_artifacts(ensure_output_dir, output_dir)
+        directory = (
+            await prepare_guarded_output_dir(output_dir, before_output_write)
+            if before_output_write is not None
+            else await persist_artifacts(ensure_output_dir, output_dir)
+        )
         result = await self.generate(
             prompt,
             call_options=call_options,
             frame_paths=frame_paths,
             usage_context=usage_context,
         )
+        if before_output_write is not None:
+            extension = _video_extension(result.media_type)
+            return await guarded_artifact_path(
+                directory,
+                "vid",
+                extension,
+                before_output_write,
+                lambda path: write_generated_media_artifact(
+                    result.data,
+                    output_dir=directory,
+                    extension=extension,
+                    media_type=result.media_type,
+                    file_path=path,
+                ),
+            )
         return await persist_artifacts(
             write_generated_media_artifact,
             result.data,

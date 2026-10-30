@@ -8,6 +8,8 @@ Left out of the description on purpose (review 2026-10-08, kept in the one-shot 
 
 | Text | Failure it prevents | Evidence |
 |---|---|---|
+| `powershell was not run: the command was not approved.` (`bash` on other hosts) | Tells the Agent the optional review stopped the command before launch, so it does not assume an effect. | Shell review callback contract. |
+| `Permission Rules changed while the command was prepared. Call it again.` | The prepared environment may no longer match the live authority; a fresh call prepares it under the current Rules. | Shell preparation revalidation. |
 | `PowerShell reported an error from <cmdlet>, although the command exited with code 0. Later statements can still run after a cmdlet error.` | A later successful statement hid a cmdlet failure behind exit 0 (F4). The command must invoke the named cmdlet and match its error's source line or missing path. | October 21-23 audit: two file-reading failures. |
 | `Check what completed before retrying; use -ErrorAction Stop on a cmdlet when later statements depend on it.` | An error does not undo earlier effects or prevent later statements; a blind retry can repeat changes (F4, F5). The conditional advice preserves intentional best-effort commands. | Same audit; synthetic log-reading counterexamples receive no hint. |
 | `The output contains a Python traceback despite exit code 0. Blender defaults to zero even when a command-line Python script raises an exception.` | Exit 0 was read as a successful build even though Blender printed a Python exception (F4). Requires a Blender Python invocation and both traceback and exception lines. | October 21-23 audit: six Blender commands. |

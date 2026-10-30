@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from core.runs._timeline import is_silent_answer
 from core.runs.run import (
@@ -187,6 +187,9 @@ class ChatRunManager:
             raise ValueError("run_event_retention_limit must be positive")
         if waiting_work_limit < 1:
             raise ValueError("waiting_work_limit must be positive")
+        from core.runs._approvals import RunApprovals
+
+        self._approvals = RunApprovals()
         self._lock = asyncio.Lock()
         self._active_by_session: dict[SessionAddress, Run] = {}
         self._queues: dict[SessionAddress, deque[QueuedRunItem]] = {}
@@ -210,6 +213,25 @@ class ChatRunManager:
         self._input_withdrawer = input_withdrawer
         self._admission_validator = admission_validator
         self._work_span_reader: Callable[[SessionAddress], datetime | None] | None = None
+
+    def approvals_snapshot(self) -> JsonObject:
+        """Return the process-live operator requests and their revision."""
+        return self._approvals.snapshot()
+
+    def add_approvals_changed_callback(
+        self, callback: Callable[[JsonObject], None]
+    ) -> Callable[[], None]:
+        return self._approvals.subscribe(callback)
+
+    def resolve_approval(self, request_id: str, decision: str) -> bool:
+        if decision not in ("allow", "reject"):
+            raise ValueError("decision must be allow or reject")
+        return self._approvals.resolve(request_id, cast(Literal["allow", "reject"], decision))
+
+    async def request_approval(
+        self, run: Run, payload: JsonObject, keys: Sequence[str], rejected_keys: Sequence[str]
+    ) -> bool:
+        return await self._approvals.request(run, payload, keys, rejected_keys)
 
     def reserve_waiting_work(
         self,
@@ -1287,6 +1309,7 @@ class ChatRunManager:
         _notify(self._run_started_callbacks, run, "Run start callback failed")
 
     def _notify_run_finished(self, run: Run) -> None:
+        self._approvals.finish(run)
         _notify(self._run_finished_callbacks, run, "Run finish callback failed")
 
     def _prune_terminal_runs_locked(self) -> None:

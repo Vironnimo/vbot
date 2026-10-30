@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from core.permissions.commands.commands import (
         CommandAnalyzer,
         CommandPlan,
+        PlannedPathAccess,
         ShellKind,
         SimpleCommand,
         UnresolvedElement,
@@ -142,7 +143,7 @@ class CommandChecker:
         if isinstance(plan, PermissionRefusal):
             return plan
         refused = await self._decision(boundary, plan, cwd, command_line, workdir_parameter)
-        if refused is None and refuse_command is not None:
+        if (refused is None or refused.reason == "not_permitted") and refuse_command is not None:
             for command in plan.commands:
                 reason = refuse_command(command)
                 if reason is not None:
@@ -234,29 +235,54 @@ class CommandChecker:
         text: str,
         workdir_parameter: bool,
     ) -> PermissionRefusal | None:
-        """The first refusal in the decision order; blocking (resolves links), off the loop."""
-        refused = boundary.check_path(cwd, "start_dir")
-        if refused is not None:
-            return refused
+        refusals = self._decide_all(boundary, plan, cwd, text, workdir_parameter)
+        return next(
+            (item for item in refusals if item.reason != "not_permitted"),
+            refusals[0] if refusals else None,
+        )
+
+    def _decide_all(
+        self,
+        boundary: PermissionBoundary,
+        plan: CommandPlan,
+        cwd: Path,
+        text: str,
+        workdir_parameter: bool,
+    ) -> tuple[PermissionRefusal, ...]:
+        """Collect all affected accesses, with hard refusals available to the caller."""
+        from core.permissions.commands.commands import command_pattern_matches
+
+        found: list[PermissionRefusal] = []
+
+        def add(refusal: PermissionRefusal | None) -> None:
+            if refusal is not None and refusal not in found:
+                found.append(refusal)
+
+        add(boundary.check_path(cwd, "start_dir"))
         context = boundary.context
         windows = (context.platform if context is not None else sys.platform) == "win32"
-        for check in (
-            self._deny_rules,
-            self._listed,
-            self._vbot_cli,
-            self._vbot_server,
-        ):
-            refused = check(boundary, plan, cwd, windows)
-            if refused is not None:
-                return refused
+        for check in (self._deny_rules, self._vbot_cli, self._vbot_server):
+            add(check(boundary, plan, cwd, windows))
+        for layer in boundary.layers:
+            if layer.commands == "listed":
+                for command in plan.commands:
+                    if not any(
+                        command_pattern_matches(pattern, command, case_insensitive=windows)
+                        for pattern in layer.shell_allow
+                    ):
+                        add(
+                            boundary.refusal(
+                                "command",
+                                _shown(command.source),
+                                "not_permitted",
+                                source=layer.source,
+                                base="listed",
+                            )
+                        )
         for url in plan.urls:
-            refused = boundary.check_url(url, by_program=True)
-            if refused is not None:
-                return refused
+            add(boundary.check_url(url, by_program=True))
         for host in plan.hosts:
-            refused = boundary.check_host(canonical_host(host), "connect", by_program=True)
-            if refused is not None:
-                return refused
+            add(boundary.check_host(canonical_host(host), "connect", by_program=True))
         for access in plan.paths:
             kind: PathAccess = access.kind
             refused = boundary.check_path(
@@ -267,17 +293,120 @@ class CommandChecker:
                 pruned=access.pruned,
                 git=access.git,
             )
-            if refused is not None:
-                if refused.below is not None and kind == "read" and not access.work_tree:
-                    refused = replace(refused, hint=_DENIED_BELOW_HINT)
-                return refused
+            if (
+                refused is not None
+                and refused.below is not None
+                and kind == "read"
+                and not access.work_tree
+            ):
+                refused = replace(refused, hint=_DENIED_BELOW_HINT)
+            add(refused)
         for mention in plan.mentions:
-            refused = boundary.check_path(mention.path, "read", glob=mention.glob, deny_only=True)
-            if refused is not None:
-                return refused
+            add(boundary.check_path(mention.path, "read", glob=mention.glob, deny_only=True))
         for element in plan.unresolved:
-            return _unresolved_refusal(boundary, element, text, workdir_parameter)
-        return None
+            add(_unresolved_refusal(boundary, element, text, workdir_parameter))
+        return tuple(found)
+
+    async def prepare_line(
+        self,
+        boundary: PermissionBoundary,
+        command_line: str,
+        *,
+        shell: ShellKind,
+        cwd: Path,
+        env: Mapping[str, str],
+        home: Path,
+        workdir_parameter: bool = False,
+    ) -> tuple[CommandPlan | None, tuple[PermissionRefusal, ...]]:
+        """Return the exact plan and all its refusals for Tool preflight."""
+        if not boundary.restricted:
+            return None, ()
+        plan = await self._analyze(
+            boundary,
+            command_line,
+            lambda analyzer: analyzer.analyze(
+                command_line, shell=shell, cwd=cwd, env=env, home=home
+            ),
+        )
+        if isinstance(plan, PermissionRefusal):
+            return None, (plan,)
+        refusals = await _decision_pool().run(
+            self._decide_all, boundary, plan, cwd, command_line, workdir_parameter
+        )
+        return plan, refusals
+
+    async def prepare_argv(
+        self,
+        boundary: PermissionBoundary,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        home: Path,
+    ) -> tuple[CommandPlan | None, tuple[PermissionRefusal, ...]]:
+        if not boundary.restricted:
+            return None, ()
+        text = " ".join(argv)
+        plan = await self._analyze(
+            boundary,
+            text,
+            lambda analyzer: analyzer.analyze_argv(argv, cwd=cwd, env=env, home=home),
+        )
+        if isinstance(plan, PermissionRefusal):
+            return None, (plan,)
+        refusals = await _decision_pool().run(self._decide_all, boundary, plan, cwd, text, False)
+        return plan, refusals
+
+    @staticmethod
+    def command_path(boundary: PermissionBoundary, access: PlannedPathAccess) -> Path:
+        return _work_tree_top(boundary, access.path) if access.work_tree else access.path
+
+    async def check_line_all(
+        self,
+        boundary: PermissionBoundary,
+        command_line: str,
+        *,
+        shell: ShellKind,
+        cwd: Path,
+        env: Mapping[str, str],
+        home: Path,
+        workdir_parameter: bool = False,
+    ) -> tuple[PermissionRefusal, ...]:
+        if not boundary.restricted:
+            return ()
+        plan = await self._analyze(
+            boundary,
+            command_line,
+            lambda analyzer: analyzer.analyze(
+                command_line, shell=shell, cwd=cwd, env=env, home=home
+            ),
+        )
+        if isinstance(plan, PermissionRefusal):
+            return (plan,)
+        return await _decision_pool().run(
+            self._decide_all, boundary, plan, cwd, command_line, workdir_parameter
+        )
+
+    async def check_argv_all(
+        self,
+        boundary: PermissionBoundary,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        home: Path,
+    ) -> tuple[PermissionRefusal, ...]:
+        if not boundary.restricted:
+            return ()
+        text = " ".join(argv)
+        plan = await self._analyze(
+            boundary,
+            text,
+            lambda analyzer: analyzer.analyze_argv(argv, cwd=cwd, env=env, home=home),
+        )
+        if isinstance(plan, PermissionRefusal):
+            return (plan,)
+        return await _decision_pool().run(self._decide_all, boundary, plan, cwd, text, False)
 
     def _deny_rules(
         self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
@@ -452,6 +581,11 @@ def _decision_pool() -> BoundedWorkerPool:
 
         _POOL = BoundedWorkerPool(name="command-check", max_workers=2)
     return _POOL
+
+
+async def run_permission_decision[T](operation: Callable[[], T]) -> T:
+    """Run blocking path and command decisions on the shared bounded pool."""
+    return await _decision_pool().run(operation)
 
 
 def _shown(text: str) -> str:

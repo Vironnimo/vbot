@@ -123,6 +123,29 @@ async def test_command_decisions(
     assert (refusal.reason if refusal else None) == reason
 
 
+@pytest.mark.asyncio
+async def test_hard_command_refusal_precedes_missing_access(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside"
+    analyzer = FakeAnalyzer(
+        plan(
+            "cat file",
+            reads=(outside,),
+            unresolved=(UnresolvedElement("command", "eval", "it is computed"),),
+        )
+    )
+    checker = fake_checker(analyzer)
+    restricted = boundary(tmp_path, {"read": "work_area"})
+    plan_result, refusals = await checker.prepare_line(
+        restricted, "cat file; eval $x", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+    )
+    assert plan_result is not None
+    assert {item.reason for item in refusals} == {"not_permitted", "unanalyzable"}
+    refusal = await checker.check_line(
+        restricted, "cat file; eval $x", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+    )
+    assert refusal is not None and refusal.reason == "unanalyzable"
+
+
 @pytest.mark.parametrize(
     ("command", "cwd_in_checkout", "refused"),
     [
@@ -383,5 +406,7 @@ async def test_a_work_tree_change_above_the_readable_folders_is_refused(
         home=tmp_path,
     )
 
-    assert refusal is not None and refusal.reason == "not_permitted"
+    # The work tree contains the protected data directory; that hard refusal
+    # takes precedence over the missing base grant.
+    assert refusal is not None and refusal.reason == "protected_location"
     assert refusal.target == tmp_path.as_posix()

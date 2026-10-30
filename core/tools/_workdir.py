@@ -36,7 +36,11 @@ def is_project_workdir(value: str) -> bool:
 
 
 def project_workdir(
-    projects: ProjectStore | None, value: str, *, permissions: PermissionBoundary
+    projects: ProjectStore | None,
+    value: str,
+    *,
+    permissions: PermissionBoundary,
+    prepare_only: bool = False,
 ) -> Path:
     """The directory of the Project a ``project:<project-id>`` workdir names.
 
@@ -71,6 +75,8 @@ def project_workdir(
             "Project's directory path instead.",
             code="project_unavailable",
         ) from error
+    if prepare_only:
+        return Path(project.cwd)
     if refusal := permissions.check_path(project.cwd, "start_dir"):
         raise PermissionDenied(refusal)
     if not cwd_exists(project.cwd):

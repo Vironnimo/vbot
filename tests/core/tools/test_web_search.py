@@ -324,32 +324,19 @@ async def test_site_restrictions_in_any_form_filter_the_results(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("rules", "kept", "note"),
-    [
-        (
-            {"deny": ["Web(reddit.com)"]},
-            ["https://docs.python.org/3/", "https://example.com/news"],
-            "1 result was left out because the permission rules refuse fetching from "
-            "www.reddit.com.",
-        ),
-        (
-            {"web": "listed", "allow": ["Web(docs.python.org)"]},
-            ["https://docs.python.org/3/"],
-            "2 results were left out because the permission rules refuse fetching from "
-            "www.reddit.com, example.com.",
-        ),
-    ],
-    ids=["deny-rule", "listed-hosts"],
-)
-async def test_results_the_permission_rules_refuse_to_fetch_are_left_out_with_a_count(
-    tmp_path: Path, brave: Any, rules: dict[str, Any], kept: list[str], note: str
-) -> None:
-    result = await search(tmp_path, {"query": "asyncio"}, permissions=restricted(tmp_path, **rules))
-
+async def test_agent_host_rules_do_not_filter_search_results(tmp_path: Path, brave: Any) -> None:
+    result = await search(
+        tmp_path,
+        {"query": "asyncio"},
+        permissions=restricted(tmp_path, web="listed", deny=["Web(reddit.com)"]),
+    )
     shown = assert_success_envelope(result)
-    assert result_urls(shown) == kept
-    assert shown["note"] == note
+    assert result_urls(shown) == [
+        "https://docs.python.org/3/",
+        "https://www.reddit.com/r/python/",
+        "https://example.com/news",
+    ]
+    assert "note" not in shown
 
 
 @pytest.mark.asyncio

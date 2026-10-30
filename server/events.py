@@ -19,6 +19,7 @@ DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT = 1024
 _LOGGER = logging.getLogger("vbot.server.events")
 EVENTS_TRACK = "events"
 
+PERMISSIONS_APPROVALS_EVENT = "permissions_approvals"
 APP_ERROR_EVENT = "app_error"
 RUN_STARTED_SERVER_EVENT = "run_started"
 RUN_OUTPUT_SERVER_EVENT = "run_output"
@@ -43,6 +44,7 @@ CRON_FAILURE_ALERT_EVENT = "cron_failure_alert"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
+        PERMISSIONS_APPROVALS_EVENT,
         APP_ERROR_EVENT,
         RUN_STARTED_SERVER_EVENT,
         RUN_OUTPUT_SERVER_EVENT,

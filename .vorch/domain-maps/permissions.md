@@ -4,7 +4,7 @@ The optional rules that confine what an Agent's Tools may read, change, run and 
 
 ## Overview
 
-`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, the refusal type and its Agent-facing text, the presets and editor data, and the command check (`_command_check.py::CommandChecker`). `commands/` holds the shell command analysis (References). Apart from the checker, which owns the analyzer, the package is a pure library: it keeps no global state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors`.
+`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, the refusal type and its Agent-facing text, the presets and editor data, exact per-call access requirements/grants, and the command check (`_command_check.py::CommandChecker`). `commands/` holds the shell command analysis (References). Apart from the checker, which owns the analyzer, the package is a pure library: it keeps no global state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors`.
 
 Not owned here: storing `permission_rules` on Agents, Settings defaults, Project overrides and `TemporaryAgentConfig` (their owners call `normalize_permission_rules`), resolving them per part (`projects/resolution.md` -> Permission Rules), building the Run's boundary and carrying it to `ToolContext` (`chat/run-execution.md` -> Permission Boundary), the checks inside each Tool (Tools), persisting ceilings on Sub-Agent Sessions and Cron jobs (`subagents/delegation.md`, `automation/cron.md`), and every UI. `tool_failure_for_exception` maps `PermissionDenied` to `permission_denied` (`tools/registry-dispatch.md` -> Failure codes).
 
@@ -12,7 +12,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 
 1. Rules are optional and configured explicitly per Agent; without them an Agent has full access, as before. Choosing a Project for a Session confines nothing.
 2. Threat model: mistakes of well-meaning Agents, and Models that must stay out of certain areas. Not a defense against a hostile or prompt-injected Agent.
-3. No OS sandbox, no approvals: vBot enforces the rules itself. A later OS backend must be able to enforce the same rule model unchanged.
+3. No OS sandbox: vBot enforces the rules itself. A later OS backend must be able to enforce the same rule model unchanged. User decisions 2026-10-30 add once-only approvals for exact prepared Tool calls; explicit denies and protected/unsafe/unanalyzable accesses stay hard (`permissions/approvals.md`).
 4. The shell is confined "in a sensible way", not only the file Tools.
 5. Rule-based configuration like Claude Code and OpenCode, with presets as starting points; built polished from the start.
 6. An Agent can change only files it can read. A stored rule set with `write: anywhere` beside `read: work_area` is refused; when per-part resolution combines them from different levels, writing narrows to `work_area` (`write_within_read`). A `Read` deny also refuses changes and an `Edit` allow also permits reading, so no Tool result can leak a file's content to an Agent that may change but not read it.
@@ -51,7 +51,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 
 **Command checks** (`CommandChecker`, one per Runtime, `runtime._command_checker`): `check_line(boundary, command_line, *, shell, cwd, env, home, workdir_parameter=False)` for a shell Tool call (whose cwd hint names `workdir`), a terminal line or a Cron watch command; `check_argv(boundary, argv, *, cwd, env, home)` for a program a terminal starts. Each returns `None` or a `PermissionRefusal`. A failed analysis refuses (fail closed, `retryable`); every unresolved element refuses too (`unanalyzable`, with a fix in `hint`): with the protected locations, no unresolved path or command is harmless. Decision order: `permissions/commands.md` -> Command checks.
 
-**Refusal:** `PermissionRefusal(access, target, reason, source, rule, base, location, detail, resolved, allowed, hint, below, retryable)`; `reason` is `deny_rule` (`below`: the denied part a recursive or wildcard access would reach), `protected_location` (`location` `data_dir`, `installation`, `agent_config`, `vbot_server`, `vbot_cli`), `not_permitted` (by `base` of layer `source`), `unsafe_form` (`location` names the form) or `unanalyzable` (`detail` is the caller's clause). `hint` names the way forward instead of the closing "tell the user"; with it, and for every `unanalyzable` refusal, the message leaves out that every other way is refused too. `retryable`: only a failed analysis. `refusal.message(tool=...)` is the Agent-facing text, `refusal.watch_message()` the wording for a Cron watch check, which also reaches the user's alert; `PermissionDenied(refusal)` raises it through a Tool.
+**Refusal:** `PermissionRefusal` records the access, target, reason and source; `PermissionDenied` carries it through Tools as `permission_denied`. Exact fields, classification and approval use: `permissions/approvals.md` -> Decision inputs.
 
 **Users** (where the library is wired in):
 - Stored rule sets: `agent.json` `permission_rules` (`agent/configuration.md`), `defaults.agent.permission_rules` (`settings.md`), the Project override `overrides.<agent>.permission_rules` (`projects/configuration.md`), `AgentProfile.permission_rules` of a repository profile (`projects/scanning.md` -> Permission Rules translation) and `TemporaryAgentConfig.permission_rules` / `.permission_ceiling` (`agent/temporary-agents.md`). Each owner normalizes on write; a stored set that does not normalize, an unknown part included, makes its document invalid and unwritable, never unrestricted.
@@ -60,12 +60,16 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 - Paths beyond the Tool target: listings, missing-path suggestions, diagnostics, search roots and exclusions, image, media, Channel files, instruction files (`project` Tool, Working Project, folder notes), MCP roots and Assistant `file:` references are checked before any access, so no refused path is touched or named beyond a readable folder's entries and deny rules (`tools/file_state.md` -> Path resolution, `chat/request-building.md` for file references, `extensions/mcp.md` for roots).
 - Shell: `bash`/`powershell` check every call before launch and run it in a confined environment (`tools/shell.md` -> Permission Rules).
 - Cron watch checks of a job with a ceiling: the command and URL at every check and when the `cron` Tool saves the watch (`automation/cron-watch.md`).
-- Web: `web_fetch` at the address, every redirect hop and final page; `analyze_image` image URLs and hops (`fetch_public(..., permissions=)`); `web_search` drops results it may not fetch (`tools/web_fetch.md`, `tools/web_search.md` -> Permission Rules).
+- Web Tools: user decision 2026-10-30 controls `web_fetch` and `web_search` only through Tool access; they do not apply Agent domain rules or create approvals. Public HTTP(S), DNS/address, redirect and transport protections remain. Shell network destinations and other callers such as `analyze_image` retain Permission Rules (`permissions/approvals.md`).
 - Portal: `open` checks `http://localhost:<port>/` before any listener or probe (`tools/portal.md` -> Permission Rules).
 - Terminal: `start` (program, folder), lines submitted at an integrated shell prompt, and `attach`/`status` only for terminals started under the same or narrower rules (`tools/terminal.md` -> Permission Rules).
 - Restricted Session reads stay in the caller's Agent and, with inherited ceilings, its tree; peer sends are refused (`tools/session_search.md`, `tools/session.md`).
 - Ceilings: `AgentOverrides.permission_ceiling` of a Session, joined and never widened (`source` `parent` by delegation and `send`, `cron` for a fired Session), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).
 - Editors and summaries: RPC `agent.create`/`agent.update` `permission_rules`, `permissions.validate`, `permissions.session` and `permissions.clear_session_ceiling` (`server/session-agent-rpcs.md` -> Permission Rules), the CLI permission flags of `agent` and `project override set` (`cli/agent-commands.md`), the WebUI editors, the Session `Restricted` badge and refused Tool rows (`webui/settings.md`, `webui/projects.md`, `webui/chat.md`). `permissions_block_text(boundary)` gives the text the Agent reads.
+
+## Approval ownership
+
+Runs own pending decisions; Tools prepare and revalidate exact per-call access. Lifecycle, rejection scope and accessor/review contracts: `permissions/approvals.md`.
 
 ## Decision order
 
@@ -97,6 +101,7 @@ This domain owns the refusal texts (`PermissionRefusal.message` and `watch_messa
 
 Read these only when your task matches - not by default.
 
+- Changing pending approvals, per-call grants, rejection suppression, approval RPC/UI or a review requiring human consent -> `permissions/approvals.md`
 - Changing how shell command lines are analyzed or checked (CommandPlan, PowerShell helper, path tiers, cwd tracking, Shell(...) patterns, the checker's decision order) -> `permissions/commands.md`
 - Changing the stored rule form, its validation, placeholders, host patterns, resolution, presets, layer descriptions, or what `permissions.validate` gives the editors (`editor_bases`) -> `permissions/rule-language.md`
 - Changing how a path is normalized or matched (unsafe forms, links and junctions, subtree and glob accesses, `refusable_below`, `readable_entries`, case and platform differences) -> `permissions/paths.md`

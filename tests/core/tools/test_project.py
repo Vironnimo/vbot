@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -533,6 +534,43 @@ def test_project_load_reads_only_what_the_permission_rules_permit(
         assert "permission rules" in result["data"]["note"]
 
 
+def test_approved_project_root_loads_only_permitted_instruction_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("INCLUDED", encoding="utf-8")
+    (repo / "private.md").write_text("SECRET", encoding="utf-8")
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo, auto_load=["AGENTS.md", "private.md"])
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules(
+            {"read": "work_area", "deny": [f"Read({(repo / 'private.md').as_posix()})"]}
+        ),
+        BoundaryContext(
+            workdir=tmp_path / "workspace", home=tmp_path / "home", data_dir=tmp_path / "data"
+        ),
+    )
+    requests: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        requests.append(requirements)
+        return True
+
+    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    ctx = replace(
+        _context(tmp_path, permissions=boundary),
+        approval_hook=approve,
+        approval_refresh_hook=refresh,
+    )
+    result = asyncio.run(dispatch_as_executor(_registry(projects), ctx, {"project_id": "vbot"}))
+    assert result["ok"] and "INCLUDED" in result["data"]["content"]
+    assert "SECRET" not in str(result) and "private.md" in result["data"]["note"]
+    assert len(requests) == 1 and requests[0][0].filtered
+
+
 @pytest.mark.parametrize(
     ("problem", "location"),
     [
@@ -631,3 +669,30 @@ def test_unavailable_project_catalog_is_not_an_empty_catalog(
         ["project"], profile_context=ToolDefinitionProfileContext("coder")
     )
     assert "- vbot: vBot" in recovered[0]["parameters"]["properties"]["project_id"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_project_freshness_check_does_not_reenter_occupied_tool_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.tools import _tool_workers
+    from core.utils.workers import BoundedWorkerPool
+
+    monkeypatch.setattr(
+        _tool_workers, "_TOOL_WORKERS", BoundedWorkerPool(name="project-test", max_workers=1)
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("atlas", "Atlas", repo)
+    registry = _registry(projects)
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                dispatch_as_executor(registry, _context(tmp_path), {"project_id": "atlas"})
+                for _ in range(2)
+            )
+        ),
+        timeout=2,
+    )
+    assert all(result["ok"] for result in results)

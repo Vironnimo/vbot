@@ -312,7 +312,7 @@ class ExternalRun:
             skill_registry=self._skill_registry,
         )
 
-    async def _current_permissions(self, run: Run) -> PermissionBoundary:
+    async def _current_permissions(self, run: Run, *, force: bool = False) -> PermissionBoundary:
         """The boundary for the next call, rebuilt when one of its rule sources changed.
 
         As a Chat Run refreshes it before each Tool round, the Agent is resolved
@@ -323,7 +323,7 @@ class ExternalRun:
             current = self._permissions
             if current is None:
                 raise ChatError("the external Run has no Permission Boundary")
-            if await current.changed():
+            if force or await current.changed():
                 agent = await self._dependencies.agent_resolver.resolve_agent_async(
                     None, self.agent_id, session_id=self.session_id
                 )
@@ -410,6 +410,14 @@ class ExternalRun:
         self, run: Run, permissions: PermissionBoundary, execution: JsonObject
     ) -> ToolDispatchContext:
         dependencies = self._dependencies
+
+        async def refresh_approval():
+            boundary = await self._current_permissions(run, force=True)
+            execution = normalize_execution(
+                await dependencies.sessions.metadata_value_async(self._session.address, "execution")
+            )
+            return boundary, execution
+
         return ToolDispatchContext(
             registry=dependencies.tools,
             extension_registry=dependencies.get_extension_registry(),
@@ -419,6 +427,8 @@ class ExternalRun:
             vbot_root=Path(dependencies.get_system_prompts().vbot_root),
             data_root=Path(dependencies.storage.data_dir),
             permissions=permissions,
+            approval_manager=dependencies.run_manager,
+            approval_refresh_hook=refresh_approval,
             execution=execution,
             project_cwd=self._project_cwd,
             skill_project_id=self._skill_project_id,

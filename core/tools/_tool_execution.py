@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import Sequence
-from contextlib import nullcontext
+from collections.abc import Awaitable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar
 
@@ -30,6 +29,46 @@ if TYPE_CHECKING:
     from core.tools.tools import ToolRegistry
 
 DEFAULT_TOOL_CONCURRENCY_LIMIT = 500
+
+
+class _ExecutionSlots:
+    """Release both Tool slots while waiting for an operator decision."""
+
+    def __init__(self, per_run: asyncio.Semaphore, global_slot: asyncio.Semaphore | None) -> None:
+        self._per_run = per_run
+        self._global = global_slot
+        self._held_run = False
+        self._held_global = False
+
+    async def __aenter__(self) -> _ExecutionSlots:
+        await self._per_run.acquire()
+        self._held_run = True
+        try:
+            if self._global is not None:
+                await self._global.acquire()
+                self._held_global = True
+        except BaseException:
+            self._release()
+            raise
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self._release()
+
+    def _release(self) -> None:
+        if self._held_global:
+            assert self._global is not None
+            self._global.release()
+            self._held_global = False
+        if self._held_run:
+            self._per_run.release()
+            self._held_run = False
+
+    async def wait(self, pending: Awaitable[bool]) -> bool:
+        self._release()
+        result = await pending
+        await self.__aenter__()
+        return result
 
 
 class ToolExecutor:
@@ -87,8 +126,9 @@ class ToolExecutor:
         per_run_semaphore: asyncio.Semaphore,
     ) -> JsonObject:
         needs_slot = self._registry.requires_execution_slot(tool_call.name)
-        global_slot = self._get_global_semaphore() if needs_slot else nullcontext()
-        async with per_run_semaphore, global_slot:
+        global_slot = self._get_global_semaphore() if needs_slot else None
+        slots = _ExecutionSlots(per_run_semaphore, global_slot)
+        async with slots:
             # Per-call cancel hooks close over tool_call.id so concurrent sibling
             # tool calls in one execution group each register/inspect their own id.
             cancel_registration_hook, cancel_check_hook = _build_per_call_cancel_hooks(
@@ -128,6 +168,9 @@ class ToolExecutor:
                 programmatic=config.programmatic,
                 tool_call_hook=config.tool_call_hook,
                 permissions=config.permissions,
+                approval_hook=config.approval_hook,
+                approval_refresh_hook=config.approval_refresh_hook,
+                approval_wait_hook=slots.wait,
                 execution=normalize_execution(config.execution),
                 reply_surface=config.reply_surface,
                 emit_hook=config.emit_hook,

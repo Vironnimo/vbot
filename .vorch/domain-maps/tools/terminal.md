@@ -138,6 +138,8 @@ Remote Agent terminals currently require full access. Existing Permission Rules 
 
 ## Permission Rules
 
+Start preflights the whole program and workdir before launch. Integrated-shell input checks the whole submitted line before sending; after an approval it rechecks the prompt, screen and Rules. Grants remain local to the Tool call, not the terminal.
+
 Workdir selection, including omitted and `project:<id>` paths, checks permission before filesystem probing; see `tools/shell.md` -> Execution lifecycle.
 
 A restricted Session's terminal is checked in `_terminal_permissions.py` with the Runtime's `CommandChecker` (`permissions.md` -> Command checks; `register_terminal_tool(..., command_checker=)`). Tests: `test_terminal_permissions.py`; marks and shell kinds also in `test_terminal_launch.py`.
@@ -154,6 +156,8 @@ Failure modes F1-F6: `tools/agent-facing-text.md` -> Failure modes. "Usage analy
 
 | Text | Failure it prevents | Evidence |
 |---|---|---|
+| `The terminal prompt changed while the input was prepared. Call terminal again.` | A previously approved line may no longer match the prompt; a new call reads the current state. | Terminal input revalidation. |
+| `Permission Rules changed while the terminal was prepared. Call it again.` | A launch prepared under a different boundary must not start. | Terminal start revalidation. |
 | `computer_id`: `For start, a computer id or exact name from list. Omit to use the Session's selected computer. Existing terminals stay on their original computer.` | Guessing a target, silently returning to server, or moving an existing process when the Session default changes (F2, F4). | Desktop execution design 2026-10-26; remote grant/pinning tests. |
 | `workdir`: `Directory on the selected computer. On the server, relative paths and omission use the working directory; on a Desktop, they use that computer's home directory.` | Applying server cwd or home expansion to a remote filesystem (F2). | Native path resolution and RPC forwarding tests. |
 | Unconfirmed launch note: `The Desktop has not confirmed this terminal's launch. Reconnect if needed; this terminal will recover by checking the same process, without starting another one.` | Repeating a start after a lost acknowledgement, or treating uncertainty as a confirmed failure/success (F4). | Delayed-spawn and reconnect regressions. |

@@ -955,6 +955,54 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
         assert "links" in note
 
 
+@pytest.mark.parametrize("mode", ["content", "directories", "absolute_glob", "linked_root"])
+def test_approved_search_root_still_filters_denied_descendants(tmp_path: Path, mode: str) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    _write(outside, {"visible/ok.txt": "token", "secret/hidden.txt": "token"})
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules(
+            {"read": "work_area", "deny": [f"Read({outside.as_posix()}/secret/**)"]}
+        ),
+        BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+    requests: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        requests.append(requirements)
+        return True
+
+    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    arguments: dict[str, Any] = (
+        {"args": ["--dirs"]} if mode == "directories" else {"pattern": "token"}
+    )
+    if mode == "absolute_glob":
+        arguments["glob"] = f"{outside.as_posix()}/**/*.txt"
+    elif mode == "linked_root":
+        link_directory(work / "linked", outside)
+        arguments["path"] = "linked"
+    else:
+        arguments["path"] = str(outside)
+    result = asyncio.run(
+        dispatch(
+            work,
+            arguments,
+            permissions=boundary,
+            approval_hook=approve,
+            approval_refresh_hook=refresh,
+        )
+    )
+    assert result["ok"], result
+    shown = json.dumps(result["data"])
+    assert "visible" in shown and "hidden.txt" not in shown
+    assert len(requests) == 1 and len(requests[0]) == 1
+
+
 def test_a_restricted_search_counts_only_the_files_it_may_read(tmp_path: Path) -> None:
     work, boundary = _restricted_tree(tmp_path)
 

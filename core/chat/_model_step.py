@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.chat._request_history import _prepare_request_context
-from core.chat._run_state import RequestState
+from core.chat._run_state import RequestState, refresh_run_permissions
 from core.chat._step_outcomes import (
     _prepare_assistant_context,
     _prepare_completed_assistant,
@@ -245,6 +245,11 @@ class ModelStepBoundary:
             context.session,
             context.project_id,
         )
+
+        async def refresh_approval():
+            await refresh_run_permissions(self._dependencies, context, force=True)
+            return context.permissions, context.execution
+
         return ToolDispatchContext(
             registry=self._dependencies.tools,
             extension_registry=self._dependencies.get_extension_registry(),
@@ -266,6 +271,8 @@ class ModelStepBoundary:
             reply_surface=context.request.reply_surface,
             subagent_session=context.subagent_session,
             permissions=context.permissions,
+            approval_manager=self._dependencies.run_manager,
+            approval_refresh_hook=refresh_approval,
             execution=context.execution,
             tool_restriction=context.request.tool_restriction,
             tool_denial_resolver=context.request.tool_denial_resolver,

@@ -185,6 +185,30 @@ async def test_failed_save_names_the_images_already_saved(
 
 
 @pytest.mark.asyncio
+async def test_guarded_batch_reports_earlier_saved_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+
+    checked: list[Path] = []
+
+    async def guard(path: Path) -> None:
+        checked.append(path)
+        if len(checked) == 3:
+            raise PermissionError("permission changed")
+
+    monkeypatch.setattr(service, "generate", generate)
+    with pytest.raises(OutputWriteError) as caught:
+        await service.generate_artifacts("a cat", output_dir=tmp_path, before_output_write=guard)
+    assert caught.value.saved == (checked[1],)
+    assert checked[1].read_bytes() == b"one"
+    assert not checked[2].exists()
+
+
+@pytest.mark.asyncio
 async def test_artifact_batch_settles_on_cancel_and_waiting_preflight_is_not_billed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -259,6 +283,34 @@ async def test_generate_artifacts_never_overwrite_an_existing_file(
     assert artifact.id == "img_000000000002"
     assert artifact.file_path.read_bytes() == b"new"
     assert existing.read_bytes() == b"keep"
+
+
+@pytest.mark.asyncio
+async def test_guarded_image_collision_checks_each_concrete_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+    existing = tmp_path / "img_000000000001.svg"
+    existing.write_bytes(b"keep")
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        bits = iter((1 << 20, 2 << 20))
+        monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(bits))
+        return ImageGenerationResult(images=(b"new",), media_type="image/svg+xml", model="m")
+
+    checked: list[Path] = []
+
+    async def guard(path: Path) -> None:
+        checked.append(path)
+
+    monkeypatch.setattr(service, "generate", generate)
+    [artifact] = await service.generate_artifacts(
+        "a cat", output_dir=tmp_path, before_output_write=guard
+    )
+    assert checked[1:] == [existing, artifact.file_path]
+    assert artifact.file_path.name == "img_000000000002.svg"
+    assert existing.read_bytes() == b"keep"
+    assert artifact.file_path.read_bytes() == b"new"
 
 
 @pytest.mark.asyncio

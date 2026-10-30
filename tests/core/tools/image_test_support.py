@@ -91,6 +91,7 @@ class ImageService:
         call_options: dict[str, object] | None = None,
         source_paths: tuple[Path, ...] = (),
         usage_context: object = None,
+        before_output_write: Any = None,
     ) -> tuple[object, ...]:
         self.output_dirs.append(output_dir)
         if self.error is not None:

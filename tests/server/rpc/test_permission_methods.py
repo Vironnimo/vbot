@@ -343,3 +343,28 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert [payload["kind"] for _event, payload in state.events] == ["sessions"]
     assert [layer["source"] for layer in after["layers"]] == ["agent"]
     assert after["stored_ceiling"] is False
+
+
+@pytest.mark.asyncio
+async def test_approval_rpcs_project_pending_and_resolve_once() -> None:
+    class Approvals:
+        def approvals_snapshot(self) -> JsonObject:
+            return {"revision": 2, "requests": [{"id": "approval-one"}]}
+
+        def resolve_approval(self, request_id: str, decision: str) -> bool:
+            return request_id == "approval-one" and decision == "allow"
+
+    state = SimpleNamespace(chat_runs=Approvals())
+    assert await rpc_result(state, "permissions.pending") == {
+        "revision": 2,
+        "requests": [{"id": "approval-one"}],
+    }
+    assert await rpc_result(state, "permissions.resolve", id="approval-one", decision="allow") == {
+        "resolved": True
+    }
+    assert (await rpc_error(state, "permissions.resolve", id="gone", decision="reject"))[
+        "code"
+    ] == "approval_not_found"
+    assert (await rpc_error(state, "permissions.resolve", id="approval-one", decision="always"))[
+        "code"
+    ] == "invalid_request"

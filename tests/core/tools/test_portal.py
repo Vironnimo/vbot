@@ -167,6 +167,47 @@ async def test_a_restricted_agent_opens_only_ports_its_web_rules_reach(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_portal_approval_is_exact_and_vbot_port_never_asks(tmp_path: Path) -> None:
+    tools, portals, listeners = _setup()
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"web": "listed"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    requests: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        assert listeners.opened == []
+        requests.append(requirements)
+        return True
+
+    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    refused, _ = await _call(
+        tools,
+        tmp_path,
+        {"action": "open", "port": _VBOT_PORT},
+        permissions=boundary,
+        approval_hook=approve,
+        approval_refresh_hook=refresh,
+    )
+    assert refused["error"]["code"] == "own_port" and requests == []
+    opened, _ = await _call(
+        tools,
+        tmp_path,
+        {"action": "open", "port": 5173},
+        permissions=boundary,
+        approval_hook=approve,
+        approval_refresh_hook=refresh,
+    )
+    assert opened["ok"] and len(requests) == 1
+    assert requests[0][0].kind == "url" and ":5173/" in requests[0][0].target
+    await portals.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_session_holds_a_bounded_number_of_portals_until_one_closes(
     tmp_path: Path,
 ) -> None:

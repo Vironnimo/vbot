@@ -217,3 +217,193 @@ def test_output_preflight_accepts_write_only_folders(
     probes = list(tmp_path.glob(".vb_*.tmp"))
     assert len(probes) == (0 if can_delete else 1)
     assert all(probe.read_bytes() == b"" for probe in probes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["image", "video", "music"])
+async def test_generated_output_is_rechecked_after_provider_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    import asyncio
+    from typing import Any, cast
+
+    from core.model_tasks.artifacts import OutputWriteError
+    from core.model_tasks.image import ImageService
+    from core.model_tasks.image_types import ImageGenerationResult
+    from core.model_tasks.music import MusicService
+    from core.model_tasks.music_types import MusicGenerationResult
+    from core.model_tasks.video import VideoService
+    from core.model_tasks.video_types import VideoGenerationResult
+
+    service = {
+        "image": ImageService,
+        "video": VideoService,
+        "music": MusicService,
+    }[kind](cast(Any, object()), cast(Any, object()))
+    results = {
+        "image": ImageGenerationResult(images=(b"image",), media_type="image/svg+xml", model="m"),
+        "video": VideoGenerationResult(
+            data=b"video", media_type="video/webm", model="m", job_id="j"
+        ),
+        "music": MusicGenerationResult(data=b"music", media_type="audio/ogg", model="m"),
+    }
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    output = tmp_path / "output"
+    authorized = True
+    checked: list[Path] = []
+
+    async def generate(_prompt: str, **_kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return results[kind]
+
+    async def check(path: Path) -> None:
+        checked.append(path)
+        if not authorized:
+            raise PermissionError("output authority changed")
+
+    monkeypatch.setattr(service, "generate", generate)
+    method = service.generate_artifacts if kind == "image" else service.generate_artifact
+    task = asyncio.create_task(method("prompt", output_dir=output, before_output_write=check))
+    await entered.wait()
+    checked.clear()  # The preflight probe was already authorized.
+    authorized = False
+    release.set()
+    with pytest.raises(OutputWriteError) as caught:
+        await task
+    assert caught.value.code == "output_write_failed"
+    assert caught.value.retryable is False
+    assert caught.value.saved == ()
+    assert checked[0].parent == output
+    assert checked[0].suffix == {"image": ".svg", "video": ".webm", "music": ".ogg"}[kind]
+    assert list(output.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_generated_output_guard_runs_after_worker_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+    from typing import Any, cast
+
+    from core.model_tasks import artifacts as artifact_module
+    from core.model_tasks.artifacts import OutputWriteError
+    from core.model_tasks.image import ImageService
+    from core.model_tasks.image_types import ImageGenerationResult
+    from core.utils.workers import BoundedWorkerPool
+
+    pool = BoundedWorkerPool(name="guarded-artifacts-test", max_workers=1)
+    monkeypatch.setattr(artifact_module, "_PERSISTENCE_WORKERS", pool)
+    service = ImageService(cast(Any, object()), cast(Any, object()))
+    provider_entered, release_provider, generated = (asyncio.Event() for _ in range(3))
+    worker_entered = asyncio.Event()
+    release_worker = threading.Event()
+    loop = asyncio.get_running_loop()
+    allowed = True
+    checked: list[Path] = []
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        provider_entered.set()
+        await release_provider.wait()
+        generated.set()
+        return ImageGenerationResult(images=(b"image",), media_type="image/png", model="m")
+
+    def occupy_worker() -> None:
+        loop.call_soon_threadsafe(worker_entered.set)
+        assert release_worker.wait(2)
+
+    async def check(path: Path) -> None:
+        checked.append(path)
+        if not allowed:
+            raise PermissionError("output authority changed")
+
+    monkeypatch.setattr(service, "generate", generate)
+    task = asyncio.create_task(
+        service.generate_artifacts("prompt", output_dir=tmp_path, before_output_write=check)
+    )
+    blocker = None
+    try:
+        await provider_entered.wait()
+        checked.clear()  # The preflight probe was already authorized.
+        blocker = asyncio.create_task(pool.run(occupy_worker))
+        await worker_entered.wait()
+        release_provider.set()
+        await generated.wait()
+        assert checked == []
+        allowed = False
+        release_worker.set()
+        await blocker
+        with pytest.raises(OutputWriteError) as caught:
+            await task
+        assert caught.value.code == "output_write_failed"
+        assert len(checked) == 1
+        assert not checked[0].exists()
+    finally:
+        release_provider.set()
+        release_worker.set()
+        await asyncio.gather(task, *([blocker] if blocker else []), return_exceptions=True)
+        pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_guarded_preflight_rechecks_after_worker_admission_without_creating_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from core.model_tasks import artifacts as artifact_module
+    from core.utils.workers import BoundedWorkerPool
+
+    pool = BoundedWorkerPool(name="guarded-preflight-test", max_workers=1)
+    monkeypatch.setattr(artifact_module, "_PERSISTENCE_WORKERS", pool)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    allowed = True
+    checked: list[Path] = []
+    directory = tmp_path / "new-folder"
+
+    def occupy_worker() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+
+    async def guard(path: Path) -> None:
+        checked.append(path)
+        if not allowed:
+            raise PermissionError("output authority changed")
+
+    blocker = asyncio.create_task(pool.run(occupy_worker))
+    await entered.wait()
+    task = asyncio.create_task(artifact_module.prepare_guarded_output_dir(directory, guard))
+    try:
+        await asyncio.sleep(0)
+        assert checked == []
+        allowed = False
+        release.set()
+        await blocker
+        with pytest.raises(PermissionError):
+            await task
+        assert len(checked) == 1
+        assert checked[0].parent == directory
+        assert not directory.exists()
+    finally:
+        release.set()
+        await asyncio.gather(blocker, task, return_exceptions=True)
+        pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_guarded_preflight_preserves_unusable_directory_error(tmp_path: Path) -> None:
+    from core.model_tasks.artifacts import OutputDirectoryError, prepare_guarded_output_dir
+
+    target = tmp_path / "file"
+    target.write_bytes(b"file")
+
+    async def allow(_path: Path) -> None:
+        pass
+
+    with pytest.raises(OutputDirectoryError):
+        await prepare_guarded_output_dir(target, allow)

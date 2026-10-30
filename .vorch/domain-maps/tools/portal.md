@@ -25,6 +25,8 @@ A target that refuses the connection marks the Portal not listening and answers 
 
 ## Permission Rules
 
+An `open` preflights its exact localhost URL; missing access asks once, and vBot-owned listener ports are refused before asking. The registry rechecks live authority after acquiring its open lock and before binding.
+
 A restricted Session's `open` (`permissions.md`) checks `http://localhost:<port>/` with `check_url`, the decision a shell `curl localhost:<port>` gets: refused when the web rules do not let it fetch from `localhost` (`web: listed` without `Web(localhost)`, or a `Web(localhost)` deny rule) and, as everywhere, at the vBot server's own port. The check runs after the port is validated and before the registry binds a listener or probes the port, so a refused call learns nothing about whether the port answers; a repeated open of an existing Portal is checked the same way. The refusal is the standard not-retryable `permission_denied` (`PermissionDenied`, target `localhost:<port>`). `list` and `close` act only on the Session's own Portals and are not checked. A Portal opened before the rules narrowed keeps forwarding until it is closed: the rules confine the Agent's calls, and the Portal's requests come from the user's browser. Test: `test_portal.py::test_a_restricted_agent_opens_only_ports_its_web_rules_reach`.
 
 ## Constraints & Gotchas

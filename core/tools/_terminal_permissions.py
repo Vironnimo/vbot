@@ -32,6 +32,9 @@ from core.permissions import (
     PermissionDenied,
     PermissionRefusal,
 )
+from core.tools._permission_preflight import authorize_command
+from core.tools._tool_context import ToolContext
+from core.tools.contracts import JsonObject, ToolContractError
 
 from ._terminal_launch import integrated_shell_kind, starts_shell_prompt
 from ._terminal_shell_state import ShellState
@@ -284,6 +287,54 @@ def _follow(
 def _shown(text: str) -> str:
     shown = " ".join(text.split())
     return shown if len(shown) <= _SHOWN_CHARS else shown[: _SHOWN_CHARS - 3] + "..."
+
+
+async def authorize_input(
+    checker: CommandChecker | None,
+    context: ToolContext,
+    state: ShellState | None,
+    shell: ShellKind | None,
+    *,
+    data: str | None,
+    text: str | None,
+    key: str | None,
+    arguments: JsonObject,
+) -> TypedInput | UnfollowableInput | None:
+    if state is None or shell is None:
+        return None
+    typed = typed_input(state, shell, data=data, text=text, key=key)
+    if isinstance(typed, UnfollowableInput) and not context.permissions.restricted:
+        state.forget()
+        return None
+    if (
+        not isinstance(typed, TypedInput)
+        or typed.check is None
+        or not context.permissions.restricted
+    ):
+        return typed
+    if state.cwd is None or checker is None:
+        refused = await check_line(checker, context.permissions, typed)
+        if refused is not None:
+            raise PermissionDenied(refused)
+        return typed
+    identity = (state.at_prompt, state.prompt_count, state.cwd, state.line())
+    environment = {name: os.environ[name] for name in _LINE_ENVIRONMENT if name in os.environ}
+    await authorize_command(
+        context,
+        checker,
+        arguments=arguments,
+        command=typed.check,
+        shell=shell,
+        cwd=Path(state.cwd),
+        env=environment,
+        refuse_command=_nested_shell,
+    )
+    await context.revalidate_permissions()
+    if (state.at_prompt, state.prompt_count, state.cwd, state.line()) != identity:
+        raise ToolContractError(
+            "The terminal prompt changed while the input was prepared. Call terminal again."
+        )
+    return typed
 
 
 async def check_input(

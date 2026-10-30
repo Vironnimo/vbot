@@ -14,9 +14,9 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
-from core.permissions import PermissionBoundary
 from core.storage.layout import DataDirectoryLayout
 from core.tools._path_suggestions import missing_file_message
+from core.tools._permission_preflight import authorize_paths
 from core.tools._read_arguments import (
     READ_HIDDEN_PARAMETERS,
     change_command_refusal,
@@ -238,7 +238,7 @@ def make_read_handler(
                 return tool_failure(
                     "invalid_arguments", _directory_search_message(arguments, label)
                 )
-            return _list_directory(resolved, arguments, label, context.permissions)
+            return _list_directory(resolved, arguments, label, context)
         if not stat.S_ISREG(status.st_mode):
             return tool_failure("not_a_file", f"{label} is neither a file nor a directory.")
 
@@ -542,7 +542,7 @@ def _read_video(label: str, media_type: str) -> JsonObject:
 
 
 def _list_directory(
-    resolved: Path, arguments: JsonObject, label: str, permissions: PermissionBoundary
+    resolved: Path, arguments: JsonObject, label: str, context: ToolContext
 ) -> JsonObject:
     """List a directory's entries; reading a directory never counts as reading a file.
 
@@ -553,7 +553,15 @@ def _list_directory(
             entries = list(scan)
     except OSError as error:
         return tool_failure("file_read_error", f"Could not list {label}: {os_error_reason(error)}.")
-    readable = permissions.readable_entries(resolved, entries)
+    readable = context.permissions.readable_entries(resolved, entries)
+    root = context.path_target(arguments["path"], access="read")
+    known = {entry.path for entry in readable}
+    readable.extend(
+        entry
+        for entry in entries
+        if entry.path not in known
+        and context.permission_access.listing_read_allowed(root / entry.name, root)
+    )
     try:
         page = render_directory_listing(readable, arguments, label)
     except ValueError as error:
@@ -642,6 +650,12 @@ def _display_line_number(value: object) -> int | None:
     return None
 
 
+async def _preflight_read(context: ToolContext, arguments: JsonObject) -> None:
+    path = arguments.get("path")
+    if isinstance(path, str) and path:
+        await authorize_paths(context, [(path, "read", {})], arguments=arguments)
+
+
 def register_read_tool(
     registry: ToolRegistry,
     *,
@@ -671,6 +685,7 @@ def register_read_tool(
         # reaches the handler, which refuses it.
         unadvertised_parameters={**READ_HIDDEN_PARAMETERS, "command": {}, "message_id": {}},
         argument_normalizer=normalize_read_arguments,
+        preflight=_preflight_read,
     )
 
 
