@@ -42,6 +42,7 @@ from core.statistics.index import (
     StatisticsIndex,
     StatisticsScope,
 )
+from core.statistics.model_routes import ModelRouteUse, load_model_route_use
 from core.statistics.report import (
     JsonObject,
     RunActivity,
@@ -335,6 +336,25 @@ class StatisticsService:
     async def skill_package_usage_async(self) -> tuple[SkillActivationUse, ...]:
         """Read package-qualified use on the index database's worker pool."""
         return await self._index.run_async(self.skill_package_usage)
+
+    def model_route_usage(self, *, since: datetime) -> tuple[ModelRouteUse, ...]:
+        """Return the completed Chat requests of the user's own conversations per route.
+
+        A route is a Model and the Connection that served it; the count starts
+        at the whole UTC hour containing ``since`` (`model_routes.py`).
+        """
+        self._import_session_usage()
+        return self._index.read(
+            self._sessions,
+            _index_scopes(self._statistics_scopes(), self._extension_sessions()),
+            lambda view: load_model_route_use(view.connection, since=since),
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
+        )
+
+    async def model_route_usage_async(self, *, since: datetime) -> tuple[ModelRouteUse, ...]:
+        """``model_route_usage`` on the index database's worker pool."""
+        return await self._index.run_async(self.model_route_usage, since=since)
 
     async def group_usage(
         self,

@@ -63,6 +63,7 @@ Per-model **facts a Provider or catalog reports** live in the Provider-scoped `m
 - `query(model_query)` is the pure filtered read path; credential gating happens outside it. `get(provider, model)` raises on unknown pairs; `list_for_provider` sorts ascending.
 - `Model.pricing` is optional immutable `TokenPricing` (`core/models/pricing.py`); `ModelRegistry.pricing_for(bare_or_qualified_reference)` returns the effective exact price or None, and Chat and Compaction snapshot the computed cost in canonical Usage (sources, tiers, computation: `models/pricing.md`).
 - `model.list` and `model.get` (`server/rpc/model_methods.py`) add per-Connection `wire_profiles` statuses and, on `model.get`, the resolved wire facts (`providers/wire-profiles.md` -> Wire reads and learned facts).
+- `model.list {sort: "usage"}`, the default of `vbot model list`, orders Models by the user's own recent Chat requests and adds `preferred_id`, which keeps the user's Connection: `models/model-list.md`.
 - Bundled-only registries cache by database locations; supplying `custom_providers` always returns an isolated registry instead of touching the shared cache.
 
 ## Capabilities & Tasks
@@ -85,3 +86,4 @@ Read these only when your task matches - not by default.
 
 - Changing Model DB roots, the manifest, root selection, refresh staging/publication, `model.refresh_db`, carry-forward enrichment, refresh-time reasoning derivation or per-Connection Context windows, or registry reload concurrency -> `models/refresh.md`
 - Changing token pricing, repricing, tiers or cost computation -> `models/pricing.md`
+- Changing how `model.list` orders Models by usage or picks `preferred_id` -> `models/model-list.md`

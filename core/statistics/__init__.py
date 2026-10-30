@@ -9,6 +9,7 @@ from core.statistics._sources import (
     SessionSource,
 )
 from core.statistics.index import StatisticsIndex, StatisticsUnavailableError
+from core.statistics.model_routes import ModelRouteUse
 from core.statistics.report import RunActivity, RunActivityReport
 from core.statistics.skills import SkillInventorySource, SkillUse, counts_as_skill_use
 from core.statistics.statistics import REPORT_SECTIONS, StatisticsService
@@ -16,6 +17,7 @@ from core.statistics.statistics import REPORT_SECTIONS, StatisticsService
 __all__ = [
     "REPORT_SECTIONS",
     "AgentDirectory",
+    "ModelRouteUse",
     "ProjectDirectory",
     "RunActivity",
     "RunActivityReport",

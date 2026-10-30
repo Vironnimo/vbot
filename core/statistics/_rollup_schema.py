@@ -90,6 +90,7 @@ CREATE TABLE agg_usage (
     unit_key INTEGER NOT NULL,
     origin TEXT NOT NULL,
     model_key TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
     failure_class TEXT NOT NULL,
@@ -121,7 +122,10 @@ CREATE TABLE agg_usage (
 {_SPEED_COLUMNS}
     duration_calls INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
-    PRIMARY KEY (hour, unit_key, origin, model_key, kind, status, failure_class, http_status)
+    PRIMARY KEY (
+        hour, unit_key, origin, model_key, connection_id, kind, status, failure_class,
+        http_status
+    )
 ) WITHOUT ROWID;
 CREATE INDEX agg_usage_unit ON agg_usage(unit_key);
 CREATE TABLE agg_first_token (
@@ -129,6 +133,7 @@ CREATE TABLE agg_first_token (
     unit_key INTEGER NOT NULL,
     origin TEXT NOT NULL,
     model_key TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
     failure_class TEXT NOT NULL,
@@ -136,8 +141,8 @@ CREATE TABLE agg_first_token (
     first_token_ms INTEGER NOT NULL,
     calls INTEGER NOT NULL,
     PRIMARY KEY (
-        hour, unit_key, origin, model_key, kind, status, failure_class, http_status,
-        first_token_ms
+        hour, unit_key, origin, model_key, connection_id, kind, status, failure_class,
+        http_status, first_token_ms
     )
 ) WITHOUT ROWID;
 CREATE INDEX agg_first_token_unit ON agg_first_token(unit_key);

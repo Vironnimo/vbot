@@ -24,10 +24,10 @@ def test_model_list_prints_one_row_per_model(rpc: FakeRpc, run_cli: RunCli) -> N
         },
     )
 
-    code, out, _err = run_cli("model", "list")
+    code, out, _err = run_cli("model", "list", "--sort", "name")
 
     assert code == 0
-    assert rpc.calls == [("model.list", {})]
+    assert rpc.calls == [("model.list", {"sort": "name"})]
     assert out.splitlines()[1:] == [
         "- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
         # An unknown context window is shown as such, never guessed.
@@ -85,12 +85,68 @@ def test_model_list_sends_the_filters_and_prints_effective_window_and_capabiliti
                 "output_modalities": ["text"],
                 "min_context_window": 128000,
                 "query": ["Claude", "opus"],
+                "sort": "usage",
             },
         )
     ]
     assert out.splitlines()[1:] == [
         "- id: ollama/qwen3  name: Qwen 3  context_window: 32768  reachable: no  "
         "capabilities: tools,reasoning  tasks: chat,text_output"
+    ]
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_model_list_groups_models_by_usage(rpc: FakeRpc, run_cli: RunCli, available: bool) -> None:
+    def model(model_id: str, group: str, preferred: str | None = None, **usage: Any) -> Any:
+        return {
+            "id": model_id,
+            "preferred_id": preferred or model_id,
+            "name": model_id,
+            "context_window": 128000,
+            "usage": {"group": group, "calls": 0, **usage},
+        }
+
+    used = model(
+        "opencode-go/deepseek-v4.1-flash",
+        "used",
+        "opencode-go/deepseek-v4.1-flash::plan",
+        calls=40,
+        routes=[{"connection_id": "plan", "calls": 38}, {"connection_id": "api-key", "calls": 2}],
+    )
+    rpc.reply(
+        "model.list",
+        {
+            "models": [
+                used,
+                model("opencode-go/glm-5.3", "provider_used", "opencode-go/glm-5.3::plan"),
+                model("deepseek/deepseek-v4.1-flash", "other"),
+            ],
+            "sort": "usage",
+            "usage_days": 30,
+        }
+        if available
+        else {"models": [used], "sort": "name", "usage_unavailable": True},
+    )
+
+    code, out, _err = run_cli("model", "list", "--query", "deepseek flash")
+
+    assert code == 0
+    assert rpc.calls == [("model.list", {"query": ["deepseek flash"], "sort": "usage"})]
+    lines = out.splitlines()
+    if not available:
+        assert lines[0].startswith("Note: Usage could not be read")
+        return
+    assert lines[0] == "3 usable Models, ordered by use in the last 30 days."
+    assert lines[1].startswith("Note: An id ending in ::<connection>")
+    assert lines[2:] == [
+        "Used in the last 30 days, most requests first:",
+        "- id: opencode-go/deepseek-v4.1-flash::plan  name: opencode-go/deepseek-v4.1-flash  "
+        "context_window: 128000  requests: 40 (plan 38, api-key 2)",
+        "Not used in that time, from the Providers used:",
+        "- id: opencode-go/glm-5.3::plan  name: opencode-go/glm-5.3  context_window: 128000",
+        "Other Models:",
+        "- id: deepseek/deepseek-v4.1-flash  name: deepseek/deepseek-v4.1-flash  "
+        "context_window: 128000",
     ]
 
 

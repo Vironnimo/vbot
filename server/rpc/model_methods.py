@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
 from core.models.query import ModelQuery
 from core.providers.accounts import ConnectionRef
+from core.statistics import ModelRouteUse
 from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MODELS
@@ -27,6 +30,7 @@ from server.rpc.payloads import (
 from server.rpc.provider_access import (
     _connection_reachability,
 )
+from server.rpc.statistics_methods import statistics_service
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
@@ -51,6 +55,11 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
     )
 )
 
+MODEL_LIST_SORTS = ("name", "usage")
+
+# How far back `model.list` with sort "usage" counts the user's own Chat requests.
+MODEL_USAGE_DAYS = 30
+
 _MODEL_REFRESH_TARGET_RUNTIME = "runtime"
 
 _MODEL_REFRESH_TARGET_SYSTEM = "system"
@@ -63,10 +72,23 @@ _MODEL_READ_WORKERS = BoundedWorkerPool(name="model-access", max_workers=4)
 
 
 async def _list_models(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, MODEL_LIST_FILTER_FIELDS, "model.list")
+    """List the Models of usable Connections, by Provider and Model id.
+
+    ``sort: "usage"`` instead puts the Models of the user's own recent Chat
+    requests first (``_order_by_usage``). Statistics only annotate the list:
+    when they cannot be read, the list stays in name order with
+    ``usage_unavailable``.
+    """
+    _reject_unsupported(params, MODEL_LIST_FILTER_FIELDS | {"sort"}, "model.list")
+    sort = params.get("sort", "name")
+    if sort not in MODEL_LIST_SORTS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"Unknown sort {sort!r}; use one of: {', '.join(MODEL_LIST_SORTS)}.",
+        )
 
     try:
-        model_query = ModelQuery.from_filters(params)
+        model_query = ModelQuery.from_filters({k: v for k, v in params.items() if k != "sort"})
     except (KeyError, ValueError) as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
@@ -85,6 +107,7 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
             )
 
             models = []
+            bare_connections: dict[str, list[str]] = {}
             for provider_id, model in selected_models:
                 allowed_connections = [
                     connection
@@ -120,10 +143,89 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                 if reachable is not None:
                     response["reachable"] = reachable
                 models.append(response)
+                bare_connections[response["id"]] = [
+                    connection.id for connection in allowed_connections
+                ]
             models.sort(key=lambda model: (model["provider_id"], model["model_id"]))
         except Exception as exc:
             raise _map_expected_error(exc) from exc
+    if sort == "name":
         return {"models": models}
+    since = datetime.now(UTC) - timedelta(days=MODEL_USAGE_DAYS)
+    try:
+        routes = await statistics_service(state).model_route_usage_async(since=since)
+    except Exception as exc:  # Usage only orders the list.
+        _LOGGER.warning("Model usage is unavailable for model.list: %s", exc)
+        return {"models": models, "sort": "name", "usage_unavailable": True}
+    return {
+        "models": _order_by_usage(models, bare_connections, routes),
+        "sort": "usage",
+        "usage_days": MODEL_USAGE_DAYS,
+    }
+
+
+def _order_by_usage(
+    models: list[JsonObject],
+    allowed_connections: dict[str, list[str]],
+    routes: Sequence[ModelRouteUse],
+) -> list[JsonObject]:
+    """Order name-sorted *models* in three groups and add each one's ``usage``.
+
+    ``used`` Models had completed Chat requests and come first, most requests
+    first; ``provider_used`` Models are unused ones of a Provider the user
+    used; ``other`` Models follow. ``usage.routes`` counts the requests per
+    Connection id (requests that recorded no Connection count only in
+    ``calls``). ``preferred_id`` pins the Connection the user used most for
+    the Model, else for its Provider, when a bare id would resolve to another
+    one, the first of *allowed_connections* (``core/chat/model_resolution.py``).
+    """
+    model_calls: dict[str, int] = {}
+    model_routes: dict[str, dict[str, int]] = {}
+    provider_routes: dict[str, dict[str, int]] = {}
+    for route in routes:
+        model_calls[route.model] = model_calls.get(route.model, 0) + route.calls
+        provider_id = route.model.split("/", 1)[0]
+        provider_routes.setdefault(provider_id, {})
+        if not route.connection_id:
+            continue
+        connection_id = route.connection_id.split(":", 1)[-1]
+        by_model = model_routes.setdefault(route.model, {})
+        by_model[connection_id] = by_model.get(connection_id, 0) + route.calls
+        by_provider = provider_routes[provider_id]
+        by_provider[connection_id] = by_provider.get(connection_id, 0) + route.calls
+
+    def most_used(counts: dict[str, int], allowed: list[str]) -> str | None:
+        usable = [connection for connection in counts if connection in allowed]
+        return max(usable, key=lambda connection: counts[connection]) if usable else None
+
+    groups: dict[str, list[JsonObject]] = {"used": [], "provider_used": [], "other": []}
+    for model in models:
+        model_id = model["id"]
+        calls = model_calls.get(model_id, 0)
+        if calls:
+            group = "used"
+        elif model["provider_id"] in provider_routes:
+            group = "provider_used"
+        else:
+            group = "other"
+        counts = model_routes.get(model_id, {})
+        allowed = allowed_connections[model_id]
+        preferred = most_used(counts, allowed) or most_used(
+            provider_routes.get(model["provider_id"], {}), allowed
+        )
+        usage: JsonObject = {"group": group, "calls": calls}
+        if counts:
+            usage["routes"] = [
+                {"connection_id": connection, "calls": count}
+                for connection, count in sorted(counts.items(), key=lambda item: -item[1])
+            ]
+        model["usage"] = usage
+        model["preferred_id"] = (
+            f"{model_id}::{preferred}" if preferred and preferred != allowed[0] else model_id
+        )
+        groups[group].append(model)
+    groups["used"].sort(key=lambda model: -model["usage"]["calls"])
+    return [*groups["used"], *groups["provider_used"], *groups["other"]]
 
 
 def _model_access_snapshot(

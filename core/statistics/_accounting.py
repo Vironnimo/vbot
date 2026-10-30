@@ -45,7 +45,8 @@ CREATE TABLE stat_usage_records (
     status TEXT NOT NULL,
     duration_ms INTEGER,
     failure_class TEXT,
-    http_status INTEGER
+    http_status INTEGER,
+    connection_id TEXT
 );
 CREATE INDEX stat_usage_records_run ON stat_usage_records(session_key, run_id);
 CREATE INDEX stat_usage_records_instant ON stat_usage_records(instant);
@@ -64,20 +65,21 @@ _INSERT_CALL = (
 )
 _RECORD_COLUMNS = (
     "session_key, call_id, timestamp, instant, run_id, status, duration_ms, failure_class, "
-    "http_status"
+    "http_status, connection_id"
 )
 # Insert or replace one call's record; an existing record keeps its sequence.
 _UPSERT_RECORD = (
-    f"INSERT INTO stat_usage_records ({_RECORD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    f"INSERT INTO stat_usage_records ({_RECORD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
     "ON CONFLICT(call_id) DO UPDATE SET "
     "session_key = excluded.session_key, timestamp = excluded.timestamp, "
     "instant = excluded.instant, run_id = excluded.run_id, status = excluded.status, "
     "duration_ms = excluded.duration_ms, failure_class = excluded.failure_class, "
-    "http_status = excluded.http_status "
+    "http_status = excluded.http_status, connection_id = excluded.connection_id "
     "RETURNING seq"
 )
 _INSERT_RECORD = (
-    f"INSERT INTO stat_usage_records (seq, {_RECORD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    f"INSERT INTO stat_usage_records (seq, {_RECORD_COLUMNS}) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -291,6 +293,7 @@ def _record_values(record: UsageRecord, unit_key: int, instant: int) -> tuple[An
         record.duration_ms,
         record.failure_class,
         record.http_status,
+        record.connection_id,
     )
 
 

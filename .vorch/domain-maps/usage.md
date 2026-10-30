@@ -34,7 +34,10 @@ public address or Run-id reuse never proves historical ownership.
 - `last_request_usage(usage)` selects the final physical request measurement when the optional snapshot is present, including an empty or partial snapshot; otherwise it returns the ordinary Usage. Chat Context, Reasoning replay, output speed, Compaction and Decision calibration use this shared Usage boundary.
 
 - `start(model, kind, ...scope)` durably allocates a `use_` id immediately before
-  request dispatch. Model identity is `provider/model`; Connection is separate.
+  request dispatch. Model identity is `provider/model`; Connection is separate
+  (`connection_id`, `provider:connection`). Chat passes the Connection serving each
+  attempt since 2026-10-30; its earlier requests have none, and `model list`
+  ranks routes by it (`statistics.md` -> Interfaces).
 - `finish(id, usage, status=..., failure=...)` stores known canonical counters,
   their per-field estimate provenance and a cost snapshot, returning Usage with
   `usage_call_id`. Missing counters remain absent. Provider-reported cost takes

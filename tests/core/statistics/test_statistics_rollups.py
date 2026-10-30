@@ -227,7 +227,7 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         "output_tokens": 10,
         "speed": {"first_token_ms": 300, "tokens": 8, "window_ms": 200, "basis": "output"},
     }
-    await _call(ledger, usage, address=alpha.address, run_id="a1")
+    await _call(ledger, usage, address=alpha.address, run_id="a1", connection_id="chat:plan")
     await _call(ledger, {"input_tokens": 7, "output_tokens": 1}, address=alpha.address)
     await _call(ledger, {"input_tokens": 3}, kind="text_embedding", model="embed/m")
     beta = manager.create("main", session_id="beta")

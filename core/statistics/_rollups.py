@@ -544,8 +544,11 @@ _MEASURE_SQL = {
 # Measures of ledger requests only: saved Session usage keeps no request record.
 _REQUEST_MEASURES = ("failed_calls", "duration_calls", "duration_ms")
 _USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
-# A request that did not fail has failure class '' and HTTP status 0.
-_USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status, failure_class, http_status"
+# A request that did not fail has failure class '' and HTTP status 0; one that
+# recorded no Connection (Chat before 2026-10-30) has connection_id ''.
+_USAGE_KEYS = (
+    "hour, unit_key, origin, model_key, connection_id, kind, status, failure_class, http_status"
+)
 _USAGE_COLUMNS = f"{_USAGE_KEYS}, {', '.join(_USAGE_CUBE_MEASURES)}"
 _FIRST_TOKEN_KEYS = f"{_USAGE_KEYS}, first_token_ms"
 _FIRST_TOKEN_COLUMNS = f"{_FIRST_TOKEN_KEYS}, calls"
@@ -905,13 +908,13 @@ def _usage_select(
     # generation index instead of scanning ``stat_sessions`` per request.
     keys = (
         f"{'r.seq, ' if sequence else ''}{_HOUR}, r.session_key, {USAGE_ORIGIN_SQL}, "
-        "c.model_key, c.purpose, r.status, COALESCE(r.failure_class, ''), "
-        "COALESCE(r.http_status, 0)"
+        "c.model_key, COALESCE(r.connection_id, ''), c.purpose, r.status, "
+        "COALESCE(r.failure_class, ''), COALESCE(r.http_status, 0)"
     )
     return f"""
         SELECT {"r.seq, " if sequence else ""}{_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
-            c.model_key, c.purpose, r.status,
+            c.model_key, COALESCE(r.connection_id, '') AS connection_id, c.purpose, r.status,
             COALESCE(r.failure_class, '') AS failure_class,
             COALESCE(r.http_status, 0) AS http_status,
             {measures}

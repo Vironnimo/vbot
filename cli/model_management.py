@@ -19,15 +19,24 @@ def model_list(
 ) -> CommandResult:
     """List available models via `model.list` RPC."""
 
-    payload = _rpc_call(instance, "model.list", dict(filters or {}))
+    params = dict(filters or {})
+    filtered = any(key != "sort" for key in params)
+    payload = _rpc_call(instance, "model.list", params)
     if not payload.ok:
         return payload.to_command_result()
     models = payload.data.get("models")
     if not isinstance(models, list):
         return CommandResult(ok=False, message="RPC result missing models list", instance=instance)
-    return CommandResult(
-        ok=True, message=_format_model_rows(models, filtered=bool(filters)), instance=instance
-    )
+    if payload.data.get("sort") == "usage" and models:
+        message = _format_models_by_usage(models, payload.data.get("usage_days"))
+    else:
+        message = _format_model_rows(models, filtered=filtered)
+        if payload.data.get("usage_unavailable") and models:
+            message = (
+                "Note: Usage could not be read right now, so the Models are in name order.\n"
+                + message
+            )
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def model_show(instance: ServerInstance, model: str) -> CommandResult:
@@ -108,16 +117,66 @@ def _format_model_rows(models: Sequence[object], *, filtered: bool) -> str:
     return "\n".join(lines)
 
 
+# Headings of the usage groups `model.list` returns with sort "usage"; {days} is its window.
+_USAGE_GROUP_HEADINGS = (
+    ("used", "Used in the last {days} days, most requests first:"),
+    ("provider_used", "Not used in that time, from the Providers used:"),
+    ("other", "Other Models:"),
+)
+
+
+def _format_models_by_usage(models: Sequence[object], days: object) -> str:
+    entries = [model for model in models if isinstance(model, dict)]
+    if all(_usage(model).get("group", "other") == "other" for model in entries):
+        return "\n".join(
+            [
+                f"{len(models)} usable Models in name order; "
+                f"none was used in the last {days} days.",
+                *(_format_model_row(model) for model in models),
+            ]
+        )
+    lines = [f"{len(models)} usable Models, ordered by use in the last {days} days."]
+    if any(model.get("preferred_id", model.get("id")) != model.get("id") for model in entries):
+        lines.append(
+            "Note: An id ending in ::<connection> keeps requests on the Connection used so far; "
+            "the id without it can resolve to another Connection."
+        )
+    for group, heading in _USAGE_GROUP_HEADINGS:
+        rows = [model for model in entries if _usage(model).get("group", "other") == group]
+        if rows:
+            lines.append(heading.format(days=days))
+            lines.extend(_format_model_row(model) for model in rows)
+    return "\n".join(lines)
+
+
+def _usage(model: Mapping[str, Any]) -> Mapping[str, Any]:
+    usage = model.get("usage")
+    return usage if isinstance(usage, Mapping) else {}
+
+
 def _format_model_row(model: object) -> str:
     if not isinstance(model, dict):
         return "- invalid model entry"
 
-    model_id = _string_or_default(model.get("id"), "?")
+    model_id = _string_or_default(model.get("preferred_id", model.get("id")), "?")
     name = _string_or_default(model.get("name"), "?")
     context_window = _stringify_or_default(
         model.get("effective_context_window", model.get("context_window")), "?"
     )
     fields = [f"- id: {model_id}", f"name: {name}", f"context_window: {context_window}"]
+    calls = _usage(model).get("calls")
+    if isinstance(calls, int) and calls:
+        routes = _usage(model).get("routes")
+        via = (
+            ", ".join(
+                f"{route.get('connection_id')} {route.get('calls')}"
+                for route in routes
+                if isinstance(route, Mapping)
+            )
+            if isinstance(routes, list)
+            else ""
+        )
+        fields.append(f"requests: {calls}" + (f" ({via})" if via else ""))
     if "reachable" in model:
         fields.append(f"reachable: {'yes' if model.get('reachable') else 'no'}")
     capabilities = _capability_names(model.get("capabilities"))
