@@ -29,7 +29,7 @@ from core.calendar._events import (
     EventOccurrence,
     FreeSlot,
     _check_event,
-    _check_span,
+    _check_stored_span,
     _clone_event,
     _load_events_document,
     _optional_text,
@@ -50,6 +50,8 @@ from core.calendar._time import (
     _parse_iso_datetime,
     _resolve_zone,
     _utc_now_iso,
+    input_span,
+    span_length,
 )
 from core.calendar.errors import (
     CalendarEventNotFoundError,
@@ -78,7 +80,9 @@ _LOGGER = get_logger("calendar.service")
 _CALENDAR_WORKERS = BoundedWorkerPool(name="calendar", max_workers=2)
 # Who caused a mutation when the caller does not say (direct in-process callers).
 _DEFAULT_ACTOR = "internal"
-_EVENT_INPUT_FIELDS = frozenset(("title", "description", "location", "start", "end", "rrule"))
+_EVENT_INPUT_FIELDS = frozenset(
+    ("title", "description", "location", "start", "end", "rrule", "timezone")
+)
 _DEFAULT_LENGTH = timedelta(minutes=DEFAULT_EVENT_DURATION_MINUTES)
 _DEFAULT_DAYS = timedelta(days=DEFAULT_ALL_DAY_DURATION_DAYS)
 _ONE_DAY = timedelta(days=1)
@@ -166,6 +170,7 @@ class CalendarService(CalendarProjection):
         description: str | None = None,
         location: str | None = None,
         rrule: str | None = None,
+        timezone: str | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CalendarEvent:
         """Create and persist a new event.
@@ -184,6 +189,7 @@ class CalendarService(CalendarProjection):
             description=description,
             location=location,
             rrule=rrule,
+            timezone=timezone,
             actor=actor,
         )
         self._store(event, None)
@@ -204,6 +210,7 @@ class CalendarService(CalendarProjection):
         description: str | None = None,
         location: str | None = None,
         rrule: str | None = None,
+        timezone: str | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CalendarEvent:
         """Build and validate an event against the current committed catalog."""
@@ -215,7 +222,9 @@ class CalendarService(CalendarProjection):
         fields: dict[str, Any] = {"start": start}
         if end is not None:
             fields["end"] = end
-        start_text, end_text, tz_name = self._event_times(fields, None)
+        if timezone is not None:
+            fields["timezone"] = timezone
+        start_text, end_text, tz_name, start_utc, end_utc = self._event_times(fields, None)
         now = _utc_now_iso()
         event = CalendarEvent(
             id=new_id("evt", claim=lambda candidate: candidate not in self._events),
@@ -225,7 +234,9 @@ class CalendarService(CalendarProjection):
             start=start_text,
             end=end_text,
             tz_name=tz_name,
-            rrule=_event_rule(rrule, start_text, tz_name),
+            start_utc=start_utc,
+            end_utc=end_utc,
+            rrule=_event_rule(rrule, start_text, tz_name, start_utc),
             created_at=now,
             updated_at=now,
         )
@@ -329,7 +340,7 @@ class CalendarService(CalendarProjection):
         all-day). A change back to the series' own value drops that change.
         """
         await self.load()
-        unknown_fields = sorted(set(fields) - OVERRIDE_FIELDS)
+        unknown_fields = sorted(set(fields) - (OVERRIDE_FIELDS - {"start_utc", "end_utc"}))
         if unknown_fields:
             raise CalendarValidationError(
                 f"Unsupported calendar occurrence fields: {', '.join(unknown_fields)}"
@@ -356,7 +367,10 @@ class CalendarService(CalendarProjection):
                 fields["location"], "location", MAX_LOCATION_LENGTH
             )
         if "start" in fields or "end" in fields:
-            override["start"], override["end"] = self._occurrence_times(event, current, fields)
+            start, end, start_utc, end_utc = self._occurrence_times(event, current, fields)
+            override.update(start=start, end=end)
+            if start_utc is not None:
+                override.update(start_utc=start_utc, end_utc=end_utc)
         override = _without_series_values(event, key, override)
         candidate = _clone_event(event)
         if override:
@@ -420,71 +434,152 @@ class CalendarService(CalendarProjection):
             )
         if "location" in fields:
             candidate.location = _optional_text(fields["location"], "location", MAX_LOCATION_LENGTH)
-        if "start" in fields or "end" in fields:
-            candidate.start, candidate.end, candidate.tz_name = self._event_times(fields, event)
+        if any(name in fields for name in ("start", "end", "timezone")):
+            (
+                candidate.start,
+                candidate.end,
+                candidate.tz_name,
+                candidate.start_utc,
+                candidate.end_utc,
+            ) = self._event_times(fields, event)
         if "rrule" in fields:
-            candidate.rrule = _event_rule(fields["rrule"], candidate.start, candidate.tz_name)
+            candidate.rrule = _event_rule(
+                fields["rrule"], candidate.start, candidate.tz_name, candidate.start_utc
+            )
         elif candidate.rrule is not None and (
-            candidate.start != event.start or candidate.tz_name != event.tz_name
+            candidate.start != event.start
+            or candidate.tz_name != event.tz_name
+            or candidate.start_utc != event.start_utc
         ):
             # The rule's meaning depends on the start (its weekday, UNTIL, BYHOUR).
-            candidate.rrule = _event_rule(candidate.rrule, candidate.start, candidate.tz_name)
+            candidate.rrule = _event_rule(
+                candidate.rrule, candidate.start, candidate.tz_name, candidate.start_utc
+            )
         if candidate.rrule is None:
             candidate.exdates, candidate.overrides = [], {}
-        elif (candidate.start, candidate.rrule) != (event.start, event.rrule):
+        elif (candidate.start, candidate.rrule, candidate.tz_name, candidate.start_utc) != (
+            event.start,
+            event.rrule,
+            event.tz_name,
+            event.start_utc,
+        ):
             _carry_occurrence_changes(candidate, event)
         return candidate
 
     def _event_times(
         self, fields: dict[str, Any], event: CalendarEvent | None
-    ) -> tuple[str, str, str | None]:
-        """Stored start, end and zone of an event from the start and end a call sends."""
+    ) -> tuple[str, str, str | None, str | None, str | None]:
+        """Read an event's local anchor, named zone and exact anchor endpoints."""
+        requested = _resolve_zone(fields["timezone"]) if "timezone" in fields else None
+        zone = requested or (
+            _resolve_zone(event.tz_name or self.system_timezone_name())
+            if event and event.tz_name
+            else self._timezone
+        )
         if "start" in fields:
-            start, zone = self._input_time(fields["start"], "start", event)
+            start, own_zone = self._input_time(fields["start"], "start", event, timezone=requested)
         else:
             assert event is not None
             start = local_time(event.start)
-            zone = None if event.tz_name is None else _resolve_zone(event.tz_name)
-        all_day = zone is None
+            own_zone = None if event.all_day else zone
+            if event.start_utc and (requested is None or str(requested) == event.tz_name):
+                fold = datetime.fromisoformat(event.start_utc).astimezone(zone).fold
+                start = start.replace(fold=fold)
+        all_day = own_zone is None
+        if all_day and requested is not None:
+            raise CalendarValidationError(
+                "timezone applies to timed events; an all-day event uses dates"
+            )
         if fields.get("end") is not None:
-            end, end_zone = self._input_time(fields["end"], "end", event)
+            end, end_zone = self._input_time(fields["end"], "end", event, timezone=requested)
             if (end_zone is None) != all_day:
-                form = "a date" if all_day else "a date-time"
-                raise CalendarValidationError(f"end must be {form} like the start")
+                raise CalendarValidationError(
+                    "end must have the same date or date-time form as start"
+                )
         elif event is not None and event.all_day == all_day:
-            # A moved event keeps its length; an unmoved one its end.
-            end = start + (local_time(event.end) - local_time(event.start))
+            if "start" not in fields:
+                end = local_time(event.end)
+                if event.end_utc and (requested is None or str(requested) == event.tz_name):
+                    fold = datetime.fromisoformat(event.end_utc).astimezone(zone).fold
+                    end = end.replace(fold=fold)
+            else:
+                end = (
+                    start + span_length(event.start, event.end, event.start_utc, event.end_utc)
+                ).replace(fold=start.fold)
         else:
-            end = start + (_DEFAULT_DAYS if all_day else _DEFAULT_LENGTH)
-        _check_span(start, end, all_day=all_day)
+            end = (start + (_DEFAULT_DAYS if all_day else _DEFAULT_LENGTH)).replace(fold=start.fold)
         if all_day and end == start:
             end = start + _ONE_DAY
+        first, last = self._span_instants(start, end, own_zone, fields)
+        if (
+            event is not None
+            and all_day == event.all_day
+            and (requested is None or str(requested) == event.tz_name)
+            and "start" not in fields
+            and event.start_utc is not None
+        ):
+            first = event.start_utc
+            if "end" not in fields:
+                last = event.end_utc
+        if first is not None and last is not None and end <= start:
+            end = start + (datetime.fromisoformat(last) - datetime.fromisoformat(first))
+        _check_stored_span(start, end, first, last, all_day=all_day)
         return (
             occurrence_key(start, all_day=all_day),
             occurrence_key(end, all_day=all_day),
-            None if zone is None else str(zone),
+            None if all_day else str(zone),
+            first,
+            last,
         )
 
     def _occurrence_times(
         self, event: CalendarEvent, current: EventOccurrence, fields: dict[str, Any]
-    ) -> tuple[str, str]:
-        """Stored start and end of a changed occurrence; it keeps the event's kind."""
-        own_start = local_time(current.start)
-        length = local_time(current.end) - own_start
-        start = own_start
+    ) -> tuple[str, str, str | None, str | None]:
+        zone = (
+            None if event.all_day else _resolve_zone(event.tz_name or self.system_timezone_name())
+        )
+        if zone is None:
+            start = local_time(current.start)
+        else:
+            start = current.start_utc.astimezone(zone).replace(tzinfo=None)
         if fields.get("start") is not None:
             start, _ = self._input_time(fields["start"], "start", event, kind_of=event)
         if fields.get("end") is not None:
             end, _ = self._input_time(fields["end"], "end", event, kind_of=event)
+        elif "start" not in fields:
+            end = (
+                local_time(current.end)
+                if zone is None
+                else current.end_utc.astimezone(zone).replace(tzinfo=None)
+            )
         else:
-            end = start + length
-        _check_span(start, end, all_day=event.all_day)
+            length = span_length(
+                current.start,
+                current.end,
+                current.start_utc.isoformat(),
+                current.end_utc.isoformat(),
+            )
+            end = (start + length).replace(fold=start.fold)
         if event.all_day and end == start:
             end = start + _ONE_DAY
+        first, last = self._span_instants(start, end, zone, fields)
+        if first is not None and last is not None and end <= start:
+            end = start + (datetime.fromisoformat(last) - datetime.fromisoformat(first))
+        _check_stored_span(start, end, first, last, all_day=event.all_day)
         return (
             occurrence_key(start, all_day=event.all_day),
             occurrence_key(end, all_day=event.all_day),
+            first,
+            last,
         )
+
+    def _span_instants(
+        self, start: datetime, end: datetime, zone: ZoneInfo | None, fields: dict[str, Any]
+    ) -> tuple[str | None, str | None]:
+        if zone is None:
+            return None, None
+        explicit_end = "end" in fields and datetime.fromisoformat(fields["end"]).tzinfo is not None
+        return input_span(start, end, zone, explicit_end=explicit_end)
 
     def _input_time(
         self,
@@ -493,13 +588,9 @@ class CalendarService(CalendarProjection):
         event: CalendarEvent | None,
         *,
         kind_of: CalendarEvent | None = None,
+        timezone: ZoneInfo | None = None,
     ) -> tuple[datetime, ZoneInfo | None]:
-        """A sent start or end as a naive local time and its zone (None for a date).
-
-        A time without an offset is a server-local time; it is kept in the
-        zone of a timed ``event``, else in the server zone. With ``kind_of``,
-        the value must have that event's kind.
-        """
+        """Read local clock values in the event's zone; an offset names an exact instant."""
         if not isinstance(value, str) or not value.strip():
             raise CalendarValidationError(
                 f"{field_name} must be a date (YYYY-MM-DD) or an ISO 8601 datetime"
@@ -518,14 +609,15 @@ class CalendarService(CalendarProjection):
                 f"{field_name} must be a date: an occurrence keeps the event's kind"
             )
         parsed = _parse_iso_datetime(text, field_name=field_name)
-        zone = (
-            _resolve_zone(event.tz_name)
-            if event is not None and event.tz_name is not None
+        zone = timezone or (
+            _resolve_zone(event.tz_name or self.system_timezone_name())
+            if event and event.tz_name
             else self._timezone
         )
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=self._timezone)
-        local = parsed.astimezone(zone).replace(tzinfo=None, microsecond=0)
+            parsed = parsed.replace(tzinfo=timezone or self._timezone)
+        local = parsed.astimezone(zone).replace(tzinfo=None)
+        local = local.replace(microsecond=0)
         _check_year(local.year, field_name)
         return local, zone
 
@@ -685,9 +777,11 @@ class CalendarService(CalendarProjection):
             ) from error
 
 
-def _event_rule(value: object, start: str, tz_name: str | None) -> str | None:
+def _event_rule(
+    value: object, start: str, tz_name: str | None, anchor_utc: str | None = None
+) -> str | None:
     zone = None if tz_name is None else _resolve_zone(tz_name)
-    return normalize_rrule(value, start=local_time(start), zone=zone)
+    return normalize_rrule(value, start=local_time(start), zone=zone, anchor_utc=anchor_utc)
 
 
 def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) -> None:
@@ -734,7 +828,7 @@ def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) ->
         targets[key] = target
         sources[target] = key
     candidate.exdates = sorted(targets[key] for key in event.exdates if key in targets)
-    length = local_time(candidate.end) - new_start
+    length = span_length(candidate.start, candidate.end, candidate.start_utc, candidate.end_utc)
     overrides: dict[str, dict[str, Any]] = {}
     for key, changes in event.overrides.items():
         if key not in targets:
@@ -751,6 +845,16 @@ def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) ->
                     "end": occurrence_key(start + length, all_day=all_day),
                 },
             )
+        if all_day:
+            value.pop("start_utc", None)
+            value.pop("end_utc", None)
+        elif candidate.tz_name != event.tz_name and "start" in value:
+            first, last = input_span(
+                local_time(value["start"]),
+                local_time(value["end"]),
+                _resolve_zone(candidate.tz_name or "UTC"),
+            )
+            value.update(start_utc=first, end_utc=last)
         if value:
             overrides[targets[key]] = value
     candidate.overrides = overrides
@@ -766,18 +870,29 @@ def _without_series_values(
             del result[name]
     if "start" in result:
         own_start = local_time(key)
-        own_end = own_start + (local_time(event.end) - local_time(event.start))
+        own_end = own_start + span_length(event.start, event.end, event.start_utc, event.end_utc)
         if (result["start"], result["end"]) == (
             occurrence_key(own_start, all_day=event.all_day),
             occurrence_key(own_end, all_day=event.all_day),
         ):
-            del result["start"], result["end"]
+            # Equal wall times can still name different overlap instants.
+            first, last = (event.start_utc, event.end_utc) if key == event.start else (None, None)
+            if first is None and event.tz_name is not None:
+                first, last = input_span(own_start, own_end, _resolve_zone(event.tz_name))
+            if result.get("start_utc", first) == first and result.get("end_utc", last) == last:
+                del result["start"], result["end"]
+                result.pop("start_utc", None)
+                result.pop("end_utc", None)
     return result
 
 
 def _changed_fields(before: CalendarEvent, after: CalendarEvent) -> list[str]:
     old, new = before.to_dict(), after.to_dict()
-    return sorted(name for name in new if name != "updated_at" and new[name] != old[name])
+    return sorted(
+        name
+        for name in new.keys() | old.keys()
+        if name != "updated_at" and new.get(name) != old.get(name)
+    )
 
 
 def _check_year(year: int, field_name: str) -> None:

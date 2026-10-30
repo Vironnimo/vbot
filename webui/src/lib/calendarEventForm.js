@@ -1,9 +1,9 @@
 // The Calendar's event form: an event or one occurrence as editable values,
 // and those values as a `calendar.create` or `calendar.update` payload.
 //
-// The form edits the server-zone wall clock the grid shows. A timed event
-// stores naive local times in its own zone (`tz_name`, the server zone when it
-// was made); an all-day event stores dates with an exclusive end, which the
+// The form edits the event-zone wall clock; the grid uses the application zone. A timed event
+// stores nominal local times in its own zone (`tz_name`) and optional exact
+// endpoints; an all-day event stores dates with an exclusive end, which the
 // form shows inclusively as its last day. Repetition is an RFC 5545 RRULE: the
 // form edits the common shapes (every N days, weeks on chosen weekdays,
 // months on a day or weekday, years; ending never, after a count or on a
@@ -56,12 +56,13 @@ export function emptyEventForm(dayKey) {
   };
 }
 
-// A whole event's values, its times in the server zone.
+// A whole event's values, its times in the event's own zone.
 export function eventFormValues(event, systemTimeZone = 'UTC') {
   const allDay = Boolean(event.all_day);
+  const zone = event.tz_name || systemTimeZone;
   const times = allDay
     ? allDayTimes(event.start, event.end)
-    : timedEventFields(event, systemTimeZone);
+    : timedEventFields(event, zone);
   return {
     title: event.title ?? '',
     description: event.description ?? '',
@@ -69,6 +70,8 @@ export function eventFormValues(event, systemTimeZone = 'UTC') {
     all_day: allDay,
     ...defaultTimes(allDay),
     ...times,
+    ...(!allDay ? { timezone: zone } : {}),
+    ...exactSpan(event, times, zone),
     ...parseRrule(event.rrule, times.start_date),
   };
 }
@@ -76,19 +79,12 @@ export function eventFormValues(event, systemTimeZone = 'UTC') {
 // One occurrence's values: its own title, place, notes and times.
 export function occurrenceFormValues(occurrence, systemTimeZone = 'UTC') {
   const allDay = Boolean(occurrence.all_day);
+  const zone = occurrence.timezone || systemTimeZone;
   const times = allDay
     ? allDayTimes(occurrence.start, occurrence.end)
     : {
-        ...wallClockFields(
-          'start',
-          Date.parse(occurrence.start_utc),
-          systemTimeZone,
-        ),
-        ...wallClockFields(
-          'end',
-          Date.parse(occurrence.end_utc),
-          systemTimeZone,
-        ),
+        ...wallClockFields('start', Date.parse(occurrence.start_utc), zone),
+        ...wallClockFields('end', Date.parse(occurrence.end_utc), zone),
       };
   return {
     title: occurrence.title ?? '',
@@ -97,7 +93,34 @@ export function occurrenceFormValues(occurrence, systemTimeZone = 'UTC') {
     all_day: allDay,
     ...defaultTimes(allDay),
     ...times,
+    ...(!allDay ? { timezone: zone } : {}),
+    ...exactSpan(occurrence, times, zone),
     ...recurrenceDefaults(),
+  };
+}
+
+// A server-proven overlap interval can have an earlier-looking local end.
+// Keep non-time edits usable; changing either clock still requires validation.
+function clockKey(values) {
+  return `${values.start_date}T${values.start_time}/${values.end_date}T${values.end_time}`;
+}
+
+function exactSpan(source, times, zone) {
+  const first = Date.parse(source.start_utc);
+  const last = Date.parse(source.end_utc);
+  if (!Number.isFinite(first) || !(last > first)) return {};
+  return {
+    _source_times: {
+      start: source.start_utc,
+      end: source.end_utc,
+      timezone: zone,
+      start_clock: `${times.start_date}T${times.start_time}`,
+      end_clock: `${times.end_date}T${times.end_time}`,
+    },
+    ...(`${times.end_date}T${times.end_time}` <=
+    `${times.start_date}T${times.start_time}`
+      ? { _exact_span: clockKey(times) }
+      : {}),
   };
 }
 
@@ -132,8 +155,9 @@ export function eventFormProblem(values, { repeats = true } = {}) {
   } else if (
     !isTime(values.start_time) ||
     !isTime(values.end_time) ||
-    `${values.end_date}T${values.end_time}` <=
-      `${values.start_date}T${values.start_time}`
+    (`${values.end_date}T${values.end_time}` <=
+      `${values.start_date}T${values.start_time}` &&
+      values._exact_span !== clockKey(values))
   ) {
     return 'end';
   }
@@ -176,6 +200,23 @@ export function eventFormPayload(
   } else {
     payload.start = `${values.start_date}T${values.start_time}:00`;
     payload.end = `${values.end_date}T${values.end_time}:00`;
+    if (values.timezone) {
+      for (const name of ['start', 'end']) {
+        const original = values._source_times;
+        const clock = `${values[`${name}_date`]}T${values[`${name}_time`]}`;
+        payload[name] =
+          original?.timezone === values.timezone &&
+          original[`${name}_clock`] === clock
+            ? original[name]
+            : new Date(
+                zoneInstant(
+                  naiveWallMilliseconds(payload[name]),
+                  values.timezone,
+                ),
+              ).toISOString();
+      }
+      if (repeats) payload.timezone = values.timezone;
+    }
   }
   if (repeats) {
     payload.rrule = buildRrule(values);
@@ -189,7 +230,13 @@ export function eventFormPayload(
       delete payload.start;
       delete payload.end;
     }
-    for (const key of ['title', 'description', 'location', 'rrule']) {
+    for (const key of [
+      'title',
+      'description',
+      'location',
+      'rrule',
+      'timezone',
+    ]) {
       if (payload[key] === previous[key]) delete payload[key];
     }
   }
@@ -444,13 +491,17 @@ function timedEventFields(event, systemTimeZone) {
   const zone = event.tz_name || systemTimeZone;
   const nominalStart = naiveWallMilliseconds(event.start);
   const nominalEnd = naiveWallMilliseconds(event.end);
-  const start = zoneInstant(nominalStart, zone);
+  const start = event.start_utc
+    ? Date.parse(event.start_utc)
+    : zoneInstant(nominalStart, zone);
   // A skipped start moves the whole span; resolving its nominal end alone
   // would shorten the event or even make both ends equal in the editor.
   const shiftedStart = Number.isFinite(start)
     ? start + zoneOffset(start, zone)
     : Number.NaN;
-  const end = zoneInstant(shiftedStart + nominalEnd - nominalStart, zone);
+  const end = event.end_utc
+    ? Date.parse(event.end_utc)
+    : zoneInstant(shiftedStart + nominalEnd - nominalStart, zone);
   return {
     ...wallClockFields('start', start, systemTimeZone),
     ...wallClockFields('end', end, systemTimeZone),

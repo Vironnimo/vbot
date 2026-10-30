@@ -185,7 +185,7 @@ _DAILY = {
             },
             "start",
             "2026-03-29T03:02",
-            ["2026-03-29T02:00", "2026-03-29T03:00"],
+            ["2026-03-29T03:00", "2026-03-29T03:00"],
             id="gap-shifted-and-ordinary-occurrences-share-a-due-time",
         ),
     ],

@@ -64,6 +64,7 @@ def test_definition_has_the_canonical_parameters() -> None:
         "end",
         "description",
         "location",
+        "timezone",
         "rrule",
         "time_min",
         "time_max",
@@ -71,7 +72,15 @@ def test_definition_has_the_canonical_parameters() -> None:
         "duration",
         "cursor",
     ]
-    assert properties["action"]["enum"] == ["list", "create", "update", "delete", "find_free_time"]
+    assert properties["action"]["enum"] == [
+        "list",
+        "get",
+        "search",
+        "create",
+        "update",
+        "delete",
+        "find_free_time",
+    ]
     assert (properties["duration"]["type"], properties["duration"]["default"]) == ("integer", 60)
     assert CALENDAR_TOOL_PARAMETERS["required"] == ["action"]
 
@@ -80,7 +89,7 @@ class TestCreate:
     def test_timed_event_is_local_time_and_lasts_an_hour_without_end(
         self, tool: CalendarTool
     ) -> None:
-        text = tool.succeeded(
+        result, text = tool.call(
             {
                 "action": "create",
                 "title": "Dentist",
@@ -89,17 +98,22 @@ class TestCreate:
                 "description": "Bring the card.",
             }
         )
-
+        assert result["ok"], text
         event = tool.only_event()
         assert (event.start, event.end, event.tz_name) == (
             "2030-01-10T15:00:00",
             "2030-01-10T16:00:00",
             "Europe/Berlin",
         )
-        assert text == (
-            f"id: {event.id}\ntitle: Dentist\nstart: 2030-01-10T15:00\nend: 2030-01-10T16:00\n"
-            "location: Dr. Weiss\ndescription: Bring the card."
-        )
+        assert result["data"] == {
+            "id": event.id,
+            "title": "Dentist",
+            "start": "2030-01-10T15:00+01:00",
+            "end": "2030-01-10T16:00+01:00",
+            "timezone": "Europe/Berlin",
+            "location": "Dr. Weiss",
+            "description": "Bring the card.",
+        }
 
     @pytest.mark.parametrize(
         ("end", "stored", "shown"),
@@ -131,7 +145,9 @@ class TestCreate:
 
         assert tool.only_event().rrule == WEEKLY
         assert f"rrule: {WEEKLY}" in text
-        assert "next: 2030-01-09T09:00, 2030-01-14T09:00, 2030-01-16T09:00" in text
+        event = tool.only_event()
+        assert f"{event.id}_20300109T0900 2030-01-09T09:00+01:00" in text
+        assert f"{event.id}_20300116T0900 2030-01-16T09:00+01:00" in text
 
     def test_create_needs_title_and_start(self, tool: CalendarTool) -> None:
         message = tool.refused({"action": "create", "location": "Home"})
@@ -191,31 +207,41 @@ class TestCreate:
 
 
 class TestList:
-    def test_list_shows_a_header_and_one_block_per_event(self, tool: CalendarTool) -> None:
+    def test_list_shows_chronological_occurrences_with_exact_ids(self, tool: CalendarTool) -> None:
         standup = _standup(tool)
         job = _bind_job(tool, standup)
         asyncio.run(
             tool.service.update_occurrence(f"{standup}_20300109T0900", start="2030-01-09T10:00")
         )
         trip = tool.service.create_event(title="Trip", start="2030-01-14", end="2030-01-17").id
-
-        envelope, text = tool.call(
+        result, text = tool.call(
             {"action": "list", "time_min": "2030-01-06", "time_max": "2030-01-20"}
         )
-
-        assert envelope["data"]["events"] == 2
-        assert text == (
-            "events: 2\nwindow: 2030-01-06 to 2030-01-19\ntimezone: Europe/Berlin\n"
-            "complete: true\n\n"
-            f"id: {standup}\ntitle: Standup\nstart: 2030-01-07T09:00\nend: 2030-01-07T09:15\n"
-            f"rrule: {WEEKLY}\nlocation: Room 4\n"
-            f"cron_jobs: {job} at start - 30m, target agent-one\n"
-            "occurrences:\n"
-            f"  {standup}_20300107T0900 2030-01-07T09:00\n"
-            f"  {standup}_20300109T0900 2030-01-09T10:00 to 2030-01-09T10:15\n"
-            f"  {standup}_20300114T0900 2030-01-14T09:00\n"
-            f"  {standup}_20300116T0900 2030-01-16T09:00\n\n"
-            f"id: {trip}\ntitle: Trip\nstart: 2030-01-14\nend: 2030-01-17 (last day 2030-01-16)"
+        assert result["ok"], text
+        data = result["data"]
+        assert (data["occurrences"], data["complete"], data["window_timezone"]) == (
+            5,
+            True,
+            "Europe/Berlin",
+        )
+        blocks = [
+            dict(line.split(": ", 1) for line in block.splitlines())
+            for block in data["content"].split("\n\n")
+        ]
+        assert [block["id"] for block in blocks] == [
+            f"{standup}_20300107T0900",
+            f"{standup}_20300109T0900",
+            trip,
+            f"{standup}_20300114T0900",
+            f"{standup}_20300116T0900",
+        ]
+        assert blocks[1]["start"] == "2030-01-09T10:00+01:00"
+        assert blocks[1]["end"] == "2030-01-09T10:15+01:00"
+        assert blocks[2]["end"] == "2030-01-17 (last day 2030-01-16)"
+        assert all(
+            block["series"] == standup and job in block["cron_jobs"]
+            for block in blocks
+            if block["id"] != trip
         )
 
     def test_window_starts_now_and_spans_30_days_by_default(
@@ -231,7 +257,7 @@ class TestList:
 
         text = tool.succeeded({"action": "list"})
 
-        assert "window: 2030-01-01T12:00 to 2030-01-31T12:00" in text
+        assert "window: 2030-01-01T12:00+01:00 to 2030-01-31T12:00+01:00" in text
         assert "title: Last inside" in text
         assert "Over" not in text and "After" not in text
 
@@ -264,23 +290,23 @@ class TestList:
 
         envelope, text = tool.call({"action": "list", "time_min": "2030-01-10", "query": "piano"})
 
-        assert envelope["data"]["events"] == 3
+        assert envelope["data"]["occurrences"] == 3
         assert "query" not in text
         assert "Dentist" not in text
 
     def test_a_long_series_lists_all_occurrences(self, tool: CalendarTool) -> None:
-        event_id = tool.service.create_event(
+        event = tool.service.create_event(
             title="Daily", start="2030-01-01T08:00", rrule="FREQ=DAILY"
-        ).id
-
-        text = tool.succeeded(
+        )
+        result, _ = tool.call(
             {"action": "list", "time_min": "2030-01-01", "time_max": "2030-01-31"}
         )
-
-        occurrences = text.split("occurrences:\n", 1)[1].splitlines()
-        assert occurrences[0] == f"  {event_id}_20300101T0800 2030-01-01T08:00"
-        assert len(occurrences) == 30
-        assert occurrences[-1] == f"  {event_id}_20300130T0800 2030-01-30T08:00"
+        data = result["data"]
+        assert data["occurrences"] == 30
+        ids = [line[4:] for line in data["content"].splitlines() if line.startswith("id: ")]
+        assert ids[0] == f"{event.id}_20300101T0800"
+        assert ids[-1] == f"{event.id}_20300130T0800"
+        assert len(set(ids)) == 30
 
     @pytest.mark.parametrize(
         ("window", "message"),
@@ -324,10 +350,11 @@ class TestFindFreeTime:
         )
 
         assert text == (
-            "free: 2\nwindow: 2030-01-07T08:00 to 2030-01-07T18:00\ntimezone: Europe/Berlin\n"
+            "free: 2\nwindow: 2030-01-07T08:00+01:00 to 2030-01-07T18:00+01:00\n"
+            "timezone: Europe/Berlin\n"
             "complete: true\n\n"
-            "2030-01-07T08:00 to 2030-01-07T09:00 (1h)\n"
-            "2030-01-07T11:00 to 2030-01-07T18:00 (7h)"
+            "2030-01-07T08:00+01:00 to 2030-01-07T09:00+01:00 (1h)\n"
+            "2030-01-07T11:00+01:00 to 2030-01-07T18:00+01:00 (7h)"
         )
 
     def test_defaults_to_seven_days_and_an_hour(
@@ -342,9 +369,10 @@ class TestFindFreeTime:
         text = tool.succeeded({"action": "find_free_time"})
 
         assert text == (
-            "free: 1\nwindow: 2030-01-01T12:00 to 2030-01-08T12:00\ntimezone: Europe/Berlin\n"
+            "free: 1\nwindow: 2030-01-01T12:00+01:00 to 2030-01-08T12:00+01:00\n"
+            "timezone: Europe/Berlin\n"
             "complete: true\n\n"
-            "2030-01-03T10:00 to 2030-01-03T11:00 (1h)"
+            "2030-01-03T10:00+01:00 to 2030-01-03T11:00+01:00 (1h)"
         )
 
     def test_no_free_span_is_named(self, tool: CalendarTool) -> None:
@@ -486,32 +514,22 @@ class TestUpdate:
     ) -> None:
         _now(monkeypatch, datetime(2030, 1, 8, 12, tzinfo=UTC))
         standup = _standup(tool)
+        target = f"{standup}_20300109T0900"
         changes = {"title": "Long standup", "end": "2030-01-09T10:00"} if action == "update" else {}
-
-        text = tool.succeeded({"action": action, "id": f"{standup}_20300109T0900", **changes})
-
+        result, text = tool.call({"action": action, "id": target, **changes})
+        assert result["ok"], text
         listing = tool.succeeded(
             {"action": "list", "time_min": "2030-01-07", "time_max": "2030-01-15"}
         )
         if action == "update":
-            assert text == (
-                f"id: {standup}_20300109T0900\nseries: {standup}\ntitle: Long standup\n"
-                "start: 2030-01-09T09:00\nend: 2030-01-09T10:00\nlocation: Room 4"
-            )
-            assert (
-                f"  {standup}_20300109T0900 2030-01-09T09:00 to 2030-01-09T10:00, "
-                "title: Long standup"
-            ) in listing
+            assert result["data"]["id"] == target
+            assert result["data"]["end"] == "2030-01-09T10:00+01:00"
+            assert f"id: {target}\nseries: {standup}\ntitle: Long standup" in listing
         else:
-            assert text == (
-                f"id: {standup}_20300109T0900\ntitle: Standup\nstart: 2030-01-09T09:00\n"
-                "status: deleted; the rest of the series stays\n"
-                # The series goes on without the deleted occurrence.
-                "next: 2030-01-14T09:00, 2030-01-16T09:00, 2030-01-21T09:00"
-            )
-            assert f"{standup}_20300109T0900" not in listing
-        assert f"  {standup}_20300107T0900 2030-01-07T09:00\n" in listing
-        assert f"  {standup}_20300114T0900 2030-01-14T09:00" in listing
+            assert target not in listing
+            assert f"{standup}_20300114T0900" in result["data"]["next"]
+        assert f"id: {standup}_20300107T0900" in listing
+        assert f"id: {standup}_20300114T0900" in listing
         assert tool.only_event().title == "Standup"
 
     def test_rule_of_an_occurrence_goes_to_the_series(self, tool: CalendarTool) -> None:
@@ -533,7 +551,8 @@ class TestUpdate:
 
         assert message == (
             "calendar was not run: update needs a field to change: title, start, end, "
-            f'description, location or rrule. Send: {{"action":"update","id":"{event_id}",'
+            'description, location, rrule or timezone. Send: {"action":"update",'
+            f'"id":"{event_id}",'
             '"start":"<2030-01-10T15:00 or 2030-01-10>"}'
         )
 
@@ -558,7 +577,11 @@ class TestIds:
     def test_update_and_delete_need_an_id(
         self, tool: CalendarTool, call: dict[str, Any], message: str
     ) -> None:
-        assert tool.refused(call) == message
+        received = tool.refused(call)
+        corrected = json.loads(received.split(" Send: ", 1)[1])
+        assert corrected["action"] == call["action"]
+        assert corrected["id"] == STAND_INS["id"]
+        assert '"action":"search"' in received
 
     @pytest.mark.parametrize(
         ("item_id", "listing"),
@@ -593,7 +616,7 @@ class TestIds:
 
         message = envelope["error"]["message"]
         assert message.startswith("calendar was not run: ")
-        assert f'{{"action":"list","id":"{standup}"}}' in message
+        assert f'{{"action":"get","id":"{standup}"}}' in message
         assert f"{standup}_20300107T0900" in tool.succeeded(
             {"action": "list", "id": standup, "time_min": "2030-01-01"}
         )
@@ -708,3 +731,87 @@ def test_display_labels_the_meant_action(
     display = tool.registry.display_for_call(CALENDAR_TOOL_NAME, arguments)
 
     assert [part["value"] for part in display.get("primary", [])] == labels
+
+
+@pytest.mark.parametrize("kind", ["event", "occurrence"])
+def test_get_reads_exact_identity_and_full_details(tool: CalendarTool, kind: str) -> None:
+    series = _standup(tool)
+    changed = f"{series}_20300109T0900"
+    removed = f"{series}_20300107T0900"
+    description = "Full changed detail " * 100
+    asyncio.run(tool.service.update_occurrence(changed, title="Changed", description=description))
+    asyncio.run(tool.service.delete_occurrence(removed))
+    target = series if kind == "event" else changed
+    result, text = tool.call({"action": "get", "id": target})
+    assert result["ok"], text
+    assert result["data"]["complete"] is True
+    content = result["data"]["content"]
+    assert content.startswith(f"id: {target}\n")
+    if kind == "event":
+        assert f"removed_occurrences: {removed}" in content
+        assert f"changed_occurrences: {changed}" in content
+    else:
+        assert f"series: {series}" in content
+        assert description.strip() in content
+        assert f"{series}_20300114T0900" not in content
+        # The tolerated original-start form has the same exact read target.
+        assert (
+            tool.call({"action": "list", "id": series, "original_start": "2030-01-09T09:00"})[0]
+            == result
+        )
+
+
+def test_search_is_global_and_preserves_literal_query_text(tool: CalendarTool) -> None:
+    old = tool.service.create_event(title="TBD", start="2000-01-01")
+    future = tool.service.create_event(title="Future", start="2050-01-01", rrule="FREQ=YEARLY")
+    asyncio.run(tool.service.update_occurrence(occurrence_id(future.id, "2051-01-01"), title="TBD"))
+    result, text = tool.call({"action": "search", "query": "TBD"})
+    assert result["ok"], text
+    assert result["data"]["events"] == 2
+    assert f"id: {old.id}" in text and f"id: {future.id}" in text
+    assert f"matching_occurrences: {future.id}_20510101" in text
+    bounded, _ = tool.call(
+        {"action": "list", "query": "TBD", "time_min": "2030-01-01", "time_max": "2031-01-01"}
+    )
+    assert bounded["data"]["occurrences"] == 0
+
+
+@pytest.mark.parametrize("bound_names", [("start", "end"), ("time_min", "time_max")])
+def test_search_date_aliases_retain_the_window(
+    tool: CalendarTool, bound_names: tuple[str, str]
+) -> None:
+    old = tool.service.create_event(title="Needle", start="2000-01-01")
+    current = tool.service.create_event(title="Needle", start="2030-01-01")
+    result, text = tool.call(
+        {
+            "action": "search",
+            "query": "Needle",
+            bound_names[0]: "2030-01-01",
+            bound_names[1]: "2031-01-01",
+        }
+    )
+    assert result["ok"], text
+    assert result["data"]["occurrences"] == 1
+    assert current.id in text and old.id not in text
+
+
+def test_named_zone_mutations_and_results_keep_local_intent(tool: CalendarTool) -> None:
+    result, text = tool.call(
+        {
+            "action": "create",
+            "title": "New York",
+            "start": "2030-03-03T09:00",
+            "timezone": "America/New_York",
+            "rrule": "FREQ=WEEKLY;COUNT=6",
+        }
+    )
+    assert result["ok"], text
+    event = tool.only_event()
+    assert (event.start, event.tz_name) == ("2030-03-03T09:00:00", "America/New_York")
+    listed, text = tool.call({"action": "list", "time_min": "2030-03-01", "time_max": "2030-04-10"})
+    assert listed["data"]["occurrences"] == 6
+    assert text.count("timezone: America/New_York") == 6
+    assert "2030-03-03T09:00-05:00" in text and "2030-03-10T09:00-04:00" in text
+    tool.succeeded({"action": "update", "id": event.id, "start": "2030-03-03T10:00"})
+    assert tool.only_event().start == "2030-03-03T10:00:00"
+    assert tool.only_event().tz_name == "America/New_York"

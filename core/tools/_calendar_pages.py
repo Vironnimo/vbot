@@ -15,7 +15,7 @@ from core.tools._calendar_arguments import CalendarCallRefusedError
 
 PAGE_MAX_CHARACTERS = 30_000
 # Headers, the continuation token and its ready-to-send call are budgeted below.
-type Position = tuple[int, str, str]
+type Position = tuple[str, ...]
 type Record = tuple[Position, str]
 
 
@@ -31,7 +31,7 @@ class CalendarPage:
     arguments: dict[str, Any]
     now: datetime
     identity: str
-    position: Position = (0, "", "")
+    position: Position = ()
     offset: int = 0
 
     @classmethod
@@ -45,7 +45,7 @@ class CalendarPage:
             position = payload["position"]
             offset = payload["offset"]
             if (
-                payload["version"] != 1
+                payload["version"] != 2
                 or not isinstance(payload.get("identity"), str)
                 or not isinstance(request, dict)
                 or request.get("action") != arguments["action"]
@@ -54,14 +54,25 @@ class CalendarPage:
                     isinstance(value, str) for key, value in request.items() if key != "duration"
                 )
                 or not isinstance(position, list)
-                or len(position) != 3
-                or type(position[0]) is not int
-                or position[0] < 0
-                or not all(isinstance(value, str) for value in position[1:])
+                or not all(isinstance(value, str) for value in position)
                 or type(offset) is not int
                 or offset < 0
             ):
                 raise ValueError
+            arity = {"list": 3, "search": 2, "get": 1, "find_free_time": 1}[request["action"]]
+            if len(position) != arity:
+                raise ValueError
+            if request["action"] in {"list", "find_free_time"}:
+                moment = datetime.fromisoformat(position[0])
+                if moment.tzinfo is None:
+                    raise ValueError
+            if "duration" in request and (
+                type(request["duration"]) is not int or request["duration"] < 1
+            ):
+                raise ValueError
+            for key in ("time_min", "time_max"):
+                if key in request and datetime.fromisoformat(request[key]).tzinfo is None:
+                    raise ValueError
             frozen_now = datetime.fromisoformat(payload["now"])
             if frozen_now.tzinfo is None:
                 raise ValueError
@@ -84,11 +95,11 @@ class CalendarPage:
                 "calendar was not run: cursor already retains the query's window and filters. "
                 "Continue with only action and cursor, or start a new query without cursor."
             )
-        return cls(request, frozen_now, identity, (position[0], position[1], position[2]), offset)
+        return cls(request, frozen_now, identity, tuple(position), offset)
 
     def _token(self, position: Position, offset: int) -> str:
         payload = {
-            "version": 1,
+            "version": 2,
             "request": self.arguments,
             "now": self.now.isoformat(),
             "identity": self.identity,
@@ -113,6 +124,11 @@ class CalendarPage:
         data = {**data, "complete": False}
         for position, text in records:
             offset = self.offset if first else 0
+            if first and self.position and (position != self.position or offset >= len(text)):
+                raise CalendarCallRefusedError(
+                    "calendar was not run: cursor is invalid for this action. "
+                    "Start the calendar query again without cursor."
+                )
             first = False
             remaining = text[offset:]
             token = self._token(position, offset)
@@ -163,11 +179,18 @@ class CalendarPage:
                     )
                     + "."
                 )
-                if "free" in data:
-                    data["free"] = returned
+                for field in ("free", "events", "occurrences"):
+                    if field in data:
+                        data[field] = returned
                 return {**data, **continuation, "content": content}
             content += remaining
             returned += 1
-        if "free" in data:
-            data["free"] = returned
+        if first and self.position:
+            raise CalendarCallRefusedError(
+                "calendar was not run: cursor is invalid for this action. "
+                "Start the calendar query again without cursor."
+            )
+        for field in ("free", "events", "occurrences"):
+            if field in data:
+                data[field] = returned
         return {**data, "complete": True, **({"content": content} if content else {})}

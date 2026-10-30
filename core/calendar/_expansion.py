@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from dateutil.rrule import rrulebase
 
 from core.calendar._events import CalendarEvent, EventOccurrence, occurrence_id
-from core.calendar._time import _resolve_zone
+from core.calendar._time import _resolve_zone, span_length
 from core.calendar.recurrence import build_rule, resolve_local_span
 
 # Rule starts this much before a window still reach into it through their length.
@@ -41,8 +41,8 @@ def event_series(event: CalendarEvent, system_tz: ZoneInfo) -> _Series:
     """Read ``event`` for expansion; raises CalendarValidationError for an unusable record."""
     zone = None if event.tz_name is None else _resolve_zone(event.tz_name)
     start = local_time(event.start)
-    length = local_time(event.end) - start
-    rule = None if event.rrule is None else build_rule(event.rrule, start, zone)
+    length = span_length(event.start, event.end, event.start_utc, event.end_utc)
+    rule = None if event.rrule is None else build_rule(event.rrule, start, zone, event.start_utc)
     return _Series(event, zone, system_tz, start, length, rule)
 
 
@@ -199,13 +199,31 @@ def _occurrence(
     start, length = original, series.length
     if "start" in changes:
         start = local_time(changes["start"])
-        length = local_time(changes["end"]) - start
+        length = span_length(
+            changes["start"], changes["end"], changes.get("start_utc"), changes.get("end_utc")
+        )
     all_day = series.zone is None
     if series.zone is None:
         start_utc = _midnight(start.date(), series.system_tz)
         end_utc = _midnight((start + length).date(), series.system_tz)
     else:
         start_utc, end_utc = resolve_local_span(start, series.zone, length)
+        if "start" in changes:
+            first, last = changes.get("start_utc"), changes.get("end_utc")
+        elif original == series.start:
+            first, last = event.start_utc, event.end_utc
+        else:
+            first = last = None
+        if first is not None and last is not None:
+            start_utc, end_utc = datetime.fromisoformat(first), datetime.fromisoformat(last)
+    shown_start = (
+        start if series.zone is None else start_utc.astimezone(series.zone).replace(tzinfo=None)
+    )
+    shown_end = (
+        start + length
+        if series.zone is None
+        else end_utc.astimezone(series.zone).replace(tzinfo=None)
+    )
     recurring = series.rule is not None
     key = occurrence_key(original, all_day=all_day) if recurring else None
     return EventOccurrence(
@@ -216,12 +234,13 @@ def _occurrence(
         location=changes.get("location", event.location),
         all_day=all_day,
         recurring=recurring,
-        start=occurrence_key(start, all_day=all_day),
-        end=occurrence_key(start + length, all_day=all_day),
+        start=occurrence_key(shown_start, all_day=all_day),
+        end=occurrence_key(shown_end, all_day=all_day),
         start_utc=start_utc,
         end_utc=end_utc,
         original_start=key,
         overridden=bool(changes),
+        timezone=event.tz_name,
     )
 
 

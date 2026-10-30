@@ -21,7 +21,7 @@ _CALENDAR_READS = BoundedWorkerPool(name="calendar-rpc", max_workers=2)
 _WINDOW_FIELDS = frozenset({"from", "to"})
 # Texts a call may clear with null or "".
 _TEXT_FIELDS = ("description", "location", "rrule")
-_EVENT_FIELDS = frozenset({"title", "start", "end", *_TEXT_FIELDS})
+_EVENT_FIELDS = frozenset({"title", "start", "end", "timezone", *_TEXT_FIELDS})
 _CREATE_FIELDS = _EVENT_FIELDS
 _UPDATE_FIELDS = _EVENT_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
@@ -95,6 +95,11 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
     item_id = _required_string(params, "id")
     fields = _event_fields(params)
     occurrence = parse_occurrence_id(item_id) is not None
+    if occurrence and "timezone" in fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.timezone changes the series; send its event id instead of an occurrence id",
+        )
     if occurrence and "rrule" in fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -150,7 +155,7 @@ async def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
 def _event_fields(params: JsonObject) -> JsonObject:
     """The event fields of a call; null or "" clears a text field."""
     fields: JsonObject = {}
-    for key in ("title", "start", "end"):
+    for key in ("title", "start", "end", "timezone"):
         if key in params:
             fields[key] = _required_string(params, key)
     for key in _TEXT_FIELDS:
@@ -164,6 +169,10 @@ def _event_fields(params: JsonObject) -> JsonObject:
 
 def _event_payload(event: Any) -> JsonObject:
     payload: JsonObject = event.to_dict()
+    payload.pop("endpoints", None)
+    payload["overrides"] = {key: dict(value) for key, value in event.overrides.items()}
+    if event.start_utc is not None:
+        payload.update(start_utc=event.start_utc, end_utc=event.end_utc)
     payload["all_day"] = event.all_day
     payload["recurring"] = event.recurring
     return payload
@@ -184,6 +193,7 @@ def _occurrence_payload(occurrence: Any) -> JsonObject:
         "end_utc": occurrence.end_utc.isoformat(),
         "original_start": occurrence.original_start,
         "overridden": occurrence.overridden,
+        "timezone": occurrence.timezone,
     }
 
 

@@ -54,12 +54,14 @@ OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
 
 WINDOW_ACTIONS = frozenset({"list", "find_free_time"})
-CHANGE_FIELDS = ("title", "start", "end", "description", "location", "rrule")
+READ_ACTIONS = frozenset({"list", "get", "search", "find_free_time"})
+CHANGE_FIELDS = ("title", "start", "end", "description", "location", "rrule", "timezone")
 STAND_INS = {
     "id": "<event id from list>",
     "title": "<title>",
     "start": "<2030-01-10T15:00 or 2030-01-10>",
     "end": "<same form as start>",
+    "timezone": "<IANA zone such as America/New_York>",
     "rrule": "<rule such as FREQ=WEEKLY;BYDAY=MO>",
     "time_min": "<2030-01-10 or 2030-01-10T15:00>",
     "time_max": "<2030-01-10 or 2030-01-10T15:00>",
@@ -84,6 +86,7 @@ _CALL_ORDER = (
     "start",
     "end",
     "rrule",
+    "timezone",
     "location",
     "description",
     "time_min",
@@ -134,18 +137,15 @@ _FIELD_ALIASES = SpellingAliases(
 )
 _ACTION_SYNONYMS = SpellingAliases(
     {
+        "get": ("get_event", "get_occurrence", "read_event"),
+        "search": ("search_events", "query"),
         "list": (
-            "get",
             "show",
             "view",
             "read",
             "events",
             "list_events",
             "get_events",
-            "get_event",
-            "search",
-            "search_events",
-            "query",
             "agenda",
             "upcoming",
         ),
@@ -224,19 +224,14 @@ _PROMPT_KEYS = frozenset({"prompt", "instruction", "instructions", "task", "acti
 _INERT_KEYS = frozenset(
     {
         "singleevents",
-        "orderby",
-        "maxresults",
-        "limit",
         "sendupdates",
         "sendnotifications",
         "colorid",
         "visibility",
-        "transparency",
         "guestscanmodify",
         "guestscaninviteothers",
         "guestscanseeotherguests",
         "showdeleted",
-        "status",
         "kind",
     }
 )
@@ -280,6 +275,8 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     value = _lift_wrappers(value, problems)
     value = _read_time_objects(value, problems)
     zone_name, original_start = _take_zone(value, problems), _take_original_start(value, problems)
+    if zone_name is not None:
+        value["timezone"] = zone_name
     reminder = _take_reminder(value)
     attendees = _take_attendees(value)
     for key in [key for key in value if spelling(key) in _RULE_KEYS]:
@@ -290,21 +287,54 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
         enum_fields=("action",),
         field_aliases=_FIELD_ALIASES,
         field_normalizers={"action": _action_word},
-        empty_as_omitted=("id", "title", "start", "end", "time_min", "time_max", "query"),
+        empty_as_omitted=("id", "start", "end", "time_min", "time_max"),
     )
     if not isinstance(normalized, dict):
         return normalized
+    if normalized.get("query") is None or normalized.get("query") == "":
+        normalized.pop("query", None)
     _read_extras(normalized, problems)
     _omit_placeholders(normalized)
     action = _read_action(normalized, reminder)
     if attendees and action in {"create", "update"}:
         normalized[ATTENDEES_FIELD] = attendees
     if zone_name is not None:
-        _apply_zone(normalized, zone_name, problems)
+        if action in WINDOW_ACTIONS:
+            _apply_zone(normalized, zone_name, problems)
+        elif action in {"create", "update"}:
+            zone = named_zone(zone_name)
+            if zone is None:
+                problems.add(f'timezone "{zone_name}" is not a known time zone.')
+            else:
+                normalized["timezone"] = str(zone)
     if action in WINDOW_ACTIONS:
         _read_window(normalized, problems)
+    elif action in {"get", "search"}:
+        if action == "get" and original_start is not None:
+            normalized["original_start"] = original_start
+        if action == "search" and "id" in normalized:
+            normalized["action"] = "get"
+        if "title" in normalized and "query" not in normalized:
+            normalized["query"] = normalized.pop("title")
+        if action == "search" and any(
+            name in normalized for name in ("time_min", "time_max", "start", "end", WHEN_FIELD)
+        ):
+            # A bounded text search asks for matching occurrences.
+            normalized["action"] = "list"
+            _read_window(normalized, problems)
+        else:
+            for name in CHANGE_FIELDS:
+                normalized.pop(name, None)
     else:
         _read_event(normalized, original_start, problems)
+    if (
+        action == "list"
+        and "id" in normalized
+        and not any(name in normalized for name in ("time_min", "time_max", WHEN_FIELD))
+    ):
+        normalized["action"] = "get"
+        if original_start is not None:
+            normalized["original_start"] = original_start
     if problems.texts or problems.choice:
         known = set(contract.input_schema["properties"])
         for key in normalized:
@@ -373,7 +403,21 @@ def _read_time_objects(arguments: dict[str, Any], problems: _Problems) -> dict[s
         fields = {spelling(name): value for name, value in item.items()}
         moment, day, zone = fields.get("datetime"), fields.get("date"), fields.get("timezone")
         if isinstance(moment, str) and moment.strip():
-            result[key] = _in_zone(moment.strip(), zone, problems)
+            if spelling(key) in {"start", "starttime"} and zone:
+                _merge(result, "timezone", zone, problems)
+                result[key] = moment.strip()
+            elif (
+                spelling(key) in {"end", "endtime"}
+                and zone
+                and (
+                    zone == result.get("timezone")
+                    or isinstance(arguments.get("start"), dict)
+                    and zone == arguments["start"].get("timeZone")
+                )
+            ):
+                result[key] = moment.strip()
+            else:
+                result[key] = _in_zone(moment.strip(), zone, problems)
         elif isinstance(day, str) and day.strip():
             result[key] = day.strip()
         else:
@@ -395,12 +439,14 @@ def _in_zone(text: str, zone_name: Any, problems: _Problems) -> str:
     if zone is None:
         problems.add(f'"timeZone" "{zone_name}" is not a known time zone.')
         return text
-    return moment.replace(tzinfo=zone).isoformat(timespec="minutes")
+    return moment.replace(tzinfo=zone).isoformat(timespec="seconds")
 
 
 def _take_zone(arguments: dict[str, Any], problems: _Problems) -> str | None:
     zones = [arguments.pop(key) for key in list(arguments) if spelling(key) in _ZONE_KEYS]
-    if len({str(zone).strip() for zone in zones}) > 1:
+    if any(zone not in (None, "") and not isinstance(zone, str) for zone in zones):
+        problems.add("timezone needs an IANA zone such as America/New_York.")
+    if len({str(zone).strip() for zone in zones if zone not in (None, "")}) > 1:
         problems.add("time zones disagree; send one time zone.")
     return next((zone for zone in zones if isinstance(zone, str) and zone.strip()), None)
 
@@ -474,13 +520,7 @@ def _take_reminder(arguments: dict[str, Any]) -> dict[str, str] | None:
 
 
 def _requests_reminder(item: Any) -> bool:
-    if item in (None, False, "", [], {}):
-        return False
-    if isinstance(item, dict):
-        # Google's default reminders ask for nothing beyond the user's own calendar settings.
-        uses_default = item.get("useDefault", item.get("use_default")) is True
-        return not (uses_default and not item.get("overrides"))
-    return True
+    return item not in (None, False, "", [], {})
 
 
 def _reminder_minutes(item: Any) -> int | None:
@@ -530,7 +570,23 @@ def _action_word(value: Any) -> Any:
 def _read_extras(arguments: dict[str, Any], problems: _Problems) -> None:
     for key in list(arguments):
         word = spelling(key)
-        if word in _INERT_KEYS:
+        if word == "status" and str(arguments[key]).casefold() not in {"confirmed", ""}:
+            raise ToolContractError(
+                REFUSAL_PREFIX
+                + (
+                    "status is not supported. Events are active; to cancel an existing"
+                    " event, use delete with its id."
+                )
+            )
+        if word == "transparency" and str(arguments[key]).casefold() not in {"opaque", ""}:
+            raise ToolContractError(
+                REFUSAL_PREFIX
+                + (
+                    "transparent events are not supported. Calendar events block time;"
+                    " omit transparency only when a blocking event is intended."
+                )
+            )
+        if word in _INERT_KEYS or word in {"status", "transparency"}:
             arguments.pop(key)
         elif word in _CALENDAR_KEYS:
             item = arguments.pop(key)
@@ -568,6 +624,8 @@ def _omit_placeholders(arguments: dict[str, Any]) -> None:
         item = arguments.get(name)
         if name in {"description", "location"} and item == "":
             continue  # An explicit empty value clears this field on update.
+        if name in {"title", "description", "location", "query"}:
+            continue
         if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
             del arguments[name]
 
@@ -581,10 +639,14 @@ def _read_action(arguments: dict[str, Any], reminder: dict[str, str] | None) -> 
     if action is None:
         if "id" in arguments and (reminder or any(name in arguments for name in CHANGE_FIELDS)):
             action = "update"
+        elif "id" in arguments:
+            action = "get"
         elif "title" in arguments or reminder:
             action = "create"
         elif "duration" in arguments:
             action = "find_free_time"
+        elif "query" in arguments:
+            action = "search"
         else:
             action = "list"
         arguments["action"] = action
@@ -618,7 +680,6 @@ def _read_window(arguments: dict[str, Any], problems: _Problems) -> None:
         if name not in keep and name in {
             *CHANGE_FIELDS,
             "id",
-            "query",
             "duration",
             ATTENDEES_FIELD,
             REMINDER_FIELD,
@@ -675,7 +736,7 @@ def _read_length(arguments: dict[str, Any], problems: _Problems) -> None:
         problems.add(f"{reason}; send end instead.")
         arguments.setdefault("end", STAND_INS["end"])
         return
-    if "end" in arguments and arguments["end"] != end:
+    if "end" in arguments and not _same_time(arguments["end"], end):
         problems.choose('"end" and "duration" give different ends:', [{}, {"end": end}])
         return
     arguments["end"] = end
@@ -694,7 +755,7 @@ def _end_after(start: str, minutes: int) -> str | None:
         begin = datetime.fromisoformat(start)
     except ValueError:
         return None
-    return (begin + timedelta(minutes=minutes)).isoformat(timespec="minutes")
+    return (begin + timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
 
 def _is_time(text: str) -> bool:
@@ -734,3 +795,12 @@ __all__ = [
     "refusal",
     "render_call",
 ]
+
+
+def _same_time(left: Any, right: str) -> bool:
+    if not isinstance(left, str):
+        return False
+    try:
+        return datetime.fromisoformat(left) == datetime.fromisoformat(right)
+    except ValueError:
+        return left == right
