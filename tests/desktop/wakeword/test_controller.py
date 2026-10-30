@@ -440,10 +440,16 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
 def test_a_spoken_command_is_recorded_transcribed_and_sent(
     voice_rig: Callable[..., Rig],
 ) -> None:
-    rig = voice_rig()
+    gate = threading.Event()
+    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
     rig.wait_ready()
 
     started = rig.say_command()
+    wait_until(rig.server.transcribing.is_set)
+    assert rig.voice.status()["recording"] is None
+    assert rig.cues.played == ["listen", "done"]
+    assert rig.server.sent == []
+    gate.set()
     sent = rig.sink.wait_for_event("sent")
 
     assert rig.sink.kinds() == ["detected", "recording_started", "recording_ended", "sent"]
@@ -482,6 +488,7 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     sequences = [payload["sequence"] for _, payload in rig.sink.pushes]
     assert sequences == list(range(1, len(sequences) + 1))
     assert rig.voice.status()["sequence"] == sequences[-1]
+    assert rig.cues.played == ["listen", "done"]
 
 
 def test_a_cancel_phrase_discards_the_command(voice_rig: Callable[..., Rig]) -> None:
@@ -494,6 +501,7 @@ def test_a_cancel_phrase_discards_the_command(voice_rig: Callable[..., Rig]) -> 
     assert cancelled["command_id"] == "c1"
     assert rig.server.sent == []
     assert rig.state() == ("listening", None)
+    assert rig.cues.played == ["listen", "done", "cancel"]
 
 
 def test_no_speech_after_the_wake_phrase_sends_nothing(voice_rig: Callable[..., Rig]) -> None:
@@ -505,18 +513,25 @@ def test_no_speech_after_the_wake_phrase_sends_nothing(voice_rig: Callable[..., 
 
     assert rig.sink.kinds() == ["detected", "recording_started", "recording_ended", "no_speech"]
     assert rig.server.uploads == []
+    assert rig.voice.status()["recording"] is None
+    assert rig.cues.played == ["listen", "no_speech"]
 
 
 def test_the_user_stop_ends_the_recording_and_sends_what_was_said(
     voice_rig: Callable[..., Rig],
 ) -> None:
-    rig = voice_rig()
+    gate = threading.Event()
+    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
     rig.wait_ready()
     rig.say_wake_phrase()
 
     rig.sd.feed(tone(0.4, 16000))  # no silence follows, so only the stop can end the recording
     wait_until(rig.heard_speech)
     status = rig.voice.stop_recording()
+    wait_until(rig.server.transcribing.is_set)
+    assert rig.voice.status()["recording"] is None
+    assert rig.cues.played == ["listen", "done"]
+    gate.set()
     rig.sink.wait_for_event("sent")
 
     assert status["state"] == "listening"
@@ -552,6 +567,7 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     assert rig.sink.kinds()[-2:] == ["recording_ended", "command_failed"]
     assert rig.server.uploads == []
     assert rig.state() == ("listening", None)
+    assert rig.cues.played == ["listen", "failed"]
     rig.say_command()
     rig.sink.wait_for_event("sent")
 
@@ -635,6 +651,7 @@ def test_a_failed_recording_start_releases_the_recording_and_keeps_listening(
     assert all(subscription.closed for subscription in subscriptions)
     assert rig.server.uploads == []
     assert rig.state() == ("listening", None)
+    assert rig.cues.played == ["listen", "failed"]
     if next_command:
         rig.say_command()
         assert rig.sink.wait_for_event("sent")["command_id"] == "c2"
@@ -841,6 +858,7 @@ def test_a_config_change_during_a_recording_restarts_the_listener_and_drops_it(
     assert rig.server.uploads == []
     assert len(rig.sd.streams) == 2
     assert rig.voice.status()["recording"] is None
+    assert rig.cues.played == ["listen"]
 
 
 def test_an_active_phrase_whose_model_is_gone_can_still_be_removed(

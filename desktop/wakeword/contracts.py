@@ -8,7 +8,6 @@ from typing import Any, Protocol
 
 from desktop.speech.cues import (
     CUE_CANCEL,
-    CUE_DONE,
     CUE_ERROR,
     CUE_FAILED,
     CUE_LISTEN,
@@ -48,7 +47,6 @@ EVENT_ERROR = "error"
 
 _EVENT_CUES = {
     EVENT_DETECTED: CUE_LISTEN,
-    EVENT_SENT: CUE_DONE,
     EVENT_CANCELLED: CUE_CANCEL,
     EVENT_NO_SPEECH: CUE_NO_SPEECH,
     EVENT_TRANSCRIPTION_FAILED: CUE_FAILED,

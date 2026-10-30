@@ -150,7 +150,7 @@ Error codes a Voice bridge call can reject with: `voice_config_invalid`, `no_ser
 - `desktop/speech/cues.py` (`CuePlayer`): the one player `desktop/main.py` creates for Voice and dictation and closes after both on exit, so their cues never overlap and play in request order on `vbot-desktop-cues` (Windows `winsound`; silent elsewhere). `play(cue)` never blocks; a failing playback is logged and skipped. A controller without a player stays silent (tests).
 - Sounds: short sine tones with a 10 ms exponential swell and an exponential fade, 0.12 s apart: `listen` 760 Hz with a 0.28 s fade, `done` 660 then 880 Hz, `cancel` 520 then 360 Hz, `no_speech` 360 Hz, `failed` 320 then 260 Hz, `error` 260 then 220 Hz (0.09 s fades).
 - A cue plays immediately, never behind a lead-in (user requirement: a sound must mark the moment recording can start, without added delay). The `listen` cue rings out longer, so a wireless headset waking from idle that swallows its start still lets its end through.
-- Voice events: `detected` -> `listen`, `sent` -> `done`, `cancelled` -> `cancel`, `no_speech` -> `no_speech`, `transcription_failed` and `command_failed` -> `failed`, `error` -> `error`; other kinds play nothing. Dictation's cues: `desktop/dictation.md` -> Cues.
+- Voice cues: `detected` -> `listen`; `recording_ended` -> `done` only for a completed command take with audio, before transcription starts (user requirement). An empty, failed, or discarded recording gets no `done` cue, and `sent` stays silent. Outcomes keep their cues: `cancelled` -> `cancel`, `no_speech` -> `no_speech`, `transcription_failed` and `command_failed` -> `failed`, `error` -> `error`; other kinds play nothing. Dictation's cues: `desktop/dictation.md` -> Cues.
 
 ## Capture and microphones
 

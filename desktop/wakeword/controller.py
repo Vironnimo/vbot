@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from desktop import settings as desktop_settings
 from desktop.speech.cues import (
+    CUE_DONE,
     CuePlayer,
 )
 from desktop.speech.server_client import (
@@ -699,7 +700,9 @@ class VoiceController:
             if generation != self._generation or self._recording is not recording:
                 return
             self._recording = None
-            self._emit_recording_locked(voice.EVENT_RECORDING_ENDED, recording)
+            self._emit_recording_locked(
+                voice.EVENT_RECORDING_ENDED, recording, completed=result.outcome == OUTCOME_AUDIO
+            )
             if result.outcome == OUTCOME_NO_SPEECH:
                 self._emit_locked(
                     voice.EVENT_NO_SPEECH,
@@ -853,7 +856,7 @@ class VoiceController:
                 return False
             if self._recording is recording:
                 self._recording = None
-                self._emit_recording_locked(voice.EVENT_RECORDING_ENDED, recording)
+                self._emit_recording_locked(voice.EVENT_RECORDING_ENDED, recording, completed=True)
             if stage is not None:
                 self._commands[recording.command_id] = {
                     "command_id": recording.command_id,
@@ -958,13 +961,17 @@ class VoiceController:
         except Exception:
             logger.exception("Voice status push failed")
 
-    def _emit_recording_locked(self, kind: str, recording: voice._Recording) -> None:
+    def _emit_recording_locked(
+        self, kind: str, recording: voice._Recording, *, completed: bool = False
+    ) -> None:
         self._emit_locked(
             kind,
             command_id=recording.command_id,
             model_id=recording.model_id,
             agent_id=recording.agent_id,
         )
+        if completed and self._cues is not None:
+            self._cues.play(CUE_DONE)
 
     def _emit_locked(self, kind: str, **fields: Any) -> None:
         self._sequence += 1

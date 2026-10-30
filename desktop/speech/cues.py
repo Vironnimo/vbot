@@ -29,7 +29,7 @@ logger = logging.getLogger("vbot.desktop.speech.cues")
 CUE_LISTEN = "listen"
 """Listening starts: a wake phrase was detected, a dictation records."""
 CUE_DONE = "done"
-"""A Voice command was sent, a dictation stopped recording."""
+"""A Voice command or dictation stopped recording, before transcription."""
 CUE_CANCEL = "cancel"
 CUE_NO_SPEECH = "no_speech"
 CUE_FAILED = "failed"
