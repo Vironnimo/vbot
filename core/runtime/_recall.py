@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +67,10 @@ class RecallIntegration:
         embeddings: EmbeddingService,
         extensions: Callable[[], ExtensionRegistry | None],
         logger: LoggerProtocol | None,
+        agent_roster: Callable[[], Sequence[tuple[str, str]]] | None = None,
     ) -> None:
         self._storage = storage
+        self._agent_roster = agent_roster
         self._chat_sessions = sessions
         self._tools = tools
         self._models = models
@@ -122,6 +124,7 @@ class RecallIntegration:
             self.backend,
             self._chat_sessions,
             timezone_name_loader=self._timezone_name,
+            agent_roster=self._agent_roster,
         )
 
     def _timezone_name(self) -> str:

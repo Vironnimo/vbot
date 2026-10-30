@@ -6,7 +6,7 @@ import calendar
 import inspect
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, tzinfo
 from datetime import time as datetime_time
@@ -102,8 +102,8 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
             "agent_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Id of the Agent whose Sessions to search. Use the named Agent "
-                "when one is specified. Omit for the current Agent.",
+                "description": "Id or name of the Agent whose Sessions to search, such as an "
+                "Agent the user names. Omit for the current Agent.",
             },
             "session_id": {
                 "type": "string",
@@ -152,10 +152,15 @@ class _Period:
     text: str
 
 
+# Each Identity Agent as (id, display name), built-in Agents included; read off the Event Loop.
+AgentRoster = Callable[[], Sequence[tuple[str, str]]]
+
+
 def make_session_search_handler(
     recall_backend: Any,
     sessions: ChatSessionManager | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
+    agent_roster: AgentRoster | None = None,
 ):
     resolved_sessions = sessions or _backend_sessions(recall_backend)
 
@@ -166,6 +171,7 @@ def make_session_search_handler(
             recall_backend,
             sessions=resolved_sessions,
             timezone_name_loader=timezone_name_loader,
+            agent_roster=agent_roster,
         )
 
     return handler
@@ -178,11 +184,14 @@ async def session_search_handler(
     *,
     sessions: ChatSessionManager | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
+    agent_roster: AgentRoster | None = None,
 ) -> JsonObject:
     """Search past Sessions.
 
     ``timezone_name_loader`` returns the configured IANA timezone that reads
     period dates and times without an offset; without it they read as UTC.
+    ``agent_roster`` lets ``agent_id`` name an Identity Agent by its display
+    name; without it only Agent ids that own Sessions are accepted.
     """
     started = time.perf_counter()
     resolved_sessions = sessions or _backend_sessions(recall_backend)
@@ -200,7 +209,7 @@ async def session_search_handler(
         _validate_session_search_fields(arguments, zone)
         capabilities = _search_capabilities(recall_backend)
         data = await _search_sessions(
-            context, arguments, recall_backend, capabilities, resolved_sessions, zone
+            context, arguments, recall_backend, capabilities, resolved_sessions, zone, agent_roster
         )
         result = tool_success(data)
         _LOGGER.debug(
@@ -251,6 +260,7 @@ def register_session_search_tool(
     sessions: ChatSessionManager | None = None,
     *,
     timezone_name_loader: Callable[[], str] | None = None,
+    agent_roster: AgentRoster | None = None,
 ) -> None:
     if isinstance(recall_backend, ChatSessionManager):
         sessions = recall_backend
@@ -259,7 +269,7 @@ def register_session_search_tool(
         SESSION_SEARCH_TOOL_NAME,
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
-        make_session_search_handler(recall_backend, sessions, timezone_name_loader),
+        make_session_search_handler(recall_backend, sessions, timezone_name_loader, agent_roster),
         summary="Search past conversations.",
         family="sessions",
         open_input_schema=True,
@@ -285,16 +295,18 @@ async def _search_sessions(
     capabilities: RecallSearchCapabilities,
     sessions: ChatSessionManager | None,
     zone: _Zone,
+    agent_roster: AgentRoster | None = None,
 ) -> JsonObject:
     query = _required_string(arguments, "query")
-    agent_id = _agent_id(arguments, context)
+    requested = _optional_string(arguments.get("agent_id"))
+    agent_id, agent_note = await _resolve_agent_id(requested, context, sessions, agent_roster)
     confined = _confined_to_tree(context)
     if agent_id != context.agent_id and context.permissions.restricted:
         # The rules confine what this Session reads; another Agent's conversations
         # can hold what they keep from it.
         raise _SessionSearchError(
             "permission_denied",
-            f'agent_id "{agent_id}" names another Agent. '
+            f'agent_id "{requested}" names another Agent. '
             + (
                 f"{_TREE_SCOPE} Omit agent_id."
                 if confined
@@ -317,6 +329,8 @@ async def _search_sessions(
     period = _parse_period(arguments.get("period"), zone)
     since, until = (period.since, period.until) if period is not None else (None, None)
     limit, notes = _limit(arguments.get("limit"))
+    if agent_note is not None:
+        notes.append(agent_note)
     if sessions is None:
         raise _SessionSearchError(
             "session_search_unavailable",
@@ -383,8 +397,70 @@ async def _search_sessions(
         period=period.text if period is not None else None,
         limit=limit,
         notes=notes,
+        # Another Agent's Sessions are open to this search: say so when it finds nothing.
+        other_agents_searchable=requested is None
+        and context.project_id is None
+        and not context.permissions.restricted,
     )
     return data
+
+
+async def _resolve_agent_id(
+    requested: str | None,
+    context: ToolContext,
+    sessions: ChatSessionManager | None,
+    agent_roster: AgentRoster | None,
+) -> tuple[str, str | None]:
+    """Return the Agent id *requested* names, with a note when a display name was read.
+
+    An exact or case-folded id of an Agent or Session owner wins; otherwise one
+    Identity Agent whose display name matches, ignoring case. A value nothing
+    matches is returned unchanged under restrictive permission rules, whose
+    refusal follows, and refused otherwise with the Agents it could name.
+    """
+    if requested is None or requested == context.agent_id:
+        return context.agent_id, None
+    roster: Sequence[tuple[str, str]] = ()
+    if agent_roster is not None and context.project_id is None:
+        roster = await run_tool_worker(agent_roster)
+    owners: list[str] = []
+    if sessions is not None:
+        owners = await sessions.run_async(
+            sessions.list_agent_ids, context.project_id, exclude_owner_managed=True
+        )
+    ids = {agent_id.casefold(): agent_id for agent_id in [*owners, *(a for a, _ in roster)]}
+    ids.setdefault(context.agent_id.casefold(), context.agent_id)
+    if requested.casefold() in ids:
+        return ids[requested.casefold()], None
+    named = [
+        (agent_id, name) for agent_id, name in roster if name.casefold() == requested.casefold()
+    ]
+    if len(named) == 1:
+        agent_id, name = named[0]
+        return agent_id, f'agent_id "{requested}" was read as the Agent {agent_id} ({name}).'
+    if context.permissions.restricted:
+        return requested, None
+    if named:
+        raise _SessionSearchError(
+            "unknown_agent",
+            f'Nothing was searched. Several Agents have the name "{requested}": '
+            f"{', '.join(agent_id for agent_id, _ in named)}. Set agent_id to one of these ids.",
+        )
+    names = dict(roster)
+    choices = ", ".join(
+        f"{agent_id} ({names[agent_id]})" if names.get(agent_id) else agent_id
+        for agent_id in sorted(set(ids.values()))
+    )
+    if context.project_id is None:
+        raise _SessionSearchError(
+            "unknown_agent",
+            f'Nothing was searched. No Agent has the id or name "{requested}". Agents: {choices}.',
+        )
+    raise _SessionSearchError(
+        "unknown_agent",
+        f'Nothing was searched. No Agent of this Project has Sessions under the id "{requested}". '
+        f"Agents with Sessions here: {choices}.",
+    )
 
 
 # What a Session under an inherited ceiling can search, for its refusals.
@@ -635,11 +711,6 @@ def _validate_session_search_fields(arguments: JsonObject, zone: _Zone = _UTC_ZO
             f"limit must be a whole number from 1 to {SESSION_SEARCH_DEFAULT_LIMIT}; omit it "
             f"for up to {SESSION_SEARCH_DEFAULT_LIMIT} matches.",
         )
-
-
-def _agent_id(arguments: JsonObject, context: ToolContext) -> str:
-    raw = arguments.get("agent_id")
-    return raw.strip() if isinstance(raw, str) and raw.strip() else context.agent_id
 
 
 def _required_string(arguments: JsonObject, key: str) -> str:

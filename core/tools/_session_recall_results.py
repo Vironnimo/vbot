@@ -48,6 +48,8 @@ class _RequestEcho:
     period: str | None
     limit: int
     notes: tuple[str, ...]
+    # No agent_id was given and another Agent's Sessions could have been searched.
+    other_agents_searchable: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,8 +69,14 @@ def _render_search_page(
     period: str | None = None,
     limit: int = SESSION_SEARCH_DEFAULT_LIMIT,
     notes: Sequence[str] = (),
+    other_agents_searchable: bool = False,
 ) -> JsonObject:
-    request = _RequestEcho(period=period, limit=limit, notes=tuple(notes))
+    request = _RequestEcho(
+        period=period,
+        limit=limit,
+        notes=tuple(notes),
+        other_agents_searchable=other_agents_searchable,
+    )
     hits = list(page.hits)
     if len(targets) != len(hits):
         raise _SessionSearchError(
@@ -185,6 +193,11 @@ def _search_data(
             "query terms, or remove unneeded period/session_id filters. Tool "
             "Results are not searched."
         )
+        if request.other_agents_searchable:
+            guidance.append(
+                "This searched only your own Agent's Sessions; to search another Agent's, "
+                "set agent_id to its id or name."
+            )
     else:
         guidance.append(
             "These are selected excerpts and context, not a full transcript. Use them for "

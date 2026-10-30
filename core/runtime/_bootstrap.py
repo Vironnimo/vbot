@@ -616,8 +616,9 @@ def bootstrap(runtime: Runtime) -> None:
         # barrier on the calling thread, the Event Loop in the server lifespan. It never
         # waits there: no request, and so no data snapshot, is served before startup
         # completes.
-        runtime._agents.ensure_bootstrap()
-        runtime._agents.ensure_builtin_agents()
+        agents = runtime._agents
+        agents.ensure_bootstrap()
+        agents.ensure_builtin_agents()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
             sessions=runtime._chat_sessions,
@@ -626,6 +627,7 @@ def bootstrap(runtime: Runtime) -> None:
             embeddings=runtime._embeddings,
             extensions=lambda: runtime._extensions,
             logger=runtime.logger,
+            agent_roster=lambda: [(agent.id, agent.name) for agent in agents.list_with_builtins()],
         )
         runtime._chat_sessions.recover_interrupted_runs()
         runtime._chat_run_manager = ChatRunManager(

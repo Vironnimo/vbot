@@ -80,7 +80,40 @@ async def test_other_agent_same_session_id_remains_searchable(tmp_path: Path) ->
     own = success(await search(tmp_path, {"query": "needle"}, backend))
     other = success(await search(tmp_path, {"query": "needle", "agent_id": "reviewer"}, backend))
     assert own["items"] == []
+    assert "set agent_id to its id or name" in own["guidance"]
     assert other["items"][0]["agent_id"] == "reviewer"
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "searched", "said"),
+    [
+        ("nemo", "copilot", 'agent_id "nemo" was read as the Agent copilot (Nemo).'),
+        ("COPILOT", "copilot", None),
+        ("Nemu", None, 'No Agent has the id or name "Nemu". Agents: coder (Coder), copilot (Nemo)'),
+        ("Twin", None, 'Several Agents have the name "Twin": left, right.'),
+    ],
+    ids=["display-name", "id-case", "unknown", "ambiguous-name"],
+)
+async def test_agent_id_takes_an_agent_name_and_refuses_one_nothing_matches(
+    tmp_path: Path, agent_id: str, searched: str | None, said: str | None
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("copilot", session_id="past").append(ChatMessage.user("needle"))
+    agents = {"coder": "Coder", "copilot": "Nemo", "left": "Twin", "right": "Twin"}
+    backend = CanonicalSessionRecallBackend(sessions)
+
+    result = await search(
+        tmp_path, {"query": "needle", "agent_id": agent_id}, backend, agents=agents
+    )
+
+    if searched is None:
+        message = failure(result, "unknown_agent")["message"]
+        assert message.startswith("Nothing was searched.")
+        assert said is not None and said in message
+        return
+    data = success(result)
+    assert [item["agent_id"] for item in data["items"]] == [searched]
+    assert (said in data["guidance"]) if said else ("was read as" not in data["guidance"])
 
 
 async def test_a_restricted_session_searches_only_its_own_agent(tmp_path: Path) -> None:
