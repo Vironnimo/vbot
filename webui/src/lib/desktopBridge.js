@@ -487,6 +487,7 @@ function normalizeVoiceStatus(raw) {
       : 'active',
     phrases: normalizePhrases(raw.phrases),
     recording: normalizeRecording(raw.recording),
+    last_recording: normalizeRecording(raw.last_recording),
     commands: normalizeCommands(raw.commands),
     calibration: normalizeCalibration(raw.calibration),
     limits: normalizeLimits(raw.limits),
@@ -519,6 +520,22 @@ function requireVoiceStatus(raw) {
 /** Read the current Voice status snapshot. */
 export async function getVoiceStatus() {
   return requireVoiceStatus(await callBridge('getVoiceStatus'));
+}
+
+/** Read the exact WAV last handed to transcription, without re-encoding it. */
+export async function getVoiceRecording(commandId) {
+  const result = await callBridge('getVoiceRecording', commandId);
+  if (
+    result?.command_id !== commandId ||
+    typeof result.content_base64 !== 'string' ||
+    !result.content_base64
+  ) {
+    throw new Error('The Desktop returned an invalid Voice recording');
+  }
+  const bytes = Uint8Array.from(atob(result.content_base64), (value) =>
+    value.charCodeAt(0),
+  );
+  return new Blob([bytes], { type: 'audio/wav' });
 }
 
 /**

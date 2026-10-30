@@ -3,7 +3,7 @@
 :class:`CommandRecorder` records one command at a time on its own thread
 (``vbot-voice-recorder``) from a dedicated capture subscription that starts at
 the detection pre-roll. Its own speech detector finds the start and the end
-of the utterance on 32 ms hops:
+of the utterance on 32 ms hops, including the detection pre-roll:
 
 - the pre-roll and later non-speech audio wait in a short pre-speech buffer
   (:data:`PRE_SPEECH_SECONDS`) and are kept once speech starts, so the first
@@ -215,13 +215,7 @@ class CommandRecorder:
         rate = pre_roll[-1].recording_rate if pre_roll else None
         pre_speech: deque[AudioBlock] = deque()
         pre_speech_seconds = 0.0
-        for block in pre_roll:
-            if block.recording_rate != rate:
-                pre_speech.clear()
-                pre_speech_seconds = 0.0
-                continue
-            pre_speech.append(block)
-            pre_speech_seconds += block.duration
+        remaining_pre_roll = deque(pre_roll)
         kept: list[bytes] = []
         kept_bytes = 0
         has_speech = False
@@ -236,7 +230,12 @@ class CommandRecorder:
             if user_stop.is_set():
                 logger.info("Voice recording stopped by the user")
                 break
-            item = subscription.read(_READ_TIMEOUT_SECONDS)
+            from_pre_roll = bool(remaining_pre_roll)
+            item = (
+                remaining_pre_roll.popleft()
+                if from_pre_roll
+                else subscription.read(_READ_TIMEOUT_SECONDS)
+            )
             if item is None:
                 if subscription.closed:
                     return RecordingResult(OUTCOME_CANCELLED)
@@ -257,7 +256,8 @@ class CommandRecorder:
                 logger.warning("Voice recording rate changed; discarding it")
                 return RecordingResult(OUTCOME_FAILED, error_code=ERROR_RECORDING_INTERRUPTED)
 
-            recorded_seconds += item.duration
+            if not from_pre_roll:
+                recorded_seconds += item.duration
             pending += item.pcm16
             decisions: list[bool] = []
             while len(pending) >= _HOP_BYTES:
@@ -298,7 +298,8 @@ class CommandRecorder:
                     and pre_speech_seconds - pre_speech[0].duration >= PRE_SPEECH_SECONDS
                 ):
                     pre_speech_seconds -= pre_speech.popleft().duration
-                waited_hops += len(decisions)
+                if not from_pre_roll:
+                    waited_hops += len(decisions)
 
             if has_speech and silent_hops >= _SILENCE_HOPS:
                 break
@@ -364,6 +365,8 @@ class CommandPipeline:
     ``on_stage(command_id, stage)`` reports ``transcribing`` and ``sending``;
     ``on_outcome`` receives exactly one :class:`CommandOutcome` per command,
     unless the request was cancelled or the pipeline stopped or closed before delivery.
+    ``on_transcription(command)`` receives the exact WAV immediately before
+    its upload, so the controller can retain that take for local playback.
     Transcriptions run in parallel; Session resolution and sending follow
     submission order per Agent. Waiting transcripts leave workers free.
     """
@@ -375,12 +378,14 @@ class CommandPipeline:
         stop_event: threading.Event,
         on_stage: Callable[[str, str], None],
         on_outcome: Callable[[CommandOutcome], None],
+        on_transcription: Callable[[Command], None] | None = None,
         max_workers: int = MAX_COMMAND_WORKERS,
     ) -> None:
         self._client = client
         self._stop = stop_event
         self._on_stage = on_stage
         self._on_outcome = on_outcome
+        self._on_transcription = on_transcription
         self._max_workers = max_workers
         self._condition = threading.Condition()
         self._queue: deque[_PendingCommand] = deque()
@@ -480,6 +485,8 @@ class CommandPipeline:
                 return None
             if transcript is None:
                 self._on_stage(command.command_id, STAGE_TRANSCRIBING)
+                if self._on_transcription is not None:
+                    self._on_transcription(command)
                 try:
                     transcript = self._client.transcribe(command.wav).strip()
                 except SpeechServerError as exc:

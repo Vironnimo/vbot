@@ -11,6 +11,7 @@ through it, and a test feeds any further audio itself.
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import threading
@@ -72,6 +73,7 @@ STATUS_KEYS = {
     "default_session_behavior",
     "phrases",
     "recording",
+    "last_recording",
     "commands",
     "calibration",
     "limits",
@@ -484,6 +486,17 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     assert list(dict.fromkeys(stages)) == ["transcribing", "sending"]
     assert rig.voice.status()["commands"] == []
     assert rig.voice.status()["recording"] is None
+    recording = rig.voice.status()["last_recording"]
+    assert recording == {"command_id": "c1", "model_id": OKAY, "agent_id": "main"}
+    audio = base64.b64decode(rig.voice.recording_audio(recording["command_id"])["content_base64"])
+    # The playback is byte-for-byte the file in the actual multipart upload.
+    upload = rig.server.uploads[0]
+    wav_start = upload.index(b"RIFF")
+    wav_size = int.from_bytes(upload[wav_start + 4 : wav_start + 8], "little") + 8
+    assert audio == upload[wav_start : wav_start + wav_size]
+    with pytest.raises(VoiceControlError) as unavailable:
+        rig.voice.recording_audio("missing")
+    assert unavailable.value.error_code == "voice_recording_unavailable"
     # Status snapshots and events share one gap-free sequence.
     sequences = [payload["sequence"] for _, payload in rig.sink.pushes]
     assert sequences == list(range(1, len(sequences) + 1))
@@ -734,6 +747,10 @@ def test_detection_continues_while_a_command_is_transcribed(
     wait_until(rig.server.transcribing.is_set)
     rig.say_command()
     wait_until(lambda: len(rig.voice.status()["commands"]) == 2)
+    wait_until(lambda: rig.voice.status()["last_recording"]["command_id"] == "c2")
+    with pytest.raises(VoiceControlError) as unavailable:
+        rig.voice.recording_audio("c1")
+    assert unavailable.value.error_code == "voice_recording_unavailable"
     gate.set()
 
     rig.sink.wait_for_event("sent", 2)
@@ -934,6 +951,10 @@ def test_a_server_switch_mid_command_rebuilds_the_listener_and_drops_the_old_com
 
     assert status["default_agent_id"] is None
     assert status["commands"] == []
+    assert status["last_recording"] is None
+    with pytest.raises(VoiceControlError) as unavailable:
+        rig.voice.recording_audio("c1")
+    assert unavailable.value.error_code == "voice_recording_unavailable"
     assert status["phrases"][0]["problem"] == "missing_target_agent"
     assert "sent" not in rig.sink.kinds()
     assert rig.server.sent == []

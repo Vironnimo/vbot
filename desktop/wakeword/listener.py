@@ -25,7 +25,7 @@ from desktop.wakeword.server_client import VoiceServerClient
 if TYPE_CHECKING:
     from desktop.speech.capture import AudioCapture, CaptureStatus
     from desktop.speech.microphone import MicrophoneService
-    from desktop.wakeword.commands import CommandOutcome, CommandPipeline, CommandRecorder
+    from desktop.wakeword.commands import Command, CommandOutcome, CommandPipeline, CommandRecorder
     from desktop.wakeword.detection import Detection, DetectionLoop
 logger = logging.getLogger("vbot.desktop.wakeword.controller")
 JOIN_TIMEOUT_SECONDS = 2.0
@@ -124,6 +124,7 @@ class ListenerEvents(MockEvents, Protocol):
     def _on_listener_failed(self, generation: int, error_code: str) -> None: ...
     def _calibrating(self, generation: int) -> bool: ...
     def _on_command_stage(self, generation: int, command_id: str, stage: str) -> None: ...
+    def _on_transcription(self, generation: int, command: Command) -> None: ...
     def _on_command_outcome(self, generation: int, outcome: CommandOutcome) -> None: ...
 
 
@@ -174,6 +175,7 @@ def _build_listener(
         stop_event=stop_event,
         on_stage=lambda command_id, stage: events._on_command_stage(generation, command_id, stage),
         on_outcome=lambda outcome: events._on_command_outcome(generation, outcome),
+        on_transcription=lambda command: events._on_transcription(generation, command),
     )
     return session
 
