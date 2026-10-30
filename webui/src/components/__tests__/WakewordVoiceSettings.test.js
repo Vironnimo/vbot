@@ -18,7 +18,6 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   setVoiceEnabled: vi.fn(),
   updateVoiceConfig: vi.fn(),
   listWakewordModels: vi.fn(),
-  getVoiceRecording: vi.fn(),
   importWakewordModel: vi.fn(),
   deleteWakewordModel: vi.fn(),
   retryVoice: vi.fn(),
@@ -200,116 +199,6 @@ describe('WakewordVoiceSettings', () => {
     await settle();
     await settle();
   }
-
-  describe('last command recording', () => {
-    let createUrl;
-    let revokeUrl;
-    let play;
-    let originalCreateUrl;
-    let originalRevokeUrl;
-    const recording = (commandId) => ({
-      command_id: commandId,
-      model_id: NABU,
-      agent_id: 'main',
-    });
-
-    beforeEach(() => {
-      originalCreateUrl = URL.createObjectURL;
-      originalRevokeUrl = URL.revokeObjectURL;
-      createUrl = vi
-        .fn()
-        .mockReturnValueOnce('blob:first')
-        .mockReturnValue('blob:next');
-      revokeUrl = vi.fn();
-      URL.createObjectURL = createUrl;
-      URL.revokeObjectURL = revokeUrl;
-      play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
-      vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(
-        () => {},
-      );
-      vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
-      desktopBridge.getVoiceRecording.mockResolvedValue(
-        new Blob(['exact WAV']),
-      );
-    });
-
-    afterEach(async () => {
-      if (mountedComponent) {
-        await unmount(mountedComponent);
-        mountedComponent = null;
-      }
-      URL.createObjectURL = originalCreateUrl;
-      URL.revokeObjectURL = originalRevokeUrl;
-      vi.restoreAllMocks();
-    });
-
-    it('plays only on request and releases audio when replaced or hidden', async () => {
-      await mountPanel({
-        status: voiceStatus({ last_recording: recording('c1') }),
-      });
-      expect(desktopBridge.getVoiceRecording).toHaveBeenCalledWith('c1');
-      expect(document.querySelector('audio').getAttribute('src')).toBe(
-        'blob:first',
-      );
-      expect(play).not.toHaveBeenCalled();
-      buttonByLabel(t('audio.play')).click();
-      await settle();
-      expect(play).toHaveBeenCalledOnce();
-
-      owner.adopt(
-        voiceStatus({ sequence: 2, last_recording: recording('c1') }),
-      );
-      await settle();
-      expect(desktopBridge.getVoiceRecording).toHaveBeenCalledOnce();
-      expect(revokeUrl).not.toHaveBeenCalled();
-      owner.adopt(
-        voiceStatus({ sequence: 3, last_recording: recording('c2') }),
-      );
-      await settle();
-      expect(revokeUrl).toHaveBeenCalledWith('blob:first');
-      expect(document.querySelector('audio').getAttribute('src')).toBe(
-        'blob:next',
-      );
-      panelProps.active = false;
-      await settle();
-      expect(revokeUrl).toHaveBeenCalledWith('blob:next');
-      expect(document.querySelector('audio')).toBeNull();
-    });
-
-    it('ignores an older pending recording and releases its replacement on unmount', async () => {
-      let finishFirst;
-      desktopBridge.getVoiceRecording.mockImplementationOnce(
-        () => new Promise((resolve) => (finishFirst = resolve)),
-      );
-      await mountPanel({
-        status: voiceStatus({ last_recording: recording('c1') }),
-      });
-      owner.adopt(
-        voiceStatus({ sequence: 2, last_recording: recording('c2') }),
-      );
-      await settle();
-      finishFirst(new Blob(['old WAV']));
-      await settle();
-      expect(createUrl).toHaveBeenCalledOnce();
-      await unmount(mountedComponent);
-      mountedComponent = null;
-      expect(revokeUrl).toHaveBeenCalledWith('blob:first');
-    });
-
-    it('allows retrying a failed recording read', async () => {
-      desktopBridge.getVoiceRecording.mockRejectedValueOnce(
-        new Error('unavailable'),
-      );
-      await mountPanel({
-        status: voiceStatus({ last_recording: recording('c1') }),
-      });
-      expect(document.querySelector('audio')).toBeNull();
-      buttonByText(t('common.retry')).click();
-      await settle();
-      expect(desktopBridge.getVoiceRecording).toHaveBeenCalledTimes(2);
-      expect(document.querySelector('audio')).not.toBeNull();
-    });
-  });
 
   describe('availability', () => {
     it.each([

@@ -91,7 +91,7 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
     (
         StorageManager.load_debug_settings,
         {"debug": {"trace_limit": 501}},
-        {"enabled": False, "trace_limit": 50},
+        {"enabled": False, "trace_limit": 50, "speech_recording_limit": 10},
     ),
     (
         StorageManager.load_archive_settings,
@@ -366,7 +366,7 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         {"debug": {"enabled": True, "trace_limit": 100}},
         {"debug": {"trace_limit": 200}},
         StorageManager.load_debug_settings,
-        {"enabled": True, "trace_limit": 200},
+        {"enabled": True, "trace_limit": 200, "speech_recording_limit": 10},
     ),
     "archive-null-disables-retention": (
         {"archive": {"retention_days": 14}},
@@ -473,6 +473,18 @@ def test_section_update_merges_into_stored_settings_and_returns_what_is_read_bac
     assert updated == {section: expected}
     assert read(storage) == expected
     assert storage.load_settings()["server_port"] == 8500
+
+
+def test_debug_section_update_preserves_unrecognized_stored_fields(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"debug": {"future_field": {"keep": True}}})
+
+    updated = storage.update_settings_sections({"debug": {"speech_recording_limit": 2}})
+
+    assert updated["debug"] == storage.load_debug_settings()
+    assert updated["debug"]["speech_recording_limit"] == 2
+    persisted = json.loads(storage.settings_path.read_text(encoding="utf-8"))
+    assert persisted["debug"]["future_field"] == {"keep": True}
 
 
 @pytest.mark.parametrize(
@@ -665,7 +677,7 @@ def test_multiple_sections_update_in_one_write(
     assert set(updated) == {"appearance", "subagents", "recall", "debug"}
     assert storage.load_settings() == {
         "appearance": APPEARANCE_DEFAULTS,
-        "debug": {"enabled": True, "trace_limit": 200},
+        "debug": {"enabled": True, "trace_limit": 200, "speech_recording_limit": 10},
         "max_active_subagents": 12,
         "max_active_subagents_total": 40,
         "max_subagent_depth": 6,

@@ -61,7 +61,7 @@ export default Object.freeze({
   'debug.captureEnabled': 'Capture enabled',
   'debug.captureDisabled': 'Capture disabled',
   'debug.inspectorSubtitle':
-    'Explore exactly what was sent to the Provider and what came back.',
+    'Inspect Provider exchanges and speech recognition recordings.',
   'debug.captureAndStorage': 'Capture & storage',
   'debug.capturePrivacy':
     'Bodies are stored in full, including prompts. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
@@ -145,9 +145,23 @@ export default Object.freeze({
   'debug.emptyHeader': 'No traces captured yet',
   'debug.statusFilter': 'Status filter',
   'debug.enabledDescription':
-    'Records full Provider requests and responses, including prompts.',
+    'Records Provider requests, responses and speech recognition audio for inspection.',
   'debug.enabledHelp':
-    'Debug mode records Provider requests and responses, including prompts, for inspection below.\n\nTraces are stored on the computer running the vBot server. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
+    'Debug mode records Provider requests and responses, including prompts, and uploaded speech audio with its transcription or error.\n\nDiagnostics are stored on the computer running the vBot server. Turning Debug off stops new speech captures; retained recordings stay until replaced or cleared. Recognized secret headers and URL parameters are redacted; body content and audio are not redacted.',
+  'debug.speechLimit': 'Speech recordings to keep',
+  'debug.speechLimitHelp':
+    'How many speech recognition recordings to keep on the server. Oldest recordings are removed when the limit is exceeded or reduced. Between 1 and 500; 10 by default. Independent of the Provider trace limit.',
+  'debug.speech.title': 'Speech recognition',
+  'debug.speech.description':
+    'Original uploaded audio with its transcription or error, newest first. Includes wakeword commands, Dictation and the Chat microphone.',
+  'debug.speech.disabled':
+    'Enable Debug mode to capture and inspect speech recordings.',
+  'debug.speech.empty': 'No speech recordings captured yet.',
+  'debug.speech.clear': 'Clear speech recordings',
+  'debug.speech.clearConfirm':
+    'Delete all retained speech recordings and their transcriptions?',
+  'debug.speech.audio': 'Uploaded speech recording',
+  'debug.speech.noText': 'No text recognized',
   'debug.traceLimitHelp':
     'How many traces to keep. When a new trace goes over this limit, the oldest traces are removed. Between 1 and 500; 50 by default.',
   'statistics.range.label': 'Time range',

@@ -798,6 +798,14 @@ export function debugTraceClear(options = {}) {
   return rpc('debug.trace_clear', {}, options);
 }
 
+export function debugSpeechList(options = {}) {
+  return rpc('debug.speech_list', {}, options);
+}
+
+export function debugSpeechClear(options = {}) {
+  return rpc('debug.speech_clear', {}, options);
+}
+
 export function debugModelProbe(providerId, connectionId, options = {}) {
   requireNonEmptyString(
     providerId,

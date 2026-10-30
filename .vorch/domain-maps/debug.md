@@ -1,6 +1,6 @@
 # Debug
 
-Captures complete raw provider HTTP or WebSocket exchanges for local inspection, and probes provider model endpoints. Off by default.
+Captures Provider wire exchanges and original speech uploads with their outcomes for local inspection, and probes Provider model endpoints. Off by default.
 
 ## Overview
 
@@ -49,6 +49,14 @@ Applied before disk, **structured only** - on request and response header and qu
 - Lifecycle: Runtime builds a fresh recorder + store **per adapter construction**, reading settings live - toggling Debug Mode takes effect on the next adapter construction rather than mutating an active Run's transport.
 - Task requests: `ProviderTaskClient.from_runtime(..., debug_context=...)` asks `Runtime.provider_debug_recorder(body_limit=TASK_TRACE_BODY_LIMIT)` for a fresh recorder per client. Image, video and music services pass a context only for Tool calls made in a Run (`task_debug_context`: Run/Agent/Session, Iteration `0`; music `streaming=true`), so standalone work such as indexing never crowds Run traces out of the store. `ProviderDebugRecorder(store, body_limit=None)` keeps whole bodies; with a limit (64 KiB for task clients) it keeps the first bytes of each request and response body and appends `[N more bytes not recorded]`; a cut response body is stored as received, without undoing its `Content-Encoding`.
 - RPCs: `debug.status` and `debug.trace_clear` are always available (so users can clean up after disabling); listing/getting gate on enabled. `model_probe` sends the same discovery request as `model.refresh_db` (Connection, credential and `build_discovery_request`: `providers/catalog-discovery.md`) over a deliberately raw client, stores its own trace, and never mutates the catalog. A Connection without an effective `models_endpoint` is a domain error. Trace-list freshness rides the event bus via `resource_changed(kind: "debug_traces")` on terminal Runs, probes, and clears - DebugView has no manual refresh.
+
+## Speech recognition recordings
+
+`core/debug/speech.py` owns `SpeechDebugStore`, separate from the Provider trace format and its retention. Runtime injects it into `SpeechService`; admission checks Debug Mode off the Event Loop before transcription, and completion hands original upload bytes plus timestamp, duration and transcript or error to the same ordered Debug worker. Capture is best-effort, with at most four pending hand-offs, and cannot change transcription results. A queued save rechecks Debug Mode: disabling capture also drops unfinished captures that have not been published.
+
+Recordings persist under `<data_dir>/artifacts/debug/speech/` as exclusively claimed audio/metadata pairs. The retained audio is the exact input to `SpeechService`, before any Provider-specific conversion; it covers Desktop Voice, Dictation, Chat microphone and other STT callers, including local engines. `debug.speech_recording_limit` is independent of `debug.trace_limit`: 10 by default, editable from 1 to 500. Saves prune oldest-first; reducing the limit applies immediately through the shared Runtime Settings coordinator. Disabling Debug leaves published recordings intact. Clear remains allowed while disabled; list and audio reads require Debug Mode. Like the existing traces, this diagnostic data stays outside data snapshots and configuration backups (`json-documents.md` -> Outside the contract).
+
+The store serializes reads, writes, pruning and clears with Provider traces, so a listing triggered after a transcription observes its queued capture. Malformed or unreadable metadata refuses publication/pruning rather than authorizing deletion; explicit clear removes owned files without following links. Empty reserved sidecars and orphan audio from interrupted publication are removed by the next successful sweep. Binary audio travels only through `GET /api/debug/speech/{recording_id}/audio`, with access guarding, live Debug authorization and `Cache-Control: no-store`; listing and clearing use `debug.speech_list` / `debug.speech_clear`. Neither Debug content nor audio enters app-wide events.
 
 ## Conventions & Gotchas
 

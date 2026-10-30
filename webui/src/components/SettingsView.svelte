@@ -481,6 +481,8 @@
       onCommit={(next) => commitSettings(next, ['debug'])}
       onError={(message) => reportSettingsError(message)}
     />
+  {:else if panelId === 'debug_speech'}
+    <Panel {settings} {active} {debugTracesRefreshToken} />
   {:else if panelId === 'debug_traces'}
     <Panel
       {settings}

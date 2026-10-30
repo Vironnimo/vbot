@@ -97,6 +97,7 @@ ARCHIVE_SETTING_DEFAULTS: dict[str, Any] = {"retention_days": 30}
 DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
     "enabled": False,
     "trace_limit": 50,
+    "speech_recording_limit": 10,
 }
 
 
@@ -429,6 +430,9 @@ def normalize_debug_settings(debug: Any) -> dict[str, Any]:
     return {
         "enabled": _normalize_debug_enabled(section.get("enabled")),
         "trace_limit": _normalize_debug_trace_limit(section.get("trace_limit")),
+        "speech_recording_limit": _normalize_debug_trace_limit(
+            section.get("speech_recording_limit"), field="speech_recording_limit"
+        ),
     }
 
 
@@ -448,15 +452,15 @@ def _normalize_debug_enabled(value: Any) -> bool:
     return value
 
 
-def _normalize_debug_trace_limit(value: Any) -> int:
+def _normalize_debug_trace_limit(value: Any, *, field: str = "trace_limit") -> int:
     if value is None:
-        return cast("int", DEBUG_SETTING_DEFAULTS["trace_limit"])
+        return cast("int", DEBUG_SETTING_DEFAULTS[field])
     if not isinstance(value, int) or isinstance(value, bool):
-        raise StorageError("Debug setting trace_limit must be an integer")
+        raise StorageError(f"Debug setting {field} must be an integer")
     if value <= 0:
-        raise StorageError("Debug setting trace_limit must be positive")
+        raise StorageError(f"Debug setting {field} must be positive")
     if value > MAX_TRACE_LIMIT:
-        raise StorageError(f"Debug setting trace_limit must be at most {MAX_TRACE_LIMIT}")
+        raise StorageError(f"Debug setting {field} must be at most {MAX_TRACE_LIMIT}")
     return value
 
 

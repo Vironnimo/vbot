@@ -41,6 +41,7 @@ from core.database import (
     remove_interrupted_staging,
     retire_core_databases,
 )
+from core.debug import SpeechDebugStore
 from core.extensions import ExtensionRegistry
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -346,6 +347,9 @@ def bootstrap(runtime: Runtime) -> None:
             transcription_audio_getter=runtime._storage.load_speech_settings,
             max_input_bytes=runtime._speech_upload_max_size_bytes,
             usage_recorder=runtime._usage_recorder,
+            debug_recordings=SpeechDebugStore(
+                runtime._storage.data_dir, runtime._storage.load_debug_settings
+            ),
         )
         runtime._image = ImageService(
             runtime._model_tasks,

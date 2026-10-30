@@ -89,6 +89,20 @@ def test_atomic_patch_sets_multiple_nested_values() -> None:
     assert build_effective_settings(updated)["web_search"]["provider"] == "searxng"
 
 
+def test_speech_recording_retention_defaults_to_ten_and_patches_independently() -> None:
+    assert setting_details({}, "debug.speech_recording_limit")["value"] == 10
+    updated, changed = apply_settings_patch(
+        {"debug": {"trace_limit": 80}},
+        parse_patch_operations([{"op": "set", "path": "debug.speech_recording_limit", "value": 5}]),
+    )
+    assert changed == ("debug.speech_recording_limit",)
+    assert build_effective_settings(updated)["debug"] == {
+        "enabled": False,
+        "trace_limit": 80,
+        "speech_recording_limit": 5,
+    }
+
+
 @pytest.mark.parametrize(
     ("operations", "message"),
     [

@@ -9,7 +9,6 @@ simulation timing in `_mock`; all return through this owner's admission checks.
 
 from __future__ import annotations
 
-import base64
 import itertools
 import logging
 import threading
@@ -52,7 +51,6 @@ if TYPE_CHECKING:
     from desktop.speech.capture import CaptureStatus
     from desktop.speech.microphone import MicrophoneService, MicrophoneSettings
     from desktop.wakeword.commands import (
-        Command,
         CommandOutcome,
         RecordingResult,
     )
@@ -134,8 +132,6 @@ class VoiceController:
         self._labels: dict[str, str] = {}
         self._labels_loaded = False
         self._command_ids = itertools.count(1)
-        # One exact upload, kept only in memory for listening in Settings.
-        self._last_transcription: Command | None = None
         # Runtime state of the current generation (see _reset_runtime_locked).
         self._recording: voice._Recording | None = None
         # While set (a Desktop dictation records), detections are ignored.
@@ -173,7 +169,6 @@ class VoiceController:
                 if self._closed:
                     return
                 self._closed = True
-                self._last_transcription = None
                 self._generation += 1
                 session, self._session = self._session, None
                 if session is not None:
@@ -193,7 +188,6 @@ class VoiceController:
                 return
             logger.info("Voice follows the server %s", url or "(none)")
             self._server_url = url
-            self._last_transcription = None
             self._transition_locked()
             self._commit_locked()
 
@@ -214,24 +208,6 @@ class VoiceController:
         self._ensure_labels()
         with self._lock:
             return self._status_locked()
-
-    def recording_audio(self, command_id: Any) -> dict[str, str]:
-        """Return the exact WAV last handed to transcription, only for its id."""
-        with self._lock:
-            command = self._last_transcription
-            if command is None or command.command_id != command_id:
-                raise voice.VoiceControlError(
-                    "This Voice recording is no longer available",
-                    error_code="voice_recording_unavailable",
-                )
-        content = base64.b64encode(command.wav).decode("ascii")
-        with self._lock:
-            if self._last_transcription is not command:
-                raise voice.VoiceControlError(
-                    "This Voice recording is no longer available",
-                    error_code="voice_recording_unavailable",
-                )
-        return {"command_id": command.command_id, "content_base64": content}
 
     def pause_wake_phrases(self, paused: bool) -> None:
         """Ignore wake phrases while ``paused`` (a Desktop dictation records).
@@ -769,13 +745,6 @@ class VoiceController:
                 self._commands.pop(command.command_id, None)
             self._commit_locked()
 
-    def _on_transcription(self, generation: int, command: Command) -> None:
-        with self._lock:
-            if generation != self._generation or command.command_id not in self._commands:
-                return
-            self._last_transcription = command
-            self._commit_locked()
-
     def _on_command_stage(self, generation: int, command_id: str, stage: str) -> None:
         with self._lock:
             entry = self._commands.get(command_id)
@@ -961,15 +930,6 @@ class VoiceController:
                 else None
             ),
             "commands": [dict(entry) for entry in self._commands.values()],
-            "last_recording": (
-                {
-                    "command_id": self._last_transcription.command_id,
-                    "model_id": self._last_transcription.model_id,
-                    "agent_id": self._last_transcription.agent_id,
-                }
-                if self._last_transcription is not None
-                else None
-            ),
             "calibration": calibration.status(self._clock()) if calibration is not None else None,
             "limits": base["limits"],
         }

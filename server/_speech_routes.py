@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, cast, override
 
+from core.debug import SpeechDebugDisabledError, SpeechDebugStore
 from core.model_tasks import (
     SpeechArtifactNotFoundError,
     SpeechConfigurationError,
@@ -33,6 +34,8 @@ from server._request_bodies import (
     _read_upload_file_with_limit,
     _require_json_media_type,
 )
+from server.events import RESOURCE_KIND_DEBUG_TRACES
+from server.rpc.event_bridge import publish_resource_changed
 
 JsonObject = dict[str, Any]
 
@@ -77,24 +80,54 @@ def register_speech_routes(app: FastAPIType) -> None:
             )
         finally:
             await file.close()
+
+        async def transcribe(progress: SpeechProgress | None = None) -> Any:
+            try:
+                return await speech_service.transcribe(
+                    audio, filename=filename, media_type=media_type, progress=progress
+                )
+            finally:
+                # The queued Debug write precedes any listing triggered by this
+                # event, including standalone Dictation without a Chat Run.
+                publish_resource_changed(request.app.state, RESOURCE_KIND_DEBUG_TRACES)
+
         if "application/x-ndjson" in request.headers.get("accept", ""):
             return _SpeechStreamingResponse(
-                _stream_speech(
-                    lambda progress: speech_service.transcribe(
-                        audio, filename=filename, media_type=media_type, progress=progress
-                    )
-                ),
+                _stream_speech(transcribe),
                 media_type="application/x-ndjson",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
         try:
             result = await _speech_until_disconnect(
                 request,
-                speech_service.transcribe(audio, filename=filename, media_type=media_type),
+                transcribe(),
             )
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
         return cast(JsonObject, result.to_dict())
+
+    @app.get("/api/debug/speech/{recording_id}/audio")
+    async def speech_debug_audio(request: Request, recording_id: str) -> Response:
+        runtime = request.app.state.runtime
+        # Settings I/O shares the Debug worker; no synchronous disk work on
+        # the HTTP Event Loop and no cached authorization after disabling.
+        store = SpeechDebugStore(runtime.storage.data_dir, runtime.storage.load_debug_settings)
+        try:
+            audio, media_type = await store.audio_async(recording_id)
+        except SpeechDebugDisabledError:
+            raise HTTPException(status_code=403, detail="Debug mode is not enabled") from None
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Speech recording not found") from None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid speech recording") from None
+        return Response(
+            audio,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post("/api/speech/synthesize")
     async def synthesize_speech(request: Request) -> Response:

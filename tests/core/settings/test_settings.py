@@ -456,6 +456,18 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"debug": {"trace_limit": True}}, "params.debug.trace_limit must be a positive integer"),
         ({"debug": {"trace_limit": 0}}, "params.debug.trace_limit must be a positive integer"),
         ({"debug": {"trace_limit": 501}}, "params.debug.trace_limit must not exceed 500"),
+        (
+            {"debug": {"speech_recording_limit": True}},
+            "params.debug.speech_recording_limit must be a positive integer",
+        ),
+        (
+            {"debug": {"speech_recording_limit": 0}},
+            "params.debug.speech_recording_limit must be a positive integer",
+        ),
+        (
+            {"debug": {"speech_recording_limit": 501}},
+            "params.debug.speech_recording_limit must not exceed 500",
+        ),
         ({"archive": []}, "params.archive must be an object"),
         ({"archive": {"days": 7}}, "unsupported archive settings: days"),
         *[

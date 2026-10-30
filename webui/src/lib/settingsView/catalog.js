@@ -107,6 +107,7 @@ const sections = [
   { id: 'archive_entries', label: () => t('archive.listLabel') },
   { id: 'debug_capture', label: () => t('debug.captureAndStorage') },
   { id: 'debug_traces', label: () => t('debug.traceList') },
+  { id: 'debug_speech', label: () => t('debug.speech.title') },
 ];
 export const panelById = new Map(
   sections.map((section) => [section.id, section]),
@@ -215,7 +216,7 @@ export function settingsPages(desktopCapabilities) {
       id: 'debug',
       label: () => t('debug.title'),
       description: () => t('debug.inspectorSubtitle'),
-      sections: ['debug_capture', 'debug_traces'],
+      sections: ['debug_capture', 'debug_speech', 'debug_traces'],
       subPages: 'debug_traces',
     },
   ];

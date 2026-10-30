@@ -17,11 +17,13 @@
   const DEBUG_SETTING_DEFAULTS = Object.freeze({
     enabled: false,
     trace_limit: 50,
+    speech_recording_limit: 10,
   });
 
   function getDebugSettings(rawSettings) {
     const debug = rawSettings?.debug ?? {};
     const traceLimit = Number(debug.trace_limit);
+    const speechLimit = Number(debug.speech_recording_limit);
 
     return {
       enabled:
@@ -32,6 +34,10 @@
         Number.isInteger(traceLimit) && traceLimit >= 1 && traceLimit <= 500
           ? traceLimit
           : DEBUG_SETTING_DEFAULTS.trace_limit,
+      speech_recording_limit:
+        Number.isInteger(speechLimit) && speechLimit >= 1 && speechLimit <= 500
+          ? speechLimit
+          : DEBUG_SETTING_DEFAULTS.speech_recording_limit,
     };
   }
 
@@ -50,6 +56,7 @@
       debug: {
         enabled: values.enabled,
         trace_limit: Number(values.trace_limit),
+        speech_recording_limit: Number(values.speech_recording_limit),
       },
     }),
   });
@@ -88,7 +95,9 @@
   function debugSettingsMatch(left, right) {
     return (
       left.enabled === right.enabled &&
-      Number(left.trace_limit) === Number(right.trace_limit)
+      Number(left.trace_limit) === Number(right.trace_limit) &&
+      Number(left.speech_recording_limit) ===
+        Number(right.speech_recording_limit)
     );
   }
 
@@ -97,8 +106,15 @@
       return true;
     }
 
-    const limit = Number(debugSettings.trace_limit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    const limits = [
+      Number(debugSettings.trace_limit),
+      Number(debugSettings.speech_recording_limit),
+    ];
+    if (
+      limits.some(
+        (limit) => !Number.isInteger(limit) || limit < 1 || limit > 500,
+      )
+    ) {
       onError(t('debug.limitInvalid'));
       return false;
     }
@@ -156,6 +172,29 @@
         ariaLabel={t('debug.traceLimit')}
         onInput={(next) => {
           debugSettings = { ...debugSettings, trace_limit: next };
+          onError('');
+        }}
+      />
+    </div>
+  </div>
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('debug.speechLimit')}
+        <InfoHint text={t('debug.speechLimitHelp')} />
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-debug-speech-limit"
+        type="number"
+        min="1"
+        max="500"
+        step="1"
+        value={debugSettings.speech_recording_limit}
+        ariaLabel={t('debug.speechLimit')}
+        onInput={(next) => {
+          debugSettings = { ...debugSettings, speech_recording_limit: next };
           onError('');
         }}
       />
