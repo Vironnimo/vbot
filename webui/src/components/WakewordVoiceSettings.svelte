@@ -41,6 +41,7 @@
   import VoicePhraseCard from './voice/VoicePhraseCard.svelte';
   import VoiceUnavailablePhraseCard from './voice/VoiceUnavailablePhraseCard.svelte';
   import WakewordCalibration from './voice/WakewordCalibration.svelte';
+  import VoiceRecording from './voice/VoiceRecording.svelte';
 
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
   const VOICE_LIST_RETRY_MS = 3000;
@@ -782,6 +783,10 @@
           </p>
         </div>
       </div>
+
+      {#if status?.last_recording}
+        <VoiceRecording recording={status.last_recording} {active} />
+      {/if}
 
       <!-- Where commands go when a phrase names no Agent of its own. -->
       <div class="s-row">

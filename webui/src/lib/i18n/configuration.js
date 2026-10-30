@@ -1439,6 +1439,11 @@ export default Object.freeze({
   'settings.voice.defaultSessionHelp':
     'Whether spoken commands continue the Agent’s active Session or start a new one each time, unless a phrase chooses otherwise.',
   'settings.voice.activeMicrophone': 'Microphone in use',
+  'settings.voice.lastRecording': 'Last command recording',
+  'settings.voice.lastRecordingHelp':
+    'The exact WAV uploaded to speech recognition, including the audio lead-in and trailing silence. Kept only in this Desktop app until replaced by the next upload, a server switch or closing the app.',
+  'settings.voice.recordingLoadFailed':
+    'This recording could not be loaded. Try again or record another command.',
   'settings.voice.echoOff': 'Off',
   'settings.voice.echoOffDetail':
     'Speaker output can trigger wake phrases and end up in command recordings. Turn echo cancellation on under Microphone.',

@@ -137,15 +137,21 @@ def harness() -> Iterator[Callable[..., RecorderHarness]]:
         assert state.recorder.join(5), "recorder thread did not stop"
 
 
+@pytest.mark.parametrize("speech_location", ["after-trigger", "in-pre-roll", "across-trigger"])
 def test_speech_then_silence_keeps_the_pre_roll_and_ends_after_a_second(
     harness: Callable[..., RecorderHarness],
+    speech_location: str,
 ) -> None:
     rig = harness()
     subscription = FakeSubscription()
-    pre_roll = subscription.blocks(_quiet(0.32), recording_rate=48000)
+    before = _quiet(0.32) if speech_location == "after-trigger" else tone(0.32, 16000)
+    after_seconds = {"after-trigger": 0.4, "in-pre-roll": 0.0, "across-trigger": 0.16}[
+        speech_location
+    ]
+    pre_roll = subscription.blocks(before, recording_rate=48000)
     recording = rig.record(pre_roll, subscription)
 
-    subscription.push_audio(tone(0.4, 16000), recording_rate=48000)
+    subscription.push_audio(tone(after_seconds, 16000), recording_rate=48000)
     subscription.push_audio(silence(1.5, 16000), recording_rate=48000)
     result = recording.result()
 
@@ -155,7 +161,7 @@ def test_speech_then_silence_keeps_the_pre_roll_and_ends_after_a_second(
     pre_roll_bytes = b"".join(block.recording for block in pre_roll)
     assert frames.startswith(pre_roll_bytes)
     seconds = len(frames) / 2 / 48000
-    assert 0.32 + 0.4 + 0.95 <= seconds <= 0.32 + 0.4 + 1.1
+    assert 0.32 + after_seconds + 0.95 <= seconds <= 0.32 + after_seconds + 1.1
     assert recording.subscription.closed
 
 

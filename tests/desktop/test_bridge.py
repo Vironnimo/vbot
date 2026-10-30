@@ -28,6 +28,7 @@ from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordMod
 
 VOICE_METHODS = {
     "getVoiceStatus",
+    "getVoiceRecording",
     "setVoiceEnabled",
     "updateVoiceConfig",
     "listWakewordModels",
@@ -354,6 +355,7 @@ def test_microphone_methods_delegate_to_the_service(
     ("method", "args", "controller_method"),
     [
         ("getVoiceStatus", (), "status"),
+        ("getVoiceRecording", ("c1",), "recording_audio"),
         ("setVoiceEnabled", (True,), "set_enabled"),
         ("updateVoiceConfig", ({"default_session_behavior": "new"},), "update_config"),
         ("listWakewordModels", (), "list_models"),

@@ -15,6 +15,7 @@ import {
   disabledDesktopCapabilities,
   supportsDesktopVoice,
   getVoiceStatus,
+  getVoiceRecording,
   setVoiceEnabled,
   updateVoiceConfig,
   listMicrophones,
@@ -114,6 +115,7 @@ function rawStatus(overrides = {}) {
     default_session_behavior: 'active',
     phrases: [],
     recording: null,
+    last_recording: null,
     commands: [],
     calibration: null,
     limits: {
@@ -564,6 +566,19 @@ describe('Desktop bridge calls', () => {
 });
 
 describe('Voice status validation', () => {
+  it('returns the exact uploaded bytes as playable WAV', async () => {
+    const getRecording = vi.fn(async () => ({
+      command_id: 'c1',
+      content_base64: btoa('RIFF\u0000voice-upload'),
+    }));
+    desktopWindow({ getVoiceRecording: getRecording });
+    const blob = await getVoiceRecording('c1');
+    expect(blob.type).toBe('audio/wav');
+    expect(await blob.text()).toBe('RIFF\u0000voice-upload');
+    expect(getRecording).toHaveBeenCalledWith('c1');
+    await expect(getVoiceRecording('c2')).rejects.toThrow();
+  });
+
   /** Read `raw` through the Desktop's status call. */
   function readStatus(raw) {
     desktopWindow({ getVoiceStatus: () => raw });
@@ -607,6 +622,11 @@ describe('Voice status validation', () => {
       ],
       recording: {
         command_id: 'c-1',
+        model_id: 'builtin/okay_nabu',
+        agent_id: 'writer',
+      },
+      last_recording: {
+        command_id: 'c-0',
         model_id: 'builtin/okay_nabu',
         agent_id: 'writer',
       },
