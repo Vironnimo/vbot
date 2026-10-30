@@ -542,14 +542,12 @@ class TestOccurrencesInWindow:
                 datetime(2026, 9, 2, tzinfo=UTC), datetime(2026, 9, 1, tzinfo=UTC)
             )
 
-    def test_rejects_oversized_window(self, service: CalendarService) -> None:
-        from core.calendar.service import MAX_WINDOW_DAYS
-
-        with pytest.raises(CalendarValidationError, match="window span"):
-            service.occurrences_in_window(
-                datetime(2026, 1, 1, tzinfo=UTC),
-                datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=MAX_WINDOW_DAYS + 1),
-            )
+    def test_accepts_arbitrary_window_lengths(self, service: CalendarService) -> None:
+        event = service.create_event(title="Yearly", start="2030-01-01", rrule="FREQ=YEARLY")
+        start = datetime(2029, 1, 1, tzinfo=UTC)
+        end = datetime(2035, 1, 1, tzinfo=UTC)
+        assert len(service.occurrences_in_window(start, end)) == 6
+        assert {item.event_id for item in service.iter_window_occurrences(start, end)} == {event.id}
 
 
 class TestFindFreeSlots:

@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
-from itertools import islice
+from itertools import islice, takewhile
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import CronServiceError
 from core.calendar import (
-    MAX_WINDOW_DAYS,
     CalendarEventNotFoundError,
     CalendarProjection,
     CalendarServiceError,
     CalendarStorageError,
     CalendarValidationError,
+    occurrence_id,
     parse_occurrence_id,
     parse_when,
 )
-from core.calendar.service import FIND_FREE_MAX_RESULTS
 from core.projects import format_agent_address
+from core.providers.adapter import tool_result_text
 from core.tools._calendar_arguments import (
     ATTENDEES_FIELD,
     CHANGE_FIELDS,
@@ -39,6 +41,7 @@ from core.tools._calendar_arguments import (
     refusal,
     render_call,
 )
+from core.tools._calendar_pages import CalendarPage, Position, Record, catalog_identity
 from core.tools._cron_arguments import render_call as render_cron_call
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
@@ -136,6 +139,14 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
             "default": 60,
             "description": "Minimum free time in minutes for find_free_time.",
         },
+        "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "For list and find_free_time: continuation from next_cursor. "
+                "Omit for the first page; to continue, send only action and cursor."
+            ),
+        },
     },
     "required": ["action"],
 }
@@ -143,7 +154,6 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
 _LIST_DAYS = 30
 _FREE_DAYS = 7
 _DEFAULT_FREE_MINUTES = 60
-_LISTED_OCCURRENCES = 10
 _NEXT_OCCURRENCES = 3
 # Actions that can let a Cron job bound to the event run again.
 _REFERENCE_ACTIONS = frozenset({"update", "delete"})
@@ -199,6 +209,7 @@ def register_calendar_tool(
         open_input_schema=True,
         argument_normalizer=_normalize_calendar_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
+        announce_changes=("parameters.cursor",),
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_calendar_display_parts,
@@ -217,63 +228,146 @@ class _CalendarRead:
 
     def _list(self, arguments: JsonObject) -> JsonObject:
         zone = self._zone()
-        start, end = self._window(arguments, _LIST_DAYS)
+        page, start, end = self._page(arguments, _LIST_DAYS)
+        arguments = page.arguments
         events = {event.id: event for event in self._calendar.list_events()}
-        found: dict[str, list[EventOccurrence]] = {}
         if "id" in arguments:
             # One event, shown even when none of its occurrences falls in the window.
             parsed = parse_occurrence_id(arguments["id"])
             chosen = self._calendar.get_event(parsed[0] if parsed else arguments["id"])
-            events, found = {chosen.id: chosen}, {chosen.id: []}
+            events = {chosen.id: chosen}
         query = arguments.get("query")
         text = query.casefold() if isinstance(query, str) else ""
-        for occurrence in self._calendar.occurrences_in_window(start, end):
-            fields = (occurrence.title, occurrence.description or "", occurrence.location or "")
-            if occurrence.event_id in events and any(text in field.casefold() for field in fields):
-                found.setdefault(occurrence.event_id, []).append(occurrence)
+        found = []
+        for event in events.values():
+            first = next(self._matching(event, start, end, text), None)
+            if first is not None or "id" in arguments:
+                found.append((event, first))
+        found.sort(key=lambda pair: (pair[1].start_utc if pair[1] else start, pair[0].id))
         data: JsonObject = {
             "events": len(found),
             "window": _window_text(start, end, zone),
             "timezone": self._calendar.system_timezone_name(),
         }
-        if found:
-            data["content"] = "\n\n".join(
-                self._event_block(events[event_id], items) for event_id, items in found.items()
+
+        def records() -> Iterator[Record]:
+            for index, (event, first) in enumerate(found):
+                if index < page.position[0]:
+                    continue
+                if index > page.position[0] or not page.position[1]:
+                    header = self._event_block(event, [])
+                    if event.recurring and first is not None:
+                        header = header.removesuffix(" none in this window")
+                    yield (index, "", ""), ("\n\n" if index else "") + header
+                if not event.recurring:
+                    continue
+                after = page.position if index == page.position[0] else (index, "", "")
+                for item in self._matching(event, start, end, text, after=after):
+                    yield (
+                        (index, item.start_utc.isoformat(), item.id),
+                        "\n" + _occurrence_line(event, item),
+                    )
+
+        return tool_success(page.read(records(), data, visible_length=_visible_length))
+
+    def _matching(
+        self,
+        event: CalendarEvent,
+        start: datetime,
+        end: datetime,
+        query: str,
+        *,
+        after: Position | None = None,
+    ) -> Iterator[EventOccurrence]:
+        def matches(value: Any) -> bool:
+            return any(query in str(field or "").casefold() for field in value)
+
+        fields = (event.title, event.description, event.location)
+        if (
+            query
+            and not matches(fields)
+            and not any(
+                matches(
+                    (override.get("title"), override.get("description"), override.get("location"))
+                )
+                for override in event.overrides.values()
             )
-        return tool_success(data)
+        ):
+            return
+        lower = max(start, datetime.fromisoformat(after[1])) if after and after[1] else start
+        stream = self._calendar.iter_occurrences(event, lower)
+        for item in takewhile(lambda item: item.start_utc < end, stream):
+            key = (item.start_utc.isoformat(), item.id)
+            if after and after[1] and key < after[1:]:
+                continue
+            if matches((item.title, item.description, item.location)):
+                yield item
 
     def _find_free_time(self, arguments: JsonObject) -> JsonObject:
         zone = self._zone()
-        start, end = self._window(arguments, _FREE_DAYS)
+        page, start, end = self._page(arguments, _FREE_DAYS)
+        arguments = page.arguments
         duration = arguments.get("duration", _DEFAULT_FREE_MINUTES)
-        slots = self._calendar.find_free_slots(
-            start, end, duration, max_results=FIND_FREE_MAX_RESULTS + 1
-        )
-        shown = slots[:FIND_FREE_MAX_RESULTS]
         data: JsonObject = {
-            "free": len(shown),
+            "free": 0,
             "window": _window_text(start, end, zone),
             "timezone": self._calendar.system_timezone_name(),
         }
-        if not shown:
-            data["note"] = f"No free span of {length_text(duration)} or more in this window."
-        elif len(slots) > len(shown):
-            data["note"] = (
-                f"More free time follows after {_local(shown[-1].end_utc, zone)}; a later "
-                "time_min shows it."
-            )
-        if shown:
-            data["content"] = "\n".join(
-                f"{_local(slot.start_utc, zone)} to {_local(slot.end_utc, zone)} "
-                f"({length_text(int((slot.end_utc - slot.start_utc).total_seconds() // 60))})"
-                for slot in shown
-            )
-        return tool_success(data)
 
-    def _window(self, arguments: JsonObject, days: int) -> tuple[datetime, datetime]:
+        def records() -> Iterator[Record]:
+            lower = datetime.fromisoformat(page.position[1]) if page.position[1] else start
+            first = not page.position[1] or page.position[2] == "first"
+            for slot in self._calendar.iter_free_slots(lower, end, duration, now_utc=page.now):
+                minutes = int((slot.end_utc - slot.start_utc).total_seconds() // 60)
+                yield (
+                    (0, slot.start_utc.isoformat(), "first" if first else "next"),
+                    (
+                        ("" if first else "\n")
+                        + f"{_local(slot.start_utc, zone)} to {_local(slot.end_utc, zone)} "
+                        + f"({length_text(minutes)})"
+                    ),
+                )
+                first = False
+
+        result = page.read(records(), data, visible_length=_visible_length)
+        if not result["free"]:
+            data["note"] = f"No free span of {length_text(duration)} or more in this window."
+            result["note"] = data["note"]
+        return tool_success(result)
+
+    def _page(self, arguments: JsonObject, days: int) -> tuple[CalendarPage, datetime, datetime]:
+        identity = catalog_identity(
+            self._calendar.list_events(), self._jobs, self._calendar.system_timezone_name()
+        )
+        page = CalendarPage.resume(arguments, datetime.now(UTC), identity)
+        start, end = self._window(page.arguments, days, now=page.now)
+        if "cursor" in arguments and any(
+            key in arguments for key in ("time_min", "time_max", WHEN_FIELD)
+        ):
+            repeated = {
+                **page.arguments,
+                **{key: value for key, value in arguments.items() if key != "cursor"},
+            }
+            if WHEN_FIELD in repeated:
+                repeated.pop("time_min", None)
+                repeated.pop("time_max", None)
+            if self._window(repeated, days, now=page.now) != (start, end):
+                raise CalendarCallRefusedError(
+                    "calendar was not run: cursor already retains the query's window. "
+                    "Continue with only action and cursor, or start a new query without cursor."
+                )
+        page.arguments = {
+            key: value for key, value in page.arguments.items() if key not in {"cursor", WHEN_FIELD}
+        }
+        page.arguments.update(time_min=start.isoformat(), time_max=end.isoformat())
+        return page, start, end
+
+    def _window(
+        self, arguments: JsonObject, days: int, *, now: datetime | None = None
+    ) -> tuple[datetime, datetime]:
         """The half-open UTC window a list or find_free_time call reads."""
         zone = self._zone()
-        now = datetime.now(UTC).replace(second=0, microsecond=0)
+        now = (now or datetime.now(UTC)).replace(second=0, microsecond=0)
         when = arguments.get(WHEN_FIELD)
         if isinstance(when, str):
             if "time_min" in arguments or "time_max" in arguments:
@@ -291,18 +385,6 @@ class _CalendarRead:
             raise CalendarCallRefusedError(
                 refusal(
                     "time_max must come after time_min.", arguments, time_max=STAND_INS["time_max"]
-                )
-            )
-        # Local days, like the suggested window: across a clock change they
-        # last an hour more or less.
-        longest = _days_after(start, MAX_WINDOW_DAYS, zone)
-        if end > longest:
-            latest = _local(longest, zone)
-            raise CalendarCallRefusedError(
-                refusal(
-                    f"a window spans at most {MAX_WINDOW_DAYS} days.",
-                    {**arguments, "time_min": _local(start, zone)},
-                    time_max=latest,
                 )
             )
         return start, end
@@ -366,7 +448,28 @@ class _CalendarTool(_CalendarRead):
     async def run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         action = arguments["action"]
         try:
-            await self._calendar.load(allow_degraded=action in WINDOW_ACTIONS)
+            await self._calendar.load()
+            if action in _REFERENCE_ACTIONS and "original_start" in arguments and "id" in arguments:
+                arguments = dict(arguments)
+                parsed = parse_occurrence_id(arguments["id"])
+                event = self._calendar.get_event(parsed[0] if parsed else arguments["id"])
+                original = arguments.pop("original_start")
+                moment = datetime.fromisoformat(original)
+                if moment.tzinfo is not None:
+                    moment = moment.astimezone(
+                        ZoneInfo(event.tz_name or self._calendar.system_timezone_name())
+                    )
+                key = (
+                    moment.date().isoformat()
+                    if event.all_day
+                    else moment.replace(tzinfo=None).isoformat(timespec="seconds")
+                )
+                if parsed is not None and parsed[1] != key:
+                    raise CalendarCallRefusedError(
+                        "calendar was not run: id and original_start name different occurrences. "
+                        "Send the intended occurrence id from list."
+                    )
+                arguments["id"] = occurrence_id(event.id, key)
             if self._cron is not None:
                 await self._cron.load_projection()
                 jobs: dict[str, list[str]] = {}
@@ -560,6 +663,12 @@ class _CalendarTool(_CalendarRead):
         if reminder is not None and cron_offered:
             item_id = call.get("id")
             parsed = parse_occurrence_id(item_id) if isinstance(item_id, str) else None
+            if parsed is not None:
+                steps.append(
+                    "Use a one-time cron job for this occurrence; an event-bound job would "
+                    "cover the whole series."
+                )
+                return REFUSAL_PREFIX + " ".join([*texts, *steps])
             cron_call = render_cron_call(
                 {
                     "action": "create",
@@ -598,12 +707,12 @@ def _occurrence_lines(event: CalendarEvent, occurrences: list[EventOccurrence]) 
     if not occurrences:
         return ["occurrences: none in this window"]
     lines = ["occurrences:"]
-    for item in occurrences[:_LISTED_OCCURRENCES]:
+    for item in occurrences:
         line = f"  {item.id} {_time_text(item.start)}"
         if item.overridden:
             line += f" to {_end_text(item.end, all_day=item.all_day)}"
             changed = [
-                f"{name}: {_brief(value)}"
+                f"{name}: {value if value is not None else '(cleared)'}"
                 for name, value, own in (
                     ("title", item.title, event.title),
                     ("location", item.location, event.location),
@@ -613,12 +722,15 @@ def _occurrence_lines(event: CalendarEvent, occurrences: list[EventOccurrence]) 
             ]
             line += "".join(f", {text}" for text in changed)
         lines.append(line)
-    if len(occurrences) > _LISTED_OCCURRENCES:
-        lines.append(
-            f"  ...{len(occurrences) - _LISTED_OCCURRENCES} more, the last at "
-            f"{_time_text(occurrences[-1].start)}; a shorter window lists them"
-        )
     return lines
+
+
+def _occurrence_line(event: CalendarEvent, item: EventOccurrence) -> str:
+    return _occurrence_lines(event, [item])[1]
+
+
+def _visible_length(data: JsonObject) -> int:
+    return len(str(tool_result_text(json.dumps(tool_success(data), ensure_ascii=False))))
 
 
 def _occurrence_fields(occurrence: EventOccurrence) -> JsonObject:
@@ -758,11 +870,6 @@ def _end_text(end: str, *, all_day: bool) -> str:
     if not all_day:
         return _time_text(end)
     return f"{end} (last day {(date.fromisoformat(end) - timedelta(days=1)).isoformat()})"
-
-
-def _brief(text: str | None) -> str:
-    line = " ".join(str(text or "").split())
-    return line if len(line) <= 40 else line[:37] + "..."
 
 
 def _calendar_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

@@ -28,7 +28,6 @@ from contextlib import suppress
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from core.calendar import occurrence_id, parse_occurrence_id
 from core.tools._durations import duration_minutes
 from core.tools._named_zones import named_zone
 from core.tools.call_syntax import (
@@ -49,6 +48,7 @@ UNADVERTISED_PARAMETERS: dict[str, Any] = {
     REMINDER_FIELD: {"type": "object"},
     # The names of requested attendees; the handler refuses them.
     ATTENDEES_FIELD: {"type": "array", "items": {"type": "string"}},
+    "original_start": {"type": "string", "minLength": 1},
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
@@ -90,6 +90,8 @@ _CALL_ORDER = (
     "time_max",
     "query",
     "duration",
+    "cursor",
+    "original_start",
     WHEN_FIELD,
     # Rendered so that a call refused for another reason still asks for its attendees.
     ATTENDEES_FIELD,
@@ -277,7 +279,7 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     problems = _Problems()
     value = _lift_wrappers(value, problems)
     value = _read_time_objects(value, problems)
-    zone_name, original_start = _take_zone(value), _take_original_start(value)
+    zone_name, original_start = _take_zone(value, problems), _take_original_start(value, problems)
     reminder = _take_reminder(value)
     attendees = _take_attendees(value)
     for key in [key for key in value if spelling(key) in _RULE_KEYS]:
@@ -396,8 +398,10 @@ def _in_zone(text: str, zone_name: Any, problems: _Problems) -> str:
     return moment.replace(tzinfo=zone).isoformat(timespec="minutes")
 
 
-def _take_zone(arguments: dict[str, Any]) -> str | None:
+def _take_zone(arguments: dict[str, Any], problems: _Problems) -> str | None:
     zones = [arguments.pop(key) for key in list(arguments) if spelling(key) in _ZONE_KEYS]
+    if len({str(zone).strip() for zone in zones}) > 1:
+        problems.add("time zones disagree; send one time zone.")
     return next((zone for zone in zones if isinstance(zone, str) and zone.strip()), None)
 
 
@@ -409,20 +413,37 @@ def _apply_zone(arguments: dict[str, Any], zone_name: str, problems: _Problems) 
             arguments[name] = _in_zone(item.strip(), zone_name, problems)
 
 
-def _take_original_start(arguments: dict[str, Any]) -> str | None:
+def _take_original_start(arguments: dict[str, Any], problems: _Problems) -> str | None:
     """The original start that names one occurrence of a series, as local wall-clock text."""
     found = [arguments.pop(key) for key in list(arguments) if spelling(key) in _ORIGINAL_START_KEYS]
+    keys = []
     for item in found:
         if not isinstance(item, str):
+            problems.add(
+                "original_start needs the occurrence's original date or date-time; "
+                "use its occurrence id from list."
+            )
             continue
         text = item.strip()
         if _DATE.match(text):
-            return text
-        try:
-            return datetime.fromisoformat(text).replace(tzinfo=None).isoformat(timespec="minutes")
-        except ValueError:
+            try:
+                date.fromisoformat(text)
+                keys.append(text)
+            except ValueError:
+                problems.add("original_start is not a valid date; use the occurrence id from list.")
             continue
-    return None
+        try:
+            moment = datetime.fromisoformat(text)
+            if moment.microsecond:
+                problems.add("original_start needs whole seconds; use the occurrence id from list.")
+            keys.append(moment.isoformat(timespec="seconds"))
+        except ValueError:
+            problems.add(
+                "original_start is not a date or date-time; use the occurrence id from list."
+            )
+    if len(set(keys)) > 1:
+        problems.add("original_start values disagree; send one occurrence id from list.")
+    return keys[0] if keys else None
 
 
 def _take_reminder(arguments: dict[str, Any]) -> dict[str, str] | None:
@@ -583,9 +604,9 @@ def _read_window(arguments: dict[str, Any], problems: _Problems) -> None:
     if arguments["action"] == "list":
         if "title" in arguments and "query" not in arguments:
             arguments["query"] = arguments["title"]
-        keep = {"action", "id", "time_min", "time_max", "query", WHEN_FIELD}
+        keep = {"action", "id", "time_min", "time_max", "query", "cursor", WHEN_FIELD}
     else:
-        keep = {"action", "time_min", "time_max", "duration", WHEN_FIELD}
+        keep = {"action", "time_min", "time_max", "duration", "cursor", WHEN_FIELD}
         if "duration" in arguments:
             minutes = duration_minutes(arguments["duration"])
             if minutes is None:
@@ -594,7 +615,14 @@ def _read_window(arguments: dict[str, Any], problems: _Problems) -> None:
             else:
                 arguments["duration"] = minutes
     for name in list(arguments):
-        if name not in keep:
+        if name not in keep and name in {
+            *CHANGE_FIELDS,
+            "id",
+            "query",
+            "duration",
+            ATTENDEES_FIELD,
+            REMINDER_FIELD,
+        }:
             del arguments[name]
 
 
@@ -606,9 +634,8 @@ def _read_event(arguments: dict[str, Any], original_start: str | None, problems:
         arguments["start"] = when.strip()
     for name in ("time_min", "time_max", "query"):
         arguments.pop(name, None)
-    item_id = arguments.get("id")
-    if isinstance(item_id, str) and original_start and parse_occurrence_id(item_id) is None:
-        arguments["id"] = occurrence_id(item_id, original_start)
+    if original_start is not None:
+        arguments["original_start"] = original_start
     if action == "create":
         if arguments.get("rrule") == "":
             del arguments["rrule"]
