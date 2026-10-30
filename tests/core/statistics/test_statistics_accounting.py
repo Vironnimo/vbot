@@ -15,7 +15,7 @@ import pytest
 from core.database import create_data_snapshot, restore_data_snapshot
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.statistics import StatisticsService
+from core.statistics import ModelRouteUse, StatisticsService
 from core.statistics._projection import CALL_COLUMNS
 from core.statistics.index import StatisticsIndex
 from core.usage import UsagePage, UsageRecorder
@@ -25,6 +25,7 @@ from tests.core.statistics.statistics_test_support import (
     BASE,
     StatisticsFactory,
     _assistant,
+    _call,
     _compaction,
     _run_summary,
     _write_session,
@@ -102,6 +103,37 @@ async def test_standalone_task_and_auxiliary_calls_count_without_fake_sessions(a
     assert {row["kind"] for row in usage["recent_calls"]} == set(kinds)
     assert {row["status"] for row in usage["recent_calls"]} == {"completed"}
     assert all(row["session_id"] is None and row["agent_id"] == "" for row in usage["recent_calls"])
+
+
+@pytest.mark.asyncio
+async def test_model_route_usage_counts_completed_chat_requests_of_own_conversations(accounting):
+    service, manager, recorder = accounting
+    own = manager.create("main", session_id="own").address
+    helper = manager.create("main", session_id="helper").address
+    manager.set_metadata(helper, {"is_subagent_session": True})
+    model = "openai/gpt-5.2::api-key"
+    for _ in range(2):
+        await _call(recorder, {}, model=model, address=own, connection_id="openai:api-key")
+    # Chat before 2026-10-30 recorded no Connection.
+    await _call(recorder, {}, model="openai/gpt-5.2", address=own)
+    # Not counted: a failed request, a Sub-Agent's, a title and one before the window.
+    await _call(
+        recorder, {}, model=model, address=own, connection_id="openai:api-key",
+        status="failed", failure="incomplete",
+    )  # fmt: skip
+    await _call(recorder, {}, model=model, address=helper, connection_id="openai:oauth")
+    await _call(recorder, {}, model=model, kind="session_title", address=own)
+    await _call(
+        recorder, {}, model=model, address=own, connection_id="openai:oauth",
+        at=BASE - timedelta(days=31),
+    )  # fmt: skip
+
+    routes = service.model_route_usage(since=BASE - timedelta(days=30))
+
+    assert routes == (
+        ModelRouteUse("openai/gpt-5.2", "openai:api-key", 2),
+        ModelRouteUse("openai/gpt-5.2", "", 1),
+    )
 
 
 @pytest.mark.asyncio

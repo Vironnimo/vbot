@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, override
 
@@ -14,6 +15,7 @@ import pytest
 
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._wire_profile_files import parse_wire_profile_file
+from core.statistics import ModelRouteUse, StatisticsUnavailableError
 from server.rpc import model_methods
 from tests.server.rpc_test_support import (
     JsonObject,
@@ -527,12 +529,92 @@ async def test_model_get_returns_complete_model_data(
     assert model["usable_connections"] == ["api-key"]
 
 
+class _RouteUsage:
+    """Statistics that answer ``model_route_usage`` with fixed routes, or fail."""
+
+    def __init__(self, routes: list[ModelRouteUse] | None) -> None:
+        self.routes = routes
+        self.since: list[datetime] = []
+
+    async def model_route_usage_async(self, *, since: datetime) -> tuple[ModelRouteUse, ...]:
+        self.since.append(since)
+        if self.routes is None:
+            raise StatisticsUnavailableError("Statistics are busy; retry shortly")
+        return tuple(self.routes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", [True, False])
+async def test_model_list_sorted_by_usage_puts_used_models_and_their_connections_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    available: bool,
+) -> None:
+    """A bare openai id resolves to oauth, the first usable Connection; the user's
+    requests went through api-key, so the listed ids pin it."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.models._models["openai"].append(
+        _model("gpt-5.5", "GPT-5.5", connections=("oauth",))
+    )
+    statistics = _RouteUsage(
+        [
+            ModelRouteUse("openai/gpt-5.2", "openai:api-key", 12),
+            # Requests recorded before Chat stored the Connection count for the Model only.
+            ModelRouteUse("openai/gpt-5.2", "", 5),
+            ModelRouteUse("openai/gpt-5.2", "openai:oauth", 2),
+            ModelRouteUse("openai/gpt-5.5", "openai:oauth", 6),
+            ModelRouteUse("gone/model", "gone:key", 99),
+        ]
+        if available
+        else None
+    )
+    state.statistics_service = statistics
+
+    result = await rpc_result(state, "model.list", sort="usage")
+
+    if not available:
+        assert result["sort"] == "name"
+        assert result["usage_unavailable"] is True
+        assert [model["id"] for model in result["models"]] == [
+            "anthropic/claude-sonnet-4-20250219",
+            "openai/gpt-4.1-mini",
+            "openai/gpt-5.2",
+            "openai/gpt-5.5",
+        ]
+        return
+    assert result["sort"] == "usage"
+    assert result["usage_days"] == model_methods.MODEL_USAGE_DAYS
+    assert datetime.now(UTC) - statistics.since[0] >= timedelta(days=30)
+    assert [
+        (model["preferred_id"], model["usage"]["group"], model["usage"]["calls"])
+        for model in result["models"]
+    ] == [
+        ("openai/gpt-5.2::api-key", "used", 19),
+        ("openai/gpt-5.5", "used", 6),
+        # Unused, so it takes the Connection the user's requests used most for its Provider.
+        ("openai/gpt-4.1-mini::api-key", "provider_used", 0),
+        ("anthropic/claude-sonnet-4-20250219", "other", 0),
+    ]
+    by_id = {model["id"]: model for model in result["models"]}
+    assert by_id["openai/gpt-5.2"]["usage"]["routes"] == [
+        {"connection_id": "api-key", "calls": 12},
+        {"connection_id": "oauth", "calls": 2},
+    ]
+    assert "routes" not in by_id["openai/gpt-4.1-mini"]["usage"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "named"),
     [
         ("model.list", {"provider_id": "openai", "extra": True}, "extra"),
         ("model.list", {"min_context_window": -1}, ""),
+        ("model.list", {"sort": "recent"}, "use one of: name, usage"),
         ("model.get", {"model": "openai/gpt-4.1-mni"}, "did you mean: openai/gpt-4.1-mini"),
         ("model.get", {"model": "gpt-4.1-mini"}, "params.model must be '<provider>/<model-id>'"),
         ("provider.routing_options", {"provider_id": "openai"}, "does not expose routing"),

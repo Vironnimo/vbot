@@ -567,6 +567,17 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         metavar="<tokens>",
         help="Require at least this many context tokens",
     )
+    list_parser.add_argument(
+        "--sort",
+        choices=("usage", "name"),
+        default="usage",
+        help=(
+            "usage lists the Models with Chat requests in the last 30 days first, most "
+            "requests first and each with the Connection the requests used, then unused "
+            "Models of the same Providers, then the rest; name orders by Provider and "
+            "Model id. Omit for usage."
+        ),
+    )
     show_parser = _add_command_parser(
         model_subparsers,
         "show",

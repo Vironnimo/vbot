@@ -74,13 +74,14 @@ vbot provider disconnect <provider-id> [--connection <provider:connection-id>] [
 ## Models
 
 ```bash
-vbot model list [--query <text>]... [--provider <provider-id>] [--capability <name>]... [--task <task-type>]... [--input-modality <name>]... [--output-modality <name>]... [--min-context-window <tokens>]
+vbot model list [--query <text>]... [--provider <provider-id>] [--capability <name>]... [--task <task-type>]... [--input-modality <name>]... [--output-modality <name>]... [--min-context-window <tokens>] [--sort usage|name]
 vbot model show <provider>/<model-id>
 vbot model refresh [<provider-id>]
 ```
 
 - `model list` returns only Models served by at least one usable Connection (enabled and authenticated when required). Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
 - `--query` finds the Model the user names: every word must occur in the Model id, name or family, ignoring case, across all Providers (`vbot model list --task chat --query claude --query opus`). Add `--provider` when the user names the Provider. Prefer it to an unfiltered list, which can hold hundreds of Models.
+- The list starts with the Models the user used in the last 30 days, most requests first. When several Providers serve the Model the user names, take the first matching row and copy its id with any `::<connection>` ending: it routes like the user's own requests, while the id without it can resolve to another Connection, such as a paid API key.
 - `model show` returns the complete public Model record, including modalities, task types, supported parameters and voices, typed task options, reasoning controls, context/output limits, connection restrictions, usable Connections, family, and metadata. Use it instead of web search when the question is about the Model data currently loaded by vBot.
 - `refresh` fetches the Model lists of one Provider, or of every Provider without an id, through their usable Connections.
 - `vbot model forget-wire-facts <provider>[/<model-id>] [--connection <connection-id>]` forgets the parameters and limits vBot learned from a Provider's refusals; run it when such a refusal was a one-off or the Provider has fixed it. Learned facts otherwise expire after 30 days.

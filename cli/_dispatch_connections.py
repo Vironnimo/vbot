@@ -367,6 +367,7 @@ def _model_filters_from_args(args: argparse.Namespace) -> dict[str, Any]:
         ("output_modality", "output_modalities"),
         ("min_context_window", "min_context_window"),
         ("query", "query"),
+        ("sort", "sort"),
     ):
         value = getattr(args, argument, None)
         if value is not None:
