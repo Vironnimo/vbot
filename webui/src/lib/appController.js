@@ -85,6 +85,7 @@ export function createAppControllerState() {
     clientsRefreshToken: 0,
     commandsRefreshToken: 0,
     connectionSnapshot: null,
+    permissionApprovals: { revision: -1, requests: [] },
     connectionState: createConnectionState(),
     debugTracesRefreshToken: 0,
     devicesRefreshToken: 0,
@@ -288,6 +289,11 @@ export function createAppController({
       onSpeechEvent(event);
       invalidateCatalogReads();
       state.connectionSnapshot = event;
+      // The hello is authoritative even after a server restart resets revision.
+      state.permissionApprovals = event.permissions_approvals ?? {
+        revision: -1,
+        requests: [],
+      };
       runEvents.resetActiveRuns(event.active_runs);
       state.sessionActivity = sessionActivityFromSnapshot(
         event.session_activity,
@@ -334,6 +340,17 @@ export function createAppController({
     if (isRunServerEvent(event.type)) {
       onSpeechEvent(event);
       runEvents.append(event);
+      return;
+    }
+    if (event.type === 'permissions_approvals') {
+      const snapshot = event.payload;
+      if (
+        Number.isInteger(snapshot?.revision) &&
+        snapshot.revision > state.permissionApprovals.revision &&
+        Array.isArray(snapshot.requests)
+      ) {
+        state.permissionApprovals = snapshot;
+      }
       return;
     }
     if (event.type === 'command_status_changed') {

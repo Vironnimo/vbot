@@ -48,6 +48,8 @@ Models write sends in the dialects of messaging Tools they know: OpenClaw `messa
 
 ## Constraints & Gotchas
 
+Explicit attachment paths are preflighted together before file reads or sending.
+
 - Every platform in `ALLOWED_CHANNEL_PLATFORMS` needs an entry in `_CHANNEL_PROFILE_FIELDS` and `_PLATFORM_NAMES`. A profile resolver exception is swallowed by `_resolve_definition_profile` (warning only) and hides the Tool, which is how Slack, Mattermost and WhatsApp Channels once made `channel_send` disappear.
 - The target Channel must belong to the calling Agent; a Channel owned by another Agent returns `invalid_arguments` (`ChannelConfigError`).
 - Run-button origin binding requires the calling Identity Session to exist and is scoped to the exact Channel, platform target, and optional thread. The public callback contract remains `run:<payload>`; callers must never construct or persist the private versioned wire envelope.

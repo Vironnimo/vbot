@@ -6,17 +6,18 @@ import asyncio
 import contextlib
 import shutil
 import sys
-from collections.abc import Callable, Container, Coroutine
+from collections.abc import Awaitable, Callable, Container, Coroutine, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.permissions import CommandChecker, PermissionBoundary, PermissionDenied
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
 from core.sessions import SessionAddress
+from core.tools._permission_preflight import authorize_command
 from core.tools._powershell import (
     PowerShellRequest,
     powershell_bootstrap,
@@ -28,6 +29,7 @@ from core.tools._shell_arguments import (
     _ShellCall,
     normalize_shell_arguments,
     shell_display_parts,
+    validate_workdir,
 )
 from core.tools._shell_results import (
     COMMAND_STATUS_NOTE_MARKER,
@@ -63,6 +65,7 @@ from core.tools.command_manager import (
     CommandReport,
     StopReason,
 )
+from core.tools.contracts import ToolContractError
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.scratch_areas import ScratchAreas, ScratchFolder, ScratchUnavailableError
 from core.tools.shell_environment import (
@@ -102,6 +105,21 @@ _LOGGER = get_logger("tools.shell")
 CredentialResolver = Callable[[str], str]
 # The environment names vBot knows as credentials (``Runtime.environment_credential_names``).
 CredentialNames = Callable[[], Container[str]]
+
+
+class ShellReviewer(Protocol):
+    def __call__(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        *,
+        command: str,
+        shell: str,
+        cwd: Path,
+        environment: Mapping[str, str],
+    ) -> Awaitable[bool]: ...
+
+
 # On Windows a command's processes have a hidden console whose input nothing
 # writes: a program that reads it directly instead of stdin (Python's getpass,
 # $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
@@ -222,10 +240,12 @@ class ShellTool:
         secrets: AgentSecrets | None = None,
         command_checker: CommandChecker | None = None,
         subagents: SubAgentTree | None = None,
+        review_shell: ShellReviewer | None = None,
     ) -> None:
         self._commands = command_manager
         self._subagents = subagents
         self._checker = command_checker
+        self._review_shell = review_shell
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._credential_names: CredentialNames = credential_names or frozenset
         self._secrets = secrets
@@ -257,13 +277,41 @@ class ShellTool:
             ),
         )
         scratch = await self._scratch(context)
-        if confined:
+        if confined or self._checker is not None:
             # Before any Agent Secret is used and before the handoff token exists.
-            await self._check_permissions(context, call, scratch, withheld)
+            await self._check_permissions(context, call, scratch, withheld, arguments)
+        validate_workdir(context, arguments, call.workdir)
+        if self._review_shell is not None:
+            public_environment = {**call.variables, **dict(call.secret_variables)}
+            approved = await self._review_shell(
+                context,
+                arguments,
+                command=call.command,
+                shell=HOST_SHELL_KIND,
+                cwd=call.workdir,
+                environment=public_environment,
+            )
+            if not approved:
+                return tool_failure(
+                    "command_not_approved",
+                    f"{SHELL_MODEL_NAME} was not run: the command was not approved.",
+                )
+            await context.revalidate_permissions()
+            if context.permissions.restricted != confined:
+                raise ToolContractError(
+                    "Permission Rules changed while the command was prepared. Call it again."
+                )
+            validate_workdir(context, arguments, call.workdir)
         try:
             secret_environment = await self._secret_environment(context, call)
         except SecretUseError as error:
             return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
+        await context.revalidate_permissions()
+        if context.permissions.restricted != confined:
+            raise ToolContractError(
+                "Permission Rules changed while the command was prepared. Call it again."
+            )
+        validate_workdir(context, arguments, call.workdir)
         # A restricted Session cannot reach the server to use an update handoff.
         handoff = None if confined else _issue_update_handoff(self._update_handoffs, context)
         try:
@@ -303,8 +351,9 @@ class ShellTool:
         call: _ShellCall,
         scratch: ScratchFolder | None,
         withheld: Container[str],
+        arguments: JsonObject,
     ) -> None:
-        """Refuse the call before launch when the Session's Permission Rules refuse it."""
+        """Authorize the whole command before secrets or launch."""
         boundary = context.permissions
         if self._checker is None:
             raise PermissionDenied(
@@ -325,17 +374,16 @@ class ShellTool:
                 credential_names=withheld,
             )
         )
-        refusal = await self._checker.check_line(
-            boundary,
-            call.command,
+        await authorize_command(
+            context,
+            self._checker,
+            arguments=arguments,
+            command=call.command,
             shell=HOST_SHELL_KIND,
             cwd=call.workdir,
             env=environment.complete(),
-            home=Path.home(),
             workdir_parameter=True,
         )
-        if refusal is not None:
-            raise PermissionDenied(refusal)
 
     async def _secret_environment(self, context: ToolContext, call: _ShellCall) -> dict[str, str]:
         """The variables of the Agent Secrets this call names; blocking sources run off-loop."""
@@ -445,7 +493,13 @@ class ShellTool:
             # PATH lookup probes the filesystem and uses this call's fresh environment.
             return _shell_start(call, environment)
 
+        confined = context.permissions.restricted
         start = await asyncio.to_thread(prepare)
+        await context.revalidate_permissions()
+        if context.permissions.restricted != confined:
+            raise ToolContractError(
+                "Permission Rules changed while the command was prepared. Call it again."
+            )
         # Output can arrive before the launch returns the command's id.
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
@@ -784,6 +838,7 @@ def register_shell_tool(
     secrets: AgentSecrets | None = None,
     command_checker: CommandChecker | None = None,
     subagents: SubAgentTree | None = None,
+    review_shell: ShellReviewer | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
@@ -803,6 +858,7 @@ def register_shell_tool(
         secrets=secrets,
         command_checker=command_checker,
         subagents=subagents,
+        review_shell=review_shell,
     )
     registry.register(
         SHELL_TOOL_NAME,

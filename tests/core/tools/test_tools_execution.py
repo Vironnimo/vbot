@@ -1059,3 +1059,41 @@ async def test_default_capacity_runs_500_tools_before_queueing_overflow() -> Non
         release.set()
         await task
     assert count == 501
+
+
+@pytest.mark.asyncio
+async def test_handler_owned_approval_rechecks_live_tool_denial(tmp_path: Path) -> None:
+    from core.permissions import ApprovalRequirement
+    from tests.core.tools.tools_test_support import dispatch_as_executor, make_context
+
+    registry = ToolRegistry()
+    waiting, release = asyncio.Event(), asyncio.Event()
+    denied, effects = False, []
+
+    async def approval(context, reason, requirements, arguments, cwd):
+        waiting.set()
+        await release.wait()
+        return True
+
+    async def handler(context, arguments):
+        await context.request_approval(
+            "review", [ApprovalRequirement.review("x")], arguments=arguments
+        )
+        await context.revalidate_permissions()
+        effects.append(True)
+        return tool_success({})
+
+    registry.register("probe", "Probe.", {"type": "object"}, handler)
+    context = make_context(
+        "probe",
+        cwd=tmp_path,
+        approval_hook=approval,
+        tool_denial_resolver=lambda _name: "No longer allowed" if denied else None,
+    )
+    task = asyncio.create_task(dispatch_as_executor(registry, context, {}))
+    await waiting.wait()
+    denied = True
+    release.set()
+    result = await task
+    assert result["error"]["code"] == "tool_not_allowed"
+    assert not effects

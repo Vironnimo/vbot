@@ -99,7 +99,13 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
 ) -> None:
     runtime, seen = _runtime(
         tmp_path,
-        {"read": "work_area", "write": "scratch", "deny": ["Read({workdir}/secrets/**)"]},
+        {
+            "read": "work_area",
+            "write": "scratch",
+            "web": "listed",
+            "allow": ["Web(docs.example)"],
+            "deny": ["Read({workdir}/secrets/**)", "Web(blocked.example)"],
+        },
     )
 
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
@@ -129,6 +135,8 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
     assert "## Permission rules" in prompt
     assert f"`{workspace.as_posix()}`" in prompt
     assert f"`Read({workspace.as_posix()}/secrets/**)`" in prompt
+    assert "`docs.example`" in prompt and "`blocked.example`" in prompt
+    assert "Web(" not in prompt
 
 
 @pytest.mark.asyncio

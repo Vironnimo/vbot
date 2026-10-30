@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import idna
-
-from core.permissions import PermissionBoundary
 
 _DOMAIN_LABEL_PATTERN = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
 
@@ -191,11 +189,7 @@ def _clean_snippet(raw: Any) -> str:
 
 @dataclass(frozen=True)
 class WebSearchRequest:
-    """One constrained search shared by every engine adapter.
-
-    ``permissions`` is the calling Session's boundary: a result whose address
-    it refuses is left out and its address collected in ``refused``.
-    """
+    """One constrained search shared by every engine adapter."""
 
     query: str
     domains: list[str]
@@ -203,8 +197,6 @@ class WebSearchRequest:
     count: int
     page: int
     recency: str
-    permissions: PermissionBoundary = field(kw_only=True)
-    refused: dict[str, str] = field(default_factory=dict, compare=False)
 
     @staticmethod
     def resolve_sites(
@@ -241,18 +233,13 @@ class WebSearchRequest:
         return " ".join(terms)
 
     def restrict(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Keep results inside required domains and outside excluded ones, and
-        those the permission rules let this Agent fetch."""
+        """Keep results inside required domains and outside excluded ones."""
         kept = []
         for result in results:
             url = _normalize_text(result.get("url"))
             if self.domains and not _url_matches_domains(url, self.domains):
                 continue
             if self.exclude and _url_matches_domains(url, self.exclude):
-                continue
-            if (refusal := self.permissions.check_url(url)) is not None:
-                # By address: an adapter that restricts twice counts a result once.
-                self.refused[url] = refusal.target
                 continue
             kept.append(result)
         return kept[: self.count]

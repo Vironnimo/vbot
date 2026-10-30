@@ -12,7 +12,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from core.secrets.agent_secrets import SINK_CLASSES
-from core.tools._tool_context import ToolHandler
+from core.tools._tool_context import ToolHandler, ToolPreflight
 from core.tools._tool_display import ToolDisplay
 from core.tools.availability import (
     TOOL_ACTIVATION_CONFIGURABLE,
@@ -119,6 +119,8 @@ class Tool:
     description: str
     parameters: JsonObject
     handler: ToolHandler
+    preflight: ToolPreflight | None = field(default=None, repr=False, compare=False)
+    defer_secret_consumption: bool = False
     result_schema: JsonObject | None = field(default=None, repr=False)
     # Optional one-sentence, Model-facing summary that lists the Tool where its
     # full definition is not shown (On-demand Tools). ``None`` summarizes the

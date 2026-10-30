@@ -13,15 +13,16 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from core.permissions import CommandChecker, PermissionDenied
+from core.permissions import CommandChecker
 from core.sessions import SessionAddress
 from core.tools._argument_repair import load_json_value
 from core.tools._code_process import CodeExecutionResult, run_python
+from core.tools._permission_preflight import authorize_command
 from core.tools._tool_display import display_notice, display_text
 from core.tools.arguments import required_string
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
-from core.tools.contracts import JsonObject, ToolContract, compile_tool_contract
+from core.tools.contracts import JsonObject, ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.scratch_areas import ScratchAreas, ScratchFolder, ScratchUnavailableError
 from core.tools.shell_environment import RunIdentity, command_environment
@@ -125,22 +126,32 @@ class _ExecuteCode:
                 "code_unavailable",
                 "Nothing was run: execute_code needs an active conversation Run.",
             )
-        cwd = context.resolve_path(context.effective_cwd, access="start_dir")
+        cwd = context.path_target(context.effective_cwd, access="start_dir")
+        confined = context.permissions.restricted
         scratch = await self._scratch(context)
         environment = await run_tool_worker(self._environment, context, scratch)
-        refusal = await self._checker.check_argv(
-            context.permissions,
-            [sys.executable, "-c", code],
+        await authorize_command(
+            context,
+            self._checker,
+            arguments=arguments,
+            argv=[sys.executable, "-c", code],
             cwd=cwd,
             env=environment,
-            home=Path.home(),
         )
-        if refusal is not None:
-            raise PermissionDenied(refusal)
+        await context.revalidate_permissions()
+        if context.permissions.restricted != confined:
+            raise ToolContractError(
+                "Permission Rules changed while Python was prepared. Call it again."
+            )
         context.record_worked_paths(cwd)
         output_path = await run_tool_worker(_output_path, scratch)
         result: CodeExecutionResult | None = None
         try:
+            await context.revalidate_permissions()
+            if context.permissions.restricted != confined:
+                raise ToolContractError(
+                    "Permission Rules changed while Python was prepared. Call it again."
+                )
             result = await self._run(context, code, cwd, environment, output_path)
         finally:
             if output_path is not None and not (

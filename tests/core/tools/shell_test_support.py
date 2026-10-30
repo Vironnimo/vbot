@@ -72,6 +72,7 @@ class Shell:
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
         credential_names: Container[str] = frozenset(),
         subagents: SubAgentTree | None = None,
+        review_shell: Any = None,
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
@@ -88,6 +89,7 @@ class Shell:
             secrets=secrets,
             command_checker=self.checker,
             subagents=subagents,
+            review_shell=review_shell,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []

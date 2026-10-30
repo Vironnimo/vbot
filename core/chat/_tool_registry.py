@@ -324,7 +324,7 @@ class _EmittingToolRegistry(ToolRegistry):
             # No Secret value and no lone surrogate leaves the call: not to the
             # Model, the events or the persisted Tool Result.
             masker = self._secret_masker()
-            result = _leaving_call(masker, result)
+            result = _leaving_call(masker, context.mask_prepared_secrets(result))
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
@@ -338,12 +338,14 @@ class _EmittingToolRegistry(ToolRegistry):
             self._tool_timings[context.tool_call_id] = timing
             completed_display = _leaving_call(
                 masker,
-                _tool_display_payload(
-                    self._registry,
-                    context.tool_name,
-                    effective_arguments,
-                    context=context,
-                    result=result,
+                context.mask_prepared_secrets(
+                    _tool_display_payload(
+                        self._registry,
+                        context.tool_name,
+                        effective_arguments,
+                        context=context,
+                        result=result,
+                    )
                 ),
             )
             self._tool_displays[context.tool_call_id] = completed_display
@@ -487,16 +489,21 @@ class _EmittingToolRegistry(ToolRegistry):
     ) -> JsonObject:
         """Finish the lifecycle of a call whose hooks or bookkeeping raised."""
         masker = self._secret_masker()
-        result = _leaving_call(masker, tool_failure_for_exception(context.tool_name, error))
+        result = _leaving_call(
+            masker,
+            context.mask_prepared_secrets(tool_failure_for_exception(context.tool_name, error)),
+        )
         try:
             display = _leaving_call(
                 masker,
-                _tool_display_payload(
-                    self._registry,
-                    context.tool_name,
-                    events.arguments,
-                    context=context,
-                    result=result,
+                context.mask_prepared_secrets(
+                    _tool_display_payload(
+                        self._registry,
+                        context.tool_name,
+                        events.arguments,
+                        context=context,
+                        result=result,
+                    )
                 ),
             )
         except Exception:

@@ -334,6 +334,43 @@ async def test_permission_rules_refuse_a_read_before_the_file_is_touched(
 
 
 @pytest.mark.asyncio
+async def test_approval_is_limited_to_the_prepared_read(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "notes.txt"
+    target.write_text("approved content", encoding="utf-8")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+    calls: list[Any] = []
+
+    async def approve(
+        _context: Any, _reason: str, requirements: Any, _arguments: Any, _cwd: Any
+    ) -> bool:
+        calls.append(requirements)
+        return True
+
+    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
+
+    ctx = replace(
+        make_context(work, cwd=work),
+        permissions=boundary,
+        approval_hook=approve,
+        approval_refresh_hook=refresh,
+    )
+    result = await read_registry().dispatch(ctx, {"path": str(target)})
+    assert "approved content" in content(result)
+    assert len(calls) == 1 and len(calls[0]) == 1
+    sibling = replace(make_context(work, cwd=work), permissions=boundary)
+    with pytest.raises(PermissionDenied):
+        await read_registry().dispatch(sibling, {"path": str(target)})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["plan.md", "secret"])
 async def test_permission_rules_name_refused_entries_in_listings_and_suggestions(
     tmp_path: Path, missing: str

@@ -27,6 +27,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 
 ## Contract
 
+Every parsed source and destination is preflighted together before the first operation; hard refusals take precedence over requests for missing access. Later path checks still guard links changed during a patch.
+
 - `register_apply_patch_tool(registry, *, file_state)` registers `apply_patch`
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The

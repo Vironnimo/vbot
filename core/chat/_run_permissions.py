@@ -378,8 +378,8 @@ PERMISSIONS_BLOCK_ID = "core:permissions"
 _PERMISSIONS_HEADING = "## Permission rules"
 _PERMISSIONS_LEAD = "The user set permission rules for you{inherited}."
 _PERMISSIONS_SCOPE = (
-    "vBot's Tools and commands refuse access outside these limits, and the limits also "
-    "apply to scripts and programs that vBot does not check."
+    "Tools can request approval for additional access; deny rules cannot be overridden. "
+    "These limits also apply to scripts and programs that vBot does not check."
 )
 # Where a ceiling's rules come from, as the lead names them.
 _INHERITED_FROM: Final[dict[str, str]] = {
@@ -398,7 +398,7 @@ _PERMISSIONS_LINES: Final[tuple[tuple[PermissionAccess, str, str], ...]] = (
     ),
     ("write", "You can change files only in: {items}.", "You cannot change any files."),
     ("command", "You can run only these commands: {items}.", "You cannot run any commands."),
-    ("web", "You can fetch only from: {items}.", "You cannot fetch from any host."),
+    ("web", "Commands can reach only these hosts: {items}.", "Commands cannot reach any host."),
 )
 _PERMISSIONS_DENIED = "Always refused, even inside these folders: {items}."
 _PERMISSIONS_DENIED_ONLY = "Always refused: {items}."
@@ -416,10 +416,21 @@ def permissions_block_text(boundary: PermissionBoundary) -> str:
             continue
         folders = folders or access in ("read", "write")
         lines.append(listed.format(items=_items(allowed)) if allowed else nothing)
-    denied = tuple(dict.fromkeys(rule.text for layer in boundary.layers for rule in layer.deny))
+    denied = tuple(
+        dict.fromkeys(
+            rule.text for layer in boundary.layers for rule in layer.deny if rule.kind != "Web"
+        )
+    )
     if denied:
         template = _PERMISSIONS_DENIED if folders else _PERMISSIONS_DENIED_ONLY
         lines.append(template.format(items=_items(denied)))
+    network_denied = tuple(
+        dict.fromkeys(
+            rule.pattern for layer in boundary.layers for rule in layer.deny if rule.kind == "Web"
+        )
+    )
+    if network_denied:
+        lines.append(f"Commands cannot reach these hosts: {_items(network_denied)}.")
     if not lines:
         return ""
     sources = dict.fromkeys(

@@ -377,6 +377,16 @@ class PermissionBoundary:
                     source=layer.layer.source,
                     resolved=shown,
                 )
+        # Hard subtree refusals take precedence over a missing base grant, so
+        # an approval cannot hide a denied or protected descendant.
+        if subtree or glob is not None:
+            reach = tuple(path_key(glob, windows=self._windows).split("/")) if glob else ()
+            if subtree or not reach:
+                reach += ("**",)
+            names = frozenset(path_key(name, windows=self._windows) for name in pruned)
+            refused = self._subtree_refusal(keys, access, target, shown, reach, names, git)
+            if refused is not None:
+                return refused
         for layer in () if deny_only else self._compiled:
             if not all(self._granted(key, access) or layer.permits(key, access) for key in keys):
                 return self.refusal(
@@ -387,12 +397,6 @@ class PermissionBoundary:
                     base=layer.layer.write if access == "write" else layer.layer.read,
                     resolved=shown,
                 )
-        if subtree or glob is not None:
-            reach = tuple(path_key(glob, windows=self._windows).split("/")) if glob else ()
-            if subtree or not reach:
-                reach += ("**",)
-            names = frozenset(path_key(name, windows=self._windows) for name in pruned)
-            return self._subtree_refusal(keys, access, target, shown, reach, names, git)
         return None
 
     def _subtree_refusal(

@@ -659,6 +659,8 @@ notice about the next page and each warning
 
 ## Permission Rules
 
+Explicit roots and path-valued flags are preflighted together. An approved search root permits only that call to enumerate beneath it; hard-denied and protected descendants remain filtered, and suggestions and enumerated children never request approval.
+
 A restricted Run searches only what its rules let it read; full access adds no
 argument and no check.
 

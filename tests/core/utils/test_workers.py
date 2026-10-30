@@ -112,6 +112,32 @@ async def test_worker_pool_applies_backpressure_before_submission() -> None:
 
 
 @pytest.mark.asyncio
+async def test_guarded_worker_cancelled_during_guard_releases_admission() -> None:
+    pool = BoundedWorkerPool(name="test-guard-cancel", max_workers=1)
+    entered = asyncio.Event()
+    worker_started = False
+
+    async def guard() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    def worker() -> None:
+        nonlocal worker_started
+        worker_started = True
+
+    try:
+        task = asyncio.create_task(pool.run_guarded(guard, worker))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert worker_started is False
+        assert await pool.run(lambda: 7) == 7
+    finally:
+        pool.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_worker_pool_waits_for_started_mutation_before_cancellation() -> None:
     pool = BoundedWorkerPool(name="test-cancellation", max_workers=1)
     started = threading.Event()

@@ -685,28 +685,34 @@ def _parse_call(
 def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore | None) -> Path:
     raw = optional_string(arguments.get("workdir"), field_name="workdir")
     if not raw:
-        workdir = context.resolve_path(context.effective_cwd, access="start_dir")
+        workdir = context.path_target(context.effective_cwd, access="start_dir")
     elif is_project_workdir(raw):
         # Not advertised; the Projects block names each Project's directory path.
         try:
-            return project_workdir(projects, raw, permissions=context.permissions)
+            return project_workdir(
+                projects, raw, permissions=context.permissions, prepare_only=True
+            )
         except ProjectWorkdirError as error:
             raise _call_error(str(error)) from error
     else:
-        workdir = context.resolve_path(raw, access="start_dir")
+        workdir = context.path_target(raw, access="start_dir")
+    return workdir
+
+
+def validate_workdir(context: ToolContext, arguments: JsonObject, workdir: Path) -> None:
+    raw = optional_string(arguments.get("workdir"), field_name="workdir")
     try:
         directory = is_dir_strict(workdir)
     except OSError:
         # Launch owns host failures. Keep an unavailable path distinct from a
         # missing one, so the manager reports the actual filesystem failure.
-        return workdir
+        return
     if not directory:
         raise _call_error(
             _missing_workdir(
                 workdir, given=bool(raw), cwd=context.effective_cwd, permissions=context.permissions
             )
         )
-    return workdir
 
 
 def _missing_workdir(

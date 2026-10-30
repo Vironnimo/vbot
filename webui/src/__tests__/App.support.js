@@ -48,6 +48,8 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
     RUN_EVENT_TOOL_CALL_OUTPUT: 'tool_call_output',
     debugStatus: (...args) => debugStatusMock(...args),
+    debugSpeechList: () => Promise.resolve({ recordings: [] }),
+    debugSpeechClear: () => Promise.resolve({ cleared: 0 }),
     getServedWebuiBuild: (...args) => getServedWebuiBuildMock(...args),
     getLiveVoiceStatus: () => rpcMock('live.status'),
     listClients: (...args) => listClientsMock(...args),

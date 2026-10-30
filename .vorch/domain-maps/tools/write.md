@@ -8,6 +8,8 @@ Tool shares only its name.
 
 ## Contract
 
+The explicit target is preflighted before any file change.
+
 - Registered by `register_edit_tools` with `edit`: `files` family, follows
   `apply_patch`, hidden from `tool.list`.
 - **Schema:** `path` and `content`, both required. Unknown root fields follow

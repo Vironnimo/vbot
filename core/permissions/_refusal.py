@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from core.utils.errors import VBotError
@@ -212,3 +212,16 @@ class PermissionDenied(VBotError):  # noqa: N818 - reads as the refusal it carri
     def __init__(self, refusal: PermissionRefusal) -> None:
         super().__init__(refusal.message())
         self.refusal = refusal
+
+
+class PermissionApprovalRejected(PermissionDenied):
+    """A user rejected the additional access for this Run."""
+
+    def __init__(self, refusal: PermissionRefusal) -> None:
+        super().__init__(
+            replace(
+                refusal,
+                hint="The user declined this additional access for this Run. "
+                "Continue with work that does not need it.",
+            )
+        )

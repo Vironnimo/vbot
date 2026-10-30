@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import inspect
 import json
@@ -23,6 +24,8 @@ from core.secrets.agent_secrets import (
 from core.sessions import SessionAddress
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
+    ToolApprovalCancelledError,
+    ToolAuthorityUnavailableError,
     ToolCall,
     ToolCallCancelCheck,
     ToolCallCancelRegistrar,
@@ -39,9 +42,11 @@ from core.tools._tool_context import (
     ToolHandler,
     ToolLoadHook,
     ToolNoteHook,
+    ToolPreflight,
     ToolResultPayloadHook,
     ToolResultPersistedCallback,
     ToolResultPersistedHook,
+    ToolSecretCommitError,
     ToolSkillActivationHook,
     ToolTurnEndHook,
     builtin_payload_owner,
@@ -101,7 +106,11 @@ from core.tools._tool_results import (
     with_call_note,
 )
 from core.tools._tool_workers import DEFAULT_TOOL_WORKER_LIMIT as DEFAULT_TOOL_WORKER_LIMIT
-from core.tools._tool_workers import _invoke_sync_tool_handler, _OffloadedToolHandler
+from core.tools._tool_workers import (
+    _invoke_sync_tool_handler,
+    _OffloadedToolHandler,
+    run_tool_worker_guarded,
+)
 from core.tools._tool_workers import offload_tool_handler as offload_tool_handler
 from core.tools._tool_workers import run_tool_worker as run_tool_worker
 from core.tools.availability import (
@@ -353,6 +362,8 @@ class ToolRegistry:
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
         announce_changes: Sequence[str] = (),
         secret_sinks: Mapping[str, str] | None = None,
+        preflight: ToolPreflight | None = None,
+        defer_secret_consumption: bool = False,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -390,6 +401,8 @@ class ToolRegistry:
             description=description,
             parameters=parameters,
             handler=handler,
+            preflight=preflight,
+            defer_secret_consumption=defer_secret_consumption,
             result_schema=result_schema,
             summary=summary,
             internal=internal,
@@ -748,7 +761,19 @@ class ToolRegistry:
         normalized_arguments, ignored = _checked_arguments(
             tool, context.input_contract or tool.contract, arguments
         )
+        object.__setattr__(context, "public_arguments", copy.deepcopy(normalized_arguments))
         note = ignored_fields_note(context.tool_name, ignored) if ignored else None
+
+        def recheck_authority() -> None:
+            unavailable = self._authorize_prepared(context, tool, arguments, allowed_tools)
+            if unavailable is not None:
+                raise ToolAuthorityUnavailableError(unavailable)
+
+        object.__setattr__(context, "authority_recheck", recheck_authority)
+        if tool.preflight is not None:
+            await tool.preflight(context, normalized_arguments)
+            if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):
+                return unavailable
         if tool.secret_sinks and self._secrets is not None:
             try:
                 normalized_arguments, unavailable = await self._substitute_secrets(
@@ -769,12 +794,20 @@ class ToolRegistry:
         if isinstance(handler, _OffloadedToolHandler):
             handler = handler.__wrapped__
 
+        loop = asyncio.get_running_loop()
+
         def invoke() -> Any:
             # Blocking handlers may wait for worker admission after preparation.
             # Check on that worker before entering their actual implementation.
             unavailable = self._authorize_prepared(context, tool, arguments, allowed_tools)
             if unavailable is not None:
                 return unavailable
+            if offloaded or (
+                tool.extension is not None and not inspect.iscoroutinefunction(handler)
+            ):
+                asyncio.run_coroutine_threadsafe(
+                    context.revalidate_permissions(enforce_cancel=False), loop
+                ).result()
             return _invoke_sync_tool_handler(handler, context, normalized_arguments)
 
         # From here on the handler runs: only a ToolContractError it raises
@@ -786,6 +819,7 @@ class ToolRegistry:
             ):
                 result = await run_tool_worker(invoke)
             else:
+                await context.revalidate_permissions(enforce_cancel=False)
                 result = invoke()
             if inspect.isawaitable(result):
                 result = await result
@@ -850,21 +884,59 @@ class ToolRegistry:
                     sink,
                     passed_only=context.subagent_session,
                     consume=False,
-                    literals=context.secret_literals if sink == "files" else None,
+                    literals=(
+                        context.prepared_secret_literals
+                        if tool.defer_secret_consumption
+                        else context.secret_literals
+                        if sink == "files"
+                        else None
+                    ),
                 )
                 uses.extend(use for use in found if use not in uses)
             # Refused preparation must not spend a one-time grant.
             if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):
                 return changed, [], unavailable
-            secrets.consume(
-                SessionAddress(context.project_id, context.agent_id, context.session_id),
-                uses,
-                passed_only=context.subagent_session,
-            )
+            if not tool.defer_secret_consumption:
+                secrets.consume(
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
+                    uses,
+                    passed_only=context.subagent_session,
+                )
             return changed, uses, None
 
         changed, uses, unavailable = await run_tool_worker(substitute)
-        if uses:
+        if uses and tool.defer_secret_consumption:
+
+            async def commit() -> None:
+                def consume() -> None:
+                    # A user Stop may arrive after admission but before the
+                    # worker begins; never spend a Secret for that call.
+                    if context.is_cancelled():
+                        raise asyncio.CancelledError
+                    if context.was_cancelled_by_user():
+                        raise ToolApprovalCancelledError
+                    unavailable = self._authorize_prepared(context, tool, arguments, allowed_tools)
+                    if unavailable is not None:
+                        raise ToolAuthorityUnavailableError(unavailable)
+                    secrets.consume(
+                        SessionAddress(context.project_id, context.agent_id, context.session_id),
+                        uses,
+                        passed_only=context.subagent_session,
+                    )
+
+                try:
+                    # Source I/O must never run while holding a Secret Store lock.
+                    await run_tool_worker(secrets.validate_prepared_values, uses)
+                    # Recheck after worker admission as well: Rules, Computer,
+                    # prompt state and cancellation may change during either wait.
+                    await run_tool_worker_guarded(context.revalidate_permissions, consume)
+                except SecretUseError as error:
+                    raise ToolSecretCommitError(str(error)) from error
+                context.record_secret_uses(describe_uses(uses))
+                object.__setattr__(context, "secret_commit_hook", None)
+
+            object.__setattr__(context, "secret_commit_hook", commit)
+        elif uses:
             context.record_secret_uses(describe_uses(uses))
         return changed, unavailable
 

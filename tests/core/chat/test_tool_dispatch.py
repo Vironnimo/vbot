@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -417,6 +418,74 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
     assert value not in json.dumps(completed.payload["display"])
     assert value not in persisted
     assert completed.payload["display"]["secrets_used"] == ["API.value (files)"]
+
+
+@pytest.mark.asyncio
+async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_path: Path) -> None:
+    from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
+    from core.permissions import ApprovalRequirement, PermissionBoundary
+    from core.runs import ChatRunManager
+
+    value = "Z7Q"
+    store = SecretStore(
+        tmp_path / "data", protections=(KeyFileProtection(directories=(tmp_path / "keys",)),)
+    )
+    (tmp_path / "data").mkdir(exist_ok=True)
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    tools = ToolRegistry()
+    tools.set_secrets(secrets)
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        await context.request_approval(
+            f"Review {arguments['content']}",
+            [ApprovalRequirement.review(f"command {arguments['content']}")],
+            arguments=context.public_arguments,
+        )
+        return tool_success({"content": arguments["content"]})
+
+    tools.register(
+        "echo",
+        "Echo.",
+        {"type": "object", "additionalProperties": True},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "terminal"},
+        defer_secret_consumption=True,
+    )
+    harness = ToolDispatchHarness(tmp_path, tools)
+    secrets.create(
+        name="api", kind="text", values={"value": value}, actor="user", agents=[harness.agent.id]
+    )
+    manager = ChatRunManager()
+    dispatch = ToolDispatchContext(
+        registry=tools,
+        extension_registry=None,
+        agent=harness.agent,
+        session=harness.session,
+        run=harness.run,
+        vbot_root=Path.cwd(),
+        data_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
+        approval_manager=manager,
+    )
+    round_ = ToolRound(dispatch, assistant_message_id=None, iteration_number=0)
+    task = asyncio.create_task(round_.finish([call("echo", content="{{secret:API}}")]))
+
+    async def request_ready() -> None:
+        while not manager.approvals_snapshot()["requests"]:
+            await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(request_ready(), timeout=2)
+        request = manager.approvals_snapshot()["requests"][0]
+        assert value not in json.dumps(request)
+        assert request["arguments"]["content"] == "{{secret:API}}"
+        assert request["display_redacted"] is True
+        assert manager.resolve_approval(request["id"], "allow")
+        messages, _ = await task
+        assert value not in json.dumps([message.to_dict() for message in messages])
+    finally:
+        await round_.aclose()
 
 
 @pytest.mark.asyncio

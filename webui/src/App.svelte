@@ -82,6 +82,7 @@
   import Button from './components/ui/Button.svelte';
   import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
+  import PermissionApprovals from './components/PermissionApprovals.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
   import { appearancePrefs } from '$lib/appearancePrefs.svelte.js';
@@ -89,7 +90,7 @@
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
   import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, setContext, tick } from 'svelte';
   import {
     createSpeechAudio,
     provideSpeechAudio,
@@ -175,6 +176,11 @@
     extensions.allNavigationItems.some((item) => item.id === viewId);
 
   const appControllerState = $state(createAppControllerState());
+  setContext('permissionApprovals', {
+    get requests() {
+      return appControllerState.permissionApprovals.requests;
+    },
+  });
   const autosave = createAppAutosave({
     onStay: () => navigator.cancelPendingMove(),
   });
@@ -624,6 +630,7 @@
       </Button>
     </Banner>
   {/if}
+  <PermissionApprovals snapshot={appControllerState.permissionApprovals} />
   <ExtensionRequests
     subscribeInvalidations={extensions.subscribeInvalidations}
   />

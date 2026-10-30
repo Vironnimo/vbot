@@ -351,6 +351,16 @@ def _check_local(
         )
 
 
+def preflight_image_paths(raw_paths: Any, field: str, *, allow_urls: bool = False) -> list[str]:
+    """Collect explicit local paths without opening them or downloading images."""
+    items = _requested_items(raw_paths, field, "local image path", "local image paths")
+    return [
+        _local_path_text(text, field)
+        for text in items
+        if not (allow_urls and image_address(text) is not None)
+    ]
+
+
 def resolve_local_images(
     context: ToolContext, raw_paths: Any, field: str, *, single: bool = False
 ) -> list[Path]:
@@ -393,12 +403,13 @@ async def resolve_analysis_images(
     }
     try:
         _check_local(context, items, local, field, False)
+        await context.revalidate_permissions()
         downloaded = await download_images(
             addresses,
             field=field,
             attachment_store=attachment_store,
             several=len(items) > 1,
-            permissions=context.permissions,
+            permissions=context.permission_access,
         )
     except UnusableImageError:
         _present(context, _named(list(local.values())), source=False)

@@ -436,7 +436,8 @@ _UNOFFERED_ASPECT_RATIO = (
             failure(
                 "output_write_failed",
                 "The provider generated the images, but saving to full-disk failed: the disk "
-                "is full. No file was saved. Repeating the call generates the images again at "
+                "is full. No complete file was saved. A partial file may remain. "
+                "Repeating the call generates the images again at "
                 "new cost. Tell the user before you repeat it.",
             ),
             id="save-failed",
@@ -448,7 +449,8 @@ _UNOFFERED_ASPECT_RATIO = (
             failure(
                 "output_write_failed",
                 "The provider generated the images, but saving to full-disk failed: the disk "
-                "is full. Files saved before the failure: full-disk/img_1.png. Repeating the "
+                "is full. Files saved before the failure: full-disk/img_1.png. A partial file "
+                "may remain. Repeating the "
                 "call generates the images again at new cost. Tell the user before you repeat "
                 "it.",
             ),

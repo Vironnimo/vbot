@@ -1,6 +1,8 @@
 """Permission Rules domain public API (``permissions.md``)."""
 
-from core.permissions._command_check import CommandChecker
+from core.permissions._approval_access import ApprovalRequirement, PermissionGrant
+from core.permissions._command_check import CommandChecker, run_permission_decision
+from core.permissions._refusal import PermissionApprovalRejected
 from core.permissions.permissions import (
     CUSTOM_PRESET,
     PERMISSION_PRESETS,
@@ -60,8 +62,12 @@ __all__ = [
     "PERMISSION_RULE_PARTS",
     "PLACEHOLDERS",
     "RULE_KINDS",
+    "ApprovalRequirement",
+    "PermissionGrant",
+    "PermissionApprovalRejected",
     "BoundaryContext",
     "CommandChecker",
+    "run_permission_decision",
     "CommandsBase",
     "LayerDescription",
     "LayerSource",

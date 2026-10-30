@@ -20,7 +20,7 @@ from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks.artifacts import os_error_reason
-from core.permissions import PermissionBoundary, PermissionDenied
+from core.permissions import PermissionBoundary, PermissionDenied, PermissionGrant
 from core.tools._public_http import PublicFetchError, fetch_public
 
 _IMAGE_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
@@ -169,7 +169,9 @@ def _filename(url: str) -> str:
     return name or "image"
 
 
-async def _download(address: str, max_bytes: int, permissions: PermissionBoundary) -> _Image:
+async def _download(
+    address: str, max_bytes: int, permissions: PermissionBoundary | PermissionGrant
+) -> _Image:
     if address[:5].casefold() == "data:":
         data, declared = _decode_data_url(address, max_bytes)
         return _checked(data, declared, None, "image")
@@ -192,7 +194,7 @@ async def _download(address: str, max_bytes: int, permissions: PermissionBoundar
 
 
 async def _attempt(
-    address: str, max_bytes: int, permissions: PermissionBoundary
+    address: str, max_bytes: int, permissions: PermissionBoundary | PermissionGrant
 ) -> _Image | ImageDownloadError:
     try:
         return await _download(address, max_bytes, permissions)
@@ -206,7 +208,7 @@ async def download_images(
     field: str,
     attachment_store: Any,
     several: bool,
-    permissions: PermissionBoundary,
+    permissions: PermissionBoundary | PermissionGrant,
 ) -> dict[int, tuple[Path, str]]:
     """Download the images at ``addresses`` (keyed by argument index) and store them.
 

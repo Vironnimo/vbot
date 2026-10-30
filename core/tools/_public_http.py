@@ -34,6 +34,7 @@ from urllib.parse import urljoin, urlparse
 from core.permissions import (
     PermissionBoundary,
     PermissionDenied,
+    PermissionGrant,
     PermissionRefusal,
     normalize_host,
 )
@@ -666,7 +667,7 @@ async def _fetch_with_retry(
     what: str = "page",
     hosts: HostSlots | None = None,
     *,
-    permissions: PermissionBoundary,
+    permissions: PermissionBoundary | PermissionGrant,
     truncate: bool = False,
 ) -> PublicResponse:
     """Fetch a URL, validating each redirect hop against SSRF rules and *permissions*.
@@ -757,7 +758,9 @@ async def _fetch_with_retry(
     raise RuntimeError("unreachable retry loop state")
 
 
-def hop_refusal(permissions: PermissionBoundary, url: str, hop: str) -> PermissionRefusal | None:
+def hop_refusal(
+    permissions: PermissionBoundary | PermissionGrant, url: str, hop: str
+) -> PermissionRefusal | None:
     """Whether *permissions* refuse *hop*, an address a fetch of *url* reached.
 
     A refused hop other than *url* (a redirect, or the page a service or the
@@ -769,7 +772,7 @@ def hop_refusal(permissions: PermissionBoundary, url: str, hop: str) -> Permissi
     return refused
 
 
-def _check_hop(permissions: PermissionBoundary, url: str, hop: str) -> None:
+def _check_hop(permissions: PermissionBoundary | PermissionGrant, url: str, hop: str) -> None:
     """Raise ``PermissionDenied`` when *permissions* refuse *hop* of a fetch of *url*."""
     refused = hop_refusal(permissions, url, hop)
     if refused is not None:
@@ -976,7 +979,7 @@ async def fetch_public(
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
     hosts: HostSlots | None = None,
-    permissions: PermissionBoundary,
+    permissions: PermissionBoundary | PermissionGrant,
     truncate: bool = False,
 ) -> PublicResponse:
     """GET a public address and return its successful response.

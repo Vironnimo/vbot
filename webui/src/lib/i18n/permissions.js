@@ -2,7 +2,7 @@ export default Object.freeze({
   // Permission Rules editor (components/permissions/PermissionRulesEditor.svelte)
   'permissions.title': 'Permissions',
   'permissions.agentDescription':
-    'Where this Agent may read and change files, which commands it may run and which sites it may open.',
+    'Where this Agent may read and change files, which commands it may run and which network destinations shell commands may reach.',
   'permissions.defaultsTitle': 'Permissions',
   'permissions.defaultsDescription':
     'The Permission Rules that Identity Agents and Project Agents inherit for each part they do not set themselves. Without them, Agents have full access.',
@@ -11,7 +11,7 @@ export default Object.freeze({
   'permissions.limits':
     'The rules limit vBot’s own Tools and check shell commands before they run; programs those commands start, MCP servers and Extensions are not confined.',
   'permissions.limitsHelp':
-    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. In a terminal, only command lines typed at the shell’s own prompt are checked; input to programs running there is not. Pages the local browser opens can follow redirects and load content from sites the rules do not allow. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git can show the contents of files from its history. Git commands that work on a whole folder or repository, such as pull, switch, restore . or add ., can read and change denied files and a repository’s permission settings files below it; only paths that name such files are refused. If you go back to an older vBot version, it ignores these rules.',
+    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. In a terminal, only command lines typed at the shell’s own prompt are checked; input to programs running there is not. Web search and page reading are not restricted by destination rules. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git can show the contents of files from its history. Git commands that work on a whole folder or repository, such as pull, switch, restore . or add ., can read and change denied files and a repository’s permission settings files below it; only paths that name such files are refused. If you go back to an older vBot version, it ignores these rules.',
   'permissions.createHelp':
     'Single bases and rules are set in the Agent editor after creating.',
   'permissions.preset': 'Preset',
@@ -31,7 +31,7 @@ export default Object.freeze({
   'permissions.part.read': 'Read files',
   'permissions.part.write': 'Change files',
   'permissions.part.commands': 'Shell commands',
-  'permissions.part.web': 'Web access',
+  'permissions.part.web': 'Shell network destinations',
   'permissions.base.read.anywhere': 'Anywhere',
   'permissions.base.read.work_area': 'Only in the work area',
   'permissions.base.write.anywhere': 'Anywhere',
@@ -39,8 +39,8 @@ export default Object.freeze({
   'permissions.base.write.scratch': 'Only in the scratch area',
   'permissions.base.commands.any': 'Any command',
   'permissions.base.commands.listed': 'Only allowed commands',
-  'permissions.base.web.any': 'Any site',
-  'permissions.base.web.listed': 'Only allowed sites',
+  'permissions.base.web.any': 'Any destination',
+  'permissions.base.web.listed': 'Only allowed destinations',
   'permissions.base.inherited': 'Inherited: {value}',
   'permissions.base.default': 'Default: {value}',
   'permissions.base.writeNarrowed':
@@ -53,12 +53,12 @@ export default Object.freeze({
     'The work area is the folder a Session works in plus its scratch area. An Agent can always read and change its own Workspace.',
   'permissions.allowTitle': 'Allow rules',
   'permissions.allowDescription':
-    'Extra folders, commands and sites the Agent may use beyond the settings above.',
+    'Extra folders, commands and shell network destinations the Agent may use beyond the settings above.',
   'permissions.denyTitle': 'Deny rules',
   'permissions.denyDescription':
     'Refused even where the settings above or an allow rule permit them.',
   'permissions.rulesHelp':
-    'Write paths or globs: Read(docs/**), Edit({workdir}/src/**). Shell(git push *) matches a command, Web(*.github.com) a site. {workdir} is the folder a Session works in, {project} the Working Project’s repository, {scratch} the Session’s scratch area, {workspace} the Agent’s Workspace and ~ the home folder. A relative path starts in {workdir}.',
+    'Write paths or globs: Read(docs/**), Edit({workdir}/src/**). Shell(git push *) matches a command, Web(*.github.com) a shell network destination. {workdir} is the folder a Session works in, {project} the Working Project’s repository, {scratch} the Session’s scratch area, {workspace} the Agent’s Workspace and ~ the home folder. A relative path starts in {workdir}.',
   'permissions.rulesInherited': 'Inherited rules',
   'permissions.rulesNone': 'No rules.',
   'permissions.rulesChange': 'Change',
@@ -69,7 +69,7 @@ export default Object.freeze({
     'Removes this level’s own list, so the inherited rules apply again.',
   'permissions.ruleKind': 'Kind of rule {index}',
   'permissions.rulePattern': 'Pattern of rule {index}',
-  'permissions.rulePatternPlaceholder': 'Path, command or site',
+  'permissions.rulePatternPlaceholder': 'Path, command or destination',
   'permissions.ruleRemove': 'Remove rule {rule}',
   'permissions.ruleAdd': 'Add rule',
   'permissions.paste': 'Paste rules',
@@ -86,14 +86,14 @@ export default Object.freeze({
   'permissions.preview.read': 'Read',
   'permissions.preview.write': 'Change',
   'permissions.preview.commands': 'Run',
-  'permissions.preview.web': 'Fetch from',
+  'permissions.preview.web': 'Shell network destinations',
   'permissions.preview.deny': 'Never',
   'permissions.preview.inactive': 'Skipped here',
   'permissions.preview.inactiveHint':
     'These rules use a placeholder without a value for this Agent, so its Runs skip them.',
   'permissions.preview.anywhere': 'Anywhere',
   'permissions.preview.anyCommand': 'Any command',
-  'permissions.preview.anySite': 'Any site',
+  'permissions.preview.anySite': 'Any destination',
   'permissions.preview.nothing': 'Nothing',
   'permissions.preview.fullAccess': 'Full access: no Permission Rules apply.',
   'permissions.preview.scratch':
@@ -103,7 +103,7 @@ export default Object.freeze({
   'permissions.session.badge': 'Restricted',
   'permissions.session.title': 'Permission Rules limit this Session',
   'permissions.session.text':
-    'Its Tools refuse what these limits do not allow. When several sets of limits are listed, all of them apply.',
+    'Its Tools may ask for approval when these limits do not allow access. Explicit denies remain in force. When several sets of limits are listed, all of them apply.',
   'permissions.session.source.agent': 'This Agent’s rules',
   'permissions.session.source.parent':
     'Inherited from the Agent that started it',

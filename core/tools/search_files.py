@@ -14,7 +14,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from core.permissions import PermissionBoundary
+from core.permissions import PermissionBoundary, PermissionGrant
+from core.tools._permission_preflight import authorize_paths
 from core.tools._refused_notes import search_note
 from core.tools._search_arguments import (
     interpret_search_call as interpret_search_call,
@@ -302,7 +303,13 @@ def _list_directories(
     directories: dict[str, Path] = {}
     for root in bases:
         for path in _walk_directories(
-            root, skipped, depth, follow, execution.budget, execution.permissions
+            root,
+            skipped,
+            depth,
+            follow,
+            execution.budget,
+            execution.permissions,
+            execution.context.permission_access,
         ):
             key = os.path.normcase(path)
             if holding is None or key in holding:
@@ -356,6 +363,7 @@ def _walk_directories(
     follow: bool,
     budget: SearchBudget,
     permissions: PermissionBoundary,
+    grant: PermissionGrant,
 ) -> Iterator[Path]:
     """Yield the directories below root that ripgrep's walker enters.
 
@@ -372,7 +380,12 @@ def _walk_directories(
         try:
             with os.scandir(directory) as entries:
                 children = sorted(
-                    permissions.readable_entries(directory, entries),
+                    (
+                        entry
+                        for entry in entries
+                        if permissions.check_path(entry.path, "read") is None
+                        or grant.search_read_allowed(entry.path, root)
+                    ),
                     key=lambda entry: entry.name,
                     reverse=True,
                 )
@@ -796,9 +809,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if query.mode == "reference":
             text = execution.reference_text(query.reference_args)
             return tool_success({"content": text})
-        confine_flags(query, cwd, context.permissions)
+        confine_flags(query, cwd, context.permissions, context.permission_access)
         try:
-            roots = _resolve_roots(query, cwd, context.permissions)
+            roots = _resolve_roots(query, cwd, context.permissions, context.permission_access)
         except OSError as error:
             target = path_label(Path(error.filename), cwd) if error.filename else "the search paths"
             return tool_failure(
@@ -806,6 +819,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 f"Nothing was searched. Could not check {target}: {os_error_reason(error)}. "
                 "Check access to this path and retry.",
             )
+        execution.roots = roots.paths
         context.record_worked_paths(*roots.paths)
         missing = _missing_warnings(
             query, roots, cwd, context.offers, context.permissions, arguments.get("args")
@@ -910,6 +924,69 @@ def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[J
     return blocks
 
 
+async def _preflight_search(context: ToolContext, arguments: JsonObject) -> None:
+    try:
+        query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
+    except SearchArgumentError, ToolContractError, ValueError:
+        return
+    if query.mode in {"help", "reference"}:
+        return
+    cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
+    roots: list[str] = []
+    if not query.roots:
+        for glob in query.globs:
+            path = Path(glob)
+            if glob.startswith("!") or not path.is_absolute():
+                continue
+            parts = path.parts
+            fixed = next(
+                (index for index, part in enumerate(parts) if any(char in part for char in "*?[{")),
+                len(parts) - 1,
+            )
+            if fixed < 1:
+                continue
+            base = Path(*parts[:fixed])
+            anchored = cwd.joinpath(*parts[1:fixed])
+            if (
+                os.name != "nt"
+                and context.permissions.check_path(anchored, "read") is None
+                and anchored.is_dir()
+            ):
+                continue
+            if not base.is_relative_to(cwd):
+                roots.append(str(base))
+                break
+    for raw in query.roots or ([] if roots else [str(cwd)]):
+        if raw.startswith("!"):
+            continue
+        if "{" in raw:
+            roots.extend(_expand_brace_alternations(raw))
+        elif "," in raw:
+            roots.extend(part.strip() for part in raw.split(",") if part.strip())
+        elif any(char in raw for char in "*?["):
+            parts = Path(raw).parts
+            fixed = next(index for index, part in enumerate(parts) if any(c in part for c in "*?["))
+            roots.append(str(Path(*parts[:fixed])) if fixed else ".")
+        else:
+            roots.append(raw)
+    if not roots:
+        roots.append(str(cwd))
+    flags = [
+        value
+        for item in query.rg_args
+        for name, sep, value in [item.partition("=")]
+        if sep and name in {"--file", "--ignore-file"}
+    ]
+    await authorize_paths(
+        context,
+        [
+            *((path, "read", {"filtered": True}) for path in roots),
+            *((path, "read", {}) for path in flags),
+        ],
+        arguments=arguments,
+    )
+
+
 def register_search_files_tool(registry: ToolRegistry) -> None:
     available = True
     hint = None
@@ -929,6 +1006,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         parallel_safe=True,
         open_input_schema=True,
         argument_normalizer=normalize_search_arguments,
+        preflight=_preflight_search,
         ready=lambda: available,
         readiness_hint=hint,
     )

@@ -140,6 +140,7 @@ AREA_HELP = {
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
     "devices": "List, approve, rename and revoke the devices that may sign in to the server",
+    "approvals": "Inspect pending Tool calls and answer their permission requests as the user",
     "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",

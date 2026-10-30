@@ -139,6 +139,13 @@ class PortalRegistry:
 
     # Operations --------------------------------------------------------------
 
+    def is_own_port(self, port: int) -> bool:
+        """Whether the port belongs to vBot or one of its Portal listeners."""
+        listeners = self._listeners
+        return bool(listeners and port in listeners.own_ports) or any(
+            portal.listen_port == port for portal in self._portals.values()
+        )
+
     def list(self, owner: SessionAddress) -> list[Portal]:
         """The Session's open Portals in the order they were opened."""
         return [portal for portal in self._portals.values() if portal.owner == owner]
@@ -147,7 +154,13 @@ class PortalRegistry:
         return self._portals.get(portal_id)
 
     async def open(
-        self, owner: SessionAddress, *, target_port: int, title: str, path: str
+        self,
+        owner: SessionAddress,
+        *,
+        target_port: int,
+        title: str,
+        path: str,
+        before_open: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[Portal, bool]:
         """Open a Portal to *target_port*; returns it and whether it was opened now.
 
@@ -172,6 +185,8 @@ class PortalRegistry:
                 )
             if len(self._portals) >= MAX_PORTALS:
                 raise PortalError("limit", f"vBot already has {MAX_PORTALS} portals open")
+            if before_open is not None:
+                await before_open()
             portal_id = self._new_id()
             listen_port = await listeners.open(portal_id, target_port)
             try:

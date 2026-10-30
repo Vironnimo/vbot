@@ -784,7 +784,9 @@ def make_web_fetch_handler(
         only: bool = True,
     ) -> JsonObject:
         """Fetch one page; ``only`` is false when the call fetches other pages too."""
-        permissions = context.permissions
+        # Web Tool availability is governed by Tool access, not Agent host rules.
+        # Public-address validation remains in check_public_url and fetch_public.
+        permissions = PermissionBoundary.UNRESTRICTED
         # Before any request: neither a DNS lookup nor a provider sees a refused address.
         if (refused := permissions.check_url(url)) is not None:
             return _refused(

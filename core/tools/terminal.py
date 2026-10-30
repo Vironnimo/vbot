@@ -14,9 +14,11 @@ from core.computers import ComputerError
 from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
+from core.tools._permission_preflight import authorize_command, authorize_paths
 from core.tools._terminal_arguments import (
     normalize_terminal_arguments,
 )
+from core.tools._terminal_launch import integrated_shell_kind
 from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
 from core.tools.arguments import (
     optional_int,
@@ -88,7 +90,7 @@ from ._terminal_display import _terminal_detail_blocks, _terminal_display_parts
 from ._terminal_permissions import (
     UnfollowableInput,
     attach_refused_message,
-    check_input,
+    authorize_input,
     check_start,
     may_attach,
     permission_scope,
@@ -386,12 +388,6 @@ async def _handle_start(
     if raw_workdir == "":
         workdir_value = None
     workdir = _resolve_workdir(projects, context, workdir_value)
-    if not workdir.is_dir():
-        # Checked here, before the terminal is launched.
-        raise ToolContractError(
-            f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
-            "an existing directory, or omit workdir to use the working directory."
-        )
     context.record_worked_paths(workdir)
     owner = _owner(context)
     if arguments.get("group") not in (None, ""):
@@ -414,11 +410,40 @@ async def _handle_start(
     scope = permission_scope(context.permissions)
     if scope is not None:
         confined = await terminal_manager.confined_environment(overlay)
-        refused = await check_start(
-            command_checker, context.permissions, argv, cwd=workdir, env=confined
+        if integrated_shell_kind(argv) is not None:
+            await authorize_paths(
+                context, [(workdir, "start_dir", {})], arguments=arguments, cwd=workdir
+            )
+        else:
+            refused = await check_start(
+                command_checker, context.permissions, argv, cwd=workdir, env=confined
+            )
+            if refused is not None and refused.reason != "not_permitted":
+                raise PermissionDenied(refused)
+            if command_checker is not None:
+                await authorize_command(
+                    context,
+                    command_checker,
+                    arguments=arguments,
+                    argv=argv,
+                    cwd=workdir,
+                    env=confined,
+                )
+    else:
+        # Register a fresh check even if this call started with full access.
+        await authorize_paths(
+            context, [(workdir, "start_dir", {})], arguments=arguments, cwd=workdir
         )
-        if refused is not None:
-            raise PermissionDenied(refused)
+    await context.revalidate_permissions()
+    if permission_scope(context.permissions) != scope:
+        raise ToolContractError(
+            "Permission Rules changed while the terminal was prepared. Call it again."
+        )
+    if not workdir.is_dir():
+        raise ToolContractError(
+            f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
+            "an existing directory, or omit workdir to use the working directory."
+        )
     try:
         started = await terminal_manager.spawn(
             owner,
@@ -763,17 +788,55 @@ async def _handle_input(
     info = terminal_manager.terminal(terminal_id, owner)
     prior_attention_revision = info.attention_revision if info.attention is not None else None
     revision_before_input = info.attention_revision
-    checked = await check_input(
+    scope = permission_scope(context.permissions)
+
+    def prompt_identity() -> tuple[Any, ...]:
+        current = terminal_manager.shell_state(terminal_id, owner)
+        shell = terminal_manager.terminal(terminal_id, owner).shell
+        if current is None:
+            return (shell, None)
+        return (
+            shell,
+            current,
+            current.at_prompt,
+            current.prompt_count,
+            current.cwd,
+            current.line(),
+        )
+
+    prepared_prompt = prompt_identity()
+
+    async def check_input_state() -> None:
+        if permission_scope(context.permissions) != scope:
+            raise ToolContractError(
+                "Permission Rules changed while the terminal was prepared. Call it again."
+            )
+        if prompt_identity() != prepared_prompt:
+            raise ToolContractError(
+                "The terminal prompt changed while the input was prepared. Call terminal again."
+            )
+
+    context.add_permission_recheck(check_input_state)
+    checked = await authorize_input(
         command_checker,
-        context.permissions,
+        context,
         terminal_manager.shell_state(terminal_id, owner),
         info.shell,
         data=raw_data,
         text=text,
         key=key,
+        arguments=context.public_arguments or arguments,
     )
     if isinstance(checked, UnfollowableInput):
         return tool_failure("permission_denied", checked.message(), retryable=False)
+    if scope is None and checked is None:
+        # An unrestricted unfollowable key intentionally forgets the tracked line.
+        prepared_prompt = prompt_identity()
+    if context.permissions.restricted and checked is not None and expected_revision is None:
+        expected_revision = info.screen_revision
+    await context.revalidate_permissions()
+    await context.commit_prepared_secrets()
+    await context.revalidate_permissions()
     sent = await terminal_manager.send_input(
         terminal_id,
         owner,
@@ -969,10 +1032,12 @@ def _resolve_workdir(
     workdir_value: str | None,
 ) -> Path:
     if workdir_value is None:
-        return context.resolve_path(context.effective_cwd, access="start_dir")
+        return context.path_target(context.effective_cwd, access="start_dir")
     if is_project_workdir(workdir_value):
-        return project_workdir(projects, workdir_value, permissions=context.permissions)
-    return context.resolve_path(workdir_value, access="start_dir")
+        return project_workdir(
+            projects, workdir_value, permissions=context.permissions, prepare_only=True
+        )
+    return context.path_target(workdir_value, access="start_dir")
 
 
 def _owner(context: ToolContext) -> TerminalOwner:
@@ -1014,6 +1079,7 @@ def register_terminal_tool(
         announce_changes=("description", "parameters.computer_id", "parameters.workdir"),
         # Answers password prompts; the length limit applies to the real value.
         secret_sinks={"text": "terminal", "data": "terminal"},
+        defer_secret_consumption=True,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_terminal_display_parts,

@@ -6,6 +6,8 @@ Built-in `analyze_image` and `generate_image` Tools for isolated visual analysis
 
 ## Interfaces
 
+Local input images and a generated image's output directory are preflighted as one call before downloads or generation. `analyze_image` batches its explicit local paths and URLs; a URL approval covers only that address, so a redirect is independently checked without another prompt.
+
 ### `analyze_image`
 
 - Tool name: `analyze_image`
@@ -81,7 +83,7 @@ Shared media failure wording in `core/tools/_media_failures.py` (also used by `g
 | `<setting> is not available (<cause>). Tell the user to choose a working <setting> model in <place>.` | No call can succeed until the user changes Settings; the cause is the service's own short reason, stated once. |
 | Result field `revised_prompt` | The provider can render a different subject than requested; the Agent otherwise describes an image it did not get. |
 | `Nothing was generated. The output folder <dir> cannot be used: <reason>. Pass another output_dir, or omit output_dir to use the default folder.` | The folder check runs before the request, so the Agent learns that nothing was billed and gets the two valid next calls. `<reason>` is English and chosen by error number (`os_error_reason`), because the system's own message follows the host language ("Zugriff verweigert"). |
-| `The provider generated the <product>, but saving to <dir> failed: <reason>.` + `No file was saved.` or `Files saved before the failure: <paths>.` | The request succeeded but left no or only some files; the Agent must neither report success nor describe files it does not have. |
+| `The provider generated the <product>, but saving to <dir> failed: <reason>.` + `No complete file was saved. A partial file may remain.` or `Files saved before the failure: <paths>. A partial file may remain.` | The request succeeded but an incomplete file can remain after a write error; the Agent must not report success or assume the folder is unchanged. |
 | `Repeating the call generates the <product> again at new cost. Tell the user before you repeat it.` | A repeat bills again, or counts against the subscription's usage limit, so the user decides; "charged" alone was false on the subscription. |
 | `Nothing was saved. The <task> provider accepted the request as job <id>, but <reason>. If the job finishes, the provider bills it.` | Without the job state the failure reads like a plain error worth repeating. |
 | `Repeating the call starts and bills a second <product> job. Tell the user, including the job id, instead of repeating the call.` | Names the cost of a repeat and the alternative without forbidding a repeat the user asks for; vBot cannot fetch the job later, so the id is the user's only handle. |

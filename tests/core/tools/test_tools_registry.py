@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, override
 
@@ -31,7 +31,7 @@ from core.tools import tools as registry_module
 from core.tools.tools import offload_tool_handler
 from core.utils.workers import BoundedWorkerPool
 from tests.core.secrets.secrets_test_support import data_directory
-from tests.core.secrets.test_agent_secrets import FakeSource
+from tests.core.secrets.test_agent_secrets import TOTP_SEED, Clock, FakeSource
 from tests.core.tools.tools_test_support import (
     READ_FILE_SCHEMA,
     JsonObject,
@@ -644,6 +644,211 @@ async def test_parallel_dispatch_spends_a_once_secret_in_only_one_call(tmp_path:
         next(result for result in results if not result["ok"])["error"]["code"]
         == "secret_unavailable"
     )
+
+
+@pytest.mark.asyncio
+async def test_deferred_once_secret_is_consumed_only_by_one_approved_call(tmp_path: Path) -> None:
+    store = SecretStore(
+        data_directory(tmp_path),
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secret = secrets.create(
+        name="api",
+        kind="text",
+        values={"value": "one-time-credential"},
+        actor="user",
+        agents=["agent-1"],
+        lifetime="once",
+        session_id="session-1",
+    )
+    prepared = 0
+    both_prepared, release = asyncio.Event(), asyncio.Event()
+    effects: list[str] = []
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        nonlocal prepared
+        assert context.public_arguments["content"] == "{{secret:API}}"
+        assert arguments["content"] == "one-time-credential"
+        prepared += 1
+        if prepared == 2:
+            both_prepared.set()
+        await release.wait()
+        await context.commit_prepared_secrets()
+        effects.append(arguments["content"])
+        return tool_success({})
+
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    registry.register(
+        "fixture",
+        "Fixture",
+        {"type": "object"},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "terminal"},
+        defer_secret_consumption=True,
+    )
+    tasks = [
+        asyncio.create_task(
+            dispatch_as_executor(registry, make_context("fixture"), {"content": "{{secret:API}}"})
+        )
+        for _ in range(2)
+    ]
+    await asyncio.wait_for(both_prepared.wait(), timeout=2)
+    assert secrets.get(secret.id) is not None
+    release.set()
+    results = await asyncio.gather(*tasks)
+    assert sum(result["ok"] for result in results) == 1
+    assert (
+        next(result for result in results if not result["ok"])["error"]["code"]
+        == "secret_unavailable"
+    )
+    assert effects == ["one-time-credential"]
+    assert secrets.get(secret.id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dynamic", ["source", "totp"])
+async def test_deferred_secret_rejects_changed_source_or_totp(tmp_path: Path, dynamic: str) -> None:
+    store = SecretStore(
+        data_directory(tmp_path), protections=(KeyFileProtection(directories=(tmp_path / "keys",)),)
+    )
+    clock = Clock()
+    secrets = AgentSecrets(store, clock=clock)
+    source = FakeSource({"value": "before-source-value"})
+    secrets.replace_sources([source])
+    common: dict[str, Any] = {
+        "name": "api",
+        "actor": "user",
+        "agents": ["agent-1"],
+        "lifetime": "once",
+        "session_id": "session-1",
+    }
+    if dynamic == "source":
+        secret = secrets.create(
+            kind="text",
+            values={},
+            source=SourceBinding("vault", "entry"),
+            source_fields={"value": "value"},
+            **common,
+        )
+        reference = "{{secret:API}}"
+    else:
+        secret = secrets.create(
+            kind="login", values={"password": "unused", "totp": TOTP_SEED}, **common
+        )
+        reference = "{{secret:API.totp}}"
+    prepared, release = asyncio.Event(), asyncio.Event()
+    effects: list[str] = []
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        prepared.set()
+        await release.wait()
+        await context.commit_prepared_secrets()
+        effects.append(arguments["content"])
+        return tool_success({})
+
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    registry.register(
+        "fixture",
+        "Fixture",
+        {"type": "object"},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "terminal"},
+        defer_secret_consumption=True,
+    )
+    task = asyncio.create_task(
+        dispatch_as_executor(registry, make_context("fixture"), {"content": reference})
+    )
+    await prepared.wait()
+    if dynamic == "source":
+        source.values["value"] = "changed-source-value"
+    else:
+        clock.now += timedelta(seconds=30)
+    release.set()
+    result = await task
+    assert result["error"]["code"] == "secret_unavailable"
+    assert effects == [] and secrets.get(secret.id) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["source-refresh", "commit-admission"])
+async def test_deferred_secret_stop_during_refresh_or_commit_admission_preserves_grant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    started, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    calls = 0
+
+    class Source(FakeSource):
+        @override
+        def resolve(self, reference: str, field_name: str) -> str:
+            nonlocal calls
+            calls += 1
+            if stage == "source-refresh" and calls == 2:
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(5)
+            return super().resolve(reference, field_name)
+
+    class Pool(BoundedWorkerPool):
+        @override
+        async def run_guarded(self, guard, function, *args, **kwargs):
+            if stage == "commit-admission":
+                started.set()
+                await asyncio.to_thread(release.wait, 5)
+            return await super().run_guarded(guard, function, *args, **kwargs)
+
+    monkeypatch.setattr(worker_module, "_TOOL_WORKERS", Pool(name="approval-test", max_workers=2))
+    store = SecretStore(
+        data_directory(tmp_path), protections=(KeyFileProtection(directories=(tmp_path / "keys",)),)
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secrets.replace_sources([Source({"value": "prepared-credential"})])
+    secret = secrets.create(
+        name="api",
+        kind="text",
+        values={},
+        actor="user",
+        agents=["agent-1"],
+        lifetime="once",
+        session_id="session-1",
+        source=SourceBinding("vault", "entry"),
+        source_fields={"value": "value"},
+    )
+    effects: list[str] = []
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        await context.commit_prepared_secrets()
+        effects.append(arguments["content"])
+        return tool_success({})
+
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    registry.register(
+        "fixture",
+        "Fixture",
+        {"type": "object"},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "terminal"},
+        defer_secret_consumption=True,
+    )
+    cancelled = False
+    context = make_context("fixture", cancel_check_hook=lambda: cancelled)
+    task = asyncio.create_task(
+        dispatch_as_executor(registry, context, {"content": "{{secret:API}}"})
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=3)
+        cancelled = True
+    finally:
+        release.set()
+    result = await task
+    assert result["error"]["code"] == "cancelled_by_user"
+    assert not effects and secrets.get(secret.id) is not None
 
 
 @pytest.mark.asyncio

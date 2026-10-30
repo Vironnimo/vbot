@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.permissions import PermissionBoundary, PermissionDenied
+from core.permissions import PermissionBoundary, PermissionDenied, PermissionGrant
 from core.tools._search_query import SearchQuery
 
 if TYPE_CHECKING:
@@ -78,7 +78,12 @@ class Confinement:
 UNCONFINED = Confinement()
 
 
-def confine_flags(query: SearchQuery, cwd: Path, permissions: PermissionBoundary) -> None:
+def confine_flags(
+    query: SearchQuery,
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
+) -> None:
     """Drop link following and check the files that path flags name, before any run.
 
     ``--file`` and ``--ignore-file`` values resolve against ``cwd`` and pass
@@ -95,7 +100,7 @@ def confine_flags(query: SearchQuery, cwd: Path, permissions: PermissionBoundary
         name, equals, value = argument.partition("=")
         if equals and name in _PATH_FLAGS:
             path = Path(os.path.abspath(cwd / Path(value).expanduser()))
-            refusal = permissions.check_path(path, "read")
+            refusal = (grant or permissions).check_path(path, "read")
             if refusal is not None:
                 raise PermissionDenied(refusal)
             argument = f"{name}={path}"

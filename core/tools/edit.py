@@ -42,6 +42,7 @@ from core.tools._patch_entries import _resolve
 from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
 from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME
 from core.tools._patch_syntax import _Operation, _PatchError
+from core.tools._permission_preflight import authorize_paths
 from core.tools._replacement_requests import content_operation, replacement_operation
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.file_state import FileReadState
@@ -553,6 +554,21 @@ _WRITE_HIDDEN_ARGUMENT_KEYS = ("content", "contents", "text", "file_text")
 _RESULT_SCHEMA: JsonObject = {"type": "object", "required": ["content"]}
 
 
+async def _preflight_change(context: ToolContext, arguments: JsonObject) -> None:
+    if _PAGE_ID in arguments:
+        return
+    path = arguments.get("path")
+    edits = arguments.get("edits")
+    if isinstance(edits, list):
+        paths = [edit.get("path", path) for edit in edits if isinstance(edit, dict)]
+    else:
+        paths = [path]
+    targets = [target for target in paths if isinstance(target, str) and target]
+    await authorize_paths(
+        context, [(target, "write", {}) for target in targets], arguments=arguments
+    )
+
+
 def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) -> None:
     """Register ``edit`` and ``write``, which follow ``apply_patch``."""
     for name, description, parameters, handler, normalizer, parts, hidden, sinks in (
@@ -589,6 +605,7 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             activation_source=APPLY_PATCH_TOOL_NAME,
             open_input_schema=True,
             argument_normalizer=_refusing(normalizer),
+            preflight=_preflight_change,
             unadvertised_parameters={_PAGE_ID: {}},
             secret_sinks=sinks,
             result_schema=_RESULT_SCHEMA,

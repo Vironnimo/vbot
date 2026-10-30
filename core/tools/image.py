@@ -25,11 +25,13 @@ from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES
 from core.model_tasks.image_profile import ImageProfile
 from core.permissions import PermissionDenied
+from core.tools._image_downloads import image_address
 from core.tools._image_inputs import (
     UnusableImageError,
     analysis_image_label,
     normalize_analyze_image_arguments,
     normalize_generate_image_arguments,
+    preflight_image_paths,
     resolve_analysis_images,
     resolve_local_images,
 )
@@ -41,6 +43,8 @@ from core.tools._media_failures import (
     refusal_message,
     unavailable_message,
 )
+from core.tools._media_permissions import check_generated_output
+from core.tools._permission_preflight import authorize_accesses, authorize_paths
 from core.tools.arguments import optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -314,6 +318,7 @@ def make_analyze_image_handler(image_service: Any, attachment_store: Any):
         except UnusableImageError as problem:
             return _unusable(problem)
 
+        await context.revalidate_permissions()
         try:
             result = await image_service.analyze(
                 prompt,
@@ -356,6 +361,29 @@ def _analyze_image_display_parts(arguments: JsonObject) -> list[ToolDisplayPart]
     return []
 
 
+async def _preflight_analyze_image(context: ToolContext, arguments: JsonObject) -> None:
+    prompt = arguments.get("prompt")
+    images = arguments.get("images")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return
+    if not isinstance(images, list) or len(images) > DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES:
+        return
+    try:
+        paths = preflight_image_paths(arguments.get("images"), "images", allow_urls=True)
+    except UnusableImageError:
+        return
+    urls = [
+        address
+        for item in images
+        if isinstance(item, str)
+        and (address := image_address(item)) is not None
+        and not address.casefold().startswith("data:")
+    ]
+    await authorize_accesses(
+        context, [(path, "read", {}) for path in paths], urls, arguments=arguments
+    )
+
+
 def register_analyze_image_tool(
     registry: ToolRegistry, image_service: Any, *, attachment_store: Any
 ) -> None:
@@ -371,6 +399,7 @@ def register_analyze_image_tool(
         constraints=("image_fallback_route",),
         open_input_schema=True,
         argument_normalizer=_normalize_analyze_image_arguments,
+        preflight=_preflight_analyze_image,
         result_schema=_ANALYZE_IMAGE_RESULT_SCHEMA,
         display=ToolDisplay(parts_builder=_analyze_image_display_parts),
     )
@@ -410,10 +439,20 @@ def make_generate_image_handler(image_service: Any):
             except UnusableImageError as problem:
                 return _unusable(problem)
 
+        root = optional_string(arguments.get("output_dir"), field_name="output_dir") or (
+            (context.workspace if context.project_id is None else context.effective_cwd)
+            / _GENERATE_IMAGE_DIRECTORY_NAME
+        )
+
+        async def before_output_write(path: Path) -> None:
+            await check_generated_output(context, root, path)
+
+        await context.revalidate_permissions()
         try:
             artifacts = await image_service.generate_artifacts(
                 prompt,
                 output_dir=output_dir,
+                before_output_write=before_output_write,
                 call_options=call_options,
                 source_paths=source_paths,
                 usage_context=TaskUsageContext(
@@ -466,14 +505,47 @@ def _generate_image_output_dir(context: ToolContext, arguments: JsonObject) -> P
     # do not let it write there names one they do, such as its Scratch Area.
     base = context.workspace if context.project_id is None else context.effective_cwd
     default = base / _GENERATE_IMAGE_DIRECTORY_NAME
-    refusal = context.permissions.check_path(default, "write")
+    refusal = context.permission_access.check_path(default, "write")
     if refusal is not None:
         raise PermissionDenied(refusal)
     return default
 
 
+async def _preflight_generate_image(context: ToolContext, arguments: JsonObject) -> None:
+    prompt = arguments.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return
+    output: str | Path | None = optional_string(
+        arguments.get("output_dir"), field_name="output_dir"
+    )
+    if not output:
+        base = context.workspace if context.project_id is None else context.effective_cwd
+        output = base / _GENERATE_IMAGE_DIRECTORY_NAME
+    try:
+        paths = (
+            preflight_image_paths(arguments["source_images"], "source_images")
+            if "source_images" in arguments
+            else []
+        )
+    except UnusableImageError:
+        return
+    await authorize_paths(
+        context,
+        [(output, "write", {}), *((path, "read", {}) for path in paths)],
+        arguments=arguments,
+    )
+
+
 def register_generate_image_tool(registry: ToolRegistry, image_service: Any) -> None:
     """Register the image generation tool with a vBot tool registry."""
+
+    async def preflight(context: ToolContext, arguments: JsonObject) -> None:
+        if (
+            "source_images" in arguments
+            and not image_service.generation_profile().accepts_source_images
+        ):
+            return
+        await _preflight_generate_image(context, arguments)
 
     registry.register(
         GENERATE_IMAGE_TOOL_NAME,
@@ -484,6 +556,7 @@ def register_generate_image_tool(registry: ToolRegistry, image_service: Any) -> 
         family="media",
         open_input_schema=True,
         argument_normalizer=_normalize_generate_image_arguments,
+        preflight=preflight,
         result_schema={"type": "object", "required": ["images"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),

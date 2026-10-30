@@ -57,6 +57,30 @@ afterEach(() => {
 });
 
 describe('App controller', () => {
+  it('uses the hello approval snapshot and ignores older replay across reconnects', async () => {
+    const { controller, state } = setup();
+    const request = { id: 'one' };
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      permissions_approvals: { revision: 3, requests: [] },
+    });
+    await controller.handleServerEvent({
+      type: 'permissions_approvals',
+      payload: { revision: 2, requests: [request] },
+    });
+    expect(state.permissionApprovals.requests).toEqual([]);
+    await controller.handleServerEvent({
+      type: 'permissions_approvals',
+      payload: { revision: 4, requests: [request] },
+    });
+    expect(state.permissionApprovals.requests).toEqual([request]);
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      permissions_approvals: { revision: 0, requests: [] },
+    });
+    expect(state.permissionApprovals).toEqual({ revision: 0, requests: [] });
+  });
+
   it('projects server events into run state and scoped invalidations', async () => {
     const onSpeechEvent = vi.fn();
     const { actions, controller, state } = setup({ onSpeechEvent });

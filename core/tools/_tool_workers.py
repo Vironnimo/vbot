@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import update_wrapper
 from typing import Any
 
@@ -29,6 +29,16 @@ async def run_tool_worker[ToolWorkerResult](
 ) -> ToolWorkerResult:
     """Run blocking Tool work through the dedicated backpressured worker pool."""
     return await _TOOL_WORKERS.run(function, *arguments, **keyword_arguments)
+
+
+async def run_tool_worker_guarded[ToolWorkerResult](
+    guard: Callable[[], Awaitable[None]],
+    function: Callable[..., ToolWorkerResult],
+    *arguments: Any,
+    **keyword_arguments: Any,
+) -> ToolWorkerResult:
+    """Check live authority after admission and before starting blocking work."""
+    return await _TOOL_WORKERS.run_guarded(guard, function, *arguments, **keyword_arguments)
 
 
 def _invoke_sync_tool_handler(

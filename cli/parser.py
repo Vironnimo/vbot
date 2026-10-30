@@ -17,6 +17,7 @@ from cli._parser_agents import (
     _add_session_parsers,
     _add_tui_parser,
 )
+from cli._parser_approvals import _add_approval_parsers
 from cli._parser_connections import (
     _add_channel_parsers,
     _add_model_parsers,
@@ -188,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_tui_parser(subparsers)
     _add_data_store_parsers(subparsers)
     _add_agent_secrets_parsers(subparsers)
+    _add_approval_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
     _add_prompt_parsers(subparsers)

@@ -5,8 +5,10 @@ The command analysis is faked (``command_check_support``); the boundary is real.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -63,6 +65,43 @@ async def test_a_denied_workdir_is_refused_before_its_status_is_probed(
     assert result["error"]["code"] == "permission_denied"
     assert probed == []
     assert shell.launcher.processes == []
+
+
+@pytest.mark.asyncio
+async def test_shell_review_waits_before_launch_and_hard_denials_skip_review(
+    tmp_path: Path,
+) -> None:
+    arrived = asyncio.Event()
+    answer = asyncio.Event()
+    reviewed: list[Any] = []
+
+    async def review(_context: Any, _arguments: Any, **prepared: Any) -> bool:
+        reviewed.append(prepared)
+        arrived.set()
+        await answer.wait()
+        return False
+
+    async with started_shell(tmp_path, review_shell=review) as shell:
+        call = shell.call({"command": "echo safe", "env": {"PUBLIC": "value"}})
+        await asyncio.wait_for(arrived.wait(), timeout=2)
+        assert shell.launcher.processes == []
+        assert reviewed[0]["command"] == "echo safe"
+        assert reviewed[0]["environment"] == {"PUBLIC": "value"}
+        answer.set()
+        result = await call
+        assert result["error"]["code"] == "command_not_approved"
+        assert shell.launcher.processes == []
+
+    reviewed.clear()
+    async with started_shell(
+        tmp_path,
+        review_shell=review,
+        analyzer=FakeAnalyzer(plan("git push origin")),
+        permissions=restricted(tmp_path, deny=["Shell(git push *)"]),
+    ) as shell:
+        result = await shell.call({"command": "git push origin"})
+        assert result["error"]["code"] == "permission_denied"
+        assert reviewed == [] and shell.launcher.processes == []
 
 
 @pytest.mark.parametrize(

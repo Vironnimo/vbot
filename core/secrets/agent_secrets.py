@@ -136,6 +136,7 @@ class SecretUse:
     sink: SinkClass
     # The exact grant/value revision resolved by this call, never exposed in output.
     secret: AgentSecret | None = dataclass_field(default=None, repr=False, compare=False)
+    value: str | None = dataclass_field(default=None, repr=False, compare=False)
 
     @property
     def label(self) -> str:
@@ -767,10 +768,28 @@ class AgentSecrets:
             )
         value = self.field_value(secret, target)
         self._record_use(secret, target.name, sink, address)
-        use = SecretUse(secret.name, target.name, sink, secret)
+        use = SecretUse(secret.name, target.name, sink, secret, value)
         if consume:
             self.consume(address, [use], passed_only=passed_only)
         return value, use
+
+    def validate_prepared_values(self, uses: Iterable[SecretUse]) -> None:
+        """Recheck dynamic source and TOTP values before committing prepared uses.
+
+        Source I/O runs without the store lock; :meth:`consume` subsequently
+        validates grants and record revisions atomically.
+        """
+        for use in uses:
+            secret = use.secret
+            if secret is None or (secret.source is None and use.field != TOTP_FIELD):
+                continue
+            target = secret.field_named(use.field)
+            if target is None or use.value is None or self.field_value(secret, target) != use.value:
+                raise SecretUseError(
+                    "not_granted",
+                    f"{use.label} changed while this call was waiting. Nothing was run. "
+                    "List the available Secrets before trying again.",
+                )
 
     def consume(
         self,

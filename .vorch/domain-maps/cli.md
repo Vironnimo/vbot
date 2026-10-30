@@ -58,6 +58,7 @@ Read these only when your task matches - not by default.
 - Changing port resolution or `--url` targets, what `cli/server_client.py` attaches, Device sign-ins, or `vbot devices` (approve, pair, logout) -> `cli/server-access.md`
 - Changing `vbot data-store` (status, snapshots, incidents, unregister, config backups, secrets) -> `cli/data-store.md`
 - Changing `vbot agent-secrets` -> `cli/agent-secrets.md`
+- Changing `vbot approvals` -> `permissions/approvals.md`
 - Changing `vbot chat`, its Run following or its output -> `cli/chat.md`
 - Changing `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
 - Changing the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
