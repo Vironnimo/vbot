@@ -160,6 +160,7 @@ from core.tools.session import register_session_tool
 from core.tools.shell import powershell_executable
 from core.tools.shell_environment import inherited_value
 from core.tools.show_widget import register_show_widget_tool
+from core.tools.skill import skill_loadable
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -628,6 +629,7 @@ def bootstrap(runtime: Runtime) -> None:
             extensions=lambda: runtime._extensions,
             logger=runtime.logger,
             agent_roster=lambda: [(agent.id, agent.name) for agent in agents.list_with_builtins()],
+            skill_check=partial(skill_loadable, runtime.skills_for),
         )
         runtime._chat_sessions.recover_interrupted_runs()
         runtime._chat_run_manager = ChatRunManager(

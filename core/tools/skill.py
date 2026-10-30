@@ -312,11 +312,7 @@ def make_skill_handler(
     """
 
     async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        # Identity runs only (``project_id is None``): a config agent's
-        # project-local slug must not resolve a same-named identity agent's
-        # private skill home (those skills bypass the project whitelist as
-        # always-allowed for their owner).
-        identity_agent_id = context.skill_subject_id if context.project_id is None else None
+        identity_agent_id = _identity_agent_id(context)
 
         async def current_registry() -> SkillRegistry:
             registry: SkillRegistry = await run_tool_worker(
@@ -686,6 +682,33 @@ def _not_found_message(
     return f"{lead} Call skill without arguments to list the available Skills."
 
 
+async def skill_loadable(
+    resolve_registry: SkillRegistryResolver, context: ToolContext, name: str
+) -> bool:
+    """Whether this Run can load Skill *name* with the skill Tool now.
+
+    For a Tool result that names a Skill only while the Agent has it.
+    """
+    if not context.can_call(SKILL_TOOL_NAME):
+        return False
+    try:
+        registry: SkillRegistry = await run_tool_worker(
+            resolve_registry, context.skill_project_id, _identity_agent_id(context)
+        )
+    except ProjectNotFoundError:
+        return False
+    return _is_skill_allowed(registry, name, context.allowed_skills) and (
+        _unavailable_skill_message(registry, name, context.allowed_skills) is None
+    )
+
+
+def _identity_agent_id(context: ToolContext) -> str | None:
+    # Identity runs only (``project_id is None``): a config agent's project-local
+    # slug must not resolve a same-named identity agent's private skill home
+    # (those skills bypass the project whitelist as always-allowed for their owner).
+    return context.skill_subject_id if context.project_id is None else None
+
+
 def _is_skill_allowed(
     skill_registry: SkillRegistry,
     skill_name: str,
@@ -728,4 +751,5 @@ __all__ = [
     "make_skill_handler",
     "load_skill_content",
     "register_skill_tool",
+    "skill_loadable",
 ]

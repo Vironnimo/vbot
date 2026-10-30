@@ -45,13 +45,19 @@ async def search(
     project_id: str | None = None,
     permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     agents: dict[str, str] | None = None,
+    skills: tuple[str, ...] = (),
 ) -> JsonObject:
     """Call session_search over ``backend`` as the Tool executor does.
 
     The caller is Agent ``coder`` in Session ``current-session``; ``timezone``
     is the configured timezone that reads periods given without an offset;
-    ``agents`` maps the Identity Agents' ids to their display names.
+    ``agents`` maps the Identity Agents' ids to their display names; ``skills``
+    are the Skills the caller can load.
     """
+
+    async def loadable(_context: ToolContext, name: str) -> bool:
+        return name in skills
+
     registry = ToolRegistry()
     register_session_search_tool(
         registry,
@@ -59,6 +65,7 @@ async def search(
         sessions,
         timezone_name_loader=(lambda: timezone) if timezone is not None else None,
         agent_roster=(lambda: list(agents.items())) if agents is not None else None,
+        skill_check=loadable,
     )
     return await dispatch_as_executor(
         registry,

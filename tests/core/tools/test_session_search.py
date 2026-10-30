@@ -77,11 +77,27 @@ async def test_other_agent_same_session_id_remains_searchable(tmp_path: Path) ->
     for agent in ("coder", "reviewer"):
         sessions.create(agent, session_id="current-session").append(ChatMessage.user("needle"))
     backend = CanonicalSessionRecallBackend(sessions)
-    own = success(await search(tmp_path, {"query": "needle"}, backend))
+    agents = {"coder": "Coder", "reviewer": "Rev"}
+    own = success(
+        await search(tmp_path, {"query": "needle"}, backend, agents=agents, skills=("vbot-docs",))
+    )
     other = success(await search(tmp_path, {"query": "needle", "agent_id": "reviewer"}, backend))
     assert own["items"] == []
-    assert "set agent_id to its id or name" in own["guidance"]
+    # The caller's only Session is the current one: the result names the other Agents.
+    assert "Your own Agent has no earlier Sessions" in own["guidance"]
+    assert "set agent_id to its id or name. Agents: reviewer (Rev)." in own["guidance"]
+    assert "search further with the vbot-docs Skill" in own["guidance"]
     assert other["items"][0]["agent_id"] == "reviewer"
+    # Once own Sessions were searched, other query terms are the alternative.
+    sessions.create("coder", session_id="past").append(ChatMessage.user("unrelated"))
+    searched = success(await search(tmp_path, {"query": "needle"}, backend, agents=agents))
+    assert "Your own Agent has no earlier Sessions" not in searched["guidance"]
+    assert "Otherwise try fewer or different query terms" in searched["guidance"]
+    # Without the Skill, a search that still finds nothing ends with telling the user.
+    missing = success(await search(tmp_path, {"query": "absent", "agent_id": "reviewer"}, backend))
+    assert "Try fewer or different query terms" in missing["guidance"]
+    assert "vbot-docs" not in missing["guidance"]
+    assert "still find nothing, tell the user nothing was found" in missing["guidance"]
 
 
 @pytest.mark.parametrize(

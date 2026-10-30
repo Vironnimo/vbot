@@ -35,6 +35,7 @@ from core.storage.storage import StorageManager
 from core.tools import (
     register_session_search_tool,
 )
+from core.tools.session_search import SkillCheck
 from core.tools.tools import ToolRegistry
 
 # Index cleanup is best-effort: the index is disposable and catches up later.
@@ -68,9 +69,11 @@ class RecallIntegration:
         extensions: Callable[[], ExtensionRegistry | None],
         logger: LoggerProtocol | None,
         agent_roster: Callable[[], Sequence[tuple[str, str]]] | None = None,
+        skill_check: SkillCheck | None = None,
     ) -> None:
         self._storage = storage
         self._agent_roster = agent_roster
+        self._skill_check = skill_check
         self._chat_sessions = sessions
         self._tools = tools
         self._models = models
@@ -125,6 +128,7 @@ class RecallIntegration:
             self._chat_sessions,
             timezone_name_loader=self._timezone_name,
             agent_roster=self._agent_roster,
+            skill_check=self._skill_check,
         )
 
     def _timezone_name(self) -> str:

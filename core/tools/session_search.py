@@ -6,7 +6,7 @@ import calendar
 import inspect
 import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, tzinfo
 from datetime import time as datetime_time
@@ -154,6 +154,10 @@ class _Period:
 
 # Each Identity Agent as (id, display name), built-in Agents included; read off the Event Loop.
 AgentRoster = Callable[[], Sequence[tuple[str, str]]]
+# Whether the calling Run can load the named Skill now; wired to ``skill_loadable``.
+SkillCheck = Callable[[ToolContext, str], Awaitable[bool]]
+# The Skill that searches Sessions beyond session_search, Tool Results included.
+_SESSION_DOCS_SKILL = "vbot-docs"
 
 
 def make_session_search_handler(
@@ -161,6 +165,7 @@ def make_session_search_handler(
     sessions: ChatSessionManager | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
     agent_roster: AgentRoster | None = None,
+    skill_check: SkillCheck | None = None,
 ):
     resolved_sessions = sessions or _backend_sessions(recall_backend)
 
@@ -172,6 +177,7 @@ def make_session_search_handler(
             sessions=resolved_sessions,
             timezone_name_loader=timezone_name_loader,
             agent_roster=agent_roster,
+            skill_check=skill_check,
         )
 
     return handler
@@ -185,6 +191,7 @@ async def session_search_handler(
     sessions: ChatSessionManager | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
     agent_roster: AgentRoster | None = None,
+    skill_check: SkillCheck | None = None,
 ) -> JsonObject:
     """Search past Sessions.
 
@@ -192,6 +199,7 @@ async def session_search_handler(
     period dates and times without an offset; without it they read as UTC.
     ``agent_roster`` lets ``agent_id`` name an Identity Agent by its display
     name; without it only Agent ids that own Sessions are accepted.
+    ``skill_check`` lets an empty result name the Skill that searches further.
     """
     started = time.perf_counter()
     resolved_sessions = sessions or _backend_sessions(recall_backend)
@@ -209,7 +217,14 @@ async def session_search_handler(
         _validate_session_search_fields(arguments, zone)
         capabilities = _search_capabilities(recall_backend)
         data = await _search_sessions(
-            context, arguments, recall_backend, capabilities, resolved_sessions, zone, agent_roster
+            context,
+            arguments,
+            recall_backend,
+            capabilities,
+            resolved_sessions,
+            zone,
+            agent_roster,
+            skill_check,
         )
         result = tool_success(data)
         _LOGGER.debug(
@@ -261,6 +276,7 @@ def register_session_search_tool(
     *,
     timezone_name_loader: Callable[[], str] | None = None,
     agent_roster: AgentRoster | None = None,
+    skill_check: SkillCheck | None = None,
 ) -> None:
     if isinstance(recall_backend, ChatSessionManager):
         sessions = recall_backend
@@ -269,7 +285,9 @@ def register_session_search_tool(
         SESSION_SEARCH_TOOL_NAME,
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
-        make_session_search_handler(recall_backend, sessions, timezone_name_loader, agent_roster),
+        make_session_search_handler(
+            recall_backend, sessions, timezone_name_loader, agent_roster, skill_check
+        ),
         summary="Search past conversations.",
         family="sessions",
         open_input_schema=True,
@@ -296,6 +314,7 @@ async def _search_sessions(
     sessions: ChatSessionManager | None,
     zone: _Zone,
     agent_roster: AgentRoster | None = None,
+    skill_check: SkillCheck | None = None,
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     requested = _optional_string(arguments.get("agent_id"))
@@ -388,6 +407,25 @@ async def _search_sessions(
     )
     if len(hits) != len(page.hits):
         page = replace(page, hits=tuple(hits))
+    # Another Agent's Sessions are open to this search: say so when it finds nothing.
+    other_agents_searchable = (
+        requested is None and context.project_id is None and not context.permissions.restricted
+    )
+    other_agents: str | None = None
+    docs_skill: str | None = None
+    if not hits:
+        if other_agents_searchable and agent_roster is not None:
+            roster = await run_tool_worker(agent_roster)
+            other_agents = _agent_choices(
+                [agent for agent, _ in roster if agent != context.agent_id], dict(roster)
+            )
+        # Permission Rules keep the Skill's script from the Session database.
+        if (
+            skill_check is not None
+            and not context.permissions.restricted
+            and await skill_check(context, _SESSION_DOCS_SKILL)
+        ):
+            docs_skill = _SESSION_DOCS_SKILL
     data = _render_search_page(
         page,
         targets,
@@ -397,10 +435,10 @@ async def _search_sessions(
         period=period.text if period is not None else None,
         limit=limit,
         notes=notes,
-        # Another Agent's Sessions are open to this search: say so when it finds nothing.
-        other_agents_searchable=requested is None
-        and context.project_id is None
-        and not context.permissions.restricted,
+        filtered=period is not None or session_id is not None,
+        other_agents_searchable=other_agents_searchable,
+        other_agents=other_agents or None,
+        docs_skill=docs_skill,
     )
     return data
 
@@ -446,11 +484,7 @@ async def _resolve_agent_id(
             f'Nothing was searched. Several Agents have the name "{requested}": '
             f"{', '.join(agent_id for agent_id, _ in named)}. Set agent_id to one of these ids.",
         )
-    names = dict(roster)
-    choices = ", ".join(
-        f"{agent_id} ({names[agent_id]})" if names.get(agent_id) else agent_id
-        for agent_id in sorted(set(ids.values()))
-    )
+    choices = _agent_choices(ids.values(), dict(roster))
     if context.project_id is None:
         raise _SessionSearchError(
             "unknown_agent",
@@ -460,6 +494,14 @@ async def _resolve_agent_id(
         "unknown_agent",
         f'Nothing was searched. No Agent of this Project has Sessions under the id "{requested}". '
         f"Agents with Sessions here: {choices}.",
+    )
+
+
+def _agent_choices(agent_ids: Iterable[str], names: dict[str, str]) -> str:
+    """Agent ids in order, each with its display name where it has one."""
+    return ", ".join(
+        f"{agent_id} ({names[agent_id]})" if names.get(agent_id) else agent_id
+        for agent_id in sorted(set(agent_ids))
     )
 
 

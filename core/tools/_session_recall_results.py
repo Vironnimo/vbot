@@ -48,8 +48,14 @@ class _RequestEcho:
     period: str | None
     limit: int
     notes: tuple[str, ...]
+    # A period or session_id narrowed the Sessions searched.
+    filtered: bool = False
     # No agent_id was given and another Agent's Sessions could have been searched.
     other_agents_searchable: bool = False
+    # Those other Agents as "id (name), ...", for an empty result.
+    other_agents: str | None = None
+    # The Skill that searches further, when this Run can load it.
+    docs_skill: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,37 @@ class _SearchSessionContext:
     descriptor: JsonObject
     conversations: dict[str, list[JsonObject]]
     is_subagent: bool
+
+
+def _no_match_guidance(request: _RequestEcho, *, searched: int) -> list[str]:
+    """What an empty result tells the Agent to try next, and when to stop."""
+    retry = "fewer or different query terms, or remove unneeded period/session_id filters."
+    guidance: list[str] = []
+    if request.other_agents_searchable:
+        agents = f" Agents: {request.other_agents}." if request.other_agents else ""
+        if searched == 0 and not request.filtered:
+            guidance.append(
+                "Your own Agent has no earlier Sessions to search. To search another Agent's "
+                f"Sessions, such as one the user names, set agent_id to its id or name.{agents}"
+            )
+        else:
+            guidance.append(
+                "No matching conversation text was returned from your own Agent's Sessions. "
+                "If the user means another Agent, such as one they name, set agent_id to its "
+                f"id or name.{agents} Otherwise try {retry}"
+            )
+    else:
+        guidance.append(f"No matching conversation text was returned in this scope. Try {retry}")
+    further = (
+        f"search further with the {request.docs_skill} Skill, which also searches Tool "
+        "Results, or tell the user nothing was found."
+        if request.docs_skill
+        else "tell the user nothing was found."
+    )
+    guidance.append(
+        f"Tool Results are not searched. If your searches still find nothing, {further}"
+    )
+    return guidance
 
 
 def _render_search_page(
@@ -69,13 +106,19 @@ def _render_search_page(
     period: str | None = None,
     limit: int = SESSION_SEARCH_DEFAULT_LIMIT,
     notes: Sequence[str] = (),
+    filtered: bool = False,
     other_agents_searchable: bool = False,
+    other_agents: str | None = None,
+    docs_skill: str | None = None,
 ) -> JsonObject:
     request = _RequestEcho(
         period=period,
         limit=limit,
         notes=tuple(notes),
+        filtered=filtered,
         other_agents_searchable=other_agents_searchable,
+        other_agents=other_agents,
+        docs_skill=docs_skill,
     )
     hits = list(page.hits)
     if len(targets) != len(hits):
@@ -188,16 +231,7 @@ def _search_data(
     }
     guidance: list[str] = list(request.notes)
     if not items:
-        guidance.append(
-            "No matching conversation text was returned in this scope. Try fewer or different "
-            "query terms, or remove unneeded period/session_id filters. Tool "
-            "Results are not searched."
-        )
-        if request.other_agents_searchable:
-            guidance.append(
-                "This searched only your own Agent's Sessions; to search another Agent's, "
-                "set agent_id to its id or name."
-            )
+        guidance.extend(_no_match_guidance(request, searched=page.total_candidate_sessions))
     else:
         guidance.append(
             "These are selected excerpts and context, not a full transcript, and a later "
