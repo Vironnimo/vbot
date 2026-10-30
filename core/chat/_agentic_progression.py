@@ -530,6 +530,7 @@ class AgenticProgression:
                             output_scope=output_scope,
                             public_model=target.public_model,
                             provider_id=target.provider_id,
+                            connection_id=target.connection_id,
                             recovery=context.recovery,
                             message_id=assistant_message_id,
                             on_tool_calls=start_tool_calls if tool_round is not None else None,
