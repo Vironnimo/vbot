@@ -83,7 +83,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
 | logging.md | cross-cutting | What to log at which level, line format, never-log rules, writing pipeline |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |
-| debug.md | `core/debug/` | Debug Mode, traces, redaction, recorder |
+| debug.md | `core/debug/` | Debug Mode, Provider traces, speech recordings and probes |
 | performance.md | `core/performance/` | Always-on metrics, Event Loop stalls, Perfetto Recordings, metric catalog |
 | development.md | `scripts/`, `.githooks/`, `.github/`, test infrastructure | Python version, dependency locks, commit hook, push check, CI, test core pool, writing tests |
 

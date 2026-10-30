@@ -719,6 +719,7 @@ def _settings_response_payload(state: Any) -> JsonObject:
         "debug": {
             "enabled": debug["enabled"],
             "trace_limit": debug["trace_limit"],
+            "speech_recording_limit": debug["speech_recording_limit"],
             "trace_count": 0,
         },
         "archive": runtime.storage.load_archive_settings(),

@@ -365,8 +365,6 @@ class CommandPipeline:
     ``on_stage(command_id, stage)`` reports ``transcribing`` and ``sending``;
     ``on_outcome`` receives exactly one :class:`CommandOutcome` per command,
     unless the request was cancelled or the pipeline stopped or closed before delivery.
-    ``on_transcription(command)`` receives the exact WAV immediately before
-    its upload, so the controller can retain that take for local playback.
     Transcriptions run in parallel; Session resolution and sending follow
     submission order per Agent. Waiting transcripts leave workers free.
     """
@@ -378,14 +376,12 @@ class CommandPipeline:
         stop_event: threading.Event,
         on_stage: Callable[[str, str], None],
         on_outcome: Callable[[CommandOutcome], None],
-        on_transcription: Callable[[Command], None] | None = None,
         max_workers: int = MAX_COMMAND_WORKERS,
     ) -> None:
         self._client = client
         self._stop = stop_event
         self._on_stage = on_stage
         self._on_outcome = on_outcome
-        self._on_transcription = on_transcription
         self._max_workers = max_workers
         self._condition = threading.Condition()
         self._queue: deque[_PendingCommand] = deque()
@@ -485,8 +481,6 @@ class CommandPipeline:
                 return None
             if transcript is None:
                 self._on_stage(command.command_id, STAGE_TRANSCRIBING)
-                if self._on_transcription is not None:
-                    self._on_transcription(command)
                 try:
                     transcript = self._client.transcribe(command.wav).strip()
                 except SpeechServerError as exc:

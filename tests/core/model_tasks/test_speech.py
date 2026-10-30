@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.debug import SpeechDebugStore
 from core.model_tasks import (
     LocalSpeechExecutor,
     SpeechArtifactNotFoundError,
@@ -144,12 +145,14 @@ async def test_local_transcription_receives_original_input_without_reading_conve
     executor = LocalSpeechExecutor(engines=[])
     executor.transcribe = AsyncMock(return_value=SpeechTranscriptionResult(text="hello"))  # type: ignore[method-assign]
     profile = MagicMock(side_effect=AssertionError("Local STT must not read the upload profile"))
+    diagnostics = SpeechDebugStore(tmp_path, lambda: {"enabled": True})
     service = SpeechService(
         _SttModelTasks("local/parakeet", {"language": "de"}),
         cast(Any, object()),
         tmp_path,
         local_executor=executor,
         transcription_audio_getter=profile,
+        debug_recordings=diagnostics,
     )
     audio = _webm_audio_bytes()
     try:
@@ -166,6 +169,9 @@ async def test_local_transcription_receives_original_input_without_reading_conve
             progress=None,
         )
         profile.assert_not_called()
+        record = (await diagnostics.list_async())[0]
+        assert record["text"] == "hello"
+        assert await diagnostics.audio_async(record["recording_id"]) == (audio, "audio/webm")
     finally:
         await service.aclose()
 

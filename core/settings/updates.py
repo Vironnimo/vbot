@@ -313,7 +313,11 @@ def apply_debug_settings(
             **dict(debug),
         }
     )
-    settings["debug"] = normalized_debug
+    previous_debug = settings.get("debug")
+    settings["debug"] = {
+        **(dict(previous_debug) if isinstance(previous_debug, Mapping) else {}),
+        **normalized_debug,
+    }
     return dict(normalized_debug)
 
 

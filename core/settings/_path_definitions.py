@@ -404,7 +404,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "debug.enabled",
         "boolean",
-        "Whether Provider wire debug traces are recorded.",
+        "Whether Provider wire traces and speech recognition recordings are captured.",
         default=DEBUG_SETTING_DEFAULTS["enabled"],
     ),
     _static(
@@ -412,6 +412,14 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "integer",
         "Maximum number of retained debug traces.",
         default=DEBUG_SETTING_DEFAULTS["trace_limit"],
+        minimum=1,
+        maximum=MAX_TRACE_LIMIT,
+    ),
+    _static(
+        "debug.speech_recording_limit",
+        "integer",
+        "Maximum number of retained speech recognition recordings.",
+        default=DEBUG_SETTING_DEFAULTS["speech_recording_limit"],
         minimum=1,
         maximum=MAX_TRACE_LIMIT,
     ),

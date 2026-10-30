@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.debug.recorder import DebugContext, ProviderDebugRecorder
     from core.debug.redaction import redact_headers, redact_url
+    from core.debug.speech import SpeechDebugDisabledError, SpeechDebugStore
     from core.debug.store import DebugTraceStore, InvalidTraceIdError, drain_debug_traces
 
 __all__ = [
@@ -13,6 +14,8 @@ __all__ = [
     "DebugTraceStore",
     "InvalidTraceIdError",
     "ProviderDebugRecorder",
+    "SpeechDebugStore",
+    "SpeechDebugDisabledError",
     "drain_debug_traces",
     "redact_headers",
     "redact_url",
@@ -21,6 +24,8 @@ __all__ = [
 _EXPORT_MODULES = {
     "DebugContext": "recorder",
     "ProviderDebugRecorder": "recorder",
+    "SpeechDebugStore": "speech",
+    "SpeechDebugDisabledError": "speech",
     "DebugTraceStore": "store",
     "InvalidTraceIdError": "store",
     "drain_debug_traces": "store",

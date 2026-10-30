@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
+from core.debug import SpeechDebugStore
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.prompts import SkillPromptRegistry
 from core.runtime._configuration import _resolve_resources_path
@@ -105,6 +106,13 @@ async def apply_settings_change(
     if changed_speech:
         runtime.speech.preload_configured(changed_speech)
     debug_enabled = _debug_enabled(current)
+    if (
+        normalize_debug_settings(previous.get("debug"))["speech_recording_limit"]
+        != normalize_debug_settings(current.get("debug"))["speech_recording_limit"]
+    ):
+        await SpeechDebugStore(
+            runtime.storage.data_dir, runtime.storage.load_debug_settings
+        ).prune_async()
     if _debug_enabled(previous) != debug_enabled:
         # Provider traffic capture is a privacy-relevant mode an operator must see.
         _LOGGER.info("Debug Mode %s", "enabled" if debug_enabled else "disabled")

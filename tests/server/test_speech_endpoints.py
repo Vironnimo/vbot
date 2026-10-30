@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.requests import ClientDisconnect  # type: ignore[import-not-found]
 
 import server._speech_routes as speech_routes
+from core.debug import SpeechDebugStore
 from core.model_tasks import (
     SpeechArtifactNotFoundError,
     SpeechConfigurationError,
@@ -34,6 +35,36 @@ from tests.server.app_test_support import ServerStubRuntime
 
 _AUDIO_FILE = {"file": ("clip.webm", b"audio", "audio/webm")}
 _NDJSON = {"Accept": "application/x-ndjson"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["audio/wav", "text/html"])
+async def test_debug_speech_audio_is_exact_and_authorization_follows_the_live_switch(
+    tmp_path: Path,
+    media_type: str,
+) -> None:
+    runtime = ServerStubRuntime(tmp_path / "data", speech=_Speech())
+    runtime.storage.update_settings_sections({"debug": {"enabled": True}})
+    store = SpeechDebugStore(runtime.storage.data_dir, runtime.storage.load_debug_settings)
+    audio = b"RIFF original upload sentinel"
+    capture = store.begin(audio, media_type)
+    assert capture is not None
+    capture.finish("transcription sentinel", None)
+    recording_id = (await store.list_async())[0]["recording_id"]
+    url = f"/api/debug/speech/{recording_id}/audio"
+    with TestClient(create_app(runtime=runtime)) as client:
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.content == audio
+        assert response.headers["content-type"] == (
+            "audio/wav" if media_type == "audio/wav" else "application/octet-stream"
+        )
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["cache-control"] == "no-store"
+        assert client.get("/api/debug/speech/invalid/audio").status_code == 400
+        assert client.get("/api/debug/speech/stt_missing/audio").status_code == 404
+        runtime.storage.update_settings_sections({"debug": {"enabled": False}})
+        assert client.get(url).status_code == 403
 
 
 @pytest.mark.parametrize(

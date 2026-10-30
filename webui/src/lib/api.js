@@ -131,6 +131,8 @@ export {
   debugTraceList,
   debugTraceGet,
   debugTraceClear,
+  debugSpeechList,
+  debugSpeechClear,
   debugModelProbe,
 } from './api/settings.js';
 export {

@@ -11,6 +11,7 @@ import httpx
 import pytest
 import respx
 
+from core.debug import SpeechDebugStore
 from core.debug.store import DebugTraceStore
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import (
@@ -170,6 +171,7 @@ async def test_status_and_settings_report_the_debug_state(
     assert settings["debug"] == {
         "enabled": enabled,
         "trace_limit": trace_limit,
+        "speech_recording_limit": 10,
         "trace_count": trace_count,
     }
 
@@ -189,6 +191,27 @@ async def test_trace_list_returns_metadata_newest_first(tmp_path: Path) -> None:
     for entry in traces:
         assert {"trace_id", "timestamp", "provider_id"} <= entry.keys()
         assert {"request", "response"}.isdisjoint(entry)
+
+
+@pytest.mark.asyncio
+async def test_speech_list_and_clear_use_the_server_store_with_independent_retention(
+    tmp_path: Path,
+) -> None:
+    state = _make_debug_state(tmp_path)
+    store = SpeechDebugStore(tmp_path, state.runtime.storage.load_debug_settings)
+    capture = store.begin(b"original uploaded audio", "audio/wav")
+    assert capture is not None
+    capture.finish("Licht an.", None)
+    listed = await rpc_result(state, "debug.speech_list")
+    record = listed["recordings"][0]
+    assert record["text"] == "Licht an."
+    assert record["audio_url"] == f"/api/debug/speech/{record['recording_id']}/audio"
+    _seed_traces(tmp_path)
+    state.runtime.storage.update_settings_sections({"debug": {"enabled": False}})
+    assert await rpc_result(state, "debug.speech_clear") == {"cleared": True}
+    state.runtime.storage.update_settings_sections({"debug": {"enabled": True}})
+    assert await rpc_result(state, "debug.speech_list") == {"recordings": []}
+    assert len(DebugTraceStore(tmp_path, 50).get_traces()) == 3
 
 
 @pytest.mark.asyncio
@@ -224,6 +247,7 @@ async def test_trace_clear_is_allowed_while_debug_is_disabled(tmp_path: Path) ->
     ("method", "params"),
     [
         ("debug.trace_list", {}),
+        ("debug.speech_list", {}),
         ("debug.trace_get", {"trace_id": TRACE_ID_1}),
         ("debug.model_probe", {"provider_id": "openai", "connection_id": "openai:api-key"}),
     ],

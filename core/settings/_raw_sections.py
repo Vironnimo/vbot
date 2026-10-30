@@ -559,22 +559,18 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     _warn_unknown_keys(diagnostics, "$.debug", value, DEBUG_FIELDS, "debug field")
     if "enabled" in value and not isinstance(value["enabled"], bool):
         _error(diagnostics, "$.debug.enabled", "must be a boolean")
-    if "trace_limit" in value:
-        trace_limit = value["trace_limit"]
-        if isinstance(trace_limit, bool) or not isinstance(trace_limit, int):
+    for field in ("trace_limit", "speech_recording_limit"):
+        if field not in value:
+            continue
+        limit = value[field]
+        if isinstance(limit, bool) or not isinstance(limit, int):
             _error(
-                diagnostics,
-                "$.debug.trace_limit",
-                f"must be a positive integer (1-{MAX_TRACE_LIMIT})",
+                diagnostics, f"$.debug.{field}", f"must be a positive integer (1-{MAX_TRACE_LIMIT})"
             )
-        elif trace_limit <= 0:
-            _error(diagnostics, "$.debug.trace_limit", "must be at least 1")
-        elif trace_limit > MAX_TRACE_LIMIT:
-            _error(
-                diagnostics,
-                "$.debug.trace_limit",
-                f"must be at most {MAX_TRACE_LIMIT}",
-            )
+        elif limit <= 0:
+            _error(diagnostics, f"$.debug.{field}", "must be at least 1")
+        elif limit > MAX_TRACE_LIMIT:
+            _error(diagnostics, f"$.debug.{field}", f"must be at most {MAX_TRACE_LIMIT}")
 
 
 def _validate_archive(diagnostics: list[JsonDiagnostic], value: Any) -> None:

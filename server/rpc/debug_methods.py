@@ -21,7 +21,12 @@ from uuid import uuid4
 
 import httpx
 
-from core.debug import DebugTraceStore, InvalidTraceIdError
+from core.debug import (
+    DebugTraceStore,
+    InvalidTraceIdError,
+    SpeechDebugDisabledError,
+    SpeechDebugStore,
+)
 from core.debug.redaction import redact_headers, redact_url
 from core.models.discovery import build_discovery_request
 from core.utils.tls import shared_ssl_context
@@ -57,6 +62,39 @@ def _make_debug_store(runtime: Any) -> DebugTraceStore:
     debug_settings = runtime.storage.load_debug_settings()
     trace_limit = debug_settings.get("trace_limit", 50)
     return DebugTraceStore(runtime.storage.data_dir, trace_limit=trace_limit)
+
+
+def _make_speech_store(runtime: Any) -> SpeechDebugStore:
+    """Read the same server-owned diagnostic store that SpeechService writes."""
+    return SpeechDebugStore(runtime.storage.data_dir, runtime.storage.load_debug_settings)
+
+
+async def _debug_speech_list(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.speech_list does not accept params")
+    try:
+        recordings = await _make_speech_store(state.runtime).list_async()
+        return {
+            "recordings": [
+                {**record, "audio_url": f"/api/debug/speech/{record['recording_id']}/audio"}
+                for record in recordings
+            ]
+        }
+    except SpeechDebugDisabledError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+async def _debug_speech_clear(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.speech_clear does not accept params")
+    try:
+        await _make_speech_store(state.runtime).clear_async()
+        publish_resource_changed(state, RESOURCE_KIND_DEBUG_TRACES)
+        return {"cleared": True}
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 async def _save_model_probe_trace(
@@ -342,4 +380,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "debug.trace_get": _debug_trace_get,
         "debug.trace_clear": _debug_trace_clear,
         "debug.model_probe": _debug_model_probe,
+        "debug.speech_list": _debug_speech_list,
+        "debug.speech_clear": _debug_speech_clear,
     }

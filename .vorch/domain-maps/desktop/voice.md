@@ -78,7 +78,6 @@ Other threads: `vbot-voice-start` / `vbot-voice-stop` (transitions), `vbot-voice
 `desktop/bridge.py` delegates every Voice method to `VoiceController`; the error contract is in `desktop/bridge.md` -> Error contract. The WebUI enables Voice only for `voiceApi === 3` (3: the microphone and echo cancellation moved to the shared microphone methods, Capture and microphones).
 
 - `getVoiceStatus()` -> status snapshot.
-- `getVoiceRecording(command_id)` returns the last transcription upload as `{command_id, content_base64}` (the exact WAV, not re-encoded). A missing or replaced id rejects with `voice_recording_unavailable`. Audio is read on demand, never included in status pushes.
 - `setVoiceEnabled(enabled)` -> `{enabled, error_code}`; persists and applies. `error_code` is always `null`: readiness problems appear in the status, the switch is never refused.
 - `updateVoiceConfig(changes)` -> status snapshot; validated, persisted, then applied.
 - `listWakewordModels()` -> descriptors `{id, label, source, format, removable, kind, overlaps}`, built-ins first, then valid imports by label; never local paths or executable targets.
@@ -100,7 +99,6 @@ Error codes a Voice bridge call can reject with: `voice_config_invalid`, `no_ser
 - `default_agent_id`, `default_session_behavior` of the current server's profile.
 - `phrases`: one per active phrase, `{model_id, label, sensitivity, action, effective, problem}`; `action` is the stored action, `effective` the resolved one, `problem` the code that keeps a command phrase from working (see Readiness), `null` for Live voice actions.
 - `recording`: `null` or `{command_id, model_id, agent_id}` while a command records (the Live hold follows it, `desktop/live-voice.md`).
-- `last_recording`: `null` or `{command_id, model_id, agent_id}` for the latest command handed to transcription. The controller retains only this WAV in memory, replacing it at the next upload and clearing it on server switch or Desktop close; listener restarts keep it. It remains available after transcription or sending fails. Mock mode creates no audio.
 - `commands`: `[{command_id, model_id, stage}]` with `stage` `transcribing` | `sending`.
 - `calibration`: `null` or `{model_id, phase, score, peak, noise_level, noise_high, sample_count, required_samples, recommended_sensitivity, noise_seconds_remaining, issue, sample_state}`. `sample_state` guides repetitions (`settling`, `ready`, `capturing`; otherwise `null`). A `ready` result can carry `issue: "insufficient_separation"` and no recommendation.
 - `limits`: `{max_active_phrases, min_sensitivity, max_sensitivity}`.
@@ -137,6 +135,7 @@ Error codes a Voice bridge call can reject with: `voice_config_invalid`, `no_ser
 - `CommandPipeline` runs up to 3 workers: `transcribing` -> an empty transcript gives `no_speech` -> a transcript that equals or ends with a reserved cancel phrase (`abbrechen`, `vergiss es`, after normalization) gives `cancelled` -> `sending`: resolve the Session, then send. Transcriptions run in parallel; Session resolution and sending follow recording order per Agent. The controller submits a finished recording before accepting the next detection. A completed transcript waits without occupying a worker or retaining its WAV, so other Agents continue. A command that fails, has no speech, or is cancelled releases its place. Outcomes become events: `sent`, `no_speech`, `cancelled`, `transcription_failed`, `command_failed` (unexpected errors: `pipeline_failed`). Once its stop event is set it publishes nothing more; `close` discards both queued recordings and transcripts waiting to send. A cancel phrase never cancels an already started Run.
 - Command failures are events; one bad utterance never stops detection. If transcription warm-up, subscription creation or recorder startup raises (or the recorder refuses the start), the controller closes any created subscription, clears the recording and emits `recording_ended` then `command_failed` (`pipeline_failed`); subsequent detections remain usable. Only successfully started warm-up threads are joined on shutdown.
 - Logs record codes, ids, and Agent routing, never transcripts.
+- The Desktop retains no diagnostic command audio. Optional recordings and their transcription outcomes belong to the server's Debug Mode (`debug.md` -> Speech recognition recordings), inspected under Settings -> Debug in every accessor.
 
 ## Server client
 

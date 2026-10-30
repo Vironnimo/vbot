@@ -613,13 +613,14 @@ def _parse_debug_update(debug: Any) -> JsonObject:
             raise SettingsValidationError("params.debug.enabled must be a boolean")
         parsed["enabled"] = enabled
 
-    if "trace_limit" in debug:
-        trace_limit = _positive_integer(debug["trace_limit"], "params.debug.trace_limit")
-        if trace_limit > MAX_TRACE_LIMIT:
-            raise SettingsValidationError(
-                f"params.debug.trace_limit must not exceed {MAX_TRACE_LIMIT}"
-            )
-        parsed["trace_limit"] = trace_limit
+    for field in ("trace_limit", "speech_recording_limit"):
+        if field in debug:
+            limit = _positive_integer(debug[field], f"params.debug.{field}")
+            if limit > MAX_TRACE_LIMIT:
+                raise SettingsValidationError(
+                    f"params.debug.{field} must not exceed {MAX_TRACE_LIMIT}"
+                )
+            parsed[field] = limit
 
     return parsed
 

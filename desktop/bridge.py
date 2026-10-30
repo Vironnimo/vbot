@@ -300,10 +300,6 @@ class DesktopBridge:
         """Return the Voice status snapshot."""
         return self._voice.status()
 
-    def getVoiceRecording(self, command_id: Any) -> dict[str, str]:  # noqa: N802
-        """Read the last transcription upload for local playback."""
-        return self._voice.recording_audio(command_id)
-
     def setVoiceEnabled(self, enabled: Any) -> dict[str, Any]:  # noqa: N802
         """Enable or disable Voice listening; returns ``{enabled, error_code}``."""
         return self._voice.set_enabled(enabled)

@@ -85,6 +85,8 @@ export const settingsPanelLoaders = {
   archive_entries: loadArchiveEntriesPanel,
   debug_capture: loadSettingsDebugPanel,
   debug_traces: loadDebugView,
+  debug_speech: () =>
+    import('../../components/debug/DebugSpeechRecordings.svelte'),
   server: loadSettingsGeneralPanel,
   access: loadSettingsAccessPanel,
   computers: loadSettingsComputersPanel,

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.debug import SpeechDebugStore
 from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore, persist_artifacts
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
@@ -118,8 +119,10 @@ class SpeechService:
         transcription_audio_getter: Callable[[], Mapping[str, Any]] | None = None,
         usage_recorder: UsageRecorder | None = None,
         max_input_bytes: int = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
+        debug_recordings: SpeechDebugStore | None = None,
     ) -> None:
         self._runtime = runtime
+        self._debug_recordings = debug_recordings
         self._max_input_bytes = max_input_bytes
         self._transcriptions = asyncio.Semaphore(_MAX_CONCURRENT_TRANSCRIPTIONS)
         self._pending_transcriptions = 0
@@ -174,7 +177,22 @@ class SpeechService:
             async with self._transcriptions:
                 if self._closed:
                     raise SpeechConfigurationError("Speech service is closed")
-                return await self._transcribe(audio, filename, media_type, progress)
+                capture = (
+                    await self._input_workers.run(self._debug_recordings.begin, audio, media_type)
+                    if self._debug_recordings is not None
+                    else None
+                )
+                result = None
+                error = None
+                try:
+                    result = await self._transcribe(audio, filename, media_type, progress)
+                    return result
+                except BaseException as exc:
+                    error = exc
+                    raise
+                finally:
+                    if capture is not None:
+                        capture.finish(result.text if result is not None else None, error)
         finally:
             self._pending_transcriptions -= 1
 
