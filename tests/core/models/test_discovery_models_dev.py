@@ -322,7 +322,7 @@ async def test_the_provider_catalog_price_wins_over_models_dev(tmp_path: Path) -
     written = read_models_file(resources_dir, "openrouter.json")["models"]
     assert written["qwen/qwen3-embedding-8b"]["pricing"] == {
         "source": "openrouter:qwen/qwen3-embedding-8b",
-        "rates": {"input": 0.01},
+        "rates": {"input": 0.01, "output": 0.0},
     }
 
 
