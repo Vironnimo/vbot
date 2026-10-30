@@ -46,7 +46,9 @@ def test_sessions_script_reads_scope_current_history_forks_blocks_and_exact_resu
     obsolete = ChatMessage.user("old discarded text")
     user = ChatMessage.user([TextBlock(type="text", text="Unicode Grüße")])
     assistant = ChatMessage.assistant(
-        model="test", content="answer", tool_calls=[ToolCall(id="call", name="bash")]
+        model="test",
+        content="answer",
+        tool_calls=[ToolCall(id="call", name="bash", arguments={"command": "y" * 300})],
     )
     result = ChatMessage.tool(
         tool_call_id="call", name="bash", content="prefix " * 500 + "exact fragment\n" + "x" * 3000
@@ -75,6 +77,9 @@ def test_sessions_script_reads_scope_current_history_forks_blocks_and_exact_resu
         _, transcript = run("transcript", "--agent", "agent-id", "--session", "session-id")
         assert [item["message_id"] for item in transcript] == [user.id, assistant.id]
         assert transcript[0]["content"][0]["text"] == "Unicode Grüße"
+        [call] = transcript[1]["tool_calls"]
+        assert call["name"] == "bash"
+        assert call["arguments"].startswith('{"command":"yyy') and call["arguments"].endswith("...")
         summary, first_page = run(
             "transcript", "--agent", "agent-id", "--session", "session-id", "--limit", "1"
         )
@@ -100,6 +105,7 @@ def test_sessions_script_reads_scope_current_history_forks_blocks_and_exact_resu
             hits[0]["generation_id"],
         )
         assert exact[0]["content"] == result.content
+        assert call["result_seq"] == hits[0]["seq"]
 
         # Inside a Run the script defaults to the Run's Session; a fork reads the
         # history it shares with its origin, then its own.

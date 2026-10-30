@@ -39,6 +39,7 @@ WITH target AS (
 
 PREVIEW_BEFORE = 300
 PREVIEW_LENGTH = 2000
+ARGUMENTS_LENGTH = 200
 
 
 class UsageError(Exception):
@@ -203,7 +204,8 @@ def _transcript(
     rows = database.execute(
         view
         + """
-SELECT v.generation_id, v.seq, v.entry_id, v.role, v.created_at, x.content, x.blocks_json
+SELECT v.generation_id, v.entry_key, v.seq, v.entry_id, v.role, v.created_at,
+       x.content, x.blocks_json
 FROM view AS v LEFT JOIN entry_text AS x ON x.entry_key = v.entry_key
 WHERE v.role IN ('user', 'assistant') AND v.seq > ?
 ORDER BY v.seq LIMIT ?
@@ -212,21 +214,58 @@ ORDER BY v.seq LIMIT ?
     ).fetchall()
     more = len(rows) > arguments.limit
     rows = rows[: arguments.limit]
+    tool_calls = _tool_calls(
+        database, scope, [row["entry_key"] for row in rows if row["role"] == "assistant"]
+    )
     summary = f"transcript: {len(rows)} messages of Session {scope['session']}"
     if more:
         summary += f"; more after seq {rows[-1]['seq']}: add --after-seq {rows[-1]['seq']}"
     yield summary
     for row in rows:
-        yield _json(
-            {
-                "generation_id": row["generation_id"],
-                "seq": row["seq"],
-                "message_id": row["entry_id"],
-                "role": row["role"],
-                "timestamp": row["created_at"],
-                "content": _content(row),
-            }
+        message = {
+            "generation_id": row["generation_id"],
+            "seq": row["seq"],
+            "message_id": row["entry_id"],
+            "role": row["role"],
+            "timestamp": row["created_at"],
+            "content": _content(row),
+        }
+        if row["entry_key"] in tool_calls:
+            message["tool_calls"] = tool_calls[row["entry_key"]]
+        yield _json(message)
+
+
+def _tool_calls(
+    database: sqlite3.Connection, scope: dict[str, str | None], entry_keys: list[int]
+) -> dict[int, list[dict[str, Any]]]:
+    """The Tool calls of these Assistant entries, with the seq of each call's Result.
+
+    ``result_seq`` is null while a call has no Result in the Session's current history.
+    """
+    calls: dict[int, list[dict[str, Any]]] = {}
+    if not entry_keys:
+        return calls
+    view, parameters = _view(scope)
+    rows = database.execute(
+        view
+        + f"""
+SELECT c.entry_key, c.name, p.arguments_json, r.seq AS result_seq
+FROM tool_calls AS c
+LEFT JOIN tool_call_payloads AS p ON p.call_key = c.call_key
+LEFT JOIN view AS r ON r.entry_key = c.result_entry_key
+WHERE c.entry_key IN ({", ".join("?" for _ in entry_keys)})
+ORDER BY c.entry_key, c.ordinal
+""",
+        (*parameters, *entry_keys),
+    )
+    for row in rows:
+        arguments = row["arguments_json"] or "{}"
+        if len(arguments) > ARGUMENTS_LENGTH:
+            arguments = arguments[:ARGUMENTS_LENGTH] + "..."
+        calls.setdefault(row["entry_key"], []).append(
+            {"name": row["name"], "arguments": arguments, "result_seq": row["result_seq"]}
         )
+    return calls
 
 
 def _search(
