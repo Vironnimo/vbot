@@ -97,7 +97,8 @@ class SpeechDebugStore:
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._directory = DataDirectoryLayout(data_dir).debug / "speech"
+        debug_dir = DataDirectoryLayout(data_dir).debug
+        self._directory = debug_dir / "speech"
         self._settings = settings
         self._clock = clock
 

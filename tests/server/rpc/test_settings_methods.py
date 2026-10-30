@@ -386,6 +386,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "debug": {
             "enabled": False,
             "trace_limit": 50,
+            "speech_recording_limit": 10,
             "trace_count": 0,
         },
         "archive": {"retention_days": 30},

@@ -787,7 +787,8 @@ async def test_update_based_on_stale_values_is_refused_without_effects(
     await rpc_result(state, method, **update, base=fresh_base)
 
     section = next(iter(update))
-    assert storage.load_settings()[section] == update[section]
+    saved = storage.load_settings()[section]
+    assert {key: saved[key] for key in update[section]} == update[section]
 
 
 @pytest.mark.asyncio

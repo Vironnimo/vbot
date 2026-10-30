@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 
 from core.model_tasks import SpeechExecutionError, SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.speech_types import SpeechProgress
 from server.app import create_app
+from server.events import ServerEventBus
 
 
 @pytest.mark.asyncio
@@ -31,7 +33,11 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
     sent: list[dict[str, Any]] = []
 
     async def operation(
-        value: bytes | str, *, filename: str | None = None, media_type: str | None = None
+        value: bytes | str,
+        *,
+        filename: str | None = None,
+        media_type: str | None = None,
+        progress: SpeechProgress | None = None,
     ) -> Any:
         if surface == "transcribe":
             assert (value, filename, media_type) == (b"audio", "clip.wav", "audio/wav")
@@ -71,6 +77,7 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
     app = create_app(runtime=runtime)
     # No other Runtime services or lifespan work participate in this HTTP contract.
     app.state.runtime = runtime
+    app.state.event_bus = ServerEventBus()
     if surface == "transcribe":
         body = (
             b"--speech-upload\r\n"

@@ -357,7 +357,7 @@ describe('SettingsView', () => {
         secrets: ['agent_secrets'],
         archive: ['archive_retention', 'archive_entries'],
         system: ['server', 'access', 'computers'],
-        debug: ['debug_capture', 'debug_traces'],
+        debug: ['debug_capture', 'debug_speech', 'debug_traces'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
         const page = document.querySelector(`[data-settings-page="${pageId}"]`);
@@ -709,11 +709,11 @@ describe('SettingsView', () => {
 
     it('ranks label matches above help and content matches', async () => {
       await mountSettings();
-      await search('trace');
+      await search('record');
       const titles = searchResultRows().map((row) => row.title);
-      // Document order puts the Debug switch, whose help mentions traces,
-      // before the Trace limit.
-      expect(titles.indexOf(t('debug.traceLimit'))).toBeLessThan(
+      // Document order puts the Debug switch, whose help mentions recordings,
+      // before the speech recording limit.
+      expect(titles.indexOf(t('debug.speechLimit'))).toBeLessThan(
         titles.indexOf(t('debug.enabled')),
       );
       expect(titles).toContain(t('debug.enabled'));
