@@ -47,6 +47,46 @@ describe('SettingsSpecializedModelsPanel', () => {
     await cleanupSpecializedModelsHarness();
   });
 
+  it('updates known Decision Model facts when the selection changes', async () => {
+    const clef = 'ollama-cloud/clef:27b::api-key';
+    const luna = 'openai/gpt-6-luna::api-key';
+    targetsFor('decision', [
+      {
+        id: clef,
+        label: 'Clef 27B',
+        facts: {
+          question_types: ['yes_no', 'choice', 'score'],
+          max_input_tokens: 65_536,
+          max_questions: 64,
+          max_choices: 255,
+          max_levels: 10,
+          input_price_per_million: 0.24,
+        },
+      },
+      { id: luna, label: 'GPT-6 Luna', facts: { max_questions: 400 } },
+    ]);
+    mountPanel({
+      taskTypes: ['decision'],
+      settings: { model_tasks: { decision: { target: clef, options: {} } } },
+    });
+    const facts = () => document.querySelector('[data-decision-target-facts]');
+    await waitForCondition(() => facts());
+
+    expect(facts().textContent).toContain('65,536');
+    expect(facts().textContent).toContain('$0.24');
+    expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
+
+    selectTarget('decision', 'GPT-6 Luna');
+    await settle();
+    expect(facts().textContent).toContain('400');
+    expect(facts().textContent).not.toContain('65,536');
+    expect(facts().textContent).not.toContain('$');
+
+    selectTarget('decision', 'Not configured');
+    await settle();
+    expect(facts()).toBeNull();
+  });
+
   it.each([
     ['speech_to_text', 'text_embedding'],
     ['text_embedding', 'image_generation'],

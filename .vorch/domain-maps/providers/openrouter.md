@@ -169,4 +169,4 @@ Explicit cold requests reported writes for the reusable prefix; DeepSeek additio
 - OpenRouter fronts many upstream providers; do not infer exact model behavior from canonical model family names without catalog facts or probe evidence.
 - Capability facts discovered from `/models` belong in normalization/runtime logic, not hand-edited model overrides.
 
-- Decision Models use `POST /api/alpha/decisions` at the OpenRouter origin through the shared Task Model HTTP client, separately from Chat routing. See `../model_tasks/decisions.md`.
+- Decision Models use the wire profile's independent `system_one` route at `POST /api/alpha/decisions`, with `provider_options` declared as its supported task control. The exact ScaleDown Classify 1 entry wraps the complete state as `state.text`; other Models receive the unchanged state. The shared Task Model HTTP client owns transport; see `../model_tasks/decisions.md` and `providers/wire-profiles.md`.

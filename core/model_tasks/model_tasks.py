@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -17,6 +16,7 @@ from core.model_tasks.constants import (
     TASK_TEXT_EMBEDDING,
     TASK_VIDEO_GENERATION,
 )
+from core.model_tasks.decision_profile import DecisionProfile, decision_profile
 from core.model_tasks.embedding_profiles import embedding_profile
 from core.model_tasks.image_profile import (
     ImageProfile,
@@ -40,6 +40,8 @@ from core.model_tasks.options import (
 from core.models import ModelQuery
 from core.providers.accounts import compose_connection_id, validate_account_id
 from core.providers.providers import model_is_local
+from core.providers.wire_profile import WireProfile
+from core.providers.wire_profiles import standalone_wire_binding
 from core.utils.errors import ConfigError, VBotError
 
 JsonObject = dict[str, Any]
@@ -214,11 +216,6 @@ def task_model_targets_equal(left: str | None, right: str | None) -> bool:
 #: have no fixed media settings or per-call choices to offer.
 _ROUTER_MODEL_PREFIX = "openrouter/"
 _GENERATION_TASKS = frozenset({TASK_IMAGE_GENERATION, TASK_VIDEO_GENERATION, TASK_MUSIC_GENERATION})
-#: TypeSafe Jev releases and the alias of the newest one. vBot's Decisions wire,
-#: answer validation and the classify Tool are verified only for Jev: other
-#: decision Models read only part of the state without an error or expect
-#: their own state shapes. ``typesafe/jev-router`` is a Chat router, not Jev.
-_JEV_DECISION_MODEL = re.compile(r"~?typesafe/jev-(?:latest|\d[^/]*)")
 
 
 def model_supports_task(model: Any, task_type: str) -> bool:
@@ -232,8 +229,8 @@ def model_supports_task(model: Any, task_type: str) -> bool:
 
     Media generation excludes router Models. Video generation also needs a
     published duration choice: Models without one edit or upscale a video,
-    or animate an avatar, and cannot run from a prompt alone. Decisions run
-    only on TypeSafe Jev, the one decision Model family vBot's wire supports.
+    or animate an avatar, and cannot run from a prompt alone. Decision target
+    expansion additionally checks the selected Connection's native route.
     """
 
     capabilities = getattr(model, "capabilities", None)
@@ -248,8 +245,6 @@ def model_supports_task(model: Any, task_type: str) -> bool:
         )
     if task_type not in task_types:
         return False
-    if task_type == TASK_DECISION:
-        return _JEV_DECISION_MODEL.fullmatch(str(getattr(model, "model_id", ""))) is not None
     if task_type in _GENERATION_TASKS and str(getattr(model, "model_id", "")).startswith(
         _ROUTER_MODEL_PREFIX
     ):
@@ -273,12 +268,14 @@ class TaskModelService:
         storage: Any,
         *,
         local_targets: LocalTaskTargetRegistry | None = None,
+        wire_profile_resolver: Callable[[str, str, str], WireProfile] | None = None,
     ) -> None:
         self._providers = providers
         self._models = models
         self._credentials = credentials
         self._storage = storage
         self._local_targets = local_targets or DEFAULT_LOCAL_TASK_TARGET_REGISTRY
+        self._wire_profile_resolver = wire_profile_resolver
 
     def settings(self) -> JsonObject:
         """Return normalized persisted task-model settings."""
@@ -477,6 +474,8 @@ class TaskModelService:
             raise TaskModelValidationError(
                 f"Unknown Connection {target_ref.local_connection_id!r} in target {target!r}"
             )
+        if task_type == TASK_DECISION and not self.decision_profile(target_ref).supported:
+            raise TaskModelValidationError(f"Model target {target!r} has no native Decision route")
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         """Return the configured binding for *task_type*."""
@@ -566,12 +565,39 @@ class TaskModelService:
                 fields=descriptor.option_fields,
             )
         model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
+        if normalized_task_type == TASK_DECISION:
+            return option_schema_for(
+                normalized_task_type,
+                target_ref.provider_id,
+                target_ref.target,
+                model=model,
+                decision_wire=self.decision_profile(target_ref).wire,
+            )
         return option_schema_for(
             normalized_task_type,
             target_ref.provider_id,
             target_ref.target,
             model=model,
             wire=self._image_wire(target_ref),
+        )
+
+    def decision_profile(self, target_ref: TaskModelTargetRef) -> DecisionProfile:
+        """Return the same native contract for selection, Settings and execution."""
+        resolver = self._wire_profile_resolver
+        if resolver is not None:
+            wire = resolver(
+                target_ref.provider_id, target_ref.local_connection_id, target_ref.model_id
+            )
+        else:
+            binding = standalone_wire_binding(
+                provider_id=target_ref.provider_id,
+                connection_id=target_ref.local_connection_id,
+                protocols=("chat_completions", "responses", "ollama_chat"),
+                model_lookup=lambda model_id: self._resolve_model(target_ref.provider_id, model_id),
+            )
+            wire = binding.profile(target_ref.model_id)
+        return decision_profile(
+            self.model_for_target(target_ref), wire.decision, target_ref.local_connection_id
         )
 
     def image_profile(self, target_ref: TaskModelTargetRef) -> ImageProfile:
@@ -689,6 +715,29 @@ class TaskModelService:
                 if model_supports_task(model, task_type)
                 and any(model.allows_connection(connection.id) for connection in usable_connections)
             ]
+            decision_profiles: dict[tuple[str, str], DecisionProfile] = {}
+            if task_type == TASK_DECISION:
+                for _, model in models:
+                    for connection in usable_connections:
+                        if not model.allows_connection(connection.id):
+                            continue
+                        profile = self.decision_profile(
+                            parse_task_model_target_id(
+                                public_provider_target_id(
+                                    provider_id, model.model_id, connection.id
+                                )
+                            )
+                        )
+                        if profile.supported:
+                            decision_profiles[model.model_id, connection.id] = profile
+                models = [
+                    (matched_provider_id, model)
+                    for matched_provider_id, model in models
+                    if any(
+                        (model.model_id, connection.id) in decision_profiles
+                        for connection in usable_connections
+                    )
+                ]
             name_counts = Counter(model.name for _, model in models)
             for matched_provider_id, model in models:
                 # Providers may give a pinned version and its moving alias the
@@ -696,6 +745,9 @@ class TaskModelService:
                 model_label = model.model_id if name_counts[model.name] > 1 else model.name
                 for connection in usable_connections:
                     if not model.allows_connection(connection.id):
+                        continue
+                    decision = decision_profiles.get((model.model_id, connection.id))
+                    if task_type == TASK_DECISION and decision is None:
                         continue
                     connection_label = getattr(connection, "label", connection.id)
                     label = f"{provider.name} / {model_label}"
@@ -716,7 +768,11 @@ class TaskModelService:
                                 dict.fromkeys((*model.capabilities.task_types, task_type))
                             ),
                             usable=True,
-                            facts=_target_facts(task_type, model.model_id, model=model),
+                            facts=(
+                                _decision_target_facts(decision)
+                                if decision is not None
+                                else _target_facts(task_type, model.model_id, model=model)
+                            ),
                         )
                     )
         return targets
@@ -738,6 +794,18 @@ class TaskModelService:
             )
             for descriptor in self._local_targets.list_for_task(task_type)
         ]
+
+
+def _decision_target_facts(profile: DecisionProfile) -> JsonObject:
+    pricing = profile.pricing
+    return {
+        "question_types": ["yes_no", "choice", "score"],
+        "max_input_tokens": profile.max_input_tokens,
+        "max_questions": profile.max_questions,
+        "max_choices": profile.max_choices,
+        "max_levels": profile.max_levels,
+        "input_price_per_million": pricing.rates.input if pricing is not None else None,
+    }
 
 
 def _target_facts(

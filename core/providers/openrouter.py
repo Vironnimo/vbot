@@ -24,7 +24,6 @@ from core.providers._chat_completions_catalog import (
     _read_string_list,
 )
 from core.providers._openrouter_catalog import (
-    _embedding_catalog_pricing,
     _image_catalog_model,
     _normalize_image_parameters,
     _normalize_video_options,
@@ -33,6 +32,7 @@ from core.providers._openrouter_catalog import (
     _openrouter_task_types,
     _passthrough_from_detail,
     _read_optional_string_list,
+    _task_catalog_pricing,
     _video_catalog_model,
 )
 from core.providers._openrouter_constants import (
@@ -672,7 +672,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
             metadata=_openrouter_runtime_metadata(architecture),
-            pricing=_embedding_catalog_pricing(model_id, raw, output_modalities),
+            pricing=_task_catalog_pricing(model_id, raw, output_modalities),
         )
 
     @override

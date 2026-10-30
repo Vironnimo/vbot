@@ -2,6 +2,11 @@
   "format_version": 1,
   "_comment": "OpenRouter. Every chat Model speaks Chat Completions except the GPT-5.6 Models, which speak stateless Responses. Chat reasoning is OpenRouter's reasoning object ({effort}, or {enabled: true} for on/off Models) plus include_reasoning; OpenRouter maps an effort onto an upstream token budget itself, so no budget is sent. A Model without a catalog ladder snaps onto none..xhigh, an id the catalog does not know is treated as a reasoning Model, and a Model whose reasoning is mandatory gets its lowest active level instead of off. Claude and the six documented Alibaba Chat Models receive explicit cache_control breakpoints; other Models receive no markers. Responses accepts max_output_tokens and top_p as its only optional parameters and omits reasoning for effort none.",
   "defaults": {
+    "decision": {
+      "protocol": "system_one",
+      "endpoint": "/api/alpha/decisions",
+      "allowed_options": ["provider_options"]
+    },
     "reasoning": {
       "supported": true,
       "floor": ["none", "minimal", "low", "medium", "high", "xhigh"]
@@ -17,6 +22,16 @@
     }
   },
   "rules": [
+    {
+      "when": {"ids": ["respan/span-01", "respan/span-01-lite", "respan/span-01-lite:free"]},
+      "set": {"decision": {"protocol": "none"}},
+      "note": "Live 2026-10-30: these conversation behavior scorers reject choice/score questions and arbitrary JSON states, so they cannot serve the general Decision binding. Span-02 uses the ordinary native contract."
+    },
+    {
+      "when": {"ids": ["scaledown/classify-1"]},
+      "set": {"decision": {"state_field": "text"}},
+      "note": "ScaleDown's Decisions contract reads the input from state.text."
+    },
     {
       "when": {
         "ids": [

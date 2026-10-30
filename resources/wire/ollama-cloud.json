@@ -2,6 +2,7 @@
   "format_version": 1,
   "_comment": "Direct Ollama Cloud on its OpenAI-compatible /v1/chat/completions wire. Reasoning controls go only to Models the catalog marks as reasoning; the effort vocabulary is none|low|medium|high|max (vBot xhigh is spelled max) and off is the explicit 'none' effort even for on/off thinkers. Readable reasoning replays as text in the Model's own response field; the reviewed Cloud Models answer and replay in reasoning (audited 2026-09-02). Replay scope is full_history except where live replay audits showed a Model ignores earlier Reasoning across Runs (current_run) or always (none). Bodies above 16 MiB are rejected (verified 2026-09-11).",
   "defaults": {
+    "decision": {"protocol": "system_one", "endpoint": "/v1/systemone"},
     "reasoning": {
       "supported": false,
       "floor": ["none", "low", "medium", "high", "max"],

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from typing import Any
 
 from core.models.models import (
@@ -13,7 +13,7 @@ from core.models.models import (
     ReasoningCapabilities,
     derive_model_task_types,
 )
-from core.models.pricing import TokenPricing
+from core.models.pricing import TokenPricing, nonnegative_amount
 
 # OpenRouter prices are USD per token; the Model DB stores USD per million.
 _TOKENS_PER_MILLION = Decimal(1_000_000)
@@ -204,32 +204,40 @@ def _video_catalog_model(entry: Mapping[str, Any], video_options: dict[str, Any]
     )
 
 
-def _embedding_catalog_pricing(
+def _task_catalog_pricing(
     model_id: str, raw: Mapping[str, Any], output_modalities: list[str]
 ) -> TokenPricing | None:
-    """Return an embedding Model's input price from its own ``pricing.prompt``.
+    """Project native embedding/Decision prices; chat retains models.dev prices.
 
-    models.dev's OpenRouter section lists no embedding Models, so the catalog
-    is their only price source; chat Models keep their models.dev price. A
-    negative value (``-1`` marks a variable-price router) or an unparsable one
-    stays unknown, while ``0`` is a real free price.
+    The catalog reports USD per token, including explicit free rates. Unknown,
+    variable (negative), malformed or non-finite rates stay unknown individually.
     """
 
-    if "embeddings" not in output_modalities:
+    if not {"embeddings", "decisions"}.intersection(output_modalities):
         return None
     pricing = raw.get("pricing")
-    prompt = pricing.get("prompt") if isinstance(pricing, Mapping) else None
-    if isinstance(prompt, bool) or not isinstance(prompt, str | int | float):
+    if not isinstance(pricing, Mapping):
         return None
-    try:
-        per_token = Decimal(str(prompt))
-    except InvalidOperation:
-        return None
-    if not per_token.is_finite() or per_token < 0:
-        return None
-    return TokenPricing.from_cost(
-        {"input": float(per_token * _TOKENS_PER_MILLION)}, source=f"openrouter:{model_id}"
-    )
+    rates: dict[str, float] = {}
+    for source_key, rate_key in (
+        ("prompt", "input"),
+        ("completion", "output"),
+        ("input_cache_read", "cache_read"),
+        ("input_cache_write", "cache_write"),
+    ):
+        value = pricing.get(source_key)
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            continue
+        try:
+            per_token = Decimal(str(value))
+            if not per_token.is_finite() or per_token < 0:
+                continue
+            amount = nonnegative_amount(float(per_token * _TOKENS_PER_MILLION))
+        except DecimalException, OverflowError:
+            continue
+        if amount is not None:
+            rates[rate_key] = amount
+    return TokenPricing.from_cost(rates, source=f"openrouter:{model_id}")
 
 
 def _openrouter_reasoning(

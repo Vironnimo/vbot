@@ -29,6 +29,8 @@ from core.providers.reasoning import (
 from core.providers.wire_profile import (
     ADMISSION_STATES,
     BUDGET_STRATEGIES,
+    DECISION_OPTION_NAMES,
+    DECISION_PROTOCOLS,
     OFF_RENDERS,
     OUT_OF_RANGE_POLICIES,
     OUTPUT_LIMIT_FIELDS,
@@ -196,6 +198,27 @@ _PARAMETER_RULE: dict[str, Any] = {
 
 PROFILE_SCHEMA: dict[str, Any] = {
     "protocol": _enum(PROTOCOLS),
+    "decision": {
+        "protocol": _enum(DECISION_PROTOCOLS),
+        "endpoint": _Leaf(
+            lambda value: (
+                isinstance(value, str)
+                and (
+                    value == ""
+                    or (
+                        value.startswith("/")
+                        and not value.startswith("//")
+                        and not any(
+                            character.isspace() or character in "?#\\" for character in value
+                        )
+                    )
+                )
+            ),
+            "an absolute path without query or fragment, or an empty string",
+        ),
+        "state_field": _Leaf(lambda value: isinstance(value, str), "a string"),
+        "allowed_options": _string_list(values=DECISION_OPTION_NAMES),
+    },
     "admission": {
         "state": _enum(ADMISSION_STATES),
         "message": _string(nullable=True),

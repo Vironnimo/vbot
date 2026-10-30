@@ -152,6 +152,40 @@ async def test_embedding_capability_tags_the_model_for_text_embedding(
     assert enriched["nomic-embed-text:latest"].context_window == 2048
 
 
+@pytest.mark.parametrize(
+    ("reported", "inputs", "tasks"),
+    [
+        (["decision"], ("text",), ("decision",)),
+        (["decision", "vision"], ("text", "image"), ("image_input", "decision")),
+        (
+            ["decision", "vision", "audio", "completion", "thinking", "tools", "embedding"],
+            ("text", "image", "audio"),
+            ("image_input", "audio_input", "decision"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_decision_capability_selects_native_scoring_in_both_catalog_paths(
+    reported: list[str], inputs: tuple[str, ...], tasks: tuple[str, ...]
+) -> None:
+    model_id = "future-decision-model:latest"
+    show = {"capabilities": reported}
+    tagged = OllamaAdapter.normalize_catalog_entry({"model": model_id, **show})
+    baseline = OllamaAdapter.normalize_catalog_entry({"model": model_id})
+    enriched = await OllamaAdapter.enrich_discovered_models({model_id: baseline}, _show(show))
+    incomplete = await OllamaAdapter.enrich_discovered_models(
+        {model_id: tagged}, _show({"model_info": {}})
+    )
+
+    for model in (tagged, enriched[model_id], incomplete[model_id]):
+        assert model.capabilities.output_modalities == ("decisions",)
+        assert model.capabilities.input_modalities == inputs
+        assert set(model.capabilities.task_types) == set(tasks)
+        assert model.capabilities.tools is False
+        assert model.capabilities.reasoning.supported is False
+        assert model.capabilities.json_mode is False
+
+
 def test_tags_entry_without_model_id_raises() -> None:
     with pytest.raises(ProviderError):
         OllamaAdapter.normalize_catalog_entry({"details": {}})

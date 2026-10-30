@@ -91,6 +91,12 @@ PROTOCOLS: tuple[Protocol, ...] = (
     "ollama_chat",
 )
 
+type DecisionProtocol = Literal["none", "system_one", "openai_decisions"]
+"""Native Decision protocols, independent of the target's Chat protocol."""
+
+DECISION_PROTOCOLS: tuple[DecisionProtocol, ...] = ("none", "system_one", "openai_decisions")
+DECISION_OPTION_NAMES: tuple[str, ...] = ("provider_options", "keep_alive", "prompt_cache_key")
+
 ReasoningDialect = Literal[
     "none",
     "reasoning_effort",
@@ -634,6 +640,21 @@ class Verification:
 
 
 @dataclass(frozen=True)
+class DecisionWire:
+    """The native Decision route a Provider Connection serves.
+
+    ``endpoint`` is a path at the configured Provider's origin. An empty
+    ``state_field`` passes the state unchanged; another value wraps it under
+    that field for Models with a specific input shape.
+    """
+
+    protocol: DecisionProtocol = "none"
+    endpoint: str = ""
+    state_field: str = ""
+    allowed_options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class WireProfile:
     """The resolved wire contract for one Model on one Provider Connection."""
 
@@ -649,6 +670,7 @@ class WireProfile:
     response: ResponseRules = field(default_factory=ResponseRules)
     replay: ReplayRules = field(default_factory=ReplayRules)
     media: MediaRules = field(default_factory=MediaRules)
+    decision: DecisionWire = field(default_factory=DecisionWire)
     known_model: bool = True
     provenance: Mapping[str, str] = field(default_factory=lambda: _EMPTY)
 

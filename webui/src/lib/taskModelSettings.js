@@ -1,4 +1,4 @@
-import { t } from './i18n.js';
+import { activeLocaleTag, t } from './i18n.js';
 
 const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 const TASK_TEXT_TO_SPEECH = 'text_to_speech';
@@ -142,7 +142,8 @@ export function normalizeTaskModelSettings(settings) {
 
 // `facts` are the task type's selection facts for one target (for
 // `text_embedding`: local, multilingual, recommended_rank, note,
-// input_price_per_million); other task types carry none. `metadata` describes
+// input_price_per_million; `decision`: question types, limits, input price).
+// `metadata` describes
 // the target itself (a local target: license, download_bytes, ...).
 export function normalizeTargets(result) {
   return result.targets
@@ -156,6 +157,61 @@ export function normalizeTargets(result) {
       metadata: plainCopy(target?.metadata),
     }))
     .filter((target) => target.id.length > 0);
+}
+
+// Only the selected Decision target's published facts, without inferred
+// limits, prices, or a recommendation among Models.
+export function describeDecisionModel(target) {
+  const facts = target?.facts ?? {};
+  const parts = [];
+  const types = Array.isArray(facts.question_types) ? facts.question_types : [];
+  const typeLabels = [];
+  if (types.includes('yes_no'))
+    typeLabels.push(t('settings.specializedModels.decisionYesNo'));
+  if (types.includes('choice'))
+    typeLabels.push(t('settings.specializedModels.decisionChoice'));
+  if (types.includes('score'))
+    typeLabels.push(t('settings.specializedModels.decisionScore'));
+  if (typeLabels.length) parts.push(typeLabels.join(', '));
+
+  const number = new Intl.NumberFormat(activeLocaleTag());
+  const knownLimit = (value) => Number.isInteger(value) && value > 0;
+  if (knownLimit(facts.max_input_tokens))
+    parts.push(
+      t('settings.specializedModels.decisionInputLimit', {
+        count: number.format(facts.max_input_tokens),
+      }),
+    );
+  if (knownLimit(facts.max_questions))
+    parts.push(
+      t('settings.specializedModels.decisionQuestionLimit', {
+        count: number.format(facts.max_questions),
+      }),
+    );
+  if (knownLimit(facts.max_choices))
+    parts.push(
+      t('settings.specializedModels.decisionChoiceLimit', {
+        count: number.format(facts.max_choices),
+      }),
+    );
+  if (knownLimit(facts.max_levels))
+    parts.push(
+      t('settings.specializedModels.decisionLevelLimit', {
+        count: number.format(facts.max_levels),
+      }),
+    );
+  const price = facts.input_price_per_million;
+  if (typeof price === 'number' && Number.isFinite(price) && price >= 0)
+    parts.push(
+      t('settings.specializedModels.decisionInputPrice', {
+        price: new Intl.NumberFormat(activeLocaleTag(), {
+          style: 'currency',
+          currency: 'USD',
+          maximumFractionDigits: 6,
+        }).format(price),
+      }),
+    );
+  return parts.join(' · ');
 }
 
 function plainCopy(value) {

@@ -21,6 +21,7 @@ from core.providers.reasoning import ReasoningIntent
 from core.providers.wire_observations import REJECTION_TTL, ObservedFacts, WireObservations
 from core.providers.wire_profile import (
     BudgetRule,
+    DecisionWire,
     ParameterRule,
     ReasoningWire,
     RequestRules,
@@ -128,6 +129,12 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
                     "extra_body": {"stream": False, "store": False},
                 },
                 "reasoning": {"levels": ["low", "ultra"], "dialect": "reasoning_effort"},
+                "decision": {
+                    "protocol": "chat_completions",
+                    "endpoint": "https://elsewhere.example/decisions",
+                    "state_field": 1,
+                    "allowed_options": ["temperature"],
+                },
                 "bogus": True,
             },
             "rules": [
@@ -157,10 +164,11 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
     assert dict(request["extra_body"]) == {"store": False}
     assert set(request) == {"output_limit_field", "extra_body"}
     assert dict(parsed.defaults["reasoning"]) == {"dialect": "reasoning_effort"}
+    assert dict(parsed.defaults["decision"]) == {}
     assert [rule.index for rule in parsed.rules] == [0]
     assert dict(parsed.models["m"].values) == {"replay": {}}
     assert parsed.models["m"].verification is None
-    assert len(issues) == 9
+    assert len(issues) == 13
     assert len(parsed.family_defaults) == 1
     assert dict(parsed.family_defaults[0].values["reasoning"]) == {"floor": ("low", "high")}
     assert any("tool_schema" in issue for issue in issues)
@@ -192,9 +200,19 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
                 "request": {"output_limit_cap": 1000, "body_defaults": {"a": 1, "b": 1}},
                 "reasoning": {"control": "budget"},
                 "replay": {"echo_response_field": True},
+                "decision": {
+                    "protocol": "system_one",
+                    "endpoint": "/v1/systemone",
+                    "allowed_options": ["provider_options"],
+                },
             },
             "protocols": {"chat_completions": {"request": {"output_limit_cap": 2000}}},
-            "connections": {"api-key": {"request": {"body_defaults": {"b": 2}}}},
+            "connections": {
+                "api-key": {
+                    "request": {"body_defaults": {"b": 2}},
+                    "decision": {"state_field": "text", "allowed_options": []},
+                }
+            },
             "family_defaults": [
                 {
                     "when": {"prefix": "m", "connections": "api-key"},
@@ -222,6 +240,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
                         "api-key": {
                             "request": {"output_limit_cap": 3000, "list_announced_tools": True},
                             "media": {"request_max_images": 50},
+                            "decision": {"endpoint": "/models/m/decisions"},
                         }
                     },
                 }
@@ -240,6 +259,13 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
 
     assert issues == []
     assert profile.model_id == "m"
+    assert profile.protocol == "chat_completions"
+    assert profile.decision == DecisionWire(
+        protocol="system_one", endpoint="/models/m/decisions", state_field="text"
+    )
+    assert profile.source_of("decision.protocol") == "defaults"
+    assert profile.source_of("decision.endpoint") == "model_connection"
+    assert profile.source_of("decision.state_field") == "connections"
     assert profile.media.request_max_images == 30
     assert profile.request.output_limit_field == "max_tokens"
     assert profile.source_of("request.output_limit_field") == "protocol"
@@ -269,6 +295,9 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     # Inference is scoped to the Connection; observations do not leak across it either.
     assert _resolve(profiles, "m", "other").request.body_defaults == {"a": 1, "b": 1}
     assert _resolve(profiles, "m", "other").request.output_limit_cap == 2000
+    assert _resolve(profiles, "m", "other").decision == DecisionWire(
+        protocol="system_one", endpoint="/v1/systemone", allowed_options=("provider_options",)
+    )
     disabled = _resolve(profiles, "m-disabled")
     assert disabled.reasoning.supported is False
     assert disabled.reasoning.mandatory is False
@@ -520,6 +549,86 @@ def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
     assert all(name == files[name].provider_id for name in files)
 
 
+@pytest.mark.parametrize(
+    ("provider_id", "connection_id", "model_id", "decision"),
+    [
+        (
+            "openrouter",
+            "api-key",
+            "typesafe/jev-1.14",
+            DecisionWire(
+                protocol="system_one",
+                endpoint="/api/alpha/decisions",
+                allowed_options=("provider_options",),
+            ),
+        ),
+        (
+            "openrouter",
+            "api-key",
+            "scaledown/classify-1",
+            DecisionWire(
+                protocol="system_one",
+                endpoint="/api/alpha/decisions",
+                state_field="text",
+                allowed_options=("provider_options",),
+            ),
+        ),
+        (
+            "openai",
+            "api-key",
+            "gpt-6-luna",
+            DecisionWire(
+                protocol="openai_decisions",
+                endpoint="/v1/decisions",
+                allowed_options=("prompt_cache_key",),
+            ),
+        ),
+        ("openai", "subscription", "gpt-6-luna", DecisionWire()),
+        (
+            "ollama",
+            "local",
+            "clef",
+            DecisionWire(
+                protocol="system_one", endpoint="/v1/systemone", allowed_options=("keep_alive",)
+            ),
+        ),
+        (
+            "ollama-cloud",
+            "api-key",
+            "clef",
+            DecisionWire(protocol="system_one", endpoint="/v1/systemone"),
+        ),
+        ("unknown", "default", "m", DecisionWire()),
+    ],
+)
+def test_decision_routes_are_connection_scoped_and_independent_of_chat(
+    provider_id: str, connection_id: str, model_id: str, decision: DecisionWire
+) -> None:
+    providers = ProviderRegistry.load(RESOURCES)
+    profiles = WireProfiles(
+        files=load_wire_profile_files(RESOURCES, report=lambda issue: pytest.fail(issue)),
+        protocol_support=lambda provider: (
+            ADAPTER_TYPES[providers.get(provider).adapter].WIRE_PROTOCOLS
+            if provider in providers.list_ids()
+            else None
+        ),
+        model_resolver=lambda provider, model: None,
+        report=lambda issue: pytest.fail(issue),
+    )
+
+    profile = profiles.resolve(provider_id, connection_id, model_id)
+
+    assert profile.decision == decision
+    expected_chat = (
+        "responses"
+        if provider_id == "openai"
+        else "ollama_chat"
+        if provider_id == "ollama"
+        else "chat_completions"
+    )
+    assert profile.protocol == expected_chat
+
+
 def test_a_custom_provider_wire_block_is_its_file_within_the_providers_limits() -> None:
     """The block has a file's body; names of other Connections or protocols are dropped."""
 
@@ -528,7 +637,11 @@ def test_a_custom_provider_wire_block_is_its_file_within_the_providers_limits() 
         "adapter": "openai_compatible",
         "wire": {
             "format_version": 1,
-            "defaults": {"protocol": "responses", "reasoning": {"dialect": "thinking_toggle"}},
+            "defaults": {
+                "protocol": "responses",
+                "reasoning": {"dialect": "thinking_toggle"},
+                "decision": {"protocol": "openai_decisions", "endpoint": "/v1/decisions"},
+            },
             "protocols": {"messages": {}},
             "connections": {"default": {"request": {"output_limit_cap": 10}}, "api-key": {}},
             "rules": [
@@ -549,7 +662,10 @@ def test_a_custom_provider_wire_block_is_its_file_within_the_providers_limits() 
     files = wire_profile_files({"acme": record, "plain": {"adapter": "openai_compatible"}})
 
     assert parsed is not None
-    assert dict(parsed.defaults) == {"reasoning": {"dialect": "thinking_toggle"}}
+    assert dict(parsed.defaults) == {
+        "reasoning": {"dialect": "thinking_toggle"},
+        "decision": {"protocol": "openai_decisions", "endpoint": "/v1/decisions"},
+    }
     assert (dict(parsed.protocols), list(parsed.connections)) == ({}, ["default"])
     assert [rule.index for rule in parsed.rules] == [1]
     assert parsed.models["m"].verification is not None

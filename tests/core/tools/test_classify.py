@@ -49,7 +49,11 @@ class Classify:
     """The registered Tool against a Decision service that records each validated request."""
 
     def __init__(
-        self, tmp_path, errors: dict[int, DecisionError] | None = None, available: bool = True
+        self,
+        tmp_path,
+        errors: dict[int, DecisionError] | None = None,
+        available: bool = True,
+        answers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.received: list[tuple[Any, list[dict[str, Any]]]] = []
         self.calls: list[dict[str, Any]] = []
@@ -65,7 +69,12 @@ class Classify:
                     outcomes.append(errors[index])
                     continue
                 outcomes.append(
-                    {"answers": {question["id"]: _answer(question) for question in checked}}
+                    {
+                        "answers": {
+                            question["id"]: (answers or {}).get(question["id"], _answer(question))
+                            for question in checked
+                        }
+                    }
                 )
             return outcomes
 
@@ -156,6 +165,41 @@ async def test_answers_of_several_questions_read_as_one_line(tmp_path):
         "flaky: probability of yes 0.82; kind: infra (confidence 0.9; infra 0.9, code 0.1); "
         "urgency: level 2.6 on levels 0-4"
     )
+
+
+@pytest.mark.asyncio
+async def test_unknown_and_refusal_keep_the_other_answers_without_fabricating_a_judgment(tmp_path):
+    tool = Classify(
+        tmp_path,
+        answers={
+            "category": {"type": "choice", "choice": "unknown"},
+            "declined": {"type": "refusal"},
+        },
+    )
+    result, text = await tool.call(
+        {
+            "items": ["No information about the requested subject."],
+            "questions": [
+                {
+                    "id": "category",
+                    "type": "choice",
+                    "instructions": "Which category?",
+                    "options": {
+                        "bug": "Broken behavior",
+                        "other": "Outside the categories",
+                        "unknown": "Insufficient information",
+                    },
+                },
+                {"id": "declined", "type": "yes_no", "instructions": "A declined question?"},
+            ],
+        }
+    )
+    assert result["ok"] is True
+    category, declined = text.split("; ")
+    assert category == "category: unknown"
+    assert declined.startswith("declined: ")
+    assert "probability" not in declined and "0.5" not in declined
+    assert len(tool.calls) == 1
 
 
 @pytest.mark.asyncio

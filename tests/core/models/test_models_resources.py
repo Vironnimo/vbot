@@ -139,6 +139,19 @@ def test_ollama_cloud_catalog_is_separate_and_entirely_remote(registry: ModelReg
     assert all(model.metadata.get("ollama", {}).get("remote") is True for model in models)
     assert all(model.metadata.get("ollama", {}).get("local") is not True for model in models)
 
+    clef = registry.get("ollama-cloud", "clef:27b")
+    assert clef.capabilities.output_modalities == ("decisions",)
+    assert set(clef.capabilities.task_types) == {"image_input", "decision"}
+    assert clef.capabilities.tools is False
+    assert clef.capabilities.reasoning.supported is False
+    assert clef.capabilities.task_options["decision"]["limits"] == {
+        "max_questions": 64,
+        "max_choices": 255,
+        "max_levels": 10,
+        "max_input_tokens": 65_536,
+        "max_request_bytes": 13 * 1024 * 1024,
+    }
+
 
 # Streaming token accounting on /v1/chat/completions (billed-input deltas in
 # vBot's real request shapes, visible-content control per variant):
@@ -540,6 +553,19 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     assert model.capabilities.output_modalities == ("text",)
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is True
+    if model_id == "gpt-6-luna":
+        assert set(model.capabilities.task_types) == {
+            "chat",
+            "text_output",
+            "image_input",
+            "image_understanding",
+            "decision",
+        }
+        assert model.capabilities.task_options["decision"]["limits"] == {
+            "max_questions": 400,
+            "max_choices": 255,
+            "max_levels": 10,
+        }
     levels = ("low", "medium", "high", "xhigh", "max")
     assert model.capabilities.reasoning.levels == (("none", *levels) if supports_none else levels)
     assert model.pricing is not None

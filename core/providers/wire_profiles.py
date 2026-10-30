@@ -40,6 +40,7 @@ from core.providers.wire_profile import (
     PROTOCOLS,
     Admission,
     BudgetRule,
+    DecisionWire,
     MediaRules,
     ParameterRule,
     ProfileStatus,
@@ -484,6 +485,7 @@ class _Resolution:
             response=_build_response(self.values.get("response", {})),
             replay=_build_replay(self.values.get("replay", {})),
             media=_build_media(self.values.get("media", {})),
+            decision=_build_decision(self.values.get("decision", {})),
             known_model=self.model is not None,
             provenance=MappingProxyType(dict(self.provenance)),
         )
@@ -811,6 +813,16 @@ def _frozen(mapping: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 def _build_admission(values: Mapping[str, Any]) -> Admission:
     return Admission(**{key: values[key] for key in ("state", "message") if key in values})
+
+
+def _build_decision(values: Mapping[str, Any]) -> DecisionWire:
+    return DecisionWire(
+        **{
+            key: values[key]
+            for key in ("protocol", "endpoint", "state_field", "allowed_options")
+            if key in values
+        }
+    )
 
 
 def _build_request(values: Mapping[str, Any]) -> RequestRules:

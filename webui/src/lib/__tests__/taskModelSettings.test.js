@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createTaskModelUpdatePayload,
+  describeDecisionModel,
   isOptionFieldHidden,
   normalizeOptionSchema,
   normalizeTargets,
@@ -126,6 +127,39 @@ describe('task model bindings', () => {
       ['voice', 'select', 'alloy'],
       ['text_layout', 'json', ''],
     ]);
+  });
+});
+
+describe('Decision target facts', () => {
+  it('shows published types, limits and price while leaving unknown facts out', () => {
+    const summary = describeDecisionModel({
+      facts: {
+        question_types: ['yes_no', 'choice', 'score'],
+        max_input_tokens: 65_536,
+        max_questions: 64,
+        max_choices: 255,
+        max_levels: 10,
+        input_price_per_million: 0.24,
+      },
+    });
+    for (const value of ['65,536', '64', '255', '10', '$0.24'])
+      expect(summary).toContain(value);
+    expect(describeDecisionModel(null)).toBe('');
+    expect(
+      describeDecisionModel({
+        facts: {
+          question_types: ['future-kind'],
+          max_input_tokens: null,
+          max_questions: '64',
+          max_choices: -1,
+          max_levels: true,
+          input_price_per_million: null,
+        },
+      }),
+    ).toBe('');
+    expect(
+      describeDecisionModel({ facts: { input_price_per_million: 0 } }),
+    ).toBe('$0.00 / 1M input tokens');
   });
 });
 

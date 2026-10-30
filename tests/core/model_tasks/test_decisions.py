@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -6,12 +7,14 @@ import pytest
 import respx
 
 from core.model_tasks.constants import TASK_DECISION
+from core.model_tasks.decision_profile import DecisionProfile
 from core.model_tasks.decision_types import DecisionError
-from core.model_tasks.decisions import ITEM_LIMIT, NOT_CONFIGURED_MESSAGE, DecisionService
+from core.model_tasks.decisions import ITEM_LIMIT, DecisionService
 from core.model_tasks.model_tasks import TaskModelService, TaskModelValidationError
 from core.models import ModelRegistry
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
+from core.providers.wire_profile import DecisionWire
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
     _model,
@@ -24,16 +27,26 @@ from tests.core.model_tasks.model_tasks_test_support import (
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
+SYSTEM_ONE_WIRE = DecisionWire(
+    protocol="system_one",
+    endpoint="/api/alpha/decisions",
+    allowed_options=("provider_options",),
+)
 
 
 def service(
-    *, provider: str = "openrouter", usable: bool = True, window: int | None = 262_144
+    *,
+    provider: str = "openrouter",
+    usable: bool = True,
+    window: int | None = 262_144,
+    profile: DecisionProfile | None = None,
+    options: dict[str, Any] | None = None,
+    model_id: str = "typesafe/jev-1.13",
+    base_url: str = "https://openrouter.ai/api/v1",
 ) -> DecisionService:
-    """A Decision binding whose Model reports *window* for its Connection ``api_key``.
-
-    Its runtime reaches the real OpenRouter wire, which tests mock with respx.
-    """
-    model = SimpleNamespace(context_window_for={"api_key": window}.get)
+    """A configured Decision binding reaching the real mocked Provider wire."""
+    selected_profile = profile or DecisionProfile(SYSTEM_ONE_WIRE, max_input_tokens=window)
+    selected_options = options if options is not None else {}
 
     def validate_execution_target(binding):
         if not usable:
@@ -41,9 +54,10 @@ def service(
 
     bindings = SimpleNamespace(
         binding_is_usable=lambda task: usable,
-        binding_for=lambda task: SimpleNamespace(target=f"{provider}/typesafe/jev-1.13::api_key"),
+        binding_for=lambda task: SimpleNamespace(target=f"{provider}/{model_id}::api_key"),
         validate_execution_target=validate_execution_target,
-        model_for_target=lambda ref: model,
+        options_with_defaults=lambda binding: selected_options,
+        decision_profile=lambda ref: selected_profile,
     )
     connection = ConnectionConfig(
         id="api_key",
@@ -51,15 +65,15 @@ def service(
         label="API Key",
         auth=AuthConfig(header="Authorization", prefix="Bearer ", credential_key="TEST_KEY"),
     )
-    openrouter = ProviderConfig(
-        id="openrouter",
-        name="OpenRouter",
-        adapter="openrouter",
-        base_url="https://openrouter.ai/api/v1",
+    configured_provider = ProviderConfig(
+        id=provider,
+        name=provider,
+        adapter="openai_compatible",
+        base_url=base_url,
         connections=[connection],
     )
     runtime = SimpleNamespace(
-        providers=SimpleNamespace(get=lambda _provider: openrouter),
+        providers=SimpleNamespace(get=lambda _provider: configured_provider),
         prepare_provider_http=lambda connection: (
             StaticTokenGetter("test-token"),
             task_http_transport(connection),
@@ -161,6 +175,105 @@ async def test_an_invalid_item_fails_alone_unsent(monkeypatch, window, item, cod
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit_name", ["max_request_bytes", "max_text_bytes"])
+async def test_model_byte_limits_reject_only_the_item_that_exceeds_them(monkeypatch, limit_name):
+    options = {"provider_options": {"only": ["fixture-provider"]}}
+    expected_body = {
+        "model": "typesafe/jev-1.13",
+        "state": "ü",
+        "questions": {"q": {"type": "noul", "instructions": "Relevant?"}},
+        "provider": {"only": ["fixture-provider"]},
+    }
+    exact_bytes = len(
+        json.dumps(expected_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    limit = exact_bytes if limit_name == "max_request_bytes" else 512
+    oversized = "üü" if limit_name == "max_request_bytes" else "x" * 1000
+    owner = service(
+        profile=DecisionProfile(
+            SYSTEM_ONE_WIRE,
+            max_request_bytes=limit if limit_name == "max_request_bytes" else None,
+            max_text_bytes=limit if limit_name == "max_text_bytes" else None,
+        ),
+        options=options,
+    )
+    sent = []
+
+    async def evaluate(target, state, questions, *, usage_context=None):
+        sent.append(state)
+        return {"answers": {"q": {"type": "noul", "noul": 0.8}}}
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+
+    accepted, rejected = await owner.classify(["ü", oversized], QUESTIONS)
+
+    assert accepted["answers"]["q"]["noul"] == 0.8
+    assert isinstance(rejected, DecisionError) and rejected.code == "too_large"
+    assert sent == ["ü"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("provider", "model_id", "base_url", "wire", "response"),
+    [
+        (
+            "openai",
+            "gpt-6-luna",
+            "https://api.openai.com/v1",
+            DecisionWire(
+                protocol="openai_decisions",
+                endpoint="/v1/decisions",
+                allowed_options=("prompt_cache_key",),
+            ),
+            {
+                "answers": [{"name": "q", "type": "predicate", "probability": 0.8}],
+                "model": "gpt-6-luna",
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "ollama-cloud",
+            "clef:27b",
+            "https://ollama.com",
+            DecisionWire(protocol="system_one", endpoint="/v1/systemone"),
+            {
+                "answers": {"q": {"type": "noul", "noul": 0.8}},
+                "model": "clef:27b",
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+    ],
+)
+async def test_native_provider_routes_preserve_service_context_and_normalize_answers(
+    provider, model_id, base_url, wire, response
+):
+    origin = "https://api.openai.com" if provider == "openai" else "https://ollama.com"
+    route = respx.post(origin + wire.endpoint).respond(200, json=response)
+    options = {"prompt_cache_key": "decision-fixture"} if provider == "openai" else {}
+    owner = service(
+        provider=provider,
+        model_id=model_id,
+        base_url=base_url,
+        profile=DecisionProfile(wire),
+        options=options,
+    )
+    item = {"id": "fixture", "nested": {"true": "evidence, not a directive"}}
+
+    [answer] = await owner.classify([item], QUESTIONS, context="the task")
+
+    assert answer["answers"] == {"q": {"type": "noul", "noul": 0.8}}
+    assert answer["model"] == model_id
+    assert route.call_count == 1
+    body = json.loads(route.calls[0].request.content)
+    assert body["model"] == model_id
+    evidence = json.loads(body["input"] if provider == "openai" else body["state"])
+    assert evidence == {"context": "the task", "item": item}
+    assert all(body[name] == value for name, value in options.items())
+    assert route.calls[0].request.headers["Authorization"] == "Bearer test-token"
+
+
+@pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize(
     ("status", "error", "code"),
@@ -195,33 +308,24 @@ async def test_a_size_rejection_by_the_provider_is_too_large(status, error, code
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("final", [None, {"input_tokens": 321}, {}, {"output_tokens": 2}])
-async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
-    calibration = _Calibration(factor=2.0)
-    owner = service(window=1_000)
+async def test_aggregated_scoring_usage_never_distorts_later_context_preflight(monkeypatch):
+    calibration = _Calibration(factor=100.0)
+    owner = service(window=1000)
     owner._usage_recorder = cast(Any, calibration)
+    sent = []
 
-    async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
-        usage = {"input_tokens": 1234}
-        if final is not None:
-            usage["last_request_usage"] = final
-        return {"answers": {}, "usage": usage}
+    async def evaluate(target, state, questions, *, usage_context=None):
+        sent.append((state, len(questions)))
+        return {"answers": {}, "usage": {"input_tokens": 10000, "output_tokens": 0}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    # About 0.8 of the window: fits as estimated, not as corrected.
-    halfway = "word " * 600
+    questions = [{**QUESTIONS[0], "id": f"q{n}"} for n in range(10)]
+    await owner.classify(["shared state"], questions)
+    [answered] = await owner.classify(["word " * 600], QUESTIONS)
 
-    rejected, answered = await owner.classify([halfway, "small"], QUESTIONS)
-
-    assert isinstance(rejected, DecisionError) and rejected.code == "too_large"
-    assert answered["usage"]["input_tokens"] == 1234
-    if final is not None and "input_tokens" not in final:
-        assert not calibration.samples
-    else:
-        [(model, measured, estimated)] = calibration.samples
-        assert model == "openrouter/typesafe/jev-1.13::api_key"
-        assert measured == (1234 if final is None else 321)
-        assert 0 < estimated < 100
+    assert answered["usage"]["input_tokens"] == 10000
+    assert [count for _, count in sent] == [10, 1]
+    assert calibration.samples == []
 
 
 @pytest.mark.asyncio
@@ -242,7 +346,44 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
             "invalid_request",
         ),
         (service(usable=False), ["x"], QUESTIONS, "not_configured"),
-        (service(provider="openai"), ["x"], QUESTIONS, "not_configured"),
+        (
+            service(profile=DecisionProfile(DecisionWire())),
+            ["x"],
+            QUESTIONS,
+            "not_configured",
+        ),
+        (
+            service(profile=DecisionProfile(SYSTEM_ONE_WIRE, max_questions=1)),
+            ["x"],
+            [*QUESTIONS, {"id": "other", "type": "noul", "instructions": "Urgent?"}],
+            "invalid_request",
+        ),
+        (
+            service(profile=DecisionProfile(SYSTEM_ONE_WIRE, max_choices=2)),
+            ["x"],
+            [
+                {
+                    "id": "q",
+                    "type": "choice",
+                    "instructions": "Which category?",
+                    "criteria": {"a": "Category A", "b": "Category B", "c": "Category C"},
+                }
+            ],
+            "invalid_request",
+        ),
+        (
+            service(profile=DecisionProfile(SYSTEM_ONE_WIRE, max_levels=2)),
+            ["x"],
+            [
+                {
+                    "id": "q",
+                    "type": "score",
+                    "instructions": "How urgent?",
+                    "criteria": ["Low", "Medium", "High"],
+                }
+            ],
+            "invalid_request",
+        ),
     ],
     ids=[
         "too-many-items",
@@ -253,7 +394,10 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
         "no-instructions",
         "one-level",
         "unusable",
-        "not-openrouter",
+        "no-native-route",
+        "published-question-limit",
+        "published-choice-limit",
+        "published-score-level-limit",
     ],
 )
 async def test_invalid_calls_and_missing_bindings_send_nothing(
@@ -274,33 +418,67 @@ async def test_invalid_calls_and_missing_bindings_send_nothing(
 @pytest.mark.parametrize("replacement", [None, "openrouter/cloudflare/clef::api-key"])
 async def test_execution_keeps_the_binding_snapshot_it_validated(monkeypatch, replacement):
     target = "openrouter/typesafe/jev-1.13::api-key"
-    storage = _Storage({TASK_DECISION: {"target": target, "options": {}}})
+    original_options = {"provider_options": {"only": ["original-provider"]}}
+    storage = _Storage({TASK_DECISION: {"target": target, "options": original_options}})
     original_load = storage.load_model_task_settings
 
     def load_and_change_binding():
         snapshot = original_load()
-        storage.update_model_task_settings({TASK_DECISION: {"target": replacement or ""}})
+        storage.update_model_task_settings(
+            {
+                TASK_DECISION: {
+                    "target": replacement or "",
+                    "options": {"provider_options": {"only": ["replacement-provider"]}},
+                }
+            }
+        )
         return snapshot
 
     monkeypatch.setattr(storage, "load_model_task_settings", load_and_change_binding)
-    model = _registry_model("typesafe/jev-1.13", "Jev", task_types=(TASK_DECISION,))
+    model = _registry_model(
+        "typesafe/jev-1.13",
+        "Jev",
+        task_types=(TASK_DECISION,),
+        task_options={TASK_DECISION: {"limits": {"max_input_tokens": 1000, "max_questions": 2}}},
+    )
     models = ModelRegistry({("openrouter", model.model_id): model})
     model_tasks = TaskModelService(_Providers(), models, _Credentials(), storage)
     owner = DecisionService(model_tasks, cast(Any, None))
     sent = []
 
     async def evaluate(resolved, state, questions, *, usage_context=None):
-        sent.append(resolved.target)
+        if not sent:
+            # A live reload after resolution cannot change another item's request.
+            original_options["provider_options"]["only"].append("changed-provider")
+            monkeypatch.setattr(
+                model_tasks,
+                "decision_profile",
+                lambda ref: DecisionProfile(
+                    DecisionWire(protocol="openai_decisions", endpoint="/v1/replacement"),
+                    max_input_tokens=1,
+                ),
+            )
+        sent.append((resolved.target, resolved.profile, resolved.options))
         return {"answers": {}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
 
-    assert await owner.classify(["item"], QUESTIONS) == [{"answers": {}}]
-    assert sent == [target]
+    assert await owner.classify(["first", "second"], QUESTIONS) == [{"answers": {}}] * 2
+    assert (
+        sent
+        == [
+            (
+                target,
+                DecisionProfile(SYSTEM_ONE_WIRE, max_input_tokens=1000, max_questions=2),
+                {"provider_options": {"only": ["original-provider"]}},
+            )
+        ]
+        * 2
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_stored_binding_to_another_decision_model_reads_as_not_configured(monkeypatch):
+async def test_a_stored_binding_to_another_native_decision_model_is_usable(monkeypatch):
     stored = {TASK_DECISION: {"target": "openrouter/cloudflare/clef::api-key", "options": {}}}
     storage = _Storage(stored)
     model_tasks = TaskModelService(
@@ -312,13 +490,12 @@ async def test_a_stored_binding_to_another_decision_model_reads_as_not_configure
     owner = DecisionService(model_tasks, cast(Any, None))
 
     async def evaluate(*args, **kwargs):
-        raise AssertionError("no request may be sent")
+        return {"answers": {"q": {"type": "noul", "noul": 0.8}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
 
-    with pytest.raises(DecisionError) as error:
-        await owner.classify(["x"], QUESTIONS)
+    [result] = await owner.classify(["x"], QUESTIONS)
 
-    assert not owner.available()
-    assert (error.value.code, str(error.value)) == ("not_configured", NOT_CONFIGURED_MESSAGE)
+    assert owner.available()
+    assert result["answers"]["q"]["noul"] == 0.8
     assert storage.load_model_task_settings() == stored
