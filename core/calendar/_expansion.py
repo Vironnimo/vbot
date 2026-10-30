@@ -100,8 +100,8 @@ def iter_occurrences(
     moved = [item for item in _moved_occurrences(series) if item.end_utc > after]
     yield from heapq.merge(
         _rule_occurrences(series, after),
-        sorted(moved, key=lambda item: item.start_utc),
-        key=lambda item: item.start_utc,
+        sorted(moved, key=lambda item: (item.start_utc, item.id)),
+        key=lambda item: (item.start_utc, item.id),
     )
 
 

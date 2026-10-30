@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, time, timedelta
+from heapq import merge
+from itertools import islice, takewhile
 from zoneinfo import ZoneInfo
 
 from core.calendar._events import (
@@ -11,7 +13,6 @@ from core.calendar._events import (
     FIND_FREE_ROUNDING_MINUTES,
     MAX_DURATION_MINUTES,
     MAX_OCCURRENCES_PER_EVENT,
-    MAX_WINDOW_DAYS,
     CalendarEvent,
     EventOccurrence,
     FreeSlot,
@@ -26,7 +27,6 @@ from core.calendar._expansion import (
 )
 from core.calendar._time import (
     _as_utc,
-    _merge_intervals,
     _parse_iso_datetime,
     _round_up_to_minutes,
 )
@@ -109,6 +109,20 @@ class CalendarProjection:
         """
         return iter_occurrences(event, _as_utc(after), self._timezone)
 
+    def iter_window_occurrences(
+        self, window_start_utc: datetime, window_end_utc: datetime
+    ) -> Iterator[EventOccurrence]:
+        """Stream every overlapping occurrence in stable start order, without list caps."""
+        start, end = _checked_window(window_start_utc, window_end_utc)
+        self._ensure_events_loaded()
+        return merge(
+            *(
+                takewhile(lambda item: item.start_utc < end, self.iter_occurrences(event, start))
+                for event in self._events.values()
+            ),
+            key=lambda item: (item.start_utc, item.event_id, item.id),
+        )
+
     def find_free_slots(
         self,
         window_start_utc: datetime,
@@ -125,6 +139,24 @@ class CalendarProjection:
         block their span; all-day events block their whole local days. Slots
         start no earlier than the current time and on five-minute boundaries.
         """
+        return list(
+            islice(
+                self.iter_free_slots(
+                    window_start_utc, window_end_utc, duration_minutes, now_utc=now_utc
+                ),
+                max_results,
+            )
+        )
+
+    def iter_free_slots(
+        self,
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        duration_minutes: int,
+        *,
+        now_utc: datetime | None = None,
+    ) -> Iterator[FreeSlot]:
+        """Stream whole free gaps, merging overlapping busy spans without materializing them."""
         if (
             isinstance(duration_minutes, bool)
             or not isinstance(duration_minutes, int)
@@ -139,27 +171,18 @@ class CalendarProjection:
         self._ensure_events_loaded(allow_degraded=True)
         reference_now = _as_utc(now_utc) if now_utc is not None else datetime.now(UTC)
         duration = timedelta(minutes=duration_minutes)
-        busy = [
-            (max(item.start_utc, window_start), min(item.end_utc, window_end))
-            for event in self._events.values()
-            for item in window_occurrences(
-                event, window_start, window_end, self._timezone, limit=None
-            )
-        ]
-        merged = _merge_intervals(busy)
         cursor = max(window_start, reference_now)
         cursor = _round_up_to_minutes(cursor, FIND_FREE_ROUNDING_MINUTES)
-        slots: list[FreeSlot] = []
-        for busy_start, busy_end in merged:
+        for item in self.iter_window_occurrences(window_start, window_end):
+            busy_start, busy_end = item.start_utc, min(item.end_utc, window_end)
             gap_end = min(busy_start, window_end)
-            if cursor + duration <= gap_end and len(slots) < max_results:
-                slots.append(FreeSlot(start_utc=cursor, end_utc=gap_end))
+            if cursor + duration <= gap_end:
+                yield FreeSlot(start_utc=cursor, end_utc=gap_end)
             cursor = _round_up_to_minutes(max(cursor, busy_end), FIND_FREE_ROUNDING_MINUTES)
-            if cursor >= window_end or len(slots) >= max_results:
-                break
-        if len(slots) < max_results and cursor + duration <= window_end:
-            slots.append(FreeSlot(start_utc=cursor, end_utc=window_end))
-        return slots
+            if cursor >= window_end:
+                return
+        if cursor + duration <= window_end:
+            yield FreeSlot(start_utc=cursor, end_utc=window_end)
 
     def parse_window_bound(self, value: str, *, is_end: bool) -> datetime:
         """Parse one window bound: a date (local day) or an ISO 8601 datetime."""
@@ -220,6 +243,4 @@ def _checked_window(window_start: datetime, window_end: datetime) -> tuple[datet
     start, end = _as_utc(window_start), _as_utc(window_end)
     if end <= start:
         raise CalendarValidationError("window end must be after its start")
-    if (end - start).days > MAX_WINDOW_DAYS:
-        raise CalendarValidationError(f"window span must not exceed {MAX_WINDOW_DAYS} days")
     return start, end

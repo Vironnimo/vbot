@@ -12,7 +12,6 @@ from core.calendar.errors import (
 from core.calendar.event_jobs import BoundJob, EventJobs
 from core.calendar.service import (
     MAX_CALENDAR_EVENTS,
-    MAX_WINDOW_DAYS,
     CalendarEvent,
     CalendarService,
     EventOccurrence,
@@ -24,7 +23,6 @@ from core.calendar.when import WHEN_GRAMMAR, parse_when
 
 __all__ = [
     "MAX_CALENDAR_EVENTS",
-    "MAX_WINDOW_DAYS",
     "WHEN_GRAMMAR",
     "BoundJob",
     "CalendarEvent",

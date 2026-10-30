@@ -284,7 +284,7 @@ def test_a_reminder_is_refused_with_the_cron_call(
     )
 
 
-def test_a_reminder_on_an_occurrence_binds_cron_to_the_series(tool: CalendarTool) -> None:
+def test_a_reminder_on_an_occurrence_does_not_suggest_a_series_job(tool: CalendarTool) -> None:
     series = tool.service.create_event(
         title="Standup", start="2030-01-07T09:00", rrule="FREQ=WEEKLY;BYDAY=MO"
     ).id
@@ -293,10 +293,44 @@ def test_a_reminder_on_an_occurrence_binds_cron_to_the_series(tool: CalendarTool
         {"action": "update", "id": f"{series}_20300114T0900", "minutes_before": 10}
     )
 
-    assert message == (
-        "calendar was not run: the calendar has no reminders. cron runs an instruction before, at "
-        f'or after an event. Send to cron: {{"action":"create","event_id":"{series}",'
-        '"prompt":"<instruction>","schedule":"start - 10m"}'
+    assert "event_id" not in message
+    assert tool.cron.list_jobs() == []
+
+
+@pytest.mark.parametrize("action", ["update", "delete"])
+@pytest.mark.parametrize("selector", ["tomorrow", "2030-02-30", "2030-01-01T09:00:00.5", {}])
+def test_invalid_occurrence_selector_never_targets_the_whole_series(
+    tool: CalendarTool, action: str, selector: Any
+) -> None:
+    event = tool.service.create_event(title="Daily", start="2030-01-01T09:00", rrule="FREQ=DAILY")
+    call = {"action": action, "id": event.id, "original_start": selector}
+    if action == "update":
+        call["title"] = "Changed"
+    tool.refused(call)
+    assert tool.only_event().title == "Daily"
+
+
+def test_occurrence_selector_preserves_offset_seconds_and_explicit_target(
+    tool: CalendarTool,
+) -> None:
+    event = tool.service.create_event(
+        title="Daily", start="2030-01-01T09:00:30", rrule="FREQ=DAILY"
+    )
+    tool.succeeded(
+        {
+            "action": "update",
+            "id": event.id,
+            "original_start": "2030-01-02T08:00:30Z",
+            "title": "Changed",
+        }
+    )
+    assert tool.only_event().overrides == {"2030-01-02T09:00:30": {"title": "Changed"}}
+    tool.refused(
+        {
+            "action": "delete",
+            "id": f"{event.id}_20300102T090030",
+            "original_start": "2030-01-03T09:00:30",
+        }
     )
 
 
@@ -435,3 +469,15 @@ def test_calls_with_different_readings_are_refused_with_the_corrected_call(
     tool: CalendarTool, call: dict[str, Any], message: str
 ) -> None:
     assert tool.refused(call) == message
+
+
+def test_conflicting_zone_aliases_do_not_choose_one_for_a_mutation(tool: CalendarTool) -> None:
+    tool.refused(
+        {
+            "action": "create",
+            "title": "Call",
+            "start": "2030-01-01T09:00",
+            "timezone": "Europe/Berlin",
+            "tz": "America/New_York",
+        }
+    )

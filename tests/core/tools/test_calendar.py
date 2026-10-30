@@ -69,6 +69,7 @@ def test_definition_has_the_canonical_parameters() -> None:
         "time_max",
         "query",
         "duration",
+        "cursor",
     ]
     assert properties["action"]["enum"] == ["list", "create", "update", "delete", "find_free_time"]
     assert (properties["duration"]["type"], properties["duration"]["default"]) == ("integer", 60)
@@ -204,7 +205,8 @@ class TestList:
 
         assert envelope["data"]["events"] == 2
         assert text == (
-            "events: 2\nwindow: 2030-01-06 to 2030-01-19\ntimezone: Europe/Berlin\n\n"
+            "events: 2\nwindow: 2030-01-06 to 2030-01-19\ntimezone: Europe/Berlin\n"
+            "complete: true\n\n"
             f"id: {standup}\ntitle: Standup\nstart: 2030-01-07T09:00\nend: 2030-01-07T09:15\n"
             f"rrule: {WEEKLY}\nlocation: Room 4\n"
             f"cron_jobs: {job} at start - 30m, target agent-one\n"
@@ -266,7 +268,7 @@ class TestList:
         assert "query" not in text
         assert "Dentist" not in text
 
-    def test_a_long_series_lists_its_first_occurrences(self, tool: CalendarTool) -> None:
+    def test_a_long_series_lists_all_occurrences(self, tool: CalendarTool) -> None:
         event_id = tool.service.create_event(
             title="Daily", start="2030-01-01T08:00", rrule="FREQ=DAILY"
         ).id
@@ -277,9 +279,8 @@ class TestList:
 
         occurrences = text.split("occurrences:\n", 1)[1].splitlines()
         assert occurrences[0] == f"  {event_id}_20300101T0800 2030-01-01T08:00"
-        assert occurrences[10:] == [
-            "  ...20 more, the last at 2030-01-30T08:00; a shorter window lists them"
-        ]
+        assert len(occurrences) == 30
+        assert occurrences[-1] == f"  {event_id}_20300130T0800 2030-01-30T08:00"
 
     @pytest.mark.parametrize(
         ("window", "message"),
@@ -288,11 +289,6 @@ class TestList:
                 {"time_min": "2030-01-10", "time_max": "2030-01-10"},
                 'calendar was not run: time_max must come after time_min. Send: {"action":"list",'
                 '"time_min":"2030-01-10","time_max":"<2030-01-10 or 2030-01-10T15:00>"}',
-            ),
-            (
-                {"time_min": "2030-01-01", "time_max": "2030-06-01"},
-                'calendar was not run: a window spans at most 62 days. Send: {"action":"list",'
-                '"time_min":"2030-01-01T00:00","time_max":"2030-03-04T00:00"}',
             ),
             (
                 {"time_min": "next tuesday"},
@@ -312,17 +308,6 @@ class TestList:
     ) -> None:
         assert tool.refused({"action": "list", **window}) == message
 
-    def test_the_longest_window_counts_local_days_across_a_clock_change(
-        self, tool: CalendarTool
-    ) -> None:
-        # 62 local days across the autumn change last 62 days and one hour.
-        refused = tool.refused(
-            {"action": "list", "time_min": "2030-09-01", "time_max": "2030-11-03"}
-        )
-        assert refused.endswith('"time_min":"2030-09-01T00:00","time_max":"2030-11-02T00:00"}')
-
-        tool.succeeded({"action": "list", "time_min": "2030-09-01", "time_max": "2030-11-02T00:00"})
-
 
 class TestFindFreeTime:
     def test_lists_free_spans_of_at_least_duration_minutes(self, tool: CalendarTool) -> None:
@@ -339,7 +324,8 @@ class TestFindFreeTime:
         )
 
         assert text == (
-            "free: 2\nwindow: 2030-01-07T08:00 to 2030-01-07T18:00\ntimezone: Europe/Berlin\n\n"
+            "free: 2\nwindow: 2030-01-07T08:00 to 2030-01-07T18:00\ntimezone: Europe/Berlin\n"
+            "complete: true\n\n"
             "2030-01-07T08:00 to 2030-01-07T09:00 (1h)\n"
             "2030-01-07T11:00 to 2030-01-07T18:00 (7h)"
         )
@@ -356,7 +342,8 @@ class TestFindFreeTime:
         text = tool.succeeded({"action": "find_free_time"})
 
         assert text == (
-            "free: 1\nwindow: 2030-01-01T12:00 to 2030-01-08T12:00\ntimezone: Europe/Berlin\n\n"
+            "free: 1\nwindow: 2030-01-01T12:00 to 2030-01-08T12:00\ntimezone: Europe/Berlin\n"
+            "complete: true\n\n"
             "2030-01-03T10:00 to 2030-01-03T11:00 (1h)"
         )
 
