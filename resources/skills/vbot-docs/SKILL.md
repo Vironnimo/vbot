@@ -1,6 +1,6 @@
 ---
 name: vbot-docs
-description: Configure and inspect vBot and its Agents. Use when a task changes or reads anything vBot holds, including your own settings.
+description: Configure and inspect vBot, the app you run in: Agents including yourself, settings, and what it records, such as Sessions, usage and logs. Use when a task reads or changes anything vBot holds, also when your Tools show too little or you would open its data files. Not for editing vBot's own source code.
 ---
 
 # vBot
