@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 22
+API_VERSION = 23
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -335,6 +335,15 @@ class ExtensionDeclarations:
     interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
     settings_schema: list[SettingsFieldDeclaration] | None = None
     operations: ExtensionOperations | None = None
+    shell_reviewer: ShellReviewerDeclaration | None = None
+
+
+@dataclass(frozen=True)
+class ShellReviewerDeclaration:
+    """An opt-in policy over a prepared shell call; never an input transform."""
+
+    handler: Callable[..., Any]
+    active: Callable[[], bool]
 
 
 @dataclass

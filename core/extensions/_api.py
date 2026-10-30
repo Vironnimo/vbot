@@ -18,6 +18,7 @@ from core.extensions._declarations import (
     RecallBackendDeclaration,
     SessionPromptBlockDeclaration,
     SessionRuntimeDeclaration,
+    ShellReviewerDeclaration,
     ToolDeclaration,
     ToolFamilyDeclaration,
     _is_page_id,
@@ -106,6 +107,21 @@ class ExtensionAPI:
     def on(self, event: str, handler: HookHandler) -> None:
         """Declare a hook handler for *event*. Called as ``handler(ctx, **payload)``."""
         self._declarations.hooks[event].append(handler)
+
+    def register_shell_reviewer(
+        self, handler: Callable[..., Any], *, active: Callable[[], bool]
+    ) -> None:
+        """Review prepared shell calls with fail-closed, owner-bound dispatch.
+
+        ``active`` reads live activation. An active handler receives the calling
+        ToolContext and a detached prepared request and returns an allow/ask
+        judgment. It cannot modify the invocation or bypass Permission Rules.
+        """
+        if self._declarations.shell_reviewer is not None:
+            raise ValueError("shell reviewer already declared")
+        if not callable(handler) or not callable(active):
+            raise ValueError("shell reviewer and activation must be callable")
+        self._declarations.shell_reviewer = ShellReviewerDeclaration(handler, active)
 
     def register_tool(
         self,

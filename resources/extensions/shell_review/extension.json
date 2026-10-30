@@ -1,0 +1,6 @@
+{
+  "name": "Shell Review",
+  "description": "Review shell commands against the user's request with the selected Decision Model.",
+  "version": "1.0.0",
+  "api_version": 23
+}

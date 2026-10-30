@@ -7,6 +7,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.messages import MessageSender
 from core.sessions.errors import SessionNotFoundError
+from core.subagents.links import link_session
 
 
 @pytest.mark.asyncio
@@ -61,6 +62,18 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
     source.apply_edit(first.id, [ChatMessage.user("Different source task")])
     inherited = manager.conversation_page(fork.address, expected_generation_id=generation, limit=10)
     assert inherited.messages[0].text == "First task"
+    link_session(
+        manager,
+        fork.address,
+        subagent_id="delegated-ref",
+        parent=source.address,
+        run_id="parent-run",
+        tool_call_id="parent-call",
+        tool_call_index=0,
+    )
+    fork.append_many([ChatMessage.user("Delegated task")], subagent_reply_target="parent")
+    provenance = manager.conversation_page(fork.address, expected_generation_id=generation)
+    assert provenance.messages[-1].subagent_reply_target == "parent"
 
 
 def test_conversation_page_refuses_recreated_generation(manager):

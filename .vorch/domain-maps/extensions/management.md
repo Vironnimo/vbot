@@ -32,6 +32,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v20: argument hints on slash Commands (`api.register_command(..., argument_hint=...)`, `chat/commands.md`).
 - v21: `host.computers`, the shared Computer registry for Session-policy resolution and native capability requests (`extensions/host.md`, `computers.md`).
 - v22: programmatic Tool calls through the owning Run (`ToolContext.call_tool`, `ToolContext.tool_calls_available`) and the `ToolContext.programmatic` result-projection marker (`tools/registry-dispatch.md` -> ToolContext).
+- v23: owner-bound native Decision requests and canonical review context (`host.decide`, `host.review_context`, `extensions/host.md`), prepared shell reviewer declarations (`extensions/capabilities.md`) and `textarea` Extension Settings fields.
 
 ## Offline document validation
 
@@ -41,7 +42,7 @@ Doctor reports configured roots that are missing or not directories, unavailable
 
 ## Settings schemas and live values
 
-`api.register_settings(fields)` declares at most one schema. `settings_schema.py` parses field keys, labels/descriptions, required/default metadata, and the supported `text`, `number`, `toggle`, and `secret` types. Invalid declarations fail registration with a field-specific error.
+`api.register_settings(fields)` declares at most one schema. `settings_schema.py` parses field keys, labels/descriptions, required/default metadata, and the supported `text`, `textarea`, `number`, `toggle`, and `secret` types. `textarea` has the same string validation as `text` and renders a multiline control. Invalid declarations fail registration with a field-specific error.
 
 Non-secret values live in `settings.extensions.config.<extension>` and are read live through `api.get_config()`. The Settings RPC layer validates config for loaded schema-owning Extensions before persistence because that layer has both the registry and the update; core Settings storage continues to own only the generic section shape.
 

@@ -26,6 +26,10 @@ Chat owns exact fire-points, `Replace` validation, Tool lifecycle events, and ho
 
 `dispatch_context` hands the handlers a new list with a shallow copy of each top-level message dict, made only when a `context` handler is registered (otherwise Chat's own request list passes through uncopied). Replacing or mutating those dicts is request-local, but mutating nested objects can still affect shared values (`tests/core/extensions/test_dispatch.py`). The public `tool_call_started` lifecycle event is emitted after the `tool_call` decision pipeline so its arguments reflect any accepted `Modify`.
 
+## Prepared shell reviewers
+
+`api.register_shell_reviewer(handler, active=...)` declares one reviewer per Extension, separately from ordinary fail-open Chat Hooks. `ExtensionRegistry.review_shell` is its typed, fail-closed fire-point over the final invocation, with central approval for every non-allow outcome. Activation is read live and callbacks are checked against their exact registration before invocation and after awaits. Full input, failure and authorization contracts: `extensions/shell-review.md` -> Execution integration. The reviewer never transforms Tool input or replaces a Tool Result.
+
 ## Slash Commands
 
 `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=(), argument_hint="")` declares a normal Slash Command (`argument_hint` since API 20; one printable line of at most 80 characters, refused for `argument="none"`). `ExtensionRegistry.apply_commands()` applies loaded declarations in deterministic load order to Runtime's stable `CommandDispatcher`; Built-ins always win, the first Extension wins cross-Extension collisions, and duplicates or malformed declarations are skipped with non-fatal diagnostics.

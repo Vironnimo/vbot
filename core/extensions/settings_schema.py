@@ -24,7 +24,7 @@ _FIELD_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 # storage's ``ENV_KEY_PATTERN`` for the keys the UI is allowed to declare.
 _ENV_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-_FIELD_TYPES = ("text", "number", "toggle", "secret")
+_FIELD_TYPES = ("text", "textarea", "number", "toggle", "secret")
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,7 @@ def _validate_default(key: str, field_type: str, default: Any) -> Any:
         return None
     if field_type == "secret":
         raise ValueError(f"settings field {key!r}: a secret field cannot declare a default")
-    if field_type == "text" and not isinstance(default, str):
+    if field_type in {"text", "textarea"} and not isinstance(default, str):
         raise ValueError(f"settings field {key!r}: default must be a string")
     if field_type == "number" and (
         isinstance(default, bool) or not isinstance(default, int | float)
@@ -174,7 +174,7 @@ def _validate_config_field(
     value = config.get(field.key)
 
     if present:
-        if field.type == "text" and not isinstance(value, str):
+        if field.type in {"text", "textarea"} and not isinstance(value, str):
             errors.append(f"{field.key!r}: must be a string")
         elif field.type == "number" and (
             isinstance(value, bool) or not isinstance(value, int | float)
@@ -185,6 +185,8 @@ def _validate_config_field(
 
     if field.required:
         missing = not present
-        empty_text = field.type == "text" and isinstance(value, str) and not value.strip()
+        empty_text = (
+            field.type in {"text", "textarea"} and isinstance(value, str) and not value.strip()
+        )
         if missing or empty_text:
             errors.append(f"{field.key!r}: is required")

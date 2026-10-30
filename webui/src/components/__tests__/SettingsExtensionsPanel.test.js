@@ -537,6 +537,16 @@ describe('SettingsExtensionsPanel', () => {
       { level: 'warn' },
     ],
     [
+      'textarea',
+      { key: 'policy', type: 'textarea', label: 'Policy' },
+      (control) => {
+        control.value = 'first line\nsecond line';
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+      },
+      'textarea',
+      { policy: 'first line\nsecond line' },
+    ],
+    [
       'toggle',
       { key: 'verbose', type: 'toggle', label: 'Verbose', default: false },
       (control) => control.click(),

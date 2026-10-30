@@ -928,6 +928,7 @@ def bootstrap(runtime: Runtime) -> None:
             secrets=runtime._agent_secrets,
             command_checker=runtime._command_checker,
             subagents=runtime._subagent_coordinator,
+            review_shell=runtime._review_shell,
         )
         register_execute_code_tool(
             runtime._tools,

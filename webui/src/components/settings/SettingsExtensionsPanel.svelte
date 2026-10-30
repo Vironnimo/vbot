@@ -11,6 +11,7 @@
   import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
@@ -765,6 +766,22 @@
                             </Button>
                           </div>
                         </form>
+                      {:else if field.type === 'textarea'}
+                        <TextArea
+                          id={formField.controlId}
+                          rows={6}
+                          value={formStates[extension.name]?.[field.key] ?? ''}
+                          disabled={rowBusy}
+                          invalid={formField.invalid}
+                          aria-describedby={formField.describedBy}
+                          placeholder={field.default ?? ''}
+                          ariaLabel={t('settings.extensions.fieldAria', {
+                            label: field.label,
+                            name: extension.name,
+                          })}
+                          onInput={(next) =>
+                            setFormValue(extension.name, field.key, next)}
+                        />
                       {:else}
                         <TextField
                           id={formField.controlId}

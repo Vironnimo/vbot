@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from core.projects import Project, RuntimeAgent
     from core.providers.http import ProviderHTTPTransportScope
     from core.sessions import SessionAddress
+    from core.tools.tools import ToolContext
 
 # Windows environment variable names are case-insensitive. The data-directory
 # credential fallback (the Secret Store) follows the same rule there, matching
@@ -204,11 +205,29 @@ class Runtime(RuntimeServiceGraph):
                 get_title_service=lambda: self._session_title_service,
                 session_boundary=self._session_boundary,
                 logger=self.logger,
+                decisions=self._decisions,
             )
         return self._extension_host_factory
 
     def _extension_host(self) -> ExtensionHost:
         return self._host_operations().make_host()
+
+    async def _review_shell(
+        self,
+        context: ToolContext,
+        arguments: dict[str, Any],
+        *,
+        command: str,
+        shell: str,
+        cwd: Path,
+        environment: Mapping[str, str],
+    ) -> bool:
+        registry = self._extensions
+        if registry is None:
+            return True
+        return await registry.review_shell(
+            context, arguments, command=command, shell=shell, cwd=cwd, environment=environment
+        )
 
     async def _archive_uninstalled_extension_groups(self, installed: frozenset[str]) -> None:
         await self._host_operations().archive_uninstalled_owner_groups(installed)
