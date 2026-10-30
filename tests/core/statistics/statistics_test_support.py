@@ -196,6 +196,7 @@ async def _call(
     address: SessionAddress | None = None,
     run_id: str | None = None,
     owner_name: str | None = None,
+    connection_id: str | None = None,
     status: str = "completed",
     at: datetime | None = None,
     failure: Any = None,
@@ -222,6 +223,7 @@ async def _call(
             run_id=run_id,
             owner_name=owner_name,
             group_id=None if owner_name is None else "group",
+            connection_id=connection_id,
         )
     if clock := LEDGER_CLOCKS.get(ledger):
         clock.now += duration_ms / 1000
