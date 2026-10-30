@@ -117,6 +117,11 @@ def test_sessions_script_reads_scope_current_history_forks_blocks_and_exact_resu
         assert {item["generation_id"] for item in forked} != {transcript[0]["generation_id"]}
         _, across = run("search", "exact fragment", "--all-sessions")
         assert {item["session_id"] for item in across} == {"session-id", fork.id}
+        # result takes its Session from the generation, not from the Run's Session.
+        _, generation_named = run(
+            "result", "--seq", str(hits[0]["seq"]), "--generation", hits[0]["generation_id"]
+        )
+        assert generation_named[0]["content"] == result.content
 
         assert (
             script.main(

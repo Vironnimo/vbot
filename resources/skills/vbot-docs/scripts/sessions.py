@@ -68,15 +68,15 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    def scoped(name: str, summary: str) -> argparse.ArgumentParser:
+    def scoped(
+        name: str, summary: str, default: str = "this Run (VBOT_RUN_SESSION_ID)"
+    ) -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=summary, description=summary)
         command.add_argument(
             "--agent",
-            help="Agent id, or agent@project for a Project Agent; default: the Agent of this Run",
+            help=f"Agent id, or agent@project for a Project Agent; default: the Agent of {default}",
         )
-        command.add_argument(
-            "--session", help="Session id; default: the Session of this Run (VBOT_RUN_SESSION_ID)"
-        )
+        command.add_argument("--session", help=f"Session id; default: the Session of {default}")
         command.add_argument(
             "--data-dir", help="vBot data directory; default: VBOT_DATA_DIR, else `vbot home`"
         )
@@ -107,16 +107,24 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("--limit", type=int, default=50, help="Matches to print (default 50)")
     search.set_defaults(handler=_search)
 
-    result = scoped("result", "Print one exact Tool Result by its seq and generation.")
+    result = scoped(
+        "result", "Print one exact Tool Result by its seq and generation.", "--generation"
+    )
     result.add_argument("--seq", type=int, required=True, help="seq of the Tool Result entry")
     result.add_argument(
-        "--generation", required=True, help="generation_id printed by search or transcript"
+        "--generation",
+        required=True,
+        help="generation_id printed by search or transcript; it names the Session, "
+        "so result needs no --agent or --session",
     )
     result.set_defaults(handler=_result)
     return parser
 
 
-def _scope(arguments: argparse.Namespace) -> dict[str, str | None]:
+def _scope(arguments: argparse.Namespace) -> dict[str, str | None] | None:
+    """The Session the command reads; ``None`` when the generation names it (``result``)."""
+    if arguments.command == "result" and arguments.session is None:
+        return None
     all_sessions = getattr(arguments, "all_sessions", False)
     session = arguments.session
     if arguments.agent:
@@ -315,9 +323,25 @@ ORDER BY v.session_id, v.seq
         yield _json(hit)
 
 
+def _generation_scope(database: sqlite3.Connection, generation: str) -> dict[str, str | None]:
+    row = database.execute(
+        "SELECT project_id, agent_id, session_id FROM sessions"
+        " WHERE generation_id = ? AND state = 'live'",
+        (generation,),
+    ).fetchone()
+    if row is None:
+        raise UsageError(
+            f"No live Session has generation {generation}: run search or transcript again "
+            "and use the generation_id it prints."
+        )
+    return {"project": row["project_id"], "agent": row["agent_id"], "session": row["session_id"]}
+
+
 def _result(
-    database: sqlite3.Connection, scope: dict[str, str | None], arguments: argparse.Namespace
+    database: sqlite3.Connection, scope: dict[str, str | None] | None, arguments: argparse.Namespace
 ) -> Iterator[str]:
+    if scope is None:
+        scope = _generation_scope(database, arguments.generation)
     _require_session(database, scope)
     view, parameters = _view(scope)
     row = database.execute(
