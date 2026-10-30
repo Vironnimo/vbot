@@ -551,14 +551,14 @@ def _encode(prefix: str, value: Any) -> str:
 
 def _decode(value: str, prefix: str) -> Any:
     if not isinstance(value, str) or len(value) > 8192 or not value.startswith(prefix + ":"):
-        raise _bad_cursor() if prefix != "session" else _unavailable()
+        raise _bad_cursor() if prefix != "session" else _not_a_reference(value)
     encoded = value[len(prefix) + 1 :]
     try:
         return json.loads(
             base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
         )
     except (ValueError, UnicodeError, binascii.Error) as error:
-        raise (_bad_cursor() if prefix != "session" else _unavailable()) from error
+        raise (_bad_cursor() if prefix != "session" else _not_a_reference(value)) from error
 
 
 def _integer(value: Any) -> bool:
@@ -570,6 +570,17 @@ def _bad_cursor() -> SessionPeerError:
         "invalid_cursor",
         "This cursor does not match this operation or Session. "
         "Use the cursor returned by list or read for that operation.",
+    )
+
+
+def _not_a_reference(value: object) -> SessionPeerError:
+    # Agents pass Session ids from other Tools, such as session_search; "no longer
+    # reachable" would send them looking for the Session elsewhere.
+    shown = value if isinstance(value, str) and len(value) <= 80 else f"{str(value)[:80]}..."
+    return SessionPeerError(
+        "invalid_session_reference",
+        f'id "{shown}" is not a Session reference from list. This Tool reaches only Sessions '
+        "in your Working Project, by the id list returns for them.",
     )
 
 

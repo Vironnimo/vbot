@@ -74,6 +74,10 @@ async def test_peers_are_project_scoped_generation_bound_and_working_first(
     h.create("builder", "same").append(ChatMessage.user("REPLACEMENT"))
     old = await h.call({"action": "read", "id": old_ref})
     assert old["error"]["code"] == "session_unavailable"
+    # A Session id from another Tool, such as session_search, is no reference at all.
+    foreign = await h.call({"action": "read", "id": other_owner.id})
+    assert foreign["error"]["code"] == "invalid_session_reference"
+    assert other_owner.id in foreign["error"]["message"]
     missing_project = await h.call(
         {"action": "list"}, context=replace(h.context(), working_project_id=None)
     )
