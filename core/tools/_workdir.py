@@ -79,13 +79,19 @@ def project_workdir(
         return Path(project.cwd)
     if refusal := permissions.check_path(project.cwd, "start_dir"):
         raise PermissionDenied(refusal)
-    if not cwd_exists(project.cwd):
+    validate_project_workdir(value, Path(project.cwd))
+    return Path(project.cwd).resolve()
+
+
+def validate_project_workdir(value: str, directory: Path) -> None:
+    """Validate an already-authorized Project directory without resolving another target."""
+    project_id = value.removeprefix(PROJECT_WORKDIR_PREFIX).strip()
+    if not cwd_exists(directory):
         raise ProjectWorkdirError(
-            f"the directory of Project {project_id}, {model_path(project.cwd)}, does not exist. "
+            f"the directory of Project {project_id}, {model_path(directory)}, does not exist. "
             "Pass an existing directory, or omit workdir to use the working directory.",
             code="project_unavailable",
         )
-    return Path(project.cwd).resolve()
 
 
 __all__ = [
@@ -94,4 +100,5 @@ __all__ = [
     "ProjectWorkdirFailure",
     "is_project_workdir",
     "project_workdir",
+    "validate_project_workdir",
 ]

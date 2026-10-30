@@ -528,10 +528,10 @@ async def test_input_and_wait_show_only_the_history_no_result_showed(
     note names the page of the newest 100 lines they leave out (user decision D1)."""
     terminal_manager, factory = manager
     terminal_id, callbacks = await _start_persisted(terminal_manager, tmp_path)
-    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
     wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "timeout": 0.01}
 
     async def follow(arguments: JsonObject) -> dict[str, Any]:
+        context = make_context(tmp_path, result_persisted_hook=callbacks.append)
         data = cast(dict[str, Any], (await call(terminal_manager, context, arguments))["data"])
         callbacks.pop()()
         return data

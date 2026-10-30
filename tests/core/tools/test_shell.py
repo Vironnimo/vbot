@@ -356,14 +356,14 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     shell: Shell, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     loop_thread = threading.get_ident()
-    prepared: list[int] = []
+    prepared: list[tuple[int, str]] = []
     resolved: list[tuple[int, str | None]] = []
-    paths = iter(("first-path", "changed-path"))
+    current_path = "first-path"
     tmp_path = shell.commands.cwd
 
     def environment(*_args: Any, **_kwargs: Any) -> CommandEnvironment:
-        prepared.append(threading.get_ident())
-        return CommandEnvironment({"PATH": next(paths)}, {})
+        prepared.append((threading.get_ident(), current_path))
+        return CommandEnvironment({"PATH": current_path}, {})
 
     def executable(_name: str, *, path: str | None = None) -> str:
         resolved.append((threading.get_ident(), path))
@@ -372,6 +372,7 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     monkeypatch.setattr(shell_module, "command_environment", environment)
     monkeypatch.setattr(shell_module.shutil, "which", executable)
     for count, path in enumerate(("first-path", "changed-path"), start=1):
+        current_path = path
         result = data(await shell.call({"command": "build", "run_in_background": True}))
         assert result["status"] == "running"
         assert shell.launcher.argv[-1][0] == str(tmp_path / path / "fixture-shell")
@@ -379,8 +380,8 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
         (await shell.started(count)).exit(0)
 
     assert [path for _thread, path in resolved] == ["first-path", "changed-path"]
-    assert prepared == [thread for thread, _path in resolved]
-    assert all(thread != loop_thread for thread in prepared)
+    assert {path for _thread, path in prepared} == {"first-path", "changed-path"}
+    assert all(thread != loop_thread for thread, _path in [*prepared, *resolved])
 
 
 def _numbered(count: int) -> list[str]:

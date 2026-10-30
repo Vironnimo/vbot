@@ -19,7 +19,12 @@ from core.tools._terminal_arguments import (
     normalize_terminal_arguments,
 )
 from core.tools._terminal_launch import integrated_shell_kind
-from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
+from core.tools._workdir import (
+    ProjectWorkdirError,
+    is_project_workdir,
+    project_workdir,
+    validate_project_workdir,
+)
 from core.tools.arguments import (
     optional_int,
     optional_string,
@@ -439,7 +444,9 @@ async def _handle_start(
         raise ToolContractError(
             "Permission Rules changed while the terminal was prepared. Call it again."
         )
-    if not workdir.is_dir():
+    if workdir_value is not None and is_project_workdir(workdir_value):
+        validate_project_workdir(workdir_value, workdir)
+    elif not workdir.is_dir():
         raise ToolContractError(
             f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
             "an existing directory, or omit workdir to use the working directory."
