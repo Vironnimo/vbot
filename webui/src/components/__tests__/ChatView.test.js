@@ -217,39 +217,67 @@ describe('ChatView', () => {
       expect(selectedAgentName()).toBe('');
     });
 
-    it('waits before showing initial History feedback', async () => {
-      const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
-      const loading = t('loading.history');
-      let resolveHistory;
-      const defaultRpc = createChatRpcMock();
-      rpcMock.mockImplementation((method, params) =>
-        method === 'chat.timeline'
-          ? new Promise((resolve) => {
-              resolveHistory = resolve;
-            })
-          : defaultRpc(method, params),
-      );
-      vi.useFakeTimers();
+    it.each(['empty', 'populated', 'running', 'failed'])(
+      'waits for initial History before showing the empty state: %s',
+      async (outcome) => {
+        const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
+        const loading = t('loading.history');
+        let resolveHistory;
+        let rejectHistory;
+        const history = new Promise((resolve, reject) => {
+          resolveHistory = resolve;
+          rejectHistory = reject;
+        });
+        const defaultRpc = createChatRpcMock();
+        rpcMock.mockImplementation((method, params) =>
+          method === 'chat.timeline' ? history : defaultRpc(method, params),
+        );
+        vi.useFakeTimers();
 
-      await chat.mountChat({}, { ready: null });
-      await vi.advanceTimersByTimeAsync(HISTORY_LOADING_FEEDBACK_DELAY_MS - 1);
-      flushSync();
-      expect(document.body.textContent).not.toContain(loading);
+        await chat.mountChat(alphaProps(), { ready: null });
+        expect(document.querySelector('.chat-timeline-empty')).toBeNull();
+        expect(document.body.textContent).not.toContain(loading);
+        await vi.advanceTimersByTimeAsync(
+          HISTORY_LOADING_FEEDBACK_DELAY_MS - 1,
+        );
+        flushSync();
+        expect(document.querySelector('.chat-timeline-empty')).toBeNull();
+        expect(document.body.textContent).not.toContain(loading);
 
-      await vi.advanceTimersByTimeAsync(1);
-      flushSync();
-      expect(document.body.textContent).toContain(loading);
+        await vi.advanceTimersByTimeAsync(1);
+        flushSync();
+        expect(document.querySelector('.chat-timeline-empty')).toBeNull();
+        expect(document.body.textContent).toContain(loading);
 
-      resolveHistory({
-        active_run: null,
-        has_more: false,
-        messages: [],
-        session_id: 'session-1',
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      flushSync();
-      expect(document.body.textContent).not.toContain(loading);
-    });
+        const messages = ['populated', 'running'].includes(outcome)
+          ? [{ id: 'restored-user', role: 'user', content: 'Restored message' }]
+          : [];
+        if (outcome === 'failed') {
+          rejectHistory(new Error('History unavailable sentinel'));
+        } else
+          resolveHistory({
+            active_run:
+              outcome === 'running' ? runningRun('run-restored') : null,
+            has_more: false,
+            messages,
+            items: messages.map((message) => messageItem(message)),
+            session_id: 'session-1',
+          });
+        await vi.advanceTimersByTimeAsync(0);
+        flushSync();
+        expect(document.body.textContent).not.toContain(loading);
+        expect(Boolean(document.querySelector('.chat-timeline-empty'))).toBe(
+          outcome === 'empty',
+        );
+        if (messages.length)
+          expect(document.body.textContent).toContain('Restored message');
+        if (outcome === 'running') expect(findCancelRunButton()).toBeTruthy();
+        if (outcome === 'failed')
+          expect(document.body.textContent).toContain(
+            'History unavailable sentinel',
+          );
+      },
+    );
 
     it.each([
       [

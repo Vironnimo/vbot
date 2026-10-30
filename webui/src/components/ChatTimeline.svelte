@@ -74,10 +74,11 @@
     onEditMessage = async () => false,
     hasOlderHistory = false,
     loadingOlderHistory = false,
-    // True while the displayed session's initial history request is in
-    // flight; swaps the "No messages yet" empty state for a loading
-    // placeholder so stepping through sessions does not flash it.
+    // Whether to show initial History loading feedback; the owner may delay it.
     loadingHistory = false,
+    // Only resolved History (or a draft with no Session) can be called empty,
+    // independently of when loading feedback becomes visible.
+    historyLoaded = true,
     onLoadOlder = async () => false,
     onLoadRunHistory = async () => false,
     // Reads the complete arguments and result of a Tool row: { runId, toolId }.
@@ -561,7 +562,7 @@
           <Banner variant="neutral" class="chat-timeline-loading">
             {t('loading.history')}
           </Banner>
-        {:else}
+        {:else if historyLoaded}
           <EmptyState
             fill
             class="chat-timeline-empty"

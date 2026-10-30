@@ -814,6 +814,10 @@
             {chatWorkingMode}
             loadingHistory={target.activeSessionState?.focusedHistory
               ?.loading ?? layout.historyLoadingFeedbackVisible}
+            historyLoaded={(
+              target.activeSessionState?.focusedHistory ??
+              target.activeSessionState
+            )?.historyLoaded ?? !target.activeAddressing().sessionId}
             transientCards={actions.transientCards}
             submittedTurnScrollKey={actions.submittedTurnScrollKey}
             bottomOverlayHeight={layout.footerOverlayHeight}

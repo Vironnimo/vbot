@@ -97,10 +97,12 @@ describe('ChatView Sessions', () => {
     });
     await waitForCondition(() => historyReads('session-1') > 0);
     expect(composerInput().disabled).toBe(true);
+    expect(document.querySelector('.chat-timeline-empty')).toBeNull();
     await selectAgentFromPicker('Beta');
     await waitForCondition(() => selectedAgentName() === 'Beta');
     expect(composerInput().disabled).toBe(false);
     expect(findNewSessionButton().disabled).toBe(false);
+    expect(document.querySelector('.chat-timeline-empty')).toBeTruthy();
     release({ messages: [] });
     await settle();
     expect(composerInput().disabled).toBe(false);
@@ -386,6 +388,7 @@ describe('ChatView Sessions', () => {
         ).toEqual([]);
         expect(composerInput().disabled).toBe(false);
         expect(document.body.textContent).not.toContain('Hello');
+        expect(document.querySelector('.chat-timeline-empty')).toBeTruthy();
         if (!project) {
           expect(alphaSessionId()).toBe(draft ? '' : 'session-1');
         }
@@ -974,6 +977,7 @@ describe('ChatView Sessions', () => {
         requestId: 1,
       });
       flushSync();
+      expect(document.querySelector('.chat-timeline-empty')).toBeNull();
       parent.setPendingSessionNavigation({
         returnToCurrent: true,
         requestId: 2,
