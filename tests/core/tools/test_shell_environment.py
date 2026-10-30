@@ -213,6 +213,20 @@ def test_checkout_server_leads_shell_path_with_a_vbot_for_itself(
 
     assert json.loads(output[0]) == [arguments, str(data_dir), "22333"]
     assert output[1:] in ([], [""])
+    if sys.platform == "win32":
+        # A program that starts vbot without a shell finds only vbot.exe. PATH holds
+        # nothing else, so a missing launcher cannot reach an installed vbot.
+        assert (directory / "vbot.exe").is_file()
+        program = "import subprocess, sys; sys.exit(subprocess.call(['vbot', *sys.argv[1:]]))"
+        direct = subprocess.run(
+            [sys.executable, "-c", program, *arguments],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+            env={**os.environ, "PATH": str(directory)},
+        ).stdout.splitlines()
+        assert json.loads(direct[0]) == [arguments, str(data_dir), "22333"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows login environment")

@@ -48,8 +48,13 @@ millisecond, so no cache can go stale.
 
 from __future__ import annotations
 
+import importlib.resources
+import io
 import os
+import struct
 import sys
+import sysconfig
+import zipfile
 from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -345,6 +350,7 @@ def provide_instance_command(
         (directory / "vbot.cmd").write_text(
             _cmd_command(data, port, python, script), encoding="utf-8", newline="\r\n"
         )
+        _write_launcher(directory / "vbot.exe", data, port, python, script)
         # Git Bash finds a file without extension before an installation's vbot.exe.
         python, script = Path(python).as_posix(), Path(script).as_posix()
     sh = directory / "vbot"
@@ -390,6 +396,62 @@ def _cmd_command(data: str, port: int, python: str, script: str) -> str:
         f'set "VBOT_SERVER_PORT={port}"\n'
         f'"{quote(python)}" "{quote(script)}" %*\n'
     )
+
+
+def _write_launcher(target: Path, data: str, port: int, python: str, script: str) -> None:
+    """Write ``vbot.exe`` for programs that start ``vbot`` without a shell.
+
+    Windows looks such a command up as ``vbot.exe`` only, so Python's
+    ``subprocess.run(["vbot", ...])`` reached an installation's ``vbot.exe`` further
+    down ``PATH`` and read the installed instance. The launcher is the one pip writes
+    console scripts with: it runs the Python named in its ``#!`` line on the zip
+    archive appended to it. An unchanged file is left alone, since a running
+    ``vbot.exe`` cannot be overwritten.
+    """
+    launcher = _console_launcher()
+    if launcher is None:
+        _LOGGER.warning(
+            "pip's console launcher is missing; programs that start vbot without a shell "
+            "reach the vbot.exe on PATH"
+        )
+        return
+    main = (
+        "import os, runpy, sys\n"
+        f"os.environ['VBOT_DATA_DIR'] = {data!r}\n"
+        f"os.environ['VBOT_SERVER_PORT'] = '{port}'\n"
+        f"sys.argv[0] = {script!r}\n"
+        f"sys.path[0] = {str(Path(script).parent)!r}\n"
+        f"runpy.run_path({script!r}, run_name='__main__')\n"
+    )
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        # A fixed timestamp keeps the file identical across server starts.
+        bundle.writestr(zipfile.ZipInfo("__main__.py", (1980, 1, 1, 0, 0, 0)), main)
+    interpreter = f'"{python}"' if " " in python else python
+    content = launcher + b"#!" + interpreter.encode("utf-8") + b"\n" + archive.getvalue()
+    try:
+        try:
+            current = target.read_bytes()
+        except FileNotFoundError:
+            current = None
+        if current != content:
+            target.write_bytes(content)
+    except OSError:
+        _LOGGER.warning("Could not write %s", target, exc_info=True)
+
+
+def _console_launcher() -> bytes | None:
+    """pip's console-script launcher for this interpreter's platform, if pip is installed."""
+    if struct.calcsize("P") == 4:
+        name = "t32.exe"
+    elif sysconfig.get_platform() == "win-arm64":
+        name = "t64-arm.exe"
+    else:
+        name = "t64.exe"
+    try:
+        return importlib.resources.files("pip._vendor.distlib").joinpath(name).read_bytes()
+    except ImportError, OSError:
+        return None
 
 
 def _sh_quote(value: str) -> str:
