@@ -17,6 +17,7 @@ from tests.core.tools.web_search_test_support import (
     request_json,
     result_urls,
     search,
+    without_result_notice,
 )
 
 _DUCKDUCKGO_HTML = """<html><body>
@@ -61,7 +62,7 @@ async def test_duckduckgo_results_are_read_from_its_html_page(tmp_path: Path) ->
     request = route.calls[0].request
     assert request.url.params["q"] == "vbot"
     assert request.url.params["kp"] == "-1"
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "content": (
             "1. vBot docs\nhttps://example.com/vbot\nvBot & documentation for agents\n\n"
             "2. vBot guide\nhttps://example.com/guide\nGetting started\n\n"
@@ -84,7 +85,7 @@ async def test_duckduckgo_parses_html_attributes_and_keeps_snippet_scope(tmp_pat
 
     result, _ = await _search_duckduckgo(tmp_path, {"query": "vbot"}, html=html)
 
-    assert assert_success_envelope(result)["content"] == (
+    assert without_result_notice(assert_success_envelope(result))["content"] == (
         "1. A <b>literal</b> & title\nhttps://example.com/one\nx < y and z > w works\n\n"
         "2. Second\nhttps://example.com/two"
     )
@@ -98,7 +99,7 @@ async def test_duckduckgo_pages_split_its_one_list_and_recency_is_not_applied(
         tmp_path, {"query": "vbot", "count": 2, "page": 2, "recency": "month"}
     )
 
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "note": (
             "DuckDuckGo cannot limit results by age, so these results are not limited to "
             "the past month; check result dates. DuckDuckGo returns one result list; later "
@@ -180,7 +181,7 @@ async def test_perplexity_gets_native_filters_and_lists_dated_results(tmp_path: 
     assert body["max_results"] == 5
     assert body["search_recency_filter"] == "month"
     assert body["search_domain_filter"] == ["example.com"]
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "domains": "example.com",
         "recency": "month",
         "content": (

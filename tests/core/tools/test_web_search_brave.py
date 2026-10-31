@@ -18,6 +18,7 @@ from tests.core.tools.web_search_test_support import (
     assert_success_envelope,
     result_urls,
     search,
+    without_result_notice,
 )
 
 
@@ -51,7 +52,9 @@ async def test_search_sends_the_key_and_query_and_lists_the_results(tmp_path: Pa
     assert request.headers["Accept"] == "application/json"
     assert request.url.params["q"] == "vbot"
     assert request.url.params["count"] == "5"
-    assert data == {"content": "1. vBot docs\nhttps://example.com/vbot\nvBot documentation"}
+    assert without_result_notice(data) == {
+        "content": "1. vBot docs\nhttps://example.com/vbot\nvBot documentation"
+    }
 
 
 @pytest.mark.asyncio
@@ -87,7 +90,7 @@ async def test_recency_maps_to_brave_freshness(
     data, request = await _search_brave(tmp_path, {"query": "vbot", "recency": recency}, [])
 
     tip = "no recency limit" if recency == "year" else "a longer recency window"
-    assert data == {
+    assert without_result_notice(data) == {
         "recency": recency,
         "content": f"No results found. Try other or fewer search words, or {tip}.",
     }
@@ -206,7 +209,7 @@ async def test_result_markup_is_stripped_and_plain_text_kept(
     monkeypatch.setattr(builtins, "__import__", import_off_loop)
     data, _ = await _search_brave(tmp_path, {"query": "vbot"}, results)
 
-    assert data["content"] == content
+    assert without_result_notice(data)["content"] == content
     assert parser_import_threads and loop_thread not in parser_import_threads
 
 
@@ -241,4 +244,4 @@ async def test_more_results_name_the_next_page_only_without_site_filters(
         },
     )
 
-    assert shown == data
+    assert without_result_notice(shown) == data

@@ -16,6 +16,7 @@ from tests.core.tools.web_search_test_support import (
     request_json,
     result_urls,
     search,
+    without_result_notice,
 )
 
 
@@ -52,7 +53,7 @@ async def test_search_sends_the_key_and_lists_the_results(tmp_path: Path) -> Non
         },
     )
 
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "content": (
             "1. vBot docs\nhttps://example.com/vbot\nvBot documentation\n\n"
             "2. vBot project\nhttps://example.com/project\nProject page"
@@ -154,4 +155,4 @@ async def test_other_response_shapes_are_read(
 ) -> None:
     result, _ = await _search_firecrawl(tmp_path, {"query": "vbot"}, body)
 
-    assert assert_success_envelope(result)["content"] == content
+    assert without_result_notice(assert_success_envelope(result))["content"] == content

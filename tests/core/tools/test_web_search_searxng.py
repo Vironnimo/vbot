@@ -19,6 +19,7 @@ from tests.core.tools.web_search_test_support import (
     result_urls,
     search,
     web_search_registry,
+    without_result_notice,
 )
 
 
@@ -46,7 +47,7 @@ async def test_search_needs_no_key_and_passes_recency_as_time_range(
         ],
     )
 
-    assert data == {
+    assert without_result_notice(data) == {
         "recency": recency,
         "note": "Some SearXNG engines ignore the recency limit; check result dates.",
         "content": "1. vBot docs\nhttps://example.com/vbot\nvBot docs",
@@ -120,7 +121,7 @@ async def test_later_pages_warn_that_results_may_be_skipped(
 ) -> None:
     shown, params = await _search_searxng(tmp_path, arguments, results)
 
-    assert shown == data
+    assert without_result_notice(shown) == data
     assert params["pageno"] == pageno
 
 

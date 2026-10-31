@@ -34,6 +34,7 @@ from tests.core.tools.web_search_test_support import (
     result_urls,
     search,
     web_search_registry,
+    without_result_notice,
 )
 
 WEEK_NOTE = (
@@ -358,7 +359,7 @@ async def test_site_operators_become_native_filters_for_other_providers(tmp_path
     body = request_json(route.calls[0].request)
     assert body["query"] == 'asyncio "task group"'
     assert body["include_domains"] == ["python.org"]
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "domains": "python.org",
         "content": "1. Docs\nhttps://docs.python.org/3/\nGuide",
     }
@@ -545,7 +546,8 @@ async def test_results_read_as_a_numbered_list_and_show_the_user_linked_entries(
         result = await registry.dispatch(context, {"query": "release notes"})
 
     content = assert_success_envelope(result)["content"]
-    first, second = content.split("\n\n")
+    notice, first, second = content.split("\n\n")
+    assert notice and "\n" not in notice
     title, url, detail = first.split("\n")
     assert (title, url) == ("1. Release notes", "https://example.com/a")
     assert detail.startswith("2026-09-01 - word word")
@@ -594,7 +596,7 @@ async def test_providers_without_paging_say_a_later_page_repeats_the_first(
         route = router.request(method, endpoint).respond(200, json=empty)
         result = await search(tmp_path, {"query": "vbot", "page": 2}, provider=provider)
 
-    assert assert_success_envelope(result) == {
+    assert without_result_notice(assert_success_envelope(result)) == {
         "note": f"{label} cannot page results; these are the first results again, not page 2.",
         "content": "No results found. Try other or fewer search words.",
     }

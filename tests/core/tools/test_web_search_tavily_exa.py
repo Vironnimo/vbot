@@ -19,6 +19,7 @@ from tests.core.tools.web_search_test_support import (
     result_urls,
     search,
     web_search_registry,
+    without_result_notice,
 )
 
 
@@ -51,7 +52,7 @@ async def test_tavily_gets_a_basic_search_and_lists_the_results(tmp_path: Path) 
         ],
     )
 
-    assert data == {
+    assert without_result_notice(data) == {
         "content": (
             "1. vBot docs\nhttps://example.com/vbot\n2026-08-20 - vBot documentation\n\n"
             "2. vBot project\nhttps://example.com/project\nPage"
@@ -101,7 +102,7 @@ async def test_tavily_excludes_domains_natively_and_after(tmp_path: Path) -> Non
         ],
     )
 
-    assert data == {
+    assert without_result_notice(data) == {
         "excluded_domains": "reddit.com",
         "content": "1. Kept\nhttps://example.com/a\nok",
     }
@@ -127,7 +128,7 @@ async def test_exa_gets_highlights_and_lists_the_results(tmp_path: Path) -> None
         ],
     )
 
-    assert data == {
+    assert without_result_notice(data) == {
         "content": (
             "1. vBot docs\nhttps://example.com/vbot\n"
             "2026-08-20 - vBot documentation agent harness\n\n"

@@ -114,9 +114,19 @@ def assert_failure_envelope(result: dict[str, Any], code: str) -> dict[str, Any]
     return error
 
 
+def without_result_notice(data: dict[str, Any]) -> dict[str, Any]:
+    """Leave provider payload assertions independent of the editable result notice."""
+    content = data["content"]
+    if content.startswith("No results found."):
+        return data
+    notice, separator, numbered = content.partition("\n\n")
+    assert notice and separator and numbered.startswith("1. ")
+    return {**data, "content": numbered}
+
+
 def result_blocks(data: dict[str, Any]) -> list[list[str]]:
     """Split a web_search result's numbered content into the lines of each result."""
-    content = data["content"]
+    content = without_result_notice(data)["content"]
     assert isinstance(content, str)
     if content.startswith("No results found."):
         return []
