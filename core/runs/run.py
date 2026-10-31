@@ -424,6 +424,8 @@ class Run:
             on_lagged=lambda: _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id),
         )
         self._done = asyncio.Event()
+        self._approval_ids: dict[str, tuple[asyncio.Future[bool], bool]] = {}
+        self._approvals_changed = asyncio.Event()
         # Set once the Run's Session admission committed (or the Run needs none).
         self._admitted = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -616,6 +618,7 @@ class Run:
         self.cancel_reason = reason
         self.cancel_initiator = initiator
         self.cancel_requested = True
+        self._approvals_changed.set()
         # A Run cancel subsumes every still-active per-call cancel. Fire those
         # callbacks before cancelling the executor task so Tool-owned processes,
         # connections, and other resources receive their cleanup signal even
@@ -723,6 +726,37 @@ class Run:
         """Stop executor progress once cancellation has been requested."""
         if self.cancel_requested:
             raise asyncio.CancelledError
+
+    def set_approval_pending(self, request_id: str, future: asyncio.Future[bool] | None) -> None:
+        """Publish live approval waits independently of bounded event replay."""
+        if future is not None:
+            self._approval_ids.setdefault(request_id, (future, False))
+        else:
+            self._approval_ids.pop(request_id, None)
+        self._approvals_changed.set()
+
+    def claim_approval_notice(self, request_id: str) -> bool:
+        """Claim one Channel notice while this approval still needs attention."""
+        pending = self._approval_ids.get(request_id)
+        if (
+            self.status != RunStatus.RUNNING
+            or self.cancel_requested
+            or pending is None
+            or pending[0].done()
+            or pending[1]
+        ):
+            return False
+        self._approval_ids[request_id] = (pending[0], True)
+        return True
+
+    async def watch_approvals(self) -> AsyncGenerator[str]:
+        """Observe pending requests, including ones predating this subscriber."""
+        while self.status == RunStatus.RUNNING and not self.cancel_requested:
+            self._approvals_changed.clear()
+            for request_id, (future, announced) in tuple(self._approval_ids.items()):
+                if not future.done() and not announced:
+                    yield request_id
+            await self._approvals_changed.wait()
 
     def emit(
         self,
@@ -850,6 +884,8 @@ class Run:
         sequences stay monotonic because nothing is ever renumbered.
         """
         self._cancel_callbacks.clear()
+        self._approval_ids.clear()
+        self._approvals_changed.set()
         self._completion_finalizers.clear()
         self._completion_observers.clear()
         self._tool_background_callbacks.clear()

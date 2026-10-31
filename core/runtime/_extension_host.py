@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +16,7 @@ from core.agents.temporary_execution import (
     TemporaryExecutionGroups,
     release_temporary_group,
 )
+from core.automation.cron import CronJobNotFoundError, CronService
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
 from core.extensions.databases import ExtensionDatabases
@@ -155,6 +158,7 @@ class ExtensionHostFactory:
         session_boundary: SessionBoundaryBuilder,
         logger: LoggerProtocol | None,
         decisions: DecisionService | None = None,
+        cron: CronService | None = None,
     ) -> None:
         self._host = host
         self._ensure_started = ensure_started
@@ -186,6 +190,7 @@ class ExtensionHostFactory:
         self._session_boundary = session_boundary
         self.logger = logger
         self._decisions = decisions
+        self._cron = cron
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
         self.databases = ExtensionDatabases(host.data_dir)
@@ -322,6 +327,26 @@ class ExtensionHostFactory:
         result = await self.chat_sessions.run_async(
             shell_review_context, self.chat_sessions, context, self.tools.secret_masker
         )
+        # A stored job is authority only when the operator approved its current
+        # scope. Unknown/Tool-authored jobs remain evidence for the human task.
+        if self._cron is not None:
+            unverified = []
+            for task in result["evidence"]["automated_requests"]:
+                job = None
+                if task["source"] == "cron" and task["schedule_id"]:
+                    with suppress(CronJobNotFoundError):
+                        job = self._cron.get_job(task["schedule_id"])
+                if (
+                    job is not None
+                    and job.operator_approved
+                    and job.agent_id == task["agent_id"]
+                    and job.project_id == task["project_id"]
+                    and self.tools.secret_masker.mask(job.prompt) == task["text"]
+                ):
+                    result["authorized_tasks"].append(json.dumps(task, ensure_ascii=False))
+                else:
+                    unverified.append(task)
+            result["evidence"]["automated_requests"] = unverified
         self._require_registration(identity)
         return result
 

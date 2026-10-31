@@ -67,6 +67,10 @@ _UNANSWERED_TAP_UNAVAILABLE_REPLY = (
 )
 
 _LOGGER = get_logger("channels.engine")
+_APPROVAL_REPLY = (
+    "This task is waiting for approval. Open the pending approval requests in vBot "
+    "to allow or reject it."
+)
 
 
 class ChannelReplies:
@@ -218,7 +222,7 @@ class ChannelReplies:
     async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str | None:
         """Follow the Run to its end, then project its complete durable history."""
         projection = RunReply()
-        async with self.activity(reply_plan):
+        async with self.activity(reply_plan), self._approval_notices(run, reply_plan):
             async for event in run.subscribe():
                 if event.type == ASSISTANT_OUTPUT_EVENT:
                     projection.observe_output(event.payload.get("message"))
@@ -238,6 +242,22 @@ class ChannelReplies:
             status=status,
             reason=reason,
         )
+
+    @contextlib.asynccontextmanager
+    async def _approval_notices(self, run: Run, reply_plan: ReplyPlanFacts) -> AsyncIterator[None]:
+        async def notify() -> None:
+            async with contextlib.aclosing(run.watch_approvals()) as requests:
+                async for request_id in requests:
+                    await self.ready_transport()
+                    if run.claim_approval_notice(request_id):
+                        await self.send_ingress(reply_plan, _APPROVAL_REPLY)
+
+        task = asyncio.create_task(notify())
+        try:
+            yield
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _history_reply(
         self,

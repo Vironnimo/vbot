@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Callable
 from copy import deepcopy
@@ -162,6 +164,7 @@ _MUTABLE_FIELDS = frozenset(
 )
 
 _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
+    "operator_approval",
     "consecutive_failures",
     "covered_until",
     "event_progress",
@@ -564,6 +567,11 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
     silent = item.get("last_run_silent")
     if silent is not None and not isinstance(silent, bool):
         add_error(diagnostics, f"{item_path}.last_run_silent", "must be a boolean")
+    approval = item.get("operator_approval")
+    if approval is not None and (
+        not isinstance(approval, str) or not re.fullmatch(r"[a-f0-9]{64}", approval)
+    ):
+        add_error(diagnostics, f"{item_path}.operator_approval", "must be a SHA-256 scope digest")
     ceiling = item.get("permission_ceiling")
     if ceiling is not None:
         try:
@@ -701,6 +709,9 @@ class CronJob:
     # through the ``cron`` Tool, in its stored ceiling form; every fire applies it.
     # ``None``: the job was set up by the user or a full-access Session.
     permission_ceiling: dict[str, Any] | None = None
+    # The operator supplied or explicitly enabled this exact task configuration.
+    # Tool changes to its scope revoke this provenance; old files have none.
+    operator_approval: str | None = None
     # Absence keeps legacy jobs' Agent-default behavior; explicit None is Workspace.
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     run_overrides: AgentOverrides | None = None
@@ -746,6 +757,25 @@ class CronJob:
         if self.permission_ceiling is None:
             return None
         return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+
+    def approval_scope(self) -> str:
+        """Bind operator provenance to task configuration, including across older writers."""
+        data = self.to_dict()
+        scope = {
+            key: data[key]
+            for key in _MUTABLE_FIELDS - {"name", "notification_policy", "status", "remaining_runs"}
+            if key in data
+        }
+        scope["id"] = self.id
+        return hashlib.sha256(
+            json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+
+    @property
+    def operator_approved(self) -> bool:
+        return (
+            self.operator_approval is not None and self.operator_approval == self.approval_scope()
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload.
@@ -808,6 +838,8 @@ class CronJob:
             data["unread_alert"] = self.unread_alert.to_dict()
         if self.permission_ceiling is not None:
             data["permission_ceiling"] = deepcopy(self.permission_ceiling)
+        if self.operator_approval is not None:
+            data["operator_approval"] = self.operator_approval
         if self.working_project_id is not AGENT_DEFAULT_PROJECT:
             data["working_project_id"] = self.working_project_id
         if self.run_overrides is not None or self._run_overrides_unknown:
@@ -913,6 +945,7 @@ class CronJob:
                 if payload.get("permission_ceiling") is None
                 else deepcopy(dict(payload["permission_ceiling"]))
             ),
+            operator_approval=payload.get("operator_approval"),
         )
 
 

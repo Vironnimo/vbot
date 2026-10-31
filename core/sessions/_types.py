@@ -499,6 +499,12 @@ class SessionConversationMessage:
     sender_id: str | None = None
     subagent_reply_target: str | None = None
 
+    # Trusted ingress facts for consumers that distinguish requests from consent.
+    sender_role: str | None = None
+    run_kind: str | None = None
+    schedule_id: str | None = None
+    input_source_id: str | None = None
+
 
 @dataclass(frozen=True)
 class SessionConversationPage:

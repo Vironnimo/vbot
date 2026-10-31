@@ -513,6 +513,8 @@ class CronService:
             )
             self._reject_past_once_run(job)
             self._validate_capacity(job)
+            if actor == "rpc":
+                job.operator_approval = job.approval_scope()
             self._jobs[job.id] = job
 
             async def save() -> None:
@@ -712,8 +714,11 @@ class CronService:
         self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CronJob:
         """Update mutable cron job fields and persist changes."""
-        _job, updated, changed_fields = await self._edit(job_id, fields)
-        if changed_fields == ["status"] and updated.status in {"active", "paused"}:
+        _job, updated, changed_fields = await self._edit(job_id, fields, actor=actor)
+        if set(changed_fields) - {"operator_approval"} == {"status"} and updated.status in {
+            "active",
+            "paused",
+        }:
             _LOGGER.info(
                 "Cron job %s (job=%s actor=%s)",
                 "enabled" if updated.status == "active" else "disabled",
@@ -878,7 +883,12 @@ class CronService:
         )
 
     async def _edit(
-        self, job_id: str, fields: dict[str, Any], *, rename: bool = False
+        self,
+        job_id: str,
+        fields: dict[str, Any],
+        *,
+        rename: bool = False,
+        actor: str = _DEFAULT_ACTOR,
     ) -> tuple[CronJob, CronJob, list[str]]:
         """Apply ``fields`` to memory and the job tasks at once, then save; undo both on failure.
 
@@ -888,7 +898,7 @@ class CronService:
         """
         async with self._edits:
             job, candidate, changed_fields, restart_task = self._stage_update(
-                job_id, fields, validate_references=False, rename=rename
+                job_id, fields, validate_references=False, rename=rename, actor=actor
             )
             issued = False
             try:
@@ -926,11 +936,18 @@ class CronService:
                         issued = True
                     # A fire may have changed the job while its references were checked.
                     job, candidate, changed_fields, restart_task = self._stage_update(
-                        job_id, fields, validate_references=False, rename=rename
+                        job_id, fields, validate_references=False, rename=rename, actor=actor
                     )
                 if changed_fields:
                     job, candidate, changed_fields = await self._apply_edit(
-                        job_id, job, candidate, fields, changed_fields, restart_task, rename=rename
+                        job_id,
+                        job,
+                        candidate,
+                        fields,
+                        changed_fields,
+                        restart_task,
+                        rename=rename,
+                        actor=actor,
                     )
             except BaseException:
                 if issued:
@@ -948,6 +965,7 @@ class CronService:
         restart_task: bool,
         *,
         rename: bool = False,
+        actor: str = _DEFAULT_ACTOR,
     ) -> tuple[CronJob, CronJob, list[str]]:
         """Apply a staged edit to memory and the job tasks at once, then save; undo on failure."""
         edited = self._clone_job(candidate)
@@ -963,7 +981,7 @@ class CronService:
             # Runs and notification delivery can settle while the inbox
             # checkpoint writes. Apply only this edit to the current record.
             job, candidate, changed_fields, restart_task = self._stage_update(
-                job_id, fields, validate_references=False, rename=rename
+                job_id, fields, validate_references=False, rename=rename, actor=actor
             )
             edited = self._clone_job(candidate)
             publish()
@@ -1054,6 +1072,7 @@ class CronService:
         *,
         validate_references: bool = True,
         rename: bool = False,
+        actor: str = _DEFAULT_ACTOR,
     ) -> tuple[CronJob, CronJob, list[str], bool]:
         """Validate ``fields`` against a job without applying them.
 
@@ -1180,6 +1199,14 @@ class CronService:
             for field_name in fields
             if getattr(job, field_name) != getattr(candidate, field_name)
         )
+        scope_changed = bool(set(changed_fields) - {"name", "notification_policy", "status"})
+        renew_approval = (
+            actor == "rpc" and (scope_changed or fields.get("status") == "active")
+        ) or (rename and job.operator_approved)
+        if scope_changed and not rename and not renew_approval:
+            candidate.operator_approval = None
+        if renew_approval or candidate.operator_approval != job.operator_approval:
+            changed_fields.append("operator_approval")
         if not changed_fields:
             return job, job, [], False
 
@@ -1208,6 +1235,8 @@ class CronService:
             # Arming a one-time job for an elapsed instant would fire it at once.
             self._reject_past_once_run(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
+        if renew_approval:
+            candidate.operator_approval = candidate.approval_scope()
         return job, candidate, changed_fields, restart_task
 
     async def retry_delivery(self, job_id: str, *, delivery: CronDelivery | None = None) -> int:

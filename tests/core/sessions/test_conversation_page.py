@@ -38,6 +38,8 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
     assert page.latest_user is not None and page.latest_user.message_id == question.id
     assert page.latest_user.truncated and len(page.latest_user.text) == 40
     assert page.messages[0].sender_kind == "session"
+    assert page.messages[0].sender_id == "other-ref"
+    assert page.messages[0].sender_role == "member"
     assert page.has_more
     older = manager.conversation_page(
         fork.address,

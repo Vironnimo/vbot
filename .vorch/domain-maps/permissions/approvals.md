@@ -50,6 +50,8 @@ The CLI exposes the same pending records and decisions for the human operator. A
 
 `ToolContext.request_approval` also supports an operation review that requires consent even when the Agent's Permission Boundary is unrestricted. A reviewer can request a human decision; it cannot override a Permission Rules refusal. The shell-review Extension supplies its evaluation separately and uses the final prepared shell invocation before secrets and launch. Its Model decision and settings remain Extension-owned.
 
+Within the same Tool call, `ToolContext.invocation_approved` recognizes an operator's positive decision for identical arguments, resolved cwd and Computer. Shell Review accepts that consent directly instead of asking a second time. The identity is captured before waiting; argument or target changes and sibling calls do not inherit it. Permission and authority rechecks still run before execution. This is invocation consent, not a cached Model judgment.
+
 ## Verification contracts
 
 Focused tests cover hard-first classification, exact one-call authorization, equivalent-access rejection suppression, no effects or consumed Secrets before consent, fresh-rule/link/Computer validation, cancellation, semaphore release, sibling isolation, quiet internal work, Cron/Sub-Agent visibility, reconnect ordering, stale responses, public HTTP protection and operator-only CLI decisions. Tests assert behavior and protocol fields rather than editable prose.

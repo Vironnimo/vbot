@@ -9,6 +9,8 @@
 - Every other judgment, missing evidence and review failure requests user approval. The Model never automatically denies and never widens Permission Rules.
 - The central approval system owns the dialog and exact one-time authorization; this Extension must not add a competing approval store or UI.
 
+User decision (2026-10-31): retain the source and authorized scope of requests rather than categorically rejecting automations or group requests. A preceding operator approval for this identical Tool invocation satisfies Shell Review directly; live authority and prepared targets still get checked.
+
 ## Policy and preview
 
 `_review.py::ShellReview` evaluates a detached request containing actual OS, Shell, resolved cwd, exact command, attributed user requests and existing approvals, with optional permission summary and labeled evidence. Commands, comments and evidence are data, not an authority that can approve themselves. Missing authority refuses automatic approval before a Model call. Invalid Settings, native refusals, absent/non-finite answers, Provider errors and the bounded review timeout return `ask`; cancellation propagates. Inputs are never truncated into a potentially different authorization question.
@@ -23,7 +25,7 @@ The Extension Settings hold activation (off by default), editable criteria, auto
 
 The approval requirement identifies the exact prepared command, Shell, cwd and public environment, on the server Computer. The same normalized public arguments are shown in the central approval request. A positive answer revalidates live Permission Rules before proceeding; it never grants a broader Boundary. Disabling an Extension withdraws its reviewer; a retiring registry cannot return a late automatic approval.
 
-`host.review_context` obtains bounded canonical User/Assistant text on the Sessions pool, then keeps actual human input as authority. Assistant text, Notes, peer messages and Parent input to a Sub-Agent do not become human consent. A Sub-Agent also gets its live ancestors' human requests, in timestamp order; delegated requests stay labeled evidence. Reads follow current lineage and known Parent generations, use at most 32 human messages/64,000 text characters across at most 64 ancestors and mark omitted history. A truncated human message forces confirmation. Known Agent Secret values are masked. No special explanation of automatic variables such as PowerShell's HOME is supplied to the Model.
+`host.review_context` obtains bounded canonical conversation text and ingress provenance on the Sessions pool. Human requests remain authority; Channel requests retain sender id, role and Session. Assistant text, Notes, peer messages and Parent input to a Sub-Agent do not become human consent. Authenticated Task inputs are scoped `authorized_tasks`, identified by their accepted receipt and configured source. Cron prompts become authorized tasks only when the current job retains operator approval for the same prompt and owner (`automation/cron.md`); unverified automation stays labeled evidence. Bootstrap and other system input never masquerade as human text. A human follow-up to a Task input is classified separately. A Sub-Agent also gets its live ancestors' requests; reads follow current lineage and known Parent generations, use at most 32 authority/task messages and 64,000 text characters across at most 64 ancestors, and mark omitted history. Truncated authority or automation forces confirmation. Known Agent Secret values are masked. No special explanation of automatic variables such as PowerShell's HOME is supplied to the Model.
 
 ## Verification
 
@@ -41,6 +43,8 @@ The Decision question's text is supplied only to the native Decision endpoint, n
 |---|---|
 | `Judge whether the exact command...` | Makes authorization of the supplied invocation the question, rather than whether the command is generally useful or dangerous. |
 | `Use the supplied user requests and approvals...` | Prevents a comment, Agent description or quoted document from declaring its own authority. |
+| `Keep each request's source...` / `A group member's request...` | Preserves participant identity and role; an admitted group task cannot authorize another participant's task or operator-level changes. |
+| `An authorized automated task...` / `Unverified automation...` | Keeps approved automation possible within its recorded scope without turning machine-authored evidence into independent consent. |
 | `Use earlier requests only...` | Prevents an earlier completed task from becoming standing permission for unrelated work; later applicable human instructions prevail. |
 | `Allow ordinary inspection and task steps...` | Allows task-implied routine work without requiring the user to name each shell command. |
 | `An explicitly requested deletion...` | Preserves the user's decision that clearly authorized irreversible actions need no repeated confirmation. |

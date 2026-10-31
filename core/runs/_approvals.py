@@ -126,6 +126,7 @@ class RunApprovals:
         }
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = (request, future, tuple(keys), tuple(rejected_keys))
+        run.set_approval_pending(request_id, future)
         self._changed()
         try:
             allowed = await future
@@ -136,6 +137,7 @@ class RunApprovals:
                 and run.status == RunStatus.RUNNING
             )
         finally:
+            run.set_approval_pending(request_id, None)
             if self._pending.pop(request_id, None) is not None:
                 self._changed()
 

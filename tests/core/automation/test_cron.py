@@ -133,6 +133,26 @@ async def test_cron_service_crud_operations(
     assert [job.id for job in listed] == [created.id]
     assert loaded.name == "Private status check"
     assert loaded.prompt == "private cron prompt"
+    assert loaded.operator_approved
+    assert type(loaded).from_dict(loaded.to_dict()).operator_approved
+    assert (
+        not type(loaded)
+        .from_dict(
+            {
+                **loaded.to_dict(),
+                "prompt": "Changed by an older writer",
+            }
+        )
+        .operator_approved
+    )
+    assert replace(loaded, remaining_runs=0).operator_approved
+    assert not replace(loaded, id="different-job").operator_approved
+    inherited = replace(loaded, working_project_id=AGENT_DEFAULT_PROJECT)
+    inherited.operator_approval = inherited.approval_scope()
+    assert not replace(inherited, working_project_id=None).operator_approved
+    assert not updated.operator_approved
+    assert not paused.operator_approved
+    assert enabled.operator_approved
     assert updated.name == "Updated status check"
     assert updated.prompt == "private updated prompt"
     assert paused.status == "paused"

@@ -249,6 +249,9 @@ class ToolContext:
     )
     approval_rejected: bool = field(default=False, init=False, repr=False, compare=False)
     _approval_waited: bool = field(default=False, init=False, repr=False, compare=False)
+    _approved_invocations: set[str] = field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
     _permission_rechecks: list[Callable[[], Awaitable[None]]] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
@@ -425,6 +428,7 @@ class ToolContext:
         """Ask for this prepared invocation, without holding execution slots."""
         if self.approval_hook is None or self.is_cancelled():
             return False
+        invocation = self._approval_identity(arguments, cwd)
         object.__setattr__(self, "_approval_waited", True)
         waiting = asyncio.ensure_future(
             self.approval_hook(self, reason, requirements, arguments, cwd)
@@ -463,7 +467,26 @@ class ToolContext:
             raise ToolApprovalCancelledError
         if not allowed and not self.is_cancelled() and not is_unattended_run_kind(self.run_kind):
             object.__setattr__(self, "approval_rejected", True)
+        if allowed:
+            self._approved_invocations.add(invocation)
         return allowed and not self.is_cancelled()
+
+    def invocation_approved(self, arguments: JsonObject, *, cwd: Path | None = None) -> bool:
+        """Whether the operator approved this exact invocation in this Tool call."""
+        return self._approval_identity(arguments, cwd) in self._approved_invocations
+
+    def _approval_identity(self, arguments: JsonObject, cwd: Path | None) -> str:
+        return json.dumps(
+            [
+                self.tool_name,
+                arguments,
+                str(cwd.resolve()) if cwd else None,
+                normalize_execution(self.execution),
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     def mask_prepared_secrets[T](self, value: T) -> T:
         """Mask exact values prepared for this call, including short values and TOTP."""
