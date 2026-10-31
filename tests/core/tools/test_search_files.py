@@ -975,7 +975,7 @@ def test_approved_search_root_still_filters_denied_descendants(tmp_path: Path, m
         requests.append(requirements)
         return True
 
-    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     arguments: dict[str, Any] = (

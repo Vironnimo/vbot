@@ -184,7 +184,7 @@ ToolNoteHook = Callable[[str], None]
 ToolApprovalHook = Callable[
     ["ToolContext", str, Sequence[ApprovalRequirement], JsonObject, Path | None], Awaitable[bool]
 ]
-ToolApprovalRefreshHook = Callable[[], Awaitable[tuple[PermissionBoundary, JsonObject]]]
+ToolApprovalRefreshHook = Callable[[bool], Awaitable[tuple[PermissionBoundary, JsonObject]]]
 ToolApprovalWaitHook = Callable[[Awaitable[bool]], Awaitable[bool]]
 
 
@@ -248,6 +248,7 @@ class ToolContext:
         default=None, init=False, repr=False, compare=False
     )
     approval_rejected: bool = field(default=False, init=False, repr=False, compare=False)
+    _approval_waited: bool = field(default=False, init=False, repr=False, compare=False)
     _permission_rechecks: list[Callable[[], Awaitable[None]]] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
@@ -424,6 +425,7 @@ class ToolContext:
         """Ask for this prepared invocation, without holding execution slots."""
         if self.approval_hook is None or self.is_cancelled():
             return False
+        object.__setattr__(self, "_approval_waited", True)
         waiting = asyncio.ensure_future(
             self.approval_hook(self, reason, requirements, arguments, cwd)
         )
@@ -484,7 +486,9 @@ class ToolContext:
     def add_permission_recheck(self, callback: Callable[[], Awaitable[None]]) -> None:
         self._permission_rechecks.append(callback)
 
-    async def revalidate_permissions(self, *, enforce_cancel: bool = True) -> None:
+    async def revalidate_permissions(
+        self, *, enforce_cancel: bool = True, force_refresh: bool = False
+    ) -> None:
         """Recheck live authority and each prepared access without asking again."""
         if enforce_cancel and self.is_cancelled():
             raise asyncio.CancelledError
@@ -492,16 +496,18 @@ class ToolContext:
             raise ToolApprovalCancelledError
         if self.authority_recheck is not None:
             self.authority_recheck()
-        if not self._permission_rechecks:
+        force_refresh = force_refresh or self._approval_waited
+        if not self._permission_rechecks and not force_refresh:
             return
         if self.approval_refresh_hook is not None:
-            boundary, execution = await self.approval_refresh_hook()
+            boundary, execution = await self.approval_refresh_hook(force_refresh)
             if normalize_execution(execution) != normalize_execution(self.execution):
                 raise ToolContractError(
                     "The Computer changed while the Tool was waiting. Call it again."
                 )
             object.__setattr__(self, "permissions", boundary)
             self.permission_access.boundary = boundary
+            object.__setattr__(self, "_approval_waited", False)
         for callback in self._permission_rechecks:
             await callback()
         if enforce_cancel and self.is_cancelled():
@@ -524,11 +530,12 @@ class ToolContext:
             return False
         if self.approval_refresh_hook is None:
             return False
-        boundary, execution = await self.approval_refresh_hook()
+        boundary, execution = await self.approval_refresh_hook(True)
         if normalize_execution(execution) != normalize_execution(self.execution):
             return False
         object.__setattr__(self, "permissions", boundary)
         self.permission_access.boundary = boundary
+        object.__setattr__(self, "_approval_waited", False)
         self.permission_access.approve(requirements)
         return True
 

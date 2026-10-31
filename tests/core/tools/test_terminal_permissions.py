@@ -278,7 +278,7 @@ async def test_terminal_secret_is_consumed_only_after_approval_and_checks_actual
             )
         return decision
 
-    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     def input_context() -> Any:

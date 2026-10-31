@@ -121,7 +121,8 @@ async def test_approved_target_cannot_retarget_to_an_already_allowed_link(
         link_directory(link, allowed)
         return True
 
-    async def refresh():
+    async def refresh(force: bool):
+        assert force
         return boundary, execution
 
     context = make_context(
@@ -157,12 +158,14 @@ async def test_mixed_path_and_url_checks_share_one_exact_request(tmp_path: Path)
     )
     execution = {"computer_id": "server", "allowed_computer_ids": ["server"]}
     requests = []
+    refreshes = []
 
     async def approval(context, reason, requirements, arguments, cwd):
         requests.append(requirements)
         return True
 
-    async def refresh():
+    async def refresh(force: bool):
+        refreshes.append(force)
         return boundary, execution
 
     context = make_context(
@@ -185,6 +188,8 @@ async def test_mixed_path_and_url_checks_share_one_exact_request(tmp_path: Path)
     assert context.permission_access.check_url("https://example.com/b") is not None
     hard = context.permission_access.check_url("http://localhost:1234/")
     assert hard is not None and hard.reason == "protected_location"
+    await context.revalidate_permissions()
+    assert refreshes == [True, False]
 
 
 def test_generated_output_grant_is_limited_to_one_folder_and_keeps_hard_denies(
@@ -223,7 +228,76 @@ async def test_path_approval_preparation_and_rechecks_run_off_event_loop(
         return original(boundary, *args, **kwargs)
 
     monkeypatch.setattr(PermissionBoundary, "check_path", checked)
-    context = make_context("read", cwd=tmp_path)
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    context = make_context("read", cwd=tmp_path, permissions=boundary)
     await authorize_paths(context, [(tmp_path / "file", "read", {})], arguments={})
     await context.revalidate_permissions()
     assert len(checks) >= 2 and all(thread != loop_thread for thread in checks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["paths", "urls", "command", "argv"])
+async def test_unrestricted_preflight_needs_no_permission_workers_or_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from core.tools import _permission_preflight as preflight
+    from tests.core.permissions.command_check_support import FakeAnalyzer, fake_checker
+    from tests.core.tools.tools_test_support import make_context
+
+    worker = AsyncMock(side_effect=AssertionError("unrestricted access entered a worker"))
+    refresh = AsyncMock(side_effect=AssertionError("unrestricted access refreshed its rules"))
+    monkeypatch.setattr(preflight, "run_permission_decision", worker)
+    context = make_context("read", cwd=tmp_path, approval_refresh_hook=refresh)
+    checker = fake_checker(FakeAnalyzer())
+    if operation == "paths":
+        await preflight.authorize_paths(context, [(tmp_path, "read", {})], arguments={})
+    elif operation == "urls":
+        await preflight.authorize_urls(context, ["https://example.test/a"], arguments={})
+    elif operation == "command":
+        await preflight.authorize_command(
+            context, checker, arguments={}, cwd=tmp_path, env={}, command="echo ok", shell="bash"
+        )
+    else:
+        await preflight.authorize_command(
+            context, checker, arguments={}, cwd=tmp_path, env={}, argv=["echo", "ok"]
+        )
+    await context.revalidate_permissions()
+    worker.assert_not_awaited()
+    refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", ["approval", "review"])
+async def test_unrestricted_call_refreshes_authority_after_a_real_wait(
+    tmp_path: Path, wait: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from tests.core.tools.tools_test_support import make_context
+
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    refresh = AsyncMock(return_value=(boundary, {"computer_id": "server"}))
+    context = make_context(
+        "bash",
+        cwd=tmp_path,
+        approval_hook=AsyncMock(return_value=True),
+        approval_refresh_hook=refresh,
+    )
+    if wait == "approval":
+        assert await context.request_approval(
+            "review", [ApprovalRequirement.review("command")], arguments={}
+        )
+    await context.revalidate_permissions(force_refresh=wait == "review")
+    refresh.assert_awaited_once_with(True)
+    assert context.permissions is boundary
+    assert context.permission_access.boundary is boundary
+    await context.revalidate_permissions()
+    refresh.assert_awaited_once()

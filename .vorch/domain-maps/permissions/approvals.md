@@ -32,6 +32,8 @@ URL rejections use the host's normalized DNS/IDNA forms and share the host-acces
 
 After waiting, execution rechecks current rules and preparation freshness. Changed hard rules, links, Computer authority or operation identity cannot be bypassed by an old positive decision. Execution slots are released while waiting and reacquired before execution. Call-local cancellation is checked again after reacquisition and remains local to that Tool; Run cancellation still propagates.
 
+Unrestricted path, URL and command preflights return without preparing access identities, entering permission workers or registering rechecks. Ordinary restricted-call revalidation refreshes only changed rule sources. A user approval or an active Shell Review forces a fresh Boundary even for a previously unrestricted call; inactive reviewers do not. Shell execution also refuses a workdir whose resolved target changed during review.
+
 Media generation revalidates concrete directory probes and output filenames after admission to the artifact worker, before each write. A post-generation refusal reports that the Provider already generated the result, names completed outputs and possible partial files, and never automatically repeats the paid generation.
 
 ## Pending decisions and accessors

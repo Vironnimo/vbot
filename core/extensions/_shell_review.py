@@ -8,7 +8,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.extensions._callbacks import invoke_isolated_handler
 from core.extensions._declarations import (
@@ -45,12 +45,15 @@ async def review_shell(
         "evidence": {"environment": dict(environment)},
     }
     needs_approval = False
+    reviewed = False
     for record in registry.records():
         reviewer = record.declarations.shell_reviewer if record.status == "loaded" else None
         if reviewer is None:
             continue
         try:
-            needs_approval |= await _evaluate(registry, record, reviewer, context, prepared)
+            decision = await _evaluate(registry, record, reviewer, context, prepared)
+            reviewed |= decision != "inactive"
+            needs_approval |= decision == "ask"
         except Exception as error:
             # Exceptions can contain commands, user requests or credentials.
             trace = error.__traceback__
@@ -67,6 +70,8 @@ async def review_shell(
             )
             needs_approval = True
     if not needs_approval:
+        if reviewed:
+            await context.revalidate_permissions(force_refresh=True)
         return True
     target = json.dumps(prepared, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     allowed = await context.request_approval(
@@ -86,7 +91,7 @@ async def _evaluate(
     reviewer: ShellReviewerDeclaration,
     context: ToolContext,
     prepared: dict[str, Any],
-) -> bool:
+) -> Literal["inactive", "allow", "ask"]:
     # Keep per-owner identities in a separate frame: a detached callback must
     # not start using the next iteration's declaration or registration.
     identity = registry.registration_identity(record.name)
@@ -106,9 +111,9 @@ async def _evaluate(
         active, extension_name=record.name, description="shell review activation", timeout_seconds=1
     )
     if enabled is False:
-        return False
+        return "inactive"
     if enabled is not True:
-        return True
+        return "ask"
     request = json.loads(json.dumps(prepared))
 
     if inspect.iscoroutinefunction(reviewer.handler):
@@ -130,4 +135,4 @@ async def _evaluate(
         handler, extension_name=record.name, description="shell review", timeout_seconds=125
     )
     current()
-    return not isinstance(result, dict) or result.get("decision") != "allow"
+    return "allow" if isinstance(result, dict) and result.get("decision") == "allow" else "ask"

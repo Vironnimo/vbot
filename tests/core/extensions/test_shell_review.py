@@ -104,6 +104,10 @@ async def test_inactive_reviewers_and_valid_allows_need_no_confirmation(
     context = SimpleNamespace(request_approval=AsyncMock(), revalidate_permissions=AsyncMock())
     assert await _review(registry, context, tmp_path)
     context.request_approval.assert_not_awaited()
+    if active:
+        context.revalidate_permissions.assert_awaited_once_with(force_refresh=True)
+    else:
+        context.revalidate_permissions.assert_not_awaited()
 
 
 @pytest.mark.asyncio

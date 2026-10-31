@@ -44,7 +44,7 @@ async def test_patch_hard_denial_precedes_any_approval_or_change(tmp_path: Path)
         requests.append(requirements)
         return True
 
-    async def refresh() -> tuple[Any, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[Any, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     ctx = context(work, permissions=boundary, approval_hook=approve, approval_refresh_hook=refresh)

@@ -182,7 +182,7 @@ async def test_portal_approval_is_exact_and_vbot_port_never_asks(tmp_path: Path)
         requests.append(requirements)
         return True
 
-    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     refused, _ = await _call(
