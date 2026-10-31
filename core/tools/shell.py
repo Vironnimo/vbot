@@ -288,7 +288,7 @@ class ShellTool:
                 arguments,
                 command=call.command,
                 shell=HOST_SHELL_KIND,
-                cwd=call.workdir,
+                cwd=call.workdir.resolve(),
                 environment=public_environment,
             )
             if not approved:

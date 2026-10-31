@@ -81,11 +81,13 @@ async def test_shell_review_waits_before_launch_and_hard_denials_skip_review(
         await answer.wait()
         return False
 
+    (tmp_path / "sub").mkdir()
     async with started_shell(tmp_path, review_shell=review) as shell:
-        call = shell.call({"command": "echo safe", "env": {"PUBLIC": "value"}})
+        call = shell.call({"command": "echo safe", "env": {"PUBLIC": "value"}, "workdir": "sub/.."})
         await asyncio.wait_for(arrived.wait(), timeout=2)
         assert shell.launcher.processes == []
         assert reviewed[0]["command"] == "echo safe"
+        assert reviewed[0]["cwd"] == tmp_path.resolve()
         assert reviewed[0]["environment"] == {"PUBLIC": "value"}
         answer.set()
         result = await call

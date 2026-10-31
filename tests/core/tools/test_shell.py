@@ -1215,17 +1215,22 @@ async def test_command_over_the_running_command_limit_says_how_to_make_room(
 async def test_project_workdir_runs_in_the_project_directory(tmp_path: Path) -> None:
     directory = tmp_path / "repository"
     directory.mkdir()
-    async with started_shell(tmp_path, projects=FakeProjects({"vbot": directory})) as shell:
+    gone = tmp_path / "gone"
+    async with started_shell(
+        tmp_path, projects=FakeProjects({"vbot": directory, "moved": gone})
+    ) as shell:
         call = shell.call({"command": "ls", "workdir": "project:vbot"})
         (await shell.started()).exit(0)
         assert data(await shell.returned(call))["status"] == "exited"
         unknown = await shell.call({"command": "ls", "workdir": "project:other"})
+        missing = await shell.call({"command": "ls", "workdir": "project:moved"})
 
     assert shell.launcher.cwds == [directory.resolve()]
-    assert unknown["error"]["message"] == (
-        f'{SHELL_MODEL_NAME} was not run: workdir "project:other" names no existing Project. '
-        "Pass the Project's directory path instead."
-    )
+    assert unknown["error"]["code"] == "invalid_arguments"
+    assert "project:other" in unknown["error"]["message"]
+    assert missing["error"]["code"] == "invalid_arguments"
+    assert "moved" in missing["error"]["message"]
+    assert model_path(gone) in missing["error"]["message"]
 
 
 @pytest.mark.asyncio

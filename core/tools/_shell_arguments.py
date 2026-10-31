@@ -30,7 +30,12 @@ from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     powershell_literal,
 )
-from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
+from core.tools._workdir import (
+    ProjectWorkdirError,
+    is_project_workdir,
+    project_workdir,
+    validate_project_workdir,
+)
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
@@ -701,6 +706,12 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
 
 def validate_workdir(context: ToolContext, arguments: JsonObject, workdir: Path) -> None:
     raw = optional_string(arguments.get("workdir"), field_name="workdir")
+    if raw and is_project_workdir(raw):
+        try:
+            validate_project_workdir(raw, workdir)
+        except ProjectWorkdirError as error:
+            raise _call_error(str(error)) from error
+        return
     try:
         directory = is_dir_strict(workdir)
     except OSError:
