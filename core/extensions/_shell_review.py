@@ -37,6 +37,9 @@ async def review_shell(
     environment: Mapping[str, str],
 ) -> bool:
     """Review a snapshot; callbacks can neither transform nor execute this call."""
+    if context.invocation_approved(arguments, cwd=cwd):
+        await context.revalidate_permissions()
+        return True
     prepared = {
         "platform": "windows" if sys.platform == "win32" else "linux",
         "shell": shell,

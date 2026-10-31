@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from core.extensions import ExtensionRegistry
-from tests.core.extensions.extension_test_support import write_extension
+from core.permissions import ApprovalRequirement, PermissionBoundary
+from core.tools.contracts import ToolContractError
+from tests.core.extensions.extension_test_support import tool_context, write_extension
 
 
 def _registry(tmp_path: Path, body: str, *, active: bool = True) -> ExtensionRegistry:
@@ -51,7 +54,9 @@ async def test_review_cannot_rewrite_the_command_or_its_one_time_approval(tmp_pa
         ),
     )
     context = SimpleNamespace(
-        request_approval=AsyncMock(return_value=True), revalidate_permissions=AsyncMock()
+        invocation_approved=Mock(return_value=False),
+        request_approval=AsyncMock(return_value=True),
+        revalidate_permissions=AsyncMock(),
     )
     assert await _review(registry, context, tmp_path)
     call = context.request_approval.await_args
@@ -79,6 +84,7 @@ async def test_no_unusable_or_retired_judgment_can_bypass_confirmation(
 ) -> None:
     registry = _registry(tmp_path, body)
     context = SimpleNamespace(
+        invocation_approved=Mock(return_value=False),
         registry=registry,
         request_approval=AsyncMock(return_value=False),
         revalidate_permissions=AsyncMock(),
@@ -101,7 +107,11 @@ async def test_inactive_reviewers_and_valid_allows_need_no_confirmation(
     tmp_path: Path, active: bool, body: str
 ) -> None:
     registry = _registry(tmp_path, body, active=active)
-    context = SimpleNamespace(request_approval=AsyncMock(), revalidate_permissions=AsyncMock())
+    context = SimpleNamespace(
+        invocation_approved=Mock(return_value=False),
+        request_approval=AsyncMock(),
+        revalidate_permissions=AsyncMock(),
+    )
     assert await _review(registry, context, tmp_path)
     context.request_approval.assert_not_awaited()
     if active:
@@ -124,7 +134,10 @@ async def test_caller_cancellation_never_becomes_a_confirmation_request(tmp_path
         ),
     )
     context = SimpleNamespace(
-        entered=asyncio.Event(), finished=asyncio.Event(), request_approval=AsyncMock()
+        invocation_approved=Mock(return_value=False),
+        entered=asyncio.Event(),
+        finished=asyncio.Event(),
+        request_approval=AsyncMock(),
     )
     task = asyncio.create_task(_review(registry, context, tmp_path))
     await context.entered.wait()
@@ -133,3 +146,56 @@ async def test_caller_cancellation_never_becomes_a_confirmation_request(tmp_path
         await task
     await context.finished.wait()
     context.request_approval.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [None, "arguments", "cwd", "computer", "call", "revoked"])
+async def test_prior_operator_consent_covers_only_the_same_live_invocation(
+    tmp_path: Path, change: str | None
+) -> None:
+    registry = _registry(tmp_path, "return {'decision': 'ask'}")
+    approve = AsyncMock(return_value=True)
+    refresh = AsyncMock(return_value=(PermissionBoundary.UNRESTRICTED, {"computer_id": "server"}))
+    context = replace(
+        tool_context("bash", tmp_path), approval_hook=approve, approval_refresh_hook=refresh
+    )
+    arguments = {"command": "original-command", "workdir": str(tmp_path)}
+    assert await context.authorize(
+        [ApprovalRequirement.review("prepared")],
+        reason="Permission Rules",
+        arguments=arguments,
+        cwd=tmp_path,
+    )
+    approve.reset_mock()
+    if change == "arguments":
+        arguments["command"] = "changed-command"
+    elif change == "cwd":
+        tmp_path = tmp_path / "changed"
+    elif change == "computer":
+        context.execution["computer_id"] = "other"
+        refresh.return_value = (PermissionBoundary.UNRESTRICTED, context.execution)
+    elif change == "call":
+        context = replace(context, tool_call_id="sibling")
+    elif change == "revoked":
+
+        async def revoked():
+            raise ToolContractError("The authority changed")
+
+        context.add_permission_recheck(revoked)
+
+    async def review():
+        return await registry.review_shell(
+            context,
+            arguments,
+            command=arguments["command"],
+            shell="powershell",
+            cwd=tmp_path,
+            environment={},
+        )
+
+    if change == "revoked":
+        with pytest.raises(ToolContractError, match="authority changed"):
+            await review()
+    else:
+        assert await review()
+    assert approve.await_count == int(change in {"arguments", "cwd", "computer", "call"})
