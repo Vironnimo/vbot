@@ -544,6 +544,16 @@ class TestUpdate:
             f'Send: {{"action":"update","id":"{standup}","rrule":"FREQ=DAILY"}}'
         )
 
+    def test_a_date_does_not_move_a_timed_occurrence(self, tool: CalendarTool) -> None:
+        standup = _standup(tool)
+
+        message = tool.refused(
+            {"action": "update", "id": f"{standup}_20300109T0900", "start": "2030-01-12"}
+        )
+
+        assert "start must be a date-time: an occurrence keeps the event's kind" in message
+        assert tool.only_event().overrides == {}
+
     def test_update_needs_a_change(self, tool: CalendarTool) -> None:
         event_id = tool.service.create_event(title="Dentist", start="2030-01-10T15:00").id
 

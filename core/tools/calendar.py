@@ -16,6 +16,7 @@ from core.calendar import (
     occurrence_id,
     parse_occurrence_id,
 )
+from core.calendar.when import looks_like_date
 from core.projects import format_agent_address
 from core.tools._calendar_arguments import (
     ATTENDEES_FIELD,
@@ -406,8 +407,9 @@ class _CalendarTool(_CalendarRead):
         event = self._calendar.get_event(parsed[0])
         if event.tz_name:
             for name in ("start", "end"):
-                if name in fields:
-                    moment = datetime.fromisoformat(fields[name])
+                # A date stays untouched, so the service refuses it for a timed occurrence.
+                if name in fields and not looks_like_date(fields[name].strip()):
+                    moment = datetime.fromisoformat(fields[name].strip())
                     if moment.tzinfo is None:
                         fields[name] = moment.replace(tzinfo=ZoneInfo(event.tz_name)).isoformat()
         occurrence = await self._calendar.update_occurrence(item_id, actor="tool", **fields)
