@@ -25,16 +25,18 @@ The reasons below describe intended behavior and failure prevention, not an asse
 | `Separate factual premises from opinions...` | Avoids rating opinions or future events as settled facts while still checking their premises. |
 | `Done when the scope and wording...` | Resolves consequential ambiguity without requiring a clarification before every check. |
 | `Trace the evidence behind each claim.` | Directs research toward the underlying basis of a claim. |
-| `Use available search and page-reading Tools...` | Requires actual source reading, with the existing capabilities rather than a new execution mechanism. |
+| `Read the original evidence and its relevant context...` | Requires actual source reading while allowing supplied originals to settle a claim without an unnecessary external search. |
 | `Search snippets, generated summaries and existing fact-checks...` | Prevents citation laundering through a snippet, another Model or a fact-check's unsupported conclusion. |
 | `If the original is unavailable...` | Gives a usable fallback while preserving the difference between direct and reported evidence. |
 | `If external research is unavailable...` | Prevents pretending that supplied text or remembered knowledge constitutes external verification. |
 | `Done when each claim has relevant evidence...` | Allows an explicit evidence gap as a legitimate result. |
 | `Challenge the initial interpretation.` | Makes confirmation bias a concrete research step. |
-| `Search for evidence that could contradict it...` | Avoids searches phrased only to confirm the first hypothesis and allows local-language evidence. |
+| `Check plausible counterevidence and alternative interpretations.` | Preserves the check against confirmation bias even when supplied evidence suffices. |
+| `Search externally when the evidence already inspected...` | Uses neutral and relevant original-language searches for material open questions instead of requiring a search after the evidence already settles the claim. |
 | `Check source competence, proximity...` | Stops publisher reputation or official status from substituting for claim-specific evidence. |
 | `Count independent evidence...` | Syndication and circular citations do not become independent confirmation. |
 | `For quotes and events, check...` | Covers recycled dates, cropped quotations and misleading numerical comparisons where the original fact can be accurate. |
+| `Recalculate derived quantities from the underlying values...` | Prevents copying a source's incorrect percentage or total when its underlying values permit a direct check; exposes the decisive inputs and calculation. |
 | `For scientific or causal claims...` | Stops an isolated study or correlation from being overstated as general causal evidence. |
 | `Resolve material contradictions...` | Weighs evidence rather than votes, political affiliation or agreement with the user. |
 | `Done when you have checked the plausible counterevidence...` | Limits counterchecking to evidence and context capable of changing the result. |
