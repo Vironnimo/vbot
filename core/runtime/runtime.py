@@ -206,6 +206,7 @@ class Runtime(RuntimeServiceGraph):
                 session_boundary=self._session_boundary,
                 logger=self.logger,
                 decisions=self._decisions,
+                cron=self._cron_service,
             )
         return self._extension_host_factory
 

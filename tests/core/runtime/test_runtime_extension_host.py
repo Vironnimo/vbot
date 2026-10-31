@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -22,7 +23,7 @@ from core.permissions import (
     PermissionCeiling,
     normalize_permission_rules,
 )
-from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
+from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunExecutionOwner, RunKind
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionNotFoundError
@@ -108,6 +109,71 @@ async def test_shell_review_context_keeps_human_authority_separate_from_delegati
     assert evidence["authority_truncated"] is False
     child.append_many([ChatMessage.user("x" * 20001)], subagent_reply_target="user")
     assert (await host.review_context(context))["authority_truncated"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["cron_operator", "cron_tool", "input", "group", "system"])
+async def test_shell_review_keeps_automation_and_group_scope_attributed(
+    runtime: Runtime, tmp_path: Path, source: str
+) -> None:
+    sessions = runtime.chat_sessions
+    session = sessions.create(
+        "main", metadata={"input_source_id": "feed"} if source == "input" else {}
+    )
+    kind = (
+        RunKind.CRON
+        if source.startswith("cron")
+        else (
+            RunKind.CHANNEL
+            if source == "group"
+            else RunKind.SYSTEM
+            if source == "system"
+            else RunKind.USER
+        )
+    )
+    run = Run(run_id="source-run", agent_id="main", session_id=session.id, run_kind=kind)
+    if source.startswith("cron"):
+        job = await runtime.cron_service.create_job(
+            agent_id="main",
+            prompt="Inspect the project",
+            schedule_type="interval",
+            interval_seconds=3600,
+            status="paused",
+            actor="rpc" if source == "cron_operator" else "tool",
+        )
+        run.schedule_id = job.id
+    elif source == "input":
+        run.accessor_input_id = "feed:request"
+        await sessions.accept_accessor_input_async(
+            session.address,
+            run.accessor_input_id,
+            request_hash="hash",
+            payload={},
+            queue_id="queue-source",
+        )
+    await sessions.start_run(run)
+    session.for_run(run.id).append(
+        ChatMessage.user(
+            "Inspect the project",
+            sender=MessageSender("member-1", "Member", "member") if source == "group" else None,
+        )
+    )
+    host = _owner_host(runtime, "mcp")
+    assert host.review_context is not None
+    context = replace(tool_context("bash", tmp_path), agent_id="main", session_id=session.id)
+    authority = await host.review_context(context)
+    if source == "group":
+        request = json.loads(authority["user_requests"][0])
+        assert (request["sender_id"], request["role"]) == ("member-1", "member")
+    else:
+        assert authority["user_requests"] == []
+        assert bool(authority["authorized_tasks"]) == (source in {"cron_operator", "input"})
+    if source == "input":
+        # A human follow-up in the same Run is not a second program input.
+        session.for_run(run.id).append(ChatMessage.user("Only inspect, never change files"))
+        followup = await host.review_context(context)
+        assert followup["user_requests"] == ["Only inspect, never change files"]
+        assert len(followup["authorized_tasks"]) == 1
 
 
 @pytest.mark.asyncio

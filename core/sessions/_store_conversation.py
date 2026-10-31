@@ -24,6 +24,20 @@ _HAS_TEXT = (
 _CONVERSATION = f"e.role IN ('user', 'assistant') AND {_HAS_TEXT}"
 _SENDER_KIND = "(SELECT s.source_kind FROM user_entry_senders AS s WHERE s.entry_key = e.entry_key)"
 _SENDER_ID = "(SELECT s.sender_id FROM user_entry_senders AS s WHERE s.entry_key = e.entry_key)"
+_SENDER_ROLE = "(SELECT s.sender_role FROM user_entry_senders AS s WHERE s.entry_key = e.entry_key)"
+_RUN_KIND = "(SELECT r.run_kind FROM runs AS r WHERE r.run_key = e.run_key)"
+_SCHEDULE_ID = "(SELECT n.schedule_id FROM run_notifications AS n WHERE n.run_key = e.run_key)"
+# Task inputs use a configured source id as the durable receipt's namespace.
+# Match the initial User carrier only: later human steering is a separate request.
+_INPUT_SOURCE = (
+    "(SELECT json_extract(s.metadata_json, '$.input_source_id') "
+    "FROM session_accessor_inputs AS i JOIN sessions AS s ON s.session_key = i.session_key "
+    "WHERE i.run_key = e.run_key AND i.state = 'started' "
+    "AND substr(i.input_id, 1, instr(i.input_id, ':') - 1) "
+    "= json_extract(s.metadata_json, '$.input_source_id') "
+    "AND e.entry_key = (SELECT first.entry_key FROM entries AS first "
+    "WHERE first.run_key = e.run_key AND first.role = 'user' ORDER BY first.seq LIMIT 1))"
+)
 
 
 def conversation_page(
@@ -51,7 +65,9 @@ def conversation_page(
     columns = (
         "e.seq, e.entry_id, e.role, e.created_at, "
         f"substr({_TEXT}, 1, {max_text_chars + 1}) AS text, "
-        f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id, e.subagent_reply_target"
+        f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id, e.subagent_reply_target, "
+        f"{_SENDER_ROLE} AS sender_role, {_RUN_KIND} AS run_kind, "
+        f"{_SCHEDULE_ID} AS schedule_id, {_INPUT_SOURCE} AS input_source_id"
     )
     rows = _store_lineage.ordered_rows(
         connection,
@@ -126,6 +142,10 @@ def _message(row: sqlite3.Row, limit: int) -> SessionConversationMessage:
         truncated=len(text) > limit,
         sender_kind=str(row["sender_kind"]) if row["sender_kind"] is not None else None,
         sender_id=str(row["sender_id"]) if row["sender_id"] is not None else None,
+        sender_role=row["sender_role"],
+        run_kind=row["run_kind"],
+        schedule_id=row["schedule_id"],
+        input_source_id=row["input_source_id"],
         subagent_reply_target=(
             str(row["subagent_reply_target"]) if row["subagent_reply_target"] is not None else None
         ),

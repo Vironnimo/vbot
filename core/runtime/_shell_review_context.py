@@ -28,6 +28,8 @@ def shell_review_context(
     seen: set[SessionAddress] = set()
     requests: list[tuple[str, int, str]] = []
     delegated: list[str] = []
+    tasks: list[str] = []
+    automated: list[dict[str, Any]] = []
     omitted = False
     truncated = False
     remaining = _TEXT_BUDGET
@@ -49,19 +51,60 @@ def shell_review_context(
         for message in reversed(page.messages):
             if message.role != "user":
                 continue
-            human = message.sender_kind != "session" and message.subagent_reply_target != "parent"
+            peer = message.sender_kind == "session" or message.subagent_reply_target == "parent"
+            automation = message.input_source_id is not None or (
+                message.run_kind not in {None, "user", "channel", "live"}
+                and message.subagent_reply_target != "user"
+            )
+            human = not peer and not automation
             if message.truncated:
-                truncated |= human
+                truncated |= not peer
                 omitted = True
                 continue
-            if len(message.text) > remaining or len(requests) >= _MESSAGE_LIMIT:
+            if (
+                len(message.text) > remaining
+                or len(requests) + len(tasks) + len(automated) >= _MESSAGE_LIMIT
+            ):
                 omitted = True
                 continue
             remaining -= len(message.text)
+            text = masker.mask(message.text)
             if human:
-                requests.append((message.timestamp, message.sequence, masker.mask(message.text)))
+                if message.sender_id is not None:
+                    text = json.dumps(
+                        {
+                            "source": "channel",
+                            "sender_id": message.sender_id,
+                            "role": message.sender_role,
+                            "session_id": address.session_id,
+                            "text": text,
+                        },
+                        ensure_ascii=False,
+                    )
+                requests.append((message.timestamp, message.sequence, text))
+            elif not peer and message.input_source_id is not None:
+                tasks.append(
+                    json.dumps(
+                        {
+                            "source": "authenticated_task_input",
+                            "source_id": message.input_source_id,
+                            "text": text,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            elif not peer and automation:
+                automated.append(
+                    {
+                        "source": message.run_kind,
+                        "schedule_id": message.schedule_id,
+                        "agent_id": address.agent_id,
+                        "project_id": address.project_id,
+                        "text": text,
+                    }
+                )
             else:
-                delegated.append(masker.mask(message.text))
+                delegated.append(text)
         link = read_link(sessions, address, strict=True)
         if link is None:
             break
@@ -71,6 +114,7 @@ def shell_review_context(
         truncated = True
     return {
         "user_requests": [text for _, _, text in sorted(requests)],
+        "authorized_tasks": tasks,
         "authority_truncated": truncated,
         "permissions": json.dumps(
             {
@@ -83,6 +127,7 @@ def shell_review_context(
         ),
         "evidence": {
             "delegated_requests": delegated,
+            "automated_requests": automated,
             "earlier_messages_omitted": omitted,
         },
     }

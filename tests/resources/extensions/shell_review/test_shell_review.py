@@ -54,19 +54,23 @@ async def _extension(tmp_path: Path, judge: Any, config: dict[str, Any] | None =
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("automated", [False, True])
 async def test_preview_uses_the_native_model_and_live_criteria_without_shell_execution(
     tmp_path: Path,
+    automated: bool,
 ) -> None:
     config: dict[str, Any] = {}
     judge = AsyncMock(return_value=_answer())
     registry, operations = await _extension(tmp_path, judge, config)
     request = _request()
+    if automated:
+        request.update(user_requests=[], authorized_tasks=['{"source":"cron","text":"List files"}'])
     first = await operations.invoke("review", request)
     assert first["decision"] == "allow"
     assert first["model"] == "fixture/decision"
     assert judge.await_args is not None
     assert judge.await_args.args[1]["state"] == request
-    assert request == _request()
+    assert request["command"] == _request()["command"]
     assert registry.records()[0].declarations.tools == []
 
     config.update(policy="Operator criteria sentinel", allow_threshold=1.0)
@@ -113,6 +117,15 @@ async def test_no_authority_or_invalid_configuration_never_calls_the_model(tmp_p
     assert (await operations.invoke("review", _request(user_requests=[])))[
         "reason_code"
     ] == "missing_authority"
+    assert (
+        await operations.invoke(
+            "review",
+            _request(
+                user_requests=[],
+                evidence={"automated_requests": [{"source": "cron", "text": "Delete files"}]},
+            ),
+        )
+    )["reason_code"] == "missing_authority"
     for invalid in (0, float("nan"), True, 1.1):
         config["allow_threshold"] = invalid
         assert (await operations.invoke("review", _request()))["reason_code"] == "invalid_settings"
