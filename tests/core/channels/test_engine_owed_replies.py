@@ -19,7 +19,7 @@ from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.engine import ChannelConversationEngine
 from core.chat import ChatMessage
 from core.extensions import InteractionButton, InteractionEvent
-from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run
 from core.runs.run import DEFAULT_RUN_EVENT_RETENTION_LIMIT
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions._types import SessionRunCompletion
@@ -76,6 +76,59 @@ async def _next_engine(
     engine.start()
     await settle_replies(engine)
     return engine, sessions, transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolved_offline", [False, True])
+async def test_pending_approval_notifies_the_channel_once_without_consuming_the_answer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resolved_offline: bool,
+) -> None:
+    runs = _Runs(event_retention_limit=2)
+    manager = ChatRunManager()
+    engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=runs.trigger)
+    sent = asyncio.Event()
+    original_send = transport.send_text
+
+    async def send(*args, **kwargs):
+        await original_send(*args, **kwargs)
+        sent.set()
+
+    monkeypatch.setattr(transport, "send_text", send)
+    await engine.handle_inbound_text(
+        make_conversation(
+            kind="group", mentioned_bot=True, message_id="question", thread_id="topic"
+        ),
+        "Do the task",
+    )
+    await asyncio.wait_for(runs.started.wait(), timeout=5)
+    run = runs.runs[0]
+    engine.set_connected(False)
+    waiting = asyncio.create_task(manager.request_approval(run, {}, ["access"], ["access"]))
+    await asyncio.sleep(0)
+    request_id = manager.approvals_snapshot()["requests"][0]["id"]
+    # Neither bounded replay nor unrelated output is the authority for a wait.
+    for _ in range(3):
+        run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"text": "part"})
+    if resolved_offline:
+        manager.resolve_approval(request_id, "allow")
+        assert await waiting
+    engine.set_connected(True)
+    if not resolved_offline:
+        await asyncio.wait_for(sent.wait(), timeout=5)
+        assert transport.sent_texts == [replies_module._APPROVAL_REPLY]
+        assert transport.sent_reply_targets == ["question"]
+        assert transport.sent_thread_ids == ["topic"]
+        assert not run.claim_approval_notice(request_id)
+        manager.resolve_approval(request_id, "allow")
+        assert await waiting
+    _answer(run, "Task complete")
+    await drain(engine, 12345)
+    await engine.stop()
+    assert transport.sent_texts == (
+        ["Task complete"] if resolved_offline else [replies_module._APPROVAL_REPLY, "Task complete"]
+    )
 
 
 @pytest.mark.asyncio

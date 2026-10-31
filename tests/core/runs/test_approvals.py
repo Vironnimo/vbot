@@ -29,6 +29,8 @@ async def test_approval_rejection_is_run_local_and_cancellation_removes_request(
     snapshot = manager.approvals_snapshot()
     assert len(snapshot["requests"]) == 1
     assert manager.resolve_approval(snapshot["requests"][0]["id"], "reject")
+    # Resolution retires the notice immediately, before the waiting task resumes.
+    assert not run.claim_approval_notice(snapshot["requests"][0]["id"])
     assert not await request
     assert not await manager.request_approval(run, {}, ["read"], ["read"])
     waiting = asyncio.create_task(manager.request_approval(run, {}, ["other"], ["other"]))
