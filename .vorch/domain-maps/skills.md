@@ -96,7 +96,7 @@ Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
 ## Agent-facing text
 
-This domain owns the Skill System Prompt blocks (`core:skills`, `core:skill_maintenance`), the `skill_manage` results and refusals, Repository Profile Skill preloads, the bundled `skill-writing` support-file guidance and the bundled `vbot-docs` instructions for Skill history, archive, pins and the Librarian. Before you change, add or delete a sentence of them, read `skills/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
+This domain owns the Skill System Prompt blocks (`core:skills`, `core:skill_maintenance`), the `skill_manage` results and refusals, Repository Profile Skill preloads, the bundled `skill-writing` support-file guidance, the bundled `fact-check` workflow, and the bundled `vbot-docs` instructions for Skill history, archive, pins and the Librarian. Before you change, add or delete a sentence of them, read `skills/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 

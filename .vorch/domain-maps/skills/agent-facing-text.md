@@ -1,8 +1,73 @@
 # Skills Agent-facing text
 
-Why each sentence of the Agent-facing text the Skills domain owns exists: the Skill System Prompt blocks (`core:skills`, `core:skill_maintenance`), the `skill_manage` results and refusals, Repository Profile Skill preloads, the bundled `skill-writing` support-file guidance and the bundled `vbot-docs` instructions for Skill history, archive, pins and the Librarian. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the Agent-facing text the Skills domain owns exists: the Skill System Prompt blocks (`core:skills`, `core:skill_maintenance`), the `skill_manage` results and refusals, Repository Profile Skill preloads, the bundled `skill-writing` support-file guidance, the bundled `fact-check` workflow, and the bundled `vbot-docs` instructions for Skill history, archive, pins and the Librarian. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 Repository Profile Skill preloads reuse the existing `skill_content` wrapper and expand `{baseDir}` to the absolute Skill directory. The injected `Skill directory: {absolute_path}` line gives relative script and resource references their package base before any Skill Tool call; it is included only with a selected, available preload. The Profile body remains repository-authored text. Projects owns the preload selection and reports an absent or unavailable Skill instead of pretending it loaded.
+
+## Bundled fact-check Skill
+
+`resources/skills/fact-check/SKILL.md` is a playbook over existing research and image-reading capabilities, with no registered Tool or helper script. User requirement (2026-10-31): explicit verification requests for claims in text, linked articles and screenshots; ordinary research and media authenticity are outside its scope. It uses the ordinary bundled Skill discovery and allowlist policy. Methodological basis: [AFP's fact-checking method](https://faktencheck.afp.com/Wie-wir-arbeiten), especially original evidence, context, independent corroboration and transparent sourcing; the Skill also handles unresolved claims instead of requiring a publishable debunk.
+
+The reasons below describe intended behavior and failure prevention, not an assertion that a Model cannot fail. The source file owns the exact workflow and report pattern.
+
+| Text | Reason |
+|---|---|
+| `Check factual claims in text, linked articles and screenshots.` | Catalog purpose matches all three input forms the user selected. |
+| `Use when the user asks whether a claim is true...` | Activates on verification intent, while preventing unsolicited checks of summaries, ordinary research and image authenticity. |
+| `Web search and page reading for external verification...` | Declares capability needs without inventing unsupported Tool requirements metadata or binding to a search vendor. |
+| `Produce an evidence-backed assessment...` | Defines the outcome as a supported assessment, not a binary classifier or a collection of links. |
+| `Check statements in text...` | Preserves the input boundary after activation; screenshot text does not authorize forensic image analysis. |
+| `Research and report in the conversation...` | Keeps ordinary research autonomous and prevents a check from turning into unsolicited outreach or publication. |
+| `Identify the claims that determine the answer.` | Makes compound posts assessable without exhaustive checking of incidental sentences. |
+| `Read the supplied material and separate...` | Prevents weakening a claim by dropping its quantities, dates or qualifiers before checking it. |
+| `A screenshot supplies claims to check...` | Prevents treating a screenshot as authentication of an issuer or quotation. |
+| `If material is inaccessible or illegible...` | Permits useful partial work and asks only for missing content that affects the answer, instead of guessing OCR or article content. |
+| `Separate factual premises from opinions...` | Avoids rating opinions or future events as settled facts while still checking their premises. |
+| `Done when the scope and wording...` | Resolves consequential ambiguity without requiring a clarification before every check. |
+| `Trace the evidence behind each claim.` | Directs research toward the underlying basis of a claim. |
+| `Use available search and page-reading Tools...` | Requires actual source reading, with the existing capabilities rather than a new execution mechanism. |
+| `Search snippets, generated summaries and existing fact-checks...` | Prevents citation laundering through a snippet, another Model or a fact-check's unsupported conclusion. |
+| `If the original is unavailable...` | Gives a usable fallback while preserving the difference between direct and reported evidence. |
+| `If external research is unavailable...` | Prevents pretending that supplied text or remembered knowledge constitutes external verification. |
+| `Done when each claim has relevant evidence...` | Allows an explicit evidence gap as a legitimate result. |
+| `Challenge the initial interpretation.` | Makes confirmation bias a concrete research step. |
+| `Search for evidence that could contradict it...` | Avoids searches phrased only to confirm the first hypothesis and allows local-language evidence. |
+| `Check source competence, proximity...` | Stops publisher reputation or official status from substituting for claim-specific evidence. |
+| `Count independent evidence...` | Syndication and circular citations do not become independent confirmation. |
+| `For quotes and events, check...` | Covers recycled dates, cropped quotations and misleading numerical comparisons where the original fact can be accurate. |
+| `For scientific or causal claims...` | Stops an isolated study or correlation from being overstated as general causal evidence. |
+| `Resolve material contradictions...` | Weighs evidence rather than votes, political affiliation or agreement with the user. |
+| `Done when you have checked the plausible counterevidence...` | Limits counterchecking to evidence and context capable of changing the result. |
+| `Decide whether more research can change the answer.` | Gives research a completion decision instead of an arbitrary source quota. |
+| `Finish a claim when the evidence directly addresses...` | Stops after support and contradictions are resolved, or the remaining uncertainty is identified. |
+| `If a search finds nothing useful...` | Provides one materially different recovery path and prevents repeated empty searches. |
+| `A failed search is not evidence...` | Prevents absence of search results from becoming a false verdict. |
+| `If the search service fails or rate-limits you...` | Stops query rewrites against a failed service and directs the Agent to known pages; GLM repeated a rate-limited search in the screenshot Eval (2026-10-31). |
+| `If a page is inaccessible, try...` | Distinguishes unavailable pages from a missing evidentiary record. |
+| `Done when every material claim has an assessment...` | Prevents stopping after only the easiest claim in a mixed post. |
+| `Assign an assessment to each material claim.` | Places classification after research and separates claims. |
+| `Before choosing the assessment, match...` | Requires a claim-to-passage check at the decision point; GLM gave verdicts and links without a page read in the screenshot Eval (2026-10-31). |
+| `If you have only search snippets or remembered facts...` | Names the missing action and the unresolved fallback instead of allowing plausible recollection or snippets to stand in for inspected evidence. |
+| `Use these meanings, translated...` | Gives stable semantics while preserving the user's language. |
+| `Supported: the evidence supports...` | Constrains support to the claim's actual time and scope. |
+| `Refuted: evidence contradicts...` | Requires contrary evidence, not merely missing confirmation. |
+| `Misleading: a factual element is accurate...` | Distinguishes false context or inference from wholly fabricated facts. |
+| `Unresolved: available evidence is insufficient...` | Preserves uncertainty and names its cause rather than implying that a matter has no answer. |
+| `A rule forbidding an act does not prove...` | GLM treated a reported covert vote as impossible from the historical eligibility rules, despite lacking evidence about the alleged individual event (screenshot Eval, 2026-10-31). |
+| `For mixed claims, assess their parts...` | Avoids labeling an entire article false because one statement fails. |
+| `State non-checkable opinions or predictions...` | Provides a report outcome for content outside factual verification. |
+| `Explain uncertainty through the evidence...` | Prevents uncalibrated numerical confidence and unsupported attribution of deceptive intent. |
+| `Done when every assessment follows...` | Separates the Agent's inference from what the source actually states. |
+| `Answer in the user's language...` | Makes the conclusion immediately useful to the person requesting the check. |
+| `For one claim, give the assessment...` | Scales the result to the number of claims and attaches evidence to each conclusion. |
+| `Include the date of the check...` | Makes later reuse of changing facts interpretable and exposes consequential gaps. |
+| `Cite pages you actually read...` | Prevents unsupported links and direct-source claims based on second-hand reporting. |
+| `Keep the first answer focused...` | Avoids a long research diary when a short answer settles the request. |
+| `Done when the user can see...` | Checks the report for an intelligible evidence-to-conclusion connection. |
+| `Replace the angle-bracket placeholders...` and the answer pattern | Shows the expected assessment/evidence/uncertainty structure without baking a factual answer into future checks. |
+| `For several claims, repeat...` | Applies the pattern to mixed claims without repeating a check date on every row. |
+
+## Skill authoring and maintenance
 
 Bundled `skill-writing` support-file guidance:
 
