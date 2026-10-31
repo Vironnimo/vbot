@@ -762,9 +762,11 @@ class CronJob:
         """Bind operator provenance to task configuration, including across older writers."""
         data = self.to_dict()
         scope = {
-            key: data.get(key)
+            key: data[key]
             for key in _MUTABLE_FIELDS - {"name", "notification_policy", "status", "remaining_runs"}
+            if key in data
         }
+        scope["id"] = self.id
         return hashlib.sha256(
             json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()

@@ -146,6 +146,10 @@ async def test_cron_service_crud_operations(
         .operator_approved
     )
     assert replace(loaded, remaining_runs=0).operator_approved
+    assert not replace(loaded, id="different-job").operator_approved
+    inherited = replace(loaded, working_project_id=AGENT_DEFAULT_PROJECT)
+    inherited.operator_approval = inherited.approval_scope()
+    assert not replace(inherited, working_project_id=None).operator_approved
     assert not updated.operator_approved
     assert not paused.operator_approved
     assert enabled.operator_approved
