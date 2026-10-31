@@ -282,13 +282,14 @@ class ShellTool:
             await self._check_permissions(context, call, scratch, withheld, arguments)
         validate_workdir(context, arguments, call.workdir)
         if self._review_shell is not None:
+            reviewed_cwd = call.workdir.resolve()
             public_environment = {**call.variables, **dict(call.secret_variables)}
             approved = await self._review_shell(
                 context,
                 arguments,
                 command=call.command,
                 shell=HOST_SHELL_KIND,
-                cwd=call.workdir.resolve(),
+                cwd=reviewed_cwd,
                 environment=public_environment,
             )
             if not approved:
@@ -297,6 +298,10 @@ class ShellTool:
                     f"{SHELL_MODEL_NAME} was not run: the command was not approved.",
                 )
             await context.revalidate_permissions()
+            if call.workdir.resolve() != reviewed_cwd:
+                raise ToolContractError(
+                    "The command's paths changed while the Tool was waiting. Call it again."
+                )
             if context.permissions.restricted != confined:
                 raise ToolContractError(
                     "Permission Rules changed while the command was prepared. Call it again."

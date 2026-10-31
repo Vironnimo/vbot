@@ -557,7 +557,7 @@ def test_approved_project_root_loads_only_permitted_instruction_files(tmp_path: 
         requests.append(requirements)
         return True
 
-    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     ctx = replace(

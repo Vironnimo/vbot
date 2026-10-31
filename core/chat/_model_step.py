@@ -246,8 +246,8 @@ class ModelStepBoundary:
             context.project_id,
         )
 
-        async def refresh_approval():
-            await refresh_run_permissions(self._dependencies, context, force=True)
+        async def refresh_approval(force: bool):
+            await refresh_run_permissions(self._dependencies, context, force=force)
             return context.permissions, context.execution
 
         return ToolDispatchContext(

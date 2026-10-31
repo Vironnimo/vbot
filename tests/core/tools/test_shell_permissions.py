@@ -6,6 +6,7 @@ The command analysis is faked (``command_check_support``); the boundary is real.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from tests.core.tools.shell_test_support import (
     launched,
     started_shell,
 )
+from tests.directory_links import link_directory
 
 
 @pytest_asyncio.fixture
@@ -104,6 +106,28 @@ async def test_shell_review_waits_before_launch_and_hard_denials_skip_review(
         result = await shell.call({"command": "git push origin"})
         assert result["error"]["code"] == "permission_denied"
         assert reviewed == [] and shell.launcher.processes == []
+
+
+@pytest.mark.asyncio
+async def test_full_access_review_cannot_launch_in_a_retargeted_workdir(tmp_path: Path) -> None:
+    original, other, link = tmp_path / "original", tmp_path / "other", tmp_path / "link"
+    original.mkdir()
+    other.mkdir()
+    link_directory(link, original)
+
+    async def review(_context: Any, _arguments: Any, **prepared: Any) -> bool:
+        assert prepared["cwd"] == original.resolve()
+        if os.name == "nt":
+            link.rmdir()
+        else:
+            link.unlink()
+        link_directory(link, other)
+        return True
+
+    async with started_shell(tmp_path, review_shell=review) as shell:
+        result = await shell.call({"command": "echo safe", "workdir": str(link)})
+        assert result["error"]["code"] == "invalid_arguments"
+        assert shell.launcher.processes == []
 
 
 @pytest.mark.parametrize(

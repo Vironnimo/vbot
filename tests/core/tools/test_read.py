@@ -353,7 +353,7 @@ async def test_approval_is_limited_to_the_prepared_read(tmp_path: Path) -> None:
         calls.append(requirements)
         return True
 
-    async def refresh() -> tuple[PermissionBoundary, dict[str, Any]]:
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
         return boundary, {"computer_id": "server", "allowed_computer_ids": ["server"]}
 
     ctx = replace(

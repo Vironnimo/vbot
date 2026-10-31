@@ -137,6 +137,10 @@ class ApprovalRequirement:
 
     @property
     def suppression_key(self) -> str:
+        if self.kind == "url":
+            # Rejections cover the host's access; positive grants keep the exact URL.
+            host = urlsplit(self.target).hostname or ""
+            return self.host(host, "web", computer_id=self.computer_id).suppression_key
         # A link and its target name the same requested access for rejection.
         target = self.resolved or self.target
         if self.kind == "command" and self.command_identity:

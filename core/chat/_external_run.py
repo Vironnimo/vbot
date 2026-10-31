@@ -411,8 +411,8 @@ class ExternalRun:
     ) -> ToolDispatchContext:
         dependencies = self._dependencies
 
-        async def refresh_approval():
-            boundary = await self._current_permissions(run, force=True)
+        async def refresh_approval(force: bool):
+            boundary = await self._current_permissions(run, force=force)
             execution = normalize_execution(
                 await dependencies.sessions.metadata_value_async(self._session.address, "execution")
             )

@@ -31,6 +31,8 @@ async def authorize_accesses(
     cwd: Path | None = None,
 ) -> None:
     """Check all explicit paths and URLs together before asking or performing effects."""
+    if not context.permissions.restricted:
+        return
     computer = str(context.execution.get("computer_id", "server"))
 
     def prepare() -> tuple[
@@ -149,6 +151,8 @@ async def authorize_command(
     """Authorize a whole analyzed command; recheck the prepared plan after waiting."""
     if (command is None) == (argv is None) or (command is not None and shell is None):
         raise ValueError("provide a shell command or argv")
+    if not context.permissions.restricted:
+        return
     computer = str(context.execution.get("computer_id", "server"))
     original = command if command is not None else " ".join(argv or ())
 
