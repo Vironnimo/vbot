@@ -28,6 +28,8 @@ Only necessary explicit targets prompt. Directory-entry filtering, search-result
 
 A grant is a per-call exact-access overlay. The original Permission Boundary remains available for filtering and ceiling creation. A grant cannot transfer to sibling calls, background commands or Sub-Agents, nor can it become a wider directory/host/command rule. Original arguments, the selected Computer, cwd and normalized access extent identify the prepared invocation. Public request arguments retain Secret references; substituted values are never approval payloads. All displayed fields are additionally masked against known Secrets, and `display_redacted` tells the accessor when values are hidden.
 
+URL rejections use the host's normalized DNS/IDNA forms and share the host-access suppression key across Tools, URL paths, queries, schemes and ports on the same Computer. Positive URL grants remain exact-URL; another host or Computer does not inherit a rejection.
+
 After waiting, execution rechecks current rules and preparation freshness. Changed hard rules, links, Computer authority or operation identity cannot be bypassed by an old positive decision. Execution slots are released while waiting and reacquired before execution. Call-local cancellation is checked again after reacquisition and remains local to that Tool; Run cancellation still propagates.
 
 Media generation revalidates concrete directory probes and output filenames after admission to the artifact worker, before each write. A post-generation refusal reports that the Provider already generated the result, names completed outputs and possible partial files, and never automatically repeats the paid generation.

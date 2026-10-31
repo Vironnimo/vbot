@@ -217,21 +217,43 @@ async def test_rejected_file_blocks_later_recursive_and_wildcard_access(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_rejected_host_matches_dns_and_idna_representations() -> None:
+@pytest.mark.parametrize("first_kind", ["host", "url"])
+async def test_rejected_host_matches_dns_and_idna_representations(first_kind: str) -> None:
     manager = ChatRunManager()
     run = Run(run_id="hosts", agent_id="a", session_id="s")
-    first = ApprovalRequirement.host("BÜCHER.example.", "connect")
-    equivalent = ApprovalRequirement.host("xn--bcher-kva.example", "connect")
+    first = (
+        ApprovalRequirement.host("BÜCHER.example.", "connect")
+        if first_kind == "host"
+        else ApprovalRequirement.url("https://BÜCHER.example./a")
+    )
     pending = asyncio.create_task(
         manager.request_approval(run, {}, first.suppression_keys(), [first.suppression_key])
     )
     await asyncio.sleep(0)
     assert manager.resolve_approval(manager.approvals_snapshot()["requests"][0]["id"], "reject")
     assert not await pending
-    assert not await manager.request_approval(
-        run, {}, equivalent.suppression_keys(), [equivalent.suppression_key]
-    )
+    for equivalent in (
+        ApprovalRequirement.host("xn--bcher-kva.example", "connect"),
+        ApprovalRequirement.url("https://xn--bcher-kva.example/b"),
+        ApprovalRequirement.url("http://BÜCHER.example:8080/a?q=1"),
+    ):
+        assert not await manager.request_approval(
+            run, {}, equivalent.suppression_keys(), [equivalent.suppression_key]
+        )
     assert not manager.approvals_snapshot()["requests"]
+    for different in (
+        ApprovalRequirement.url("https://other.example/a"),
+        ApprovalRequirement.url("https://BÜCHER.example./a", computer_id="desktop"),
+    ):
+        pending = asyncio.create_task(
+            manager.request_approval(
+                run, {}, different.suppression_keys(), [different.suppression_key]
+            )
+        )
+        await asyncio.sleep(0)
+        request = manager.approvals_snapshot()["requests"][0]
+        assert manager.resolve_approval(request["id"], "allow")
+        assert await pending
 
 
 @pytest.mark.asyncio
