@@ -53,6 +53,10 @@ def run_context(
         parts.append(_webhook_events.webhook_note(webhook, timezone))
     if email is not None and job.email is not None:
         parts.append(_email.email_note(email, job.email.channel_id, timezone))
+    parts.append(
+        f'This Run carries out the scheduled job "{job.name}" (cron job {job.id}): the '
+        "message after this note is the job's saved instruction, not a new message from the user."
+    )
     parts.append(_delivery.delivery_note(job.delivery))
     if job.last_result is not None:
         parts.append(_delivery.previous_result_note(job.last_result, timezone))
