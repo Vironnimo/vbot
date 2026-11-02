@@ -6,8 +6,8 @@ from pathlib import Path
 
 from cli.application.packages import require_version_switch_release, validate_release
 from cli.application.state import ApplicationError, Installation, Operation, operations
-from core.database.snapshots import read_manifest, release_snapshot_retention, snapshot_root
-from core.database.update_rollback import update_snapshot_reason
+from core.database.snapshots import release_snapshot_retention
+from core.database.update_rollback import find_update_snapshot
 
 
 def previous_update(install: Installation) -> Operation:
@@ -53,8 +53,7 @@ def require_rollback_target(
                 "The selected snapshot is not the retained data of the previous installation"
             )
         data_dir = Path(install.server_data_directory or "")
-        snapshot = read_manifest(data_dir, snapshot_root(data_dir) / restore_snapshot)
-        if snapshot is None or snapshot.reason != update_snapshot_reason(point.id):
+        if find_update_snapshot(data_dir, point.id) != restore_snapshot:
             raise ApplicationError("The previous installation's data snapshot is unavailable")
     return point
 

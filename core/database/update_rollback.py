@@ -7,8 +7,9 @@ of that; the caller proves that no server process ran on the data directory:
 - ``create_update_snapshot`` runs offline, after the previous server stopped.
   It records a stamp of the data (the marker, every registered database file
   with its journal files, every JSON document) that must be identical before
-  and after the capture, and binds the snapshot to the update by reason and by
-  the recorded member and document hashes.
+  and after the capture, and binds the snapshot to the update by reason or a
+  retained claim and by the recorded member and document hashes. An unchanged
+  offline data directory may reuse a fully verified snapshot.
 - ``data_changed_since`` compares the current data with that stamp, before the
   candidate starts and again after it failed.
 - ``restore_update_snapshot`` refuses with ``UpdateRollbackRefusedError``, and
@@ -31,6 +32,8 @@ from pathlib import Path
 
 from core.database._documents import live_documents
 from core.database._files import sha256_file
+from core.database._snapshot_manifest import SnapshotManifest
+from core.database._snapshot_retention import retain_snapshot_locked, retained_snapshot_id
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseError,
@@ -147,11 +150,13 @@ def create_update_snapshot(
     specs: Iterable[DatabaseSpec] = (),
     retain_as: str | None = None,
 ) -> UpdateSnapshot | None:
-    """Take the pre-update data snapshot while no server runs on ``data_dir``.
+    """Secure a new or unchanged checkpoint while no server runs on ``data_dir``.
 
     Returns ``None`` when no database is registered, so there is nothing an
     update could need to restore. Raises ``DatabaseError`` when the snapshot
     cannot be taken or the data changed while it was taken.
+    The operation always retains its checkpoint; ``retain_as`` adds another
+    owner's claim when supplied.
     """
     data_dir = Path(data_dir)
     reason = update_snapshot_reason(operation_id)
@@ -169,7 +174,9 @@ def create_update_snapshot(
     if missing is not None:
         raise DatabaseUnavailableError(missing)
     before = data_stamp(data_dir)
-    created = create_data_snapshot(data_dir, reason=reason, specs=specs, retain_as=retain_as)
+    created = create_data_snapshot(
+        data_dir, reason=reason, specs=specs, retain_as=operation_id, reuse_unchanged=True
+    )
     if created is None:
         health = read_snapshot_health(data_dir)
         raise DatabaseUnavailableError(
@@ -186,6 +193,9 @@ def create_update_snapshot(
     manifest = read_manifest(data_dir, created)
     if manifest is None:
         raise DatabaseCorruptError("the pre-update data snapshot could not be read back")
+    if retain_as is not None and retain_as != operation_id:
+        with operation_lock(data_dir):
+            retain_snapshot_locked(data_dir, retain_as, manifest.snapshot_id)
     if {path: member.sha256 for path, member in manifest.documents.items()} != dict(
         after.documents
     ):
@@ -262,7 +272,7 @@ def _require_restorable(data_dir: Path, snapshot_dir: Path, snapshot: UpdateSnap
     manifest = read_manifest(data_dir, snapshot_dir)
     if manifest is None:
         raise refuse("it is missing or malformed")
-    if manifest.reason != update_snapshot_reason(snapshot.operation_id):
+    if not _belongs_to_update(data_dir, manifest, snapshot.operation_id):
         raise refuse("it belongs to another operation")
     if {path: member.sha256 for path, member in manifest.documents.items()} != dict(
         snapshot.stamp.documents
@@ -281,8 +291,22 @@ def _require_restorable(data_dir: Path, snapshot_dir: Path, snapshot: UpdateSnap
             raise refuse(f"the {name} database registration changed after the snapshot")
 
 
+def _belongs_to_update(data_dir: Path, manifest: SnapshotManifest, operation_id: str) -> bool:
+    """The caller holds the operation lock while checking an adopted snapshot."""
+    return manifest.reason == update_snapshot_reason(operation_id) or (
+        manifest.source_fingerprint is not None
+        and retained_snapshot_id(data_dir, operation_id) == manifest.snapshot_id
+    )
+
+
 def find_update_snapshot(data_dir: Path, operation_id: str) -> str | None:
-    """The newest published snapshot id taken for ``operation_id``, if any."""
+    """The checkpoint captured or retained for ``operation_id``, if any."""
+    with operation_lock(data_dir):
+        retained = retained_snapshot_id(data_dir, operation_id)
+        if retained is not None:
+            manifest = read_manifest(data_dir, snapshot_root(data_dir) / retained)
+            if manifest is not None and _belongs_to_update(data_dir, manifest, operation_id):
+                return retained
     reason = update_snapshot_reason(operation_id)
     return next(
         (

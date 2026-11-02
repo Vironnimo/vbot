@@ -397,6 +397,8 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
             '{"server_access_protocol": 1}', encoding="utf-8"
         )
     data_dir = _server_data(install)
+    prior = create_update_snapshot(data_dir, operation_id="upd_prior")
+    assert prior is not None
     operation = Operation(
         id="upd_rollback", previous_version="rel_old", package="release.zip", local_package=True
     )
@@ -420,6 +422,7 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
 
     snapshot_id = find_update_snapshot(data_dir, "upd_rollback")
     assert snapshot_id is not None
+    assert snapshot_id == prior.snapshot_id
     assert operation.phase == "rolled_back"
     # The operator log names every phase change once, and the rollback with its
     # restored snapshot as warnings.

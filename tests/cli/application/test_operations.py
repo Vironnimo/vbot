@@ -290,9 +290,7 @@ def test_rollback_request_binds_the_last_activated_switch_and_coalesces(
         return {"version_switch_protocol": 1}
 
     monkeypatch.setattr(rollback, "validate_release", validate)
-    monkeypatch.setattr(
-        rollback, "read_manifest", lambda *_a: SimpleNamespace(reason="update upd_switch")
-    )
+    monkeypatch.setattr(rollback, "find_update_snapshot", lambda *_a: "snap_before")
     monkeypatch.setattr(
         operations,
         "spawn_worker",

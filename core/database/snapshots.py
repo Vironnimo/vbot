@@ -84,6 +84,7 @@ from core.database._snapshot_retention import (
     retain_snapshot_locked,
     retained_snapshot_ids,
 )
+from core.database._snapshot_source import OfflineSnapshotSource, read_offline_source
 from core.database._snapshot_verification import (
     UNUSABLE_COPY_ERRORS as UNUSABLE_COPY_ERRORS,
 )
@@ -463,6 +464,7 @@ def create_data_snapshot(
     cancelled: Callable[[], bool] | None = None,
     barrier: SnapshotBarrier | None = None,
     retain_as: str | None = None,
+    reuse_unchanged: bool = False,
 ) -> Path | None:
     """Capture, verify and atomically publish one snapshot of the durable data.
 
@@ -476,6 +478,9 @@ def create_data_snapshot(
     when there is nothing to capture, or the attempt was cancelled or failed
     (recorded in the snapshot health, a missing database file with the
     operator's next step). Refuses with ``DatabaseFormatError`` during maintenance.
+
+    ``reuse_unchanged`` is offline only: hash the source and reuse a fully
+    verified snapshot with the same fingerprint, claiming it for ``retain_as``.
     """
     data_dir = Path(data_dir)
     if not reason or not reason.strip():
@@ -487,6 +492,8 @@ def create_data_snapshot(
     if marker is None or not marker.databases:
         return None
     open_databases = {database.name: database for database in databases}
+    if reuse_unchanged and (open_databases or barrier is not None):
+        raise ValueError("snapshot reuse requires offline data")
     known_specs = {spec.name: spec for spec in specs}
     known_specs.update({name: database.spec for name, database in open_databases.items()})
     lock = acquire_operation_lock(data_dir, cancelled=cancelled)
@@ -509,6 +516,11 @@ def create_data_snapshot(
         if missing is not None:
             _record_snapshot_health(data_dir, "degraded", reason=missing)
             return None
+        source = read_offline_source(data_dir, cancelled=cancelled) if reuse_unchanged else None
+        if source is not None:
+            reused = _reuse_offline_snapshot(data_dir, source, known_specs, retain_as)
+            if reused is not None:
+                return reused
         try:
             root.mkdir(parents=True, exist_ok=True)
             needed = sum(
@@ -599,7 +611,10 @@ def create_data_snapshot(
             sqlite_source_id=sqlite_source_id() or "unknown",
             members=members,
             documents=documents,
+            source_fingerprint=source.fingerprint if source is not None else None,
         )
+        if source is not None:
+            source.require_unchanged(data_dir)
         _write_manifest(partial / SNAPSHOT_MANIFEST_NAME, manifest)
         fsync_dir(partial)
         if cancelled is not None and cancelled():
@@ -634,6 +649,36 @@ def create_data_snapshot(
             with suppress(OSError):
                 remove_tree(partial, within=root)
         lock.release()
+
+
+def _reuse_offline_snapshot(
+    data_dir: Path,
+    source: OfflineSnapshotSource,
+    specs: Mapping[str, DatabaseSpec],
+    retain_as: str | None,
+) -> Path | None:
+    """Verify and claim an unchanged checkpoint under capture's operation lock."""
+    candidates = [
+        (child, manifest)
+        for child in _published_children(data_dir)
+        if (manifest := read_manifest(data_dir, child)) is not None
+    ]
+    if not candidates:
+        return None
+    # Recovery selects the newest snapshot. Reusing an older matching image
+    # behind a later, different checkpoint would leave recovery on stale data.
+    child, manifest = max(candidates, key=lambda item: item[1].created_instant())
+    if manifest.source_fingerprint != source.fingerprint:
+        return None
+    if read_verified_manifest(data_dir, child, specs=specs) is None:
+        _LOGGER.warning("Snapshot reuse rejected a damaged copy (snapshot=%s)", child.name)
+        return None
+    source.require_unchanged(data_dir)
+    if retain_as is not None:
+        retain_snapshot_locked(data_dir, retain_as, manifest.snapshot_id)
+    _record_snapshot_health(data_dir, "healthy", snapshot_id=manifest.snapshot_id)
+    _LOGGER.info("Reused unchanged data snapshot (snapshot=%s owner=%s)", child.name, retain_as)
+    return child
 
 
 def remove_interrupted_staging(data_dir: Path) -> None:

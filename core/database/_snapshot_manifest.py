@@ -101,6 +101,8 @@ class SnapshotManifest:
     #: The JSON document set by relative path, limited to the documents this
     #: vBot knows.
     documents: Mapping[str, DocumentMember]
+    #: Exact offline source content, absent on online and older snapshots.
+    source_fingerprint: str | None = None
 
     @property
     def total_size(self) -> int:
@@ -198,6 +200,11 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
     members = payload["members"]
     if not isinstance(members, dict) or not members:
         raise DatabaseCorruptError("snapshot manifest has no members")
+    fingerprint = payload.get("source_fingerprint")
+    if fingerprint is not None and (
+        not isinstance(fingerprint, str) or _HEX64_PATTERN.fullmatch(fingerprint) is None
+    ):
+        raise DatabaseCorruptError("snapshot manifest has an invalid source_fingerprint")
     return SnapshotManifest(
         snapshot_id=snapshot_id,
         reason=str(payload["reason"]),
@@ -207,6 +214,7 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
         sqlite_source_id=str(payload["sqlite_source_id"]),
         members={name: _parse_member(name, member) for name, member in members.items()},
         documents=parse_documents(payload["documents"]),
+        source_fingerprint=fingerprint,
     )
 
 
@@ -236,6 +244,11 @@ def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
             for name, member in sorted(manifest.members.items())
         },
         "documents": documents_payload(manifest.documents),
+        **(
+            {"source_fingerprint": manifest.source_fingerprint}
+            if manifest.source_fingerprint is not None
+            else {}
+        ),
     }
 
 

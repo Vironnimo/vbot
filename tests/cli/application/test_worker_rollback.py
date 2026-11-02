@@ -61,6 +61,24 @@ def _request(install, point: Operation, *, restore: bool = False) -> Operation:
     return operation
 
 
+def test_reused_checkpoint_survives_cleanup_and_is_available_for_explicit_rollback(
+    switched, monkeypatch
+):
+    install, data_dir, first = switched
+    monkeypatch.setattr(worker, "stage_package", lambda *_a, **_kw: "rel_old")
+    next_update = Operation(
+        id="upd_next", previous_version="rel_new", package="package.zip", local_package=True
+    )
+    worker.execute(install, next_update)
+    assert next_update.phase == "completed"
+    assert next_update.data_snapshot == first.data_snapshot
+    rollback.release_unused_snapshot_claims(install)
+    point = rollback.require_rollback_target(install, restore_snapshot=next_update.data_snapshot)
+    assert point.id == next_update.id
+    pins = json.loads((snapshot_root(data_dir) / "retention.json").read_text())
+    assert pins["owners"] == {next_update.id: first.data_snapshot}
+
+
 @pytest.mark.parametrize(
     "state, prior_outcome",
     [
