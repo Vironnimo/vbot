@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -113,6 +113,96 @@ def test_tree_lists_the_processes_the_root_left_running_until_terminate_kills_th
 
         tree.terminate()
         assert tree.facts().running == ()
+
+
+def _windows_job(
+    images: Sequence[str | None], *, query_error: OSError | None = None
+) -> ProcessTree:
+    """A real tracker over deterministic Windows process-query responses."""
+    overflow = OSError("more data")
+    overflow.winerror = 234  # type: ignore[attr-defined]
+
+    def query(job: Any, kind: int, pointer: Any, size: int, returned: Any) -> bool:
+        value = pointer._obj
+        if kind == process_tree._JOB_BASIC_ACCOUNTING:
+            value.ActiveProcesses = len(images)
+            value.TotalProcesses = len(images)
+            return True
+        if query_error is not None:
+            return False
+        value.NumberOfAssignedProcesses = len(images)
+        count = min(len(images), len(value.ProcessIdList))
+        value.NumberOfProcessIdsInList = count
+        for index in range(count):
+            value.ProcessIdList[index] = index + 1
+        return count == len(images)
+
+    def image_name(handle: int, flags: int, buffer: Any, size: Any) -> bool:
+        image = images[handle - 1]
+        if image is None:
+            return False
+        buffer.value = image
+        return True
+
+    tree = object.__new__(process_tree._WindowsJobTree)
+    tree._kernel = SimpleNamespace(error=lambda: query_error or overflow)  # type: ignore[assignment]
+    tree._k = SimpleNamespace(
+        QueryInformationJobObject=query,
+        OpenProcess=lambda access, inherit, pid: pid,
+        CloseHandle=lambda handle: None,
+        QueryFullProcessImageNameW=image_name,
+    )
+    tree._job = 10
+    tree._lock = threading.Lock()
+    tree._exits = []
+    tree._jobs_ended = 0
+    return tree
+
+
+def test_windows_facts_recognize_msvc_telemetry_without_hiding_other_processes() -> None:
+    toolchain = r"\Device\HarddiskVolume3\custom VS\VC\Tools\MSVC\14.50.35717\bin"
+    cases = [
+        (toolchain + r"\Hostx64\x64\vctip.exe", True),
+        (toolchain.upper() + r"\HOSTARM64\ARM64\VCTIP.EXE", True),
+        (r"C:\project\vctip.exe", False),
+        (toolchain + r"\Hostx64\x64\watcher.exe", False),
+        (toolchain + r"\Hostx64\x64\vctip.exe.bak", False),
+        (toolchain + r"\Hostx64\x64\other\vctip.exe", False),
+        (None, False),  # An unreadable identity remains ordinary work.
+    ]
+    facts = _windows_job([image for image, _helper in cases]).facts()
+    assert [process.pid for process in facts.running] == list(range(1, len(cases) + 1))
+    assert [process.helper for process in facts.running] == [helper for _image, helper in cases]
+    assert [process.name for process in facts.running] == [
+        "vctip.exe",
+        "VCTIP.EXE",
+        "vctip.exe",
+        "watcher.exe",
+        "vctip.exe.bak",
+        "vctip.exe",
+        "process 7",
+    ]
+
+
+@pytest.mark.parametrize("query_fails", [False, True], ids=["complete", "unreadable"])
+def test_windows_facts_never_treat_a_partial_process_list_as_the_whole_tree(
+    query_fails: bool,
+) -> None:
+    helper = r"C:\VS\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\vctip.exe"
+    # The ordinary worker falls outside the initial buffer. Missing it could
+    # cause a helper cleanup to kill meaningful work.
+    tree = _windows_job(
+        [helper] * 128 + [r"C:\project\worker.exe"],
+        query_error=OSError("access denied") if query_fails else None,
+    )
+    if query_fails:
+        with pytest.raises(OSError):
+            tree.facts()
+    else:
+        facts = tree.facts()
+        assert len(facts.running) == 129
+        assert all(process.helper for process in facts.running[:-1])
+        assert (facts.running[-1].name, facts.running[-1].helper) == ("worker.exe", False)
 
 
 class _Member:

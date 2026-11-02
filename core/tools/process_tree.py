@@ -27,7 +27,9 @@ Facts are best effort where the platform is: Windows does not guarantee job
 notifications, and a child is opened only once the notification of its start
 is handled, so a child that has ended and been released by its parent by then
 leaves no exit code. A missing child exit code proves nothing. Liveness and CPU
-time come from authoritative queries.
+time come from authoritative queries. Windows facts identify MSVC telemetry
+helpers by their full executable path; only CommandManager uses that fact to
+clean up a tree containing no remaining command work.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import PurePath, PureWindowsPath
+from pathlib import PureWindowsPath
 from typing import Any, Protocol, cast
 
 import psutil  # type: ignore[import-untyped]
@@ -65,6 +67,8 @@ _MAX_LISTED_PROCESSES = 64
 class RunningProcess:
     pid: int
     name: str
+    # An incidental toolchain process safe to end once no command work remains.
+    helper: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,35 +622,43 @@ class _WindowsJobTree:
 
     def _running(self) -> tuple[RunningProcess, ...]:
         capacity = _MAX_LISTED_PROCESSES
+        while True:
 
-        class ProcessIdList(ctypes.Structure):
-            _fields_ = [
-                ("NumberOfAssignedProcesses", ctypes.c_uint32),
-                ("NumberOfProcessIdsInList", ctypes.c_uint32),
-                ("ProcessIdList", ctypes.c_size_t * capacity),
-            ]
+            class ProcessIdList(ctypes.Structure):
+                _fields_ = [
+                    ("NumberOfAssignedProcesses", ctypes.c_uint32),
+                    ("NumberOfProcessIdsInList", ctypes.c_uint32),
+                    ("ProcessIdList", ctypes.c_size_t * capacity),
+                ]
 
-        listing = ProcessIdList()
-        # A job with more processes than the list holds fails with
-        # ERROR_MORE_DATA after filling the list, which is enough here.
-        self._k.QueryInformationJobObject(
-            self._job,
-            _JOB_BASIC_PROCESS_ID_LIST,
-            ctypes.byref(listing),
-            ctypes.sizeof(listing),
-            None,
-        )
+            listing = ProcessIdList()
+            if self._k.QueryInformationJobObject(
+                self._job,
+                _JOB_BASIC_PROCESS_ID_LIST,
+                ctypes.byref(listing),
+                ctypes.sizeof(listing),
+                None,
+            ):
+                break
+            error = self._kernel.error()
+            if getattr(error, "winerror", None) != 234:  # ERROR_MORE_DATA
+                raise error
+            # A partial list cannot prove that only disposable helpers remain.
+            capacity = max(capacity * 2, int(listing.NumberOfAssignedProcesses))
         processes = []
         for index in range(min(int(listing.NumberOfProcessIdsInList), capacity)):
             pid = int(listing.ProcessIdList[index])
             handle = self._k.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            name = ""
+            image = ""
             if handle:
                 try:
-                    name = _image_name(self._k, handle)
+                    image = _image_path(self._k, handle)
                 finally:
                     self._k.CloseHandle(handle)
-            processes.append(RunningProcess(pid, name or f"process {pid}"))
+            name = PureWindowsPath(image).name if image else f"process {pid}"
+            processes.append(
+                RunningProcess(pid, name, helper=bool(_MSVC_TELEMETRY.fullmatch(image)))
+            )
         return tuple(processes)
 
     def terminate(self) -> None:
@@ -690,6 +702,10 @@ class _WindowsJobTree:
 
 
 def _image_name(kernel32: Any, handle: Any) -> str:
+    return PureWindowsPath(_image_path(kernel32, handle)).name
+
+
+def _image_path(kernel32: Any, handle: Any) -> str:
     from ctypes import wintypes
 
     size = wintypes.DWORD(1024)
@@ -700,7 +716,17 @@ def _image_name(kernel32: Any, handle: Any) -> str:
         handle, _PROCESS_NAME_NATIVE, buffer, ctypes.byref(size)
     ):
         return ""
-    return PurePath(buffer.value).name
+    return buffer.value
+
+
+# Match the toolchain layout, never an arbitrary program called vctip.exe.
+# QueryFullProcessImageNameW supplies a native absolute path, including for
+# custom Visual Studio installation directories. Other processes stay work.
+_MSVC_TELEMETRY = re.compile(
+    r".+[\\/]VC[\\/]Tools[\\/]MSVC[\\/]\d+\.\d+\.\d+[\\/]bin[\\/]"
+    r"Host(?:x86|x64|arm64)[\\/](?:x86|x64|arm|arm64|arm64ec)[\\/]vctip\.exe",
+    re.IGNORECASE,
+)
 
 
 _PYTHON_IMAGE = re.compile(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", re.IGNORECASE)

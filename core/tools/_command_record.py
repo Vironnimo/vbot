@@ -15,7 +15,8 @@ output, no new process, at most ``IDLE_CPU_SECONDS`` of CPU time). An end that
 something outside vBot caused, such as ``taskkill /T`` on the shell, is an
 ordinary end. Processes still running at the end keep the record live until
 they end or are stopped, by vBot or from outside; the record is finished once
-none runs.
+none runs. Once only recognized incidental toolchain helpers remain after
+the shell exits, they are terminated without changing the command's outcome.
 
 A wait with idle detection follows the processes over its last
 ``COMMAND_IDLE_WINDOW_SECONDS`` and says whether they were quiet in the same
@@ -627,10 +628,28 @@ class CommandRecord:
             facts = await self._tree_facts()
             self._record_exit(exit_code, facts)
             quiet = _QuietWatch()
+            helper_cleanup_failed = False
             while not self._killed.is_set():
                 if facts is not None:
                     if not facts.running:
                         break
+                    if not helper_cleanup_failed and all(p.helper for p in facts.running):
+                        # The shell's outcome is already known. End disposable
+                        # helpers without turning that outcome into a stop or
+                        # counting the cleanup's exits as failed programs.
+                        async with self._stop_lock:
+                            self._freeze_exits()
+                            failure = await self._kill()
+                        if failure is None:
+                            facts = replace(facts, running=())
+                            break
+                        helper_cleanup_failed = True
+                        _LOGGER.warning(
+                            "Cleaning up helpers of command %s failed; they stay listed",
+                            self.command_id,
+                            exc_info=failure,
+                        )
+                        self._record_end(facts)
                     if self.ended:
                         self._follow_leftovers(facts)
                     elif self._quiet_for(quiet, facts) >= COMMAND_LEFTOVER_QUIET_SECONDS:

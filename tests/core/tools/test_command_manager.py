@@ -72,6 +72,7 @@ GROUP = RunExecutionOwner("ext", "group-1", "participant", "generation", "epoch-
 SERVER = RunningProcess(5001, "server.exe")
 CONSOLE_HOST = RunningProcess(5002, "conhost.exe")
 WORKER = RunningProcess(5003, "worker.exe")
+TELEMETRY = RunningProcess(5004, "vctip.exe", helper=True)
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
 
@@ -410,11 +411,15 @@ async def test_foreground_output_is_published_until_the_command_moves_to_the_bac
 
 
 @pytest.mark.asyncio
-async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harness) -> None:
+@pytest.mark.parametrize("telemetry", [False, True], ids=["ordinary", "with-telemetry"])
+async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(
+    harness: Harness, telemetry: bool
+) -> None:
     command_id, process = await harness.launch()
     assert harness.manager.busy_addresses() == {OWNER}
     process.write("server started\n")
-    process.exit(0, leftovers=[SERVER, WORKER, CONSOLE_HOST])
+    helpers = [TELEMETRY] if telemetry else []
+    process.exit(0, leftovers=[SERVER, WORKER, CONSOLE_HOST, *helpers])
 
     # The output is drained for a second, then the leftovers must stay quiet for two.
     await harness.advance(2.5)
@@ -425,27 +430,101 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
     assert (report.ended, report.finished, report.status) == (True, False, "completed")
     assert harness.manager.busy_addresses() == {OWNER}
     # The console host of a windowless console is no work of the command.
-    assert report.still_running == (SERVER, WORKER)
+    assert report.still_running == (SERVER, WORKER, *helpers)
+    assert process.tree.terminations == 0
     # Listed as the shell lists a command that ended with processes still running.
     harness.manager.to_background(command_id, deliver=False)
     harness.changes.clear()
     # What still runs stays current, and listeners hear when a process ended.
     process.tree.running.remove(WORKER)
     await harness.advance(1.0)
-    assert harness.manager.report(command_id).still_running == (SERVER,)
+    assert harness.manager.report(command_id).still_running == (SERVER, *helpers)
     assert harness.changes == [command_id]
     # A remaining server may start another child after the call ended.
     helper = RunningProcess(30_003, "helper")
     process.tree.running.append(helper)
     harness.changes.clear()
     await harness.advance(1.0)
-    assert harness.manager.report(command_id).still_running == (SERVER, helper)
+    assert harness.manager.report(command_id).still_running == (SERVER, *helpers, helper)
     assert harness.changes == [command_id]
-    process.end_leftovers()
-    await harness.advance(1.0)
-    report = harness.manager.report(command_id)
+    if telemetry:
+        # Only the incidental telemetry remains: vBot cleans it up, leaving the
+        # original successful outcome intact after the server and worker ended.
+        process.tree.running.remove(SERVER)
+        process.tree.running.remove(helper)
+    else:
+        process.end_leftovers()
+    report = await harness.finish(command_id)
     assert (report.finished, report.still_running) == (True, ())
     assert harness.manager.busy_addresses() == set()
+    assert process.tree.terminations == int(telemetry)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [0, 101], ids=["success", "failure"])
+async def test_incidental_helpers_are_cleaned_up_without_changing_the_outcome(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, exit_code: int
+) -> None:
+    command_id, process = await harness.launch()
+    harness.manager.to_background(command_id, deliver=True)
+    process.tree.running.append(TELEMETRY)
+    await harness.advance(3.0)
+    assert process.tree.terminations == 0  # The shell is still working.
+    if exit_code:
+        process.tree.exits.append(ProgramExit("cargo.exe", exit_code))
+    terminate = process.tree.terminate
+
+    def cleanup() -> None:
+        # Job notifications can record the cleanup's own non-zero exits before
+        # terminate returns; these are not failures of the original command.
+        process.tree.exits.append(ProgramExit("vctip.exe", 1))
+        terminate()
+
+    monkeypatch.setattr(process.tree, "terminate", cleanup)
+    process.exit(exit_code, leftovers=[TELEMETRY, CONSOLE_HOST])
+    report = await harness.finish(command_id)
+    assert (report.ended, report.finished, report.exit_code, report.stop_reason) == (
+        True,
+        True,
+        exit_code,
+        None,
+    )
+    assert report.status == ("failed" if exit_code else "completed")
+    assert report.still_running == ()
+    assert report.failed_programs == (("cargo.exe exited with code 101",) if exit_code else ())
+    assert process.tree.terminations == 1
+    assert process.tree.running == []
+    assert harness.manager.busy_addresses() == set()
+    assert len(harness.sink.bodies) == 1
+    assert harness.sink.bodies[0] == format_report(report)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kill_sent", [False, True], ids=["refused", "unconfirmed"])
+async def test_helpers_that_cannot_be_cleaned_up_stay_visible_and_stoppable(
+    harness: Harness, kill_sent: bool
+) -> None:
+    command_id, process = await harness.launch()
+    process.tree.terminate_error = (
+        KillNotConfirmedError("survived") if kill_sent else OSError("refused")
+    )
+    process.exit(101, leftovers=[TELEMETRY])
+    await harness.advance(2.0)
+    report = harness.manager.to_background(command_id, deliver=False)
+    assert (report.ended, report.finished, report.status, report.exit_code) == (
+        True,
+        False,
+        "failed",
+        101,
+    )
+    assert report.still_running == (TELEMETRY,)
+    assert harness.manager.commands([OWNER])[0].still_running == (TELEMETRY,)
+    await harness.advance(3.0)
+    assert process.tree.terminations == 1  # No repeated automatic kills.
+    process.tree.terminate_error = None
+    report = await harness.manager.stop(command_id, "user")
+    assert (report.finished, report.status, report.exit_code) == (True, "failed", 101)
+    assert report.still_running == ()
 
 
 @pytest.mark.asyncio
