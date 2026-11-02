@@ -432,9 +432,11 @@ class RunTimeline:
             same_phase = all(
                 item["type"] == "tool_call"
                 or (
-                    not streaming
-                    and item["type"] in {"reasoning", "assistant_output"}
-                    and (item.get("streaming") or item.get("messageId") == message_id)
+                    item["type"] in _TEXT_KINDS
+                    and (
+                        item.get("streaming")
+                        or (not streaming and item.get("messageId") == message_id)
+                    )
                 )
                 for item in later
             )
@@ -451,7 +453,19 @@ class RunTimeline:
                 "streaming": streaming,
                 "interrupted": False,
             }
-            items.append(child)
+            position = len(items)
+            if streaming and kind == "reasoning":
+                # A late Reasoning delta belongs before this step's answer,
+                # just as in canonical History. Keep one row per text kind
+                # even when the Provider alternates their deltas.
+                for row_index in range(len(items) - 1, -1, -1):
+                    item = items[row_index]
+                    if item["type"] == "tool_call":
+                        continue
+                    if item["type"] != "assistant_output" or not item.get("streaming"):
+                        break
+                    position = row_index
+            items.insert(position, child)
         self._dirty_children.add(child["id"])
         if streaming:
             self._text_parts.setdefault(child["id"], []).append(content)

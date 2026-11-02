@@ -47,6 +47,13 @@ def test_canonical_output_settles_streamed_phase_in_place_after_early_tool_compl
     )
     emit(
         timeline,
+        "reasoning_delta",
+        {"reasoning_delta": " carefully", "summary_index": 0, "summary_text": " carefully"},
+        second=3,
+    )
+    emit(timeline, "assistant_output_delta", {"content_delta": " now"}, second=3)
+    emit(
+        timeline,
         "tool_call_result",
         {"tool_call": call, "result": {"ok": True, "data": {"content": "Read"}}},
         second=4,
@@ -84,8 +91,9 @@ def test_canonical_output_settles_streamed_phase_in_place_after_early_tool_compl
     assert tool["display"] == {"summary": "Read README"}
     assert all(not item["streaming"] for item in settled["items"])
     # Snapshots a subscriber already received cannot be changed by finalization.
-    assert previous["items"][0]["content"] == "Plan"
-    assert previous["items"][1]["content"] == "Inspecting"
+    assert previous["items"][0]["content"] == "Plan carefully"
+    assert previous["items"][0]["reasoningSummary"] == ["Plan carefully"]
+    assert previous["items"][1]["content"] == "Inspecting now"
 
 
 @pytest.mark.parametrize(
@@ -94,11 +102,23 @@ def test_canonical_output_settles_streamed_phase_in_place_after_early_tool_compl
         (
             [
                 ("reasoning", "First thought. "),
-                ("assistant_output", "Answer."),
+                ("assistant_output", "Ans"),
                 ("reasoning", "More thought."),
+                ("assistant_output", "wer."),
             ],
             "First thought. More thought.",
             "Answer.",
+        ),
+        (
+            [
+                ("assistant_output", "Now the "),
+                ("reasoning", "Plan the rewrite. "),
+                ("assistant_output", "main rewrite"),
+                ("reasoning", "Keep the text together."),
+                ("assistant_output", " of the notifications owner:"),
+            ],
+            "Plan the rewrite. Keep the text together.",
+            "Now the main rewrite of the notifications owner:",
         ),
         ([("assistant_output", "<think>Plan</think>")], "Plan", None),
         ([("reasoning", "discarded"), ("assistant_output", "Answer.")], None, "Answer."),
@@ -111,12 +131,22 @@ def test_canonical_message_replaces_only_its_transient_text_sections(
     timeline = RunTimeline("run")
     emit(timeline, "assistant_output", {"message": {"id": "earlier", "content": "Earlier step"}})
     earlier = block(timeline)["items"][0]
+    streamed_text = {"reasoning": "", "assistant_output": ""}
+    streamed_ids: dict[str, str] = {}
     for kind, text in chunks:
         emit(
             timeline,
             f"{kind}_delta",
             {"reasoning_delta" if kind == "reasoning" else "content_delta": text},
         )
+        streamed_text[kind] += text
+        current = block(timeline)["items"]
+        assert current[0] == earlier
+        assert [(item["type"], item["content"]) for item in current[1:]] == [
+            (kind, text) for kind, text in streamed_text.items() if text
+        ]
+        for item in current[1:]:
+            assert item["id"] == streamed_ids.setdefault(item["type"], item["id"])
     previous = block(timeline)
     message = {
         "id": "final",
@@ -161,8 +191,16 @@ def test_reasoning_and_outputs_remain_separate_across_tool_steps() -> None:
     timeline = RunTimeline("run")
     for step in (1, 2):
         call = {"id": f"call-{step}", "name": "read", "arguments": {"path": str(step)}}
+        previous = block(timeline)["items"]
+        emit(timeline, "assistant_output_delta", {"content_delta": "Step "})
         emit(timeline, "reasoning_delta", {"reasoning_delta": "Inspect again."})
-        emit(timeline, "assistant_output_delta", {"content_delta": f"Step {step}"})
+        emit(timeline, "assistant_output_delta", {"content_delta": str(step)})
+        streaming = block(timeline)["items"]
+        assert streaming[:-2] == previous
+        assert [(item["type"], item["content"]) for item in streaming[-2:]] == [
+            ("reasoning", "Inspect again."),
+            ("assistant_output", f"Step {step}"),
+        ]
         message = {
             "id": f"a-{step}",
             "role": "assistant",
@@ -172,6 +210,9 @@ def test_reasoning_and_outputs_remain_separate_across_tool_steps() -> None:
         }
         emit(timeline, "reasoning", {"message": message})
         emit(timeline, "assistant_output", {"message": message})
+        assert [item["id"] for item in block(timeline)["items"][:-1]] == [
+            item["id"] for item in streaming
+        ]
         emit(
             timeline,
             "tool_call_result",
