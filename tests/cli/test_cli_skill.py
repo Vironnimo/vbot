@@ -83,7 +83,7 @@ def test_skill_install_refuses_before_any_request(
 
     code, _out, _err = run_cli("skill", "install", REMOTE_SKILL, *options)
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
 
 
@@ -340,7 +340,7 @@ def test_skill_destructive_commands_require_confirmation(
 ) -> None:
     code, _out, _err = run_cli("skill", *argv, "--scope", "global")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
 
 

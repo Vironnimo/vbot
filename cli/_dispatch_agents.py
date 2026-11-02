@@ -75,7 +75,7 @@ def dispatch_agent_command(
         return show_agent(instance, args.id)
     tool_access_error = _agent_tool_access_args_error(args)
     if tool_access_error is not None:
-        return CommandResult(ok=False, message=tool_access_error, instance=instance)
+        return CommandResult(ok=False, message=tool_access_error, instance=instance, refused=True)
     if args.command == "create":
         return create_agent(instance, args.id, args.name, _agent_changes_from_args(args))
     if args.command == "update":

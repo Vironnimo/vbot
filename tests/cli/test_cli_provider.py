@@ -413,7 +413,7 @@ def test_provider_history_clear_requires_confirmation(rpc: FakeRpc, run_cli: Run
     assert rpc.calls == []
     cleared = run_cli("provider", "history", "clear", "--yes")
 
-    assert refused[0] == 1 and "--yes" in refused[1]
+    assert refused[0] == 2 and "--yes" in refused[1]
     assert cleared[0] == 0
     assert rpc.calls == [("provider.usage_history.clear", {})]
     assert cleared[1].splitlines() == ["deleted provider usage history: 12 samples"]

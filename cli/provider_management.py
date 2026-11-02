@@ -566,6 +566,7 @@ def provider_usage_history_clear(instance: ServerInstance, confirm: bool) -> Com
                 "re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     payload = _rpc_call(instance, "provider.usage_history.clear", {})
     if not payload.ok:

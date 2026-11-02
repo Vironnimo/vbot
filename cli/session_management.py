@@ -192,7 +192,7 @@ def session_delete(
             f"session {session_id} for {agent_id}",
             ("vbot", "session", "delete", agent_id, session_id, "--permanent"),
         )
-        return CommandResult(ok=False, message=message, instance=instance)
+        return CommandResult(ok=False, message=message, instance=instance, refused=True)
 
     params: dict[str, object] = {"agent_id": agent_id, "session_id": session_id}
     if permanent:

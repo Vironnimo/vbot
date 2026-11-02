@@ -37,6 +37,7 @@ def skill_install(
                 "Replacing a complete Skill requires --replace --yes; "
                 "inspect it with --dry-run first."
             ),
+            refused=True,
         )
     local = instance.host in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
     if scope == "own":
@@ -54,6 +55,7 @@ def skill_install(
                     "--scope own requires an Identity Agent's vBot Run on this server. "
                     "Use --scope global or --scope agent:<id> for an explicit target."
                 ),
+                refused=True,
             )
         scope = f"agent:{agent_id}"
     if local and not source.lower().startswith(("http://", "https://")):
@@ -216,6 +218,7 @@ def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool)
                 "re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     return _skill_write_result(instance, "skill.delete", {"scope": scope, "name": name})
 
@@ -307,6 +310,7 @@ def skill_purge(
                 "without confirmation; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     payload = _rpc_call(instance, "skill.purge", {"scope": scope, "archive_id": archive_id})
     if not payload.ok:
@@ -353,6 +357,7 @@ def skill_remove_file(
                 "re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     return _skill_write_result(
         instance,

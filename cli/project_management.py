@@ -209,6 +209,7 @@ def project_remove(
                 instance, f"project {project_id}", (*command, "--permanent")
             ),
             instance=instance,
+            refused=True,
         )
     params: dict[str, object] = {"project_id": project_id}
     if copy_rooted_agent_files:

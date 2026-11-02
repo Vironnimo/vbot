@@ -116,7 +116,7 @@ def test_memory_revert_sends_every_revision(rpc: FakeRpc, run_cli: RunCli) -> No
 def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, err = run_cli("memory", "remove", "assistant", "1")
 
-    assert code == 1
+    assert code == 2
     assert "--yes" in out + err
     assert rpc.calls == []
 

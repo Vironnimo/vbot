@@ -126,6 +126,11 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
     if args.area == "doctor" and result is not None:
         # Doctor already reports a remedy for each finding and never mutates.
         return RecoveryGuidance("", ())
+    if result is not None and result.refused:
+        # The CLI refused before it sent or saved anything: no state to inspect.
+        return RecoveryGuidance(
+            "Nothing was changed.", (("vbot", *args._command_path.split(), "--help"),)
+        )
     failure = result.failure if result else None
     code = failure.code if failure else None
     explanation = _CODE_GUIDANCE.get(

@@ -134,6 +134,7 @@ def memory_remove(
                 f"(scope: {scope}) without confirmation; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     return _memory_mutation(
         instance,

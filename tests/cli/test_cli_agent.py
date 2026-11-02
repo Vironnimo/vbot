@@ -410,10 +410,11 @@ def test_agent_update_sends_only_the_given_changes(
 def test_agent_update_rejects_incomplete_changes_before_any_request(
     rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], named_options: tuple[str, ...]
 ) -> None:
-    code, out, _err = run_cli("agent", "update", "coder", *options)
+    code, out, err = run_cli("agent", "update", "coder", *options)
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
+    assert "Nothing was changed." in err
     for option in named_options:
         assert option in out
 

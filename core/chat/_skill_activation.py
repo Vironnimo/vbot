@@ -50,6 +50,17 @@ def _activate_triggered_skills(
     for skill_name in triggered_skill_names(content):
         skill = allowed_by_name.get(skill_name)
         if skill is None:
+            try:
+                skill_registry.get(skill_name)
+            except KeyError:
+                # `$5` or `$HOME` in ordinary text names no Skill: nothing to tell the Model.
+                _LOGGER.debug(
+                    "Ignored skill trigger '%s' for agent=%s session=%s: no such skill",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                )
+                continue
             _LOGGER.warning(
                 "Ignored skill trigger '%s' for agent=%s session=%s "
                 "because it is not allowed or loadable",

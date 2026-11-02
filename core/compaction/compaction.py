@@ -305,10 +305,7 @@ class ContinuationStrategy:
             if context.trigger == COMPACTION_TRIGGER_MANUAL
             else "compaction-continuation.md"
         ).strip()
-        instruction = (context.instruction or "").strip()
-        suffix = base_instruction
-        if instruction:
-            suffix = f"{suffix}\n\nAdditional instruction: {instruction}"
+        suffix = _build_compaction_instruction(base_instruction, context.instruction)
         reminder = (
             "Create the next compaction checkpoint now. Return only the compacted "
             "context text that the agent should retain for continuing this Session.\n\n"

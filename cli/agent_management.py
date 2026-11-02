@@ -190,12 +190,14 @@ def agent_update(
             ok=False,
             message="--copy-workspace-files requires --workspace or --default-workspace",
             instance=instance,
+            refused=True,
         )
     if not changes:
         return CommandResult(
             ok=False,
             message=f"no agent fields provided; use one of: {', '.join(AGENT_UPDATE_FLAGS)}",
             instance=instance,
+            refused=True,
         )
     resolved = _with_permission_rules(instance, agent_id, changes)
     if isinstance(resolved, CommandResult):
@@ -255,6 +257,7 @@ def agent_delete(
                 instance, f"agent {agent_id}", ("vbot", "agent", "delete", agent_id, "--permanent")
             ),
             instance=instance,
+            refused=True,
         )
     params: dict[str, object] = {"id": agent_id}
     if permanent:

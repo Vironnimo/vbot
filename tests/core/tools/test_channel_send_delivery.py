@@ -211,7 +211,7 @@ def test_the_chats_session_gets_a_note_of_what_was_sent(
     delivered(envelope)
     note = tool.note()
     tool.service.record_outbound_note.assert_awaited_once_with(
-        "tg-main", "111", note, thread_id=thread
+        "tg-main", "111", note, thread_id=thread, skip_session_id="session-1"
     )
     assert json.loads(note.split("\n", 1)[1]) == {"sender_agent_id": "agent-1", **record}
     assert "</system-reminder>" not in note
