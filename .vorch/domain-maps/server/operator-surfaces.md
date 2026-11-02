@@ -1,6 +1,6 @@
 # Server: operator surfaces
 
-The operator RPCs for background activity, the data store, the Recall index and Statistics: `server/activity.py` with `activity_methods.py`, `data_store_methods.py`, `recall_methods.py` and `statistics_methods.py`.
+The operator RPCs for background activity, the data store, the Recall index, Statistics and the update check: `server/activity.py` with `activity_methods.py`, `data_store_methods.py`, `recall_methods.py`, `statistics_methods.py`, and `server/update_availability.py` with `application.update_status` in `application_methods.py`.
 
 ## Background activity
 
@@ -9,6 +9,12 @@ The operator RPCs for background activity, the data store, the Recall index and 
 ## Data store
 
 - `data_store_methods.py` exposes the operator-safe `data_store.status` (optional boolean `verify_search`, default false: explicitly check Session search coverage on the Session database pool before returning the otherwise cheap status; evidence semantics in `sessions/search.md`), `data_store.snapshot_create` (`reason`: `manual`, `rpc`, `update` or `recovery`; returns `{snapshot}`; a failed attempt's error carries the recorded snapshot-health reason), `data_store.incident_acknowledge` (returns the new status; an unknown incident is `invalid_request`), and `data_store.unregister` (`name` of a registered Extension database; returns `{unregistered: {name, database_id, quarantine}}` via `Runtime.unregister_extension_database`; a core or unregistered name is `invalid_request`, an open database `domain_error`) RPCs. It delegates to the database kernel (`database.md`) with `Runtime.canonical_databases()` on its own bounded worker pool, returns no database content, and publishes `resource_changed(kind="data_store")` after successful mutations. `error_mapping.py` maps every kernel `DatabaseError` to `domain_error` and a superseded acknowledgement (`IncidentConflictError`) to `invalid_request`.
+
+## Update check
+
+- `server/update_availability.py` `UpdateAvailabilityWatch` (built in `_initialize_app_state` as `app.state.update_availability`, started and closed in the lifespan) follows the update check of the packaged installation that records this server (`owning_installation`: `state.discover()`, a server-owning shape and the same resolved data directory), so a Linux installation without a tray reaches its users too (`cli/application.md` -> Update check). A development checkout or a foreign server has none and runs no task.
+- Every 15 minutes (`CHECK_TICK_S`) it calls `availability.refresh` on its one-worker pool, which asks the channel only when the stored answer is due, and publishes unscoped `resource_changed(kind="application")` when the answer changed.
+- `application.update_status` (no parameters; any signed-in client) reads the record fresh, because the tray may have checked meanwhile, and returns `{installed, channel, checked_at, available}` with `available` `{version_id, version, label}` or null; `installed` false means no installation records this server. The failure reason stays out of the payload. Coverage: `tests/server/test_update_availability.py`.
 
 ## Recall index
 

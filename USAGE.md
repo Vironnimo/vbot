@@ -233,6 +233,8 @@ vbot update
 
 `vbot update` installs the newest package of the installation's update channel. A separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result, shows readable progress with elapsed time, and returns a failing exit code when the update fails. The final summary reports the version and verified outcome once; when the channel still publishes the active version, it reports that vBot is already up to date. `--output plain` returns the structured operation record for scripts. Read-only `update status` reports the saved record. The tray's **Status…** window shows the same progress while an update runs and its result afterwards. No Agent is created for a human or tray update.
 
+vBot looks for a newer version of its update channel every few hours but never installs one by itself. When one is published, the tray menu item reads **Update to vBot <version>** and shows a notification, and the WebUI shows a notice until you dismiss it; a Linux server without a tray reaches you through that WebUI notice. Otherwise the tray offers **Check for updates**, which asks right away. `vbot application status` shows the last answer under `update_check`.
+
 ```bash
 vbot update --detach           # return the saved operation id immediately
 vbot update status            # inspect the latest saved operation
@@ -248,7 +250,7 @@ Switch the update channel, then update:
 ```bash
 vbot application channel main      # or: vbot application channel release
 vbot update
-vbot application status            # shows the version, shape and channel
+vbot application status            # shows the version, shape, channel and the newest published version
 ```
 
 The channel cannot change while an update is pending. `vbot update` never goes back to an older version: after switching from main to release, it installs nothing until a release newer than the running main build appears (a release of the same version counts as older, since main builds of a version follow its release). The refusal changes nothing and names the way back, `vbot application channel main`. To choose a release deliberately, use `vbot update <version>`, replacing `<version>` with its `X.Y.Z` version or `vX.Y.Z` tag. The selected signed release must declare version-switch support; the first release shipping that support is the earliest eligible target. Earlier releases are not supported downgrade targets. This command keeps the configured update channel and current data. It verifies the selected version before activation, and a failed verification retains the original installation and restores only changes made by that failed attempt. The startup check covers vBot's core data. Extensions do not run during it; their own database compatibility is checked when they open normally, and an Extension failure can leave that Extension unavailable while the server starts. A deliberately supplied `--package <file>` remains available for local builds; a supported installation also requires version-switch support in that candidate.
@@ -1063,9 +1065,10 @@ An installed vBot on Windows shows Windows notifications from its `vBot.exe` tra
 - **Run completed** and **Run failed**: an Agent Run in a Session finished or ended with an error.
 - **Automation failed**: a Cron job failed.
 - **Update result**: an application update finished or failed.
+- **New version available**: the update channel publishes a newer vBot version, once per version and at most once a day.
 - **Server stopped**: the local vBot server stopped unexpectedly.
 
-Background work such as Subagents, Channel replies and reflections never notifies, and a cancelled Run does not either. A notification about a Session is skipped while you are already looking at that Session. Clicking it opens the Session (in Desktop, or in the browser for the Server package); it disappears when you open that Session or switch to the vBot Desktop window. The switches are the Settings paths `notifications.run_completed`, `notifications.run_failed`, `notifications.automation_failed`, `notifications.update_result`, and `notifications.server_stopped`, so `vbot config` reads and changes them too.
+Background work such as Subagents, Channel replies and reflections never notifies, and a cancelled Run does not either. A notification about a Session is skipped while you are already looking at that Session. Clicking it opens the Session (in Desktop, or in the browser for the Server package); it disappears when you open that Session or switch to the vBot Desktop window. The switches are the Settings paths `notifications.run_completed`, `notifications.run_failed`, `notifications.automation_failed`, `notifications.update_result`, `notifications.update_available`, and `notifications.server_stopped`, so `vbot config` reads and changes them too.
 
 ## Channels
 

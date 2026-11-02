@@ -458,6 +458,11 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
                 "finishes or fails.",
             ),
             (
+                "update_available",
+                "Windows notification from the vBot tray when its update channel publishes "
+                "a newer vBot version.",
+            ),
+            (
                 "server_stopped",
                 "Windows notification from the vBot tray when the local vBot server stops "
                 "unexpectedly.",

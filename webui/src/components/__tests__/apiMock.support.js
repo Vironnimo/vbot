@@ -31,6 +31,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     updateSettings: (params) => call('settings.update', params),
     getRecallIndexStatus: () => call('recall.status'),
     getDataStoreStatus: () => call('data_store.status'),
+    getApplicationUpdateStatus: () => call('application.update_status'),
     acknowledgeDataStoreIncident: (incidentId) =>
       call('data_store.incident_acknowledge', { incident_id: incidentId }),
     listBackgroundActivity: () => call('activity.list'),

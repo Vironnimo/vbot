@@ -34,9 +34,12 @@ NOTIFICATION_KINDS = (
     "run_failed",
     "automation_failed",
     "update_result",
+    "update_available",
     "server_stopped",
 )
 SERVER_TOAST_KEY = "server"
+#: One toast at a time says what the update channel offers.
+AVAILABILITY_TOAST_KEY = "update-available"
 
 _RUN_OUTCOMES = {
     "run_completed": "completed",
@@ -265,6 +268,33 @@ class Notifier:
         elif failed and operation.message:
             body += f"\n{operation.message}"
         self._sink.show(Toast(f"update:{operation.id}", "update_result", title, body, failed))
+
+    def update_available(self, label: str, *, requested: bool) -> None:
+        """Announce a newer published version; a check the user asked for always shows."""
+
+        with self._lock:
+            if not requested and not self._enabled.get("update_available", True):
+                return
+        self._sink.show(
+            Toast(
+                AVAILABILITY_TOAST_KEY,
+                "update_available",
+                "vBot update available",
+                f"vBot {label} is available. Choose Update in the tray menu to install it.",
+            )
+        )
+
+    def up_to_date(self, version: str) -> None:
+        """Answer a check the user asked for that found no newer version."""
+
+        body = (
+            f"vBot {version} is the newest version on its update channel."
+            if version
+            else "No newer version is published on this update channel."
+        )
+        self._sink.show(
+            Toast(AVAILABILITY_TOAST_KEY, "update_available", "vBot is up to date", body)
+        )
 
     # Internals.
 

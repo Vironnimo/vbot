@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,6 +23,7 @@ from server.clients import ClientRegistry
 from server.events import (
     ACTIVITY_STATUS_EVENT,
     CRON_FAILURE_ALERT_EVENT,
+    RESOURCE_KIND_APPLICATION,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_COMPUTERS,
@@ -48,6 +50,7 @@ from server.rpc.event_bridge import (
 )
 from server.rpc.methods import METHODS
 from server.rpc.statistics_methods import statistics_service
+from server.update_availability import UpdateAvailabilityWatch, owning_installation
 
 if TYPE_CHECKING:
     from core.runtime import Runtime
@@ -116,6 +119,10 @@ def _initialize_app_state(
         lambda activities: app.state.event_bus.publish(
             ACTIVITY_STATUS_EVENT, {"activities": activities}
         ),
+    )
+    app.state.update_availability = UpdateAvailabilityWatch(
+        owning_installation(Path(runtime.storage.data_dir)),
+        lambda: publish_resource_changed(app.state, RESOURCE_KIND_APPLICATION),
     )
     app.state.recall_index_status_bridge_unsubscribe = _register_recall_index_status_bridge(
         app.state

@@ -8,10 +8,11 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import webbrowser
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import EllipsisType
 from typing import Any
@@ -19,8 +20,9 @@ from urllib.parse import urlencode
 
 import psutil  # type: ignore[import-untyped]
 
-from cli.application import operations, processes
+from cli.application import availability, operations, processes
 from cli.application.activity import JOURNAL_NAME, ActivityJournal, ActivityRecorder
+from cli.application.availability import Availability
 from cli.application.monitor import MonitorStatus, ServerMonitor
 from cli.application.notifications import Notifier
 from cli.application.server_exit import ServerExitWatch
@@ -46,7 +48,7 @@ from cli.server_management import (
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import process_started
-from core.utils.timestamps import canonical_timestamp
+from core.utils.timestamps import canonical_timestamp, parse_timestamp
 
 _LOGGER = logging.getLogger("vbot.application.host")
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
@@ -56,6 +58,9 @@ _SUCCESSOR_GRACE_SECONDS = 2.0
 _SUCCESSOR_LOCK_SECONDS = 30.0
 #: The sign-in link ``auth.login_ticket`` answers with; nothing else is opened.
 _TICKET_PATH = re.compile(r"/auth/ticket/[A-Za-z0-9_-]{16,256}")
+#: At most one notice of a newer version per day: the main channel publishes
+#: every green commit.
+_AVAILABLE_NOTICE_INTERVAL = timedelta(days=1)
 
 
 class ApplicationFacade:
@@ -98,6 +103,10 @@ class ApplicationFacade:
         self._last_update = ""
         # A server start or restart another process handed over, until the tray queues it.
         self._server_request: operations.ServerRequest | None = None
+        # The newest update check; written by the controller's availability
+        # thread and the check action, read by the once-per-second state poll.
+        self._availability: Availability | None = None
+        self._availability_lock = threading.Lock()
         # Tells how the owned server process ended when it bypassed its shutdown.
         self._server_exit = ServerExitWatch(self._server_target) if install.owns_server else None
         self._activity = ActivityRecorder(
@@ -136,6 +145,7 @@ class ApplicationFacade:
             details=self._details(server_url),
             restart_pending=update_idle and self._activation_changed(),
             server_request=server_request,
+            available_update=self._available_label(),
         )
 
     def record_tray_start(self, *, successor: bool) -> None:
@@ -322,6 +332,14 @@ class ApplicationFacade:
     def start_update(self) -> None:
         with self._recording("Could not start an update"):
             operations.request_update(self._install, host=True)
+
+    def check_for_updates(self) -> None:
+        """Ask the update channel now and answer with a toast either way."""
+
+        result = availability.check(self._install)
+        if result.error:
+            raise ApplicationError(result.error)
+        self._observe_availability(result, requested=True)
 
     def open_logs(self) -> None:
         path = self._install.root / "logs"
@@ -519,6 +537,81 @@ class ApplicationFacade:
             return True
         return operation is not None and not operation.terminal
 
+    def refresh_availability(self) -> None:
+        """Read the stored update check, asking the channel when it is due.
+
+        The controller calls it now and then on its own thread: a check waits
+        for the network, which the once-per-second state poll must never do.
+        """
+
+        self._observe_availability(availability.refresh(self._install), requested=False)
+
+    def _observe_availability(self, result: Availability, *, requested: bool) -> None:
+        """Show a newer version, and announce it once in the history and with a toast.
+
+        The history entry names the version, so each version is announced once,
+        also across tray restarts, and at most one a day; a check the user asked
+        for always answers.
+        """
+
+        with self._availability_lock:
+            self._availability = result
+        newer = result.available
+        if newer is None:
+            if requested and self._notifier is not None:
+                self._notifier.up_to_date(self._version())
+            return
+        ref = f"available:{newer.version_id}"
+        journal = self._activity.journal
+        if not requested and (journal.has(ref) or self._announced_recently()):
+            return
+        journal.record("update_available", f"vBot {newer.label} is available", ref=ref)
+        if self._notifier is not None:
+            self._notifier.update_available(newer.label, requested=requested)
+
+    def _announced_recently(self) -> bool:
+        since = datetime.now(UTC) - _AVAILABLE_NOTICE_INTERVAL
+        for entry in self._activity.journal.entries():
+            if entry.kind != "update_available":
+                continue
+            try:
+                if parse_timestamp(entry.at) > since:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _current_availability(self) -> Availability | None:
+        """The newest check, if it was made for the active version.
+
+        Compares the active id that :meth:`_version` caches, so it reads no file.
+        """
+
+        with self._availability_lock:
+            result = self._availability
+        if result is None or result.active_version_id != self._active_version_id:
+            return None
+        return result
+
+    def _available_label(self) -> str:
+        result = self._current_availability()
+        return result.available.label if result is not None and result.available else ""
+
+    def _availability_row(self) -> str:
+        result = self._current_availability()
+        if result is None:
+            return "Not checked yet"
+        if result.available is not None:
+            text = f"vBot {result.available.label} is available"
+        elif result.checked_at:
+            text = "This is the newest version"
+        else:
+            return f"Check failed ({_local_time(result.attempted_at, full=True)}): {result.error}"
+        text += f" (checked {_local_time(result.checked_at, full=True)})"
+        if result.error:
+            text += "; the last check failed"
+        return text
+
     def _observe_update(self, operation: Operation | None) -> None:
         """Record update milestones and results in the activity history.
 
@@ -582,6 +675,7 @@ class ApplicationFacade:
         else:
             rows.append(("Server", server_url or "No Desktop server selected"))
         rows.append(("Updates from", self._update_source()))
+        rows.append(("Newest version", self._availability_row()))
         if self._last_update:
             rows.append(("Last update", self._last_update))
         rows.append(("Installed in", str(self._install.root)))

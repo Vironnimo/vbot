@@ -240,6 +240,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "run_failed": True,
         "automation_failed": True,
         "update_result": True,
+        "update_available": True,
         "server_stopped": True,
     }
     openrouter = next(item for item in result["providers"]["items"] if item["id"] == "openrouter")

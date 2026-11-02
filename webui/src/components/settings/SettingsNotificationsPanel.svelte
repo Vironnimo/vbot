@@ -34,6 +34,10 @@
       label: () => t('settings.notifications.updateResult'),
     },
     {
+      key: 'update_available',
+      label: () => t('settings.notifications.updateAvailable'),
+    },
+    {
       key: 'server_stopped',
       label: () => t('settings.notifications.serverStopped'),
     },

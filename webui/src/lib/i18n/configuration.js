@@ -394,6 +394,7 @@ export default Object.freeze({
   'settings.notifications.runFailed': 'Run failed',
   'settings.notifications.automationFailed': 'Automation failed',
   'settings.notifications.updateResult': 'Update finished',
+  'settings.notifications.updateAvailable': 'New version available',
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',

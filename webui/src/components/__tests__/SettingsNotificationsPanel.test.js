@@ -22,6 +22,7 @@ const ALL_ON = Object.freeze({
   run_failed: true,
   automation_failed: true,
   update_result: true,
+  update_available: true,
   server_stopped: true,
 });
 
@@ -68,6 +69,7 @@ describe('SettingsNotificationsPanel', () => {
       ['Run failed', 'true'],
       ['Automation failed', 'true'],
       ['Update finished', 'true'],
+      ['New version available', 'true'],
       ['Server stopped', 'true'],
     ]);
 

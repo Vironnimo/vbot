@@ -95,6 +95,8 @@ RESOURCE_KIND_ARCHIVE = "archive"
 RESOURCE_KIND_DEVICES = "devices"
 #: Agent Secrets, Secret Sources or pending Secret requests changed (``secrets`` domain).
 RESOURCE_KIND_AGENT_SECRETS = "agent_secrets"
+#: The installation's update check has another answer (``server/update_availability.py``).
+RESOURCE_KIND_APPLICATION = "application"
 
 ALLOWED_RESOURCE_KINDS = frozenset(
     {
@@ -122,6 +124,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
         RESOURCE_KIND_ARCHIVE,
         RESOURCE_KIND_DEVICES,
         RESOURCE_KIND_AGENT_SECRETS,
+        RESOURCE_KIND_APPLICATION,
     }
 )
 

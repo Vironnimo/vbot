@@ -457,11 +457,7 @@ def download_release(
         else install.download_base
     )
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
-        identity = _release_identity(client, f"{selected_base}/{RELEASE_IDENTITY_ASSET}")
-        if identity.get("channel") != selected_channel:
-            raise ApplicationError(
-                f"Release identity does not match the selected update channel '{selected_channel}'."
-            )
+        identity = _channel_identity(client, selected_base, selected_channel)
         if release_version is not None:
             _require_selected_release(identity, release_version)
         label = version_label(identity)
@@ -494,6 +490,29 @@ def download_release(
             limit = 1024 if name.endswith(".sig") else MAX_ARCHIVE_BYTES
             _download(client, f"{base}/{name}", directory / name, limit)
     return directory / expected
+
+
+def newer_published_release(install: Installation, client: httpx.Client) -> dict[str, Any] | None:
+    """The release identity the channel publishes when an update would install it.
+
+    ``None`` when the channel publishes the active version or one that is not
+    newer, exactly the cases in which ``download_release`` downloads nothing.
+    Reads only the identity (at most ``MAX_IDENTITY_BYTES``).
+    """
+    identity = _channel_identity(client, install.download_base, install.channel)
+    if identity["version_id"] == install.version().name:
+        return None
+    active = read_json(install.version() / "release.json", limit=32 * 1024**2)
+    return None if _not_newer(identity, active) else identity
+
+
+def _channel_identity(client: httpx.Client, base: str, channel: str) -> dict[str, Any]:
+    identity = _release_identity(client, f"{base}/{RELEASE_IDENTITY_ASSET}")
+    if identity.get("channel") != channel:
+        raise ApplicationError(
+            f"Release identity does not match the selected update channel '{channel}'."
+        )
+    return identity
 
 
 def _release_numbers(manifest: dict[str, Any]) -> tuple[int, ...] | None:

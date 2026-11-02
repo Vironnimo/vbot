@@ -280,6 +280,7 @@ def create_app(
             app.state.server_identity = _server_identity(app_runtime)
             app.state.request_restart = request_restart
             app.state.activity.start()
+            app.state.update_availability.start()
             app.state.statistics_warmup_task = (
                 None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
             )
@@ -336,6 +337,8 @@ def create_app(
                             await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
                         with cleanup_step():
                             await app.state.activity.aclose()
+                        with cleanup_step():
+                            await app.state.update_availability.aclose()
                         for unregister in (
                             _unregister_run_event_bridge,
                             _unregister_session_activity_bridge,

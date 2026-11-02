@@ -122,6 +122,7 @@ NOTIFICATION_FIELDS = (
     "run_failed",
     "automation_failed",
     "update_result",
+    "update_available",
     "server_stopped",
 )
 

@@ -19,6 +19,7 @@ function setup(overrides = {}) {
     onComputersChanged: vi.fn(),
     readDataStoreStatus: vi.fn().mockResolvedValue({ incidents: [] }),
     readBackgroundActivity: vi.fn().mockResolvedValue({ activities: [] }),
+    readApplicationUpdate: vi.fn().mockResolvedValue({ installed: false }),
   };
   const controller = createAppController({
     state,
@@ -388,6 +389,29 @@ describe('App controller', () => {
     expect(readDataStoreStatus).toHaveBeenCalledTimes(2);
     expect(state.dataStoreIncident).toEqual(status.incidents[0]);
     expect(state.secretStore).toEqual(status.secrets);
+  });
+
+  it('reads the update check on connect and when the application changes', async () => {
+    const available = {
+      version_id: 'rel_new',
+      version: '0.4.36',
+      label: '0.4.36',
+    };
+    const readApplicationUpdate = vi
+      .fn()
+      .mockResolvedValueOnce({ installed: true, available: null })
+      .mockResolvedValueOnce({ installed: true, available });
+    const { controller, state } = setup({ readApplicationUpdate });
+
+    await controller.handleServerEvent({ type: 'connection_ready' });
+    expect(state.applicationUpdate).toEqual({
+      installed: true,
+      available: null,
+    });
+    await controller.handleServerEvent(resourceChanged('application'));
+
+    expect(readApplicationUpdate).toHaveBeenCalledTimes(2);
+    expect(state.applicationUpdate).toEqual({ installed: true, available });
   });
 
   it.each(['activity', 'data store'])(

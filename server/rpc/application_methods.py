@@ -1,4 +1,4 @@
-"""Private local application lifecycle RPC handlers."""
+"""Application RPC handlers: the update check, and the private local update lifecycle."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string
+from server.update_availability import UpdateAvailabilityWatch
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.application")
@@ -181,8 +182,16 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
     return {"operation_id": operation_id, "bootstrap_job_id": job.id, "created": created}
 
 
+async def _update_status(state: Any, params: JsonObject) -> JsonObject:
+    # Whether the installation's update channel publishes a newer version.
+    _reject_unsupported(params, set(), "application.update_status")
+    watch: UpdateAvailabilityWatch = state.update_availability
+    return await watch.status()
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
+        "application.update_status": _update_status,
         "application.update_continuation": _update_continuation,
         "application.update_handoff_mint": _update_handoff_mint,
     }

@@ -19,7 +19,9 @@ from cli.formatting import output_mode
 def add_parsers(subparsers) -> None:
     app = subparsers.add_parser("application", help="Manage the packaged local vBot application")
     commands = app.add_subparsers(dest="command", required=True)
-    commands.add_parser("status", help="Show the installed version and latest update")
+    commands.add_parser(
+        "status", help="Show the installed version, latest update and newest published version"
+    )
     channel = commands.add_parser(
         "channel", help="Select whether updates install releases or the newest main build"
     )
@@ -242,7 +244,10 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
 
             main()
             return 0
+        from cli.application import availability
+
         operation = operations.status(install)
+        checked = availability.read(install)
         _print(
             {
                 "root": str(install.root),
@@ -250,6 +255,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
                 "shape": install.install_shape,
                 "channel": install.channel,
                 "update": operations.public_result(operation) if operation else None,
+                "update_check": checked.projection() if checked else None,
             }
         )
         return 0
