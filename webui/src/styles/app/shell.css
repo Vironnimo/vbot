@@ -189,8 +189,12 @@
   color: var(--accent);
 }
 
+/* The rail's items stay narrower than the rail minus a vertical scrollbar,
+   so a low window scrolls the rail only vertically. */
 .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
   align-items: center;
+  padding-inline: 0;
+  overflow-x: hidden;
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group {
