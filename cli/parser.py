@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_performance_parsers(subparsers)
     _add_doctor_parsers(subparsers)
     help_parser = subparsers.add_parser("help", help="Show help for any command path")
-    help_parser.add_argument("path", nargs="*")
+    help_parser.add_argument("path", nargs="*", help="Command path, e.g. skill create")
     return parser
 
 

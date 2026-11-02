@@ -234,7 +234,7 @@ def test_skill_editable_scope_commands_send_their_requests(rpc: FakeRpc, run_cli
             "write-file", "librarian", "references/schema.md", "--content", "# Schema", *scope,
         ),
         "remove_file": ("remove-file", "librarian", "references/schema.md", "--yes", *scope),
-        "delete": ("delete", "librarian", "--yes", *scope),
+        "delete": ("delete", "librarian", *scope),
     }  # fmt: skip
 
     outputs = {name: run_cli("skill", *argv) for name, argv in commands.items()}
@@ -246,10 +246,7 @@ def test_skill_editable_scope_commands_send_their_requests(rpc: FakeRpc, run_cli
     for method, operation in operations.items():
         assert operation in outputs[method][1] and "librarian" in outputs[method][1]
     # A delete names the archive entry and how to restore it.
-    assert (
-        "restore with: vbot skill restore librarian_01 --scope agent:assistant"
-        in (outputs["delete"][1])
-    )
+    assert "Undo: vbot skill restore librarian_01 --scope agent:assistant" in (outputs["delete"][1])
     assert rpc.methods == [f"skill.{name}" for name in commands]
 
 
@@ -330,7 +327,6 @@ def test_skill_history_archive_and_pin_commands_send_their_requests(
 @pytest.mark.parametrize(
     "argv",
     [
-        pytest.param(("delete", "librarian"), id="delete"),
         pytest.param(("remove-file", "librarian", "references/schema.md"), id="remove-file"),
         pytest.param(("purge", "librarian_01"), id="purge"),
     ],

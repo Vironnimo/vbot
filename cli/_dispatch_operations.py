@@ -220,7 +220,7 @@ def dispatch_skill_command(
     update_skill_fn: Callable[
         [ServerInstance, str, str, str, str | None], CommandResult
     ] = skill_update,
-    delete_skill_fn: Callable[[ServerInstance, str, str, bool], CommandResult] = skill_delete,
+    delete_skill_fn: Callable[[ServerInstance, str, str], CommandResult] = skill_delete,
     write_skill_file_fn: Callable[
         [ServerInstance, str, str, str, str], CommandResult
     ] = skill_write_file,
@@ -280,7 +280,7 @@ def dispatch_skill_command(
             return update_skill_fn(instance, args.scope, args.name, content, args.source)
         return write_skill_file_fn(instance, args.scope, args.name, args.path, content)
     if args.command == "delete":
-        return delete_skill_fn(instance, args.scope, args.name, args.yes)
+        return delete_skill_fn(instance, args.scope, args.name)
     if args.command == "remove-file":
         return remove_skill_file_fn(instance, args.scope, args.name, args.path, args.yes)
     if args.command == "history":
@@ -336,9 +336,7 @@ def dispatch_memory_command(
             instance, args.agent, scope or "agent", args.entry_id, content or "", project=project
         )
     if args.command == "remove":
-        return memory_remove(
-            instance, args.agent, scope or "agent", args.entry_id, args.yes, project=project
-        )
+        return memory_remove(instance, args.agent, scope or "agent", args.entry_id, project=project)
     if args.command == "history":
         return memory_history(instance, args.agent, scope, args.limit, project=project)
     if args.command == "show":

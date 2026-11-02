@@ -207,19 +207,9 @@ def skill_update(
     return _skill_write_result(instance, "skill.update", params)
 
 
-def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool) -> CommandResult:
-    """Delete a Skill into its scope's archive after explicit confirmation."""
+def skill_delete(instance: ServerInstance, scope: str, name: str) -> CommandResult:
+    """Move a Skill into its scope's archive; the result names how to restore it."""
 
-    if not confirm:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"refusing to delete skill {name} from {scope} without confirmation; "
-                "re-run with --yes"
-            ),
-            instance=instance,
-            refused=True,
-        )
     return _skill_write_result(instance, "skill.delete", {"scope": scope, "name": name})
 
 
@@ -588,7 +578,7 @@ def _skill_write_result(
     archive_id = payload.data.get("archive_id")
     if method == "skill.delete" and isinstance(archive_id, str):
         lines.append(f"archived as {archive_id}")
-        lines.append(f"restore with: vbot skill restore {archive_id} --scope {scope}")
+        lines.append(f"Undo: vbot skill restore {archive_id} --scope {scope}")
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 

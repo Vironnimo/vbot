@@ -124,8 +124,8 @@ def test_invalid_choices_retain_the_allowed_tokens(tokens, choices, capsys):
     "tokens,scope",
     [
         (["prompt", "reset", "system", "--scope", "agent:demo"], "agent:demo"),
-        (["skill", "delete", "demo", "--scope", "agent:a", "--yes"], "agent:a"),
-        (["memory", "remove", "a", "1", "--scope", "user", "--yes"], "user"),
+        (["skill", "delete", "demo", "--scope", "agent:a"], "agent:a"),
+        (["memory", "remove", "a", "1", "--scope", "user"], "user"),
         (["memory", "list", "a"], None),
         (["memory", "list", "p", "--project", "--scope", "project"], "project"),
         (["memory", "add", "p", "--project", "--scope", "agent", "--content", "x"], None),

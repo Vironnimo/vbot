@@ -6,7 +6,7 @@ Pinned Memory lives in one Identity Agent's Workspace: agent-scope entries in `M
 vbot memory list <agent-id> [--scope agent|user]
 vbot memory add <agent-id> [--scope agent|user] (--content <text> | --file <path>)
 vbot memory replace <agent-id> [--scope agent|user] <entry-id> (--content <text> | --file <path>)
-vbot memory remove <agent-id> [--scope agent|user] <entry-id> --yes
+vbot memory remove <agent-id> [--scope agent|user] <entry-id>
 vbot memory history <agent-id> [--scope agent|user] [--limit <n>]
 vbot memory show <agent-id> <revision>
 vbot memory diff <agent-id> <from-revision> [<to-revision>]
@@ -14,7 +14,7 @@ vbot memory revert <agent-id> <revision>...
 ```
 
 - For writes, `--scope` defaults to `agent`; `list` shows both scopes unless `--scope` names one. User-scope entries hold durable facts about the user, agent-scope entries stable facts about the environment and conventions.
-- `list` prints entry ids; use them for `replace` and `remove`. `remove` requires `--yes`.
+- `list` prints entry ids; use them for `replace` and `remove`. `remove` prints how to take the removal back (`history`, then `revert`).
 - Every change prints the affected entry and the remaining count per scope; that output confirms it.
 - Write short, declarative facts, not Session history or scratch notes. Replace an entry instead of adding one that overlaps it.
 

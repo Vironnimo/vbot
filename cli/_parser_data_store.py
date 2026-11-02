@@ -69,14 +69,18 @@ def _add_data_store_parsers(
         DATA_STORE_SNAPSHOT_HELP["verify"],
         example="data-store snapshot verify <snapshot-id>",
     )
-    verify_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
+    verify_parser.add_argument(
+        "snapshot_id", metavar="<snapshot-id>", help="Id from data-store snapshot list"
+    )
     restore_parser = _add_command_parser(
         snapshot_commands,
         "restore",
         DATA_STORE_SNAPSHOT_HELP["restore"],
         example="data-store snapshot restore <snapshot-id> --yes",
     )
-    restore_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
+    restore_parser.add_argument(
+        "snapshot_id", metavar="<snapshot-id>", help="Id from data-store snapshot list"
+    )
     restore_parser.add_argument(
         "--database",
         action="append",
@@ -126,14 +130,18 @@ def _add_data_store_parsers(
         DATA_STORE_CONFIG_BACKUP_HELP["show"],
         example="data-store config-backup show <backup-id>",
     )
-    show_parser.add_argument("backup_id", metavar="<backup-id>")
+    show_parser.add_argument(
+        "backup_id", metavar="<backup-id>", help="Id from data-store config-backup list"
+    )
     config_restore_parser = _add_command_parser(
         config_backup_commands,
         "restore",
         DATA_STORE_CONFIG_BACKUP_HELP["restore"],
         example="data-store config-backup restore <backup-id> --file settings.json --yes",
     )
-    config_restore_parser.add_argument("backup_id", metavar="<backup-id>")
+    config_restore_parser.add_argument(
+        "backup_id", metavar="<backup-id>", help="Id from data-store config-backup list"
+    )
     config_restore_parser.add_argument(
         "--file",
         action="append",
@@ -169,7 +177,9 @@ def _add_data_store_parsers(
         "Acknowledge one durable database recovery incident",
         example="data-store incident acknowledge <incident-id>",
     )
-    acknowledge_parser.add_argument("incident_id", metavar="<incident-id>")
+    acknowledge_parser.add_argument(
+        "incident_id", metavar="<incident-id>", help="Id from data-store status"
+    )
 
     unregister_parser = _add_command_parser(
         commands,

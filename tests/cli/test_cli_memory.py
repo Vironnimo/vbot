@@ -113,12 +113,16 @@ def test_memory_revert_sends_every_revision(rpc: FakeRpc, run_cli: RunCli) -> No
     )
 
 
-def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> None:
-    code, out, err = run_cli("memory", "remove", "assistant", "1")
+def test_memory_remove_runs_without_confirmation_and_names_the_undo(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply("memory.remove", memory_response())
 
-    assert code == 2
-    assert "--yes" in out + err
-    assert rpc.calls == []
+    code, out, _err = run_cli("memory", "remove", "assistant", "1")
+
+    assert code == 0
+    assert rpc.methods == ["memory.remove"]
+    assert "Undo: " in out and "vbot memory revert assistant <revision>" in out
 
 
 @pytest.mark.parametrize(
@@ -131,7 +135,7 @@ def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> N
          {"scope": "project", "entry_id": 1, "content": "Changed"},
          {"entry": {"id": 1, "content": "Changed"}, "scopes": {"project": ["Changed"]}},
          "#1: Changed"),
-        ("remove", ["1", "--yes"], {"scope": "project", "entry_id": 1},
+        ("remove", ["1"], {"scope": "project", "entry_id": 1},
          {"scopes": {"project": []}}, "project=0"),
         ("history", [], {"scope": "project", "limit": 20}, {"revisions": [], "total": 0}, "vbot"),
         ("show", ["2"], {"revision": 2}, {"scopes": {"project": ["Keep"]}}, "- Keep"),
@@ -256,7 +260,7 @@ def test_memory_failure_lookup_follows_the_rpc_code_and_keeps_the_failure(
     else:
         project = code == "project_not_found"
         result = memory_management.memory_remove(
-            instance, "assistnt", "project" if project else "agent", 99, True, project=project
+            instance, "assistnt", "project" if project else "agent", 99, project=project
         )
 
     assert result.ok is False

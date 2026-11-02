@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from difflib import get_close_matches
 from typing import Any
 
@@ -120,23 +121,12 @@ def memory_remove(
     agent_id: str,
     scope: str,
     entry_id: int,
-    confirm: bool,
     *,
     project: bool = False,
 ) -> CommandResult:
-    """Remove one pinned memory entry after explicit confirmation."""
+    """Remove one pinned memory entry; the result names how to take the removal back."""
 
-    if not confirm:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"refusing to remove memory entry {entry_id} from {agent_id} "
-                f"(scope: {scope}) without confirmation; re-run with --yes"
-            ),
-            instance=instance,
-            refused=True,
-        )
-    return _memory_mutation(
+    result = _memory_mutation(
         instance,
         "memory.remove",
         agent_id=agent_id,
@@ -145,6 +135,14 @@ def memory_remove(
         verb="removed",
         project=project,
     )
+    if not result.ok:
+        return result
+    flag = " --project" if project else ""
+    undo = (
+        f"Undo: find the revision with vbot memory history {agent_id}{flag}, "
+        f"then vbot memory revert {agent_id}{flag} <revision>"
+    )
+    return replace(result, message=f"{result.message}\n{undo}")
 
 
 def _memory_mutation(
