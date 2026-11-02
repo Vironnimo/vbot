@@ -154,7 +154,7 @@ async def _tell_agent(
     *,
     passed_only: bool,
 ) -> None:
-    from core.tools.secrets import secret_line
+    from core.tools.secrets import SECRET_USE_HINT, secret_line
 
     secret = given.secret
     if given.replaced:
@@ -163,7 +163,7 @@ async def _tell_agent(
     elif secret.session_id is not None or passed_only:
         note = (
             f"The user gave you a Secret for this session: {secret_line(secret)[2:]} "
-            "Write its reference where the value belongs; vBot inserts the value there."
+            f"{SECRET_USE_HINT}"
         )
     else:
         return
