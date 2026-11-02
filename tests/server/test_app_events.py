@@ -9,6 +9,7 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
+from unittest.mock import ANY
 
 from anyio.from_thread import BlockingPortal
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -17,6 +18,7 @@ from core.automation.cron import CronFailureAlert, CronService
 from core.recall import IndexStatus
 from core.sessions import SessionAddress
 from core.tools.command_manager import CommandNotFoundError
+from core.tools.process_tree import RunningProcess
 from server.app import create_app
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 from tests.server.rpc_test_support_runtime import StubTerminalManager
@@ -52,7 +54,7 @@ class _RecordingCommandManager:
         except KeyError:
             raise CommandNotFoundError(command_id) from None
 
-    def change(self, command_id: str, status: str | None, *still_running: str) -> None:
+    def change(self, command_id: str, status: str | None, *still_running: RunningProcess) -> None:
         """The command now has *status* (None: forgotten) and processes still running."""
         if status is None:
             self.reports.pop(command_id, None)
@@ -141,11 +143,11 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         # A background command's state is published once per change of its
         # status or of whether processes it started still run; a forgotten
         # command publishes nothing.
-        changes: list[tuple[str | None, tuple[str, ...]]] = [
+        changes: list[tuple[str | None, tuple[RunningProcess, ...]]] = [
             ("running", ()),
             ("running", ()),
-            ("completed", ("node (pid 7)",)),
-            ("completed", ("node (pid 7)",)),
+            ("completed", (RunningProcess(7, "node"), RunningProcess(9, "vite"))),
+            ("completed", (RunningProcess(7, "node"),)),
             ("completed", ()),
             (None, ()),
         ]
@@ -195,22 +197,24 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": "term_one"}})
     ]
 
-    def status_changed(status: str, *, still_running: bool = False) -> tuple[str, JsonObject]:
+    def status_changed(status: str, *processes: str) -> tuple[str, JsonObject]:
         return (
             "command_status_changed",
             {
                 "command_id": "cmd_one",
                 "session_id": "session-one",
                 "status": status,
-                "still_running": still_running,
+                "still_running": bool(processes),
+                "processes": list(processes),
+                "processes_observed_at": ANY,
             },
         )
 
     assert command_events == [
         [status_changed("running")],
         [],
-        [status_changed("completed", still_running=True)],
-        [],
+        [status_changed("completed", "node (pid 7)", "vite (pid 9)")],
+        [status_changed("completed", "node (pid 7)")],
         [status_changed("completed")],
         [],
     ]

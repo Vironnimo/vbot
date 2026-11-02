@@ -50,6 +50,7 @@ function historyLoadOptions(history) {
     compactionPolicy: history?.compaction_policy,
     backgroundCommandStatuses: history?.background_command_statuses,
     backgroundCommandsStillRunning: history?.background_commands_still_running,
+    backgroundCommandProcesses: history?.background_command_processes,
     subAgentBackgroundCommands: history?.subagent_background_commands,
   };
 }
@@ -196,6 +197,9 @@ export function createChatHistory({
           background_commands_still_running:
             page.background_commands_still_running ??
             result.background_commands_still_running,
+          background_command_processes:
+            page.background_command_processes ??
+            result.background_command_processes,
           subagent_background_commands:
             page.subagent_background_commands ??
             result.subagent_background_commands,

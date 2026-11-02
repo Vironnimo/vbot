@@ -443,6 +443,12 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       learnCommandStatus(sessionId, normalizedCommandId, {
         status,
         stillRunning,
+        ...(Array.isArray(result?.processes)
+          ? {
+              processes: result.processes,
+              processesObservedAt: result.processes_observed_at,
+            }
+          : {}),
       });
       return {
         ok: true,

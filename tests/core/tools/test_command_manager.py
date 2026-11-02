@@ -434,6 +434,13 @@ async def test_quiet_leftovers_end_the_command_and_stay_tied_to_it(harness: Harn
     await harness.advance(1.0)
     assert harness.manager.report(command_id).still_running == (SERVER,)
     assert harness.changes == [command_id]
+    # A remaining server may start another child after the call ended.
+    helper = RunningProcess(30_003, "helper")
+    process.tree.running.append(helper)
+    harness.changes.clear()
+    await harness.advance(1.0)
+    assert harness.manager.report(command_id).still_running == (SERVER, helper)
+    assert harness.changes == [command_id]
     process.end_leftovers()
     await harness.advance(1.0)
     report = harness.manager.report(command_id)

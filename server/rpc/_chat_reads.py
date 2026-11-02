@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, cast
 
 from core.automation import LearningError
@@ -266,13 +267,14 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
             response["output_speed"] = history.output_speed
             response["output_latency"] = history.output_latency
     if before is None:
-        statuses, still_running = _current_command_statuses(
+        statuses, processes = _current_command_statuses(
             state,
             address,
             {} if projection is None else projection.background_command_statuses,
         )
         response["background_command_statuses"] = statuses
-        response["background_commands_still_running"] = still_running
+        response["background_commands_still_running"] = list(processes)
+        response["background_command_processes"] = processes
         response["subagent_background_commands"] = _subagent_background_commands(
             state, read.subagent_sessions or {}
         )
@@ -539,8 +541,8 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
 
 def _current_command_statuses(
     state: Any, address: SessionAddress, statuses: JsonObject
-) -> tuple[JsonObject, list[str]]:
-    """The folded statuses made current, and the commands whose processes still run.
+) -> tuple[JsonObject, dict[str, JsonObject]]:
+    """The folded statuses made current, and remaining processes by command id.
 
     Every background command of the Session that the command manager knows
     reports its current status, also one whose hand-off result is not saved
@@ -548,7 +550,8 @@ def _current_command_statuses(
     them has no status: the command ended without a delivered result (vBot
     restarted), or it belongs to another Session, as in a fork, which shares
     its source's History but not its commands. The list names the Session's
-    commands whose shell exited while processes they started still run.
+    commands whose shell exited while processes they started still run, with
+    their current process descriptions.
     """
     live = state.runtime.command_manager.commands([address])
     current: JsonObject = {
@@ -556,7 +559,16 @@ def _current_command_statuses(
     }
     for report in live:
         current[report.command_id] = report.status
-    return current, [report.command_id for report in live if report.still_running]
+    return current, {
+        report.command_id: {
+            "processes": [
+                f"{process.name} (pid {process.pid})" for process in report.still_running
+            ],
+            "observed_at": monotonic(),
+        }
+        for report in live
+        if report.still_running
+    }
 
 
 def _subagent_background_commands(

@@ -80,6 +80,7 @@
     // on a Sub-Agent link; null keeps the native menu.
     onSubAgentContextMenu = null,
     onCancelToolCall = () => {},
+    onStopBackgroundCommand = null,
     onBackgroundToolCall = () => {},
     // Reads the complete arguments and result of a Tool row, which the row
     // only previews: ({ runId, toolId }) => { arguments, result }.
@@ -193,6 +194,14 @@
     }
     await viewState.runPending(actionKey('tool', toolCallId), () =>
       onCancelToolCall({ runId, toolCallId }),
+    );
+  }
+
+  async function handleStopBackgroundCommand(event, commandId) {
+    event.preventDefault();
+    event.stopPropagation();
+    await viewState.runPending(actionKey('command', commandId), () =>
+      onStopBackgroundCommand({ commandId }),
     );
   }
 
@@ -587,7 +596,7 @@
             commandStatuses,
           )}
           {@const rowDotStatus =
-            commandRowState?.dotStatus ?? toolStatus(child)}
+            commandRowState?.outcomeDotStatus ?? toolStatus(child)}
           {@const rowTimeLabel = commandRowState
             ? backgroundCommandToolStatusLabel(child, commandRowState, nowMs)
             : toolStatusLabel(child, nowMs)}
@@ -640,7 +649,33 @@
                   {rowTimeLabel}
                 </span>
               {/if}
-              {#if isToolCancellable}
+              {#if commandRowState?.dotStatus === 'running' && onStopBackgroundCommand}
+                <Button
+                  variant="danger"
+                  icon
+                  class="tool-row-action row-cancel"
+                  data-cancel="command"
+                  loading={viewState.isPending(
+                    actionKey('command', commandRowState.commandId),
+                  )}
+                  tooltip={t('chat.stopBackgroundCommandAria')}
+                  ariaLabel={t('chat.stopBackgroundCommandAria')}
+                  onClick={(event) =>
+                    handleStopBackgroundCommand(
+                      event,
+                      commandRowState.commandId,
+                    )}
+                >
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="13"
+                    height="13"
+                    aria-hidden="true"
+                  >
+                    <path d="m4 4 8 8M12 4l-8 8" />
+                  </svg>
+                </Button>
+              {:else if isToolCancellable}
                 {#if backgroundToolCallIds.includes(child.toolCallId)}
                   <Button
                     variant="tertiary"

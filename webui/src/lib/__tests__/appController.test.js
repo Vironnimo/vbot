@@ -214,7 +214,11 @@ describe('App controller', () => {
     for (let index = 0; index < 205; index += 1) {
       await statusChanged(`cmd_${index}`, 'running');
     }
-    await statusChanged('cmd_204', 'completed', { still_running: true });
+    await statusChanged('cmd_204', 'completed', {
+      still_running: true,
+      processes: ['node (pid 7)'],
+      processes_observed_at: 2,
+    });
     // A status without its Session cannot be shown in the right one.
     await statusChanged('cmd_unowned', 'running', { session_id: undefined });
 
@@ -226,6 +230,8 @@ describe('App controller', () => {
     expect(state.commandStatuses.cmd_204).toEqual({
       status: 'completed',
       stillRunning: true,
+      processes: ['node (pid 7)'],
+      processesObservedAt: 2,
       sessionId: 'session-one',
     });
 

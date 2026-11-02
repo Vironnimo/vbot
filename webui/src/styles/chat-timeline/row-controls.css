@@ -136,10 +136,11 @@
 /* Per-row cancel control. The CSS-only fade-in keeps fast tool calls (the
    majority) from flashing a button for calls that finish in well under the
    reveal window. */
-.btn-icon.tool-row-action {
+.btn-icon.tool-row-action:is(.btn-danger, .btn-tertiary) {
   width: 24px;
   min-width: 24px;
   height: 24px;
+  min-height: 24px;
   margin-left: auto;
   flex-shrink: 0;
   padding: 0;
@@ -159,11 +160,21 @@
 }
 
 .btn-danger.btn-icon.row-cancel {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-med);
   /* Hidden (not just transparent) during the reveal delay: an invisible
      button must not catch clicks — a mis-click here kills a real process. */
   visibility: hidden;
   opacity: 0;
   animation: row-cancel-reveal 0.5s ease 0.5s forwards;
+}
+
+.btn-danger.btn-icon.row-cancel:hover,
+.btn-danger.btn-icon.row-cancel:focus-visible {
+  border-color: transparent;
+  background: var(--surface-3);
+  color: var(--red);
 }
 
 @keyframes row-cancel-reveal {

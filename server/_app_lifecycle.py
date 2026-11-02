@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
@@ -404,13 +405,13 @@ def _unregister_portal_change_bridge(state: Any) -> None:
 def _register_command_status_bridge(state: Any) -> Any:
     """Publish each new state of a background command, once per change.
 
-    The state is the command's status and whether processes it started still
-    run after its shell exited. The manager reports a command as it moves to
+    The state is the command's status and the processes it left running
+    after its shell exited. The manager reports a command as it moves to
     the background, so ``running`` reaches accessors before the shell call's
     result that hands it off.
     """
     commands = state.runtime.command_manager
-    published: dict[str, tuple[str, bool]] = {}
+    published: dict[str, tuple[str, tuple[str, ...]]] = {}
 
     def forward(command_id: str) -> None:
         try:
@@ -420,8 +421,8 @@ def _register_command_status_bridge(state: Any) -> Any:
         if report is None or not report.background:
             published.pop(command_id, None)
             return
-        still_running = bool(report.still_running)
-        current = (report.status, still_running)
+        processes = tuple(f"{process.name} (pid {process.pid})" for process in report.still_running)
+        current = (report.status, processes)
         if published.get(command_id) != current:
             published[command_id] = current
             publish_command_status_changed(
@@ -429,7 +430,9 @@ def _register_command_status_bridge(state: Any) -> Any:
                 command_id,
                 session_id=report.owner.session_id,
                 status=report.status,
-                still_running=still_running,
+                still_running=bool(processes),
+                processes=list(processes),
+                processes_observed_at=monotonic(),
             )
 
     return commands.add_changed_callback(forward)
