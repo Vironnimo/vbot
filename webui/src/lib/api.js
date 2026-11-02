@@ -63,6 +63,7 @@ export {
   readExtensionPageTimelineChildren,
   readExtensionPageToolCall,
   getDataStoreStatus,
+  getApplicationUpdateStatus,
   createDataSnapshot,
   acknowledgeDataStoreIncident,
   listBackgroundActivity,

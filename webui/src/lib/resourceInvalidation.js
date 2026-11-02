@@ -31,6 +31,7 @@ export const RESOURCE_TOKEN_ARCHIVE = 'archive';
 export const RESOURCE_TOKEN_CREDENTIALS = 'credentials';
 export const RESOURCE_TOKEN_AGENT_SECRETS = 'agent_secrets';
 export const RESOURCE_KIND_DATA_STORE = 'data_store';
+export const RESOURCE_KIND_APPLICATION = 'application';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
 // refresh ("models") and a provider/credential change ("providers") alter which

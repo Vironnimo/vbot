@@ -415,6 +415,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "run_failed": True,
             "automation_failed": True,
             "update_result": True,
+            "update_available": True,
             "server_stopped": True,
         },
         "local_models": {"context_windows": {}},

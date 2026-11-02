@@ -110,6 +110,11 @@
   import { startClientMetrics } from '$lib/clientMetrics.js';
   import { loadComponent } from '$lib/lazyContent.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
+  import {
+    availableUpdate,
+    dismissUpdateNotice,
+    updateNoticeDismissed,
+  } from '$lib/applicationUpdate.js';
   import { provideAutosaveContext } from '$lib/autosave.js';
   import {
     flushComposerMemory,
@@ -210,6 +215,18 @@
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
   let webuiOutdated = $derived(appControllerState.webuiOutdated);
+  let applicationUpdate = $derived(
+    availableUpdate(appControllerState.applicationUpdate),
+  );
+  // Versions dismissed in this page; storage keeps the newest across reloads.
+  let dismissedUpdate = $state('');
+  let updateNotice = $derived(
+    applicationUpdate &&
+      applicationUpdate.version_id !== dismissedUpdate &&
+      !updateNoticeDismissed(applicationUpdate.version_id)
+      ? applicationUpdate
+      : null,
+  );
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
@@ -620,6 +637,22 @@
       </Button>
     </Banner>
   {/if}
+  {#if updateNotice}
+    <Banner variant="info" class="app-update-available">
+      <span class="app-update-available__text">
+        {t('app.updateAvailable', { version: updateNotice.label })}
+      </span>
+      <Button
+        variant="secondary"
+        onClick={() => {
+          dismissUpdateNotice(updateNotice.version_id);
+          dismissedUpdate = updateNotice.version_id;
+        }}
+      >
+        {t('app.updateAvailableDismiss')}
+      </Button>
+    </Banner>
+  {/if}
   {#if setup.showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
@@ -962,6 +995,7 @@
      a provider is connected. */
   :global(.app-finish-setup),
   :global(.app-webui-outdated),
+  :global(.app-update-available),
   :global(.app-desktop-restart) {
     flex-shrink: 0;
     gap: 14px;
@@ -1003,6 +1037,7 @@
 
   .app-finish-setup__text,
   .app-webui-outdated__text,
+  .app-update-available__text,
   .app-desktop-restart__text {
     color: var(--text-med);
     font-family: var(--font-ui);
@@ -1012,6 +1047,7 @@
   @media (max-width: 640px) {
     :global(.app-finish-setup),
     :global(.app-webui-outdated),
+    :global(.app-update-available),
     :global(.app-desktop-restart) {
       padding: 8px 14px;
     }

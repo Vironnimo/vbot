@@ -33,6 +33,7 @@ NOTIFICATION_DEFAULTS = {
     "run_failed": True,
     "automation_failed": True,
     "update_result": True,
+    "update_available": True,
     "server_stopped": True,
 }
 

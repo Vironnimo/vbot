@@ -38,9 +38,10 @@ _ACTION_TRANSITIONS = {
     "quit": "stopping",
 }
 _TRANSITIONS = frozenset({"starting", "stopping", "restarting"})
-#: Actions that only open a folder: they run at once on their own thread instead
-#: of waiting behind a server start or update on the action thread.
-_OPEN_ACTIONS = frozenset({"open_logs", "open_server_logs"})
+#: Actions that open a folder or only ask the update channel: they run at once
+#: on their own thread instead of waiting behind a server start or update on the
+#: action thread, and never clear the last error.
+_OPEN_ACTIONS = frozenset({"open_logs", "open_server_logs", "check_for_updates"})
 _SERVER_LINES = {
     "running": "Server running",
     "starting": "Server starting…",
@@ -53,6 +54,9 @@ _SERVER_LINES = {
 }
 #: Earliest retry after a failed restart into the active version.
 _RESTART_RETRY_SECONDS = 600.0
+#: How often the tray looks at the stored update check; the update channel
+#: itself is asked only when that answer is due (``availability.CHECK_INTERVAL``).
+_AVAILABILITY_SECONDS = 15 * 60.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,8 @@ class TrayState:
     running, so the tray should hand over to a successor running the active
     version. ``server_request`` is a server start or restart another process
     handed to the tray, reported once for the controller to run as an action.
+    ``available_update`` names the newer version the update channel publishes,
+    empty when none is known.
     """
 
     server_state: str
@@ -85,6 +91,7 @@ class TrayState:
     details: tuple[tuple[str, str], ...] = ()
     restart_pending: bool = False
     server_request: ServerRequest | None = None
+    available_update: str = ""
 
 
 class TraySink(Protocol):
@@ -121,6 +128,10 @@ class TrayActions(Protocol):
     def open_session(self, agent: str, session: str) -> None: ...
 
     def start_update(self) -> None: ...
+
+    def check_for_updates(self) -> None: ...
+
+    def refresh_availability(self) -> None: ...
 
     def open_logs(self) -> None: ...
 
@@ -207,12 +218,14 @@ class TrayController:
         actions: TrayActions,
         *,
         poll_interval: float = 1.0,
+        availability_interval: float = _AVAILABILITY_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be positive")
         self._actions = actions
         self._poll_interval = poll_interval
+        self._availability_interval = availability_interval
         self._clock = clock
         self._state: TrayState | None = None
         self._status_error = ""
@@ -235,6 +248,10 @@ class TrayController:
         self._opener = threading.Thread(
             target=self._run_queue, args=(self._open_work,), name="vbot-tray-open", daemon=True
         )
+        # Waits for the network now and then; never joined at close.
+        self._availability = threading.Thread(
+            target=self._follow_availability, name="vbot-tray-availability", daemon=True
+        )
 
     def start(self, *, start_server: bool = False) -> None:
         """Start the action and refresh threads; optionally start the server first."""
@@ -242,6 +259,7 @@ class TrayController:
         self._worker.start()
         self._poller.start()
         self._opener.start()
+        self._availability.start()
         if start_server:
             self._queue("start_server", self._actions.start_server)
         self.changed()
@@ -315,7 +333,15 @@ class TrayController:
         items.extend(
             (
                 separator,
-                TrayMenuItem("Update", "start_update", enabled=not update_active),
+                TrayMenuItem(
+                    f"Update to vBot {state.available_update}",
+                    "start_update",
+                    enabled=not update_active,
+                )
+                if state.available_update
+                else TrayMenuItem(
+                    "Check for updates", "check_for_updates", enabled=not update_active
+                ),
                 TrayMenuItem("Status…", "show_status"),
                 TrayMenuItem("Application logs", "open_logs"),
             )
@@ -349,7 +375,8 @@ class TrayController:
         buttons = tuple(
             item
             for item in menu
-            if item.action in {"start_server", "restart_server", "start_update", "open_logs"}
+            if item.action
+            in {"start_server", "restart_server", "start_update", "check_for_updates", "open_logs"}
         )
         rows = state.details
         if error:
@@ -378,7 +405,12 @@ class TrayController:
             return
         if action in _OPEN_ACTIONS:
             callback = getattr(self._actions, action)
-            self._open_work.put(lambda: self._run_action(action, callback, clears_error=False))
+
+            def run() -> None:
+                self._run_action(action, callback, clears_error=False)
+                self.changed()
+
+            self._open_work.put(run)
             return
         if action == "start_update":
             with self._state_lock:
@@ -443,6 +475,15 @@ class TrayController:
             if self._closed.is_set():
                 return
             self._poll_state()
+
+    def _follow_availability(self) -> None:
+        while not self._closed.is_set():
+            try:
+                self._actions.refresh_availability()
+            except Exception:  # a failed look never ends the thread
+                _LOGGER.exception("Could not follow the update check")
+            self.changed()
+            self._closed.wait(self._availability_interval)
 
     def _poll_state(self) -> None:
         try:

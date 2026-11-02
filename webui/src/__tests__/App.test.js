@@ -469,6 +469,42 @@ describe('App', () => {
     }
   });
 
+  it('names a newer vBot version until its notice is dismissed', async () => {
+    const available = {
+      version_id: 'rel_new',
+      version: '0.4.36',
+      label: '0.4.36',
+    };
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'application.update_status': () => ({ installed: true, available }),
+        },
+      }),
+    );
+    const connection = mountApp();
+    connection.onEvent({ type: 'connection_ready', active_runs: [] });
+
+    const notice = t('app.updateAvailable', { version: '0.4.36' });
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('.app-update-available')?.textContent,
+      ).toContain(notice),
+    );
+    buttonWithText(
+      '.app-update-available button',
+      t('app.updateAvailableDismiss'),
+    ).click();
+    flushSync();
+    expect(document.querySelector('.app-update-available')).toBeNull();
+
+    // The dismissal holds for this version; it is stored in this browser.
+    connection.onEvent({ type: 'connection_ready', active_runs: [] });
+    await Promise.resolve();
+    flushSync();
+    expect(document.querySelector('.app-update-available')).toBeNull();
+  });
+
   it('offers Desktop server switching outside the inert app content', async () => {
     vi.useFakeTimers();
     window.history.replaceState({}, '', '/?accessor=desktop');

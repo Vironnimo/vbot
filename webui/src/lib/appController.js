@@ -1,6 +1,7 @@
 import { formatAgentAddress } from './agentAddress.js';
 import {
   acknowledgeDataStoreIncident,
+  getApplicationUpdateStatus,
   getDataStoreStatus,
   invalidateCatalogReads,
   isRunServerEvent,
@@ -36,6 +37,7 @@ import {
   RESOURCE_TOKEN_SESSIONS,
   RESOURCE_TOKEN_SKILLS,
   RESOURCE_TOKEN_TERMINALS,
+  RESOURCE_KIND_APPLICATION,
   RESOURCE_KIND_DATA_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
@@ -130,6 +132,8 @@ export function createAppControllerState() {
     agentSecretsRefreshToken: 0,
     // The server serves a newer WebUI build than this page runs.
     webuiOutdated: false,
+    // The server installation's update check (`application.update_status`).
+    applicationUpdate: null,
     skillsRefreshToken: 0,
     terminalsRefreshToken: 0,
   };
@@ -151,6 +155,7 @@ export function createAppController({
   // Session's may have.
   onPortalsChanged = () => {},
   readDataStoreStatus = getDataStoreStatus,
+  readApplicationUpdate = getApplicationUpdateStatus,
   readBackgroundActivity = listBackgroundActivity,
   acknowledgeIncident = acknowledgeDataStoreIncident,
   onCheckWebuiBuild = async () => {},
@@ -163,6 +168,7 @@ export function createAppController({
   let destroyed = false;
   let activityRevision = 0;
   let dataStoreRevision = 0;
+  let applicationUpdateRevision = 0;
   let pendingAcknowledgement = null;
   // Run events bypass `state`: copying a window of them into reactive state
   // on every event made each one cost the whole window.
@@ -180,6 +186,17 @@ export function createAppController({
         : [];
     } catch {
       // Preserve the last snapshot until another push or connection succeeds.
+    }
+  }
+
+  async function loadApplicationUpdate() {
+    const revision = ++applicationUpdateRevision;
+    try {
+      const result = await readApplicationUpdate();
+      if (destroyed || revision !== applicationUpdateRevision) return;
+      state.applicationUpdate = result ?? null;
+    } catch {
+      // An older server has no update check; a failed read keeps the last answer.
     }
   }
 
@@ -300,6 +317,7 @@ export function createAppController({
       );
       const refreshOwners = [
         loadDataStoreStatus,
+        loadApplicationUpdate,
         loadBackgroundActivity,
         onReloadExtensionPages,
         onCheckWebuiBuild,
@@ -424,6 +442,9 @@ export function createAppController({
     }
     if (kind === RESOURCE_KIND_DATA_STORE) {
       await loadDataStoreStatus();
+    }
+    if (kind === RESOURCE_KIND_APPLICATION) {
+      await loadApplicationUpdate();
     }
     if (kind === 'agents') {
       const scope = event.payload?.scope ?? {};

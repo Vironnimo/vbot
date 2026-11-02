@@ -431,6 +431,36 @@ def test_update_result_toast_describes_the_outcome(
     assert sink.shown == [Toast("update:upd_1", "update_result", title, body, failure)]
 
 
+@pytest.mark.parametrize(
+    ("settings", "requested", "shown"),
+    [
+        pytest.param({}, False, True, id="announced"),
+        pytest.param({"update_available": False}, False, False, id="switched-off"),
+        pytest.param({"update_available": False}, True, True, id="asked-for"),
+    ],
+)
+def test_update_available_toast_respects_its_setting_unless_the_user_asked(
+    settings: dict[str, bool], requested: bool, shown: bool
+):
+    sink = _Sink()
+    notifier = _notifier(sink, settings=settings)
+
+    async def connect() -> None:
+        notifier.status_changed(_CONNECTED)
+        await _settle()
+
+    asyncio.run(connect())
+    notifier.update_available("0.5.0", requested=requested)
+
+    expected = Toast(
+        "update-available",
+        "update_available",
+        "vBot update available",
+        "vBot 0.5.0 is available. Choose Update in the tray menu to install it.",
+    )
+    assert sink.shown == ([expected] if shown else [])
+
+
 @pytest.mark.parametrize("allowed_at_emit,allowed_at_display", [(False, True), (True, False)])
 def test_notification_policy_is_checked_at_completion_and_again_before_showing_a_toast(
     allowed_at_emit: bool, allowed_at_display: bool

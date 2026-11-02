@@ -27,6 +27,7 @@ class Actions(TrayActions):
         self.current = state
         self.calls: list[str] = []
         self.fail: str | None = None
+        self.availability_refreshes = 0
 
     @override
     def state(self) -> TrayState:
@@ -76,6 +77,14 @@ class Actions(TrayActions):
     @override
     def start_update(self) -> None:
         self._call("start_update")
+
+    @override
+    def check_for_updates(self) -> None:
+        self._call("check_for_updates")
+
+    @override
+    def refresh_availability(self) -> None:
+        self.availability_refreshes += 1
 
     @override
     def open_logs(self) -> None:
@@ -147,6 +156,15 @@ def _run_queued(controller: TrayController) -> None:
         work()
 
 
+def _run_opened(controller: TrayController) -> None:
+    """Run the queued open actions on the test's thread, as the open thread would."""
+
+    while not controller._open_work.empty():
+        work = controller._open_work.get_nowait()
+        assert work is not None
+        work()
+
+
 @pytest.mark.parametrize(
     ("server_state", "offered", "withheld"),
     [
@@ -205,14 +223,48 @@ def test_desktop_client_never_exposes_or_queues_server_actions():
 
 
 def test_update_is_disabled_while_an_operation_is_active():
-    actions = Actions(TrayState("running", "server", update_phase="preparing"))
+    actions = Actions(
+        TrayState("running", "server", update_phase="preparing", available_update="0.4.3")
+    )
     controller = TrayController(actions)
     controller._poll_state()
 
     menu = _labels(controller)
-    assert menu["Update"].enabled is False
+    assert menu["Update to vBot 0.4.3"].enabled is False
     controller.invoke("start_update")
     assert actions.calls == []
+
+
+def test_the_update_item_names_a_newer_version_or_checks_for_one():
+    actions = Actions(TrayState("running", "server"))
+    controller = TrayController(actions)
+    controller._poll_state()
+
+    assert "Update to vBot 0.4.3" not in _labels(controller)
+    controller.invoke("check_for_updates")
+    _run_opened(controller)
+    assert actions.calls == ["check_for_updates"]
+
+    actions.current = replace(actions.current, available_update="0.4.3")
+    controller._poll_state()
+    menu = _labels(controller)
+    assert "Check for updates" not in menu
+    assert menu["Update to vBot 0.4.3"].action == "start_update"
+    buttons = [item.action for item in controller.presentation().status.buttons]
+    assert "start_update" in buttons
+
+
+def test_a_failed_check_for_updates_becomes_the_last_error():
+    actions = Actions(TrayState("running", "server"))
+    actions.fail = "check_for_updates"
+    controller = TrayController(actions)
+    controller._poll_state()
+
+    controller.invoke("check_for_updates")
+    _run_opened(controller)
+
+    rows = dict(controller.presentation().status.rows)
+    assert rows["Last error"] == "Could not check for updates: test failure"
 
 
 @pytest.mark.parametrize(
@@ -286,7 +338,7 @@ def test_status_window_lists_details_activity_and_recovery_actions():
     assert status.activity == ("12:00:00  Server stopped from the tray",)
     assert [item.action for item in status.buttons] == [
         "start_server",
-        "start_update",
+        "check_for_updates",
         "open_logs",
     ]
 
@@ -359,7 +411,7 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
             update_entered.set()
             release_update.wait()
 
-    actions = ControlledActions(TrayState("stopped", "server"))
+    actions = ControlledActions(TrayState("stopped", "server", available_update="0.4.3"))
     controller = TrayController(actions)
     controller._poll_state()
     controller.start()
@@ -486,21 +538,21 @@ def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_r
 
 
 def test_update_request_disables_duplicate_clicks_until_facade_reports_completion():
-    actions = Actions(TrayState("running", "server"))
+    actions = Actions(TrayState("running", "server", available_update="0.4.3"))
     controller = TrayController(actions)
     controller._poll_state()
 
     controller.invoke("start_update")
     _run_queued(controller)
     # The request returned, but the facade has not reported the update yet.
-    assert _labels(controller)["Update"].enabled is False
+    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update"]
 
     actions.current = replace(actions.current, update_phase="completed")
     controller._poll_state()
-    assert _labels(controller)["Update"].enabled is True
+    assert _labels(controller)["Update to vBot 0.4.3"].enabled is True
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update", "start_update"]
@@ -535,7 +587,7 @@ def test_terminal_update_status_keeps_server_health_visible_and_allows_next_upda
     menu = _labels(controller)
     assert "Server stopped" in next(iter(menu))
     assert "Updated" not in next(iter(menu))
-    assert menu["Update"].enabled is True
+    assert menu["Check for updates"].enabled is True
 
 
 def test_facade_startup_error_is_visible_without_removing_recovery_actions():
@@ -548,7 +600,7 @@ def test_facade_startup_error_is_visible_without_removing_recovery_actions():
     controller._poll_state()
     assert next(iter(menu)) != controller.menu_items()[0].label
     assert menu["Start server"].enabled is True
-    assert menu["Update"].enabled is True
+    assert menu["Check for updates"].enabled is True
     assert menu["Application logs"].enabled is True
 
 

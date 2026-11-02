@@ -20,6 +20,7 @@ import pytest
 from cli._server_target import HealthProbeResult, RpcFailure
 from cli.application import desktop, host
 from cli.application.activity import JOURNAL_NAME, ActivityJournal
+from cli.application.availability import Availability, AvailableVersion
 from cli.application.monitor import MonitorStatus
 from cli.application.notifications import Toast
 from cli.application.state import ApplicationError, Installation, Operation
@@ -286,6 +287,57 @@ def test_update_milestones_are_recorded_once_and_the_result_toasted_once(
     ]
     assert "Version: 0.4.2 -> 0.5.0" in sink.toasts[0].body
     assert any(label == "Last update" for label, _value in facade.state().details)
+
+
+def _answer(version_id: str | None, *, active: str = "rel_current", error: str = ""):
+    at = "2026-11-02T08:00:00.000000Z"
+    newer = None if version_id is None else AvailableVersion(version_id, "0.4.3", "0.4.3")
+    return Availability("release", active, at, checked_at=at, available=newer, error=error)
+
+
+def test_a_newer_version_is_announced_once_and_offered_while_it_is_newer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    answers = {"refresh": _answer("rel_new"), "check": _answer("rel_new")}
+    monkeypatch.setattr(host.availability, "refresh", lambda _install: answers["refresh"])
+    monkeypatch.setattr(host.availability, "check", lambda _install: answers["check"])
+    facade, _monitor, sink = _watched(install, monkeypatch)
+
+    facade.refresh_availability()
+    facade.refresh_availability()
+    state = facade.state()
+    assert state.available_update == "0.4.3"
+    assert dict(state.details)["Newest version"].startswith("vBot 0.4.3 is available (checked ")
+    assert _activity(install) == ["update_available"]
+    assert [toast.kind for toast in sink.toasts] == ["update_available"]
+
+    # A successor tray, or another newer version the same day, toasts nothing more.
+    successor, _monitor, successor_sink = _watched(install, monkeypatch)
+    successor.refresh_availability()
+    answers["refresh"] = _answer("rel_newer")
+    facade.refresh_availability()
+    assert (successor_sink.toasts, len(sink.toasts)) == ([], 1)
+
+    # A check the user asks for always answers, also when nothing is newer.
+    facade.check_for_updates()
+    answers["check"] = _answer(None)
+    facade.check_for_updates()
+    assert [toast.title for toast in sink.toasts[1:]] == [
+        "vBot update available",
+        "vBot is up to date",
+    ]
+    assert facade.state().available_update == ""
+    answers["check"] = _answer(None, error="offline")
+    with pytest.raises(ApplicationError, match="offline"):
+        facade.check_for_updates()
+
+    # An answer for another active version (an update installed one) offers nothing.
+    answers["refresh"] = _answer("rel_new", active="rel_old")
+    facade.refresh_availability()
+    state = facade.state()
+    assert state.available_update == ""
+    assert dict(state.details)["Newest version"] == "Not checked yet"
 
 
 def test_tray_starts_update_workers_itself_and_for_other_requesters(

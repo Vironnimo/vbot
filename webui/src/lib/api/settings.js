@@ -154,6 +154,12 @@ export function getDataStoreStatus(options = {}) {
   return rpc('data_store.status', {}, options);
 }
 
+// Whether the server installation's update channel publishes a newer vBot:
+// `{ installed, channel, checked_at, available: { version_id, version, label } | null }`.
+export function getApplicationUpdateStatus(options = {}) {
+  return rpc('application.update_status', {}, options);
+}
+
 // The semantic Recall index: its state, coverage, last error and costs.
 // The server's background activity: `{ activities }`, the list that the
 // `activity_status` event pushes on every change.
