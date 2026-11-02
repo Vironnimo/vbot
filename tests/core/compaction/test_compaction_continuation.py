@@ -52,7 +52,7 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     assert summary.requests == []
     [sent] = active.requests
     assert sent["messages"][:-1] == request
-    assert "checkpoint" in sent["messages"][-1]["content"]
+    assert "Preserve decisions and unfinished work." in sent["messages"][-1]["content"]
     assert sent["tools"] == tools
     assert "temperature" not in sent
     assert result.content == "ACTIVE SUMMARY"

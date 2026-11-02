@@ -113,6 +113,7 @@ def project_set(
             ok=False,
             message=f"no project fields provided; use one of: {', '.join(PROJECT_SET_FLAGS)}",
             instance=instance,
+            refused=True,
         )
     params = {"project_id": project_id, **dict(changes)}
     payload = _rpc_call(instance, "project.set", params)
@@ -209,6 +210,7 @@ def project_remove(
                 instance, f"project {project_id}", (*command, "--permanent")
             ),
             instance=instance,
+            refused=True,
         )
     params: dict[str, object] = {"project_id": project_id}
     if copy_rooted_agent_files:

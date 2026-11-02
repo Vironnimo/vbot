@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.sessions import ChatSession
 from core.skills.requirements import SkillRequirements, environment_requirement_names
-from core.skills.skill_validator import triggered_skill_names
+from core.skills.skill_validator import SKILL_SLASH_TRIGGER_PATTERN, triggered_skill_names
 from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
 
@@ -47,9 +47,20 @@ def _activate_triggered_skills(
     if allowed_skills is None:
         allowed_skills = ["*"]
     allowed_by_name = _allowed_loadable_skills(skill_registry, allowed_skills)
+    slash_match = SKILL_SLASH_TRIGGER_PATTERN.match(content)
+    leading_name = slash_match.group(1) if slash_match else None
     for skill_name in triggered_skill_names(content):
         skill = allowed_by_name.get(skill_name)
         if skill is None:
+            if skill_name != leading_name and not _skill_exists(skill_registry, skill_name):
+                # `$5` or `$HOME` in ordinary text names no Skill: nothing to tell the Model.
+                _LOGGER.debug(
+                    "Ignored skill trigger '%s' for agent=%s session=%s: no such skill",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                )
+                continue
             _LOGGER.warning(
                 "Ignored skill trigger '%s' for agent=%s session=%s "
                 "because it is not allowed or loadable",
@@ -114,6 +125,14 @@ def _activate_triggered_skills(
                 agent.id,
                 session.id,
             )
+
+
+def _skill_exists(skill_registry: SkillRegistry, skill_name: str) -> bool:
+    try:
+        skill_registry.get(skill_name)
+    except KeyError:
+        return False
+    return True
 
 
 def _allowed_loadable_skills(

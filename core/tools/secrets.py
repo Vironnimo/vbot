@@ -158,7 +158,7 @@ _LIFETIME_TEXT: Final = {
     "session": "this session",
     "once": "one use, this session",
 }
-_USE_HINT: Final = (
+SECRET_USE_HINT: Final = (
     "Write a reference where the value belongs; vBot puts the value there, and output shows "
     "it to you as the reference."
 )
@@ -343,7 +343,7 @@ def _list_text(secrets: AgentSecrets, context: ToolContext) -> str:
     lines = ["Your Secrets:"]
     for secret in usable:
         lines.extend(_secret_lines(secrets, secret))
-    lines.append(_USE_HINT)
+    lines.append(SECRET_USE_HINT)
     return "\n".join(lines)
 
 
@@ -460,7 +460,7 @@ async def _request(
         verb = "replaced the value of" if outcome.replaced else "stored"
         lines = [f"The user {verb} {outcome.secret.name}:"]
         lines.extend(_secret_lines(secrets, outcome.secret))
-        lines.append(_USE_HINT)
+        lines.append(SECRET_USE_HINT)
         return tool_success({"content": "\n".join(lines)})
     if outcome.status == "declined":
         return tool_success(
@@ -533,7 +533,7 @@ async def _generate(
         return tool_failure("invalid_arguments", f"Nothing was generated. {error}")
     lines = [f"Generated a {length}-character password and stored it as {secret.name}:"]
     lines.extend(_secret_lines(secrets, secret))
-    lines.append(f"{_USE_HINT} The user can see the password in Settings -> Secrets.")
+    lines.append(f"{SECRET_USE_HINT} The user can see the password in Settings -> Secrets.")
     return tool_success({"content": "\n".join(lines)})
 
 

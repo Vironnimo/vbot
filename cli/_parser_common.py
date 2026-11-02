@@ -598,6 +598,26 @@ def _json_object_argument(raw: str) -> dict[str, object]:
     return value
 
 
+# Nested command groups: ``(area, group)`` -> what the group holds.
+GROUP_HELP = {
+    ("project", "override"): "Set or clear the override of one Agent in a Project team",
+    ("session", "policy"): "Set or clear a Session Policy override",
+    ("session", "channel"): "Link a Session to a Channel conversation for outbound replies",
+    ("channel", "token"): "Set or rotate a Channel bot token",
+    ("channel", "whatsapp"): "Set up, inspect and pair a WhatsApp Channel",
+    ("channel", "admin"): "Grant or revoke a user's admin access in one group",
+    ("prompt", "layout"): "Replace or reset the order and enabled states of System Prompt blocks",
+    ("provider", "custom"): "List, save and delete Custom Providers",
+    ("provider", "history"): "Show or clear recorded Provider usage-limit observations",
+    ("provider", "key"): "Set or remove the API key of a Provider",
+    ("provider", "connection"): "Show the OAuth connection and device-flow state of a Provider",
+    ("task-model", "target"): "List the targets available for a task type",
+    ("task-model", "option"): "Show, set or unset the options of a task target",
+    ("skill", "file"): "Write or remove supporting files of an editable Skill",
+    ("performance", "record"): "Start and stop recording a performance timeline",
+}
+
+
 def _json_array_argument(raw: str) -> list[object]:
     try:
         value = json.loads(raw)
@@ -638,7 +658,8 @@ def _add_command_parser(
         example = example.replace(f"{area} {command}", f"{area} {' '.join(path)}", 1)
     for group in path[:-1]:
         if group not in subparsers.choices:
-            group_parser = subparsers.add_parser(group, help=f"Manage {group.replace('-', ' ')}")
+            group_help = GROUP_HELP.get((area, group), f"Manage {group.replace('-', ' ')}")
+            group_parser = subparsers.add_parser(group, help=group_help, description=group_help)
             group_parser.add_subparsers(dest=argparse.SUPPRESS, required=True)
         subparsers = next(
             action

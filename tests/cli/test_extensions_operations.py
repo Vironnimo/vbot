@@ -146,7 +146,7 @@ def test_invalid_operation_input_never_invokes_the_extension(
 
     code, out, err = run_cli("extensions", "demo", *tokens)
 
-    assert code == 1
+    assert code == 2
     assert _operation_calls(rpc) == ["describe"]
     assert shown in out
     assert "do-not-print" not in out + err
@@ -169,7 +169,7 @@ def test_unknown_argument_suggests_the_schema_flag_without_echoing_the_value(
 
     code, out, err = run_cli("extensions", "demo", "cancel", *tokens)
 
-    assert code == 1
+    assert code == 2
     assert _operation_calls(rpc) == ["describe"]
     assert "--request-id" in out
     assert "secret-sentinel" not in out + err
@@ -226,7 +226,7 @@ def test_unreadable_document_argument_is_not_echoed(rpc: FakeRpc, run_cli: RunCl
     # Setup text pasted where a path belongs can hold credentials.
     code, out, err = run_cli("extensions", "mcp", "import", "TOKEN=secret-sentinel npx server")
 
-    assert code == 1
+    assert code == 2
     assert _operation_calls(rpc) == ["describe"]
     assert "- to read standard input" in out
     assert "secret-sentinel" not in out + err

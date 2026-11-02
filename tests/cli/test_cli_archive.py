@@ -791,7 +791,7 @@ def test_a_permanent_deletion_without_yes_sends_nothing_and_names_the_confirmed_
 ) -> None:
     code, out, _err = run_cli(*command)
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     assert out.startswith("refusing to delete ")
     assert f"re-run with --yes: {corrected}" in out

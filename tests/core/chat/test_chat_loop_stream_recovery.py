@@ -10,6 +10,7 @@ from typing import Any, override
 import pytest
 
 from core.chat import ChatMessage
+from core.chat._step_outcomes import STREAM_RECOVERY_NOTE
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingRepetitionError
 from core.providers._responses_wire import (
     ResponsesStreamState,
@@ -253,7 +254,7 @@ async def test_failure_after_answer_text_continues_from_the_durable_partial(
         "assistant",
         "partial",
     )
-    assert "Continue the same task" in continuation_request[-1]["content"]
+    assert STREAM_RECOVERY_NOTE in continuation_request[-1]["content"]
     assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
@@ -379,7 +380,7 @@ async def test_reasoning_only_stop_recovers_with_a_visible_continuation(
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert (messages[1].reasoning, messages[1].interrupted) == (misrouted, True)
     assert messages[1].interruption_cause == "provider"
-    assert messages[2].content == recovery_sentinel
+    assert str(messages[2].content).startswith(recovery_sentinel)
     assert len(requests) == 2
     assert recovery_sentinel in str(requests[1]["messages"])
     assert all(message.get("role") != "assistant" for message in requests[1]["messages"])

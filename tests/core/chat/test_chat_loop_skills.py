@@ -197,6 +197,18 @@ async def test_unmatched_skill_trigger_adds_one_reminder_instead_of_content(
         assert "\n".join(contents).count(reminder) == 1
 
 
+@pytest.mark.asyncio
+async def test_a_dollar_amount_or_variable_in_prose_triggers_no_reminder(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path, 1, allowed_skills=[], skills=StubSkills([]))
+
+    await build_chat_loop(runtime).send(
+        "coder", "It costs $5 and lives in $HOME", session_id="session-one"
+    )
+
+    contents = _contents(runtime.adapter.requests[0]["messages"])
+    assert not any("Skill trigger" in content for content in contents)
+
+
 def _activate(session: ChatSession, steps: str) -> ChatMessage:
     session.activate_skill_context(
         "debugging",

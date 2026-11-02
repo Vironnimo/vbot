@@ -65,7 +65,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     create_parser.add_argument(
         "--name",
-        help="Optional human-readable job name; defaults to the first useful prompt line",
+        help="Human-readable job name; defaults to the first useful prompt line",
     )
     create_prompt = create_parser.add_mutually_exclusive_group(required=True)
     create_prompt.add_argument("--prompt", help="Prompt text injected when the job fires")
@@ -396,7 +396,7 @@ def _add_devices_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         commands, "rename", DEVICES_HELP["rename"], example='devices rename <id> "Work laptop"'
     )
     rename.add_argument("id", metavar="<device-id>", help="Exact id from devices list")
-    rename.add_argument("name", metavar="<name>")
+    rename.add_argument("name", metavar="<name>", help="New device name")
     revoke = _add_command_parser(
         commands, "revoke", DEVICES_HELP["revoke"], example="devices revoke <id>"
     )
@@ -482,11 +482,13 @@ def _add_bootstrap_parsers(
         action="store_true",
         help="Use the current vBot Run Agent and Session; available only inside its Bash command",
     )
-    create.add_argument("--name", help="Optional human-readable job name")
+    create.add_argument("--name", help="Human-readable job name")
     create_prompt = create.add_mutually_exclusive_group(required=True)
     create_prompt.add_argument("--prompt", help="Prompt injected after startup")
     _add_text_file_argument(create_prompt, content="prompt text", dest="prompt_file")
-    create.add_argument("--mode", required=True, choices=BOOTSTRAP_MODES)
+    create.add_argument(
+        "--mode", required=True, choices=BOOTSTRAP_MODES, help="How the prompt is delivered"
+    )
     create.add_argument(
         "--session",
         metavar="<session-id>",
@@ -498,16 +500,22 @@ def _add_bootstrap_parsers(
         BOOTSTRAP_HELP["update"],
         example='bootstrap update <job-id> --prompt "Check status and logs"',
     )
-    update.add_argument("id", metavar="<job-id>")
-    update.add_argument("--agent", metavar="<agent>")
-    update.add_argument("--name")
+    update.add_argument("id", metavar="<job-id>", help="Exact id from bootstrap list")
+    update.add_argument("--agent", metavar="<agent>", help="Replace the Agent that runs the job")
+    update.add_argument("--name", help="Replace the human-readable job name")
     update_prompt = update.add_mutually_exclusive_group()
     update_prompt.add_argument("--prompt", help="Replace the prompt injected after startup")
     _add_text_file_argument(update_prompt, content="prompt text", dest="prompt_file")
-    update.add_argument("--mode", choices=BOOTSTRAP_MODES)
+    update.add_argument(
+        "--mode", choices=BOOTSTRAP_MODES, help="Replace how the prompt is delivered"
+    )
     session_group = update.add_mutually_exclusive_group()
-    session_group.add_argument("--session", metavar="<session-id>")
-    session_group.add_argument("--clear-session", action="store_true")
+    session_group.add_argument(
+        "--session", metavar="<session-id>", help="Replace the Session the job runs in"
+    )
+    session_group.add_argument(
+        "--clear-session", action="store_true", help="Create a fresh Session on each run"
+    )
     for command in ("delete", "enable", "disable"):
         command_parser = _add_command_parser(
             commands,
@@ -515,7 +523,7 @@ def _add_bootstrap_parsers(
             BOOTSTRAP_HELP[command],
             example=f"bootstrap {command} <job-id>",
         )
-        command_parser.add_argument("id", metavar="<job-id>")
+        command_parser.add_argument("id", metavar="<job-id>", help="Exact id from bootstrap list")
 
 
 def _add_statistics_parsers(
@@ -588,7 +596,7 @@ def _add_config_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     list_parser.add_argument(
         "prefix",
         nargs="?",
-        help="Optional public path prefix, for example web_search",
+        help="Public path prefix, for example web_search",
     )
 
     describe_parser = _add_command_parser(

@@ -57,12 +57,21 @@ def _add_extensions_parsers(
         if action in {"list", "reload", "enable", "disable"}:
             leaf.set_defaults(selector=action)
             if action in {"enable", "disable"}:
-                leaf.add_argument("rest", nargs=1, metavar="<extension-name>")
+                leaf.add_argument(
+                    "rest",
+                    nargs=1,
+                    metavar="<extension-name>",
+                    help="Extension name from extensions list",
+                )
         else:
-            leaf.add_argument("selector", metavar="<extension-name>")
+            leaf.add_argument(
+                "selector", metavar="<extension-name>", help="Extension name from extensions list"
+            )
         if action == "set":
-            leaf.add_argument("field")
-            leaf.add_argument("value", nargs="?")
+            leaf.add_argument("field", help="Setting field from extensions show")
+            leaf.add_argument(
+                "value", nargs="?", help="New value; with --stdin, read it from stdin"
+            )
             leaf.add_argument(
                 "--stdin", action="store_true", help="Read the value from UTF-8 stdin"
             )
@@ -265,7 +274,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
             skill_subparsers,
             command,
             SKILL_HELP[command],
-            example=f"skill {command} librarian",
+            example=f"skill {command} web-research",
         )
         command_parser.add_argument(
             "name",
@@ -277,7 +286,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "share",
         SKILL_HELP["share"],
-        example="skill share assistant librarian --to researcher --to coder",
+        example="skill share assistant web-research --to researcher --to coder",
     )
     share_parser.add_argument("agent", metavar="<agent-id>", help="Owning Identity Agent id")
     share_parser.add_argument("name", metavar="<skill-name>", help="Private Skill name to share")
@@ -294,7 +303,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "unshare",
         SKILL_HELP["unshare"],
-        example="skill unshare assistant librarian",
+        example="skill unshare assistant web-research",
     )
     unshare_parser.add_argument("agent", metavar="<agent-id>", help="Owning Identity Agent id")
     unshare_parser.add_argument("name", metavar="<skill-name>", help="Shared Skill name")
@@ -326,30 +335,31 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
             skill_subparsers,
             command,
             SKILL_HELP[command],
-            example=f"skill {command} librarian --scope agent:assistant --file SKILL.md",
+            example=f"skill {command} web-research --scope agent:assistant --file SKILL.md",
         )
         command_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
         content_group = command_parser.add_mutually_exclusive_group(required=True)
         content_group.add_argument("--content", help="Complete SKILL.md content as inline text")
         _add_text_file_argument(content_group, content="SKILL.md")
-        command_parser.add_argument("--source", help="Optional provenance label")
+        command_parser.add_argument("--source", help="Provenance label")
         _add_skill_scope_argument(command_parser)
 
     delete_parser = _add_command_parser(
         skill_subparsers,
         "delete",
         SKILL_HELP["delete"],
-        example="skill delete librarian --scope global --yes",
+        example="skill delete web-research --scope global",
     )
     delete_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
-    delete_parser.add_argument("--yes", action="store_true", help="Confirm deletion")
     _add_skill_scope_argument(delete_parser)
 
     write_parser = _add_command_parser(
         skill_subparsers,
         "write-file",
         SKILL_HELP["write-file"],
-        example="skill file write librarian references/schema.md --scope global --file schema.md",
+        example=(
+            "skill file write web-research references/schema.md --scope global --file schema.md"
+        ),
     )
     write_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
     write_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
@@ -362,7 +372,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "remove-file",
         SKILL_HELP["remove-file"],
-        example="skill file remove librarian references/schema.md --scope global --yes",
+        example="skill file remove web-research references/schema.md --scope global --yes",
     )
     remove_file_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
     remove_file_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
@@ -373,7 +383,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "history",
         SKILL_HELP["history"],
-        example="skill history librarian --scope agent:assistant",
+        example="skill history web-research --scope agent:assistant",
     )
     history_parser.add_argument(
         "name", nargs="?", metavar="<skill-name>", help="Only changes of this Skill"
@@ -393,7 +403,13 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         SKILL_HELP["revert"],
         example="skill revert 14 --scope agent:assistant",
     )
-    revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+    revert_parser.add_argument(
+        "revisions",
+        type=int,
+        nargs="+",
+        metavar="<revision>",
+        help="Revision numbers from the history command",
+    )
     _add_skill_scope_argument(revert_parser)
 
     archived_parser = _add_command_parser(
@@ -432,7 +448,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
             skill_subparsers,
             command,
             SKILL_HELP[command],
-            example=f"skill {command} librarian --scope agent:assistant",
+            example=f"skill {command} web-research --scope agent:assistant",
         )
         pin_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
         _add_skill_scope_argument(pin_parser)
@@ -476,18 +492,21 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         example='memory replace assistant 3 --content "Updated preference"',
     )
     _add_memory_agent_argument(replace_parser)
-    replace_parser.add_argument("entry_id", type=int, metavar="<entry-id>")
+    replace_parser.add_argument(
+        "entry_id", type=int, metavar="<entry-id>", help="Entry id from memory list"
+    )
     _add_memory_content_arguments(replace_parser)
 
     remove_parser = _add_command_parser(
         memory_subparsers,
         "remove",
         MEMORY_HELP["remove"],
-        example="memory remove assistant 3 --yes",
+        example="memory remove assistant 3",
     )
     _add_memory_agent_argument(remove_parser)
-    remove_parser.add_argument("entry_id", type=int, metavar="<entry-id>")
-    remove_parser.add_argument("--yes", action="store_true", help="Confirm removal")
+    remove_parser.add_argument(
+        "entry_id", type=int, metavar="<entry-id>", help="Entry id from memory list"
+    )
 
     history_parser = _add_command_parser(
         memory_subparsers,
@@ -511,13 +530,20 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         memory_subparsers, "show", MEMORY_HELP["show"], example="memory show assistant 12"
     )
     _add_memory_owner_argument(show_parser)
-    show_parser.add_argument("revision", type=int, metavar="<revision>")
+    show_parser.add_argument(
+        "revision", type=int, metavar="<revision>", help="Revision number from memory history"
+    )
 
     diff_parser = _add_command_parser(
         memory_subparsers, "diff", MEMORY_HELP["diff"], example="memory diff assistant 12"
     )
     _add_memory_owner_argument(diff_parser)
-    diff_parser.add_argument("from_revision", type=int, metavar="<from-revision>")
+    diff_parser.add_argument(
+        "from_revision",
+        type=int,
+        metavar="<from-revision>",
+        help="Revision number from memory history",
+    )
     diff_parser.add_argument(
         "to_revision",
         type=int,
@@ -530,7 +556,13 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         memory_subparsers, "revert", MEMORY_HELP["revert"], example="memory revert assistant 14"
     )
     _add_memory_owner_argument(revert_parser)
-    revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+    revert_parser.add_argument(
+        "revisions",
+        type=int,
+        nargs="+",
+        metavar="<revision>",
+        help="Revision numbers from the history command",
+    )
 
 
 def _add_librarian_parsers(

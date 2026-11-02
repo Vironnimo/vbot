@@ -211,7 +211,7 @@ def test_the_chats_session_gets_a_note_of_what_was_sent(
     delivered(envelope)
     note = tool.note()
     tool.service.record_outbound_note.assert_awaited_once_with(
-        "tg-main", "111", note, thread_id=thread
+        "tg-main", "111", note, thread_id=thread, skip_session_id="session-1"
     )
     assert json.loads(note.split("\n", 1)[1]) == {"sender_agent_id": "agent-1", **record}
     assert "</system-reminder>" not in note
@@ -460,7 +460,8 @@ async def test_file_deliveries_keep_the_actual_topic_for_followup_sends(
             "platform_target": "-10001",
             "thread_id": expected_topic,
         }
-        assert len([entry for entry in sessions.get(address).load() if entry.role == "note"]) == 2
+        # The chat's Session is the sender here: it holds the calls, so no note is added.
+        assert [entry for entry in sessions.get(address).load() if entry.role == "note"] == []
 
         # An explicit chat target without a topic is a new unthreaded delivery;
         # it must clear the previous topic instead of silently inheriting it.

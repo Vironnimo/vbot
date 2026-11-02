@@ -414,6 +414,7 @@ async def _handle_channel_send_tool(
             prepared.channel_id,
             platform_target,
             thread_id=thread_id,
+            sender_session_id=context.session_id,
             sender_agent_id=context.agent_id,
             message=prepared.message,
             files=prepared.files,
@@ -570,6 +571,7 @@ async def _record_outbound_message_note(
     platform_target: str,
     *,
     thread_id: str | None,
+    sender_session_id: str,
     sender_agent_id: str,
     message: str | None,
     files: list[FileData],
@@ -577,8 +579,13 @@ async def _record_outbound_message_note(
 ) -> None:
     try:
         note = _outbound_message_note(sender_agent_id, message, files, checklist)
+        # The sending Session already has the call and its arguments in its history.
         await channel_service.record_outbound_note(
-            channel_id, platform_target, note, thread_id=thread_id
+            channel_id,
+            platform_target,
+            note,
+            thread_id=thread_id,
+            skip_session_id=sender_session_id,
         )
     except Exception as error:
         # The outbound message already went out; failing to record context into the target

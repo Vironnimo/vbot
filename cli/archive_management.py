@@ -197,6 +197,7 @@ def archive_purge(
                 f"re-run with --yes: {command}{check}"
             ),
             instance=instance,
+            refused=True,
         )
     params: dict[str, object] = (
         {"all": True, **_filter_params(kind, agent_id, project_id)}

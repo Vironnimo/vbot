@@ -106,7 +106,7 @@ def test_prompt_update_refuses_undecodable_content_before_rpc(
 
     code, out, err = run_cli("prompt", "update", "core:tools", "--file", str(content_file))
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     assert "UTF-8" in out + err and "UTF-16" in out + err
     assert "secret" not in out + err

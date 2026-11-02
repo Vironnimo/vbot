@@ -410,10 +410,11 @@ def test_agent_update_sends_only_the_given_changes(
 def test_agent_update_rejects_incomplete_changes_before_any_request(
     rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], named_options: tuple[str, ...]
 ) -> None:
-    code, out, _err = run_cli("agent", "update", "coder", *options)
+    code, out, err = run_cli("agent", "update", "coder", *options)
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
+    assert "Nothing was changed." in err
     for option in named_options:
         assert option in out
 
@@ -490,7 +491,7 @@ def test_agent_rename_renames_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
 def test_agent_rename_to_the_same_id_sends_nothing(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("agent", "rename", "writer", "writer")
 
-    assert code == 1
+    assert code == 2
     assert out.strip()
     assert rpc.calls == []
 
@@ -523,7 +524,7 @@ def test_agent_reorder_rejects_duplicate_ids_before_any_request(
 ) -> None:
     code, out, _err = run_cli("agent", "reorder", "assistant", "assistant")
 
-    assert code == 1
+    assert code == 2
     assert "duplicate" in out
     assert rpc.calls == []
 

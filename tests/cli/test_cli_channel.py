@@ -373,7 +373,7 @@ def test_channel_update_sends_only_the_given_changes(
 def test_channel_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("channel", "update", "tg-assistant")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     for option in (
         "--platform",

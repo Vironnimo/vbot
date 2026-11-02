@@ -296,7 +296,7 @@ def test_project_set_sends_the_requested_changes(
 def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("project", "set", "vbot")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     for option in (
         "--cwd",

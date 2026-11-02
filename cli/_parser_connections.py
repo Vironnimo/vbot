@@ -34,7 +34,9 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         example=("channel add tg-main --platform telegram --agent assistant --token-stdin"),
     )
     add_parser.add_argument("id", metavar="<channel-id>", help="Id for the new channel")
-    add_parser.add_argument("--platform", required=True, choices=CHANNEL_PLATFORMS)
+    add_parser.add_argument(
+        "--platform", required=True, choices=CHANNEL_PLATFORMS, help="Messaging platform"
+    )
     add_parser.add_argument(
         "--agent", required=True, metavar="<agent-id>", help="Agent that handles channel messages"
     )
@@ -49,7 +51,12 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         action="store_true",
         help="Read and manage the bot token from UTF-8 stdin",
     )
-    add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
+    add_parser.add_argument(
+        "--dm-scope",
+        default="per_conversation",
+        choices=CHANNEL_DM_SCOPES,
+        help="How direct messages map to Sessions (default: per_conversation)",
+    )
     add_parser.add_argument("--app-token-env", help="Slack Socket Mode app-token variable name")
     add_parser.add_argument("--server-url", help="Mattermost server URL")
     _add_email_arguments(add_parser)
@@ -80,13 +87,31 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         example="channel update tg-main --agent coder",
     )
     update_parser.add_argument("id", metavar="<channel-id>", help="Channel id to update")
-    update_parser.add_argument("--platform", choices=CHANNEL_PLATFORMS)
-    update_parser.add_argument("--agent", metavar="<agent-id>")
-    update_parser.add_argument("--token-env", metavar="<env-var>")
-    update_parser.add_argument("--app-token-env", metavar="<env-var>")
-    update_parser.add_argument("--server-url", metavar="<url>")
+    update_parser.add_argument(
+        "--platform", choices=CHANNEL_PLATFORMS, help="Replace the messaging platform"
+    )
+    update_parser.add_argument(
+        "--agent", metavar="<agent-id>", help="Replace the Agent that handles channel messages"
+    )
+    update_parser.add_argument(
+        "--token-env",
+        metavar="<env-var>",
+        help="Replace the environment variable holding the bot token",
+    )
+    update_parser.add_argument(
+        "--app-token-env",
+        metavar="<env-var>",
+        help="Replace the Slack Socket Mode app-token variable name",
+    )
+    update_parser.add_argument(
+        "--server-url", metavar="<url>", help="Replace the Mattermost server URL"
+    )
     _add_email_arguments(update_parser)
-    update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
+    update_parser.add_argument(
+        "--dm-scope",
+        choices=CHANNEL_DM_SCOPES,
+        help="Replace how direct messages map to Sessions",
+    )
     update_parser.add_argument(
         "--allow",
         type=str,
@@ -94,7 +119,9 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<chat-id>",
         help="Replace the full allowed chat-id list",
     )
-    update_parser.add_argument("--enabled", choices=("true", "false"))
+    update_parser.add_argument(
+        "--enabled", choices=("true", "false"), help="Turn the channel listener on or off"
+    )
     _add_channel_policy_arguments(update_parser, include_defaults=False)
 
     set_token_parser = _add_command_parser(
@@ -133,7 +160,9 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             f"WhatsApp {action}; scan pairing QR codes in Settings > Channels",
             example=f"channel whatsapp-{action} wa-main",
         )
-        whatsapp.add_argument("id", metavar="<channel-id>")
+        whatsapp.add_argument(
+            "id", metavar="<channel-id>", help="WhatsApp Channel id from channel list"
+        )
         if action == "pair":
             whatsapp.add_argument(
                 "--reset",
@@ -200,9 +229,9 @@ def _add_email_arguments(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument("--email-address", metavar="<address>", help="The account's address")
     group.add_argument("--email-username", metavar="<user>", help="Login name if not the address")
-    group.add_argument("--imap-host", metavar="<host>")
+    group.add_argument("--imap-host", metavar="<host>", help="IMAP server host name")
     group.add_argument("--imap-port", type=int, metavar="<port>", help="Default 993")
-    group.add_argument("--smtp-host", metavar="<host>")
+    group.add_argument("--smtp-host", metavar="<host>", help="SMTP server host name")
     group.add_argument("--smtp-port", type=int, metavar="<port>", help="Default 465")
     group.add_argument(
         "--smtp-security",
@@ -310,13 +339,13 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         help="Connection authentication type",
     )
     key_source = custom_save_parser.add_mutually_exclusive_group()
-    key_source.add_argument("--api-key", help="Optional API key; prefer --api-key-stdin")
+    key_source.add_argument("--api-key", help="API key; prefer --api-key-stdin")
     key_source.add_argument(
         "--api-key-stdin", action="store_true", help="Read the optional API key from UTF-8 stdin"
     )
     custom_save_parser.add_argument(
         "--models-endpoint",
-        help="Optional discovery path such as /models",
+        help="Discovery path such as /models",
     )
     custom_save_parser.add_argument(
         "--model",
@@ -636,7 +665,12 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["targets"],
         example="task-model target list speech_to_text",
     )
-    targets_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    targets_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
 
     status_parser = _add_command_parser(
         task_model_subparsers,
@@ -644,7 +678,12 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["status"],
         example="task-model status text_to_speech",
     )
-    status_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    status_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
 
     options_parser = _add_command_parser(
         task_model_subparsers,
@@ -652,7 +691,12 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["options"],
         example="task-model option list text_to_speech openai/gpt-4o-mini-tts::api-key",
     )
-    options_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    options_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
     options_parser.add_argument(
         "target",
         nargs="?",
@@ -666,7 +710,12 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["set"],
         example="task-model set text_embedding openai/text-embedding-3-small::api-key",
     )
-    set_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    set_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
     set_parser.add_argument(
         "target",
         metavar="<target-id>",
@@ -700,9 +749,18 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["set-option"],
         example=("task-model option set text_to_speech voice en-us-harper:mai-voice-2"),
     )
-    set_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
-    set_option_parser.add_argument("name", metavar="<name>")
-    set_option_parser.add_argument("value", nargs="?", metavar="<value>")
+    set_option_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
+    set_option_parser.add_argument(
+        "name", metavar="<name>", help="Option name from task-model option list"
+    )
+    set_option_parser.add_argument(
+        "value", nargs="?", metavar="<value>", help="Option value; with --stdin, read it from stdin"
+    )
     set_option_parser.add_argument(
         "--stdin",
         action="store_true",
@@ -715,8 +773,15 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["unset-option"],
         example="task-model option unset text_to_speech speed",
     )
-    unset_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
-    unset_option_parser.add_argument("name", metavar="<name>")
+    unset_option_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )
+    unset_option_parser.add_argument(
+        "name", metavar="<name>", help="Option name from task-model option list"
+    )
 
     clear_parser = _add_command_parser(
         task_model_subparsers,
@@ -724,4 +789,9 @@ def _add_task_model_parsers(
         TASK_MODEL_HELP["clear"],
         example="task-model clear image_generation",
     )
-    clear_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    clear_parser.add_argument(
+        "task_type",
+        metavar="<task-type>",
+        choices=TASK_TYPES,
+        help="Task type from task-model list",
+    )

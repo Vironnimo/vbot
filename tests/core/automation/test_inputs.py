@@ -110,6 +110,7 @@ async def test_tasks_queue_continue_and_use_run_overrides_without_changing_defau
         assert result["status"] == "completed" and result["content"] == "second"
         assert (await inputs.result(identity, "one"))["content"] == "first"
         assert [request["model_id"] for request in adapter.requests] == ["request", "input"]
+        assert "program behind the Task input" in str(adapter.requests[0]["messages"])
         assert [request["kwargs"]["thinking_effort"] for request in adapter.requests] == [
             "high",
             "low",

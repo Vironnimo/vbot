@@ -27,6 +27,8 @@ SUCCESS_EXIT_CODE = 0
 
 FAILURE_EXIT_CODE = 1
 
+USAGE_EXIT_CODE = 2
+
 _arguments: ContextVar[argparse.Namespace] = ContextVar("cli_arguments")
 _last_result: ContextVar[CommandResult | None] = ContextVar("cli_last_result", default=None)
 
@@ -93,6 +95,9 @@ def with_command_output[**P](function: Callable[P, int]) -> Callable[P, int]:
                         flush=True,
                     )
                     return 130
+            refused = _last_result.get()
+            if code == FAILURE_EXIT_CODE and refused is not None and refused.refused:
+                code = USAGE_EXIT_CODE
             if output_mode.get() != "plain" and parsed.area not in {
                 "server",
                 "update",

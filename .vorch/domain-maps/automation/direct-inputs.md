@@ -31,3 +31,9 @@ Optional waiting observes the same admitted work, by its live Run or Queue futur
 `server/rpc/input_methods.py` registers operator configuration with the existing RPC dispatcher and publishes `resource_changed` kind `inputs`. The frontend maps that to the Automations refresh token. `cron/DirectInputsView.svelte` owns the Task inputs tab, reuses execution selectors and Model/Reasoning catalogs, autosaves existing inputs with the shared participant, and retains new drafts through App's existing Automation-draft state. Returning a new form to its initial values or cancelling it clears the retained draft. It presents URL/reach, reveal/rotate controls and copyable submission, polling and continuation examples. Event webhooks stay a separate tab. Input drafts and saved selections follow the App's Agent-rename notifications.
 
 Coverage: `tests/core/automation/test_inputs.py`, the durable-override recovery case in `test_chat_loop_accessor_inputs.py`, the input reference in Runtime Agent-rename tests, `tests/server/test_direct_inputs.py`, the access guard's route-exemption contract, and the direct-input creation/draft/autosave case in `CronView.test.js`.
+
+## Agent-facing text
+
+| Text | Reason |
+|---|---|
+| `This task came from the program behind the Task input "{name}", not from a person in a chat, and your final answer goes back to that program. When something you need is missing, say what in your final answer.` (`core/automation/inputs.py::_task_input_note`, a context note stored before the prompt) | The prompt arrives as an ordinary user message. Without the origin the Agent ends its turn with a clarifying question, which the calling program reads as the final answer and nobody answers. The second sentence does not forbid questions, because a human follow-up in the same Session is possible. Not yet checked with an Eval. |

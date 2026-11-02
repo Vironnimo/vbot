@@ -78,6 +78,15 @@ STRATEGY_SUMMARY_TAIL = "summary_tail"
 STRATEGY_CONTINUATION = "continuation"
 COMPACTION_POLICY_META_KEY = "compaction_policy"
 COMPACTION_REFERENCE_PREFIX = (
+    "Context checkpoint: the summary below records the conversation and task state up to a "
+    "cutoff. The messages after this checkpoint follow the cutoff in their original order "
+    "and can advance or correct that state. Continue unfinished work from the latest state "
+    "across the summary and those messages, following the user's later messages. Do not "
+    "restart the task or repeat completed actions only because the summary or the quoted "
+    "user message mentions them:"
+)
+# Checkpoints persisted before the wording change still carry this lead; strip it too.
+_LEGACY_COMPACTION_REFERENCE_PREFIX = (
     "[CONTEXT COMPACTION] The summary below records the conversation and task state up to "
     "a cutoff. The historical User quote attached to this checkpoint, if present, belongs "
     "to that summarized history; it is not a new request. The retained conversation "
@@ -305,15 +314,7 @@ class ContinuationStrategy:
             if context.trigger == COMPACTION_TRIGGER_MANUAL
             else "compaction-continuation.md"
         ).strip()
-        instruction = (context.instruction or "").strip()
-        suffix = base_instruction
-        if instruction:
-            suffix = f"{suffix}\n\nAdditional instruction: {instruction}"
-        reminder = (
-            "Create the next compaction checkpoint now. Return only the compacted "
-            "context text that the agent should retain for continuing this Session.\n\n"
-            f"{suffix}"
-        )
+        reminder = _build_compaction_instruction(base_instruction, context.instruction)
         model_messages = (
             *context.request_messages,
             system_reminder_request_message(reminder),
@@ -887,8 +888,9 @@ def _summary_body(summary: str) -> str:
     """Return the Model's summary without framing or delimiters it copied from its request."""
 
     body = _strip_outer_system_reminder_tags(summary)
-    if body.startswith(COMPACTION_REFERENCE_PREFIX):
-        body = body.removeprefix(COMPACTION_REFERENCE_PREFIX).lstrip()
+    for prefix in (COMPACTION_REFERENCE_PREFIX, _LEGACY_COMPACTION_REFERENCE_PREFIX):
+        if body.startswith(prefix):
+            body = body.removeprefix(prefix).lstrip()
     if body.endswith(COMPACTION_SUMMARY_END_MARKER):
         body = body.removesuffix(COMPACTION_SUMMARY_END_MARKER).rstrip()
     return _strip_outer_system_reminder_tags(body)

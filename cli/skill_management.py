@@ -37,6 +37,7 @@ def skill_install(
                 "Replacing a complete Skill requires --replace --yes; "
                 "inspect it with --dry-run first."
             ),
+            refused=True,
         )
     local = instance.host in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
     if scope == "own":
@@ -54,6 +55,7 @@ def skill_install(
                     "--scope own requires an Identity Agent's vBot Run on this server. "
                     "Use --scope global or --scope agent:<id> for an explicit target."
                 ),
+                refused=True,
             )
         scope = f"agent:{agent_id}"
     if local and not source.lower().startswith(("http://", "https://")):
@@ -205,18 +207,9 @@ def skill_update(
     return _skill_write_result(instance, "skill.update", params)
 
 
-def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool) -> CommandResult:
-    """Delete a Skill into its scope's archive after explicit confirmation."""
+def skill_delete(instance: ServerInstance, scope: str, name: str) -> CommandResult:
+    """Move a Skill into its scope's archive; the result names how to restore it."""
 
-    if not confirm:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"refusing to delete skill {name} from {scope} without confirmation; "
-                "re-run with --yes"
-            ),
-            instance=instance,
-        )
     return _skill_write_result(instance, "skill.delete", {"scope": scope, "name": name})
 
 
@@ -307,6 +300,7 @@ def skill_purge(
                 "without confirmation; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     payload = _rpc_call(instance, "skill.purge", {"scope": scope, "archive_id": archive_id})
     if not payload.ok:
@@ -353,6 +347,7 @@ def skill_remove_file(
                 "re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     return _skill_write_result(
         instance,
@@ -583,7 +578,7 @@ def _skill_write_result(
     archive_id = payload.data.get("archive_id")
     if method == "skill.delete" and isinstance(archive_id, str):
         lines.append(f"archived as {archive_id}")
-        lines.append(f"restore with: vbot skill restore {archive_id} --scope {scope}")
+        lines.append(f"Undo: vbot skill restore {archive_id} --scope {scope}")
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 

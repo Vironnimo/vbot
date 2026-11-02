@@ -93,11 +93,14 @@ def task_model_set(
             options = json.loads(options_json)
         except json.JSONDecodeError as exc:
             return CommandResult(
-                ok=False, message=f"--options is not valid JSON: {exc}", instance=instance
+                ok=False,
+                message=f"--options is not valid JSON: {exc}",
+                instance=instance,
+                refused=True,
             )
         if not isinstance(options, dict):
             return CommandResult(
-                ok=False, message="--options must be a JSON object", instance=instance
+                ok=False, message="--options must be a JSON object", instance=instance, refused=True
             )
         binding["options"] = options
     elif option_pairs:
@@ -112,6 +115,7 @@ def task_model_set(
                     ok=False,
                     message=f"--option was provided more than once for {name!r}",
                     instance=instance,
+                    refused=True,
                 )
             options[name] = _option_value(field_types.get(name), raw_value)
         binding["options"] = options

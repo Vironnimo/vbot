@@ -37,7 +37,7 @@ def test_bootstrap_prompt_file_is_decoded_before_the_request(
 def test_create_needs_an_agent_or_the_current_session(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, err = run_cli("bootstrap", "create", "--prompt", "Check", "--mode", "once")
 
-    assert code == 1
+    assert code == 2
     assert "<agent>" in out + err and "--current-session" in out + err
     assert rpc.calls == []
 
@@ -93,7 +93,7 @@ def test_current_session_create_is_refused_without_a_local_run(
 
     code = cli_main.run([*CREATE, "--current-session"], resolve=lambda **_: target)
 
-    assert code == 1
+    assert code == 2
     assert problem in "".join(capsys.readouterr())
     assert rpc.calls == []
 

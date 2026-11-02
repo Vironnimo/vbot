@@ -21,8 +21,7 @@ SUBAGENT_STARTED_NOTE = (
 )
 # A note in the Sub-Agent's Session; {secrets} is one line per Secret (core/tools/secrets.py).
 SUBAGENT_SECRETS_NOTE_TEMPLATE = (
-    "Your Parent Agent passed you these Secrets for this session:\n{secrets}\n"
-    "Write a reference where the value belongs; vBot inserts the value there."
+    "Your Parent Agent passed you these Secrets for this session:\n{secrets}\n{use_hint}"
 )
 SUBAGENT_SEND_STEERED_NOTE = (
     "Sent to the running Sub-Agent for its next step. Its final answers return to you."

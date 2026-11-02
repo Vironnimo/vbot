@@ -272,8 +272,8 @@ async def test_pending_notes_join_one_reminder_turn_before_the_user_input(tmp_pa
 @pytest.mark.parametrize(
     ("origin", "note"),
     [
-        (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, "speech-to-text transcription"),
-        (INPUT_ORIGIN_LIVE_VOICE, "passed on by vBot's voice assistant"),
+        (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, "dictated the following message"),
+        (INPUT_ORIGIN_LIVE_VOICE, "voice assistant passed on the following message"),
     ],
 )
 async def test_input_origin_and_reply_surface_notes_precede_the_user_turn(

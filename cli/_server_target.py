@@ -118,7 +118,10 @@ class RpcFailure:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Automation-safe outcome returned by lifecycle commands."""
+    """Automation-safe outcome returned by lifecycle commands.
+
+    ``refused`` marks a command the CLI itself refused before any request or change.
+    """
 
     ok: bool
     message: str
@@ -130,6 +133,7 @@ class CommandResult:
     forced: bool = False
     attention: tuple[str, ...] = ()
     failure: RpcFailure | None = None
+    refused: bool = False
 
 
 def resolve_instance(

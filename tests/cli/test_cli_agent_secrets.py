@@ -300,7 +300,7 @@ def test_update_names_the_secret_by_name_and_reports_what_changed(
 def test_update_without_a_change_is_refused_before_any_call(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, err = run_cli("agent-secrets", "update", "GITHUB")
 
-    assert code == 1 and "--value-stdin" in out + err and rpc.calls == []
+    assert code == 2 and "--value-stdin" in out + err and rpc.calls == []
 
 
 @pytest.mark.parametrize(

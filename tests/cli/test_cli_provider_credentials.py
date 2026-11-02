@@ -211,7 +211,7 @@ def test_oauth_connect_never_starts_without_exactly_one_oauth_connection(
 
     code, out, _err = run_cli("provider", "connect", "example")
 
-    assert code == 1
+    assert code == 2
     assert rpc.methods == ["connection.list"]
     for text in shown:
         assert text in out

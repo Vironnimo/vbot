@@ -83,7 +83,11 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         metavar="<version|status|activate>",
         help="Exact release, status, or activate. Omit to update from the configured channel",
     )
-    update_parser.add_argument("operation_id", nargs="?")
+    update_parser.add_argument(
+        "operation_id",
+        nargs="?",
+        help="Update operation id for status or activate",
+    )
     update_parser.add_argument(
         "--detach",
         action="store_true",

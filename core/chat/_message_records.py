@@ -67,15 +67,15 @@ INPUT_ORIGINS: frozenset[str] = frozenset(
     (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, INPUT_ORIGIN_LIVE_VOICE)
 )
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
-    "The following user message was produced by speech-to-text transcription. "
-    "It may contain transcription errors, missing punctuation, or misheard words. "
-    "Infer the user's likely intent when appropriate, but do not mention this unless it matters."
+    "The user dictated the following message; speech-to-text can mishear words and drop "
+    "punctuation. Act on what the user most likely meant. Ask only when a likely mishearing "
+    "would change what you do; otherwise do not comment on it."
 )
 LIVE_VOICE_SYSTEM_REMINDER = (
-    "The following user message was passed on by vBot's voice assistant from a spoken "
-    "conversation with the user. It may contain speech recognition errors or the assistant's "
-    "rewording of what the user said. Infer the user's likely intent when appropriate, but do "
-    "not mention this unless it matters."
+    "vBot's voice assistant passed on the following message from a spoken conversation with "
+    "the user; it can contain speech recognition errors or the assistant's rewording. Act on "
+    "what the user most likely meant. Ask only when a likely error would change what you do; "
+    "otherwise do not comment on it."
 )
 # Precede input the Parent Agent sends into its Sub-Agent's Session.
 PARENT_AGENT_INPUT_SYSTEM_REMINDER = (

@@ -64,6 +64,18 @@ _SHAPE = json_document(
     },
 )
 _WORKERS = BoundedWorkerPool(name="direct-inputs", max_workers=2)
+
+
+def _task_input_note(name: str) -> str:
+    """The note before a Task input's prompt: it comes from a program, not a person."""
+
+    return (
+        f'This task came from the program behind the Task input "{name}", not from a person '
+        "in a chat, and your final answer goes back to that program. When something you need "
+        "is missing, say what in your final answer."
+    )
+
+
 _LOGGER = get_logger("automation.inputs")
 
 
@@ -367,6 +379,7 @@ class DirectInputService:
                 run_overrides=overrides,
                 input_source_id=identity,
                 expected_generation_id=generation,
+                context_note=_task_input_note(row["name"]),
             )
         return await self.result(identity, request_id)
 

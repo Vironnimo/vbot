@@ -23,14 +23,22 @@ def add_parsers(subparsers) -> None:
     channel = commands.add_parser(
         "channel", help="Select whether updates install releases or the newest main build"
     )
-    channel.add_argument("update_channel", choices=("main", "release"))
+    channel.add_argument(
+        "update_channel",
+        choices=("main", "release"),
+        help="release installs releases; main installs the newest main build",
+    )
     _add_access_parsers(commands)
     commands.add_parser("tray", help="Run the vBot tray application")
     commands.add_parser("exit", help="Stop the owned tray application cleanly")
     commands.add_parser("removal-begin", help="Guard the native uninstaller's removal phase")
     commands.add_parser("removal-reset", help="Clear an interrupted removal after its owner exits")
     dependencies = commands.add_parser("dependencies", help="Manage extra Extension dependencies")
-    dependencies.add_argument("dependency_action", choices=("status", "install"))
+    dependencies.add_argument(
+        "dependency_action",
+        choices=("status", "install"),
+        help="status shows the installed dependencies; install applies --requirements",
+    )
     dependencies.add_argument(
         "--requirements", type=Path, help="Complete replacement requirements recipe"
     )
@@ -60,7 +68,7 @@ def _add_access_parsers(commands) -> None:
             "--public-url https://vbot.example.org --trusted-proxy 127.0.0.1"
         ),
     )
-    setter.add_argument("mode", choices=ACCESS_MODES)
+    setter.add_argument("mode", choices=ACCESS_MODES, help="Access mode to record")
     setter.add_argument(
         "--host",
         dest="bind_host",

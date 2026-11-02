@@ -290,7 +290,7 @@ def test_session_permanent_delete_requires_confirmation_before_any_request(
 ) -> None:
     code, out, _err = run_cli("session", "delete", "assistant", "session-one", "--permanent")
 
-    assert code == 1
+    assert code == 2
     assert "--yes" in out
     assert rpc.calls == []
 

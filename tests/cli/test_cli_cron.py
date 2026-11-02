@@ -244,7 +244,7 @@ def test_cron_create_refuses_options_that_need_another(
 ) -> None:
     code, out, _err = run_cli(*CREATE, "--cron", "0 9 * * *", *options)
 
-    assert code == 1
+    assert code == 2
     assert named in out
     assert rpc.calls == []
 
@@ -547,7 +547,7 @@ def test_email_filters_need_an_email_job(rpc: FakeRpc, run_cli: RunCli) -> None:
     created, created_out, _err = run_cli(*CREATE, "--every", "15", "--email-subject", "Bill")
     updated, updated_out, _err = run_cli("cron", "update", "job-1", "--email-from", "@a.org")
 
-    assert (created, updated) == (1, 1)
+    assert (created, updated) == (2, 2)
     assert "narrow an --email <channel-id> job" in created_out
     assert "cron job job-1 runs on no mail; add --email <channel-id>" in updated_out
     assert [method for method, _params in rpc.calls] == ["cron.list"]
@@ -559,7 +559,7 @@ def test_watch_runs_needs_a_watch(rpc: FakeRpc, run_cli: RunCli) -> None:
     created, created_out, _err = run_cli(*CREATE, "--every", "15", "--watch-runs", "always")
     updated, updated_out, _err = run_cli("cron", "update", "job-1", "--watch-runs", "always")
 
-    assert (created, updated) == (1, 1)
+    assert (created, updated) == (2, 2)
     assert "--watch-runs needs --watch <command-or-url>" in created_out
     assert "cron job job-1 has none" in updated_out
     assert [method for method, _params in rpc.calls] == ["cron.list"]
@@ -568,7 +568,7 @@ def test_watch_runs_needs_a_watch(rpc: FakeRpc, run_cli: RunCli) -> None:
 def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("cron", "update", "job-1")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     for option in (
         "--agent",

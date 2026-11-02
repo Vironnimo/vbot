@@ -217,7 +217,7 @@ def test_config_set_reads_the_json_value_from_stdin(
     code, _out, _err = run_cli("config", "set", "skills.directories", "--stdin")
 
     if operations is None:
-        assert code == 1
+        assert code == 2
         assert rpc.calls == []
     else:
         assert code == 0
@@ -283,7 +283,7 @@ def test_config_unset_sends_an_unset_patch(rpc: FakeRpc, run_cli: RunCli) -> Non
 def test_config_patch_without_operations_sends_nothing(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("config", "patch")
 
-    assert code == 1
+    assert code == 2
     assert "at least one --set or --unset" in out
     assert rpc.calls == []
 

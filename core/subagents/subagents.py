@@ -126,7 +126,7 @@ from core.subagents.links import (
 )
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.contracts import ToolContractError
-from core.tools.secrets import secret_line
+from core.tools.secrets import SECRET_USE_HINT, secret_line
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -673,7 +673,9 @@ class SubAgentCoordinator:
             passed_only=context.subagent_session,
         )
         lines = "\n".join(secret_line(secret) for secret in granted)
-        await session.add_note_async(SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines))
+        await session.add_note_async(
+            SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines, use_hint=SECRET_USE_HINT)
+        )
 
     # send
 

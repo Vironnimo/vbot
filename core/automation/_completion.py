@@ -34,9 +34,9 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("automation")
 
 AUTOMATIC_COMPLETION_GUIDANCE = (
-    "Automatic completion delivery — this is not a new user request. Do not restart or "
-    "repeat work merely because this report arrived. Re-evaluate the user's original "
-    "request and current system state before taking further action."
+    "Background work reported results; this is not a new request from the user. Use them "
+    "for the task the work was started for, as the user's later messages define it now; do "
+    "not restart or repeat work only because results arrived."
 )
 
 

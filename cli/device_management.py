@@ -60,7 +60,7 @@ def devices_approve(
         "devices approve", "approve devices yourself in a terminal or in the WebUI"
     )
     if refusal is not None:
-        return CommandResult(ok=False, message=refusal, instance=instance)
+        return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
     pending = _rpc_call(instance, "devices.pending", {"code": code})
     if not pending.ok:
         return pending.to_command_result()
@@ -72,6 +72,7 @@ def devices_approve(
                 ok=False,
                 message=f"{details}\nConfirm with --yes to approve without a terminal prompt",
                 instance=instance,
+                refused=True,
             )
         if not ask(f"{details}\nApprove this device? [y/N] "):
             return CommandResult(ok=True, message="Not approved.", instance=instance)

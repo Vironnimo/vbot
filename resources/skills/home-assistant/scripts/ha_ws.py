@@ -13,9 +13,6 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-from websockets.exceptions import WebSocketException
-from websockets.sync.client import connect
-
 DEFAULT_HASS_URL = "http://homeassistant.local:8123"
 TOKEN_ENV_KEY = "HASS_TOKEN"
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -85,6 +82,16 @@ class HomeAssistantWebSocket:
             raise HomeAssistantScriptError(
                 f"WebSocket command must not contain reserved field(s): {', '.join(reserved)}"
             )
+
+        # Imported here so --help and the offline commands start on the standard library alone.
+        try:
+            from websockets.exceptions import WebSocketException
+            from websockets.sync.client import connect
+        except ImportError as import_error:
+            raise HomeAssistantScriptError(
+                "The Python package websockets is missing for this interpreter; "
+                "install it with: python -m pip install websockets"
+            ) from import_error
 
         try:
             with connect(

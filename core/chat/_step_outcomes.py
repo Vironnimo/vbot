@@ -41,41 +41,37 @@ TOOL_ITERATION_LIMIT_FAILURE_CODE = "tool_iteration_limit"
 TOOL_FINALIZATION_DISABLED_FAILURE_CODE = "tool_calls_disabled"
 
 TOOL_ITERATION_LIMIT_FAILURE_MESSAGE = (
-    "The Run reached its limit of {limit} dispatched Tool iterations. This Tool was not "
-    "executed; provide the final answer without issuing another Tool Call."
+    "Not run: this Run reached its limit of {limit} Tool rounds and Tool calls are disabled."
 )
 
 TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE = (
-    "Tool execution is disabled for the remainder of this Run. This Tool was not executed; "
-    "provide the final answer without issuing another Tool Call."
+    "Not run: Tool calls are disabled for the rest of this Run."
 )
 
 TOOL_FINALIZATION_NOTE = (
-    "Tool execution is disabled for the remainder of this Run because {reason}. "
-    "Do not issue further Tool Calls. Explain the blocker and provide the best final answer "
-    "possible using the information already available."
+    "Tool calls are disabled for the rest of this Run because {reason}. Give your final "
+    "answer now from what you already have, and name what is still missing or blocked."
 )
 
 STREAM_RECOVERY_NOTE = (
-    "The previous Model response stream ended unexpectedly after producing visible "
-    "answer text. The partial Assistant response is already part of this conversation. "
-    "Continue the same task from exactly where it stopped without repeating that visible "
-    "text. No Tool Call from the interrupted Model step was executed; if tools are still "
-    "needed, emit every intended Tool Call again as a complete call."
+    "Your previous response broke off after part of its answer, which is above. Continue "
+    "exactly where it stopped without repeating that text. None of that response's Tool "
+    "Calls ran; call any Tool you still need again."
 )
 
 TOOL_CALLS_STREAM_RECOVERY_NOTE = (
-    "The previous Model response stream ended unexpectedly. The Tool Calls it had "
-    "completed were executed and their results are above; a Tool Call that was still "
-    "being written was not executed. Continue the same task from where it stopped "
-    "without repeating visible answer text or completed Tool Calls; emit any "
-    "still-needed Tool Call again as a complete call."
+    "Your previous response broke off. Its completed Tool Calls ran and their results are "
+    "above; a Tool Call it was still writing did not run. Continue without repeating answer "
+    "text or completed calls, and call any Tool you still need again."
 )
 
 OUTPUT_INTEGRITY_RECOVERY_NOTE = (
-    "The previous response ended before completing the task. Continue from the work and "
-    "partial answer already present without repeating visible text. Use Tools if further "
-    "work is needed, then provide the missing answer. Do not emit raw Reasoning delimiter tags."
+    "Your previous response ended before you finished answering. Continue from where it "
+    "stopped without repeating text that is already visible, and finish the answer."
+)
+
+OUTPUT_INTEGRITY_REASONING_SUFFIX = (
+    " Write the answer as plain text, without reasoning tags such as <think>."
 )
 
 

@@ -161,6 +161,7 @@ def dispatch_prompt_command(
                 ok=False,
                 message=f"cannot read prompt content file: {exc}",
                 instance=instance,
+                refused=True,
             )
         return update_prompt_fn(instance, args.block_id, content, args.scope)
     if args.command == "reset":
@@ -173,6 +174,7 @@ def dispatch_prompt_command(
                 ok=False,
                 message=f"cannot read prompt content file: {exc}",
                 instance=instance,
+                refused=True,
             )
         return create_prompt_fn(instance, args.slug, create_content, args.position, args.scope)
     if args.command == "remove":
@@ -200,7 +202,10 @@ def dispatch_log_command(
     if args.command == "read":
         if args.limit < 0:
             return CommandResult(
-                ok=False, message="--limit must be zero or positive", instance=instance
+                ok=False,
+                message="--limit must be zero or positive",
+                instance=instance,
+                refused=True,
             )
         if args.limit != 100 or args.level is not None:
             return log_read(instance, args.file, limit=args.limit, level=args.level)
@@ -220,7 +225,7 @@ def dispatch_skill_command(
     update_skill_fn: Callable[
         [ServerInstance, str, str, str, str | None], CommandResult
     ] = skill_update,
-    delete_skill_fn: Callable[[ServerInstance, str, str, bool], CommandResult] = skill_delete,
+    delete_skill_fn: Callable[[ServerInstance, str, str], CommandResult] = skill_delete,
     write_skill_file_fn: Callable[
         [ServerInstance, str, str, str, str], CommandResult
     ] = skill_write_file,
@@ -273,6 +278,7 @@ def dispatch_skill_command(
                 ok=False,
                 message=f"cannot read skill content file: {exc}",
                 instance=instance,
+                refused=True,
             )
         if args.command == "create":
             return create_skill_fn(instance, args.scope, args.name, content, args.source)
@@ -280,7 +286,7 @@ def dispatch_skill_command(
             return update_skill_fn(instance, args.scope, args.name, content, args.source)
         return write_skill_file_fn(instance, args.scope, args.name, args.path, content)
     if args.command == "delete":
-        return delete_skill_fn(instance, args.scope, args.name, args.yes)
+        return delete_skill_fn(instance, args.scope, args.name)
     if args.command == "remove-file":
         return remove_skill_file_fn(instance, args.scope, args.name, args.path, args.yes)
     if args.command == "history":
@@ -314,6 +320,7 @@ def dispatch_memory_command(
                 "scope agent or user without --project. Nothing was changed."
             ),
             instance=instance,
+            refused=True,
         )
     if project:
         scope = "project"
@@ -326,6 +333,7 @@ def dispatch_memory_command(
             ok=False,
             message=f"cannot read memory entry file: {exc}",
             instance=instance,
+            refused=True,
         )
     if args.command == "list":
         return memory_list(instance, args.agent, scope, project=project)
@@ -336,9 +344,7 @@ def dispatch_memory_command(
             instance, args.agent, scope or "agent", args.entry_id, content or "", project=project
         )
     if args.command == "remove":
-        return memory_remove(
-            instance, args.agent, scope or "agent", args.entry_id, args.yes, project=project
-        )
+        return memory_remove(instance, args.agent, scope or "agent", args.entry_id, project=project)
     if args.command == "history":
         return memory_history(instance, args.agent, scope, args.limit, project=project)
     if args.command == "show":
@@ -392,17 +398,18 @@ def dispatch_cron_command(
                 ok=False,
                 message="--event-time needs --event <event-id>",
                 instance=instance,
+                refused=True,
             )
         fields = _cron_create_fields_from_args(args)
         refusal = _add_cron_delivery_and_watch(args, fields)
         if refusal is not None:
-            return CommandResult(ok=False, message=refusal, instance=instance)
+            return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
         return create_cron_fn(instance, fields)
     if args.command == "update":
         changes = _cron_changes_from_args(args)
         refusal = _add_cron_delivery_and_watch(args, changes)
         if refusal is not None:
-            return CommandResult(ok=False, message=refusal, instance=instance)
+            return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
         return update_cron_fn(instance, args.id, changes)
     if args.command == "delete":
         return delete_cron_fn(instance, args.id)
@@ -416,7 +423,7 @@ def dispatch_cron_command(
         retry_fields: dict[str, Any] = {}
         refusal = _add_cron_delivery(args, retry_fields)
         if refusal is not None:
-            return CommandResult(ok=False, message=refusal, instance=instance)
+            return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
         return cron_retry_delivery(instance, args.id, retry_fields, as_json=args.json)
     raise ValueError(f"Unsupported cron command: {args.command}")
 
@@ -464,12 +471,14 @@ def dispatch_bootstrap_command(
                 ok=False,
                 message="--current-session cannot be combined with <agent> or --session",
                 instance=instance,
+                refused=True,
             )
         if not args.current_session and args.agent is None:
             return CommandResult(
                 ok=False,
                 message="provide <agent> or use --current-session",
                 instance=instance,
+                refused=True,
             )
         fields: dict[str, Any] = {"prompt": _automation_prompt(args), "mode": args.mode}
         if args.agent is not None:
@@ -783,6 +792,7 @@ def dispatch_config_command(
                     ok=False,
                     message="--stdin requires one valid UTF-8 JSON value; no setting was changed",
                     instance=instance,
+                    refused=True,
                 )
         else:
             coerced = coerce_config_value(args.value)
@@ -800,6 +810,7 @@ def dispatch_config_command(
                 ok=False,
                 message="config patch requires at least one --set or --unset operation",
                 instance=instance,
+                refused=True,
             )
         return patch_config_fn(instance, operations)
     raise ValueError(f"Unsupported config command: {args.command}")

@@ -24,10 +24,11 @@ JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.application")
 _OPERATION_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 _CONTINUATION_PROMPT = (
-    "A vBot update was requested from this Session. Inspect its saved result with "
-    "vbot update status {operation_id}. If it is still pending, wait for its terminal status. "
-    "Report the verified outcome, then continue the original task when appropriate. Do not "
-    "repeat the update or replay earlier Tool actions."
+    "vBot restarted after an update this Session requested. Read its saved result with "
+    "`vbot update status {operation_id}`; this command does not wait, so when the result is "
+    "still pending, tell the user and end your turn. Tell the user the verified outcome, then "
+    "continue the task the update interrupted, if one remains. Do not repeat the update or "
+    "replay earlier Tool actions."
 )
 
 
