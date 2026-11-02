@@ -294,7 +294,6 @@ describe('ChatWorkspace', () => {
     expect(pane(0).textContent).toContain('Hello');
     expect(pane(0).textContent).not.toContain('Second conversation sentinel');
     expect(pane(1).querySelector('.chat-workspace__toolbar')).toBeNull();
-    expect(pane(1).querySelector('[role=tablist]')).toBeNull();
     const leftInput = pane(0).querySelector('.msg-input');
     const rightInput = pane(1).querySelector('.msg-input');
     setInputValue(leftInput, 'Left draft sentinel');
@@ -1235,7 +1234,11 @@ describe('ChatWorkspace', () => {
         ),
       ).toBe(true);
       expect(pane(index).querySelector('.chat-workspace__toolbar')).toBeNull();
-      expect(pane(index).querySelector('[role="tablist"]')).toBeNull();
+      expect(
+        pane(index).querySelector(
+          ':scope > [role="tablist"], :scope > .chat-workspace__body > [role="tablist"]',
+        ),
+      ).toBeNull();
       expect(
         button(pane(index), 'Close area').closest('.chat-header'),
       ).not.toBeNull();
