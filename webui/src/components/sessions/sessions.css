@@ -1,9 +1,11 @@
 .session-drawer {
   position: relative;
   display: flex;
-  width: 260px;
+  width: var(--session-drawer-width, 260px);
+  /* Beside the chat, the list never takes more than half the area. */
+  max-width: 50%;
   min-height: 0;
-  flex: 0 0 260px;
+  flex: 0 0 auto;
   flex-direction: column;
   border-right: 1px solid var(--border);
   background: var(--surface);
@@ -20,7 +22,68 @@
     left: 0;
     z-index: 4;
     width: min(290px, calc(100% - 48px));
+    max-width: none;
     box-shadow: var(--floating-elevation);
+  }
+
+  .session-drawer__resize {
+    display: none;
+  }
+}
+
+/* The list's right edge resizes it. The invisible grab zone extends mainly
+   into the chat, because the list's scrollbar sits flush against its border.
+   The grip appears only on hover, keyboard focus, or while dragging. */
+.session-drawer__resize {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.session-drawer__resize::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline: -3px -6px;
+}
+
+.session-drawer__resize:focus-visible {
+  outline: none;
+}
+
+.session-drawer__resize span {
+  position: absolute;
+  top: calc(50% - 16px);
+  left: -2px;
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--text-lo);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.session-drawer__resize:hover span,
+.session-drawer__resize:focus-visible span,
+.session-drawer__resize--active span {
+  opacity: 1;
+}
+
+.session-drawer__resize:focus-visible span,
+.session-drawer__resize--active span {
+  background: var(--accent);
+}
+
+.session-drawer--resizing {
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-drawer__resize span {
+    transition: none;
   }
 }
 

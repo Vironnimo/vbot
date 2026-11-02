@@ -41,6 +41,10 @@
   } from './sessions/list.svelte.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
+  import {
+    SESSION_LIST_WIDTH,
+    sessionListWidth,
+  } from './sessions/width.svelte.js';
   import './sessions/sessions.css';
 
   let {
@@ -400,6 +404,53 @@
     onFiltersChange(filters);
   };
 
+  // The handle on the list's right edge resizes it: dragging follows the
+  // pointer, the arrow keys step, and Enter or a double-click resets.
+  let drawerElement = $state(null);
+  let resizing = $state(false);
+
+  const resizeTo = (event) => {
+    if (resizing && drawerElement) {
+      sessionListWidth.set(
+        event.clientX - drawerElement.getBoundingClientRect().left,
+      );
+    }
+  };
+
+  const startResize = (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizing = true;
+  };
+
+  const stopResize = () => {
+    if (resizing) {
+      resizing = false;
+      sessionListWidth.save();
+    }
+  };
+
+  const resizeWithKeyboard = (event) => {
+    const step = event.shiftKey ? 40 : 8;
+    const next = {
+      ArrowLeft: sessionListWidth.value - step,
+      ArrowRight: sessionListWidth.value + step,
+      Home: SESSION_LIST_WIDTH.min,
+      End: SESSION_LIST_WIDTH.max,
+      Enter: SESSION_LIST_WIDTH.default,
+    }[event.key];
+    if (next === undefined) {
+      return;
+    }
+    event.preventDefault();
+    sessionListWidth.set(next);
+    sessionListWidth.save();
+  };
+
   // A right click on the row, the context menu key on its button and its
   // "..." button open the same menu. A row being renamed keeps the native
   // menu of its input.
@@ -573,7 +624,13 @@
   </svg>
 {/snippet}
 
-<aside class="session-drawer" aria-label={t('sessions.title')}>
+<aside
+  bind:this={drawerElement}
+  class="session-drawer"
+  class:session-drawer--resizing={resizing}
+  aria-label={t('sessions.title')}
+  style:--session-drawer-width={`${sessionListWidth.value}px`}
+>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{headerTitle}</h3>
     <TabList
@@ -756,6 +813,32 @@
     {/if}
   {/if}
 </aside>
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div
+  class="session-drawer__resize"
+  class:session-drawer__resize--active={resizing}
+  role="separator"
+  tabindex="0"
+  aria-label={t('sessions.resize')}
+  aria-orientation="vertical"
+  aria-valuemin={SESSION_LIST_WIDTH.min}
+  aria-valuemax={SESSION_LIST_WIDTH.max}
+  aria-valuenow={sessionListWidth.value}
+  use:tooltip={t('sessions.resizeHint')}
+  onpointerdown={startResize}
+  onpointermove={resizeTo}
+  onpointerup={stopResize}
+  onpointercancel={stopResize}
+  onlostpointercapture={stopResize}
+  onkeydown={resizeWithKeyboard}
+  ondblclick={() => {
+    sessionListWidth.set(SESSION_LIST_WIDTH.default);
+    sessionListWidth.save();
+  }}
+>
+  <span></span>
+</div>
 
 {#snippet projectGroup(group)}
   {@const collapsed = groupCollapsed(group.key)}

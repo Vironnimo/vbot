@@ -502,6 +502,41 @@ describe('SessionListDrawer list', () => {
     );
   });
 
+  it('resizes the list from its edge within its bounds and remembers the width', async () => {
+    api.listSessions.mockResolvedValue({ sessions: [] });
+    drawer.mount();
+    const handle = document.querySelector(
+      `[role="separator"][aria-label="${t('sessions.resize')}"]`,
+    );
+    const width = () =>
+      document
+        .querySelector('.session-drawer')
+        .style.getPropertyValue('--session-drawer-width');
+    const press = (key, shiftKey = false) => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key, shiftKey, bubbles: true }),
+      );
+      flushSync();
+    };
+    expect(width()).toBe('260px');
+
+    press('ArrowRight');
+    expect(width()).toBe('268px');
+    press('ArrowRight', true);
+    expect(width()).toBe('308px');
+    press('End');
+    press('ArrowRight');
+    expect(width()).toBe('480px');
+    press('Home');
+    press('ArrowLeft');
+    expect(width()).toBe('220px');
+    expect(handle.getAttribute('aria-valuenow')).toBe('220');
+    expect(localStorage.getItem('vbot.chat.sessionListWidth')).toBe('220');
+    press('Enter');
+    expect(width()).toBe('260px');
+    expect(localStorage.getItem('vbot.chat.sessionListWidth')).toBe('260');
+  });
+
   it('requests Channels only when enabled and persists the filter choice', async () => {
     const onFiltersChange = vi.fn();
     api.listSessions.mockImplementation(async (_agents, query) => ({

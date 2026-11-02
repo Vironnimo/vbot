@@ -644,6 +644,9 @@ export default Object.freeze({
   'sessions.loading': 'Loading sessions…',
   'sessions.filtersAria': 'Session list filters',
   'sessions.filtersActive': '{count} active filters',
+  'sessions.resize': 'Resize Session list',
+  'sessions.resizeHint':
+    'Drag to resize. Arrow keys adjust; Enter or a double-click resets.',
   'sessions.view.aria': 'Session list view',
   'sessions.view.agent': 'Selected Agent',
   'sessions.view.agentHint': 'Sessions of the selected Agent',
