@@ -115,6 +115,9 @@ export function createChatScrollController(
   let planEntries = new Map();
   // Mounted row element -> { id, model }.
   const observedRows = new Map();
+  // A remounted image row can briefly lose its intrinsic image sizes even
+  // from the browser cache. Keep its known height until those images settle.
+  const reservedRows = new Set();
   let windowSyncFrame = null;
   let syncWindowUpdates = 0;
   let publishQueued = false;
@@ -127,6 +130,8 @@ export function createChatScrollController(
   resizeObserver?.observe(container);
   if (content) {
     resizeObserver?.observe(content);
+    content.addEventListener('load', handleImageSettled, true);
+    content.addEventListener('error', handleImageSettled, true);
   }
   const interactionHolds = content
     ? trackInteractionHolds(container, content, hold)
@@ -487,6 +492,7 @@ export function createChatScrollController(
   // run before the DOM swap so anchors are captured against the old content.
   function sessionChanged(sessionId) {
     saveViewport(currentSessionId);
+    releaseReservedRows();
     currentSessionId = sessionId || '';
     layout = layoutFor(currentSessionId);
     interactionHolds?.releaseAll();
@@ -648,6 +654,7 @@ export function createChatScrollController(
     const { model, window: rowWindow } = layoutFor(sessionId || '');
     model.sync(items);
     if (model.setWidth(content?.getBoundingClientRect().width)) {
+      releaseReservedRows();
       measureMountedRows(model);
       const viewport = viewportFor(sessionId);
       if (viewport.pinned) rowWindow.showTail();
@@ -760,6 +767,7 @@ export function createChatScrollController(
       if (!element.isConnected) {
         resizeObserver?.unobserve(element);
         observedRows.delete(element);
+        reservedRows.delete(element);
       }
     }
     const { model } = layout;
@@ -777,6 +785,11 @@ export function createChatScrollController(
       }
       observedRows.set(element, { id, model });
       if (layoutReady) {
+        const height = model.measuredHeight(id);
+        if (height > 0 && hasPendingImages(element)) {
+          element.style.minHeight = `${height}px`;
+          reservedRows.add(element);
+        }
         model.setMeasured(id, element.getBoundingClientRect().height);
       }
     }
@@ -788,6 +801,7 @@ export function createChatScrollController(
       layoutReady &&
       layout.model.setWidth(content?.getBoundingClientRect().width);
     if (widthChanged) {
+      releaseReservedRows();
       // ResizeObserver need not include every row in this delivery. Seed the
       // new width from all mounted rows and discard every offscreen height.
       measureMountedRows(layout.model);
@@ -819,6 +833,32 @@ export function createChatScrollController(
       }
     }
     model.refreshEstimates();
+  }
+
+  function hasPendingImages(element) {
+    return Array.from(element.querySelectorAll('img')).some(
+      (image) => !image.complete,
+    );
+  }
+
+  function handleImageSettled(event) {
+    if (event.target?.tagName !== 'IMG') return;
+    const row = event.target.closest('[data-timeline-item-id]');
+    const observed = observedRows.get(row);
+    if (!observed || !row.isConnected) return;
+    if (reservedRows.has(row) && !hasPendingImages(row)) {
+      row.style.minHeight = '';
+      reservedRows.delete(row);
+    }
+    // Learn the loaded size before a queued window update can unmount this
+    // row using its pre-load height; ResizeObserver may deliver afterward.
+    observed.model.setMeasured(observed.id, row.getBoundingClientRect().height);
+    queueContentChanged();
+  }
+
+  function releaseReservedRows() {
+    for (const row of reservedRows) row.style.minHeight = '';
+    reservedRows.clear();
   }
 
   // Content y of the top spacer, which starts the row list.
@@ -891,6 +931,9 @@ export function createChatScrollController(
     contentSyncQueued = false;
     windowSyncFrame = null;
     resizeObserver?.disconnect();
+    content?.removeEventListener('load', handleImageSettled, true);
+    content?.removeEventListener('error', handleImageSettled, true);
+    releaseReservedRows();
     interactionHolds?.destroy();
     observedRows.clear();
     loadingOlderSessions.clear();

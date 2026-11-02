@@ -78,6 +78,7 @@ describe('ChatTimeline virtualization', () => {
   afterEach(() => {
     layout?.uninstall();
     layout = null;
+    vi.restoreAllMocks();
   });
 
   async function mountWithLayout(props) {
@@ -209,6 +210,57 @@ describe('ChatTimeline virtualization', () => {
     expect(mountedRowIds().length).toBeLessThan(30);
     await scrollInSteps(-400, () => layout.scrollTop() === 0);
   });
+
+  it.each(['load', 'error'])(
+    'keeps a remounted image row at its measured height until image %s',
+    async (outcome) => {
+      let loaded = true;
+      let failed = false;
+      vi.spyOn(
+        HTMLImageElement.prototype,
+        'complete',
+        'get',
+      ).mockImplementation(() => loaded);
+      const items = historyTurns(30);
+      items[35] = assistantRun(
+        'run-17',
+        [outputItem('![Screenshot](/api/files/scroll-image)')],
+        { id: 'history-run-answer-17', source: 'history', status: 'completed' },
+      );
+      layout = installFakeLayout({
+        viewportHeight: VIEWPORT_HEIGHT,
+        rowHeight: (element) =>
+          element.querySelector('img') ? (loaded && !failed ? 2000 : 80) : 100,
+      });
+      timeline.mount({
+        agentName: 'Alpha',
+        sessionState: sessionWithHistory('image-history', items),
+      });
+      await layout.settle();
+      await scrollInSteps(-400, () => layout.scrollTop() === 0);
+      layout.scrollTo(layout.maxScrollTop());
+      await layout.settle();
+      expect(mountedRow('history-run-answer-17')).toBeNull();
+      const total = layout.maxScrollTop();
+
+      loaded = false;
+      layout.scrollTo(5600);
+      await layout.settle();
+      const row = mountedRow('history-run-answer-17');
+      expect(row).not.toBeNull();
+      expect(layout.maxScrollTop()).toBe(total);
+      expectSameTop(layout.scrollTop(), 5600);
+
+      loaded = true;
+      failed = outcome === 'error';
+      row.querySelector('img').dispatchEvent(new Event(outcome));
+      await layout.settle();
+      expect(row.style.minHeight).toBe('');
+      const shrink = failed ? 1920 : 0;
+      expect(layout.maxScrollTop()).toBe(total - shrink);
+      expectSameTop(layout.scrollTop(), 5600 - shrink);
+    },
+  );
 
   it.each([false, true])(
     'restores a reading position after a Session switch with width changed %s',

@@ -208,6 +208,7 @@ export function createLayoutModel() {
     sync,
     setWidth,
     setMeasured,
+    measuredHeight: (id) => measured.get(id)?.height,
     refreshEstimates,
     indexAt,
     offsetOf,

@@ -59,7 +59,10 @@ export function installFakeLayout({
       return Number.parseFloat(element.style.height) || 0;
     }
     if (element.dataset.timelineItemId !== undefined) {
-      return rowHeight(element);
+      return Math.max(
+        rowHeight(element),
+        Number.parseFloat(element.style.minHeight) || 0,
+      );
     }
     return 0;
   }
