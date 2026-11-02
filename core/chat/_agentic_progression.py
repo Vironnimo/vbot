@@ -785,8 +785,8 @@ class AgenticProgression:
                             media_outputs: list[JsonObject] = []
                         elif tool_limit_reached:
                             finalization_request_reason = (
-                                "the Run reached its limit of "
-                                f"{tool_iteration_limit} dispatched Tool iterations"
+                                "you reached this Run's limit of "
+                                f"{tool_iteration_limit} Tool rounds"
                             )
                             tool_messages = await _fail_tool_calls_without_dispatch(
                                 tool_dispatch_context,
@@ -861,8 +861,9 @@ class AgenticProgression:
                     )
                     if repeated_failed_tool is not None and finalization_request_reason is None:
                         finalization_request_reason = (
-                            f"Tool {model_tool_name(repeated_failed_tool)!r} repeated the same "
-                            f"failed Call {MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
+                            f"you called {model_tool_name(repeated_failed_tool)} with the same "
+                            f"arguments {MAX_IDENTICAL_FAILED_TOOL_CALLS} times and it failed "
+                            "each time"
                         )
                     if finalization_request_reason is not None:
                         session.add_note(

@@ -14,6 +14,7 @@ from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
+    TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
     _FailedToolCallCircuitBreaker,
     tool_result_facts,
 )
@@ -433,7 +434,7 @@ async def test_run_tool_iteration_limit_narrows_the_loop_limit(
     assert len(invocations) == 1
     rejected = tool_results(history(runtime))[1]["error"]
     assert rejected["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
-    assert rejected["message"].startswith("The Run reached its limit of 1 dispatched")
+    assert rejected["message"] == TOOL_ITERATION_LIMIT_FAILURE_MESSAGE.format(limit=1)
 
 
 def _tool_message(call: ToolCall, result: JsonObject) -> ChatMessage:

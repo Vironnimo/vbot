@@ -555,7 +555,7 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
 
     assert len(calls) == 8
     assert any(
-        message.role == "note" and "Tool execution is disabled" in str(message.content)
+        message.role == "note" and "Tool calls are disabled" in str(message.content)
         for message in history(runtime, "s1")
     )
     assert fallback.requests[-1]["kwargs"]["tools"] == primary.requests[0]["kwargs"]["tools"]

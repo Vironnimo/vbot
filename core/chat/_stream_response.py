@@ -14,6 +14,7 @@ from core.chat._run_state import (
     _AssistantStep,
 )
 from core.chat._step_outcomes import (
+    OUTPUT_INTEGRITY_REASONING_SUFFIX,
     OUTPUT_INTEGRITY_RECOVERY_NOTE,
     TOOL_CALLS_STREAM_RECOVERY_NOTE,
     _with_assistant_output_files,
@@ -457,7 +458,11 @@ async def consume_stream_response(
                 else "provider"
             ),
             recovery="none" if run.cancel_requested else "continue",
-            recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
+            recovery_note=(
+                OUTPUT_INTEGRITY_RECOVERY_NOTE + OUTPUT_INTEGRITY_REASONING_SUFFIX
+                if accumulator.ends_with_reasoning
+                else OUTPUT_INTEGRITY_RECOVERY_NOTE
+            ),
             output_scope=output_scope,
             message_id=message_id,
         )
