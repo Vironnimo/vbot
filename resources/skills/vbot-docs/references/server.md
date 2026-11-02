@@ -66,6 +66,8 @@ vbot application channel main|release
 
 Every vBot installation updates from the signed packages of its update channel: `release` installs published releases, `main` the newest build of vBot's main branch. `vbot application status` shows the channel. `vbot application channel main|release` switches it; the next `vbot update` applies it. Change the channel only when the user asks.
 
+To answer whether a newer vBot version exists, read `update_check` in `vbot application status`, never run `vbot update`: it installs at once and stops the server. `available` names the newer version of the channel (`label`); `null` means the active version is the newest. `checked_at` is the last successful check, which the tray and server repeat about every 6 hours; `update_check` itself is `null` before the first check, and `error` names why the last attempt failed.
+
 Use `vbot update <version>` for an exact published release; replace `<version>` with the release requested by the user. The command keeps the configured update channel and refuses a target that fails vBot's startup/data check. Extensions are checked when they load normally; successful verification does not prove they work. Eligible targets start with the first release declaring version-switch support; releases before it are refused.
 
 Use `vbot rollback` to return to the previous installation with current data. Restoring its saved data requires the user to approve the loss of subsequent changes and run the printed command in their terminal. A started restore is not proof of success: read the operation result and its safety-snapshot reference. Never change a data format marker to bypass a refusal.
