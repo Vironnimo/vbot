@@ -13,7 +13,7 @@ vi.mock('svelte', async () => {
 
 const { default: ChatHeader } = await import('../ChatHeader.svelte');
 
-// Roster order as set in the Agents tab: the bar shows the first five.
+// Roster order as set in the Agents tab; the bar shows the tabs that fit.
 const AGENTS = [
   { id: 'alpha', name: 'Alpha', model: 'openai/gpt-5.2::api-key:work' },
   {
@@ -98,22 +98,44 @@ describe('ChatHeader', () => {
     return mountedComponent;
   }
 
+  // jsdom lays nothing out, so every tab fits; this makes the tabs from
+  // index `fitting` on report a second line, as on a narrow bar.
+  async function mountOverflowing(props = {}, fitting = 5) {
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(
+      function () {
+        const roster = this.parentElement;
+        if (!roster?.classList.contains('chat-header__roster')) return 0;
+        return Array.prototype.indexOf.call(roster.children, this) >= fitting
+          ? 38
+          : 0;
+      },
+    );
+    mountHeader(props);
+    await vi.waitFor(() => {
+      expect(document.querySelector('.agent-pill--wrapped')).not.toBeNull();
+    });
+    flushSync();
+  }
+
+  // The tabs shown on the bar's line, without those wrapped out of sight.
   function pills() {
-    return Array.from(document.querySelectorAll('button.agent-pill'));
+    return Array.from(
+      document.querySelectorAll('button.agent-pill:not(.agent-pill--wrapped)'),
+    );
   }
 
   function pillLabels() {
     return pills().map((pill) => pill.getAttribute('aria-label'));
   }
 
-  function allAgentsTrigger() {
+  function moreAgentsTrigger() {
     return document.querySelector(
-      '.chat-header__all-agents button[aria-haspopup]',
+      '.chat-header__more-agents button[aria-haspopup]',
     );
   }
 
-  async function openAllAgents() {
-    allAgentsTrigger().click();
+  async function openMoreAgents() {
+    moreAgentsTrigger().click();
     await vi.waitFor(() => {
       expect(document.activeElement?.getAttribute('role')).toBe('combobox');
     });
@@ -138,9 +160,9 @@ describe('ChatHeader', () => {
     };
   }
 
-  it('shows the first five Agents in roster order with any activity dot before the name', async () => {
+  it('shows the Agents that fit in roster order with any activity dot before the name', async () => {
     const onSelectAgent = vi.fn();
-    mountHeader({ onSelectAgent });
+    await mountOverflowing({ onSelectAgent });
 
     expect(pillLabels()).toEqual([
       idle('Alpha'),
@@ -190,8 +212,8 @@ describe('ChatHeader', () => {
     ]);
   });
 
-  it('keeps a displayed Agent outside the first five on the bar', () => {
-    mountHeader({ selectedAddress: 'zeta' });
+  it('keeps a displayed Agent that does not fit on the bar', async () => {
+    await mountOverflowing({ selectedAddress: 'zeta' });
 
     expect(pillLabels()).toHaveLength(6);
     const zeta = pills()[5];
@@ -211,71 +233,51 @@ describe('ChatHeader', () => {
     ).toEqual([]);
   });
 
-  it('lists every Agent under All agents and marks the activity of those off the bar', async () => {
-    mountHeader();
+  it('lists only the Agents off the bar under More agents, counting them and marking their activity', async () => {
+    await mountOverflowing({
+      agentActivity: {
+        ...ACTIVITY,
+        zeta: { status: 'unread', unreadCount: 3, latestUnreadAt: 2_000 },
+      },
+    });
 
-    const trigger = allAgentsTrigger();
-    // Only Eta (unread) and Zeta (idle) are off the bar.
+    const trigger = moreAgentsTrigger();
+    // Only Eta and Zeta are off the bar.
+    expect(trigger.textContent.trim()).toBe('2');
     expect(trigger.querySelector('.tab-indicator--unread')).toBeTruthy();
     expect(trigger.getAttribute('aria-label')).toBe(
-      t('chat.agentBar.allAgentsActivity', {
-        activity: agentActivityState('unread', 1),
+      t('chat.agentBar.moreAgentsActivity', {
+        label: t('chat.agentBar.moreAgentsCount', { count: 2 }),
+        activity: agentActivityState('unread', 4),
       }),
     );
 
-    await openAllAgents();
+    await openMoreAgents();
     const options = Array.from(document.querySelectorAll('[role="option"]'));
-    // Running first, then waiting, then unread by newest result, then the
-    // roster.
+    // Unread by newest result first.
     expect(options.map((option) => option.getAttribute('aria-label'))).toEqual([
-      running('Beta'),
-      waiting('Epsilon'),
       unread('Eta', 1),
-      unread('Delta', 1),
-      unread('Gamma', 2),
-      idle('Alpha'),
-      idle('Zeta'),
-    ]);
-    expect(
-      options.map(
-        (option) =>
-          option
-            .querySelector('.tab-indicator')
-            ?.className.match(/tab-indicator--\w+/)?.[0],
-      ),
-    ).toEqual([
-      'tab-indicator--running',
-      'tab-indicator--waiting',
-      'tab-indicator--unread',
-      'tab-indicator--unread',
-      'tab-indicator--unread',
-      'tab-indicator--idle',
-      'tab-indicator--idle',
+      unread('Zeta', 3),
     ]);
     expect(
       options.map(
         (option) => option.querySelector('.count-badge')?.textContent,
       ),
-    ).toEqual([undefined, undefined, '1', '1', '2', undefined, undefined]);
-    expect(
-      options
-        .filter((option) => option.getAttribute('aria-selected') === 'true')
-        .map((option) => option.textContent.trim()),
-    ).toEqual(['Alpha']);
+    ).toEqual(['1', '3']);
   });
 
-  it('offers no All agents list while the bar shows every Agent', () => {
-    mountHeader({ agents: AGENTS.slice(0, 5) });
+  it('shows every Agent on a bar wide enough and offers no More agents list', () => {
+    mountHeader();
 
-    expect(pills()).toHaveLength(5);
-    expect(allAgentsTrigger()).toBeNull();
+    expect(pills()).toHaveLength(AGENTS.length);
+    expect(moreAgentsTrigger()).toBeNull();
   });
 
-  it('filters All agents by typing and returns focus on Escape', async () => {
+  it('filters More agents by typing and returns focus on Escape', async () => {
     const onSelectAgent = vi.fn();
-    mountHeader({ onSelectAgent });
+    await mountOverflowing({ onSelectAgent });
 
-    let input = await openAllAgents();
+    let input = await openMoreAgents();
     expect(input.getAttribute('aria-label')).toBe(t('chat.agentPicker.filter'));
     input.value = 'ze';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -287,21 +289,20 @@ describe('ChatHeader', () => {
     ).toEqual(['Zeta']);
     key(input, 'Enter');
     expect(onSelectAgent).toHaveBeenCalledWith('zeta');
-    expect(document.activeElement).toBe(allAgentsTrigger());
+    expect(document.activeElement).toBe(moreAgentsTrigger());
 
-    input = await openAllAgents();
+    input = await openMoreAgents();
     key(input, 'Escape');
     expect(document.querySelector('[role="listbox"]')).toBeNull();
-    expect(document.activeElement).toBe(allAgentsTrigger());
+    expect(document.activeElement).toBe(moreAgentsTrigger());
     expect(onSelectAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('toggles the Session list, starts a Session and ends with the area actions and the Session info toggle', () => {
+  it('toggles the Session list, starts a Session while the list is closed and ends with the area actions and the Session info toggle', async () => {
     const onToggleSessionList = vi.fn();
     const onNewSession = vi.fn();
     const onToggleInfoPanel = vi.fn();
     mountHeader({
-      sessionListOpen: true,
       onToggleSessionList,
       onNewSession,
       infoPanelId: 'info',
@@ -317,8 +318,11 @@ describe('ChatHeader', () => {
       document.querySelector(`.chat-header button[aria-label="${label}"]`);
 
     const toggle = button(t('chat.agentBar.sessionList'));
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
     toggle.click();
+    expect(button(t('chat.newSession')).getAttribute('aria-keyshortcuts')).toBe(
+      'Control+Shift+O',
+    );
     button(t('chat.newSession')).click();
     expect(onToggleSessionList).toHaveBeenCalledTimes(1);
     expect(onNewSession).toHaveBeenCalledTimes(1);
@@ -334,6 +338,14 @@ describe('ChatHeader', () => {
     expect(info.querySelector('.chat-header__info-running')).not.toBeNull();
     info.click();
     expect(onToggleInfoPanel).toHaveBeenCalledTimes(1);
+
+    // The open Session list offers New session itself.
+    await unmount(mountedComponent);
+    mountHeader({ sessionListOpen: true });
+    expect(
+      button(t('chat.agentBar.sessionList')).getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(button(t('chat.newSession'))).toBeNull();
   });
 
   describe('Project Teams', () => {
@@ -369,8 +381,8 @@ describe('ChatHeader', () => {
     }
 
     async function openTree() {
-      expect(allAgentsTrigger().getAttribute('aria-haspopup')).toBe('tree');
-      return openAllAgents();
+      expect(moreAgentsTrigger().getAttribute('aria-haspopup')).toBe('tree');
+      return openMoreAgents();
     }
 
     function rows() {
@@ -391,7 +403,7 @@ describe('ChatHeader', () => {
         ?.querySelector('.searchable-dropdown__option-label').textContent;
     }
 
-    it('lists each Project with a Team as a group after the Identity Agents', async () => {
+    it('lists each Project with a Team as a group after the Identity Agents off the bar', async () => {
       const onSelectAgent = vi.fn();
       mountWithProjects({
         selectedAddress: 'reviewer@web',
@@ -409,11 +421,10 @@ describe('ChatHeader', () => {
 
       await openTree();
 
-      // The selected Agent's Project and a Project with activity are open;
-      // the Project without members is left out.
+      // Alpha and Beta are on the bar. The selected Agent's Project and a
+      // Project with activity are open; the Project without members is left
+      // out.
       expect(rows()).toEqual([
-        { name: 'Alpha', level: '1', expanded: null },
-        { name: 'Beta', level: '1', expanded: null },
         { name: 'Website', level: '1', expanded: 'true' },
         { name: 'Builder', level: '2', expanded: null },
         { name: 'Reviewer', level: '2', expanded: null },
@@ -435,7 +446,7 @@ describe('ChatHeader', () => {
       ['running', 'chat.agentActivity.stateRunning'],
       ['waiting', 'chat.agentActivity.stateWaiting'],
     ])(
-      'summarizes a closed group %s and marks All agents with its activity',
+      'summarizes a closed group %s and marks More agents with its activity',
       async (status, stateKey) => {
         // This browser closed Infra earlier.
         localStorage.setItem(
@@ -451,10 +462,14 @@ describe('ChatHeader', () => {
         const activity = `${t(stateKey)} · ${t('chat.agentActivity.stateUnreadOne')}`;
 
         expect(
-          allAgentsTrigger().querySelector(`.tab-indicator--${status}`),
+          moreAgentsTrigger().querySelector(`.tab-indicator--${status}`),
         ).toBeTruthy();
-        expect(allAgentsTrigger().getAttribute('aria-label')).toBe(
-          t('chat.agentBar.allAgentsActivity', { activity }),
+        // Every Identity Agent fits, so the trigger counts none.
+        expect(moreAgentsTrigger().getAttribute('aria-label')).toBe(
+          t('chat.agentBar.moreAgentsActivity', {
+            label: t('chat.agentBar.moreAgents'),
+            activity,
+          }),
         );
         await openTree();
 
@@ -472,10 +487,19 @@ describe('ChatHeader', () => {
 
     it('opens and closes groups with tree keys and remembers the choice', async () => {
       const onSelectAgent = vi.fn();
-      mountWithProjects({ selectedAddress: 'beta', onSelectAgent });
+      // Only Alpha fits on the bar, so Beta leads the list.
+      await mountOverflowing(
+        {
+          agents: SMALL_ROSTER,
+          agentActivity: {},
+          projectGroups: PROJECT_GROUPS,
+          selectedAddress: 'alpha',
+          onSelectAgent,
+        },
+        1,
+      );
       const input = await openTree();
       expect(rows().map((row) => row.name)).toEqual([
-        'Alpha',
         'Beta',
         'Website',
         'Infra',
@@ -486,7 +510,6 @@ describe('ChatHeader', () => {
       expect(activeRowName()).toBe('Website');
       key(input, 'ArrowRight');
       expect(rows().map((row) => row.name)).toEqual([
-        'Alpha',
         'Beta',
         'Website',
         'Builder',
@@ -499,7 +522,6 @@ describe('ChatHeader', () => {
       expect(activeRowName()).toBe('Website');
       key(input, 'ArrowLeft');
       expect(rows().map((row) => row.name)).toEqual([
-        'Alpha',
         'Beta',
         'Website',
         'Infra',
@@ -541,16 +563,16 @@ describe('ChatHeader', () => {
   });
 
   it('disables selection while Agents load and explains an empty roster', async () => {
-    mountHeader({ loadingAgents: true });
+    await mountOverflowing({ loadingAgents: true });
 
-    expect(allAgentsTrigger().disabled).toBe(true);
+    expect(moreAgentsTrigger().disabled).toBe(true);
     expect(pills().every((pill) => pill.disabled)).toBe(true);
 
     await unmount(mountedComponent);
     mountedComponent = null;
     mountHeader({ agents: [], agentActivity: {}, selectedAddress: '' });
 
-    expect(allAgentsTrigger()).toBeNull();
+    expect(moreAgentsTrigger()).toBeNull();
     expect(
       document.querySelector('.chat-header__agents')?.textContent,
     ).toContain(t('chat.noAgents'));

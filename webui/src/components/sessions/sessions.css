@@ -111,6 +111,52 @@
   white-space: nowrap;
 }
 
+/* New session leads every view like a row, slightly stronger than the
+   Sessions below it; only space sets it apart from them. */
+.session-drawer__new {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin: 4px 4px 2px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.session-drawer__new:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.session-drawer__new:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.session-drawer__new:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.session-drawer__new svg {
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-drawer__new {
+    transition: none;
+  }
+}
+
 /* The view switch keeps every view at a fixed place; the filter trigger
    beside it only changes which categories the current view shows. */
 .session-drawer__header .session-drawer__view {

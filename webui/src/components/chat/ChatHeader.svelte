@@ -8,14 +8,12 @@
   import ContextMenu from '../ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import NewSessionIcon from './NewSessionIcon.svelte';
   import {
     agentActivityState,
     agentActivityTooltip,
   } from './agentActivityTooltip.js';
 
-  // The bar shows this many Identity Agents in roster order (the order set in
-  // the Agents tab); the rest and every Project Team are under "All agents".
-  const BAR_AGENT_LIMIT = 5;
   // Room for longer names and unread counts under the compact trigger.
   const AGENT_PANEL_MIN_WIDTH = 260;
   // The roster's inline padding, which leaves room for focus rings.
@@ -47,6 +45,8 @@
     loadingAgents = false,
     onSelectAgent = () => {},
     // The Session list beside the chat: whether it is open, and its toggle.
+    // While it is open, the list itself offers New session, so the bar does
+    // not.
     sessionListOpen = false,
     sessionListDisabled = false,
     onToggleSessionList = () => {},
@@ -149,13 +149,13 @@
     ...identityEntries,
     ...groups.flatMap((group) => group.entries),
   ]);
-  let barEntries = $derived(identityEntries.slice(0, BAR_AGENT_LIMIT));
-  // The bar Agents that fit on the bar's line, in order; the others wait
-  // under "All agents" until the area is wide enough.
+  // Every Identity Agent in roster order (the order set in the Agents tab)
+  // has a tab; those that do not fit the bar's line wait under "More agents"
+  // with every Project Team until the area is wide enough.
   let agentsElement = $state();
   let rosterElement = $state();
-  let fittingCount = $state(BAR_AGENT_LIMIT);
-  let visibleBarEntries = $derived(barEntries.slice(0, fittingCount));
+  let fittingCount = $state(Number.POSITIVE_INFINITY);
+  let visibleBarEntries = $derived(identityEntries.slice(0, fittingCount));
   let selectedEntry = $derived(
     allEntries.find((entry) => entry.address === selectedAddress) ?? null,
   );
@@ -166,28 +166,39 @@
       : null,
   );
   let selectedProjectId = $derived(selectedEntry?.group ?? '');
-  // What the Agents reachable only through "All agents" are doing, shown on
+  const offBar = (entry) =>
+    !visibleBarEntries.includes(entry) && entry !== extraEntry;
+  // The Identity Agents without a tab on the bar: "More agents" lists them
+  // and counts them on its trigger.
+  let hiddenIdentityEntries = $derived(identityEntries.filter(offBar));
+  // What the Agents reachable only through "More agents" are doing, shown on
   // its trigger.
-  let hiddenActivity = $derived(
-    groupActivity(
-      allEntries.filter(
-        (entry) => !visibleBarEntries.includes(entry) && entry !== extraEntry,
-      ),
-    ),
+  let hiddenActivity = $derived(groupActivity(allEntries.filter(offBar)));
+  let showMoreAgents = $derived(
+    hiddenIdentityEntries.length > 0 || groups.length > 0,
   );
-  let showAllAgents = $derived(allEntries.length > visibleBarEntries.length);
-  let allAgentsLabel = $derived(
+  let moreAgentsName = $derived(
+    hiddenIdentityEntries.length > 0
+      ? t('chat.agentBar.moreAgentsCount', {
+          count: hiddenIdentityEntries.length,
+        })
+      : t('chat.agentBar.moreAgents'),
+  );
+  let moreAgentsLabel = $derived(
     hiddenActivity.status === 'idle'
-      ? t('chat.agentBar.allAgents')
-      : t('chat.agentBar.allAgentsActivity', {
+      ? moreAgentsName
+      : t('chat.agentBar.moreAgentsActivity', {
+          label: moreAgentsName,
           activity: agentActivityState(
             hiddenActivity.status,
             hiddenActivity.unreadCount,
           ),
         }),
   );
+  // Project groups stay whole, so a displayed Team member keeps its place in
+  // its group.
   let agentOptions = $derived([
-    ...byActivity(identityEntries).map(entryOption),
+    ...byActivity(hiddenIdentityEntries).map(entryOption),
     ...groups.flatMap((group) => byActivity(group.entries).map(entryOption)),
   ]);
   let groupOptions = $derived(
@@ -218,7 +229,7 @@
 
   // Bar Agents wrap onto a hidden second line when the area is too narrow;
   // those on the first line are the ones shown, and the row ends after them
-  // so the displayed Agent and "All agents" follow directly.
+  // so the displayed Agent and "More agents" follow directly.
   function measureFittingAgents() {
     if (!rosterElement) {
       return;
@@ -229,9 +240,12 @@
     const wrapped = pills.findIndex((pill) => pill.offsetTop !== firstLine);
     fittingCount = wrapped === -1 ? pills.length : wrapped;
     if (wrapped > 0) {
-      const last = pills[wrapped - 1];
-      const end = last.offsetLeft + last.offsetWidth - rosterElement.offsetLeft;
-      rosterElement.style.width = `${end + ROSTER_INSET}px`;
+      // Unrounded: tab widths are fractional, and a width rounded down by a
+      // fraction of a pixel wraps the last tab that fits.
+      const end =
+        pills[wrapped - 1].getBoundingClientRect().right -
+        rosterElement.getBoundingClientRect().left;
+      rosterElement.style.width = `${Math.ceil(end + ROSTER_INSET)}px`;
     }
   }
 
@@ -241,7 +255,7 @@
     if (!agentsElement || typeof ResizeObserver === 'undefined') {
       return undefined;
     }
-    void barEntries;
+    void identityEntries;
     const observer = new ResizeObserver(() => measureFittingAgents());
     observer.observe(agentsElement);
     for (const pill of rosterElement?.children ?? []) {
@@ -251,11 +265,12 @@
   });
 
   $effect(() => {
-    // Names, activity dots, the displayed Agent and "All agents" change what
+    // Names, activity dots, the displayed Agent and "More agents" change what
     // fits.
-    void barEntries.map((entry) => `${entry.name}:${entry.status}`).join();
+    void identityEntries.map((entry) => `${entry.name}:${entry.status}`).join();
     void extraEntry;
-    void showAllAgents;
+    void showMoreAgents;
+    void hiddenIdentityEntries.length;
     void rosterElement;
     tick().then(measureFittingAgents);
   });
@@ -467,17 +482,18 @@
   </button>
 {/snippet}
 
-{#snippet allAgentsTrigger()}
-  <span class="chat-header__all-agents-icon" aria-hidden="true">
+{#snippet moreAgentsTrigger()}
+  <span class="chat-header__more-agents-content" aria-hidden="true">
     {#if hiddenActivity.status !== 'idle'}
-      <span
-        class="chat-header__all-agents-dot tab-indicator tab-indicator--{hiddenActivity.status}"
-      ></span>
+      <span class="tab-indicator tab-indicator--{hiddenActivity.status}"></span>
+    {/if}
+    {#if hiddenIdentityEntries.length > 0}
+      <span class="chat-header__more-agents-count"
+        >{hiddenIdentityEntries.length}</span
+      >
     {/if}
     <svg viewBox="0 0 16 16" width="16" height="16">
-      <circle cx="3.5" cy="8" r="1.3" />
-      <circle cx="8" cy="8" r="1.3" />
-      <circle cx="12.5" cy="8" r="1.3" />
+      <path d="m4 6 4 4 4-4" />
     </svg>
   </span>
 {/snippet}
@@ -502,19 +518,20 @@
         <path d="M9 4v16" />
       </svg>
     </Button>
-    <Button
-      variant="secondary"
-      icon
-      class="chat-header__action"
-      ariaLabel={t('chat.newSession')}
-      tooltip={t('chat.newSession')}
-      disabled={newSessionDisabled}
-      onClick={() => onNewSession()}
-    >
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-    </Button>
+    {#if !sessionListOpen}
+      <Button
+        variant="secondary"
+        icon
+        class="chat-header__action"
+        ariaLabel={t('chat.newSession')}
+        tooltip={t('chat.newSessionShortcut')}
+        aria-keyshortcuts="Control+Shift+O"
+        disabled={newSessionDisabled}
+        onClick={() => onNewSession()}
+      >
+        <NewSessionIcon />
+      </Button>
+    {/if}
   </div>
   <div
     bind:this={agentsElement}
@@ -524,7 +541,7 @@
   >
     {#if allEntries.length > 0 || displayedAgentName}
       <div bind:this={rosterElement} class="chat-header__roster">
-        {#each barEntries as entry, index (entry.address)}
+        {#each identityEntries as entry, index (entry.address)}
           {@render agentPill(entry, false, index >= fittingCount)}
         {/each}
       </div>
@@ -535,15 +552,15 @@
           <span class="agent-pill__name">{displayedAgentName}</span>
         </span>
       {/if}
-      {#if showAllAgents}
+      {#if showMoreAgents}
         <SearchableDropdown
           value={selectedEntry ? selectedAddress : ''}
           options={agentOptions}
-          placeholder={t('chat.agentBar.allAgents')}
-          ariaLabel={allAgentsLabel}
-          triggerClass="chat-header__all-agents"
-          triggerTooltip={allAgentsLabel}
-          triggerContent={allAgentsTrigger}
+          placeholder={t('chat.agentBar.moreAgents')}
+          ariaLabel={moreAgentsLabel}
+          triggerClass="chat-header__more-agents"
+          triggerTooltip={moreAgentsLabel}
+          triggerContent={moreAgentsTrigger}
           panelMinWidth={AGENT_PANEL_MIN_WIDTH}
           disabled={loadingAgents}
           searchPlaceholder={t('chat.agentPicker.filter')}
@@ -645,8 +662,8 @@
   }
 
   /* In a narrow area only the roster Agents give way: the ones that do not
-     fit wrap onto a clipped second line and wait under "All agents". The
-     displayed Agent, "All agents" and the actions keep their place. */
+     fit wrap onto a clipped second line and wait under "More agents". The
+     displayed Agent, "More agents" and the actions keep their place. */
   .chat-header__roster {
     display: flex;
     min-width: 0;
@@ -723,23 +740,35 @@
     text-overflow: ellipsis;
   }
 
-  .chat-header__all-agents-icon {
+  /* "More agents": the count of Identity Agents off the bar and a chevron,
+     led by their combined status dot. */
+  .chat-header__more-agents-content {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
   }
 
-  .chat-header__all-agents-icon svg {
-    fill: currentcolor;
+  .chat-header__more-agents-count {
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    font-variant-numeric: tabular-nums;
   }
 
-  .chat-header :global(.chat-header__all-agents) {
+  .chat-header__more-agents-content svg {
+    fill: none;
+    stroke: currentcolor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .chat-header :global(.chat-header__more-agents) {
     width: auto;
     min-width: 0;
     flex: 0 0 auto;
   }
 
-  .chat-header :global(.chat-header__all-agents .s-dropdown-trigger) {
+  .chat-header :global(.chat-header__more-agents .s-dropdown-trigger) {
     width: auto;
     height: 30px;
     min-height: 0;
@@ -751,8 +780,8 @@
   }
 
   .chat-header
-    :global(.chat-header__all-agents .s-dropdown-trigger:hover:not(:disabled)),
-  .chat-header :global(.chat-header__all-agents.open .s-dropdown-trigger) {
+    :global(.chat-header__more-agents .s-dropdown-trigger:hover:not(:disabled)),
+  .chat-header :global(.chat-header__more-agents.open .s-dropdown-trigger) {
     color: var(--text-hi);
     background: var(--surface-2);
   }
@@ -799,7 +828,7 @@
       height: 36px;
     }
 
-    .chat-header :global(.chat-header__all-agents .s-dropdown-trigger) {
+    .chat-header :global(.chat-header__more-agents .s-dropdown-trigger) {
       min-width: 40px;
       height: 36px;
       justify-content: center;
