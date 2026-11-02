@@ -1336,7 +1336,7 @@ NUL = (
         pytest.param(
             "write",
             {"path": "notes/10:30.md", "content": "x"},
-            "invalid_arguments",
+            "invalid_path",
             None,
             id="write-colon",
             marks=pytest.mark.skipif(os.name != "nt", reason="Windows file names"),
@@ -1353,7 +1353,7 @@ NUL = (
         pytest.param(
             "write",
             {"path": "sub./trail.txt.", "content": "x"},
-            "invalid_arguments",
+            "invalid_path",
             None,
             id="write-trailing-dot",
             marks=pytest.mark.skipif(os.name != "nt", reason="Windows file names"),
