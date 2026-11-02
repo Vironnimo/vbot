@@ -68,6 +68,7 @@ def dispatch_channel_command(
                     ok=False,
                     message=f"cannot read --token-stdin value as UTF-8: {exc}",
                     instance=instance,
+                    refused=True,
                 )
         connection_options: dict[str, Any] = {}
         if args.disabled:
@@ -120,6 +121,7 @@ def dispatch_channel_command(
                 ok=False,
                 message=f"cannot read --stdin token as UTF-8: {exc}",
                 instance=instance,
+                refused=True,
             )
         if args.slot == "app":
             return channel_set_app_token(instance, args.id, token)
@@ -247,7 +249,10 @@ def dispatch_provider_command(
             api_key = _read_stdin_utf8() if args.api_key_stdin else args.api_key
         except OSError, UnicodeError:
             return CommandResult(
-                ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
+                ok=False,
+                message="cannot read API key from UTF-8 stdin",
+                instance=instance,
+                refused=True,
             )
         wire = None
         if args.wire_file is not None:
@@ -255,11 +260,17 @@ def dispatch_provider_command(
                 wire = json.loads(_read_text_file(args.wire_file))
             except (OSError, UnicodeError, ValueError) as exc:
                 return CommandResult(
-                    ok=False, message=f"cannot read wire file: {exc}", instance=instance
+                    ok=False,
+                    message=f"cannot read wire file: {exc}",
+                    instance=instance,
+                    refused=True,
                 )
             if not isinstance(wire, dict):
                 return CommandResult(
-                    ok=False, message="wire file must hold a JSON object", instance=instance
+                    ok=False,
+                    message="wire file must hold a JSON object",
+                    instance=instance,
+                    refused=True,
                 )
         return custom_save_fn(
             instance,
@@ -291,7 +302,10 @@ def dispatch_provider_command(
             value = _read_stdin_utf8() if args.stdin else args.value
         except OSError, UnicodeError:
             return CommandResult(
-                ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
+                ok=False,
+                message="cannot read API key from UTF-8 stdin",
+                instance=instance,
+                refused=True,
             )
         return set_provider_key(
             instance,
@@ -329,6 +343,7 @@ def _accept_connection_target(
             ok=False,
             message=f"conflicting targets: {target} and --connection {args.connection}",
             instance=instance,
+            refused=True,
         )
     args.provider = target.split(":", 1)[0]
     args.connection = target
@@ -412,6 +427,7 @@ def dispatch_task_model_command(
                     ok=False,
                     message=f"cannot read --options-stdin value as UTF-8: {exc}",
                     instance=instance,
+                    refused=True,
                 )
         return set_binding_fn(
             instance,
@@ -426,6 +442,7 @@ def dispatch_task_model_command(
                 ok=False,
                 message="task-model option set accepts either <value> or --stdin, not both",
                 instance=instance,
+                refused=True,
             )
         if args.stdin:
             try:
@@ -435,6 +452,7 @@ def dispatch_task_model_command(
                     ok=False,
                     message=f"cannot read --stdin value as UTF-8: {exc}",
                     instance=instance,
+                    refused=True,
                 )
         else:
             value = args.value
@@ -443,6 +461,7 @@ def dispatch_task_model_command(
                 ok=False,
                 message="task-model option set requires <value> or --stdin",
                 instance=instance,
+                refused=True,
             )
         return set_option_fn(instance, args.task_type, args.name, value)
     if args.command == "unset-option":
@@ -518,6 +537,7 @@ def _dispatch_extensions_set(
                 ok=False,
                 message=f"cannot read --stdin value as UTF-8: {exc}",
                 instance=instance,
+                refused=True,
             )
     else:
         if len(rest) != 3:
@@ -530,4 +550,4 @@ def _dispatch_extensions_set(
 
 
 def _extensions_usage(instance: ServerInstance, message: str) -> CommandResult:
-    return CommandResult(ok=False, message=message, instance=instance)
+    return CommandResult(ok=False, message=message, instance=instance, refused=True)

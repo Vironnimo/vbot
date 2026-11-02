@@ -187,7 +187,7 @@ def test_task_model_set_rejects_options_that_are_not_a_json_object(
         "task-model", "set", "text_embedding", "local/whisper", "--options", options_json
     )
 
-    assert code == 1
+    assert code == 2
     assert "--options" in out
     assert rpc.calls == []
 

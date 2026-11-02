@@ -385,6 +385,7 @@ def _resolve_single_connection_id(
             ok=False,
             message=_format_status_not_found(provider_id, None, connections),
             instance=instance,
+            refused=True,
         )
     if oauth_only:
         provider_connections = [
@@ -402,6 +403,7 @@ def _resolve_single_connection_id(
                     "Keep the same target options."
                 ),
                 instance=instance,
+                refused=True,
             )
     if len(provider_connections) > 1:
         candidate_ids = _connection_ids(provider_connections)
@@ -412,6 +414,7 @@ def _resolve_single_connection_id(
                 f"with one of: {', '.join(candidate_ids)}"
             ),
             instance=instance,
+            refused=True,
         )
     connection = provider_connections[0]
     connection_id = connection.get("id") if isinstance(connection, dict) else None

@@ -226,6 +226,7 @@ def agent_rename(
             ok=False,
             message="new agent id must differ from the current id",
             instance=instance,
+            refused=True,
         )
     payload = _rpc_call(
         instance,
@@ -301,9 +302,7 @@ def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> Command
 
     if len(set(agent_ids)) != len(agent_ids):
         return CommandResult(
-            ok=False,
-            message="duplicate agent ids in reorder list",
-            instance=instance,
+            ok=False, message="duplicate agent ids in reorder list", instance=instance, refused=True
         )
     listing = _rpc_call(instance, "agent.list", {})
     if not listing.ok:

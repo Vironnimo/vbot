@@ -90,6 +90,7 @@ def bootstrap_update(
                 f"no Bootstrap fields provided; use one of: {', '.join(BOOTSTRAP_UPDATE_FLAGS)}"
             ),
             instance=instance,
+            refused=True,
         )
     payload = _rpc_call(instance, "bootstrap.update", {"id": job_id, **dict(changes)})
     if not payload.ok:
@@ -131,6 +132,7 @@ def _current_run_target(instance: ServerInstance) -> dict[str, str] | CommandRes
             ok=False,
             message="--current-session cannot target a remote vBot server",
             instance=instance,
+            refused=True,
         )
     agent_id = os.environ.get(RUN_AGENT_ENV, "").strip()
     session_id = os.environ.get(RUN_SESSION_ENV, "").strip()
@@ -143,6 +145,7 @@ def _current_run_target(instance: ServerInstance) -> dict[str, str] | CommandRes
                 f"missing {RUN_AGENT_ENV} or {RUN_SESSION_ENV}"
             ),
             instance=instance,
+            refused=True,
         )
     target = f"{agent_id}@{project_id}" if project_id else agent_id
     return {"agent_id": target, "session_id": session_id}

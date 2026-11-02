@@ -186,6 +186,7 @@ def performance_history(
                 ok=False,
                 message=f"invalid --at time: {at} (expected e.g. 2026-09-28 16:40)",
                 instance=instance,
+                refused=True,
             )
         params["since"] = params["until"] = moment.isoformat()
     else:

@@ -113,6 +113,7 @@ def project_set(
             ok=False,
             message=f"no project fields provided; use one of: {', '.join(PROJECT_SET_FLAGS)}",
             instance=instance,
+            refused=True,
         )
     params = {"project_id": project_id, **dict(changes)}
     payload = _rpc_call(instance, "project.set", params)

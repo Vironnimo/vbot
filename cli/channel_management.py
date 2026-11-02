@@ -73,7 +73,10 @@ def channel_add(
     if token is not None:
         if not token:
             return CommandResult(
-                ok=False, message="token from stdin must not be empty", instance=instance
+                ok=False,
+                message="token from stdin must not be empty",
+                instance=instance,
+                refused=True,
             )
         params["token"] = token
     elif token_env:
@@ -83,6 +86,7 @@ def channel_add(
             ok=False,
             message="channel add requires --token-stdin or --token-env",
             instance=instance,
+            refused=True,
         )
     if response_mode != "mention":
         params["response_mode"] = response_mode
@@ -130,7 +134,7 @@ def channel_whatsapp(
 def channel_set_app_token(instance: ServerInstance, channel_id: str, token: str) -> CommandResult:
     if not token:
         return CommandResult(
-            ok=False, message="token from stdin must not be empty", instance=instance
+            ok=False, message="token from stdin must not be empty", instance=instance, refused=True
         )
     payload = _rpc_call(
         instance, "channel.set_token", {"id": channel_id, "token": token, "slot": "app"}
@@ -180,6 +184,7 @@ def channel_update(
             ok=False,
             message=f"no channel fields provided; use one of: {', '.join(CHANNEL_UPDATE_FLAGS)}",
             instance=instance,
+            refused=True,
         )
 
     payload = _rpc_call(instance, "channel.update", {"id": channel_id, **dict(changes)})
@@ -260,7 +265,7 @@ def channel_set_token(
     """Persist a channel token through RPC and report its live application state."""
     if not token:
         return CommandResult(
-            ok=False, message="token from stdin must not be empty", instance=instance
+            ok=False, message="token from stdin must not be empty", instance=instance, refused=True
         )
 
     payload = _rpc_call(

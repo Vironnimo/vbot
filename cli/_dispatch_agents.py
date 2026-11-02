@@ -446,6 +446,7 @@ def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) ->
             ok=False,
             message="chat needs a non-empty message as <prompt> or on stdin",
             instance=instance,
+            refused=True,
         )
     overrides: dict[str, Any] = {}
     if args.model is not None:
@@ -548,7 +549,10 @@ def dispatch_data_store_command(
                 value = read_secret_fn(f"Value of {args.name} (not shown): ")
             except (OSError, UnicodeError, EOFError) as exc:
                 return CommandResult(
-                    ok=False, message=f"cannot read the value: {exc}", instance=instance
+                    ok=False,
+                    message=f"cannot read the value: {exc}",
+                    instance=instance,
+                    refused=True,
                 )
             return secrets_set_fn(instance, args.name, value)
         if args.secrets_command == "unset":
@@ -598,6 +602,7 @@ def dispatch_agent_secrets_command(
                     "Nothing was changed."
                 ),
                 instance=instance,
+                refused=True,
             )
         return secrets.agent_secrets_update(
             instance,

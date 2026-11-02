@@ -346,7 +346,7 @@ def test_provider_enable_requires_a_connection_for_a_multi_connection_provider(
 
     code, out, _err = run_cli("provider", "enable", "ollama")
 
-    assert code == 1
+    assert code == 2
     assert rpc.methods == ["connection.list"]
     for text in ("pass --connection", "ollama:cloud", "ollama:local"):
         assert text in out

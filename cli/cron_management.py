@@ -107,6 +107,7 @@ def cron_update(
             ok=False,
             message=f"no cron fields provided; use one of: {', '.join(CRON_UPDATE_FLAGS)}",
             instance=instance,
+            refused=True,
         )
     changes = dict(changes)
     watch = changes.get("watch")
@@ -122,6 +123,7 @@ def cron_update(
                     message=f"--watch-runs needs a watch, and cron job {job_id} has none; add "
                     "--watch <command-or-url>. Nothing was changed.",
                     instance=instance,
+                    refused=True,
                 )
             changes["watch"] = {**stored, "always": watch["always"]}
         elif stored is not None and stored.get("always") is True:
@@ -138,6 +140,7 @@ def cron_update(
                 message=f"--email-from and --email-subject narrow an email job, and cron job "
                 f"{job_id} runs on no mail; add --email <channel-id>. Nothing was changed.",
                 instance=instance,
+                refused=True,
             )
         changes["email"] = {**(stored_email or {}), **email}
     payload = _rpc_call(instance, "cron.update", {"id": job_id, **changes})

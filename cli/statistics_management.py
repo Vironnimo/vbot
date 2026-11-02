@@ -44,7 +44,10 @@ def statistics_report(
     route = _SECTIONS.get(section)
     if route is None:
         return CommandResult(
-            ok=False, message=f"unsupported statistics section: {section}", instance=instance
+            ok=False,
+            message=f"unsupported statistics section: {section}",
+            instance=instance,
+            refused=True,
         )
     path, formatter = route
     payload = _rpc_call(instance, "statistics.report", _report_params(path[0], since, until))

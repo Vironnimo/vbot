@@ -104,6 +104,7 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
             ok=False,
             message="refusing to unregister a database without confirmation; re-run with --yes",
             instance=instance,
+            refused=True,
         )
     payload = rpc_call(instance, "data_store.unregister", {"name": name})
     if payload.ok:
@@ -155,6 +156,7 @@ def _stopped_server_health(
             ),
             instance=instance,
             health=health,
+            refused=True,
         )
     return health
 
@@ -170,7 +172,7 @@ def _released_projection(released: UnregisteredDatabase) -> dict[str, Any]:
 def data_store_snapshot_list(instance: ServerInstance) -> CommandResult:
     """List verified data snapshots without opening any database."""
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     try:
         summaries = snapshot_summaries(
             instance.data_dir,
@@ -185,7 +187,7 @@ def data_store_snapshot_list(instance: ServerInstance) -> CommandResult:
 def data_store_snapshot_verify(instance: ServerInstance, snapshot_id: str) -> CommandResult:
     """Verify every database member and JSON document of one data snapshot."""
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     try:
         snapshot = _snapshot_path(instance, snapshot_id)
         manifest = read_verified_manifest(
@@ -223,7 +225,7 @@ def data_store_snapshot_restore(
     was running, busy or answering, is stopped first and started again afterwards.
     """
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     selected_databases = sorted(set(databases))
     if complete and (selected_databases or documents):
         return CommandResult(
@@ -231,12 +233,14 @@ def data_store_snapshot_restore(
             message="--all restores the complete snapshot; do not combine it with "
             "--database or --documents",
             instance=instance,
+            refused=True,
         )
     if not confirm:
         return CommandResult(
             ok=False,
             message="refusing data-store restore without confirmation; re-run with --yes",
             instance=instance,
+            refused=True,
         )
     # No selector restores every database; --documents alone restores no database.
     names = selected_databases if selected_databases or documents else None
@@ -280,7 +284,7 @@ def data_store_snapshot_restore(
 def data_store_config_backup_list(instance: ServerInstance) -> CommandResult:
     """List the configuration backups, newest first, from the local data directory."""
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     try:
         backups = list_config_backups(instance.data_dir)
     except DatabaseError as exc:
@@ -301,7 +305,7 @@ def data_store_config_backup_list(instance: ServerInstance) -> CommandResult:
 def data_store_config_backup_show(instance: ServerInstance, backup_id: str) -> CommandResult:
     """Show one configuration backup's files against the current ones."""
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     try:
         described = describe_config_backup(instance.data_dir, backup_id)
     except (ValueError, DatabaseError) as exc:
@@ -324,19 +328,21 @@ def data_store_config_backup_restore(
     or is reached through a link stay as they are. The state before the restore is backed up first.
     """
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     selected = sorted(set(files))
     if complete == bool(selected):
         return CommandResult(
             ok=False,
             message="name the files to restore with --file, or restore every file with --all",
             instance=instance,
+            refused=True,
         )
     if not confirm:
         return CommandResult(
             ok=False,
             message="refusing data-store restore without confirmation; re-run with --yes",
             instance=instance,
+            refused=True,
         )
     paths = None if complete else selected
 
@@ -410,7 +416,7 @@ def _describe_config_restore(restored: ConfigRestore) -> str:
 def data_store_secrets_status(instance: ServerInstance) -> CommandResult:
     """Show the Secret Store's state and ignored plaintext credential files; never a value."""
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     from core.secrets import SecretStore, secret_store_health
 
     projection = secret_store_health(SecretStore(instance.data_dir))
@@ -562,7 +568,7 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
     is stopped meanwhile and started again if it ran, so it loads the result.
     """
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     if not confirm:
         return CommandResult(
             ok=False,
@@ -571,6 +577,7 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
                 "server is stopped meanwhile; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     from core.secrets import (
         SecretStore,
@@ -660,7 +667,7 @@ def data_store_convert(instance: ServerInstance, confirm: bool) -> CommandResult
     started again if it ran.
     """
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     if not confirm:
         return CommandResult(
             ok=False,
@@ -669,6 +676,7 @@ def data_store_convert(instance: ServerInstance, confirm: bool) -> CommandResult
                 "stopped meanwhile; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     from core.archive import archived_projects_need_conversion, convert_archived_projects
     from core.projects.conversion import convert_project_documents, pending_project_documents
@@ -736,7 +744,7 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
     of the process.
     """
     if instance.host not in _LOOPBACK_HOSTS:
-        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance, refused=True)
     if not confirm:
         return CommandResult(
             ok=False,
@@ -745,6 +753,7 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
                 "credential and OAuth login must then be entered again; re-run with --yes"
             ),
             instance=instance,
+            refused=True,
         )
     from core.secrets import SecretStore
 
@@ -861,6 +870,7 @@ def _server_secret_store(instance: ServerInstance) -> dict[str, Any] | CommandRe
             ),
             instance=instance,
             health=health,
+            refused=True,
         )
     return None
 
@@ -891,6 +901,7 @@ def _change_while_stopped(
             ),
             instance=instance,
             health=health,
+            refused=True,
         )
     # A busy server runs as well: it is stopped like an answering one and started
     # again afterwards, never left stopped as if it had not been running.

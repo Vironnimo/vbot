@@ -448,7 +448,7 @@ def test_extensions_set_rejects_non_utf8_stdin_before_any_request(
 
     code, _out, _err = run_cli("extensions", "homeassistant", "set", "token", "--stdin")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
 
 

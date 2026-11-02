@@ -575,13 +575,14 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
                 }
             ),
             instance=instance,
+            refused=True,
         )
     if "--help" in tokens[1:]:
         return CommandResult(ok=True, message=json.dumps(operation, indent=2), instance=instance)
     try:
         arguments = _operation_arguments(operation, tokens[1:])
     except (ValueError, UnicodeError) as error:
-        return CommandResult(ok=False, message=str(error), instance=instance)
+        return CommandResult(ok=False, message=str(error), instance=instance, refused=True)
     payload = _rpc_call(
         instance,
         "extensions.operation",

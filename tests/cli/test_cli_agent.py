@@ -491,7 +491,7 @@ def test_agent_rename_renames_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
 def test_agent_rename_to_the_same_id_sends_nothing(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, _err = run_cli("agent", "rename", "writer", "writer")
 
-    assert code == 1
+    assert code == 2
     assert out.strip()
     assert rpc.calls == []
 
@@ -524,7 +524,7 @@ def test_agent_reorder_rejects_duplicate_ids_before_any_request(
 ) -> None:
     code, out, _err = run_cli("agent", "reorder", "assistant", "assistant")
 
-    assert code == 1
+    assert code == 2
     assert "duplicate" in out
     assert rpc.calls == []
 

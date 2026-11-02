@@ -58,9 +58,9 @@ def test_approve_needs_a_terminal_or_yes_and_never_runs_inside_an_agent_run(
     monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
     from_agent = run_cli("devices", "approve", "K7QM-4XPA", "--yes")
 
-    assert unconfirmed[0] == 1 and "--yes" in unconfirmed[1] + unconfirmed[2]
+    assert unconfirmed[0] == 2 and "--yes" in unconfirmed[1] + unconfirmed[2]
     assert confirmed[0] == 0
-    assert from_agent[0] == 1 and "Agent's Run" in from_agent[1] + from_agent[2]
+    assert from_agent[0] == 2 and "Agent's Run" in from_agent[1] + from_agent[2]
     assert rpc.methods == ["devices.pending", "devices.pending", "devices.approve"]
 
 

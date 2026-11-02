@@ -172,7 +172,7 @@ def test_memory_rejects_scope_from_another_owner_before_rpc(
 ) -> None:
     code, out, err = run_cli("memory", "add", "vbot", *selection, "--content", "Keep")
 
-    assert code == 1
+    assert code == 2
     assert rpc.calls == []
     assert "--project" in out + err and "scope" in out + err
 
