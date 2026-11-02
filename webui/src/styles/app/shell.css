@@ -189,12 +189,58 @@
   color: var(--accent);
 }
 
-/* The rail's items stay narrower than the rail minus a vertical scrollbar,
-   so a low window scrolls the rail only vertically. */
-.app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
-  align-items: center;
-  padding-inline: 0;
-  overflow-x: hidden;
+/* A rail taller than the window scrolls only vertically and without a
+   scrollbar, which would push its icons off center; a fade at the edge with
+   hidden entries says that it scrolls. Without scroll-driven animation
+   support the rail just scrolls without the fade. */
+@property --rail-fade-top {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --rail-fade-bottom {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes rail-scroll-fade {
+  0% {
+    --rail-fade-top: 0px;
+    --rail-fade-bottom: 24px;
+  }
+
+  10% {
+    --rail-fade-top: 24px;
+  }
+
+  90% {
+    --rail-fade-bottom: 24px;
+  }
+
+  100% {
+    --rail-fade-top: 24px;
+    --rail-fade-bottom: 0px;
+  }
+}
+
+@media (min-width: 641px) {
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
+    align-items: center;
+    padding-inline: 0;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      #000 var(--rail-fade-top),
+      #000 calc(100% - var(--rail-fade-bottom)),
+      transparent
+    );
+    animation: rail-scroll-fade linear both;
+    animation-timeline: scroll(self);
+  }
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group {
@@ -268,6 +314,33 @@
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator--running {
   background: var(--amber);
+}
+
+/* A low window packs the rail tighter, so it fits without scrolling down to
+   about 640px. */
+@media (min-width: 641px) and (max-height: 800px) {
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__sidebar-header {
+    padding-top: 10px;
+    padding-bottom: 2px;
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
+    padding-block: var(--space-sm);
+  }
+
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__nav-group
+    + .app-shell__nav-group {
+    --sidebar-nav-group-gap: var(--space-sm);
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-item {
+    min-height: 36px;
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator {
+    top: 1px;
+  }
 }
 
 .app-shell__nav-sigil,
