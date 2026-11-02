@@ -375,14 +375,11 @@
 
   let sessionFilters = $state(untrack(() => initialSessionFilters));
 
-  // The by-Project Session list starts each new Session in a Project: a
-  // group's "+" with the Agent it chose, New Session with the displayed Agent
-  // in the Project of the shown Session.
-  const startSessionInProject = (projectId, agentAddress, options) =>
-    navigation.handleNewSessionWith(
-      agentAddress,
-      (draft) => sessionSettings.startDraftIn(draft, projectId),
-      options,
+  // A by-Project group's "+" starts a new Session in its Project with the
+  // Agent it chose.
+  const startSessionInProject = (projectId, agentAddress) =>
+    navigation.handleNewSessionWith(agentAddress, (draft) =>
+      sessionSettings.startDraftIn(draft, projectId),
     );
 
   // The draft footer's Agent picker: the draft moves to the chosen Agent,
@@ -402,17 +399,28 @@
     });
   };
 
-  const handleNewSession = () => {
-    const next =
-      showSessionDrawer && sessionFilters?.view === 'projects'
-        ? target.projectNewSessionTarget(sessionSettings.view)
-        : null;
-    return next
-      ? startSessionInProject(next.projectId, next.agentAddress, {
-          keepEmptySession: true,
-        })
-      : navigation.handleNewSession();
-  };
+  let newSessionDisabled = $derived(
+    !target.activeAgent || chatState.loadingHistory,
+  );
+
+  // Ctrl+Shift+O (Cmd+Shift+O) starts a new Session in the focused Chat area,
+  // unless a dialog is open over it.
+  function handleNewSessionShortcut(event) {
+    if (
+      !active ||
+      !interactive ||
+      event.defaultPrevented ||
+      event.altKey ||
+      !event.shiftKey ||
+      !(event.ctrlKey || event.metaKey) ||
+      event.key?.toLowerCase() !== 'o' ||
+      document.querySelector('[aria-modal="true"]')
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (!newSessionDisabled) void navigation.handleNewSession();
+  }
 
   // A picker choice: an Identity Agent by its id, a Project Agent by its
   // `agent@project` address.
@@ -689,6 +697,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleNewSessionShortcut} />
+
 <section
   class="view view-chat active chat-view"
   data-chat-width={chatWidth}
@@ -709,8 +719,8 @@
     sessionListOpen={showSessionDrawer}
     sessionListDisabled={!target.activeAgent}
     onToggleSessionList={() => (showSessionDrawer = !showSessionDrawer)}
-    newSessionDisabled={!target.activeAgent || chatState.loadingHistory}
-    onNewSession={handleNewSession}
+    {newSessionDisabled}
+    onNewSession={navigation.handleNewSession}
     {otherArea}
     actions={workspaceActions}
     infoPanelOpen={activityPanelOpen}
@@ -774,6 +784,8 @@
           {onReorderProjects}
           projectTeams={target.projectGroups}
           onNewSessionInProject={startSessionInProject}
+          {newSessionDisabled}
+          onNewSession={navigation.handleNewSession}
         />
       {/if}
       <div

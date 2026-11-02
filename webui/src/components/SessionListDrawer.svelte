@@ -20,6 +20,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import { sessionKindIcon } from './sessions/kindIcons.js';
   import SessionKindIcon from './sessions/SessionKindIcon.svelte';
+  import NewSessionIcon from './chat/NewSessionIcon.svelte';
   import {
     sessionDisplayName,
     projectGroupKey,
@@ -105,6 +106,10 @@
     // Called with (projectId, agentAddress) when a group's "+" asks for a new
     // Session of that Agent in that Project (null: the Workspace).
     onNewSessionInProject = () => {},
+    // New session with the displayed Agent, the list's first entry in every
+    // view; the Agent bar offers it only while the list is closed.
+    onNewSession = () => {},
+    newSessionDisabled = false,
   } = $props();
   const menus = createSessionMenus();
   const uid = $props.id();
@@ -745,6 +750,18 @@
       {/if}
     </div>
   </div>
+
+  <button
+    type="button"
+    class="session-drawer__new"
+    aria-keyshortcuts="Control+Shift+O"
+    disabled={newSessionDisabled}
+    use:tooltip={t('chat.newSessionShortcut')}
+    onclick={() => onNewSession()}
+  >
+    <NewSessionIcon />
+    <span>{t('chat.newSession')}</span>
+  </button>
 
   {#if actions.actionError}
     <p class="session-drawer__state session-drawer__state--error" role="alert">

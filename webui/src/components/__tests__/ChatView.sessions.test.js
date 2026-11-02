@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { t } from '../../lib/i18n.js';
 import {
   allAgentsTrigger,
+  narrowAgentBar,
   createAgent,
   createChatRpcMock,
   createHistoryMessages,
@@ -392,6 +393,42 @@ describe('ChatView Sessions', () => {
         if (!project) {
           expect(alphaSessionId()).toBe(draft ? '' : 'session-1');
         }
+      },
+    );
+
+    it.each(['list', 'shortcut'])(
+      'shows a draft from the open Session list by its first entry or Ctrl+Shift+O (%s)',
+      async (trigger) => {
+        rpcMock.mockImplementation(createChatRpcMock());
+        await chat.mountChat({ onSessionFiltersChange: vi.fn() });
+        const barButton = () =>
+          document.querySelector(
+            `.chat-header button[aria-label="${t('chat.newSession')}"]`,
+          );
+        expect(barButton()).toBeTruthy();
+
+        // The open list offers New session itself, in place of the bar.
+        sessionsButton().click();
+        flushSync();
+        expect(barButton()).toBeNull();
+        if (trigger === 'list') {
+          document.querySelector('button.session-drawer__new').click();
+        } else {
+          const event = new KeyboardEvent('keydown', {
+            key: 'O',
+            ctrlKey: true,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          window.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(true);
+        }
+
+        await waitForCondition(() => alphaSessionId() === '');
+        await waitForCondition(
+          () => document.activeElement === composerInput(),
+        );
       },
     );
 
@@ -834,10 +871,13 @@ describe('ChatView Sessions', () => {
             },
           }),
         );
+        // Beta, the sixth Agent, is off a bar that fits five.
+        narrowAgentBar(5);
         const parent = createChatViewParentHarness();
         await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }));
 
         if (selection === 'keyboard') {
+          await waitForCondition(() => Boolean(allAgentsTrigger()));
           allAgentsTrigger().click();
           await waitForCondition(() =>
             Boolean(document.querySelector('.s-dropdown-search input')),

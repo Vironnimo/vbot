@@ -712,32 +712,17 @@ export function createChatViewNavigation(context) {
     context.layout.requestComposerFocus({ includeMobile: true });
   };
 
-  const handleNewSessionWith = (agentAddress, prepareDraft, options) =>
-    asStep(() => startNewSessionWith(agentAddress, prepareDraft, options));
+  const handleNewSessionWith = (agentAddress, prepareDraft) =>
+    asStep(() => startNewSessionWith(agentAddress, prepareDraft));
 
   // A new Session of `agentAddress`, which may be another Agent than the
   // active one (the by-Project Session list): it becomes the active Agent and
-  // shows its draft, and `prepareDraft` sets where the draft works. With
-  // `keepEmptySession`, an empty displayed Session - which the caller knows to
-  // be that Agent's, in that Project - stays the fresh conversation.
-  const startNewSessionWith = async (
-    agentAddress,
-    prepareDraft,
-    { keepEmptySession = false } = {},
-  ) => {
+  // shows its draft, and `prepareDraft` sets where the draft works.
+  const startNewSessionWith = async (agentAddress, prepareDraft) => {
     if (context.chatState.loadingHistory || !agentAddress) {
       return;
     }
     const version = sessionNavigationVersion;
-    if (
-      keepEmptySession &&
-      !context.target.activeDraft() &&
-      context.composerAvailable &&
-      context.displayedSessionIsEmpty()
-    ) {
-      context.layout.requestComposerFocus({ includeMobile: true });
-      return;
-    }
     const { agentId, projectId } = parseAgentAddress(agentAddress);
     if (agentAddress !== context.target.activeOwnAgentAddress()) {
       if (projectId) {

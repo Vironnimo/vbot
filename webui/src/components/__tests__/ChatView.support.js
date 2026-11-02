@@ -172,6 +172,8 @@ export function setupChatViewTestSuite() {
     vi.useRealTimers();
     for (const spy of pageAttentionSpies) spy.mockRestore();
     pageAttentionSpies = [];
+    agentBarLayout?.mockRestore();
+    agentBarLayout = null;
   });
 
   return {
@@ -547,7 +549,7 @@ export function selectProjectAgentFromPicker(name, project = 'vBot', root) {
 }
 
 // Whether the Agent bar shows an unread result for the named Agent: on its
-// button, or for an Agent off the bar in the "All agents" list.
+// button, or for an Agent off the bar in the "More agents" list.
 export function agentShowsUnread(name, root = document) {
   const pill = agentPill(name, root);
   if (pill) {
@@ -646,10 +648,14 @@ export function findCancelRunButton() {
   );
 }
 
-// The New Session action is an icon-only button, matched by its aria-label.
+// The New Session action: the Session list's first entry while the list is
+// open, else the Agent bar's icon-only button, matched by its aria-label.
 export function findNewSessionButton() {
-  return Array.from(document.querySelectorAll('button')).find(
-    (button) => button.getAttribute('aria-label') === 'New session',
+  return (
+    document.querySelector('button.session-drawer__new') ??
+    Array.from(document.querySelectorAll('button')).find(
+      (button) => button.getAttribute('aria-label') === 'New session',
+    )
   );
 }
 
@@ -660,9 +666,27 @@ export function sessionListButton(root = document) {
   );
 }
 
-// Trigger of the Agent bar's "All agents" list, which offers every Agent.
+let agentBarLayout = null;
+
+// jsdom lays nothing out, so every Agent fits on the Agent bar; this makes
+// the tabs from index `fitting` on report a second line, as on a narrow bar,
+// until the test ends.
+export function narrowAgentBar(fitting) {
+  agentBarLayout = vi
+    .spyOn(HTMLElement.prototype, 'offsetTop', 'get')
+    .mockImplementation(function () {
+      const roster = this.parentElement;
+      if (!roster?.classList.contains('chat-header__roster')) return 0;
+      return Array.prototype.indexOf.call(roster.children, this) >= fitting
+        ? 38
+        : 0;
+    });
+}
+
+// Trigger of the Agent bar's "More agents" list, which offers the Agents
+// without a tab on the bar and every Project Team.
 export function allAgentsTrigger(root = document) {
-  return root.querySelector('.chat-header__all-agents button[aria-haspopup]');
+  return root.querySelector('.chat-header__more-agents button[aria-haspopup]');
 }
 
 // Name of the Agent the Agent bar shows as displayed ("Builder · vBot" for a
@@ -683,7 +707,7 @@ export function agentPill(name, root = document) {
 }
 
 // Selects an Agent the way a user does: its button on the Agent bar, else
-// the "All agents" list with its closed Project groups opened. The list is
+// the "More agents" list with its closed Project groups opened. The list is
 // portaled to <body>.
 export async function selectAgentFromPicker(name, root = document) {
   await waitForCondition(
