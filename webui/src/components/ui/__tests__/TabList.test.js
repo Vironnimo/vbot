@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -101,5 +101,25 @@ describe('TabList', () => {
     expect(tabList.classList.contains('tab-list--segmented')).toBe(true);
     expect(tabList.classList.contains('tab-list--compact')).toBe(true);
     expect(tabList.classList.contains('extra')).toBe(true);
+  });
+
+  it('shows only the icon of an icon item and names it by its label', () => {
+    const icon = createRawSnippet(() => ({
+      render: () => '<svg class="test-icon" aria-hidden="true"></svg>',
+    }));
+    const tabList = render({
+      items: [
+        { id: 'list', label: 'List', icon },
+        { id: 'grid', label: 'Grid' },
+      ],
+      value: 'list',
+    });
+    const [iconTab, textTab] = tabList.querySelectorAll('[role="tab"]');
+
+    expect(iconTab.querySelector('.test-icon')).toBeTruthy();
+    expect(iconTab.textContent.trim()).toBe('');
+    expect(iconTab.getAttribute('aria-label')).toBe('List');
+    expect(textTab.textContent.trim()).toBe('Grid');
+    expect(textTab.hasAttribute('aria-label')).toBe(false);
   });
 });

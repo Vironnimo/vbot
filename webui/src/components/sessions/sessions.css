@@ -48,6 +48,13 @@
   white-space: nowrap;
 }
 
+/* The view switch keeps every view at a fixed place; the filter trigger
+   beside it only changes which categories the current view shows. */
+.session-drawer__header .session-drawer__view {
+  flex-shrink: 0;
+  align-self: center;
+}
+
 .session-drawer__filter {
   display: inline-flex;
   align-items: center;
@@ -87,11 +94,6 @@
 
 .session-drawer__filter-trigger--active {
   color: var(--accent);
-}
-
-.session-drawer__all-agents[aria-pressed='true'],
-.session-drawer__by-project[aria-pressed='true'] {
-  background: var(--accent-12);
 }
 
 .session-drawer__icon-button:focus-visible {

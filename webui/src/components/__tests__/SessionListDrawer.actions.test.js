@@ -11,6 +11,7 @@ import {
   rowCount,
   setupSessionListDrawerSuite,
   waitForCondition,
+  viewTab,
 } from './SessionListDrawer.support.js';
 import { t } from '../../lib/i18n.js';
 
@@ -368,7 +369,7 @@ describe('SessionListDrawer row actions', () => {
         agentId: 'alpha',
         currentSessionId: 'session-alpha',
         agents: [{ address: 'alpha' }, { address: 'beta' }],
-        initialFilters: { allAgents: !changeAgent },
+        initialFilters: { view: changeAgent ? 'agent' : 'all' },
         ...callbacks,
       });
       await waitForCondition(() => rowCount() === (changeAgent ? 1 : 2));
@@ -381,9 +382,7 @@ describe('SessionListDrawer row actions', () => {
         props.agentId = displayedAgent;
         props.currentSessionId = `session-${displayedAgent}`;
       } else {
-        document
-          .querySelector(`[aria-label="${t('sessions.filters.allAgents')}"]`)
-          .click();
+        viewTab('agent').click();
       }
       flushSync();
       const firstName = () =>

@@ -6,6 +6,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import TabList from './ui/TabList.svelte';
   import {
     asText,
     autofocusRename,
@@ -348,10 +349,10 @@
 
   // The header names whose Sessions the list shows.
   let headerTitle = $derived(
-    filters.byProject
+    filters.view === 'projects'
       ? t('sessions.projects.title')
-      : filters.allAgents
-        ? t('sessions.filters.allAgents')
+      : filters.view === 'all'
+        ? t('sessions.view.all')
         : rosterAgents.find((entry) => entry.address === asText(agentId))
             ?.name || t('sessions.title'),
   );
@@ -527,61 +528,83 @@
 
 <svelte:window onresize={menus.closeFilterMenu} />
 
+{#snippet agentViewIcon()}
+  <svg
+    viewBox="0 0 20 20"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    aria-hidden="true"
+  >
+    <circle cx="10" cy="6" r="2.5" />
+    <path d="M5 16v-1.5a5 5 0 0 1 10 0V16" />
+  </svg>
+{/snippet}
+
+{#snippet allAgentsViewIcon()}
+  <svg
+    viewBox="0 0 20 20"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    aria-hidden="true"
+  >
+    <circle cx="7" cy="6" r="2.5" />
+    <path
+      d="M2 16v-1.5a5 5 0 0 1 10 0V16M13 3.7a2.5 2.5 0 0 1 0 4.6M15 10a4 4 0 0 1 3 4v2"
+    />
+  </svg>
+{/snippet}
+
+{#snippet projectsViewIcon()}
+  <svg
+    viewBox="0 0 20 20"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path
+      d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2h6.6a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z"
+    />
+  </svg>
+{/snippet}
+
 <aside class="session-drawer" aria-label={t('sessions.title')}>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{headerTitle}</h3>
+    <TabList
+      class="session-drawer__view"
+      appearance="segmented"
+      density="compact"
+      ariaLabel={t('sessions.view.aria')}
+      value={filters.view}
+      onChange={(view) => setFilter('view', view)}
+      items={[
+        {
+          id: 'agent',
+          label: t('sessions.view.agent'),
+          tooltip: t('sessions.view.agentHint'),
+          icon: agentViewIcon,
+        },
+        {
+          id: 'all',
+          label: t('sessions.view.all'),
+          tooltip: t('sessions.view.allHint'),
+          icon: allAgentsViewIcon,
+        },
+        {
+          id: 'projects',
+          label: t('sessions.view.projects'),
+          tooltip: t('sessions.view.projectsHint'),
+          icon: projectsViewIcon,
+        },
+      ]}
+    />
     <div class="session-drawer__filter">
-      <button
-        type="button"
-        class="session-drawer__icon-button session-drawer__by-project"
-        class:session-drawer__filter-trigger--active={filters.byProject}
-        aria-label={t('sessions.projects.toggle')}
-        aria-pressed={filters.byProject}
-        use:tooltip={filters.byProject
-          ? t('sessions.projects.toggleOn')
-          : t('sessions.projects.toggleOff')}
-        onclick={() => setFilter('byProject', !filters.byProject)}
-      >
-        <svg
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path
-            d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2h6.6a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z"
-          />
-        </svg>
-      </button>
-      {#if !filters.byProject}
-        <button
-          type="button"
-          class="session-drawer__icon-button session-drawer__all-agents"
-          class:session-drawer__filter-trigger--active={filters.allAgents}
-          aria-label={t('sessions.filters.allAgents')}
-          aria-pressed={filters.allAgents}
-          use:tooltip={filters.allAgents
-            ? t('sessions.filters.allAgentsOn')
-            : t('sessions.filters.allAgentsOff')}
-          onclick={() => setFilter('allAgents', !filters.allAgents)}
-        >
-          <svg
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <circle cx="7" cy="6" r="2.5" />
-            <path
-              d="M2 16v-1.5a5 5 0 0 1 10 0V16M13 3.7a2.5 2.5 0 0 1 0 4.6M15 10a4 4 0 0 1 3 4v2"
-            />
-          </svg>
-        </button>
-      {/if}
       <button
         type="button"
         class="session-drawer__icon-button session-drawer__filter-trigger"
@@ -649,7 +672,7 @@
     </p>
   {/if}
 
-  {#if filters.byProject}
+  {#if filters.view === 'projects'}
     {#if list.projectState.error}
       <Banner variant="error" class="session-drawer__load-error" role="alert">
         <span>{list.projectState.error}</span>
@@ -707,7 +730,7 @@
       density="compact"
       class="session-drawer__empty-layout"
       title={t('chat.sessions.emptyTitle')}
-      description={filters.allAgents
+      description={filters.view === 'all'
         ? t('sessions.no_sessions_all')
         : t('sessions.no_sessions')}
     />

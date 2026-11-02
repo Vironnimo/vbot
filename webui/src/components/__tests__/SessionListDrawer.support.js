@@ -150,6 +150,16 @@ export function openFilterMenu() {
   return menu;
 }
 
+// Returns the header view switch's tab for one view: `agent`, `all` or
+// `projects`.
+export function viewTab(view) {
+  const tab = document.querySelector(
+    `.session-drawer__view [role="tab"][aria-label="${t(`sessions.view.${view}`)}"]`,
+  );
+  expect(tab, `view tab not found: ${view}`).toBeTruthy();
+  return tab;
+}
+
 // Returns the filter dropdown's switch for one filter key, such as `cron`.
 export function filterSwitch(filter) {
   const label = t(`sessions.filters.${filter}`);

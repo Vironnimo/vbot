@@ -23,16 +23,17 @@ const REFLECTION_RUN_KINDS = [
   'skill_reflection',
 ];
 
-// Category toggles that reveal hidden-by-default sessions. `allAgents` is a
-// scope toggle; it changes which sessions are loaded rather
+// The drawer's view and the category toggles that reveal hidden-by-default
+// sessions. `view` is one of SESSION_LIST_VIEWS: the selected Agent's
+// Sessions, every roster Agent's Sessions, or every Agent's Sessions grouped
+// by the Project they work in. It changes which sessions are loaded rather
 // than how the loaded list is classified, so the view helpers ignore it.
-// `byProject` shows every Agent's Sessions grouped by the Project they work in
-// instead of one Agent's list; `collapsedProjects` names the closed groups by
-// `projectGroupKey`.
+// `collapsedProjects` names the closed by-Project groups by `projectGroupKey`.
+export const SESSION_LIST_VIEWS = ['agent', 'all', 'projects'];
+
 export function createSessionListFilters() {
   return {
-    allAgents: false,
-    byProject: false,
+    view: 'agent',
     collapsedProjects: [],
     channels: false,
     subagents: false,
@@ -413,13 +414,23 @@ function isHiddenCategoryEnabled(session, filters) {
   );
 }
 
+// Filters stored before the view switch carried the two flags it replaced.
+function normalizeView(filters) {
+  if (SESSION_LIST_VIEWS.includes(filters.view)) {
+    return filters.view;
+  }
+  if (filters.byProject === true) {
+    return 'projects';
+  }
+  return filters.allAgents === true ? 'all' : 'agent';
+}
+
 function normalizeFilters(filters) {
   if (!isPlainObject(filters)) {
     return createSessionListFilters();
   }
   return {
-    allAgents: filters.allAgents === true,
-    byProject: filters.byProject === true,
+    view: normalizeView(filters),
     collapsedProjects: [
       ...new Set(
         (Array.isArray(filters.collapsedProjects)

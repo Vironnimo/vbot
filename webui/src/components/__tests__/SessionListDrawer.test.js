@@ -14,6 +14,7 @@ import {
   sessionRowButton,
   setupSessionListDrawerSuite,
   waitForCondition,
+  viewTab,
 } from './SessionListDrawer.support.js';
 import { appendSessionInvalidation } from '../../lib/sessionInvalidation.js';
 import { sessionActivityFromSnapshot } from '../../lib/sessionActivity.js';
@@ -473,19 +474,17 @@ describe('SessionListDrawer list', () => {
       document.querySelector('.session-drawer__title').textContent;
     expect(title()).toBe('Alpha');
 
-    const allAgents = document.querySelector(
-      `button[aria-label="${t('sessions.filters.allAgents')}"]`,
-    );
-    expect(allAgents.getAttribute('aria-pressed')).toBe('false');
-    allAgents.click();
+    expect(viewTab('agent').getAttribute('aria-selected')).toBe('true');
+    viewTab('all').click();
     flushSync();
 
     await waitForCondition(() => rowCount() === 2);
     expect(api.listSessions.mock.calls[1][0]).toEqual(['alpha', 'beta']);
     expect(api.listSessions.mock.calls[1][1]).toMatchObject({ limit: 35 });
-    expect(allAgents.getAttribute('aria-pressed')).toBe('true');
+    expect(viewTab('all').getAttribute('aria-selected')).toBe('true');
+    expect(viewTab('agent').getAttribute('aria-selected')).toBe('false');
     expect(document.querySelector('.session-drawer__filter-count')).toBeNull();
-    expect(title()).toBe(t('sessions.filters.allAgents'));
+    expect(title()).toBe(t('sessions.view.all'));
 
     // Merged rows carry their owning Agent's name, and selecting one passes
     // that Agent's address so ChatView can navigate across Agents.
@@ -525,10 +524,10 @@ describe('SessionListDrawer list', () => {
     expect(api.listSessions.mock.calls[0][1].includeChannels).toBe(false);
 
     openFilterMenu();
-    // All agents is a header toggle, not one of the dropdown filters.
+    // All agents is a header view, not one of the dropdown filters.
     expect(
       document.querySelector(
-        `[role="switch"][aria-label="${t('sessions.filters.allAgents')}"]`,
+        `[role="switch"][aria-label="${t('sessions.view.all')}"]`,
       ),
     ).toBeNull();
     filterSwitch('channels').click();
@@ -818,14 +817,13 @@ describe('SessionListDrawer by Project', () => {
     });
     await waitForCondition(() => api.listSessions.mock.calls.length === 1);
 
-    const toggle = document.querySelector('.session-drawer__by-project');
-    toggle.click();
+    viewTab('projects').click();
     flushSync();
     await waitForCondition(() => groupNames().length === 3);
 
-    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(viewTab('projects').getAttribute('aria-selected')).toBe('true');
     expect(onFiltersChange.mock.calls.at(-1)[0]).toMatchObject({
-      byProject: true,
+      view: 'projects',
     });
     expect(api.listSessionProjectGroups).toHaveBeenCalledWith({
       limit: 5,
@@ -838,8 +836,16 @@ describe('SessionListDrawer by Project', () => {
     expect(document.querySelector('.session-drawer__title').textContent).toBe(
       t('sessions.projects.title'),
     );
-    // The per-Agent "All agents" switch does not apply here.
-    expect(document.querySelector('.session-drawer__all-agents')).toBeNull();
+    // Every view keeps its place in the switch.
+    expect(
+      [...document.querySelectorAll('.session-drawer__view [role="tab"]')].map(
+        (tab) => tab.getAttribute('aria-label'),
+      ),
+    ).toEqual([
+      t('sessions.view.agent'),
+      t('sessions.view.all'),
+      t('sessions.view.projects'),
+    ]);
     expect(groupNames()).toEqual([
       'vBot',
       'Idle',
@@ -957,7 +963,7 @@ describe('SessionListDrawer by Project', () => {
       agents: roster,
       projects: [projects[1], projects[0]],
       projectTeams,
-      initialFilters: { byProject: true },
+      initialFilters: { view: 'projects' },
       onReorderProjects,
     });
     await waitForCondition(() => groupNames().length === 3);
@@ -1009,7 +1015,7 @@ describe('SessionListDrawer by Project', () => {
       agents: roster,
       projects,
       projectTeams,
-      initialFilters: { byProject: true },
+      initialFilters: { view: 'projects' },
       onNewSessionInProject,
     });
     await waitForCondition(() => groupNames().length === 3);

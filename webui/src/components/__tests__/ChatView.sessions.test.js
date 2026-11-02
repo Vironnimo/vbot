@@ -498,7 +498,11 @@ describe('ChatView Sessions', () => {
 
       sessionsButton().click();
       flushSync();
-      document.querySelector('.session-drawer__by-project').click();
+      document
+        .querySelector(
+          `.session-drawer__view [aria-label="${t('sessions.view.projects')}"]`,
+        )
+        .click();
       flushSync();
       const newInVbot = () =>
         document.querySelector(

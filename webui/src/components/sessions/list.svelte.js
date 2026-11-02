@@ -71,13 +71,15 @@ export function createSessionList(context) {
   let observedSelection = '';
   let requiredRequestVersion = 0;
 
-  // The list reloads when the addressed agent changes, when the All-agents
-  // filter changes which addresses are loaded, or when the roster itself
-  // changes while that filter is on.
+  // The list reloads when the addressed agent changes, when the view changes
+  // which addresses are loaded, or when the roster itself changes while the
+  // All agents view is shown.
   let listSourceKey = $derived(
     [
-      context.filters.byProject ? '~projects' : asText(context.agentId),
-      context.filters.allAgents && !context.filters.byProject
+      context.filters.view === 'projects'
+        ? '~projects'
+        : asText(context.agentId),
+      context.filters.view === 'all'
         ? context.rosterAgents.map((entry) => entry.address).join('|')
         : '',
       Number(context.filters.channels),
@@ -95,7 +97,7 @@ export function createSessionList(context) {
 
     loadedListKey = listSourceKey;
 
-    if (!context.filters.byProject && !asText(context.agentId)) {
+    if (context.filters.view !== 'projects' && !asText(context.agentId)) {
       sessionState = createSessionListState();
       return;
     }
@@ -135,7 +137,7 @@ export function createSessionList(context) {
         sessionState = selectSession(sessionState, null);
       }
       if (
-        !context.filters.byProject &&
+        context.filters.view !== 'projects' &&
         !sessionState.loading &&
         agentAddress &&
         selectionKey !== lastRequiredSession
@@ -193,7 +195,7 @@ export function createSessionList(context) {
       lastInvalidationId = lastId;
       // The by-Project view lists every Agent.
       if (
-        context.filters.byProject &&
+        context.filters.view === 'projects' &&
         (overflowed || targets.some((target) => !target.readRunId))
       ) {
         listReloads.schedule();
@@ -201,7 +203,7 @@ export function createSessionList(context) {
       }
       const listedAddresses = [
         asText(context.agentId),
-        ...(context.filters.allAgents
+        ...(context.filters.view === 'all'
           ? context.rosterAgents.map((entry) => entry.address)
           : []),
       ];
@@ -221,7 +223,7 @@ export function createSessionList(context) {
   // Mutations may finish after selection or filters changed. Reload the
   // drawer's current scope, while each mutation keeps its original target.
   const loadSessions = async () => {
-    if (context.filters.byProject) {
+    if (context.filters.view === 'projects') {
       await loadProjectGroups();
       return;
     }
@@ -313,7 +315,7 @@ export function createSessionList(context) {
   // the pages the user has actually reached.
   const loadRawSessions = async (targetAgentId, limit, cursor = null) => {
     const listedAgents =
-      context.filters.allAgents && context.rosterAgents.length > 0
+      context.filters.view === 'all' && context.rosterAgents.length > 0
         ? [
             ...new SvelteSet([
               targetAgentId,
@@ -342,9 +344,10 @@ export function createSessionList(context) {
       return {
         ...session,
         agent_address: owner,
-        agent_name: context.filters.allAgents
-          ? namesByAddress.get(owner) || owner
-          : null,
+        agent_name:
+          context.filters.view === 'all'
+            ? namesByAddress.get(owner) || owner
+            : null,
       };
     });
     return {
@@ -512,7 +515,7 @@ export function createSessionList(context) {
   // own selection.
   const rowSelected = (session) => {
     const owner = session.agent_address || asText(context.agentId);
-    return context.filters.byProject
+    return context.filters.view === 'projects'
       ? session.id === asText(context.currentSessionId) &&
           owner === asText(context.agentId)
       : sessionState.selectedSessionId === session.id &&

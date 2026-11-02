@@ -199,6 +199,18 @@ kbd {
   font-size: var(--fs-label-sm);
 }
 
+.tab-list--segmented .tab-list__tab--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px;
+}
+
+.tab-list__tab--icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .tab-list--segmented .tab-list__tab--active {
   color: var(--text-hi);
   background: var(--surface-3);

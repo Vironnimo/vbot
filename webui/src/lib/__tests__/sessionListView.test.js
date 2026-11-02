@@ -52,6 +52,20 @@ describe('Session filter storage', () => {
     );
   });
 
+  it.each([
+    [{ view: 'projects' }, 'projects'],
+    [{ view: 'everything' }, 'agent'],
+    // Filters stored before the view switch carried two flags.
+    [{ allAgents: true }, 'all'],
+    [{ allAgents: true, byProject: true }, 'projects'],
+  ])('restores the stored view from %j', (stored, view) => {
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(stored) });
+    expect(loadSessionListFilters(0)).toEqual({
+      ...createSessionListFilters(),
+      view,
+    });
+  });
+
   it('keeps filters usable when storage reads or writes fail', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => {

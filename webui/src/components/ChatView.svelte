@@ -404,7 +404,7 @@
 
   const handleNewSession = () => {
     const next =
-      showSessionDrawer && sessionFilters?.byProject
+      showSessionDrawer && sessionFilters?.view === 'projects'
         ? target.projectNewSessionTarget(sessionSettings.view)
         : null;
     return next

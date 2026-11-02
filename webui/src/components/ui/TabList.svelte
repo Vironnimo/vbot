@@ -2,7 +2,11 @@
   // Shared content-tab navigation. It owns both the ARIA tab contract and the
   // keyboard model, while callers keep panel content and active state. The
   // underline appearance serves view/section tabs; segmented serves compact
-  // alternate representations of the same content.
+  // alternate representations of the same content. An item with an `icon`
+  // snippet shows only the icon; its `label` names it to assistive technology
+  // and in its tooltip, which `tooltip` can replace with a longer hint.
+
+  import { tooltip } from '$lib/tooltip.js';
 
   const generatedId = $props.id();
 
@@ -102,16 +106,23 @@
       type="button"
       class="tab-list__tab"
       class:tab-list__tab--active={item.id === value}
+      class:tab-list__tab--icon={Boolean(item.icon)}
       role="tab"
       id={tabId(item)}
       aria-controls={panelId(item)}
       aria-selected={item.id === value}
+      aria-label={item.icon ? item.label : undefined}
+      use:tooltip={item.icon ? item.tooltip || item.label : ''}
       tabindex={item.id === value ? 0 : -1}
       disabled={item.disabled || undefined}
       onclick={() => select(item)}
       onkeydown={handleKeydown}
     >
-      {item.label}
+      {#if item.icon}
+        {@render item.icon()}
+      {:else}
+        {item.label}
+      {/if}
     </button>
   {/each}
 </div>
