@@ -101,6 +101,7 @@ FIRST_SENTENCE_SUMMARY_TOOLS = {"apply_patch", "background_tasks", "edit", "writ
 BUNDLED_SKILLS = [
     "coding-agents",
     "computer-use",
+    "fact-check",
     "free-models",
     "home-assistant",
     "pdf",
