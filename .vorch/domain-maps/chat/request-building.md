@@ -62,6 +62,7 @@ Inline triggers match whole Skill names. PowerShell scoped variables such as
 `$env:LOCALAPPDATA` and `$script:state` are not triggers; a prose mention such as
 `$skill: explanation` still is. Activation and automation reference/rename checks
 share this grammar in `core/skills/skill_validator.py`.
+An unknown name gets a Note (`Skill trigger '<name>' did not match an allowed loadable skill.`) only as the leading `/name`; an unknown `$name` stays silent, since `$5` or `$HOME` in prose names no Skill.
 
 Announcement planning and successful Compaction prompt refresh require `SkillRegistry.filter_allowed`; an empty catalog is a valid empty baseline.
 
