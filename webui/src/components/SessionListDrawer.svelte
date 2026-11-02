@@ -11,6 +11,7 @@
     asText,
     autofocusRename,
     sessionHoverDetails,
+    projectGroupHoverDetails,
     unreadRunDetails,
     sessionActivityDetails,
     sessionActivityLabel,
@@ -329,6 +330,28 @@
         group: 'team',
       })),
     ];
+  };
+
+  // A right click on a registered Project's group header, or the context
+  // menu key on its toggle, offers to edit that Project on the Projects page.
+  const openGroupMenu = (group, event) => {
+    if (event.defaultPrevented || group.projectId === null) {
+      return;
+    }
+    event.preventDefault();
+    menus.closeFilterMenu();
+    rowMenuKey = null;
+    rowMenu = {
+      ...contextMenuAnchor(event),
+      label: t('sessions.projects.actions', { project: group.name }),
+      items: [
+        {
+          id: 'edit-project',
+          label: t('sessions.projects.edit'),
+          onSelect: () => shell?.navigate('projects', [group.projectId]),
+        },
+      ],
+    };
   };
 
   const startNewSessionInGroup = (group, event) => {
@@ -847,12 +870,20 @@
     class="session-group"
     aria-labelledby={`${uid}-group-${group.key || '~other'}`}
   >
-    <div class="session-group__header">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="session-group__header"
+      oncontextmenu={(event) => openGroupMenu(group, event)}
+    >
       <button
         type="button"
         class="session-group__toggle"
         aria-expanded={!collapsed}
         onclick={() => toggleGroup(group.key)}
+        onkeydown={(event) => {
+          if (isContextMenuKey(event)) openGroupMenu(group, event);
+        }}
+        use:tooltip={() => projectGroupHoverDetails(group)}
       >
         <svg
           class="session-group__chevron"
@@ -922,10 +953,7 @@
                 disabled={list.loadingMoreGroupKey !== null}
                 onclick={() => list.loadMoreInGroup(group)}
               >
-                {t('sessions.projects.showMore', {
-                  count: Math.max(group.totalCount - group.sessions.length, 0),
-                  total: group.totalCount,
-                })}
+                {t('sessions.projects.showMore')}
               </button>
             {/if}
             {#if group.sessions.length > PROJECT_GROUP_PAGE_SIZE}

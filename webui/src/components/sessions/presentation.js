@@ -23,6 +23,21 @@ export const autofocusRename = (node) => {
 // parent or fork source leads with its name when the loaded list knows it,
 // otherwise with its Agent, followed by its id. `agents` is the roster
 // ({address, name}) used to name Agents; `sessions` the loaded Session list.
+// A by-Project group's card: its full name and how many Sessions it holds
+// under the current filters, which the "Show more" button leaves out.
+export function projectGroupHoverDetails(group) {
+  return {
+    title: group.name,
+    rows: [
+      {
+        label: t('sessions.projects.sessionCount'),
+        value: String(group.totalCount),
+      },
+    ],
+    placement: 'right',
+  };
+}
+
 export function sessionHoverDetails(
   session,
   { sessions = [], agents = [], nowMs = Date.now() } = {},

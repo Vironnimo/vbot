@@ -906,6 +906,34 @@ describe('SessionListDrawer by Project', () => {
       ...document.getElementById('app-tooltip').querySelectorAll('dt'),
     ].find((term) => term.textContent === t('sessions.details.agent'));
     expect(agentTerm.nextElementSibling.textContent).toBe('Builder');
+    // The group's card counts its Sessions, which "Show more" leaves out.
+    group('vBot').querySelector('.session-group__toggle').focus();
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
+    const countTerm = [
+      ...document.getElementById('app-tooltip').querySelectorAll('dt'),
+    ].find((term) => term.textContent === t('sessions.projects.sessionCount'));
+    expect(countTerm.nextElementSibling.textContent).toBe('12');
+    // A registered Project's header offers to edit it; "Other chats" has no
+    // Project to edit.
+    const rightClick = (name) => {
+      group(name)
+        .querySelector('.session-group__header')
+        .dispatchEvent(
+          new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+        );
+      flushSync();
+    };
+    rightClick('vBot');
+    expect(
+      [...document.querySelectorAll('.context-menu [role="menuitem"]')].map(
+        (item) => item.textContent.trim(),
+      ),
+    ).toEqual([t('sessions.projects.edit')]);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    flushSync();
+    rightClick(t('sessions.projects.other'));
+    expect(document.querySelector('.context-menu')).toBeNull();
     expect(group('Idle').textContent).toContain(t('sessions.projects.empty'));
     expect(
       sessionRowButton('Planning').classList.contains(
@@ -913,9 +941,7 @@ describe('SessionListDrawer by Project', () => {
       ),
     ).toBe(true);
 
-    buttonByText(
-      t('sessions.projects.showMore', { count: 7, total: 12 }),
-    ).click();
+    buttonByText(t('sessions.projects.showMore')).click();
     flushSync();
     await waitForCondition(() => groupRows('vBot').length === 10);
     expect(api.listProjectSessions).toHaveBeenLastCalledWith(
@@ -925,15 +951,11 @@ describe('SessionListDrawer by Project', () => {
     buttonByText(t('sessions.projects.less')).click();
     flushSync();
     expect(groupRows('vBot')).toHaveLength(5);
-    buttonByText(
-      t('sessions.projects.showMore', { count: 7, total: 12 }),
-    ).click();
+    buttonByText(t('sessions.projects.showMore')).click();
     flushSync();
     expect(groupRows('vBot')).toHaveLength(10);
     expect(api.listProjectSessions).toHaveBeenCalledTimes(1);
-    buttonByText(
-      t('sessions.projects.showMore', { count: 2, total: 12 }),
-    ).click();
+    buttonByText(t('sessions.projects.showMore')).click();
     flushSync();
     await waitForCondition(() => groupRows('vBot').length === 12);
     expect(api.listProjectSessions).toHaveBeenLastCalledWith(
@@ -946,9 +968,7 @@ describe('SessionListDrawer by Project', () => {
     buttonByText(t('sessions.projects.less')).click();
     flushSync();
     expect(groupRows('vBot')).toHaveLength(7);
-    expect(
-      buttonByText(t('sessions.projects.showMore', { count: 5, total: 12 })),
-    ).not.toBeNull();
+    expect(buttonByText(t('sessions.projects.showMore'))).not.toBeNull();
     buttonByText(t('sessions.projects.less')).click();
     flushSync();
     expect(groupRows('vBot')).toHaveLength(5);
@@ -956,14 +976,10 @@ describe('SessionListDrawer by Project', () => {
     expect(groupRows(t('sessions.projects.other'))).toEqual(['Chat']);
 
     // Re-expanding uses the cached pages and restores their order.
-    buttonByText(
-      t('sessions.projects.showMore', { count: 7, total: 12 }),
-    ).click();
+    buttonByText(t('sessions.projects.showMore')).click();
     flushSync();
     expect(groupRows('vBot')).toHaveLength(10);
-    buttonByText(
-      t('sessions.projects.showMore', { count: 2, total: 12 }),
-    ).click();
+    buttonByText(t('sessions.projects.showMore')).click();
     flushSync();
     expect(groupRows('vBot')).toEqual([
       'Planning',

@@ -659,7 +659,10 @@ export default Object.freeze({
   'sessions.projects.newSession': 'New session in {project}',
   'sessions.projects.chooseAgent': 'Agent for a new session in {project}',
   'sessions.projects.empty': 'No sessions yet',
-  'sessions.projects.showMore': 'Show more ({count} of {total})',
+  'sessions.projects.showMore': 'Show more',
+  'sessions.projects.sessionCount': 'Sessions',
+  'sessions.projects.actions': 'Actions for {project}',
+  'sessions.projects.edit': 'Edit Project',
   'sessions.projects.less': 'Less',
   'sessions.filters.noneActive':
     'Channel, Subagent, Reflection, and Schedule Sessions are hidden.',
