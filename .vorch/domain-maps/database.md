@@ -42,7 +42,7 @@ How an online data snapshot captures one canonical database: whether its writes 
 A frequent, deduplicated copy of the JSON document set and other configuration files (`database/config-backups.md`). Not a data snapshot: it holds no database, the Runtime takes it while it runs, and it restores per file.
 
 ### Update snapshot
-The data snapshot an updater takes offline for one update operation: the only snapshot vBot restores as a whole without an operator, and only after that operation's candidate failed its verification start (`database/snapshots-and-recovery.md` -> Update rollback). Not an operator's data snapshot.
+The data snapshot secured offline for an update: the only snapshot vBot restores as a whole without an operator, and only after that operation's candidate failed its verification start (`database/snapshots-and-recovery.md` -> Update rollback). Not an operator's data snapshot.
 
 ## Evolution contract (Generation 1)
 

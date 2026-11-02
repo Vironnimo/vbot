@@ -31,6 +31,7 @@ from core.database import (
     snapshot_root,
     unregister_database,
 )
+from core.database import snapshots as snapshots_module
 from core.database import update_rollback as rollback_module
 from core.database.recovery import quarantine_root
 from core.database.update_rollback import UPDATE_ROLLBACK_CAUSE
@@ -38,6 +39,7 @@ from tests.core.database.database_test_support import (
     add_note,
     manifest_payload,
     notes_spec,
+    raw_execute,
     rewrite_marker,
     stored_bodies,
     write_document,
@@ -105,6 +107,121 @@ def test_an_update_snapshot_is_needed_exactly_when_databases_exist(
     (unmarked / "sessions.db").write_bytes(b"")
     with pytest.raises(DatabaseFormatError, match="without a current-format"):
         create_update_snapshot(unmarked, operation_id="upd_1")
+
+
+def test_unchanged_updates_share_a_verified_checkpoint_and_keep_their_own_rollback(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _snapshot(data_dir)
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            snapshots_module, "copy_database_file", lambda *_a, **_kw: pytest.fail("must reuse")
+        )
+        # Different timestamps, or empty SQLite journals, do not change content.
+        os.utime(notes_spec(data_dir).path, ns=(1, 1))
+        Path(f"{notes_spec(data_dir).path}-wal").write_bytes(b"")
+        for operation in ("upd_2", "upd_3"):
+            shared = create_update_snapshot(data_dir, operation_id=operation)
+            assert shared is not None and shared.snapshot_id == first.snapshot_id
+            assert shared.operation_id == operation
+            assert find_update_snapshot(data_dir, operation) == first.snapshot_id
+    # Every update keeps its claim even when a previous update releases its own.
+    snapshots_module.release_snapshot_retention(data_dir, "upd_1")
+    for _ in range(6):
+        assert create_data_snapshot(data_dir, reason="operator") is not None
+    assert find_update_snapshot(data_dir, "upd_3") == first.snapshot_id
+    _candidate_writes(data_dir)
+    assert shared is not None
+    restore_update_snapshot(data_dir, shared)
+    assert stored_bodies(notes_spec(data_dir)) == ["saved notes"]
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
+
+
+@pytest.mark.parametrize(
+    "change", ["document", "document-set", "permissions", "database", "schema", "registration"]
+)
+def test_changed_data_never_reuses_an_older_update_checkpoint(data_dir: Path, change: str) -> None:
+    first = _snapshot(data_dir)
+    path = notes_spec(data_dir).path
+    before = path.stat()
+    if change == "document":
+        path = data_dir / "settings.json"
+        before = path.stat()
+        write_document(data_dir, "settings.json", _SETTINGS.replace("dark", "lite"))
+    elif change == "document-set":
+        (data_dir / "agents/main/agent.json").unlink()
+    elif change == "permissions":
+        (data_dir / "settings.json").chmod(0o400)
+    elif change == "database":
+        # Same-length row, same file size and restored mtime must still differ.
+        raw_execute(path, "UPDATE notes SET body = 'other notes'")
+    elif change == "schema":
+        raw_execute(path, "ALTER TABLE notes ADD COLUMN extra TEXT")
+    else:
+        open_database(notes_spec(data_dir, name="journal")).close()
+    if change in {"document", "database"}:
+        assert path.stat().st_size == before.st_size
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    second = create_update_snapshot(data_dir, operation_id="upd_2")
+    assert second is not None and second.snapshot_id != first.snapshot_id
+    assert data_changed_since(data_dir, second) is None
+
+
+@pytest.mark.parametrize("unusable", ["old-manifest", "database", "document", "missing"])
+def test_an_unusable_reuse_candidate_is_replaced(data_dir: Path, unusable: str) -> None:
+    first = _snapshot(data_dir)
+    directory = snapshot_root(data_dir) / first.snapshot_id
+    if unusable == "old-manifest":
+        import json
+
+        manifest = manifest_payload(directory)
+        del manifest["source_fingerprint"]
+        (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        path = directory / ("documents/settings.json" if unusable == "document" else "notes.db")
+        if unusable == "missing":
+            path.unlink()
+        else:
+            contents = bytearray(path.read_bytes())
+            contents[-2] ^= 0xFF
+            path.write_bytes(contents)
+    second = create_update_snapshot(data_dir, operation_id="upd_2")
+    assert second is not None and second.snapshot_id != first.snapshot_id
+
+
+def test_reuse_never_leaves_a_newer_different_snapshot_as_the_recovery_candidate(
+    data_dir: Path,
+) -> None:
+    first = _snapshot(data_dir)
+    write_document(data_dir, "settings.json", _SETTINGS.replace("dark", "lite"))
+    second = create_update_snapshot(data_dir, operation_id="upd_2")
+    assert second is not None and second.snapshot_id != first.snapshot_id
+    write_document(data_dir, "settings.json", _SETTINGS)
+    current = create_update_snapshot(data_dir, operation_id="upd_3")
+    assert current is not None
+    assert current.snapshot_id not in {first.snapshot_id, second.snapshot_id}
+    assert snapshots_module.snapshot_inventory(data_dir)[0]["snapshot_id"] == current.snapshot_id
+
+
+@pytest.mark.parametrize("stage", ["reuse", "capture"])
+def test_a_change_during_snapshot_preparation_cannot_publish_or_adopt_the_checkpoint(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    _snapshot(data_dir)
+    if stage == "capture":
+        write_document(data_dir, "settings.json", _SETTINGS.replace("dark", "lite"))
+    name = "read_verified_manifest" if stage == "reuse" else "copy_database_file"
+    real_prepare = getattr(snapshots_module, name)
+
+    def prepare(*args, **kwargs):
+        result = real_prepare(*args, **kwargs)
+        write_document(data_dir, "settings.json", _SETTINGS.replace("dark", "snow"))
+        return result
+
+    monkeypatch.setattr(snapshots_module, name, prepare)
+    with pytest.raises(DatabaseUnavailableError):
+        create_update_snapshot(data_dir, operation_id="upd_2")
+    assert find_update_snapshot(data_dir, "upd_2") is None
 
 
 def test_an_update_snapshot_that_cannot_be_captured_refuses_the_update(data_dir: Path) -> None:

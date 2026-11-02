@@ -49,6 +49,12 @@ def retained_snapshot_ids(data_dir: Path) -> set[str]:
     return set(_read(data_dir)["owners"].values())
 
 
+def retained_snapshot_id(data_dir: Path, owner: str) -> str | None:
+    """The snapshot bound to one owner; the caller holds the operation lock."""
+    snapshot = _read(data_dir)["owners"].get(owner)
+    return str(snapshot) if snapshot is not None else None
+
+
 def retain_snapshot_locked(data_dir: Path, owner: str, snapshot_id: str) -> None:
     """Claim a verified, published snapshot before capture's lock is released."""
     if not is_safe_id(owner) or _SNAPSHOT_ID_PATTERN.fullmatch(snapshot_id) is None:
