@@ -149,13 +149,21 @@ describe('Session client state', () => {
           cmd_lingering: 'completed',
         },
         backgroundCommandsStillRunning: ['cmd_lingering'],
+        backgroundCommandProcesses: {
+          cmd_lingering: { processes: ['vctip.exe (pid 42)'], observed_at: 2 },
+        },
       },
     );
 
     expect(sessionState.backgroundCommandStatuses).toEqual({
-      cmd_running: { status: 'running', stillRunning: false },
-      cmd_finished: { status: 'completed', stillRunning: false },
-      cmd_lingering: { status: 'completed', stillRunning: true },
+      cmd_running: { status: 'running', stillRunning: false, processes: [] },
+      cmd_finished: { status: 'completed', stillRunning: false, processes: [] },
+      cmd_lingering: {
+        status: 'completed',
+        stillRunning: true,
+        processes: ['vctip.exe (pid 42)'],
+        processesObservedAt: 2,
+      },
     });
     expect(sessionState.messages).toHaveLength(2);
   });

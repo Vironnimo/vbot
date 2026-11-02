@@ -163,6 +163,17 @@ function nextBackgroundCommandStatuses(known, options) {
       };
     }
   }
+  if (isRecord(options.backgroundCommandProcesses)) {
+    for (const [commandId, entry] of Object.entries(entries)) {
+      entries[commandId] = {
+        ...entry,
+        processes:
+          options.backgroundCommandProcesses[commandId]?.processes ?? [],
+        processesObservedAt:
+          options.backgroundCommandProcesses[commandId]?.observed_at,
+      };
+    }
+  }
   return entries;
 }
 

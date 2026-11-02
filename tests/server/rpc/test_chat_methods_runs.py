@@ -330,6 +330,10 @@ async def test_stop_command_stops_a_background_command_for_the_user(tmp_path: Pa
         shell.exit(0, leftovers=[RunningProcess(20_001, "node")])
         await commands.advance(3.25)
         delivered = list(commands.sink.bodies)
+        output = await call(
+            state, "chat.command_output", session_id=OWNER.session_id, command_id=lingering
+        )
+        assert output["result"]["processes"] == ["node (pid 20001)"]
 
         async def stop(command_id: str) -> JsonObject:
             return await call(

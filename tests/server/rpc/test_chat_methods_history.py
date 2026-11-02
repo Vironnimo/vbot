@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import get_ident
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import ANY
 
 import pytest
 
@@ -25,6 +26,7 @@ from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
 from core.subagents import SubAgentState
 from core.subagents.links import link_session
+from core.tools.process_tree import RunningProcess
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
 from server.rpc import _chat_reads as chat_reads
@@ -72,7 +74,11 @@ class _Commands:
         self.reports: dict[str, SimpleNamespace] = {}
 
     def add(
-        self, command_id: str, status: str, *still_running: str, session_id: str = "session-one"
+        self,
+        command_id: str,
+        status: str,
+        *still_running: RunningProcess,
+        session_id: str = "session-one",
     ) -> None:
         owner = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
         self.reports[command_id] = SimpleNamespace(
@@ -539,7 +545,7 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     # cmd_one exited, its result not yet delivered, and a server it started
     # still runs; cmd_new was handed off in a Tool batch that still runs, so no
     # record names it yet; vBot restarted since cmd_gone ran.
-    commands.add("cmd_one", "completed", "node (pid 7)")
+    commands.add("cmd_one", "completed", RunningProcess(7, "node"))
     commands.add("cmd_new", "running")
     commands.add("cmd_source", "running", session_id="session-source")
     # Its Sub-Agent and that one's own Sub-Agents run commands too; the user took
@@ -565,7 +571,9 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
         lambda metadata: metadata.__setitem__(SUBAGENT_REPLY_TARGET_META_KEY, "user"),
     )
     commands.add("cmd_child", "running", session_id="session-child")
-    commands.add("cmd_grandchild", "failed", "vite (pid 9)", session_id="session-grandchild")
+    commands.add(
+        "cmd_grandchild", "failed", RunningProcess(9, "vite"), session_id="session-grandchild"
+    )
     commands.add("cmd_grandchild_done", "completed", session_id="session-grandchild")
     commands.add("cmd_taken", "running", session_id="session-taken")
     commands.add("cmd_below_taken", "running", session_id="session-below-taken")
@@ -580,6 +588,9 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
         "cmd_new": "running",
     }
     assert first["background_commands_still_running"] == ["cmd_one"]
+    assert first["background_command_processes"] == {
+        "cmd_one": {"processes": ["node (pid 7)"], "observed_at": ANY}
+    }
     assert all(message["role"] != "note" for message in first["messages"])
     assert walks
     # The commands its Sub-Agents still run, at every depth, each under the
@@ -1000,6 +1011,7 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
         "has_more": False,
         "background_command_statuses": {},
         "background_commands_still_running": [],
+        "background_command_processes": {},
         "subagent_background_commands": [],
     }
 

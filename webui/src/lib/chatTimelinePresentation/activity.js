@@ -539,6 +539,16 @@ function commandState(value) {
     stillRunning:
       COMMAND_PROGRESS[status] === COMMAND_ENDED_WITH_STATUS &&
       value.stillRunning === true,
+    ...(Array.isArray(value.processes)
+      ? {
+          processes: [
+            ...new Set(value.processes.map(trimmedString).filter(Boolean)),
+          ],
+          processesObservedAt: Number.isFinite(value.processesObservedAt)
+            ? value.processesObservedAt
+            : 0,
+        }
+      : {}),
   };
 }
 
@@ -558,9 +568,22 @@ export function laterCommandState(left, right) {
   if (progress !== 0) {
     return progress > 0 ? leftState : rightState;
   }
+  const processState = !leftState.processes
+    ? rightState
+    : !rightState.processes
+      ? leftState
+      : leftState.processesObservedAt > rightState.processesObservedAt
+        ? leftState
+        : rightState;
   return {
     status: leftState.status,
     stillRunning: leftState.stillRunning && rightState.stillRunning,
+    ...(processState.processes
+      ? {
+          processes: processState.processes,
+          processesObservedAt: processState.processesObservedAt,
+        }
+      : {}),
   };
 }
 
@@ -610,11 +633,12 @@ function callEndState(data) {
 // from the live statuses (`command_status_changed` and the replies of stop
 // and output reads) and the durable ones from History, whichever got further,
 // so the dot and the time label follow the command. Processes still running
-// show as `dotStatus` `running` with `stillRunning`; a handed-off command
+// keep `dotStatus` `running` for Activity and stop availability, while
+// `outcomeDotStatus` preserves the timeline outcome; a handed-off command
 // with no status has ended (`dotStatus` `ended`). Returns null for every
 // other Tool row, and in a view that follows no command statuses (both maps
 // null, such as the Swarm page's Activity): there the row stays a plain Tool
-// row. Both maps hold `{ status, stillRunning }` by command id.
+// row. Both maps hold `{ status, stillRunning, processes? }` by command id.
 export const backgroundCommandRowState = (
   tool,
   backgroundCommandStatuses = {},
@@ -651,7 +675,9 @@ export const backgroundCommandRowState = (
     dotStatus: state.stillRunning
       ? 'running'
       : COMMAND_DOT_STATUSES[state.status],
+    outcomeDotStatus: COMMAND_DOT_STATUSES[state.status],
     stillRunning: state.stillRunning,
+    processes: state.stillRunning ? (state.processes ?? []) : [],
     callEnded: Boolean(callEnd),
   };
 };
@@ -682,7 +708,7 @@ export const backgroundCommandStatusDetails = (
   if (!isPlainObject(rowState)) {
     return null;
   }
-  const running = rowState.dotStatus === 'running';
+  const running = rowState.dotStatus === 'running' && !rowState.stillRunning;
   const startedAt = toolStartedTimestamp(tool);
   const rows = running
     ? executionDetailRows({
@@ -699,9 +725,16 @@ export const backgroundCommandStatusDetails = (
     value: rowState.commandId,
     mono: true,
   });
+  if (rowState.stillRunning && rowState.processes.length) {
+    rows.push({
+      label: t('chat.toolState.stillRunning'),
+      value: rowState.processes.join(', '),
+      mono: true,
+    });
+  }
   return {
     title: rowState.stillRunning
-      ? t('chat.toolState.stillRunning')
+      ? executionStateTitle(rowState.outcomeDotStatus)
       : running
         ? t('chat.toolState.background')
         : executionStateTitle(rowState.dotStatus),
@@ -718,9 +751,9 @@ export const backgroundCommandStatusDetails = (
 
 // Status label for a background command row. While the command runs the label
 // ticks from the Tool call's own start timestamp (the command starts with the
-// call, and this internal timing never reaches the Model); processes left
-// running after the shell exited say so instead. A call that ran to its end
-// shows its own label once nothing of it runs. A handed-off command that was
+// call, and this internal timing never reaches the Model); after the shell
+// exited it combines the outcome with the count of remaining processes.
+// A call that ran to its end shows its own label once nothing of it runs. A handed-off command that was
 // stopped reads as cancelled; otherwise the label stays empty, since the
 // command's runtime is unknown and the call's own duration would mislead.
 export const backgroundCommandToolStatusLabel = (
@@ -732,7 +765,20 @@ export const backgroundCommandToolStatusLabel = (
     return '';
   }
   if (rowState.stillRunning) {
-    return t('chat.toolStillRunning');
+    const data = parseJsonValue(tool.result)?.data;
+    const status = executionStateTitle(rowState.outcomeDotStatus);
+    const outcome =
+      data?.status === 'exited' && Number.isFinite(data.exit_code)
+        ? t('chat.commandOutcomeWithCode', { status, code: data.exit_code })
+        : status;
+    const count = rowState.processes.length;
+    const processes =
+      count === 1
+        ? t('chat.toolStillRunningOne')
+        : count > 1
+          ? t('chat.toolStillRunningCount', { count })
+          : t('chat.toolStillRunning');
+    return t('chat.commandWithProcesses', { outcome, processes });
   }
   if (rowState.dotStatus === 'running') {
     return formatDurationMs(

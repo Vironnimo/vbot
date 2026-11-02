@@ -1133,7 +1133,9 @@ describe('ChatActivityPanel', () => {
     );
     expect(
       lingeringRow.querySelector('.chat-activity__task-time').textContent,
-    ).toBe(`· ${t('chat.toolStillRunning')}`);
+    ).toBe(
+      `· ${t('chat.commandWithProcesses', { outcome: t('chat.commandOutcomeWithCode', { status: t('chat.toolState.success'), code: 0 }), processes: t('chat.toolStillRunning') })}`,
+    );
     expect(
       [...document.querySelectorAll('[data-cancel-kind="command"]')].map(
         (button) => button.closest('.chat-activity__task-row'),

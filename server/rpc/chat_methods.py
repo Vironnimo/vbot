@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from time import monotonic
 from typing import Any
 
 from core.chat import AccessorChatSubmission, ChatLoop, ChatMessage, CommandDispatcher, ReplySurface
@@ -487,6 +488,8 @@ def _command_output_chat(state: Any, params: JsonObject) -> JsonObject:
     return {
         "status": report.status,
         "still_running": bool(report.still_running),
+        "processes": [f"{process.name} (pid {process.pid})" for process in report.still_running],
+        "processes_observed_at": monotonic(),
         "output": output,
     }
 

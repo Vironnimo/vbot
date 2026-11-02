@@ -703,12 +703,12 @@ class CommandRecord:
     def _follow_leftovers(self, facts: ProcessTreeFacts) -> None:
         """After the end: keep the processes still running current.
 
-        Listeners hear when one of them ended, so a view of what still runs
+        Listeners hear when one ended or started a child, so a view of what still runs
         follows; the command's status stays as it ended.
         """
         before = {process.pid for process in self._facts.running} if self._facts else set()
         self._facts = facts
-        if before - {process.pid for process in facts.running}:
+        if before != {process.pid for process in facts.running}:
             self._changed()
 
     def _record_end(self, facts: ProcessTreeFacts | None) -> None:

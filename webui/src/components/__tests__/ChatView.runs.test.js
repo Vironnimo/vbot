@@ -332,6 +332,70 @@ describe('ChatView Runs', () => {
       ]);
     });
 
+    it('stops leftover processes from a finished Tool row without cancelling its Run', async () => {
+      const fallback = createChatRpcMock({
+        streamResponse: runningRun('run-bash'),
+      });
+      rpcMock.mockImplementation(async (method, params) =>
+        method === 'chat.stop_command'
+          ? { status: 'failed', stopped: true }
+          : fallback(method, params),
+      );
+      const props = reactiveProps({
+        ...alphaProps(),
+        commandStatuses: {
+          cmd_test: {
+            status: 'failed',
+            stillRunning: true,
+            processes: ['vctip.exe (pid 42)'],
+            sessionId: 'session-1',
+          },
+        },
+      });
+      await chat.mountChat(props, { ready: null });
+      const source = await startRun('run-bash', 'Run a failing command');
+      source.emit('timeline_update', {
+        run: { id: 'assistant-run-run-bash' },
+        children: [
+          toolItem({
+            id: 'call-bash',
+            name: 'bash',
+            status: 'success',
+            arguments: { command: 'cargo test' },
+            result: {
+              ok: true,
+              data: {
+                status: 'exited',
+                exit_code: 101,
+                command_id: 'cmd_test',
+              },
+            },
+          }),
+        ],
+      });
+      await waitForCondition(() =>
+        Boolean(document.querySelector('[data-cancel="command"]')),
+      );
+      expect(
+        document.querySelector('.tool-event-line .te-dot.error'),
+      ).not.toBeNull();
+      document.querySelector('[data-cancel="command"]').click();
+      await waitForCondition(
+        () => document.querySelector('[data-cancel="command"]') === null,
+      );
+      expect(rpcCalls('chat.stop_command')).toEqual([
+        { session_id: 'session-1', command_id: 'cmd_test' },
+      ]);
+      expect(rpcCalls('chat.cancel_tool_call')).toEqual([]);
+      expect(cancelRunMock).not.toHaveBeenCalled();
+      expect(
+        document.querySelector('.tool-event-line .te-dot.error'),
+      ).not.toBeNull();
+      expect(
+        document.querySelector('.tool-event-line .te-time')?.textContent ?? '',
+      ).not.toContain(t('chat.toolStillRunningOne'));
+    });
+
     it('coalesces repeated run stream errors into one reconnect', async () => {
       const activeRuns = {};
       rpcMock.mockImplementation(

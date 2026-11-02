@@ -859,6 +859,7 @@
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}
+            onStopBackgroundCommand={actions.handleStopBackgroundCommand}
             onBackgroundToolCall={({ runId, toolCallId }) =>
               chatController.controlRun(
                 target.activeSessionState,

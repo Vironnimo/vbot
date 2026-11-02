@@ -67,6 +67,7 @@
     // the link's `{ agentId, sessionId }` target); null offers no link menu.
     otherArea = null,
     onCancelToolCall = () => {},
+    onStopBackgroundCommand = null,
     onBackgroundToolCall = () => {},
     onCancelSubAgent = () => {},
     // Why User messages cannot be edited right now; '' allows editing.
@@ -647,6 +648,7 @@
         {onNavigateToSubAgent}
         onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
         {onCancelToolCall}
+        {onStopBackgroundCommand}
         {onBackgroundToolCall}
         loadToolCall={onLoadToolCall}
         backgroundToolCallIds={currentRun?.runId === item.runId &&

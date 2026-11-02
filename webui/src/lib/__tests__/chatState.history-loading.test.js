@@ -170,6 +170,9 @@ describe('History reads', () => {
         compaction_policy: policy,
         background_command_statuses: { cmd_one: 'completed' },
         background_commands_still_running: ['cmd_one'],
+        background_command_processes: {
+          cmd_one: { processes: ['node (pid 7)'], observed_at: 2 },
+        },
         reflection_runs: [],
       })
       .mockResolvedValueOnce({
@@ -211,7 +214,12 @@ describe('History reads', () => {
     expect(source.contextUsage).toEqual({ used_tokens: 5 });
     expect(source.compactionPolicy).toBe(policy);
     expect(source.backgroundCommandStatuses).toEqual({
-      cmd_one: { status: 'completed', stillRunning: true },
+      cmd_one: {
+        status: 'completed',
+        stillRunning: true,
+        processes: ['node (pid 7)'],
+        processesObservedAt: 2,
+      },
     });
 
     // A policy refreshed from another window while History is in flight must

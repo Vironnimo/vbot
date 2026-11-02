@@ -371,6 +371,12 @@ export function createAppController({
             [commandId]: {
               status,
               stillRunning: event.payload.still_running === true,
+              ...(Array.isArray(event.payload.processes)
+                ? {
+                    processes: event.payload.processes,
+                    processesObservedAt: event.payload.processes_observed_at,
+                  }
+                : {}),
               sessionId,
             },
           },

@@ -530,7 +530,7 @@ export function stopCommand(sessionId, commandId, options = {}) {
 }
 
 // Reads a background command's status and its newest output lines as plain
-// text: `{ status, still_running, output }`; `still_running` is true while
+// text: `{ status, still_running, processes, output }`; `still_running` is true while
 // processes it started still run after its shell exited.
 export function loadCommandOutput(sessionId, commandId, options = {}) {
   requireNonEmptyString(

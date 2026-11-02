@@ -119,6 +119,72 @@ describe('ChatAssistantRun', () => {
       expect(document.querySelector('.row-cancel')).toBeNull();
     });
 
+    it.each([
+      ['running', { status: 'running' }, { status: 'running' }],
+      [
+        'failed with leftover processes',
+        { status: 'exited', exit_code: 101 },
+        {
+          status: 'failed',
+          stillRunning: true,
+          processes: ['vctip.exe (pid 42)'],
+        },
+      ],
+    ])(
+      'stops a command that is %s by command id',
+      async (_case, data, state) => {
+        let finish;
+        const onStopBackgroundCommand = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        );
+        const onCancelToolCall = vi.fn();
+        const child = toolChild(
+          'bash',
+          { command: 'cargo test' },
+          {
+            status: 'success',
+            result: {
+              ok: true,
+              data: { command_id: 'cmd_test', ...data },
+              artifacts: [],
+            },
+          },
+        );
+        run.mount({
+          item: assistantRun({ status: 'completed', items: [child] }),
+          commandStatuses: { cmd_test: state },
+          onStopBackgroundCommand,
+          onCancelToolCall,
+        });
+        const button = rowCancel('command');
+        const disclosure = button.closest('details');
+        const wasOpen = disclosure.open;
+        if (state.stillRunning) {
+          expect(toolDot().classList.contains('error')).toBe(true);
+          expect(document.querySelector('.te-time').textContent).toContain(
+            '101',
+          );
+        }
+        button.click();
+        flushSync();
+        expect(disclosure.open).toBe(wasOpen);
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+        button.click();
+        expect(onStopBackgroundCommand).toHaveBeenCalledTimes(1);
+        expect(onStopBackgroundCommand).toHaveBeenCalledWith({
+          commandId: 'cmd_test',
+        });
+        expect(onCancelToolCall).not.toHaveBeenCalled();
+        finish();
+        await flushAsync();
+        expect(button.disabled).toBe(false);
+      },
+    );
+
     function backgroundButton() {
       return document.querySelector(
         `[aria-label="${t('chat.moveToBackground')}"]`,
@@ -946,11 +1012,18 @@ describe('ChatAssistantRun', () => {
         () => '1.0s',
       ],
       [
-        'keeps a call whose processes still run running, saying so',
+        'shows the outcome of a call whose processes still run',
         lingering,
         { commandStatuses: { cmd_one: state('completed', true) } },
-        ['running', 'done'],
-        () => t('chat.toolStillRunning'),
+        ['done', 'running'],
+        () =>
+          t('chat.commandWithProcesses', {
+            outcome: t('chat.commandOutcomeWithCode', {
+              status: t('chat.toolState.success'),
+              code: 0,
+            }),
+            processes: t('chat.toolStillRunning'),
+          }),
       ],
       [
         'settles a call once its processes ended, with its own duration',

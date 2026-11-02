@@ -188,7 +188,14 @@ def _publish_provider_auth_completed_event(
 
 
 def publish_command_status_changed(
-    state: Any, command_id: str, *, session_id: str, status: str, still_running: bool
+    state: Any,
+    command_id: str,
+    *,
+    session_id: str,
+    status: str,
+    still_running: bool,
+    processes: list[str],
+    processes_observed_at: float,
 ) -> None:
     """Forward the new state of a background shell command to accessors.
 
@@ -198,7 +205,8 @@ def publish_command_status_changed(
     ``stopped``, as in the ``background_command_statuses`` of ``chat.history``.
     ``still_running`` is true while processes the command started still run
     after its shell exited (``background_commands_still_running`` there); the
-    user can stop them with ``chat.stop_command``.
+    user can stop them with ``chat.stop_command``. ``processes`` names each
+    remaining process and its pid, including when only part of that list ended.
     """
     state.event_bus.publish(
         COMMAND_STATUS_CHANGED_EVENT,
@@ -207,6 +215,8 @@ def publish_command_status_changed(
             "session_id": session_id,
             "status": status,
             "still_running": still_running,
+            "processes": processes,
+            "processes_observed_at": processes_observed_at,
         },
     )
 

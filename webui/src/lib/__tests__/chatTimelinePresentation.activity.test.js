@@ -754,6 +754,8 @@ describe('background command rows', () => {
         fullCommand: 'npm run dev',
         description: '',
         dotStatus,
+        outcomeDotStatus: stillRunning ? 'success' : dotStatus,
+        processes: [],
         stillRunning,
         callEnded: false,
       });
@@ -785,6 +787,53 @@ describe('background command rows', () => {
     expect(dot({}, { cmd_one: state('ended') })).toBe('ended');
     // A view that follows no commands keeps a plain Tool row.
     expect(backgroundCommandRowState(tool, null, null)).toBeNull();
+    // A delayed snapshot cannot resurrect one of the leftover processes.
+    const shrinking = backgroundCommandRowState(
+      tool,
+      {
+        cmd_one: {
+          ...state('completed', true),
+          processes: ['node (pid 7)', 'vite (pid 9)'],
+          processesObservedAt: 1,
+        },
+      },
+      {
+        cmd_one: {
+          ...state('completed', true),
+          processes: ['node (pid 7)'],
+          processesObservedAt: 2,
+        },
+      },
+    );
+    expect(shrinking.processes).toEqual(['node (pid 7)']);
+    // A remaining process can start new children; the newer observation wins
+    // regardless of whether History or a live event carries it.
+    const growing = backgroundCommandRowState(
+      tool,
+      {
+        cmd_one: {
+          ...state('completed', true),
+          processes: ['node (pid 7)', 'helper (pid 10)'],
+          processesObservedAt: 3,
+        },
+      },
+      {
+        cmd_one: {
+          ...state('completed', true),
+          processes: ['node (pid 7)'],
+          processesObservedAt: 2,
+        },
+      },
+    );
+    expect(growing.processes).toEqual(['node (pid 7)', 'helper (pid 10)']);
+
+    expect(backgroundCommandStatusDetails(tool, shrinking).rows).toContainEqual(
+      {
+        label: t('chat.toolState.stillRunning'),
+        value: 'node (pid 7)',
+        mono: true,
+      },
+    );
     expect(
       backgroundCommandRowState(
         foregroundBash(),
@@ -834,7 +883,14 @@ describe('background command rows', () => {
       'says so while processes it started still run',
       lingeringBash(),
       state('completed', true),
-      () => t('chat.toolStillRunning'),
+      () =>
+        t('chat.commandWithProcesses', {
+          outcome: t('chat.commandOutcomeWithCode', {
+            status: t('chat.toolState.success'),
+            code: 0,
+          }),
+          processes: t('chat.toolStillRunning'),
+        }),
     ],
     [
       "shows a call's own duration once its processes ended",
@@ -873,14 +929,18 @@ describe('background command rows', () => {
       lingeringBash(),
       state('completed', true),
       (moment) => ({
-        title: t('chat.toolState.stillRunning'),
+        title: t('chat.toolState.success'),
         text: t('chat.toolState.stillRunningHint'),
         rows: [
           {
             label: t('chat.details.started'),
             value: moment(timing.started_at),
           },
-          { label: t('chat.details.runningFor'), value: minutesSeconds(30, 0) },
+          {
+            label: t('chat.details.finished'),
+            value: moment(timing.completed_at),
+          },
+          { label: t('chat.details.duration'), value: '1.0s' },
           commandIdRow('cmd_one'),
         ],
       }),
