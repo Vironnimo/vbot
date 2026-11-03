@@ -20,6 +20,9 @@ export const statusLabel = (status) => {
   if (status === 'ended') {
     return t('chat.activity.status.ended');
   }
+  if (status === 'idle') {
+    return t('chat.activity.status.idle');
+  }
   return t('chat.activity.status.unknown');
 };
 

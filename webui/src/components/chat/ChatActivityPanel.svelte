@@ -100,6 +100,7 @@
       commandStatuses,
       subAgentCommands,
       nowMs,
+      subAgentTree,
     ),
   );
   // Running work first, then finished work; each entry names its kind.

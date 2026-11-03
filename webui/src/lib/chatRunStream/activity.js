@@ -48,6 +48,9 @@ export function createRunActivityProjection({
       }
       if (statusAddress && event.session_id) {
         updates[`session:${statusAddress}::${event.session_id}`] = status;
+        if (event.run_id)
+          updates[`sessionRun:${statusAddress}::${event.session_id}`] =
+            event.run_id;
       }
 
       // A reused child session must not surface the previous run's last tool
@@ -215,6 +218,8 @@ export function createRunActivityProjection({
       if (address && activeRun.session_id) {
         subAgentUpdates[`session:${address}::${activeRun.session_id}`] =
           'running';
+        subAgentUpdates[`sessionRun:${address}::${activeRun.session_id}`] =
+          activeRun.run_id;
         if (activeRun.started_at) {
           subAgentUpdates[
             `sessionStarted:${address}::${activeRun.session_id}`

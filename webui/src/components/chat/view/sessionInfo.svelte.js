@@ -149,6 +149,7 @@ export function createSessionInfo(context) {
     const { agentAddress, sessionId } = job;
     const current = () => job.sessionKey === infoSessionKey;
     const controller = context.chatController;
+    const previousStatuses = context.subAgentStatuses;
     await Promise.all([
       controller
         .getSessionChangeStats(agentAddress, sessionId, {
@@ -179,6 +180,7 @@ export function createSessionInfo(context) {
         .then((result) => {
           if (current() && Array.isArray(result?.subagents)) {
             subAgents = result.subagents;
+            controller.reconcileSubAgentTree(subAgents, previousStatuses);
           }
         })
         .catch(() => {}),

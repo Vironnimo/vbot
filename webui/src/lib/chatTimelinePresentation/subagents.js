@@ -178,6 +178,7 @@ function subAgentStatusScope(tool, statuses) {
   if (
     session &&
     TERMINAL_CHILD_STATUSES.has(own) &&
+    statuses[`sessionRun:${session}`] !== runId &&
     trimmedString(statuses[`session:${session}`]).toLowerCase() === 'running'
   ) {
     return { runId: '', session };
@@ -239,28 +240,59 @@ export const subAgentToolStatusLabel = (
   subAgentStatuses = {},
   nowMs = Date.now(),
 ) => {
+  return subAgentRuntimeLabel(
+    dotStatus,
+    subAgentRunStartedAt(tool, subAgentStatuses),
+    subAgentRunDurationMs(tool, subAgentStatuses),
+    nowMs,
+  );
+};
+
+function subAgentRuntimeLabel(dotStatus, startedAt, durationMs, nowMs) {
   if (dotStatus === 'cancelled') {
-    const duration = formatDurationMs(
-      subAgentRunDurationMs(tool, subAgentStatuses),
-    );
+    const duration = formatDurationMs(durationMs);
     return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
   if (dotStatus === 'interrupted') {
-    const duration = formatDurationMs(
-      subAgentRunDurationMs(tool, subAgentStatuses),
-    );
+    const duration = formatDurationMs(durationMs);
     return [t('chat.toolInterrupted'), duration].filter(Boolean).join(' · ');
   }
   if (dotStatus === 'running') {
-    return formatDurationMs(
-      elapsedSinceTimestamp(
-        subAgentRunStartedAt(tool, subAgentStatuses),
-        nowMs,
-      ),
-    );
+    return formatDurationMs(elapsedSinceTimestamp(startedAt, nowMs));
   }
-  return formatDurationMs(subAgentRunDurationMs(tool, subAgentStatuses));
-};
+  return formatDurationMs(durationMs);
+}
+
+// A Session task remains addressable when its creating Tool call is outside
+// the loaded History page or a Run's child window. Its current Session state
+// is seeded from the tree and enriched by live events and exact inspection.
+export function subAgentSessionPresentation(
+  entry,
+  statuses = {},
+  nowMs = Date.now(),
+) {
+  const key = `${entry.agent_id}::${entry.session_id}`;
+  const status = trimmedString(statuses[`session:${key}`]);
+  const dotStatus =
+    subAgentStatusToDotStatus(status) ||
+    (entry.status === 'working' || entry.status === 'queued'
+      ? 'running'
+      : 'idle');
+  const startedAt = trimmedString(statuses[`sessionStarted:${key}`]);
+  const duration = statuses[`sessionDuration:${key}`];
+  const durationMs =
+    Number.isFinite(duration) && duration >= 0 ? duration : null;
+  return {
+    dotStatus,
+    startedAt,
+    durationMs,
+    lastToolName:
+      dotStatus === 'running'
+        ? trimmedString(statuses[`sessionTool:${key}`])
+        : '',
+    timeLabel: subAgentRuntimeLabel(dotStatus, startedAt, durationMs, nowMs),
+  };
+}
 
 const RUNNING_WORK_LABELS = {
   subagent: () => t('chat.details.runningSubAgent'),
@@ -282,11 +314,36 @@ export const subAgentStatusDetails = (
   nowMs = Date.now(),
   remainingWork = [],
 ) => {
+  return subAgentExecutionDetails(
+    {
+      dotStatus,
+      startedAt: subAgentRunStartedAt(tool, subAgentStatuses),
+      durationMs: subAgentRunDurationMs(tool, subAgentStatuses),
+      lastToolName: subAgentLastToolName(tool, subAgentStatuses),
+    },
+    nowMs,
+    remainingWork,
+  );
+};
+
+export const subAgentSessionStatusDetails = (
+  entry,
+  statuses,
+  nowMs,
+  remainingWork = [],
+) =>
+  subAgentExecutionDetails(
+    subAgentSessionPresentation(entry, statuses, nowMs),
+    nowMs,
+    remainingWork,
+  );
+
+function subAgentExecutionDetails(state, nowMs, remainingWork) {
+  const { dotStatus, startedAt, lastToolName } = state;
   const running = dotStatus === 'running';
-  const startedAt = subAgentRunStartedAt(tool, subAgentStatuses);
   const durationMs = running
     ? elapsedSinceTimestamp(startedAt, nowMs)
-    : subAgentRunDurationMs(tool, subAgentStatuses);
+    : state.durationMs;
   const startedMs = timestampToMs(startedAt);
   const rows = executionDetailRows({
     startedAt,
@@ -298,10 +355,7 @@ export const subAgentStatusDetails = (
     running,
     nowMs,
   });
-  const lastToolName = running
-    ? subAgentLastToolName(tool, subAgentStatuses)
-    : '';
-  if (lastToolName) {
+  if (running && lastToolName) {
     rows.push({
       label: t('chat.details.latestTool'),
       value: lastToolName,
@@ -317,8 +371,14 @@ export const subAgentStatusDetails = (
       });
     }
   }
-  return { title: executionStateTitle(dotStatus), rows };
-};
+  return {
+    title:
+      dotStatus === 'idle'
+        ? t('chat.activity.status.idle')
+        : executionStateTitle(dotStatus),
+    rows,
+  };
+}
 
 const subAgentSessionId = (tool) => {
   const args = subAgentArguments(tool);

@@ -179,23 +179,32 @@ describe('Subagent rows', () => {
     },
   );
 
-  it.each([
-    ['cancels the Run it finds working', 'running', true],
-    ['leaves a Sub-Agent with nothing running alone', 'completed', false],
-  ])(
-    'inspects a Subagent row without a known Run and %s',
-    async (_label, status, cancels) => {
+  it.each(
+    [true, false].flatMap((toolLoaded) => [
+      ['cancels the Run it finds working', 'running', true, toolLoaded],
+      ['stops queued work', 'queued', false, toolLoaded],
+      [
+        'leaves a Sub-Agent with nothing running alone',
+        'completed',
+        false,
+        toolLoaded,
+      ],
+    ]),
+  )(
+    'inspects a Subagent and %s (status: %s, cancels Run: %s, Tool loaded: %s)',
+    async (_label, status, cancels, toolLoaded) => {
       const inspectSubAgentWork = vi.fn().mockResolvedValue({
         id: 'sub-work',
         agent_id: 'worker',
         project_id: 'project-one',
         session_id: 'child-session',
-        run_id: 'child-run',
+        run_id: status === 'queued' ? null : 'child-run',
         status,
       });
       const cancelRun = vi.fn().mockResolvedValue({ status: 'cancelled' });
+      const stopAll = vi.fn().mockResolvedValue({ ok: true, stopped: 1 });
       const { chatState, controller } = setupController({
-        operationOverrides: { cancelRun, inspectSubAgentWork },
+        operationOverrides: { cancelRun, stopAll, inspectSubAgentWork },
       });
       const sessionState = ensureSessionState(
         chatState,
@@ -205,7 +214,15 @@ describe('Subagent rows', () => {
 
       await expect(
         controller.cancelSubAgent({
-          tool: reloadedRow('sub-work'),
+          ...(toolLoaded
+            ? { tool: reloadedRow('sub-work') }
+            : {
+                target: {
+                  agentId: 'worker@project-one',
+                  sessionId: 'child-session',
+                },
+                subAgentId: 'sub-work',
+              }),
           sessionState,
           projectId: 'project-one',
         }),
@@ -219,78 +236,172 @@ describe('Subagent rows', () => {
       expect(cancelRun.mock.calls).toEqual(
         cancels ? [['child-run', { reason: 'user' }]] : [],
       );
-      expect(chatState.subAgentStatuses).toMatchObject({
-        'run:child-run': cancels ? 'cancelled' : 'completed',
-        'workRun:sub-work': 'child-run',
-      });
+      expect(stopAll.mock.calls).toEqual(
+        status === 'queued' ? [['worker@project-one', 'child-session']] : [],
+      );
+      if (status === 'queued') {
+        expect(Object.entries(chatState.subAgentStatuses)).toContainEqual([
+          `session:worker${toolLoaded ? '' : '@project-one'}::child-session`,
+          'cancelled',
+        ]);
+      } else {
+        expect(chatState.subAgentStatuses).toMatchObject({
+          'run:child-run': cancels ? 'cancelled' : 'completed',
+          'workRun:sub-work': 'child-run',
+        });
+      }
       expect(sessionState.actionError).toBe('');
     },
   );
-});
 
-describe('Sub-Agent work', () => {
-  it('reads what a Sub-Agent still runs through its exact work id', async () => {
-    const inspectSubAgentWork = vi.fn().mockResolvedValue({
-      id: 'sub-work',
-      agent_id: 'worker',
-      project_id: 'project-one',
-      session_id: 'child-session',
-      run_id: 'child-run',
-      status: 'completed',
-      running: [
-        { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
-        { kind: 'unknown', id: 'x', label: 'dropped' },
-      ],
-    });
+  it('restores precise Session-wide task state without History and preserves newer live events', async () => {
+    const pending = deferred();
+    const inspectSubAgentWork = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        run_id: 'next',
+        status: 'failed',
+        timing: { started_at: '2026-11-03T10:00:00Z', duration_ms: 4200 },
+      });
     const { chatState, controller } = setupController({
       operationOverrides: { inspectSubAgentWork },
     });
-
-    await expect(
-      controller.loadSubAgentWork({
-        tool: reloadedRow('sub-work'),
-        projectId: 'project-one',
-      }),
-    ).resolves.toBe(true);
-
+    const tree = [
+      {
+        id: 'sub-old',
+        agent_id: 'worker@other',
+        session_id: 'child',
+        parent_id: null,
+        status: 'working',
+      },
+    ];
+    controller.reconcileSubAgentTree(tree, chatState.subAgentStatuses);
+    expect(chatState.subAgentStatuses['session:worker@other::child']).toBe(
+      'running',
+    );
+    controller.applySubAgentStatusUpdates({
+      'session:worker@other::child': 'failed',
+      'run:latest': 'failed',
+    });
+    pending.resolve({ run_id: 'latest', status: 'running' });
+    await vi.waitFor(() =>
+      expect(chatState.subAgentStatuses['workRun:sub-old']).toBe('latest'),
+    );
+    await Promise.resolve();
+    expect(chatState.subAgentStatuses['session:worker@other::child']).toBe(
+      'failed',
+    );
     expect(inspectSubAgentWork).toHaveBeenCalledWith({
-      id: 'sub-work',
-      agent_id: 'worker@project-one',
-      session_id: 'child-session',
+      id: 'sub-old',
+      agent_id: 'worker@other',
+      session_id: 'child',
     });
-    expect(chatState.subAgentWork).toEqual({
-      'sub-work': [
-        { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
-        { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
-      ],
-    });
-    expect(chatState.subAgentStatuses).toMatchObject({
-      'run:child-run': 'completed',
-      'workRun:sub-work': 'child-run',
-    });
-  });
 
-  it('stops everything a Sub-Agent still runs through Stop all of its Session', async () => {
-    const stopAll = vi.fn().mockResolvedValue({ ok: true, stopped: 2 });
-    const { chatState, controller } = setupController({
-      operationOverrides: { stopAll },
-    });
-    const parent = ensureSessionState(chatState, 'alpha', 'parent');
-    const stop = () =>
-      controller.stopSubAgentWork({
-        tool: reloadedRow('sub-work'),
-        sessionState: parent,
-        projectId: 'project-one',
+    // An older tree read must not resurrect the Session after a live end.
+    controller.reconcileSubAgentTree(tree, {});
+    expect(chatState.subAgentStatuses['session:worker@other::child']).toBe(
+      'failed',
+    );
+    // A later tree snapshot can start another Run of the same Session.
+    controller.reconcileSubAgentTree(tree, chatState.subAgentStatuses);
+    await vi.waitFor(() =>
+      expect(chatState.subAgentStatuses).toMatchObject({
+        'session:worker@other::child': 'failed',
+        'sessionStarted:worker@other::child': '2026-11-03T10:00:00Z',
+        'sessionDuration:worker@other::child': 4200,
+      }),
+    );
+  });
+});
+
+describe('Sub-Agent work', () => {
+  it.each([true, false])(
+    'reads exact Sub-Agent work (Tool row loaded: %s)',
+    async (toolLoaded) => {
+      const inspectSubAgentWork = vi.fn().mockResolvedValue({
+        id: 'sub-work',
+        agent_id: 'worker',
+        project_id: 'project-one',
+        session_id: 'child-session',
+        run_id: 'child-run',
+        status: 'completed',
+        running: [
+          { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
+          { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
+          { kind: 'unknown', id: 'x', label: 'dropped' },
+        ],
+      });
+      const { chatState, controller } = setupController({
+        operationOverrides: { inspectSubAgentWork },
       });
 
-    await expect(stop()).resolves.toBe(true);
-    expect(stopAll).toHaveBeenCalledWith('worker@project-one', 'child-session');
+      await expect(
+        controller.loadSubAgentWork({
+          ...(toolLoaded
+            ? { tool: reloadedRow('sub-work') }
+            : {
+                target: {
+                  agentId: 'worker@project-one',
+                  sessionId: 'child-session',
+                },
+                subAgentId: 'sub-work',
+              }),
+          projectId: 'project-one',
+        }),
+      ).resolves.toBe(true);
 
-    stopAll.mockRejectedValueOnce(new ApiClientError('internal', 'Offline'));
-    await expect(stop()).resolves.toBe(false);
-    expect(parent.actionError).toContain('Offline');
-  });
+      expect(inspectSubAgentWork).toHaveBeenCalledWith({
+        id: 'sub-work',
+        agent_id: 'worker@project-one',
+        session_id: 'child-session',
+      });
+      expect(chatState.subAgentWork).toEqual({
+        'sub-work': [
+          { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
+          { kind: 'command', id: 'cmd_1', label: 'npm run dev' },
+        ],
+      });
+      expect(chatState.subAgentStatuses).toMatchObject({
+        'run:child-run': 'completed',
+        'workRun:sub-work': 'child-run',
+      });
+    },
+  );
+
+  it.each([true, false])(
+    'stops all Sub-Agent work (Tool row loaded: %s)',
+    async (toolLoaded) => {
+      const stopAll = vi.fn().mockResolvedValue({ ok: true, stopped: 2 });
+      const { chatState, controller } = setupController({
+        operationOverrides: { stopAll },
+      });
+      const parent = ensureSessionState(chatState, 'alpha', 'parent');
+      const stop = () =>
+        controller.stopSubAgentWork({
+          ...(toolLoaded
+            ? { tool: reloadedRow('sub-work') }
+            : {
+                target: {
+                  agentId: 'worker@project-one',
+                  sessionId: 'child-session',
+                },
+              }),
+          sessionState: parent,
+          projectId: 'project-one',
+        });
+
+      await expect(stop()).resolves.toBe(true);
+      expect(stopAll).toHaveBeenCalledWith(
+        'worker@project-one',
+        'child-session',
+      );
+
+      stopAll.mockRejectedValueOnce(new ApiClientError('internal', 'Offline'));
+      await expect(stop()).resolves.toBe(false);
+      expect(parent.actionError).toContain('Offline');
+    },
+  );
 
   it('leaves a row without a Sub-Agent id uninspected', async () => {
     const inspectSubAgentWork = vi.fn();

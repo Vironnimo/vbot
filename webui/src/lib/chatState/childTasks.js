@@ -44,6 +44,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   }
 
   function applySubAgentStatusUpdates(updates, { replaceActive = false } = {}) {
+    if (replaceActive) subAgentStatusVerificationKeys.clear();
     const { entries, evictedKeys } = replaceActive
       ? replaceActiveSubAgentStatuses(
           chatState.subAgentStatuses,
@@ -84,6 +85,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   function applySubAgentInspection(
     { agentId, sessionId, runId = '', workId = '' },
     inspection,
+    previousStatuses = chatState.subAgentStatuses,
   ) {
     let status = normalizedSubAgentStatus(inspection?.status);
     const inspectedRunId = trimmedString(inspection?.run_id) || runId;
@@ -105,25 +107,40 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     // Session-scoped keys use the requesting row's address — the child's
     // outside address the row itself reads (`chatRunStream/activity.js`).
     const address = trimmedString(agentId);
-    if (!inspectedRunId && address) {
-      updates[`session:${address}::${sessionId}`] = status;
+    const sessionKey = `${address}::${sessionId}`;
+    const sessionCurrent =
+      address &&
+      ['session', 'sessionStarted', 'sessionRun'].every(
+        (kind) =>
+          chatState.subAgentStatuses[`${kind}:${sessionKey}`] ===
+          previousStatuses[`${kind}:${sessionKey}`],
+      );
+    if (sessionCurrent) {
+      updates[`session:${sessionKey}`] = status;
+      if (inspectedRunId) updates[`sessionRun:${sessionKey}`] = inspectedRunId;
+    }
+
+    const startedAt =
+      trimmedString(inspection?.started_at) ||
+      trimmedString(inspection?.timing?.started_at);
+    if (!stale && startedAt) {
+      if (inspectedRunId) updates[`runStarted:${inspectedRunId}`] = startedAt;
+      if (sessionCurrent) updates[`sessionStarted:${sessionKey}`] = startedAt;
     }
 
     const durationMs = inspection?.timing?.duration_ms;
     if (!stale && Number.isFinite(durationMs) && durationMs >= 0) {
       if (inspectedRunId) {
         updates[`runDuration:${inspectedRunId}`] = durationMs;
-      } else if (address) {
-        updates[`sessionDuration:${address}::${sessionId}`] = durationMs;
       }
+      if (sessionCurrent) updates[`sessionDuration:${sessionKey}`] = durationMs;
     }
     const toolName = trimmedString(inspection?.tool_name);
     if (!stale && toolName) {
       if (inspectedRunId) {
         updates[`runTool:${inspectedRunId}`] = toolName;
-      } else if (address) {
-        updates[`sessionTool:${address}::${sessionId}`] = toolName;
       }
+      if (sessionCurrent) updates[`sessionTool:${sessionKey}`] = toolName;
     }
     if (Object.keys(updates).length > 0) {
       applySubAgentStatusUpdates(updates);
@@ -211,6 +228,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
     subAgentStatusInflightKeys.add(guardKey);
     try {
+      const previousStatuses = chatState.subAgentStatuses;
       const inspection = await resolveSubAgentInspection({
         agentId,
         sessionId,
@@ -221,6 +239,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       applySubAgentInspection(
         { agentId, sessionId, runId, workId },
         inspection,
+        previousStatuses,
       );
       subAgentStatusVerificationKeys.add(guardKey);
       return true;
@@ -234,11 +253,19 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   // Cancels the Sub-Agent's current Run: the followed Run while the row knows
   // it is current, else the Run inspection finds active (for example one a
   // later message started). A Sub-Agent with nothing running is left alone.
-  async function cancelSubAgent({ tool, sessionState, projectId = '' } = {}) {
-    if (!tool || !sessionState) {
+  async function cancelSubAgent({
+    tool,
+    target,
+    subAgentId = '',
+    sessionState,
+    projectId = '',
+  } = {}) {
+    if ((!tool && !target) || !sessionState) {
       return false;
     }
-    const plan = resolveSubAgentCancelPlan(tool, chatState.subAgentStatuses);
+    const plan = target
+      ? { kind: 'inspect', ...target, workId: subAgentId }
+      : resolveSubAgentCancelPlan(tool, chatState.subAgentStatuses);
     if (!plan) {
       return false;
     }
@@ -250,17 +277,42 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
           agentId: plan.agentId,
           sessionId: plan.sessionId,
           workId: plan.workId,
-          projectId,
+          projectId: target ? '' : projectId,
         };
+        const previousStatuses = chatState.subAgentStatuses;
         const inspection = await resolveSubAgentInspection(request);
-        const projection = applySubAgentInspection(request, inspection);
+        const projection = applySubAgentInspection(
+          request,
+          inspection,
+          previousStatuses,
+        );
+        if (projection.status === 'queued') {
+          await operations.stopAll(
+            target
+              ? plan.agentId
+              : qualifyAgentAddress(plan.agentId, projectId),
+            plan.sessionId,
+          );
+          applySubAgentStatusUpdates({
+            [`session:${request.agentId}::${request.sessionId}`]: 'cancelled',
+          });
+          return true;
+        }
         if (projection.status !== 'running' || !projection.runId) {
           return true;
         }
         runId = projection.runId;
       }
       await operations.cancelRun(runId, { reason: 'user' });
-      applySubAgentStatusUpdates({ [`run:${runId}`]: 'cancelled' });
+      applySubAgentStatusUpdates({
+        [`run:${runId}`]: 'cancelled',
+        ...(target &&
+        chatState.subAgentStatuses[
+          `sessionRun:${target.agentId}::${target.sessionId}`
+        ] === runId
+          ? { [`session:${target.agentId}::${target.sessionId}`]: 'cancelled' }
+          : {}),
+      });
       return true;
     } catch (error) {
       sessionState.actionError = `${t('chat.cancelError')} ${errorMessage(error)}`;
@@ -271,15 +323,19 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   // Stops everything a Sub-Agent still runs once its Run ended: the
   // background commands, terminals and Sub-Agents below it (Stop all of its
   // Session). The stopped commands' ends arrive as live statuses.
-  async function stopSubAgentWork({ tool, sessionState, projectId = '' } = {}) {
-    const target = tool ? subAgentNavigationTarget(tool) : null;
+  async function stopSubAgentWork({
+    tool,
+    target = tool ? subAgentNavigationTarget(tool) : null,
+    sessionState,
+    projectId = '',
+  } = {}) {
     if (!target || !sessionState) {
       return false;
     }
     sessionState.actionError = '';
     try {
       await operations.stopAll(
-        qualifyAgentAddress(target.agentId, projectId),
+        tool ? qualifyAgentAddress(target.agentId, projectId) : target.agentId,
         target.sessionId,
       );
       return true;
@@ -308,9 +364,13 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   // while the user looks at its row. The inspection also refreshes the row's
   // status. Rows without a Sub-Agent id predate inspection and stay as they
   // are; a failed read keeps the last known work.
-  async function loadSubAgentWork({ tool, projectId = '' } = {}) {
-    const target = tool ? subAgentNavigationTarget(tool) : null;
-    const workId = trimmedString(subAgentResultData(tool).id);
+  async function loadSubAgentWork({
+    tool,
+    target = tool ? subAgentNavigationTarget(tool) : null,
+    subAgentId = '',
+    projectId = '',
+  } = {}) {
+    const workId = subAgentId || trimmedString(subAgentResultData(tool).id);
     if (!target || !workId || subAgentWorkInflightIds.has(workId)) {
       return false;
     }
@@ -319,12 +379,15 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       const request = {
         agentId: target.agentId,
         sessionId: target.sessionId,
-        runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
+        runId: tool
+          ? subAgentEffectiveRunId(tool, chatState.subAgentStatuses)
+          : '',
         workId,
-        projectId,
+        projectId: tool ? projectId : '',
       };
+      const previousStatuses = chatState.subAgentStatuses;
       const inspection = await inspectExactSubAgentWork(request);
-      applySubAgentInspection(request, inspection);
+      applySubAgentInspection(request, inspection, previousStatuses);
       chatState.subAgentWork = mergeBoundedEntries(
         chatState.subAgentWork,
         { [workId]: inspectedWork(inspection) },
@@ -496,6 +559,54 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
+  // Tree membership covers the whole Session. Seed its current broad state,
+  // then recover precise outcomes and timing once through exact inspection.
+  // A tree response cannot overwrite a newer live Session lifecycle event.
+  function reconcileSubAgentTree(entries, previousStatuses) {
+    const updates = {};
+    const inspect = [];
+    for (const entry of entries ?? []) {
+      if (
+        entry?.parent_id ||
+        !entry?.id ||
+        !entry.agent_id ||
+        !entry.session_id
+      )
+        continue;
+      const key = `${entry.agent_id}::${entry.session_id}`;
+      if (
+        !['session', 'sessionStarted', 'sessionRun'].every(
+          (kind) =>
+            chatState.subAgentStatuses[`${kind}:${key}`] ===
+            previousStatuses[`${kind}:${key}`],
+        )
+      )
+        continue;
+      const known = chatState.subAgentStatuses[`session:${key}`];
+      const status =
+        entry.status === 'working'
+          ? 'running'
+          : entry.status === 'queued'
+            ? 'queued'
+            : ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+                  known,
+                )
+              ? known
+              : 'idle';
+      if (known !== status) {
+        updates[`session:${key}`] = status;
+        subAgentStatusVerificationKeys.delete(key);
+      }
+      inspect.push({
+        agentId: entry.agent_id,
+        sessionId: entry.session_id,
+        workId: entry.id,
+      });
+    }
+    if (Object.keys(updates).length) applySubAgentStatusUpdates(updates);
+    for (const target of inspect) void verifySubAgentStatus(target);
+  }
+
   // The View forwards App's live map of `command_status_changed` on every
   // change; applying it again is idempotent.
   function applyCommandStatuses(statuses) {
@@ -518,6 +629,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,
+    reconcileSubAgentTree,
     stopCommand,
     stopSubAgentWork,
     dispose() {

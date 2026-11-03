@@ -28,6 +28,7 @@ import {
   subAgentDescription,
   subAgentResultData,
   subAgentNavigationTarget,
+  subAgentSessionPresentation,
 } from './subagents.js';
 
 const MAX_BACKGROUND_COMMAND_LABEL_LENGTH = 96;
@@ -375,6 +376,7 @@ export const backgroundTasks = (
   commandStatuses = {},
   subAgentCommands = {},
   nowMs = Date.now(),
+  subAgentTree = [],
 ) => {
   const tasks = [];
   let order = 0;
@@ -457,7 +459,42 @@ export const backgroundTasks = (
   // command; the panel must show it once, otherwise its keyed rows cannot mount
   // when opened. Prefer the latest occurrence, keeping its current Tool
   // projection and order.
-  return [...new Map(tasks.map((task) => [task.id, task])).values()]
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  // The durable tree supplies every direct child, including those whose
+  // spawn call is outside both History windows. A known child follows its
+  // current Session, including later Runs; new live calls appear before the
+  // tree refreshes. The original Tool remains available as provenance only.
+  for (const entry of subAgentTree ?? []) {
+    if (entry?.parent_id || !entry?.id || !entry.agent_id || !entry.session_id)
+      continue;
+    const id = `subagent:${entry.id}`;
+    const existing = byId.get(id);
+    const state = subAgentSessionPresentation(entry, subAgentStatuses, nowMs);
+    const runningCommands = subAgentCommands?.[entry.id] ?? [];
+    const workRunning =
+      state.dotStatus !== 'running' && runningCommands.length > 0;
+    byId.set(id, {
+      id,
+      kind: 'subagent',
+      subAgentId: entry.id,
+      sessionEntry: entry,
+      tool: existing?.tool ?? null,
+      target: { agentId: entry.agent_id, sessionId: entry.session_id },
+      agentId: entry.agent_id,
+      label: entry.agent_id,
+      description: entry.title || '',
+      startedAt: toolStartedTimestamp(existing?.tool) || state.startedAt,
+      dotStatus: workRunning ? 'running' : state.dotStatus,
+      runDotStatus: state.dotStatus,
+      workRunning,
+      runningCommands,
+      timeLabel: workRunning
+        ? t('chat.subAgentCommandsRunning')
+        : state.timeLabel,
+      order: existing?.order ?? order++,
+    });
+  }
+  return [...byId.values()]
     .sort((left, right) => {
       const activeDifference =
         Number(right.dotStatus === 'running') -
@@ -478,7 +515,9 @@ export const activitySections = (tasks = [], reflectionRows = []) => {
       kind: task.kind,
       task,
       running: task.dotStatus === 'running',
-      startedMs: timestampToMs(toolStartedTimestamp(task.tool)),
+      startedMs: timestampToMs(
+        task.startedAt || toolStartedTimestamp(task.tool),
+      ),
     })),
     ...(reflectionRows ?? []).map((row) => ({
       key: `reflection:${row.runId}`,
