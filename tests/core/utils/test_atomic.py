@@ -49,15 +49,16 @@ def test_atomic_write_cleans_staging_file_after_success(tmp_path: Path) -> None:
 
 
 @pytest.mark.durable
-@pytest.mark.parametrize("write_text", [False, True])
+@pytest.mark.parametrize("write_mode", ["text", "bytes", "create"])
 def test_atomic_write_fsyncs_data_before_replace_and_directories_after(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    write_text: bool,
+    write_mode: str,
 ) -> None:
     target = tmp_path / "settings.json"
     events: list[str] = []
     real_replace = os.replace
+    real_link = os.link
 
     def record_fsync(descriptor: int) -> None:
         mode = os.fstat(descriptor).st_mode
@@ -67,17 +68,50 @@ def test_atomic_write_fsyncs_data_before_replace_and_directories_after(
         events.append("replace")
         real_replace(source, destination)
 
+    def record_link(source: Path, destination: Path) -> None:
+        events.append("link")
+        real_link(source, destination)
+
     monkeypatch.setattr("core.utils.atomic.os.fsync", record_fsync)
     monkeypatch.setattr("core.utils.atomic.os.replace", record_replace)
+    monkeypatch.setattr("core.utils.atomic.os.link", record_link)
 
-    if write_text:
+    if write_mode == "text":
         atomic_write_text(target, "new\n", data_dir=tmp_path)
     else:
-        atomic_write_bytes(target, b"new\n", data_dir=tmp_path)
+        atomic_write_bytes(
+            target, b"new\n", data_dir=tmp_path, replace_existing=write_mode != "create"
+        )
 
-    assert events[:2] == ["file_fsync", "replace"]
+    assert events[:2] == ["file_fsync", "link" if write_mode == "create" else "replace"]
     assert all(event == "directory_fsync" for event in events[2:])
     assert len(events[2:]) == (2 if os.name == "posix" else 0)
+
+
+@pytest.mark.parametrize("existing", ["absent", "before", "during"])
+def test_atomic_create_publishes_complete_bytes_without_replacing_another_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: str
+) -> None:
+    target = tmp_path / "notes.txt"
+    real_link = os.link
+    if existing == "before":
+        target.write_bytes(b"other writer")
+
+    def publish(source: Path, destination: Path) -> None:
+        assert source.read_bytes() == b"complete\n"
+        if existing == "during":
+            destination.write_bytes(b"other writer")
+        real_link(source, destination)
+
+    monkeypatch.setattr(atomic.os, "link", publish)
+    if existing == "absent":
+        atomic_write_bytes(target, b"complete\n", replace_existing=False)
+        assert target.read_bytes() == b"complete\n"
+    else:
+        with pytest.raises(FileExistsError):
+            atomic_write_bytes(target, b"complete\n", replace_existing=False)
+        assert target.read_bytes() == b"other writer"
+    assert list(tmp_path.iterdir()) == [target]
 
 
 @pytest.mark.durable

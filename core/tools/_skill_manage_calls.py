@@ -158,6 +158,7 @@ class _Call:
     absorbed_into: str | None = None
     # ``global`` when the call names the global home explicitly, else ``None``.
     scope: str | None = None
+    create_only: bool = False
     notes: list[str] = field(default_factory=list)
 
 
@@ -203,7 +204,12 @@ def _read_create(call: _Call) -> _Call:
             "create writes a new Skill; old_string is only for patch. Omit old_string to "
             "create, or use action patch to change an existing Skill.",
         )
-    _refuse_support_file(call, "write_file")
+    if call.file_path is not None and call.file_path != SKILL_FILENAME:
+        if call.description is not None:
+            _refuse_support_file(call, "write_file")
+        call.action = "write_file"
+        call.create_only = True
+        return _read_write_file(call)
     if call.content is None:
         raise _RefusalError(
             "invalid_arguments", _document_needed(call.name, "create needs content")

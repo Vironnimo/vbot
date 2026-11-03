@@ -10,6 +10,8 @@ Write mechanics of `SkillAuthoringService` (`core/skills/authoring.py`), the one
 
 Mutating an existing package requires its `SKILL.md`, including delete and support-file operations. Package directories, the entry document and support-file path components reject symlink/junction redirects before resolution (other reparse points, such as OneDrive cloud-file placeholders, are ordinary files), so aliases cannot bypass document validation or target a different named package. Installation reuses this authoring boundary (`tests/core/skills/test_authoring.py`).
 
+`write_file(create_only=True)` uses the same package validation and write lock but refuses every existing target with `SkillFileExistsError`, including identical or empty files. `atomic_write_bytes(replace_existing=False)` publishes the completed temporary file exclusively, so a file created by an external writer after the check also survives unchanged. Other support-file writes keep their replacement behavior.
+
 When a create's atomic document write fails, cleanup removes only the empty directory it created. Files added there by an outside writer survive the failure; no creation revision is recorded.
 
 ## Shared-owner invalidation
