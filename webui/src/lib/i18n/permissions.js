@@ -119,4 +119,16 @@ export default Object.freeze({
     'Later Runs in this Session then follow only this Agent’s own rules. A scheduled job or the Session that started this one adds its limits again when it runs here.',
   'permissions.session.clearConfirm': 'Remove limits',
   'permissions.session.clearFailed': 'The limits could not be removed.',
+  'permissions.session.fullTitle': 'This Session has full access',
+  'permissions.session.fullText':
+    'vBot does not limit which files its Tools read or change, which commands they run or which sites they reach.',
+  'permissions.session.access': 'Access in this Session',
+  'permissions.session.accessHelp':
+    'Applies to this Session only. A reply in progress uses it from its next Tool call, and the Agent is told about the change.',
+  'permissions.session.access.agent': 'This Agent’s rules',
+  'permissions.session.accessFailed': 'The access could not be changed.',
+  'permissions.session.fullConfirmTitle': 'Give this Session full access?',
+  'permissions.session.fullConfirmText':
+    'This also removes the limits it inherited from a scheduled job or the Session that started it. They return when that job or Session runs here again.',
+  'permissions.session.fullConfirm': 'Give full access',
 });

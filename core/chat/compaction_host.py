@@ -84,7 +84,9 @@ class ManualCompactionRequest:
     @property
     def permissions(self) -> PermissionBoundary:
         """The Permission Boundary of the Run the Compaction serves."""
-        return self.request_inputs.permissions
+        permissions = self.request_inputs.permissions
+        assert permissions is not None, "a manual Compaction request carries its Run's boundary"
+        return permissions
 
 
 class ChatCompactionHost:

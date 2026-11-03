@@ -162,6 +162,29 @@ export function clearSessionCeiling({ agentId, sessionId } = {}, options = {}) {
   );
 }
 
+// Give one Session the rules of a preset (`full_access`, `work_dir`,
+// `work_dir_read_only`), or `null` for the Agent's own rules again. Full
+// access also removes the limits the Session inherited (`ceiling_cleared`).
+export function setSessionPermissions(
+  { agentId, sessionId, preset = null } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.set_session_rules',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'permissions.set_session_rules',
+  );
+  const params = { agent_id: agentId, session_id: sessionId };
+  if (preset) params.preset = preset;
+  else params.permission_rules = null;
+  return rpc('permissions.set_session_rules', params, options);
+}
+
 export function renameAgent(id, newId, options = {}) {
   requireNonEmptyString(
     id,

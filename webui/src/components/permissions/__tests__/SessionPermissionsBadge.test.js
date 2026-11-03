@@ -12,9 +12,11 @@ vi.mock('svelte', async () => {
 
 const permissionsMock = vi.fn();
 const clearMock = vi.fn();
+const setMock = vi.fn();
 vi.mock('$lib/api.js', () => ({
   getSessionPermissions: (...args) => permissionsMock(...args),
   clearSessionCeiling: (...args) => clearMock(...args),
+  setSessionPermissions: (...args) => setMock(...args),
 }));
 
 const { default: SessionPermissionsBadge } =
@@ -59,6 +61,7 @@ describe('SessionPermissionsBadge', () => {
     init('en');
     permissionsMock.mockReset();
     clearMock.mockReset();
+    setMock.mockReset();
   });
 
   afterEach(async () => {
@@ -101,6 +104,73 @@ describe('SessionPermissionsBadge', () => {
     expect(permissionsMock).toHaveBeenCalledTimes(2);
     expect(clearButton()).toBeUndefined();
     expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
+  });
+
+  it('gives a Session its own access, asking before full access lifts inherited limits', async () => {
+    const restricted = {
+      restricted: true,
+      layers: [OWN_LAYER, CRON_LAYER],
+      stored_ceiling: true,
+      session_rules: null,
+      session_preset: null,
+    };
+    permissionsMock.mockResolvedValueOnce(restricted);
+    permissionsMock.mockResolvedValueOnce({
+      ...restricted,
+      session_rules: { read: 'work_area', write: 'work_area' },
+      session_preset: 'work_dir',
+    });
+    permissionsMock.mockResolvedValue({
+      restricted: false,
+      layers: [],
+      stored_ceiling: false,
+      session_rules: { read: 'anywhere' },
+      session_preset: 'full_access',
+    });
+    setMock.mockResolvedValue({});
+    await render({ sessionId: 's1' });
+
+    const choice = (value) =>
+      document.querySelector(`[data-access-choice="${value}"]`);
+    expect(choice('agent').getAttribute('aria-checked')).toBe('true');
+
+    choice('work_dir').click();
+    await settle();
+    expect(setMock).toHaveBeenLastCalledWith({
+      agentId: 'coder',
+      sessionId: 's1',
+      preset: 'work_dir',
+    });
+    expect(choice('work_dir').getAttribute('aria-checked')).toBe('true');
+
+    // Full access also removes the stored inherited limits: it asks first.
+    choice('full_access').click();
+    flushSync();
+    expect(setMock).toHaveBeenCalledTimes(1);
+    [...document.querySelectorAll('button')]
+      .find(
+        (button) =>
+          button.textContent.trim() === t('permissions.session.fullConfirm'),
+      )
+      .click();
+    await settle();
+    expect(setMock).toHaveBeenLastCalledWith({
+      agentId: 'coder',
+      sessionId: 's1',
+      preset: 'full_access',
+    });
+    expect(
+      document
+        .querySelector('[data-session-permissions]')
+        .getAttribute('data-session-permissions'),
+    ).toBe('full');
+  });
+
+  it('shows a draft with full access nothing', async () => {
+    permissionsMock.mockResolvedValue({ restricted: false, layers: [] });
+    await render({ workingProjectId: null });
+
+    expect(document.querySelector('[data-session-permissions]')).toBeNull();
   });
 
   it('names the scratch area and states the limits of the checks', async () => {
@@ -159,7 +229,11 @@ describe('SessionPermissionsBadge', () => {
       props,
     });
     await settle();
-    expect(document.querySelector('[data-session-permissions]')).toBeNull();
+    expect(
+      document
+        .querySelector('[data-session-permissions]')
+        .getAttribute('data-session-permissions'),
+    ).toBe('full');
 
     // The Agent or the Session changed on the server.
     permissionsMock.mockResolvedValue({
@@ -169,7 +243,11 @@ describe('SessionPermissionsBadge', () => {
     });
     props.revision = '1';
     await settle();
-    expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
+    expect(
+      document
+        .querySelector('[data-session-permissions]')
+        .getAttribute('data-session-permissions'),
+    ).toBe('restricted');
 
     // A change no event reports (the shared default) shows once the card
     // is about to open.

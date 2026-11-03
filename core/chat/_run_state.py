@@ -743,9 +743,10 @@ class RequestBuildInputs:
     subagent_tool_withheld: bool = False
     # The Session has an open goal and grants ``update_goal``.
     goal_session: bool = False
-    # The Run's Permission Boundary; a restricted one shows the ``core:permissions``
-    # block, pinned per prompt epoch like the temporary Session blocks.
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    # The Run's Permission Boundary, which the ``core:permissions`` block
+    # describes, pinned per prompt epoch like the temporary Session blocks;
+    # ``None`` (a build outside a Run) shows no block.
+    permissions: PermissionBoundary | None = None
     # Start a new prompt epoch's Tool pin and dynamic block pin from the current
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
@@ -869,12 +870,12 @@ def _resolve_working_project(
 
 async def refresh_run_permissions(
     dependencies: ChatLoopDependencies, context: _RunExecutionContext, *, force: bool = False
-) -> None:
+) -> bool:
     """Rebuild the Run's boundary when one of its rule sources changed, or on *force*.
 
     Called before each Tool round, so a rule edit applies to the next Tool
-    Calls; the ``core:permissions`` block follows at the next Run as a
-    ``[prompt-block-change]`` note. A rebuild that fails ends the Run.
+    Calls; whether it rebuilt, so the request boundary can tell the Model
+    (``RequestBuilder.plan_permissions_change``). A rebuild that fails ends the Run.
     """
     # A Parent's send can narrow a Sub-Agent's grants while its Run is active.
     # The operator setter excludes active/queued Runs, so it cannot retarget a
@@ -883,8 +884,8 @@ async def refresh_run_permissions(
         await dependencies.sessions.metadata_value_async(context.session.address, "execution")
     )
     current = context.permission_sources
-    if current is None or not (force or await current.changed()):
-        return
+    if current is None or not (force or await current.changed(dependencies)):
+        return False
     agent = await resolve_run_agent(dependencies, context.run, context.request)
     rebuilt = await run_permission_boundary(
         dependencies,
@@ -896,6 +897,7 @@ async def refresh_run_permissions(
     )
     context.permission_sources = rebuilt
     context.permissions = rebuilt.boundary
+    return True
 
 
 async def resolve_run_agent(
