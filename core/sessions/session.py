@@ -464,7 +464,6 @@ class ChatSession:
         excluded_roles: Sequence[str] = (),
         complete_run_segment: bool = False,
         complete_runs: bool = False,
-        focus_run_id: str | None = None,
         background_tool_names: Sequence[str] = (),
         background_note_marker: str | None = None,
         skip_unchanged: bool = False,
@@ -476,8 +475,6 @@ class ChatSession:
         ``skip_unchanged``, an ``after`` cursor at the Session's end returns an
         empty ``unchanged`` snapshot without reading those facts.
         """
-        if focus_run_id is not None and (before is not None or after is not None):
-            raise ChatSessionError("focus_run_id cannot be combined with paging cursors")
         decoded_cursor = None if before is None else _decode_chat_history_cursor(before)
         if before is not None and after is not None:
             raise ChatSessionError("before and after cannot be combined")
@@ -496,7 +493,6 @@ class ChatSession:
             excluded_roles=excluded_roles,
             complete_run_segment=complete_run_segment,
             complete_runs=complete_runs,
-            focus_run_id=focus_run_id,
             background_tool_names=background_tool_names,
             background_note_marker=background_note_marker,
             after=after_cursor,

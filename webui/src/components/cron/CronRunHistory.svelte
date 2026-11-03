@@ -105,8 +105,6 @@
             onOpenSession(
               formatAgentAddress(run.agent_id, run.project_id),
               run.session_id,
-              false,
-              run.run_id,
             )}
         >
           <span class="cron-run-title">{run.title}</span>

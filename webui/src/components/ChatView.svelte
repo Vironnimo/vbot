@@ -800,16 +800,13 @@
         <div class="chat-view__timeline-shell">
           <ChatTimeline
             timelineItems={activity.timelineItems}
-            sessionKey={`${target.activeSessionState?.key ?? ''}:${target.activeSessionState?.focusedHistory?.focusRunId ?? ''}`}
+            sessionKey={target.activeSessionState?.key ?? ''}
             currentRun={target.activeSessionState?.currentRun ?? null}
             agentName={target.activeAgent.name}
             {chatWorkingMode}
-            loadingHistory={target.activeSessionState?.focusedHistory
-              ?.loading ?? layout.historyLoadingFeedbackVisible}
-            historyLoaded={(
-              target.activeSessionState?.focusedHistory ??
-              target.activeSessionState
-            )?.historyLoaded ?? !target.activeAddressing().sessionId}
+            loadingHistory={layout.historyLoadingFeedbackVisible}
+            historyLoaded={target.activeSessionState?.historyLoaded ??
+              !target.activeAddressing().sessionId}
             transientCards={actions.transientCards}
             submittedTurnScrollKey={actions.submittedTurnScrollKey}
             bottomOverlayHeight={layout.footerOverlayHeight}
@@ -817,14 +814,10 @@
               layout.chatScrollbarWidth = width;
             }}
             followSessionRequest={navigation.subAgentLinkFollowRequest}
-            hasOlderHistory={(
-              target.activeSessionState?.focusedHistory ??
-              target.activeSessionState
-            )?.hasOlderHistory === true}
-            loadingOlderHistory={(
-              target.activeSessionState?.focusedHistory ??
-              target.activeSessionState
-            )?.loadingOlderHistory === true}
+            hasOlderHistory={target.activeSessionState?.hasOlderHistory ===
+              true}
+            loadingOlderHistory={target.activeSessionState
+              ?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
@@ -837,17 +830,9 @@
             ]?.workStartedAt ?? null}
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
-              chatController.loadRunHistory(
-                target.activeSessionState?.focusedHistory ??
-                  target.activeSessionState,
-                gap,
-              )}
+              chatController.loadRunHistory(target.activeSessionState, gap)}
             onLoadToolCall={(call) =>
-              chatController.loadToolCall(
-                target.activeSessionState?.focusedHistory ??
-                  target.activeSessionState,
-                call,
-              )}
+              chatController.loadToolCall(target.activeSessionState, call)}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}
@@ -912,37 +897,6 @@
                   {t('chat.returnToMainSession')}
                 </Button>
               {/if}
-            </Banner>
-          {/if}
-          {#if target.activeSessionState?.focusedHistory?.actionError}
-            <Banner
-              variant="error"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              {target.activeSessionState.focusedHistory.actionError}
-              <Button
-                variant="tertiary"
-                onClick={() =>
-                  chatController.focusRun(
-                    target.activeSessionState,
-                    target.activeSessionState.focusedHistory.focusRunId,
-                  )}>{t('common.retry')}</Button
-              >
-            </Banner>
-          {:else if target.activeSessionState?.focusedHistory}
-            <Banner
-              appearance="compact"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <strong>{t('chat.selectedResult')}</strong>
-              <Button
-                variant="tertiary"
-                onClick={() =>
-                  (target.activeSessionState.focusedHistory = null)}
-                >{t('chat.showConversation')}</Button
-              >
             </Banner>
           {/if}
           {#if providerSetupMissing}

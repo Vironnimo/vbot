@@ -177,13 +177,12 @@ export function createChatViewLifecycle(context) {
     void pageAttentionRevision;
     const sessionState = target.activeSessionState;
     const known = sessionState?.readRunIds ?? [];
-    const visible = sessionState?.focusedHistory ?? sessionState;
     const runIds = [
       ...new SvelteSet([
-        ...Object.entries(visible?.historyRuns ?? {})
+        ...Object.entries(sessionState?.historyRuns ?? {})
           .filter(([, run]) => run.complete)
           .map(([id]) => id),
-        ...(visible?.runEvents ?? [])
+        ...(sessionState?.runEvents ?? [])
           .filter((event) =>
             [
               'run_completed',

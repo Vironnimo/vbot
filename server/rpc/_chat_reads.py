@@ -7,6 +7,8 @@ from time import monotonic
 from typing import Any, cast
 
 from core.automation import LearningError
+from core.automation.cron import CronServiceError
+from core.automation.inputs import DirectInputError
 from core.chat import (
     latest_session_context_usage,
 )
@@ -131,7 +133,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     if timeline:
-        supported_fields.update({"child_limit", "focus_run_id"})
+        supported_fields.add("child_limit")
     _reject_unsupported(params, supported_fields, "chat.history")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
@@ -139,11 +141,6 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
     after = _optional_string(params, "after")
-    focus_run_id = _optional_string(params, "focus_run_id")
-    if focus_run_id and (before or after):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST, "focus_run_id cannot be combined with paging cursors"
-        )
     child_limit = (
         _optional_positive_integer(params, "child_limit", max_value=200) or 0 if timeline else 0
     )
@@ -193,7 +190,6 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
                 active_reviews=active_reviews,
                 subagent_walk=subagent_walk,
                 complete_runs=timeline,
-                focus_run_id=focus_run_id,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -203,7 +199,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         # Freeze the live projection at the same boundary as durable history.
         # A completion during projection must not turn an earlier page into idle history.
         live_timeline = None
-        if timeline and active_run_object is not None and before is None and focus_run_id is None:
+        if timeline and active_run_object is not None and before is None:
             from server.timeline import capture_run_timeline
 
             live_timeline = capture_run_timeline(active_run_object)
@@ -226,6 +222,8 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
                 file_delivery=state.file_delivery,
             )
         )
+        if projection is not None:
+            _name_automations(state, projection.messages)
         reflection_runs = (
             None
             if read.reflection_runs is None
@@ -366,7 +364,6 @@ def _read_chat_history(
     active_reviews: list[Run] | None,
     subagent_walk: bool,
     complete_runs: bool = False,
-    focus_run_id: str | None = None,
 ) -> _ChatHistoryRead:
     """Read one History page and the Session facts it carries in one Session-pool hop.
 
@@ -380,7 +377,6 @@ def _read_chat_history(
         excluded_roles=("note", "history_edit"),
         complete_run_segment=True,
         complete_runs=complete_runs,
-        focus_run_id=focus_run_id,
         background_tool_names=COMMAND_STATUS_TOOL_NAMES if before is None else (),
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
@@ -609,11 +605,32 @@ def _project_chat_history(
         for index, message in enumerate(page.messages)
         if (record := history_message(message, file_delivery=file_delivery)) is not None
     ]
+    # The first User message of a Run an Automation started is its prompt.
+    automations = {run["run_id"]: run["automation"] for run in history.runs if "automation" in run}
+    for message in messages:
+        if message.get("role") == "user" and message.get("history_run_id") in automations:
+            message["automation"] = automations.pop(message["history_run_id"])
     return _ChatHistoryProjection(
         messages=messages,
         background_command_statuses=background_command_statuses(history.background_records),
         context_usage=latest_session_context_usage(list(history.context_messages)),
     )
+
+
+def _name_automations(state: Any, messages: list[JsonObject]) -> None:
+    """Add its current name to each Automation prompt whose Automation still exists."""
+    for message in messages:
+        automation = message.get("automation")
+        if automation is None:
+            continue
+        try:
+            automation["name"] = (
+                state.runtime.cron_service.get_job(automation["id"]).name
+                if automation["kind"] == "schedule"
+                else state.runtime.direct_inputs.get(automation["id"])["name"]
+            )
+        except CronServiceError, DirectInputError:
+            continue
 
 
 def _current_session_id(state: Any, agent_id: str) -> str | None:

@@ -504,12 +504,7 @@ describe('CronView', () => {
       () => document.querySelectorAll('.cron-run').length === 7,
     );
     document.querySelectorAll('.cron-run')[6].click();
-    expect(onOpenSession).toHaveBeenCalledWith(
-      'coder@work',
-      'session-1',
-      false,
-      'run-1',
-    );
+    expect(onOpenSession).toHaveBeenCalledWith('coder@work', 'session-1');
     const read = [...document.querySelectorAll('.cron-runs button')].find(
       (button) => button.textContent.includes(t('cron.runs.read')),
     );

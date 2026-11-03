@@ -18,9 +18,7 @@ export function createChatViewActivity(context) {
   // The displayed Session's rendered rows, projected once per update and
   // shared by the timeline, the Activity panel and Sub-Agent reconciliation.
   let activeTimelineItems = $derived(
-    visibleTimelineItemsForRender(
-      target.activeSessionState?.focusedHistory ?? target.activeSessionState,
-    ),
+    visibleTimelineItemsForRender(target.activeSessionState),
   );
   // The live state of the displayed Session's own background commands; a
   // fork's History names its source's commands, which never run for it.

@@ -37,4 +37,4 @@ Public Queue mutations await Chat-owned persistence before acknowledging removal
 
 `chat.work {agent_id, session_id}` serves the Sub-Agent coordinator's live work snapshot of the Session's subtree (`subagents.md` -> Interfaces, `work_snapshot`), independently of paged History. Accessors refresh it from existing Run, command, Queue and Terminal events and reconnects.
 
-`chat.timeline` additionally accepts `focus_run_id` to read the selected Run in this Session's current History, with older-page cursor and bounded children. It cannot combine with `before` or `after`; a missing or superseded Run is refused. The read neither changes read state nor overlays unrelated live Timeline output.
+`chat.history` and `chat.timeline` mark the prompt of a Run an Automation started: its first User message carries `automation {kind, id, name?}` from the page's Run rows (`sessions/history-api.md`), with the Schedule's or Task input's current name while it still exists. The mark is display data only; the Model never sees it.

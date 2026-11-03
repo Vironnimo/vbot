@@ -380,8 +380,7 @@ export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
     Object.values(state?.sessions ?? {}).some(
       (sessionState) =>
         sessionState.agentId === agentId &&
-        (sessionState.key !== displayedSessionKey ||
-          sessionState.focusedHistory) &&
+        sessionState.key !== displayedSessionKey &&
         hasAttention(sessionState) &&
         isSessionIdle(state, sessionState),
     )
@@ -413,8 +412,7 @@ export function newestUnreadSessionForAgent(state, agentId) {
 // agentActivityStatus, because its result is being read.
 export function agentUnreadResults(state, agentId, displayedSessionKey = '') {
   const sessions = unreadResultSessions(state, agentId).filter(
-    (sessionState) =>
-      sessionState.key !== displayedSessionKey || sessionState.focusedHistory,
+    (sessionState) => sessionState.key !== displayedSessionKey,
   );
   return {
     count: sessions.reduce(

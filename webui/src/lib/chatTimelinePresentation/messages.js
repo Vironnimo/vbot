@@ -48,9 +48,30 @@ export const shouldRenderMessage = (message) =>
 const senderDisplayName = (message) =>
   trimmedString(message?.sender?.display_name);
 
-// A User-role message identifies another Session or a Channel sender and
-// whether Live voice passed it on; the user's own typed message needs no label.
+// The prompt of a Run an Automation started, named while the Automation exists.
+const automationLabel = ({ kind, name }) => {
+  const named = trimmedString(name);
+  if (kind === 'schedule') {
+    return named
+      ? t('chat.role.scheduleNamed', { name: named })
+      : t('chat.role.schedule');
+  }
+  if (kind === 'task_input') {
+    return named
+      ? t('chat.role.taskInputNamed', { name: named })
+      : t('chat.role.taskInput');
+  }
+  return '';
+};
+
+// A User-role message identifies an Automation prompt, another Session or a
+// Channel sender and whether Live voice passed it on; the user's own typed
+// message needs no label.
 const userLabel = (message) => {
+  const automation = message?.automation
+    ? automationLabel(message.automation)
+    : '';
+  if (automation) return automation.toUpperCase();
   const sender = senderDisplayName(message);
   if (message?.sender?.kind === 'session') {
     return (

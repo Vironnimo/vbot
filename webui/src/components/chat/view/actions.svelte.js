@@ -178,7 +178,6 @@ export function createChatViewActions(context) {
     const focusAfterSend = context.layout.captureComposerFocus({
       includeMobile: true,
     });
-    if (sessionState) sessionState.focusedHistory = null;
     const outcome = await context.chatController.sendMessage(
       sessionState,
       content,
@@ -495,10 +494,7 @@ export function createChatViewActions(context) {
   };
 
   const loadOlderHistory = () =>
-    context.chatController.loadOlderHistory(
-      context.target.activeSessionState?.focusedHistory ??
-        context.target.activeSessionState,
-    );
+    context.chatController.loadOlderHistory(context.target.activeSessionState);
 
   return {
     captureDisplayedSession,

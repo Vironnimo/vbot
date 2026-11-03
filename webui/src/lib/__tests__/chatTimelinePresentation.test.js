@@ -146,6 +146,18 @@ describe('message presentation', () => {
       t('chat.role.userViaLive', { name: t('chat.role.user') }).toUpperCase(),
     ],
     ['a dictation', undefined, { input_origin: 'speech_transcription' }, ''],
+    [
+      'a Schedule prompt',
+      undefined,
+      { automation: { kind: 'schedule', id: 'job', name: 'Daily report' } },
+      t('chat.role.scheduleNamed', { name: 'Daily report' }).toUpperCase(),
+    ],
+    [
+      'a deleted Task input prompt',
+      undefined,
+      { automation: { kind: 'task_input', id: 'feed' } },
+      t('chat.role.taskInput').toUpperCase(),
+    ],
   ])(
     'labels persisted and live User messages with %s',
     (_label, sender, extra, expected) => {

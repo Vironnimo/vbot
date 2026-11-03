@@ -15,12 +15,14 @@ from unittest.mock import ANY
 import pytest
 
 from core.automation import LearningChanges
+from core.automation.cron import CronJobNotFoundError
+from core.automation.inputs import DirectInputNotFoundError
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
 from core.chat.messages import GoalEvent, ModelFallback, SubAgentMessage, WidgetState
 from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
-from core.runs import ChatRunManager, RunAdmission, RunKind
+from core.runs import ChatRunManager, Run, RunAdmission, RunKind
 from core.sessions import SUBAGENT_REPLY_TARGET_META_KEY, ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
@@ -65,6 +67,23 @@ class _HistoryAgents:
             raise AgentResolutionError(f"agent '{agent_id}@{project_id}' not found")
         model = self.session_models.get(session_id or "", self.model)
         return SimpleNamespace(compaction_policy=self.compaction_policy, model=model)
+
+
+class _Automations:
+    """The Schedules or Task inputs that exist, by id: their names."""
+
+    def __init__(self, names: dict[str, str]) -> None:
+        self.names = names
+
+    def get_job(self, job_id: str) -> SimpleNamespace:
+        if job_id not in self.names:
+            raise CronJobNotFoundError(job_id)
+        return SimpleNamespace(name=self.names[job_id])
+
+    def get(self, identity: str) -> dict[str, str]:
+        if identity not in self.names:
+            raise DirectInputNotFoundError(identity)
+        return {"name": self.names[identity]}
 
 
 class _Commands:
@@ -131,6 +150,8 @@ def history(tmp_path: Path) -> Iterator[_History]:
             ),
             chat_sessions=sessions,
             command_manager=_Commands(),
+            cron_service=_Automations({"schedule-a": "Daily report"}),
+            direct_inputs=_Automations({"feed": "Feed"}),
             memory=memory,
             learning_changes=LearningChanges(
                 memory=memory,
@@ -1374,41 +1395,44 @@ async def test_subagent_tree_lists_every_depth_with_its_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeline_opens_a_selected_run_without_reading_other_results(history: _History):
-    session = history.session()
-    seed_history(
-        session,
-        [
-            ChatMessage.user("first request"),
-            ChatMessage.assistant(model="test", content="first answer"),
-            _summary("first", "first-end"),
-            ChatMessage.user("second request"),
-            ChatMessage.assistant(model="test", content="second answer"),
-            _summary("second", "second-end"),
-            ChatMessage.user("third request"),
-            ChatMessage.assistant(model="test", content="third answer"),
-            _summary("third", "third-end"),
-        ],
+@pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
+async def test_an_automation_prompt_names_the_automation_that_started_its_run(
+    history: _History, method: str
+):
+    session = history.session(metadata={"input_source_id": "feed"})
+    sources = {
+        "scheduled": Run(run_id="scheduled", agent_id="coder", session_id=session.id),
+        "deleted": Run(run_id="deleted", agent_id="coder", session_id=session.id),
+        "input": Run(run_id="input", agent_id="coder", session_id=session.id),
+        "typed": Run(run_id="typed", agent_id="coder", session_id=session.id),
+    }
+    sources["scheduled"].schedule_id = "schedule-a"
+    sources["deleted"].schedule_id = "schedule-gone"
+    sources["input"].accessor_input_id = "feed:request"
+    await history.sessions.accept_accessor_input_async(
+        session.address, "feed:request", request_hash="hash", payload={}, queue_id="queue"
     )
-    before = history.sessions.summary(session.address)
-    assert before is not None
-    result = await history.read(
-        method="chat.timeline", session_id=session.id, focus_run_id="second"
-    )
-    assert [run["run_id"] for run in result["runs"]] == ["second"]
-    assert result["has_more"] is True
-    assert result["next_before"]
-    assert "second answer" in str(result["items"])
-    assert "third answer" not in str(result["items"])
-    assert "first answer" not in str(result["items"])
-    after = history.sessions.summary(session.address)
-    assert after is not None
-    assert after["local_unread_count"] == before["local_unread_count"]
-    for invalid in (
-        {"focus_run_id": "missing"},
-        {"focus_run_id": "second", "before": result["next_before"]},
-    ):
-        response = await call(
-            history.state, "chat.timeline", agent_id="coder", session_id=session.id, **invalid
-        )
-        assert response["ok"] is False
+    for run_id, run in sources.items():
+        await history.sessions.start_run(run)
+        writer = session.for_run(run_id)
+        writer.append(replace(ChatMessage.user(f"{run_id} prompt"), id=f"{run_id}-prompt"))
+        # A follow-up in the same Run is the user's own message, not the prompt.
+        writer.append(replace(ChatMessage.user(f"{run_id} follow-up"), id=f"{run_id}-follow"))
+        complete_run(writer, _summary(run_id, f"{run_id}-end"))
+    result = await history.read(method=method, session_id=session.id)
+    labels = {
+        message["id"]: message.get("automation")
+        for message in result["messages"]
+        if message["role"] == "user"
+    }
+    assert labels == {
+        "scheduled-prompt": {"kind": "schedule", "id": "schedule-a", "name": "Daily report"},
+        "scheduled-follow": None,
+        # A deleted Automation still marks its prompt, without a name.
+        "deleted-prompt": {"kind": "schedule", "id": "schedule-gone"},
+        "deleted-follow": None,
+        "input-prompt": {"kind": "task_input", "id": "feed", "name": "Feed"},
+        "input-follow": None,
+        "typed-prompt": None,
+        "typed-follow": None,
+    }

@@ -240,6 +240,18 @@ def _background_records(
     ]
 
 
+# The Automation that started a Run: its Schedule, or the Task input whose
+# request opened it (the input id is namespaced by the Session's source id).
+_RUN_SCHEDULE = "(SELECT n.schedule_id FROM run_notifications AS n WHERE n.run_key = r.run_key)"
+_RUN_TASK_INPUT = (
+    "(SELECT json_extract(s.metadata_json, '$.input_source_id') "
+    "FROM session_accessor_inputs AS i JOIN sessions AS s ON s.session_key = i.session_key "
+    "WHERE i.session_key = r.session_key AND i.run_key = r.run_key AND i.state = 'started' "
+    "AND substr(i.input_id, 1, instr(i.input_id, ':') - 1) "
+    "= json_extract(s.metadata_json, '$.input_source_id'))"
+)
+
+
 def _page_runs(
     connection: sqlite3.Connection,
     ranges: Sequence[ViewRange],
@@ -258,7 +270,8 @@ def _page_runs(
         value for view_range in ranges for value in _store_lineage.range_params(view_range)
     ]
     runs = connection.execute(
-        "SELECT r.run_key, r.run_id, r.status, r.start_seq, t.seq AS terminal_seq "
+        "SELECT r.run_key, r.run_id, r.status, r.start_seq, t.seq AS terminal_seq, "
+        f"{_RUN_SCHEDULE} AS schedule_id, {_RUN_TASK_INPUT} AS task_input_id "
         "FROM runs AS r LEFT JOIN entries AS t ON t.entry_key = r.end_entry_key "
         f"AND ({visible_terminal}) "
         "WHERE r.run_key IN (SELECT value FROM json_each(?)) ORDER BY r.start_seq, r.run_key",
@@ -267,12 +280,20 @@ def _page_runs(
     result = []
     for run in runs:
         terminal = run["terminal_seq"]
+        automation = (
+            {"kind": "schedule", "id": run["schedule_id"]}
+            if run["schedule_id"] is not None
+            else {"kind": "task_input", "id": run["task_input_id"]}
+            if run["task_input_id"] is not None
+            else None
+        )
         result.append(
             {
                 "run_id": run["run_id"],
                 "status": run["status"],
                 "start_sequence": run["start_seq"],
                 "terminal_sequence": terminal,
+                **({"automation": automation} if automation is not None else {}),
                 "complete": terminal is not None
                 and terminal < through
                 and (
@@ -309,7 +330,6 @@ def chat_history_snapshot(
     background_tool_names: Sequence[str] = (),
     background_note_marker: str | None = None,
     complete_runs: bool = False,
-    focus_run_id: str | None = None,
     after: tuple[str, int] | None = None,
     skip_unchanged: bool = False,
 ) -> Callable[[], SessionChatHistorySnapshot]:
@@ -328,35 +348,7 @@ def chat_history_snapshot(
         unchanged = _unchanged_history_snapshot(generation, through)
         return lambda: unchanged
     editable: frozenset[str]
-    if focus_run_id is not None:
-        run = connection.execute(
-            "SELECT run_key FROM runs WHERE session_key = ? AND run_id = ?",
-            (state["session_key"], focus_run_id),
-        ).fetchone()
-        if run is None:
-            raise ChatSessionError("The selected Run is unavailable in this Session")
-        where, params = _role_filter(excluded_roles)
-        batch = _store_history.view_batch(
-            connection,
-            ranges,
-            where=" AND ".join(filter(None, [where, "e.run_key = ?"])),
-            params=[*params, run["run_key"]],
-        )
-        if not batch.rows:
-            raise ChatSessionError("The selected Run is no longer in this Session's history")
-        page_floor = int(batch.rows[0]["seq"])
-        through = int(batch.rows[-1]["seq"]) + 1
-        has_more = (
-            _store_history.view_seq(
-                connection, ranges, where=where, params=params, upper=page_floor
-            )
-            is not None
-        )
-        takeover = latest_takeover(connection, ranges)
-        editable = frozenset(
-            str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
-        )
-    elif incremental:
+    if incremental:
         assert after is not None
         through = min(after[1] + (limit or 500), through)
         where, params = _role_filter(excluded_roles)
