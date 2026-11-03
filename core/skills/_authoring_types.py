@@ -35,6 +35,15 @@ class SkillAuthoringError(VBotError):
         self.diagnostics: list[str] = list(diagnostics) if diagnostics else [message]
 
 
+class SkillFileExistsError(SkillAuthoringError):
+    """A create-only support-file write found an existing target."""
+
+    def __init__(self, skill_name: str, relative_path: str) -> None:
+        super().__init__(f"Skill file '{relative_path}' already exists in '{skill_name}'.")
+        self.skill_name = skill_name
+        self.relative_path = relative_path
+
+
 class SkillProtectedError(SkillAuthoringError):
     """A background writer tried to change a Skill it may not change.
 

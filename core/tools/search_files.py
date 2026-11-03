@@ -348,10 +348,7 @@ def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[
         patterns, flag, note = retry
         if flag is not None:
             query.rg_args.append(flag)
-        try:
-            matched = execution.match_names(query, patterns, unique)
-        except SearchRefusedError:
-            raise error from None
+        matched = execution.match_names(query, patterns, unique)
         query.notes.append(note)
         return matched
 
@@ -711,10 +708,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         patterns, flag, note = retry
         if flag is not None:
             query.rg_args.append(flag)
-        try:
-            results = [execution.count_scan(query, patterns, scope) for scope in scopes]
-        except SearchRefusedError:
-            raise error from None
+        results = [execution.count_scan(query, patterns, scope) for scope in scopes]
         query.notes.append(note)
         repair_note = note
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):

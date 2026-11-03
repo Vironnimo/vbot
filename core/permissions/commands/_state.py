@@ -60,6 +60,9 @@ class Listing:
     roots: list[ListedRoot] | None = None
     filter: bool = False
     recursive: bool = False
+    # Text output can still name bounded targets (for example rg --files).
+    # Select-String searches text itself; other consumers may treat it as paths.
+    text: bool = False
 
 
 @dataclass(slots=True)
@@ -82,6 +85,13 @@ class Context:
     delayed_expansion: bool = False
     # The folders the script's process started in (where .NET resolves relative paths).
     start: tuple[Location, ...] = ()
+    # Proven scalar/text values, usable only after a top-level assignment.
+    constants: dict[str, tuple[int, str]] = field(default_factory=dict)
+    text_variables: dict[str, int] = field(default_factory=dict)
+    invalid_values: set[str] = field(default_factory=set)
+    values_unknown: bool = False
+    value_offset: int = -1
+    value_scope: bool = False
 
     def locations(self, scope: tuple[int, ...]) -> tuple[Location, ...]:
         for length in range(len(scope), -1, -1):

@@ -970,6 +970,9 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
         ({"pattern": "[z-a]x", "args": ["--dirs"]}, "[z-a]x", 1, 3),
         # A PCRE2 error has no caret to place: ripgrep's message stays.
         ({"pattern": r"x(?<=\c", "args": ["-P"]}, None, 0, 0),
+        # An automatic PCRE2 retry reports its own error, for contents and file names.
+        ({"pattern": r"(?<!prefix_[a-z]+)suffix"}, None, 0, 0),
+        ({"pattern": r"(?<!prefix_[a-z]+)suffix", "args": ["--files"]}, None, 0, 0),
     ],
 )
 async def test_a_regex_error_points_at_the_pattern_as_sent(

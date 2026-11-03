@@ -130,6 +130,9 @@ class RawCommand:
     an expression names, not a command word) and an ``item``, the content of
     a provider item a variable path names (``${C:/x}``; a write when assigned
     to). ``offset`` is the PowerShell source position an entry is ordered by.
+    ``top_level`` includes eager subexpressions, but excludes conditional and
+    deferred bodies. ``output_text`` and ``output_variable`` describe expression
+    pipeline output without executing the expression.
     """
 
     words: list[Word]
@@ -146,6 +149,19 @@ class RawCommand:
     call: MemberCall | None = None
     expression: Word | None = None
     item: Redirect | None = None
+    top_level: bool = False
+    output_text: bool = False
+    output_variable: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Assignment:
+    """One untyped, once-assigned top-level PowerShell variable, after its RHS."""
+
+    name: str
+    offset: int
+    value: Word | None = None
+    text: bool = False
 
 
 @dataclass(slots=True)
@@ -156,3 +172,4 @@ class Script:
     assigned: set[str] = field(default_factory=set)
     environment_changed: bool = False
     error: str | None = None
+    assignments: list[Assignment] = field(default_factory=list)

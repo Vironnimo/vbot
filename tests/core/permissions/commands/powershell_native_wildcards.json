@@ -1,170 +1,183 @@
 {
+  "assignments": [],
+  "functions": [],
+  "items": [],
+  "assigned": [],
+  "incomplete": false,
+  "errors": [],
   "commands": [
     {
       "stop_parsing": false,
       "pipeline": null,
-      "source": "python s*/a.py",
-      "redirects": [],
       "words": [
         {
           "quoted": false,
-          "source": "s*/a.py",
           "parts": [
             {
               "v": "s*/a.py",
               "k": "s"
             }
-          ]
+          ],
+          "source": "s*/a.py"
         }
       ],
       "invocation": "",
+      "source": "python s*/a.py",
+      "top_level": true,
       "offset": 0,
       "name": {
         "quoted": false,
-        "source": "python",
         "parts": [
           {
             "v": "python",
             "k": "s"
           }
-        ]
-      }
+        ],
+        "source": "python"
+      },
+      "redirects": []
     },
     {
       "stop_parsing": false,
       "pipeline": null,
-      "source": "python 's*/b.py'",
-      "redirects": [],
       "words": [
         {
           "quoted": true,
-          "source": "'s*/b.py'",
           "parts": [
             {
               "v": "s*/b.py",
               "k": "s"
             }
-          ]
+          ],
+          "source": "'s*/b.py'"
         }
       ],
       "invocation": "",
+      "source": "python 's*/b.py'",
+      "top_level": true,
       "offset": 16,
       "name": {
         "quoted": false,
-        "source": "python",
         "parts": [
           {
             "v": "python",
             "k": "s"
           }
-        ]
-      }
+        ],
+        "source": "python"
+      },
+      "redirects": []
     },
     {
       "stop_parsing": false,
       "pipeline": null,
-      "source": "python ('s*/c.py')",
-      "redirects": [],
       "words": [
         {
-          "source": "('s*/c.py')",
           "parts": [
             {
               "v": "s*/c.py",
               "k": "s"
             }
-          ]
+          ],
+          "source": "('s*/c.py')"
         }
       ],
       "invocation": "",
+      "source": "python ('s*/c.py')",
+      "top_level": true,
       "offset": 34,
       "name": {
         "quoted": false,
-        "source": "python",
         "parts": [
           {
             "v": "python",
             "k": "s"
           }
-        ]
-      }
+        ],
+        "source": "python"
+      },
+      "redirects": []
     },
     {
-      "offset": 42,
-      "redirects": [],
+      "pipeline": null,
+      "output_text": true,
       "expression": true,
       "source": "'s*/c.py'",
-      "pipeline": null
+      "top_level": true,
+      "offset": 42,
+      "redirects": []
     },
     {
       "stop_parsing": false,
       "pipeline": null,
-      "source": "python 'q*',s*/d",
-      "redirects": [],
       "words": [
         {
           "items": [
             {
               "quoted": true,
-              "source": "'q*'",
               "parts": [
                 {
                   "v": "q*",
                   "k": "s"
                 }
-              ]
+              ],
+              "source": "'q*'"
             },
             {
               "quoted": false,
-              "source": "s*/d",
               "parts": [
                 {
                   "v": "s*/d",
                   "k": "s"
                 }
-              ]
+              ],
+              "source": "s*/d"
             }
           ],
-          "source": "'q*',s*/d",
-          "parts": []
+          "parts": [],
+          "source": "'q*',s*/d"
         }
       ],
       "invocation": "",
+      "source": "python 'q*',s*/d",
+      "top_level": true,
       "offset": 54,
       "name": {
         "quoted": false,
-        "source": "python",
         "parts": [
           {
             "v": "python",
             "k": "s"
           }
-        ]
-      }
+        ],
+        "source": "python"
+      },
+      "redirects": []
     },
     {
       "stop_parsing": false,
       "pipeline": null,
-      "source": "Get-Content -LiteralPath s*/e",
-      "redirects": [],
       "words": [
         {
           "parameter": "LiteralPath",
-          "source": "-LiteralPath",
-          "parts": []
+          "parts": [],
+          "source": "-LiteralPath"
         },
         {
           "quoted": false,
-          "source": "s*/e",
           "parts": [
             {
               "v": "s*/e",
               "k": "s"
             }
-          ]
+          ],
+          "source": "s*/e"
         }
       ],
       "invocation": "",
+      "source": "Get-Content -LiteralPath s*/e",
+      "top_level": true,
+      "type": "Cmdlet",
       "offset": 72,
       "binding": {
         "unbound": [],
@@ -172,50 +185,45 @@
         "bound": {
           "LiteralPath": {
             "quoted": false,
-            "source": "s*/e",
             "parts": [
               {
                 "v": "s*/e",
                 "k": "s"
               }
-            ]
+            ],
+            "source": "s*/e"
           }
         }
       },
       "name": {
         "quoted": false,
-        "source": "Get-Content",
         "parts": [
           {
             "v": "Get-Content",
             "k": "s"
           }
-        ]
+        ],
+        "source": "Get-Content"
       },
-      "type": "Cmdlet",
+      "redirects": [],
       "resolved": "Get-Content"
     }
   ],
-  "calls": [],
   "strings": [
     {
       "word": {
         "quoted": true,
-        "source": "'s*/c.py'",
         "parts": [
           {
             "v": "s*/c.py",
             "k": "s"
           }
-        ]
+        ],
+        "source": "'s*/c.py'"
       },
       "offset": 42
     }
   ],
-  "assigned": [],
-  "errors": [],
-  "items": [],
-  "incomplete": false,
-  "environment_changed": false,
-  "functions": []
+  "calls": [],
+  "environment_changed": false
 }

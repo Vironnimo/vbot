@@ -52,6 +52,7 @@ from core.skills._authoring_types import (
     SkillAuthoringError,
     SkillFileChange,
     SkillFileChangeKind,
+    SkillFileExistsError,
     SkillMergeAccessError,
     SkillProtectedError,
     SkillProtection,
@@ -435,8 +436,9 @@ class SkillAuthoringService:
         content: str,
         *,
         writer: SkillWriter,
+        create_only: bool = False,
     ) -> SkillWriteResult:
-        """Create or replace one UTF-8 support file."""
+        """Write one UTF-8 support file; create_only refuses every existing target."""
         if not isinstance(content, str):
             raise SkillAuthoringError("Support file content must be a string.")
         with self._write_lock:
@@ -444,6 +446,9 @@ class SkillAuthoringService:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
             _reject_new_reserved_path(skill_dir, relative_path)
             resource_path = self._resource_path(skill_dir, relative_path)
+            normalized = _normalized_support_path(relative_path)
+            if create_only and exists_strict(resource_path, follow_symlinks=False):
+                raise SkillFileExistsError(skill_name, normalized)
             history = SkillHistory(skill_dir.parent)
             self._revisions._observe(history, skill_name, skill_dir, writer)
             existed = resource_path.is_file()
@@ -459,8 +464,14 @@ class SkillAuthoringService:
             text = _normalize_newlines(content)
             styled = _to_line_ending(text, file_ending)
             resource_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(resource_path, styled.encode("utf-8"))
-            normalized = _normalized_support_path(relative_path)
+            try:
+                atomic_write_bytes(
+                    resource_path, styled.encode("utf-8"), replace_existing=not create_only
+                )
+            except FileExistsError as error:
+                if not create_only:
+                    raise
+                raise SkillFileExistsError(skill_name, normalized) from error
             return SkillWriteResult(
                 name=skill_name,
                 operation="write_file",
@@ -776,6 +787,7 @@ __all__ = [
     "SkillAuthoringError",
     "SkillFileChange",
     "SkillFileChangeKind",
+    "SkillFileExistsError",
     "SkillMergeAccessError",
     "SkillProtectedError",
     "SkillProtection",

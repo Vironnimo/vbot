@@ -214,10 +214,51 @@ class Analysis:
                 self.environment_dynamic.add(environment_key(name[4:]))
         if context.shell == "powershell":
             _cmdlets.prepare(self, context, script)
+            self._constant_values(context, script)
+
+    def _constant_values(self, context: Context, script: Script) -> None:
+        """Resolve only immutable scalar assignments; no evaluation of script code."""
+        while True:
+            context.constants.clear()
+            context.text_variables.clear()
+            context.value_scope = True
+            for assignment in script.assignments:
+                if context.values_unknown or context.environment_changed:
+                    break
+                if assignment.name in context.invalid_values:
+                    continue
+                context.value_offset = assignment.offset
+                word = assignment.value
+                if word is not None and word.items is None:
+                    # Location-dependent values cannot be frozen before the walk.
+                    if any(
+                        part.kind == "variable" and part.value.rsplit(":", 1)[-1] == "pwd"
+                        for part in word.parts
+                    ):
+                        continue
+                    value = self.value(context, word, context.locations(())[0])
+                    if value.text is not None:
+                        context.constants[assignment.name] = (assignment.offset, value.text)
+                        context.text_variables[assignment.name] = assignment.offset
+                if assignment.text:
+                    context.text_variables[assignment.name] = assignment.offset
+            # A constant can name a variable-provider target. Invalidate those
+            # mutations and their dependants before using any derived value.
+            if not _cmdlets.resolve_mutations(self, context, script):
+                break
+        context.value_scope = False
+        context.value_offset = -1
 
     # Commands ---------------------------------------------------------------
 
     def _command(self, context: Context, raw: RawCommand) -> None:
+        context.value_scope = raw.top_level
+        context.value_offset = raw.offset
+        if raw.output_variable is not None and raw.top_level:
+            defined_at = context.text_variables.get(raw.output_variable)
+            raw.output_text |= defined_at is not None and defined_at < raw.offset
+        if raw.output_text:
+            self.text_output(context, raw)
         if raw.call is not None:
             _dotnet.member_call(self, context, raw)
             return
@@ -249,8 +290,7 @@ class Analysis:
         if name is None:
             self.unresolve("command", raw.source, "the command name is computed when it runs")
             return
-        if _paths.is_clearly_path(name, windows_switches=False):
-            self.access(context, raw, "read", name_word, glob=False, tier="a")
+        self.program_path(context, raw, name_word)
         self.program(context, raw, _paths.program_name(name), raw.words[1:])
 
     def _cmd_command(self, context: Context, raw: RawCommand) -> None:
@@ -306,6 +346,7 @@ class Analysis:
             self.emit(context, name, arguments, raw)
             self.apply_spec(context, raw, lowered, spec, arguments)
             return
+        self.program_path(context, raw, raw.words[0])
         self.program(context, raw, _paths.program_name(name), arguments)
 
     def link(
@@ -373,7 +414,51 @@ class Analysis:
         if name is None:
             self.unresolve("command", raw.source, "the command name is computed when it runs")
             return
+        self.program_path(context, raw, words[0])
         self.program(context, raw, _paths.program_name(name), list(words[1:]), fed=fed)
+
+    def program_path(
+        self, context: Context, raw: RawCommand, word: Word, *, script: bool = False
+    ) -> None:
+        """Execution is governed by Command rules; named native binaries still honor Read denies.
+
+        Scripts are read in full. Only explicit .exe/.com names identify native
+        binaries without looking up or opening the program on disk.
+        """
+        name = self.value(context, word, self.first(context, raw)).text
+        if name is None or not (
+            script or re.search(r"[\\/]", name) or name.lower().endswith(".ps1")
+        ):
+            return
+        native = not script and name.lower().endswith((".exe", ".com"))
+        if not native:
+            self.access(context, raw, "read", word, glob=False, tier="a")
+            return
+        resolved = self.resolve_word(context, raw, word, glob=word.glob)
+        if resolved is None:
+            self.access(context, raw, "read", word, glob=False, tier="a")
+            return
+        for path, source, pattern in resolved:
+            self._mentions.setdefault(
+                (path, pattern),
+                PlannedPathAccess("read", path, source[:SOURCE_LIMIT], glob=pattern),
+            )
+
+    def native_text_output(self, name: str) -> bool:
+        """Known native programs emit text; unknown PowerShell commands may return file objects."""
+        lowered = name.lower()
+        program = _paths.program_name(lowered)
+        if program in POWERSHELLS or lowered.endswith((".ps1", ".psm1")):
+            return False
+        return bool(
+            lowered.endswith((".exe", ".com"))
+            or program in PROGRAMS
+            or program in HANDLERS
+            or program in GLOBAL_OPTIONS
+            or program in RUNNERS
+            or PYTHONS.fullmatch(program)
+            or program == "godot"
+        )
 
     def program(
         self,
@@ -744,17 +829,25 @@ class Analysis:
 
     # Pipelines --------------------------------------------------------------
 
+    def text_output(self, context: Context, raw: RawCommand) -> None:
+        """Record output that Select-String searches as text, independently of target bounds."""
+        if raw.pipeline is not None:
+            key = (raw.pipeline.id, raw.pipeline.index)
+            context.listings[key] = replace(context.listings.get(key, Listing()), text=True)
+
     def listing_before(self, context: Context, pipeline: Pipeline) -> Listing | None:
         """What the pipeline hands the element at *pipeline*, through filters; None if unknown."""
         index = pipeline.index - 1
+        text = False
         while index >= 0:
             listing = context.listings.get((pipeline.id, index))
             if listing is None:
-                return None
+                return Listing(text=True) if text else None
+            text = text or listing.text
             if not listing.filter:
-                return listing if listing.roots is not None else None
+                return replace(listing, text=text) if listing.roots is not None or text else None
             index -= 1
-        return None
+        return Listing(text=True) if text else None
 
     def pipeline_targets(self, context: Context, raw: RawCommand, kind: AccessKind) -> None:
         """A command that takes its targets from its input: bounded by the listing before it."""
@@ -762,7 +855,7 @@ class Analysis:
             self.unresolve(UNRESOLVED_KIND[kind], raw.source, "it takes its targets from its input")
             return
         listing = self.listing_before(context, raw.pipeline)
-        if listing is None:
+        if listing is None or listing.roots is None:
             self.unresolve(
                 UNRESOLVED_KIND[kind],
                 raw.source,
@@ -819,6 +912,20 @@ class Analysis:
             if name == "HOME":
                 return self.env.get("HOME") or str(self.home)
             return self.environment(name)
+        scoped = False
+        if context.shell == "powershell" and name.partition(":")[0] in {
+            "global",
+            "script",
+            "local",
+            "private",
+            "using",
+        }:
+            scoped = True
+            name = name.partition(":")[2]
+        if context.shell == "powershell" and context.value_scope and not scoped:
+            constant = context.constants.get(name)
+            if constant is not None and constant[0] < context.value_offset:
+                return constant[1]
         if context.environment_changed or name in context.assigned:
             return None
         if name.startswith("env:"):

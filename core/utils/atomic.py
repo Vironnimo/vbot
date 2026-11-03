@@ -8,6 +8,10 @@ default (guaranteeing the same filesystem for the replace); pass ``data_dir``
 to stage it under the data directory's canonical atomic-temporary area instead.
 ``atomic_write_text`` writes the text verbatim: newlines stay ``\n`` on every
 platform instead of turning into ``\r\n`` on Windows.
+``atomic_write_bytes(..., replace_existing=False)`` publishes the completed
+temporary file with an exclusive hard link instead: an existing destination
+raises ``FileExistsError`` and stays untouched, including one created while
+the temporary file was being written.
 Pass ``mode`` (e.g. ``0o600`` for secret control records) to create the temp
 file with those exact permissions and re-assert them on the target after the
 replace. ``owner_only=True`` makes the file accessible to the current user
@@ -76,6 +80,7 @@ def atomic_write_bytes(
     data_dir: Path | None = None,
     mode: int | None = None,
     owner_only: bool = False,
+    replace_existing: bool = True,
 ) -> None:
     """Atomically write ``data`` to ``target_path`` (see module docstring)."""
 
@@ -85,7 +90,14 @@ def atomic_write_bytes(
             handle.flush()
             os.fsync(handle.fileno())
 
-    _atomic_write(target_path, write, data_dir=data_dir, mode=mode, owner_only=owner_only)
+    _atomic_write(
+        target_path,
+        write,
+        data_dir=data_dir,
+        mode=mode,
+        owner_only=owner_only,
+        replace_existing=replace_existing,
+    )
 
 
 def atomic_write_text(
@@ -163,6 +175,7 @@ def _atomic_write(
     data_dir: Path | None,
     mode: int | None = None,
     owner_only: bool = False,
+    replace_existing: bool = True,
 ) -> None:
     if owner_only and mode is None:
         mode = OWNER_ONLY_MODE
@@ -182,7 +195,11 @@ def _atomic_write(
             # Before any content: the secret never sits in a file others can read.
             restrict_to_owner(temp_path)
         write(temp_path)
-        replace_path(temp_path, target_path)
+        if replace_existing:
+            replace_path(temp_path, target_path)
+        else:
+            os.link(temp_path, target_path)
+            temp_path.unlink()
         _fsync_replace_directories(temp_path, target_path)
     except BaseException:
         # A streamed writer can fail outside the OS layer; never leave its temp.

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.permissions.commands._syntax import (
+    Assignment,
     Binding,
     CallTarget,
     CallTargetKind,
@@ -365,6 +366,15 @@ def lower(result: dict[str, Any]) -> Script:
     script = Script(
         assigned={str(name) for name in result.get("assigned") or []},
         environment_changed=bool(result.get("environment_changed")),
+        assignments=[
+            Assignment(
+                str(entry["name"]),
+                int(entry["offset"]),
+                None if entry.get("value") is None else _word(entry["value"]),
+                bool(entry.get("text")),
+            )
+            for entry in result.get("assignments") or []
+        ],
     )
     pipelines: dict[int, int] = {}
 
@@ -385,6 +395,7 @@ def lower(result: dict[str, Any]) -> Script:
                 [],
                 str(entry.get("source", "")),
                 offset=int(entry.get("offset", -1)),
+                top_level=bool(entry.get("top_level")),
                 call=MemberCall(
                     member=None if entry.get("member") is None else str(entry["member"]),
                     static=bool(entry.get("static")),
@@ -426,7 +437,16 @@ def _command(entry: dict[str, Any], pipeline: Pipeline | None) -> RawCommand:
     ]
     offset = int(entry.get("offset", -1))
     if entry.get("expression"):
-        return RawCommand([], str(entry.get("source", "")), redirects, pipeline, offset=offset)
+        return RawCommand(
+            [],
+            str(entry.get("source", "")),
+            redirects,
+            pipeline,
+            offset=offset,
+            top_level=bool(entry.get("top_level")),
+            output_text=bool(entry.get("output_text")),
+            output_variable=entry.get("output_variable"),
+        )
     binding = None
     if isinstance(entry.get("binding"), dict):
         raw = entry["binding"]
@@ -454,6 +474,7 @@ def _command(entry: dict[str, Any], pipeline: Pipeline | None) -> RawCommand:
         script_function=bool(entry.get("script_function")),
         stop_parsing=bool(entry.get("stop_parsing")),
         offset=offset,
+        top_level=bool(entry.get("top_level")),
     )
 
 

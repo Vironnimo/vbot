@@ -8,6 +8,7 @@ from pathlib import Path
 from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillFileExistsError,
     SkillReference,
     SkillWriter,
     SkillWriteResult,
@@ -73,10 +74,24 @@ def _apply(
         return _patch(authoring, target_root, call, writer)
     file_path = call.file_path or ""
     if call.action == "write_file":
-        result = authoring.write_file(
-            target_root, name, file_path, call.content or "", writer=writer
-        )
-        return result, f"Wrote {file_path} of Skill '{name}'."
+        try:
+            result = authoring.write_file(
+                target_root,
+                name,
+                file_path,
+                call.content or "",
+                writer=writer,
+                create_only=call.create_only,
+            )
+        except SkillFileExistsError as error:
+            raise _RefusalError(
+                "file_exists",
+                f"Nothing was changed. {error.relative_path} already exists in Skill "
+                f"'{error.skill_name}'. Use action patch to change part of it, or "
+                "write_file to replace it.",
+            ) from error
+        verb = "Created" if call.create_only else "Wrote"
+        return result, f"{verb} {file_path} of Skill '{name}'."
     if call.action == "remove_file":
         result = authoring.remove_file(target_root, name, file_path, writer=writer)
         return result, f"Removed {file_path} from Skill '{name}'."

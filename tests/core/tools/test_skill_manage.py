@@ -16,6 +16,7 @@ from core.permissions import BoundaryContext, PermissionBoundary, normalize_perm
 from core.providers.tool_schema import render_tool_definitions
 from core.runs import RunKind
 from core.skills import _history as skill_history_module
+from core.skills import authoring as skill_authoring_module
 from core.skills.authoring import (
     HUMAN_WRITER,
     SkillAuthoringService,
@@ -408,6 +409,19 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "Leave it as it is and name the needed change in your reply.",
             id="pinned-skill",
         ),
+        pytest.param(
+            "pinned",
+            {
+                "action": "create",
+                "name": "demo",
+                "file_path": "references/new.md",
+                "content": "New.",
+            },
+            "skill_protected",
+            "Skill 'demo' is pinned by the user, so you cannot change it; nothing changed. "
+            "Leave it as it is and name the needed change in your reply.",
+            id="pinned-support-file-create",
+        ),
         # Without its history, whether the user pinned the Skill is unknown.
         pytest.param(
             "unreadable",
@@ -667,12 +681,6 @@ _MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load
             id="publish-with-a-file",
         ),
         pytest.param(
-            {"action": "create", "file_path": "references/notes.md", "content": "Notes."},
-            "create writes SKILL.md. To write references/notes.md, use action write_file with "
-            "that file_path; omit file_path to create SKILL.md.",
-            id="create-support-file",
-        ),
-        pytest.param(
             {"action": "delete", "content": _skill_md()},
             "delete removes the whole Skill and takes no text. Use edit or patch to change it "
             "instead.",
@@ -798,19 +806,20 @@ def test_content_must_be_present_and_textual(
     assert not (skill_path.parent / "assets/empty.txt").exists()
 
 
-def test_write_and_remove_support_file(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["write_file", "create"])
+def test_write_and_remove_support_file(tmp_path: Path, action: str) -> None:
     harness, skill_file = _patch_harness(tmp_path)
-    arguments = {"action": "write_file", "name": "demo", "file_path": "references/notes.md"}
+    arguments = {"action": action, "name": "demo", "file_path": "references/notes.md"}
 
     written = harness.run({**arguments, "content": "Useful notes\n"})
     written_files = harness.changed_files()
-    harness.run({**arguments, "content": "Useful notes\nMore\n"})
+    harness.run({**arguments, "action": "write_file", "content": "Useful notes\nMore\n"})
     rewritten_files = harness.changed_files()
     removed = harness.run(
         {"action": "remove_file", "name": "demo", "file_path": "references/notes.md"}
     )
 
-    assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
+    assert written["ok"] is True
     assert removed["data"] == {"content": "Removed references/notes.md from Skill 'demo'."}
     # The user sees each change as a diff of the package file.
     assert written_files == [("references/notes.md", "created", 1, 0)]
@@ -818,6 +827,55 @@ def test_write_and_remove_support_file(tmp_path: Path) -> None:
     assert harness.changed_files() == [("references/notes.md", "deleted", 0, 2)]
     assert not (skill_file.parent / "references").exists()
     assert harness.invalidated == ["main", "main", "main"]
+
+
+@pytest.mark.parametrize(
+    ("when", "existing"),
+    [
+        ("before", b"same\n"),
+        ("before", b"different\n"),
+        ("before", b""),
+        ("before", None),
+        ("during", b"external writer\n"),
+    ],
+)
+def test_create_support_file_never_replaces_an_existing_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, when: str, existing: bytes | None
+) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    target = skill_file.parent / "references/notes.md"
+    target.parent.mkdir()
+    if when == "during":
+        write = skill_authoring_module.atomic_write_bytes
+
+        def external_write(path: Path, content: bytes, **kwargs: Any) -> None:
+            assert existing is not None
+            path.write_bytes(existing)
+            write(path, content, **kwargs)
+
+        monkeypatch.setattr(skill_authoring_module, "atomic_write_bytes", external_write)
+    elif existing is None:
+        target.mkdir()
+    else:
+        target.write_bytes(existing)
+    revisions = harness.authoring.recorded_revisions(harness.home("main"))
+
+    result = harness.run(
+        {
+            "action": "create",
+            "name": "demo",
+            "file_path": "references/notes.md",
+            "content": "same\n",
+        }
+    )
+
+    assert (result["ok"], result["error"]["code"]) == (False, "file_exists")
+    if existing is None:
+        assert target.is_dir()
+    else:
+        assert target.read_bytes() == existing
+    assert harness.authoring.recorded_revisions(harness.home("main")) == revisions
+    assert harness.invalidated == []
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -1031,6 +1089,11 @@ def test_delete_names_the_skill_that_absorbed_it(
             ["is a Project Skill — read-only here."],
         ),
         (
+            "project",
+            {"action": "create", "file_path": "references/new.md", "content": "New."},
+            ["is a Project Skill — read-only here."],
+        ),
+        (
             "shared",
             {"action": "delete"},
             ["is shared with you", "only its owner or the user can delete it"],
@@ -1070,12 +1133,18 @@ def test_foreign_skill_names_report_their_scope_instead_of_not_found(
     assert not harness.invalidated
 
 
-def test_unknown_name_keeps_plain_not_found(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["edit", "create-file"])
+def test_unknown_name_keeps_plain_not_found(tmp_path: Path, action: str) -> None:
     harness = _Harness(tmp_path, scopes={"foreign": "bundled"})
 
-    result = harness.run(
-        {"action": "edit", "name": "no-such-skill", "content": _skill_md(name="no-such-skill")}
-    )
+    arguments: dict[str, object] = {
+        "action": "edit",
+        "name": "no-such-skill",
+        "content": _skill_md(name="no-such-skill"),
+    }
+    if action == "create-file":
+        arguments.update(action="create", file_path="references/notes.md", content="Notes.")
+    result = harness.run(arguments)
 
     assert result == tool_failure(
         "skill_not_found",
@@ -1083,16 +1152,31 @@ def test_unknown_name_keeps_plain_not_found(tmp_path: Path) -> None:
         "your own yet; use action create to add one.",
         retryable=False,
     )
+    assert not harness.home("main").exists()
 
 
 @pytest.mark.parametrize("name", ["demos", "Demo", "xdemo"])
-def test_similar_skill_name_is_suggested_and_nothing_is_written(tmp_path: Path, name: str) -> None:
+@pytest.mark.parametrize("action", ["patch", "create-file"])
+def test_similar_skill_name_is_suggested_and_nothing_is_written(
+    tmp_path: Path, name: str, action: str
+) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     before = skill_file.read_bytes()
 
-    result = harness.run(
-        {"action": "patch", "name": name, "old_string": "# Demo", "new_string": "# Other"}
-    )
+    arguments: dict[str, object] = {
+        "action": "patch",
+        "name": name,
+        "old_string": "# Demo",
+        "new_string": "# Other",
+    }
+    if action == "create-file":
+        arguments = {
+            "action": "create",
+            "name": name,
+            "file_path": "references/notes.md",
+            "content": "Notes.",
+        }
+    result = harness.run(arguments)
 
     assert result == tool_failure(
         "skill_not_found",
@@ -1388,10 +1472,20 @@ def test_rules_that_limit_writes_keep_changes_to_own_skills(
         {"action": "patch", "name": "notes", "old_string": "# Demo", "new_string": "# Mine"},
         permissions=boundary,
     )
+
+    def create_file(name: str) -> dict[str, Any]:
+        return harness.run(
+            {"action": "create", "name": name, "file_path": "references/new.md", "content": "New."},
+            permissions=boundary,
+        )
+
+    assert create_file("notes")["ok"] is True
     results = {
         "global": patch("guide"),
         "global-scope": patch("guide", scope="global"),
         "shared": patch("deploy"),
+        "global-create": create_file("guide"),
+        "shared-create": create_file("deploy"),
         "publish": harness.run({"action": "publish", "name": "notes"}, permissions=boundary),
     }
     assert own["ok"] is True
@@ -1407,7 +1501,13 @@ def test_rules_that_limit_writes_keep_changes_to_own_skills(
                 f"rules let you change only your own Skills, {rule}the user.",
                 retryable=False,
             )
-            for key, name in (("global", "guide"), ("global-scope", "guide"), ("shared", "deploy"))
+            for key, name in (
+                ("global", "guide"),
+                ("global-scope", "guide"),
+                ("shared", "deploy"),
+                ("global-create", "guide"),
+                ("shared-create", "deploy"),
+            )
         },
         "publish": tool_failure(
             "permission_denied",
