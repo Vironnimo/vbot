@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -13,6 +13,7 @@ from core.permissions import (
     PermissionCeiling,
     join_ceilings,
     normalize_permission_rules,
+    normalize_session_grants,
     permission_rules_to_dict,
     resolve_rule_set,
 )
@@ -157,6 +158,11 @@ class AgentOverrides:
     stored form: the most specific level above the Agent's resolved rules, per
     part (:meth:`rules_over`). Only the user's setter
     (``SessionResolution.set_session_permission_rules``) changes it.
+
+    ``permission_grants`` are the Session Grants: allow rules the user added
+    while approving a Tool call, as normalized rule strings. They add to the
+    Agent's own rules (after the Session's rule set) and never to an inherited
+    ceiling; under full access they change nothing.
     """
 
     model: str | None = None
@@ -168,6 +174,7 @@ class AgentOverrides:
     thinking_effort_default: bool = False
     permission_ceiling: Mapping[str, Any] | None = None
     permission_rules: Mapping[str, Any] | None = None
+    permission_grants: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.permission_ceiling is not None:
@@ -180,6 +187,11 @@ class AgentOverrides:
                 "permission_rules",
                 permission_rules_to_dict(normalize_permission_rules(self.permission_rules)),
             )
+        object.__setattr__(
+            self,
+            "permission_grants",
+            tuple(rule.text for rule in normalize_session_grants(self.permission_grants)),
+        )
         if not isinstance(self.thinking_effort_default, bool):
             raise ValueError("thinking_effort_default must be a boolean")
         if self.thinking_effort_default and self.thinking_effort is not None:
@@ -221,6 +233,7 @@ class AgentOverrides:
             ),
             permission_ceiling=value.get("permission_ceiling"),
             permission_rules=value.get("permission_rules"),
+            permission_grants=tuple(value.get("permission_grants") or ()),
         )
 
     def ceiling(self) -> PermissionCeiling | None:
@@ -234,13 +247,27 @@ class AgentOverrides:
 
         Without Session rules the Agent's rules stay as they are; a part the
         Session sets replaces the Agent's, so the Full access preset lifts them all.
+        The Session Grants then add to the allow rules of a restricting result.
         """
-        if self.permission_rules is None:
-            return agent_rules
-        return resolve_rule_set(
-            normalize_permission_rules(self.permission_rules),
-            agent_rules if agent_rules is not None else PERMISSION_PRESETS["full_access"],
-        )
+        rules = agent_rules
+        if self.permission_rules is not None:
+            rules = resolve_rule_set(
+                normalize_permission_rules(self.permission_rules),
+                agent_rules if agent_rules is not None else PERMISSION_PRESETS["full_access"],
+            )
+        if rules is None or not self.permission_grants:
+            return rules
+        added = [
+            rule
+            for rule in normalize_session_grants(self.permission_grants)
+            if rule not in (rules.allow or ())
+        ]
+        return replace(rules, allow=(*(rules.allow or ()), *added))
+
+    @property
+    def changes_permission_rules(self) -> bool:
+        """Whether :meth:`rules_over` can differ from the Agent's rules."""
+        return self.permission_rules is not None or bool(self.permission_grants)
 
     @property
     def grants_full_access(self) -> bool:
@@ -258,8 +285,6 @@ class AgentOverrides:
 
     def with_ceiling(self, added: PermissionCeiling | None) -> AgentOverrides:
         """These overrides with *added* joined into the ceiling, which never widens."""
-        from dataclasses import replace
-
         joined = join_ceilings(self.ceiling(), added)
         if joined is None:
             return self
@@ -267,8 +292,6 @@ class AgentOverrides:
 
     def capture(self, agent: RuntimeAgent) -> AgentOverrides:
         """Keep this Session's Model and effort independently of later Agent edits."""
-        from dataclasses import replace
-
         effort = self.thinking_effort
         if effort is None and not self.thinking_effort_default:
             effort = agent.thinking_effort or None
@@ -286,6 +309,7 @@ class AgentOverrides:
             not self.thinking_effort_default
             and self.permission_ceiling is None
             and self.permission_rules is None
+            and not self.permission_grants
             and all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
         )
 
@@ -320,6 +344,8 @@ class AgentOverrides:
             stored["permission_ceiling"] = dict(self.permission_ceiling)
         if self.permission_rules is not None:
             stored["permission_rules"] = dict(self.permission_rules)
+        if self.permission_grants:
+            stored["permission_grants"] = list(self.permission_grants)
         return {AGENT_OVERRIDES_META_KEY: stored}
 
 

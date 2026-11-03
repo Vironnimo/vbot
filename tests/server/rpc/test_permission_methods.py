@@ -297,6 +297,7 @@ async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> No
             "stored_ceiling": False,
             "session_rules": None,
             "session_preset": None,
+            "session_grants": [],
         }
 
 
@@ -427,6 +428,7 @@ async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
             "stored_ceiling": False,
             "session_rules": full["session_rules"],
             "session_preset": "full_access",
+            "session_grants": [],
         }
 
         # null gives the Session the Agent's rules again.
@@ -462,3 +464,60 @@ async def test_approval_rpcs_project_pending_and_resolve_once() -> None:
     assert (await rpc_error(state, "permissions.resolve", id="approval-one", decision="always"))[
         "code"
     ] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_the_user_remembers_an_approval_for_the_session(tmp_path: Path) -> None:
+    state = _state(tmp_path, {})
+    state.runtime.agents.create(
+        "coder", "Coder", permission_rules={"commands": "listed", "allow": ["Shell(ls *)"]}
+    )
+    state.runtime.chat_sessions.create("coder", session_id="s1")
+    state.runtime.chat_sessions.create("coder", session_id="s2")
+    resolved: list[tuple[str, str]] = []
+
+    class Approvals:
+        def approvals_snapshot(self) -> JsonObject:
+            request = {"id": "approval-one", "project_id": None, "agent_id": "coder"}
+            return {"revision": 1, "requests": [{**request, "session_id": "s1"}]}
+
+        def resolve_approval(self, request_id: str, decision: str) -> bool:
+            resolved.append((request_id, decision))
+            return True
+
+    state.chat_runs = Approvals()
+    resolver = state.runtime.agent_resolver
+    remember = {"id": "approval-one", "decision": "allow", "remember": ["Bash(git push:*)"]}
+
+    # An Agent's own call cannot widen its Session.
+    assert (await rpc_error(state, "permissions.resolve", **remember))["code"] == "access_denied"
+    with bound_principal(HOST):
+        for wrong in (
+            {**remember, "decision": "reject"},
+            {**remember, "remember": ["Shell(rm *)", "Read(/a)", 7]},
+            {**remember, "remember": []},
+        ):
+            assert (await rpc_error(state, "permissions.resolve", **wrong))[
+                "code"
+            ] == "invalid_request"
+        assert resolved == []
+
+        # The grant is stored before the waiting call goes on, for this Session only.
+        assert await rpc_result(state, "permissions.resolve", **remember) == {"resolved": True}
+        assert resolved == [("approval-one", "allow")]
+        allow = resolver.resolve_agent(None, "coder", session_id="s1").permission_rules.allow
+        assert [rule.text for rule in allow] == ["Shell(ls *)", "Shell(git push *)"]
+        other = resolver.resolve_agent(None, "coder", session_id="s2").permission_rules.allow
+        assert [rule.text for rule in other] == ["Shell(ls *)"]
+        params = {"agent_id": "coder", "session_id": "s1"}
+        described = await rpc_result(state, "permissions.session", **params)
+        assert described["session_grants"] == ["Shell(git push *)"]
+        assert described["session_rules"] is None
+
+        removed = await rpc_result(
+            state, "permissions.remove_session_grants", **params, rules=["Shell(git push *)"]
+        )
+        assert removed == {"session_grants": []}
+        allow = resolver.resolve_agent(None, "coder", session_id="s1").permission_rules.allow
+        assert [rule.text for rule in allow] == ["Shell(ls *)"]
+    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 2

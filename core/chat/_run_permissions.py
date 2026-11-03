@@ -230,9 +230,11 @@ async def _session_overrides(
 
 
 def _session_rule_state(overrides: AgentOverrides) -> str:
-    """What a Session stores that decides its boundary: its rules and its ceiling."""
+    """What a Session stores that decides its boundary: its rules, grants and ceiling."""
     return json.dumps(
-        [overrides.permission_rules, overrides.permission_ceiling], sort_keys=True, default=str
+        [overrides.permission_rules, overrides.permission_grants, overrides.permission_ceiling],
+        sort_keys=True,
+        default=str,
     )
 
 

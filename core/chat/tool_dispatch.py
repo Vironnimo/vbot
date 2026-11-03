@@ -35,6 +35,13 @@ from core.chat._tool_result_projection import (
 )
 from core.chat.events import _emit_tool_context_event, _timing_payload
 from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
+from core.permissions import (
+    ApprovalRequirement,
+    GrantSuggestion,
+    PermissionBoundary,
+    run_permission_decision,
+    suggest_session_grants,
+)
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT
 from core.sessions.history import skill_tool_activation_name
 from core.skills.policy import SkillPackageRef
@@ -55,6 +62,20 @@ from core.utils.workers import settle_before_cancelling
 _LOGGER = get_logger("chat")
 
 # How long tool_result hooks of a finished call may still run after a Run cancel.
+
+
+async def _session_grant_suggestion(
+    boundary: PermissionBoundary, requirements: Sequence[ApprovalRequirement]
+) -> GrantSuggestion | None:
+    """The rules that would remember an approval for the Session, if any can."""
+    if not boundary.restricted:
+        return None
+    try:
+        return await run_permission_decision(lambda: suggest_session_grants(boundary, requirements))
+    except OSError, ValueError:
+        # The approval stays possible once; only remembering it is not offered.
+        _LOGGER.warning("Could not suggest Session permission grants", exc_info=True)
+        return None
 
 
 class ToolRound:
@@ -102,20 +123,25 @@ class ToolRound:
         workspace = _agent_workspace(agent, context.data_root)
 
         async def request_approval(tool_context, reason, requirements, arguments, cwd):
+            suggestion = await _session_grant_suggestion(tool_context.permissions, requirements)
             payload = {
                 "tool_call_id": tool_context.tool_call_id,
                 "tool_name": tool_context.tool_name,
                 "execution": tool_context.execution,
                 "reason": reason,
-                "requirements": [item.to_dict() for item in requirements],
+                "requirements": [item.to_payload() for item in requirements],
                 "arguments": arguments,
                 "cwd": str(cwd) if cwd is not None else None,
+                "session_grant": suggestion.to_dict() if suggestion is not None else None,
             }
 
             safe_payload = _leaving_call(
                 self._registry._secret_masker(), tool_context.mask_prepared_secrets(payload)
             )
             safe_payload["display_redacted"] = safe_payload != payload
+            if safe_payload["session_grant"] != payload["session_grant"]:
+                # A masked rule would grant something else than it shows.
+                safe_payload["session_grant"] = None
             checks = [key for item in requirements for key in item.suppression_keys()]
             rejected = [item.suppression_key for item in requirements]
             manager = context.approval_manager

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
+from core.permissions import normalize_session_grants
 from core.projects._resolution_context import _RESOLUTION_WORKERS, _session_address
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -20,7 +21,7 @@ from core.sessions import AGENT_DEFAULT_PROJECT
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from core.agents.agents import Agent
     from core.permissions import PermissionCeiling
@@ -286,6 +287,52 @@ class SessionResolution:
         )
         return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY)), cleared
 
+    def change_session_permission_grants(
+        self,
+        address: SessionAddress,
+        *,
+        add: Sequence[str] = (),
+        remove: Sequence[str] = (),
+    ) -> AgentOverrides:
+        """Add and remove Session Grants of one Session in one write.
+
+        Rules compare in normalized form, so a differently written rule removes
+        its stored twin. Raises ``PermissionRulesError`` (a ``ValueError``) for
+        a rule that cannot be a Session Grant before anything is written; a Run
+        in progress applies the change at its next Tool round.
+        """
+        if self._owner._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        added = normalize_session_grants(list(add))
+        removed = normalize_session_grants(list(remove))
+
+        def mutate(metadata: Any) -> None:
+            stored = metadata.get(AGENT_OVERRIDES_META_KEY)
+            merged = dict(stored) if isinstance(stored, dict) else {}
+            current = normalize_session_grants(list(merged.get("permission_grants") or ()))
+            grants = [rule for rule in (*current, *added) if rule not in removed]
+            texts = list(dict.fromkeys(rule.text for rule in grants))
+            if texts:
+                merged["permission_grants"] = texts
+            else:
+                merged.pop("permission_grants", None)
+            if merged:
+                metadata[AGENT_OVERRIDES_META_KEY] = merged
+            else:
+                metadata.pop(AGENT_OVERRIDES_META_KEY, None)
+
+        _previous, updated = self._owner._sessions.ensure_metadata(address, mutate)
+        _LOGGER.info(
+            "Session permission grants changed "
+            "(agent=%s project=%s session=%s added=%d removed=%d)",
+            address.agent_id,
+            address.project_id,
+            address.session_id,
+            len(added),
+            len(removed),
+        )
+        return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 
@@ -457,7 +504,7 @@ class SessionResolution:
 
         changes = overrides.agent_changes()
         # Built-in Agents keep full access, whatever a Session stores.
-        if overrides.permission_rules is not None and getattr(agent, "builtin", None) is None:
+        if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
             changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
         if require_model and overrides.model is not None:
             self._owner._model_checker.require_configured(overrides.model)

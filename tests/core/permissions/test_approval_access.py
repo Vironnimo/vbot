@@ -8,6 +8,7 @@ from core.permissions import (
     ApprovalRequirement,
     BoundaryContext,
     PermissionBoundary,
+    PermissionCeiling,
     PermissionGrant,
     normalize_permission_rules,
 )
@@ -301,3 +302,56 @@ async def test_unrestricted_call_refreshes_authority_after_a_real_wait(
     assert context.permission_access.boundary is boundary
     await context.revalidate_permissions()
     refresh.assert_awaited_once()
+
+
+@pytest.mark.parametrize("case", ["file", "command", "host", "inherited"])
+def test_session_grant_suggestion_lets_the_same_access_run(tmp_path: Path, case: str) -> None:
+    from core.permissions import parse_permission_rule, suggest_session_grants
+
+    work, notes = tmp_path / "work", tmp_path / "outside" / "notes"
+    context = BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data")
+    rules = normalize_permission_rules(
+        {"write": "work_area", "commands": "listed", "web": "listed", "allow": ["Shell(ls *)"]}
+    )
+    ceilings: tuple[PermissionCeiling, ...] = ()
+    if case == "inherited":
+        parent = PermissionBoundary.build(
+            normalize_permission_rules({"commands": "listed"}), context
+        )
+        ceiling = parent.ceiling(source="parent")
+        assert ceiling is not None
+        ceilings = (ceiling,)
+    boundary = PermissionBoundary.build(rules, context, ceilings=ceilings)
+
+    def text(rule: str) -> str:
+        return parse_permission_rule(rule).text
+
+    expected: tuple[tuple[str, ...], tuple[str, ...] | None]
+    if case == "file":
+        requirement = ApprovalRequirement.path(boundary, notes / "Today.md", "write")
+        expected = ((text(f"Edit({notes})"),), (text(f"Edit({notes / 'Today.md'})"),))
+    elif case == "host":
+        requirement = ApprovalRequirement.host("example.org", "connect")
+        expected = (("Web(example.org)",), None)
+    else:
+        identity = [("npm", True), ("test", True), ("--", True), ("$WATCH", False)]
+        requirement = ApprovalRequirement.command(
+            "npm test -- $WATCH", shell="bash", cwd=work, identity=identity
+        )
+        expected = (("Shell(npm test *)",), None)
+
+    suggestion = suggest_session_grants(boundary, [requirement], is_dir=lambda _path: False)
+
+    # Inherited limits are never widened, so nothing a Session could remember helps there.
+    if case == "inherited":
+        assert suggestion is None
+        return
+    assert suggestion is not None
+    assert (suggestion.rules, suggestion.exact) == expected
+    widened = boundary.with_agent_allow(parse_permission_rule(rule) for rule in suggestion.rules)
+    assert widened is not None
+    if case == "file":
+        assert widened.check_path(notes / "Other.md", "write") is None
+        assert widened.check_path(notes.parent / "elsewhere.md", "write") is not None
+    elif case == "host":
+        assert widened.check_host("example.org", "connect", by_program=True) is None

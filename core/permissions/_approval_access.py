@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -33,6 +33,9 @@ class ApprovalRequirement:
     command_identity: tuple[tuple[str, bool], ...] = ()
     filtered: bool = False
     host_aliases: tuple[str, ...] = ()
+    # A path's lexical form as written, before case folding: what the user reads
+    # and a suggested rule names. Not part of the access's identity.
+    shown: str | None = field(default=None, compare=False)
 
     @classmethod
     def path(
@@ -65,6 +68,7 @@ class ApprovalRequirement:
             tuple(sorted(path_key(item, windows=windows) for item in pruned)),
             git,
             filtered=filtered,
+            shown=normalized.lexical,
         )
 
     @classmethod
@@ -130,6 +134,10 @@ class ApprovalRequirement:
             "filtered": self.filtered,
             "host_aliases": list(self.host_aliases),
         }
+
+    def to_payload(self) -> dict[str, Any]:
+        """The requirement as an approval request shows it: its identity plus ``shown``."""
+        return {**self.to_dict(), "shown": self.shown}
 
     @property
     def key(self) -> str:
