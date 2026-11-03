@@ -5,10 +5,12 @@
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { isContextMenuKey } from '../ui/contextMenu.js';
+  import { qualifyAgentAddress } from '$lib/agentAddress.js';
   import { t } from '$lib/i18n.js';
   import { formatAbsoluteTime, formatMoment } from '$lib/timeText.js';
   import { INTENTIONAL_HOVER_SHOW_DELAY_MS, tooltip } from '$lib/tooltip.js';
   import ChangeStats from './ChangeStats.svelte';
+  import ChatApprovalCard from './ChatApprovalCard.svelte';
   import CopyableValueCard from './CopyableValueCard.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import CollapseRail from './CollapseRail.svelte';
@@ -108,10 +110,32 @@
   } = $props();
 
   const approvals = getContext('permissionApprovals');
+  const pendingApprovals = $derived(approvals?.requests ?? []);
   const waitingForApproval = $derived(
-    approvals?.requests?.some((request) => request.run_id === item.runId) ??
-      false,
+    pendingApprovals.some((request) => request.run_id === item.runId),
   );
+
+  // The approval requests a Tool row of this Run waits on.
+  function approvalsForTool(child) {
+    if (!child?.toolCallId) return [];
+    return pendingApprovals.filter(
+      (request) =>
+        request.run_id === item.runId &&
+        request.tool_call_id === child.toolCallId,
+    );
+  }
+
+  // The requests waiting in the Session a Sub-Agent row started.
+  function approvalsInSubAgent(child) {
+    const target = subAgentNavigationTarget(child);
+    if (!target) return [];
+    return pendingApprovals.filter(
+      (request) =>
+        request.session_id === target.sessionId &&
+        qualifyAgentAddress(request.agent_id, request.project_id) ===
+          target.agentId,
+    );
+  }
 
   // Disclosure and pending-action state lives in the timeline's view state,
   // so it survives this Run being unmounted and mounted again.
@@ -313,6 +337,23 @@
         {@render runChildContent(child)}
       {/if}
     {/snippet}
+    {#snippet approvalCards(child)}
+      <!-- A Tool row shows the approval it waits on; a Sub-Agent row the
+           approvals its Session waits on, answerable from here. -->
+      {#if isSubAgentSpawnTool(child)}
+        {#each approvalsInSubAgent(child) as request (request.id)}
+          <ChatApprovalCard
+            {request}
+            subAgent={subAgentAgentId(child)}
+            onOpenSession={(event) => handleSubAgentNavigate(event, child)}
+          />
+        {/each}
+      {:else}
+        {#each approvalsForTool(child) as request (request.id)}
+          <ChatApprovalCard {request} />
+        {/each}
+      {/if}
+    {/snippet}
     {#snippet runChildContent(child)}
       {#if child.type === 'history_gap'}
         <!-- The timeline's scroll controller loads the omitted steps once
@@ -483,6 +524,7 @@
               loadRaw={rawCallLoader(child)}
             />
           </details>
+          {@render approvalCards(child)}
         {:else if isSubAgentSendTool(child)}
           {@const sendStatus = toolStatus(child)}
           {@const sendTimeLabel = toolStatusLabel(child, nowMs)}
@@ -734,6 +776,7 @@
               loadRaw={rawCallLoader(child)}
             />
           </details>
+          {@render approvalCards(child)}
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
             {@const playback = ['running', 'success'].includes(child.status)
@@ -921,6 +964,12 @@
             {/each}
           </div>
         </details>
+        {#if !groupOpen}
+          <!-- A folded row still shows the approval it waits on. -->
+          {#each group.children as child (child.id)}
+            {@render approvalCards(child)}
+          {/each}
+        {/if}
       {:else}
         {@render runChild(group.child)}
       {/if}

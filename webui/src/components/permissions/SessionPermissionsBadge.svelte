@@ -2,6 +2,7 @@
   import {
     clearSessionCeiling,
     getSessionPermissions,
+    removeSessionGrants,
     setSessionPermissions,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -21,6 +22,9 @@
   // so with stored ones it asks first. A Session that stores inherited limits
   // (from the Session that started it or a scheduled job) offers to remove
   // them, after a confirmation (`permissions.clear_session_ceiling`). The
+  // rules the user allowed for the Session while approving Tool calls (Session
+  // Grants) are listed one by one, each removable
+  // (`permissions.remove_session_grants`). The
   // limits change elsewhere (the Agent's rules, the shared default, a Project
   // override, the stored ceiling), so they are read again when `revision`
   // changes and whenever the card is about to open.
@@ -41,6 +45,8 @@
   let clearError = $state('');
   let choosing = $state(false);
   let chooseError = $state('');
+  let removingGrant = $state('');
+  let grantError = $state('');
   let sequence = 0;
 
   let requestKey = $derived(
@@ -94,6 +100,23 @@
       clearError = errorText(error, t('permissions.session.clearFailed'));
     } finally {
       clearing = false;
+    }
+  }
+
+  async function removeGrant(rule) {
+    removingGrant = rule;
+    grantError = '';
+    try {
+      await removeSessionGrants({
+        agentId: agentAddress,
+        sessionId,
+        rules: [rule],
+      });
+      await load(requestKey);
+    } catch (error) {
+      grantError = errorText(error, t('permissions.session.grantsFailed'));
+    } finally {
+      removingGrant = '';
     }
   }
 
@@ -237,6 +260,7 @@
     Boolean(summary?.restricted && summary.stored_ceiling && sessionId),
   );
   let restricted = $derived(Boolean(summary?.restricted));
+  let grants = $derived(sessionId ? (summary?.session_grants ?? []) : []);
   // A Session can always change its access; a draft shows only its limits.
   let shown = $derived(Boolean(summary && (restricted || sessionId)));
 </script>
@@ -314,6 +338,47 @@
           {t('permissions.limits')}
           <InfoHint text={t('permissions.limitsHelp')} />
         </p>
+      {/if}
+      {#if grants.length > 0}
+        <div class="session-permissions-card__grants" data-session-grants>
+          <div class="session-permissions-card__access-label">
+            {t('permissions.session.grants')}
+            <InfoHint text={t('permissions.session.grantsHelp')} />
+          </div>
+          <ul>
+            {#each grants as rule (rule)}
+              <li>
+                <span class="app-tooltip__mono">{rule}</span>
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="session-permissions-card__remove"
+                  loading={removingGrant === rule}
+                  disabled={Boolean(removingGrant)}
+                  tooltip={t('permissions.session.grantRemove')}
+                  ariaLabel={t('permissions.session.grantRemoveRule', {
+                    rule,
+                  })}
+                  onClick={() => removeGrant(rule)}
+                >
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="12"
+                    height="12"
+                    aria-hidden="true"
+                  >
+                    <path d="m4 4 8 8M12 4l-8 8" />
+                  </svg>
+                </Button>
+              </li>
+            {/each}
+          </ul>
+          {#if grantError}
+            <p class="session-permissions-card__error" role="alert">
+              {grantError}
+            </p>
+          {/if}
+        </div>
       {/if}
       {#if sessionId}
         <div
@@ -478,6 +543,26 @@
     margin-top: 8px;
     padding-top: 7px;
     border-top: 1px solid var(--border-2);
+  }
+  .session-permissions-card__grants {
+    flex-shrink: 0;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border-2);
+  }
+  .session-permissions-card__grants ul {
+    display: grid;
+    gap: 2px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .session-permissions-card__grants li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    overflow-wrap: anywhere;
   }
   .session-permissions-card__access-label {
     flex-basis: 100%;

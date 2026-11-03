@@ -82,7 +82,6 @@
   import Button from './components/ui/Button.svelte';
   import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
-  import PermissionApprovals from './components/PermissionApprovals.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
   import { appearancePrefs } from '$lib/appearancePrefs.svelte.js';
@@ -663,7 +662,6 @@
       </Button>
     </Banner>
   {/if}
-  <PermissionApprovals snapshot={appControllerState.permissionApprovals} />
   <ExtensionRequests
     subscribeInvalidations={extensions.subscribeInvalidations}
   />

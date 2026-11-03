@@ -35,8 +35,12 @@
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import SessionCompactionPolicyDialog from './sessions/SessionCompactionPolicyDialog.svelte';
-  import { untrack } from 'svelte';
-  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
+  import { getContext, untrack } from 'svelte';
+  import {
+    formatAgentAddress,
+    parseAgentAddress,
+    qualifyAgentAddress,
+  } from '$lib/agentAddress.js';
   import {
     createSessionList,
     PROJECT_GROUP_PAGE_SIZE,
@@ -112,6 +116,17 @@
     newSessionDisabled = false,
   } = $props();
   const menus = createSessionMenus();
+  // The Sessions with a Tool call waiting for the user's approval, by
+  // `agent address::session id`; their rows say so before anything else.
+  const permissionApprovals = getContext('permissionApprovals');
+  let approvalSessions = $derived(
+    new Set(
+      (permissionApprovals?.requests ?? []).map(
+        (request) =>
+          `${qualifyAgentAddress(request.agent_id, request.project_id)}::${request.session_id}`,
+      ),
+    ),
+  );
   const uid = $props.id();
   // The open row menu (./ui/ContextMenu.svelte) and the row it belongs to.
   let rowMenu = $state(null);
@@ -1042,7 +1057,18 @@
           <!-- One status slot before the title: work that is not finished
                  (working, or waiting for work that will wake it) hides an
                  unread result, which counts only once the Session is idle. -->
-          {#if session.activity_state === 'working' || session.activity_state === 'waiting'}
+          {#if approvalSessions.has(`${session.agent_address || asText(agentId)}::${session.id}`)}
+            <span
+              class="session-row__status session-row__approval"
+              aria-label={t('sessions.awaitingApproval')}
+              use:tooltip={t('sessions.awaitingApproval')}
+            >
+              <span
+                class="tab-indicator tab-indicator--approval"
+                aria-hidden="true"
+              ></span>
+            </span>
+          {:else if session.activity_state === 'working' || session.activity_state === 'waiting'}
             <span
               class="session-row__status session-row__activity"
               aria-label={sessionActivityLabel(session)}

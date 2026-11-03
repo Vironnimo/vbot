@@ -13,7 +13,9 @@ vi.mock('svelte', async () => {
 const permissionsMock = vi.fn();
 const clearMock = vi.fn();
 const setMock = vi.fn();
+const removeGrantsMock = vi.fn();
 vi.mock('$lib/api.js', () => ({
+  removeSessionGrants: (...args) => removeGrantsMock(...args),
   getSessionPermissions: (...args) => permissionsMock(...args),
   clearSessionCeiling: (...args) => clearMock(...args),
   setSessionPermissions: (...args) => setMock(...args),
@@ -62,6 +64,7 @@ describe('SessionPermissionsBadge', () => {
     permissionsMock.mockReset();
     clearMock.mockReset();
     setMock.mockReset();
+    removeGrantsMock.mockReset();
   });
 
   afterEach(async () => {
@@ -104,6 +107,39 @@ describe('SessionPermissionsBadge', () => {
     expect(permissionsMock).toHaveBeenCalledTimes(2);
     expect(clearButton()).toBeUndefined();
     expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
+  });
+
+  it('lists the rules allowed while approving, each removable', async () => {
+    const grants = ['Shell(git push *)', 'Edit(/notes)'];
+    permissionsMock.mockResolvedValueOnce({
+      restricted: true,
+      layers: [OWN_LAYER],
+      session_grants: grants,
+    });
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [OWN_LAYER],
+      session_grants: ['Edit(/notes)'],
+    });
+    removeGrantsMock.mockResolvedValue({ session_grants: ['Edit(/notes)'] });
+    await render({ sessionId: 's1' });
+
+    const list = () => document.querySelector('[data-session-grants]');
+    expect(list().textContent).toContain('Shell(git push *)');
+    list()
+      .querySelector(
+        `[aria-label="${t('permissions.session.grantRemoveRule', { rule: grants[0] })}"]`,
+      )
+      .click();
+    await settle();
+
+    expect(removeGrantsMock).toHaveBeenCalledWith({
+      agentId: 'coder',
+      sessionId: 's1',
+      rules: ['Shell(git push *)'],
+    });
+    expect(list().textContent).not.toContain('Shell(git push *)');
+    expect(list().textContent).toContain('Edit(/notes)');
   });
 
   it('gives a Session its own access, asking before full access lifts inherited limits', async () => {
