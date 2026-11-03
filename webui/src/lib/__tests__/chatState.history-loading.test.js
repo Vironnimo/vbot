@@ -62,6 +62,21 @@ describe('History reads', () => {
     expect(session.messages[0].content).toBe('Current conversation');
   });
 
+  it('shows the live History for the Session latest Run', async () => {
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadChatHistory: vi.fn().mockResolvedValue({
+          messages: [{ id: 'answer', role: 'assistant', content: 'Latest' }],
+          items: [],
+          has_newer: false,
+        }),
+      },
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'session');
+    expect(await controller.focusRun(session, 'latest')).toBe(true);
+    expect(session.focusedHistory).toBeNull();
+  });
+
   it('ignores a child page once its Run gap is gone', async () => {
     const pending = deferred();
     const { chatState, controller } = setupController({

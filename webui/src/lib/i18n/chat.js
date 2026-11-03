@@ -44,7 +44,7 @@ export default Object.freeze({
   'approvals.error': 'Could not submit the decision. Try again.',
   'approvals.waitingStatus': 'Waiting for approval',
 
-  'chat.selectedResult': 'Selected Run',
+  'chat.selectedResult': 'Showing an earlier Run of this Session',
   'chat.showConversation': 'Show latest messages',
   'audio.label': 'Speech audio',
   'audio.background': 'Speech from {agent}',

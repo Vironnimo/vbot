@@ -798,30 +798,6 @@
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
         <div class="chat-view__timeline-shell">
-          {#if target.activeSessionState?.focusedHistory}
-            <Banner appearance="compact">
-              {t('chat.selectedResult')}
-              <Button
-                variant="tertiary"
-                onClick={() =>
-                  (target.activeSessionState.focusedHistory = null)}
-                >{t('chat.showConversation')}</Button
-              >
-            </Banner>
-            {#if target.activeSessionState.focusedHistory.actionError}
-              <Banner variant="error"
-                >{target.activeSessionState.focusedHistory.actionError}</Banner
-              >
-              <Button
-                variant="tertiary"
-                onClick={() =>
-                  chatController.focusRun(
-                    target.activeSessionState,
-                    target.activeSessionState.focusedHistory.focusRunId,
-                  )}>{t('common.retry')}</Button
-              >
-            {/if}
-          {/if}
           <ChatTimeline
             timelineItems={activity.timelineItems}
             sessionKey={`${target.activeSessionState?.key ?? ''}:${target.activeSessionState?.focusedHistory?.focusRunId ?? ''}`}
@@ -936,6 +912,37 @@
                   {t('chat.returnToMainSession')}
                 </Button>
               {/if}
+            </Banner>
+          {/if}
+          {#if target.activeSessionState?.focusedHistory?.actionError}
+            <Banner
+              variant="error"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              {target.activeSessionState.focusedHistory.actionError}
+              <Button
+                variant="tertiary"
+                onClick={() =>
+                  chatController.focusRun(
+                    target.activeSessionState,
+                    target.activeSessionState.focusedHistory.focusRunId,
+                  )}>{t('common.retry')}</Button
+              >
+            </Banner>
+          {:else if target.activeSessionState?.focusedHistory}
+            <Banner
+              appearance="compact"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <strong>{t('chat.selectedResult')}</strong>
+              <Button
+                variant="tertiary"
+                onClick={() =>
+                  (target.activeSessionState.focusedHistory = null)}
+                >{t('chat.showConversation')}</Button
+              >
             </Banner>
           {/if}
           {#if providerSetupMissing}

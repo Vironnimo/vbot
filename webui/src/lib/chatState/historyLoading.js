@@ -301,6 +301,7 @@ export function createChatHistory({
 
   // A result link reads one bounded Run into a separate viewport. The live
   // Session stays attached, so its composer and work controls remain current.
+  // A link to the Session's latest Run shows the live view instead.
   async function focusRun(sessionState, runId) {
     const focused = ensureSessionState(
       { sessions: {} },
@@ -319,6 +320,11 @@ export function createChatHistory({
         child_limit: 100,
       });
       if (sessionState.focusedHistory !== displayed) return false;
+      // The Session's latest Run is what the live view shows anyway.
+      if (response.has_newer === false) {
+        sessionState.focusedHistory = null;
+        return true;
+      }
       loadHistory(
         displayed,
         response.messages ?? [],
