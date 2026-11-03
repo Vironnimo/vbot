@@ -221,7 +221,9 @@ async def test_a_run_without_rules_gets_full_access_without_building_a_boundary(
 
     [context] = seen
     assert context.permissions is PermissionBoundary.UNRESTRICTED
-    assert "Permission rules" not in _system_prompt(runtime)
+    # The Agent still learns that nothing limits it.
+    assert "## Permission rules" in _system_prompt(runtime)
+    assert "full access" in _system_prompt(runtime)
 
 
 @pytest.mark.asyncio
@@ -308,9 +310,16 @@ def test_a_ceiling_only_session_boundary_keeps_the_agents_workspace_and_config(
 
 
 @pytest.mark.asyncio
-async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed", ["agent_rules", "session_ceiling"])
+async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
+    tmp_path: Path, changed: str
+) -> None:
+    address = SessionAddress(None, "coder", "s1")
+
     def tighten() -> None:
-        if len(seen) == 1:
+        if len(seen) != 1:
+            return
+        if changed == "agent_rules":
             agent = runtime.agents._agent
             runtime.agents._agent = replace(
                 agent, permission_rules=normalize_permission_rules({"write": "scratch"})
@@ -318,6 +327,13 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path
             # The edit as vBot saves it: a configuration document change.
             with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
                 pass
+            return
+        # A change to what the Session stores, such as a ceiling a Cron fire joins.
+        ceiling = PermissionBoundary.build(
+            normalize_permission_rules({"write": "scratch"}),
+            BoundaryContext(workdir=tmp_path / "cron", home=tmp_path, data_dir=tmp_path / "data"),
+        ).ceiling(source="cron")
+        runtime.agent_resolver.join_session_ceiling(address, ceiling)
 
     runtime, seen = _runtime(
         tmp_path,
@@ -325,6 +341,9 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path
         turns=[tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
         on_call=tighten,
     )
+    # Real System Prompt assembly, which pins the prompt epoch's blocks.
+    runtime.agents._agent = _agent(tmp_path / "workspace", allowed_tools=["*"])
+    runtime.system_prompts = _manager(tmp_path, tools=runtime.tools)
 
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
@@ -332,6 +351,13 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path
     assert first.permissions is PermissionBoundary.UNRESTRICTED
     refused = second.permissions.check_path(tmp_path / "elsewhere.md", "write")
     assert refused is not None and refused.reason == "not_permitted"
+    # The Model learns the new rules once, at the request after the change, and
+    # the System Prompt stays byte-identical for the Provider cache.
+    systems = {str(request["messages"][0]["content"]) for request in runtime.adapter.requests}
+    assert len(runtime.adapter.requests) == 3 and len(systems) == 1
+    notes = [message for message in history(runtime, "s1") if is_prompt_block_change_note(message)]
+    assert len(notes) == 1
+    assert "full access" in systems.pop() and "full access" not in str(notes[0].content)
 
 
 @pytest.mark.asyncio
@@ -366,7 +392,7 @@ async def test_the_permissions_block_is_pinned_and_a_change_is_announced_once(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     agent = _agent(workspace)
-    adapter = StubAdapter([final(str(index)) for index in range(4)])
+    adapter = StubAdapter([final(str(index)) for index in range(5)])
     runtime: Any = StubRuntime(data_dir=tmp_path / "data", agent=cast(Any, agent), adapter=adapter)
     runtime.system_prompts = _manager(tmp_path, tools=runtime.tools)
     runtime.chat_sessions.create(agent.id, session_id="s1")
@@ -378,20 +404,22 @@ async def test_the_permissions_block_is_pinned_and_a_change_is_announced_once(
     )
     await loop.send(agent.id, "Second", session_id="s1")
     await loop.send(agent.id, "Third", session_id="s1")
+    runtime.agents._agent = agent
+    await loop.send(agent.id, "Fourth", session_id="s1")
     runtime.chat_sessions.create(agent.id, session_id="s2")
     await loop.send(agent.id, "Fresh", session_id="s2")
 
     *systems, fresh = [str(request["messages"][0]["content"]) for request in adapter.requests]
     # A new prompt epoch shows the block in the System Prompt itself.
     assert "## Permission rules" in fresh
-    # Full access shows no block, and the epoch's System Prompt stays byte-identical.
-    assert "Permission rules" not in systems[0]
-    assert systems == [systems[0]] * 3
-    notes = [
-        message
+    assert "full access" in systems[0]
+    # The epoch's System Prompt stays byte-identical across both changes.
+    assert systems == [systems[0]] * 4
+    narrowed, widened = [
+        str(message.content)
         for message in history(runtime, "s1", agent.id)
         if is_prompt_block_change_note(message)
     ]
-    assert len(notes) == 1
-    assert "Permission rules" in str(notes[0].content)
-    assert workspace.as_posix() in str(notes[0].content)
+    assert workspace.as_posix() in narrowed and "refused" not in narrowed
+    # Widening tells the Agent that calls the earlier rules refused can run now.
+    assert "full access" in widened and "refused" in widened

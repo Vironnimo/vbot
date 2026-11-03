@@ -43,6 +43,8 @@ _SECTION_NAME_LIMIT = 80
 # None captures a fresh inventory. Existing ids capture only previously live,
 # unpinned contributions, skipping those whose text the old snapshot already owns.
 LiveBlockRenderer = Callable[[Collection[str] | None], "PromptBlockPin"]
+# A block's own wording for its change (before, after); None keeps the generic one.
+ChangeDescriber = Callable[[RenderedBlock, RenderedBlock], str | None]
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,8 @@ def plan_prompt_block_change(
     live: Mapping[str, RenderedBlock],
     *,
     unavailable: Collection[str] = (),
+    describe: Mapping[str, ChangeDescriber] | None = None,
+    only: Collection[str] | None = None,
 ) -> PromptBlockChange | None:
     """Return the announcement that brings the Model's knowledge of *pin*'s blocks up to *live*.
 
@@ -172,6 +176,8 @@ def plan_prompt_block_change(
     and removed entries, any other block by its current text. ``None`` when no
     block changed. Missing blocks are announced as removed; render failures
     named in *unavailable* leave the previously announced state intact.
+    *describe* words the change of a block by its id; *only* limits the
+    comparison to those block ids (a change within a Run).
     """
 
     known = dict(pin.blocks)
@@ -182,14 +188,16 @@ def plan_prompt_block_change(
     changed: dict[str, RenderedBlock] = {}
     paragraphs: list[str] = []
     for block_id in dict.fromkeys([*live, *known]):
-        if block_id in unavailable:
+        if block_id in unavailable or (only is not None and block_id not in only):
             continue
         before = known.get(block_id, RenderedBlock(""))
         block = live.get(block_id, RenderedBlock(""))
         if before.text == block.text:
             continue
         changed[block_id] = block
-        paragraphs.append(_describe_change(before, block))
+        describer = (describe or {}).get(block_id)
+        described = describer(before, block) if describer is not None else None
+        paragraphs.append(described if described is not None else _describe_change(before, block))
     if not changed:
         return None
     return PromptBlockChange(epoch=pin.epoch, blocks=changed, text="\n\n".join(paragraphs))

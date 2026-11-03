@@ -323,7 +323,7 @@ class ExternalRun:
             current = self._permissions
             if current is None:
                 raise ChatError("the external Run has no Permission Boundary")
-            if force or await current.changed():
+            if force or await current.changed(self._dependencies):
                 agent = await self._dependencies.agent_resolver.resolve_agent_async(
                     None, self.agent_id, session_id=self.session_id
                 )

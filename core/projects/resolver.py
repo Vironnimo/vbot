@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents import SKILL_AGENT_CREATED_AT_KEY
-from core.permissions import PermissionCeiling
+from core.permissions import (
+    PERMISSION_RULE_PARTS,
+    PermissionCeiling,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
     CredentialProbe,
@@ -471,6 +476,15 @@ class AgentResolver:
         """Remove the Session's stored permission ceiling; whether it had one. Blocking."""
         return self._session_resolution.clear_session_ceiling(address)
 
+    def set_session_permission_rules(
+        self, address: SessionAddress, rules: Mapping[str, Any] | None
+    ) -> tuple[AgentOverrides, bool]:
+        """Set or clear the user's rule set for one Session; whether a ceiling was removed.
+
+        Blocking; see ``SessionResolution.set_session_permission_rules``.
+        """
+        return self._session_resolution.set_session_permission_rules(address, rules)
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 
@@ -654,6 +668,7 @@ class AgentResolver:
         With ``session_id``, each field that Session overrides reports its value
         with source ``"session"``.
         """
+        builtin = False
         if project_id is None:
             from core.agents.agents import AgentError
 
@@ -662,6 +677,7 @@ class AgentResolver:
             except AgentError as error:
                 raise _identity_resolution_error(error) from error
             effective = self.effective_config_for_identity(raw)
+            builtin = raw.builtin is not None
         else:
             effective = self._config_effective_config(project_id, agent_id)
         if session_id is not None:
@@ -669,6 +685,10 @@ class AgentResolver:
             for name, value in overrides.agent_changes().items():
                 if name in effective:
                     effective[name] = {"value": value, "source": "session"}
+            if overrides.permission_rules is not None and not builtin:
+                effective["permission_rules"] = _session_permission_rules_source(
+                    effective["permission_rules"], overrides
+                )
         return effective
 
     def inherited_tool_loading(self) -> dict[str, Any]:
@@ -958,3 +978,29 @@ def build_agent_resolver(
         temporary_agents=temporary_agents,
         sessions=sessions,
     )
+
+
+def _session_permission_rules_source(
+    agent_source: dict[str, Any], overrides: AgentOverrides
+) -> dict[str, Any]:
+    """The ``permission_rules`` provenance with the Session's rule set over the Agent's.
+
+    Each part the Session sets reports source ``session``; the others keep the
+    level that supplied them, and an invalid default stays reported.
+    """
+    stored = agent_source.get("value")
+    agent_rules = normalize_permission_rules(stored) if stored is not None else None
+    effective = overrides.rules_over(agent_rules)
+    session_rules = overrides.permission_rules or {}
+    parts = {
+        **agent_source.get("parts", {}),
+        **{part: "session" for part in PERMISSION_RULE_PARTS if part in session_rules},
+    }
+    result: dict[str, Any] = {
+        "value": permission_rules_to_dict(effective) if effective is not None else None,
+        "source": "session",
+        "parts": parts,
+    }
+    if "error" in agent_source:
+        result["error"] = agent_source["error"]
+    return result

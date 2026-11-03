@@ -135,12 +135,11 @@ async def test_send_persists_the_exchange_and_sends_the_agent_request(tmp_path: 
             {"name": "get_weather", "description": "Get weather.", "parameters": {"type": "object"}}
         ],
     }
-    assert [
-        (message["role"], message["content"]) for message in adapter.requests[0]["messages"]
-    ] == [
-        ("system", "System for coder"),
-        ("user", "Hi"),
-    ]
+    system, user = adapter.requests[0]["messages"]
+    # The Run's Permission rules section follows the Agent's System Prompt.
+    assert system["role"] == "system"
+    assert system["content"].startswith("System for coder")
+    assert (user["role"], user["content"]) == ("user", "Hi")
     run = last_run(runtime)
     assert await event_types(runtime, run) == [
         "run_started",

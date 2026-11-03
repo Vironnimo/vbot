@@ -1,5 +1,9 @@
 <script>
-  import { clearSessionCeiling, getSessionPermissions } from '$lib/api.js';
+  import {
+    clearSessionCeiling,
+    getSessionPermissions,
+    setSessionPermissions,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { floatingHoverCard } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
@@ -7,16 +11,19 @@
   import InfoHint from '../ui/InfoHint.svelte';
 
   // A compact "Restricted" mark for a Session (or a draft's next Session)
-  // whose Runs work under Permission Rules; nothing for full access. Its
-  // hover card lists every layer that applies (`permissions.session`): the
-  // Agent's own rules and each inherited limit, then the honest limits of
-  // the checks (`.vorch/domain-maps/permissions.md`). A Session that stores
-  // inherited limits (from the Session that started it or a scheduled job)
-  // offers to remove them, after a confirmation
-  // (`permissions.clear_session_ceiling`). The limits change elsewhere (the
-  // Agent's rules, the shared default, a Project override, the stored
-  // ceiling), so they are read again when `revision` changes and whenever
-  // the card is about to open.
+  // whose Runs work under Permission Rules; a quiet open lock for a Session
+  // with full access, and nothing for a draft with full access. Its hover
+  // card lists every layer that applies (`permissions.session`): the Agent's
+  // own rules and each inherited limit, then the honest limits of the checks
+  // (`.vorch/domain-maps/permissions.md`). For a Session, the card lets the
+  // user give it its own access (`permissions.set_session_rules`): the
+  // Agent's rules or a preset; full access also removes inherited limits,
+  // so with stored ones it asks first. A Session that stores inherited limits
+  // (from the Session that started it or a scheduled job) offers to remove
+  // them, after a confirmation (`permissions.clear_session_ceiling`). The
+  // limits change elsewhere (the Agent's rules, the shared default, a Project
+  // override, the stored ceiling), so they are read again when `revision`
+  // changes and whenever the card is about to open.
   let {
     agentAddress = '',
     sessionId = '',
@@ -28,9 +35,12 @@
   } = $props();
 
   let summary = $state(null);
-  let confirming = $state(false);
+  // The confirmation shown: 'clear' (inherited limits) or 'full' (full access).
+  let confirming = $state('');
   let clearing = $state(false);
   let clearError = $state('');
+  let choosing = $state(false);
+  let chooseError = $state('');
   let sequence = 0;
 
   let requestKey = $derived(
@@ -67,26 +77,76 @@
     }
   }
 
+  function errorText(error, fallback) {
+    return typeof error?.message === 'string' && error.message.trim()
+      ? error.message.trim()
+      : fallback;
+  }
+
   async function clearInherited() {
     clearing = true;
     clearError = '';
     try {
       await clearSessionCeiling({ agentId: agentAddress, sessionId });
-      confirming = false;
+      confirming = '';
       await load(requestKey);
     } catch (error) {
-      clearError =
-        typeof error?.message === 'string' && error.message.trim()
-          ? error.message.trim()
-          : t('permissions.session.clearFailed');
+      clearError = errorText(error, t('permissions.session.clearFailed'));
     } finally {
       clearing = false;
     }
   }
 
-  function cancelClear() {
-    if (clearing) return;
-    confirming = false;
+  // The access choices of a Session: the Agent's own rules (no value) or a
+  // preset the Session keeps for itself.
+  const ACCESS_CHOICES = [
+    { value: '', label: () => t('permissions.session.access.agent') },
+    { value: 'full_access', label: () => t('permissions.preset.full_access') },
+    { value: 'work_dir', label: () => t('permissions.preset.work_dir') },
+    {
+      value: 'work_dir_read_only',
+      label: () => t('permissions.preset.work_dir_read_only'),
+    },
+  ];
+
+  let accessValue = $derived(
+    summary?.session_rules ? (summary.session_preset ?? 'custom') : '',
+  );
+
+  function choose(value) {
+    if (choosing || value === accessValue) return;
+    chooseError = '';
+    // Full access also removes the limits the Session inherited.
+    if (value === 'full_access' && summary?.stored_ceiling) {
+      confirming = 'full';
+      return;
+    }
+    void applyAccess(value);
+  }
+
+  async function applyAccess(value) {
+    choosing = true;
+    clearError = '';
+    try {
+      await setSessionPermissions({
+        agentId: agentAddress,
+        sessionId,
+        preset: value || null,
+      });
+      confirming = '';
+      await load(requestKey);
+    } catch (error) {
+      const message = errorText(error, t('permissions.session.accessFailed'));
+      if (confirming) clearError = message;
+      else chooseError = message;
+    } finally {
+      choosing = false;
+    }
+  }
+
+  function cancelConfirm() {
+    if (clearing || choosing) return;
+    confirming = '';
     clearError = '';
   }
 
@@ -176,17 +236,23 @@
   let clearable = $derived(
     Boolean(summary?.restricted && summary.stored_ceiling && sessionId),
   );
+  let restricted = $derived(Boolean(summary?.restricted));
+  // A Session can always change its access; a draft shows only its limits.
+  let shown = $derived(Boolean(summary && (restricted || sessionId)));
 </script>
 
-{#if summary?.restricted}
+{#if shown}
   <span class="session-permissions-anchor">
     <button
       type="button"
       class="session-permissions"
+      class:session-permissions--full={!restricted}
       onpointerenter={() => void load(requestKey)}
       onfocus={() => void load(requestKey)}
-      aria-label={`${t('permissions.session.badge')}: ${t('permissions.session.title')}`}
-      data-session-permissions
+      aria-label={restricted
+        ? `${t('permissions.session.badge')}: ${t('permissions.session.title')}`
+        : t('permissions.session.fullTitle')}
+      data-session-permissions={restricted ? 'restricted' : 'full'}
     >
       <svg
         class="session-permissions__icon"
@@ -196,17 +262,30 @@
         aria-hidden="true"
       >
         <rect x="3.5" y="7" width="9" height="6.5" rx="1" />
-        <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+        {#if restricted}
+          <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+        {:else}
+          <path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7" />
+        {/if}
       </svg>
-      <span>{t('permissions.session.badge')}</span>
+      {#if restricted}
+        <span>{t('permissions.session.badge')}</span>
+      {/if}
     </button>
     <div
       class="floating-card session-permissions-card"
       use:floatingHoverCard={{ openOnPress: true }}
       data-session-permissions-card
     >
-      <div class="app-tooltip__title">{t('permissions.session.title')}</div>
-      <div class="app-tooltip__text">{t('permissions.session.text')}</div>
+      {#if restricted}
+        <div class="app-tooltip__title">{t('permissions.session.title')}</div>
+        <div class="app-tooltip__text">{t('permissions.session.text')}</div>
+      {:else}
+        <div class="app-tooltip__title">
+          {t('permissions.session.fullTitle')}
+        </div>
+        <div class="app-tooltip__text">{t('permissions.session.fullText')}</div>
+      {/if}
       <!-- Only the rows scroll: the limits of the checks and the action stay
            in view on a short window. -->
       <div class="session-permissions-card__body">
@@ -228,18 +307,62 @@
           </p>
         {/if}
       </div>
-      <p
-        class="session-permissions-card__note session-permissions-card__limits"
-      >
-        {t('permissions.limits')}
-        <InfoHint text={t('permissions.limitsHelp')} />
-      </p>
+      {#if restricted}
+        <p
+          class="session-permissions-card__note session-permissions-card__limits"
+        >
+          {t('permissions.limits')}
+          <InfoHint text={t('permissions.limitsHelp')} />
+        </p>
+      {/if}
+      {#if sessionId}
+        <div
+          class="session-permissions-card__access"
+          role="radiogroup"
+          aria-label={t('permissions.session.access')}
+          data-session-access
+        >
+          <div class="session-permissions-card__access-label">
+            {t('permissions.session.access')}
+            <InfoHint text={t('permissions.session.accessHelp')} />
+          </div>
+          {#each ACCESS_CHOICES as choice (choice.value)}
+            <button
+              type="button"
+              role="radio"
+              class="session-permissions-card__choice"
+              aria-checked={accessValue === choice.value}
+              disabled={choosing}
+              onclick={() => choose(choice.value)}
+              data-access-choice={choice.value || 'agent'}
+            >
+              {choice.label()}
+            </button>
+          {/each}
+          {#if accessValue === 'custom'}
+            <button
+              type="button"
+              role="radio"
+              class="session-permissions-card__choice"
+              aria-checked="true"
+              disabled
+            >
+              {t('permissions.preset.custom')}
+            </button>
+          {/if}
+          {#if chooseError}
+            <p class="session-permissions-card__error" role="alert">
+              {chooseError}
+            </p>
+          {/if}
+        </div>
+      {/if}
       {#if clearable}
         <div class="session-permissions-card__footer">
           <Button
             variant="secondary"
             class="session-permissions-card__action"
-            onClick={() => (confirming = true)}
+            onClick={() => (confirming = 'clear')}
           >
             {t('permissions.session.clear')}
           </Button>
@@ -249,7 +372,7 @@
   </span>
 {/if}
 
-{#if confirming}
+{#if confirming === 'clear'}
   <ConfirmDialog
     title={t('permissions.session.clearTitle')}
     body={t('permissions.session.clearText')}
@@ -257,7 +380,17 @@
     busy={clearing}
     error={clearError}
     onConfirm={clearInherited}
-    onCancel={cancelClear}
+    onCancel={cancelConfirm}
+  />
+{:else if confirming === 'full'}
+  <ConfirmDialog
+    title={t('permissions.session.fullConfirmTitle')}
+    body={t('permissions.session.fullConfirmText')}
+    confirmLabel={t('permissions.session.fullConfirm')}
+    busy={choosing}
+    error={clearError}
+    onConfirm={() => applyAccess('full_access')}
+    onCancel={cancelConfirm}
   />
 {/if}
 
@@ -281,6 +414,9 @@
     font-size: var(--fs-label-sm);
     line-height: 1.4;
     cursor: default;
+  }
+  .session-permissions--full {
+    color: var(--text-lo);
   }
   button.session-permissions:hover,
   button.session-permissions:focus-visible {
@@ -333,6 +469,52 @@
   .session-permissions-card__limits :global(.info-hint) {
     margin-left: 2px;
     vertical-align: -3px;
+  }
+  .session-permissions-card__access {
+    display: flex;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border-2);
+  }
+  .session-permissions-card__access-label {
+    flex-basis: 100%;
+    color: var(--text-lo);
+  }
+  .session-permissions-card__access-label :global(.info-hint) {
+    margin-left: 2px;
+    vertical-align: -3px;
+  }
+  .session-permissions-card__choice {
+    min-height: 26px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    color: var(--text-lo);
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+  }
+  .session-permissions-card__choice:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
+  .session-permissions-card__choice:focus-visible {
+    box-shadow: var(--field-focus-ring);
+    outline: none;
+  }
+  .session-permissions-card__choice[aria-checked='true'] {
+    border-color: var(--accent);
+    color: var(--text-hi);
+  }
+  .session-permissions-card__choice:disabled {
+    cursor: default;
+  }
+  .session-permissions-card__error {
+    flex-basis: 100%;
+    margin: 4px 0 0;
+    color: var(--red);
   }
   .session-permissions-card__footer {
     display: flex;

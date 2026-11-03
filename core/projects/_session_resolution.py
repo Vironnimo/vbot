@@ -242,6 +242,50 @@ class SessionResolution:
             )
         return cleared
 
+    def set_session_permission_rules(
+        self, address: SessionAddress, rules: Mapping[str, Any] | None
+    ) -> tuple[AgentOverrides, bool]:
+        """Set the user's rule set for one Session (``None``: the Agent's rules again).
+
+        Returns the stored overrides and whether an inherited ceiling was
+        removed: rules that restrict nothing are the user's choice of full
+        access, which a ceiling from a parent Session or a Cron job would
+        otherwise still narrow. Raises ``ValueError`` for an invalid rule set
+        before anything is written; a Run in progress applies the change at its
+        next Tool round.
+        """
+        if self._owner._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        requested = AgentOverrides(permission_rules=rules)
+        full_access = requested.grants_full_access
+
+        def mutate(metadata: Any) -> None:
+            stored = metadata.get(AGENT_OVERRIDES_META_KEY)
+            merged = dict(stored) if isinstance(stored, dict) else {}
+            if requested.permission_rules is None:
+                merged.pop("permission_rules", None)
+            else:
+                merged["permission_rules"] = dict(requested.permission_rules)
+            if full_access:
+                merged.pop("permission_ceiling", None)
+            if merged:
+                metadata[AGENT_OVERRIDES_META_KEY] = merged
+            else:
+                metadata.pop(AGENT_OVERRIDES_META_KEY, None)
+
+        previous, updated = self._owner._sessions.ensure_metadata(address, mutate)
+        before = previous.get(AGENT_OVERRIDES_META_KEY)
+        cleared = full_access and isinstance(before, dict) and "permission_ceiling" in before
+        _LOGGER.info(
+            "Session permission rules %s (agent=%s project=%s session=%s ceiling_cleared=%s)",
+            "cleared" if requested.permission_rules is None else "set",
+            address.agent_id,
+            address.project_id,
+            address.session_id,
+            cleared,
+        )
+        return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY)), cleared
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 
@@ -412,6 +456,9 @@ class SessionResolution:
             return agent
 
         changes = overrides.agent_changes()
+        # Built-in Agents keep full access, whatever a Session stores.
+        if overrides.permission_rules is not None and getattr(agent, "builtin", None) is None:
+            changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
         if require_model and overrides.model is not None:
             self._owner._model_checker.require_configured(overrides.model)
         if isinstance(agent, ConfigAgent):

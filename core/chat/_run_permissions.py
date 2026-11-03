@@ -10,11 +10,13 @@ The boundary rides from the Run's execution context to every Tool Call
 (``ToolContext.permissions``). An Agent without rules, in a Session without an
 inherited ceiling, gets ``PermissionBoundary.UNRESTRICTED`` without building
 anything: full-access Runs pay nothing for the feature. Before each Tool round
-:class:`RunPermissions` notices a changed rule source, and the Run rebuilds it.
+:class:`RunPermissions` notices a changed rule source or Session override, and
+the Run rebuilds it.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -40,6 +42,7 @@ from core.prompts import (
     BLOCK_OWNER_ALWAYS,
     BlockDefinition,
     ProjectPromptContext,
+    RenderedBlock,
 )
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner, session_artifact_dirs
@@ -48,7 +51,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies
-    from core.projects import Project, RuntimeAgent
+    from core.projects import AgentOverrides, Project, RuntimeAgent
     from core.runs import Run
     from core.sessions import SessionAddress
     from core.skills import SkillRegistry
@@ -215,16 +218,22 @@ def _skill_dirs(skill_registry: SkillRegistry, allowed_skills: Sequence[str] | N
     return [skill.path.parent if skill.path.suffix else skill.path for skill in skills]
 
 
-async def _session_ceiling(
+async def _session_overrides(
     dependencies: ChatLoopDependencies, address: SessionAddress
-) -> PermissionCeiling | None:
-    """The ceiling the Session stores: a Parent's, a Cron job's, or both joined."""
+) -> AgentOverrides:
+    """The Session's stored overrides, which hold its ceiling and the user's rules for it."""
     try:
-        overrides = await dependencies.agent_resolver.session_overrides_async(address)
-        return overrides.ceiling()
+        return await dependencies.agent_resolver.session_overrides_async(address)
     except ValueError as error:
-        _LOGGER.warning("Unreadable inherited permission ceiling (session=%s)", address.session_id)
+        _LOGGER.warning("Unreadable Session permission rules (session=%s)", address.session_id)
         raise ChatError(_INVALID_CEILING) from error
+
+
+def _session_rule_state(overrides: AgentOverrides) -> str:
+    """What a Session stores that decides its boundary: its rules and its ceiling."""
+    return json.dumps(
+        [overrides.permission_rules, overrides.permission_ceiling], sort_keys=True, default=str
+    )
 
 
 # A rule source file's state: (modification time, size), or None when missing.
@@ -252,7 +261,9 @@ class RunPermissions:
     (:func:`core.json_documents.documents_written`): every rule edit through
     vBot changes it, so even a full-access Run notices one without any I/O. A
     restricted Run also compares its rule source files, which the user may edit
-    outside vBot.
+    outside vBot. ``session_state`` is what the Session stored when the
+    boundary was built (the user's rules for it and its ceiling), which lives in
+    the Session database, not in a document.
     """
 
     boundary: PermissionBoundary
@@ -261,10 +272,14 @@ class RunPermissions:
     project_root: Path | None
     sources: tuple[Path, ...] = ()
     stamps: tuple[_Stamp, ...] = ()
+    session_state: str = ""
 
-    async def changed(self) -> bool:
-        """Whether a rule source may have changed since the build."""
+    async def changed(self, dependencies: ChatLoopDependencies) -> bool:
+        """Whether a rule source or the Session's stored rules may have changed since the build."""
         if documents_written() != self.documents:
+            return True
+        overrides = await _session_overrides(dependencies, self.address)
+        if _session_rule_state(overrides) != self.session_state:
             return True
         if not self.boundary.restricted or not self.sources:
             return False
@@ -288,13 +303,20 @@ async def run_permission_boundary(
     else, so an edit during the build still shows at the next Tool round.
     """
     documents = documents_written()
-    ceiling = await _session_ceiling(dependencies, address)
+    overrides = await _session_overrides(dependencies, address)
+    session_state = _session_rule_state(overrides)
     data_dir = Path(dependencies.storage.data_dir)
     permissions = session_permissions(
-        agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling
+        agent, data_dir=data_dir, project_root=project_root, ceiling=overrides.ceiling()
     )
     if not permissions.restricted:
-        return RunPermissions(PermissionBoundary.UNRESTRICTED, documents, address, project_root)
+        return RunPermissions(
+            PermissionBoundary.UNRESTRICTED,
+            documents,
+            address,
+            project_root,
+            session_state=session_state,
+        )
     scratch_root: Path | None = None
     scratch = dependencies.scratch_areas
     if scratch is not None and run.run_kind in SCRATCH_RUN_KINDS:
@@ -317,6 +339,7 @@ async def run_permission_boundary(
         skill_registry,
         port,
         dependencies.server_hosts,
+        session_state,
     )
 
 
@@ -330,6 +353,7 @@ def _build_run_permissions(
     skill_registry: SkillRegistry,
     port: int | None,
     own_hosts: Callable[[], tuple[str, ...]] | None,
+    session_state: str,
 ) -> RunPermissions:
     """Blocking: the sources' stamps are taken before the boundary is built from them."""
     sources = permissions.rule_sources()
@@ -342,7 +366,9 @@ def _build_run_permissions(
         loopback_port=port,
         own_hosts=own_hosts,
     )
-    return RunPermissions(boundary, documents, address, project_root, sources, stamps)
+    return RunPermissions(
+        boundary, documents, address, project_root, sources, stamps, session_state
+    )
 
 
 def permitted_project_context(
@@ -371,11 +397,30 @@ def permitted_project_context(
     )
 
 
-# The System Prompt block telling a restricted Agent its boundary. Chat adds it
-# to the request's temporary blocks, so it is pinned per prompt epoch and a
-# change within an epoch arrives as a ``[prompt-block-change]`` System Reminder.
+# The System Prompt block telling every Agent its boundary, full access
+# included. Chat adds it to the request's temporary blocks, so it is pinned per
+# prompt epoch and a change within an epoch arrives as a ``[prompt-block-change]``
+# System Reminder worded by :func:`describe_permissions_change`.
 PERMISSIONS_BLOCK_ID = "core:permissions"
 _PERMISSIONS_HEADING = "## Permission rules"
+_PERMISSIONS_FULL = (
+    "You have full access: vBot does not limit which files your Tools read or change, "
+    "which commands they run or which hosts they reach. Ask the user before you change "
+    "system settings, the configuration of other programs or files outside the folders "
+    "of your task, unless your task asks for that change."
+)
+# For every Agent: what no rule decides, such as which of the allowed files to delete.
+_PERMISSIONS_CARE = (
+    "Before you delete, overwrite or move files or folders, check that each path is the "
+    "one your task means; when a wildcard or recursive command could reach more, list "
+    "what it matches first. Show, copy or send the contents of credential files, such as "
+    "keys, tokens and `.env` files, only when the user asks for it."
+)
+_PERMISSIONS_CHANGED = (
+    'Your permission rules changed. From now on this applies instead of the "Permission '
+    'rules" section of your System Prompt:\n\n{text}'
+)
+_PERMISSIONS_WIDENED = "Calls that the earlier rules refused can run now."
 _PERMISSIONS_LEAD = "The user set permission rules for you{inherited}."
 _PERMISSIONS_SCOPE = (
     "Tools can request approval for additional access; deny rules cannot be overridden. "
@@ -405,9 +450,9 @@ _PERMISSIONS_DENIED_ONLY = "Always refused: {items}."
 
 
 def permissions_block_text(boundary: PermissionBoundary) -> str:
-    """The ``core:permissions`` text for *boundary*; empty when it limits nothing to list."""
+    """The ``core:permissions`` text for *boundary*: its limits, or full access."""
     if not boundary.restricted:
-        return ""
+        return "\n\n".join((_PERMISSIONS_HEADING, _PERMISSIONS_FULL, _PERMISSIONS_CARE))
     lines: list[str] = []
     folders = False
     for access, listed, nothing in _PERMISSIONS_LINES:
@@ -431,21 +476,33 @@ def permissions_block_text(boundary: PermissionBoundary) -> str:
     )
     if network_denied:
         lines.append(f"Commands cannot reach these hosts: {_items(network_denied)}.")
-    if not lines:
-        return ""
     sources = dict.fromkeys(
         _INHERITED_FROM[layer.source] for layer in boundary.layers if layer.source != "agent"
     )
     inherited = f", including those of {' and '.join(sources)}" if sources else ""
     lead = f"{_PERMISSIONS_LEAD.format(inherited=inherited)} {_PERMISSIONS_SCOPE}"
-    return "\n".join((_PERMISSIONS_HEADING, "", lead, *(f"- {line}" for line in lines)))
+    limits = "\n".join((lead, *(f"- {line}" for line in lines)))
+    return "\n\n".join((_PERMISSIONS_HEADING, limits, _PERMISSIONS_CARE))
 
 
-def permissions_prompt_block(boundary: PermissionBoundary) -> BlockDefinition | None:
-    """The Run's ``core:permissions`` block, or ``None`` for a boundary with nothing to show."""
-    text = permissions_block_text(boundary)
-    if not text:
+def describe_permissions_change(before: RenderedBlock, after: RenderedBlock) -> str | None:
+    """The System Reminder for a changed ``core:permissions`` block.
+
+    ``None`` when the block starts or stops showing (a Session pinned before
+    every Run showed it): the generic wording then fits.
+    """
+    text = after.text.strip()
+    if not before.text.strip() or not text:
         return None
+    described = _PERMISSIONS_CHANGED.format(text=text)
+    if _PERMISSIONS_FULL in text and _PERMISSIONS_FULL not in before.text:
+        described = f"{described}\n\n{_PERMISSIONS_WIDENED}"
+    return described
+
+
+def permissions_prompt_block(boundary: PermissionBoundary) -> BlockDefinition:
+    """The Run's ``core:permissions`` block."""
+    text = permissions_block_text(boundary)
     return BlockDefinition(
         id=PERMISSIONS_BLOCK_ID,
         owner=BLOCK_OWNER_ALWAYS,

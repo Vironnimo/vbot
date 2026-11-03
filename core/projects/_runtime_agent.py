@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
-from core.permissions import PermissionCeiling, join_ceilings
+from core.permissions import (
+    PERMISSION_PRESETS,
+    PERMISSION_RULE_PARTS,
+    PermissionCeiling,
+    join_ceilings,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+    resolve_rule_set,
+)
 from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
 
 if TYPE_CHECKING:
@@ -144,6 +152,11 @@ class AgentOverrides:
     form (``PermissionBoundary.to_ceiling_dict``). Every Run of the Session
     applies it on top of the Agent's own rules. Only :meth:`with_ceiling`
     changes it, and only narrows it; no Session override update does.
+
+    ``permission_rules`` is the user's rule set for this Session alone, in
+    stored form: the most specific level above the Agent's resolved rules, per
+    part (:meth:`rules_over`). Only the user's setter
+    (``SessionResolution.set_session_permission_rules``) changes it.
     """
 
     model: str | None = None
@@ -154,11 +167,19 @@ class AgentOverrides:
     # an omitted effort, which continues to inherit the Agent's setting.
     thinking_effort_default: bool = False
     permission_ceiling: Mapping[str, Any] | None = None
+    permission_rules: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.permission_ceiling is not None:
             # Strict: an unreadable stored ceiling stops the Session's Runs.
             PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+        if self.permission_rules is not None:
+            # Strict too: an unreadable Session rule set must not mean full access.
+            object.__setattr__(
+                self,
+                "permission_rules",
+                permission_rules_to_dict(normalize_permission_rules(self.permission_rules)),
+            )
         if not isinstance(self.thinking_effort_default, bool):
             raise ValueError("thinking_effort_default must be a boolean")
         if self.thinking_effort_default and self.thinking_effort is not None:
@@ -199,6 +220,7 @@ class AgentOverrides:
                 else False
             ),
             permission_ceiling=value.get("permission_ceiling"),
+            permission_rules=value.get("permission_rules"),
         )
 
     def ceiling(self) -> PermissionCeiling | None:
@@ -206,6 +228,33 @@ class AgentOverrides:
         if self.permission_ceiling is None:
             return None
         return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+
+    def rules_over(self, agent_rules: PermissionRules | None) -> PermissionRules | None:
+        """The Session's rule set over *agent_rules* (``None``: full access), per part.
+
+        Without Session rules the Agent's rules stay as they are; a part the
+        Session sets replaces the Agent's, so the Full access preset lifts them all.
+        """
+        if self.permission_rules is None:
+            return agent_rules
+        return resolve_rule_set(
+            normalize_permission_rules(self.permission_rules),
+            agent_rules if agent_rules is not None else PERMISSION_PRESETS["full_access"],
+        )
+
+    @property
+    def grants_full_access(self) -> bool:
+        """Whether the Session's rule set sets every part and restricts nothing.
+
+        Such a set lifts the Agent's rules whatever they are (the Full access
+        preset); a partial set that restricts nothing keeps the Agent's other parts.
+        """
+        if self.permission_rules is None:
+            return False
+        rules = normalize_permission_rules(self.permission_rules)
+        return not rules.restricts and all(
+            getattr(rules, part) is not None for part in PERMISSION_RULE_PARTS
+        )
 
     def with_ceiling(self, added: PermissionCeiling | None) -> AgentOverrides:
         """These overrides with *added* joined into the ceiling, which never widens."""
@@ -236,14 +285,15 @@ class AgentOverrides:
         return (
             not self.thinking_effort_default
             and self.permission_ceiling is None
+            and self.permission_rules is None
             and all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
         )
 
     def as_dict(self) -> dict[str, Any]:
         """Return only the replaced settings as stored, keyed by field name.
 
-        The ``permission_ceiling`` is no setting and stays out; :meth:`session_metadata`
-        stores it.
+        The ``permission_ceiling`` and ``permission_rules`` stay out: they
+        replace no plain Agent field, and :meth:`session_metadata` stores them.
         """
         values = {
             name: getattr(self, name)
@@ -268,6 +318,8 @@ class AgentOverrides:
         stored = self.as_dict()
         if self.permission_ceiling is not None:
             stored["permission_ceiling"] = dict(self.permission_ceiling)
+        if self.permission_rules is not None:
+            stored["permission_rules"] = dict(self.permission_rules)
         return {AGENT_OVERRIDES_META_KEY: stored}
 
 

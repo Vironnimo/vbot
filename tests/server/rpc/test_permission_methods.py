@@ -16,6 +16,8 @@ from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
+from server.access import bound_principal
+from server.access._principal import HOST
 from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
 
 
@@ -289,7 +291,13 @@ async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> No
     for agent_id, params in (("coder", {"session_id": "s1"}), ("coder", {}), ("free", {})):
         result = await rpc_result(state, "permissions.session", agent_id=agent_id, **params)
 
-        assert result == {"restricted": False, "layers": [], "stored_ceiling": False}
+        assert result == {
+            "restricted": False,
+            "layers": [],
+            "stored_ceiling": False,
+            "session_rules": None,
+            "session_preset": None,
+        }
 
 
 @pytest.mark.asyncio
@@ -329,13 +337,18 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert inherited["write"] == [_posix(tmp_path / "parent-scratch")]
     assert result["stored_ceiling"] is True
 
-    # The user lifts the inherited ceiling; the Agent's own rules stay.
-    cleared = await rpc_result(
+    # Only the user lifts the inherited ceiling; the Agent's own rules stay.
+    refused = await rpc_error(
         state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
     )
-    repeated = await rpc_result(
-        state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
-    )
+    assert refused["code"] == "access_denied"
+    with bound_principal(HOST):
+        cleared = await rpc_result(
+            state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
+        )
+        repeated = await rpc_result(
+            state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
+        )
     after = await rpc_result(state, "permissions.session", agent_id="coder", session_id="s1")
 
     assert (cleared, repeated) == ({"cleared": True}, {"cleared": False})
@@ -343,6 +356,87 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert [payload["kind"] for _event, payload in state.events] == ["sessions"]
     assert [layer["source"] for layer in after["layers"]] == ["agent"]
     assert after["stored_ceiling"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
+    state = _state(tmp_path, {})
+    workspace = tmp_path / "workspace"
+    state.runtime.agents.create(
+        "coder", "Coder", permission_rules={"read": "work_area", "web": "listed"}
+    )
+    state.runtime.agents.update("coder", workspace=str(workspace))
+    state.runtime.chat_sessions.create("coder", session_id="s1")
+    state.runtime.chat_sessions.create("coder", session_id="s2")
+    address = SessionAddress(None, "coder", "s1")
+    resolver = state.runtime.agent_resolver
+    params = {"agent_id": "coder", "session_id": "s1"}
+
+    # An Agent's own call cannot widen its Session.
+    refused = await rpc_error(
+        state, "permissions.set_session_rules", **params, permission_rules=_FULL_ACCESS
+    )
+    assert refused["code"] == "access_denied"
+
+    with bound_principal(HOST):
+        invalid = await rpc_error(
+            state, "permissions.set_session_rules", **params, permission_rules={"write": "nowhere"}
+        )
+        assert invalid["code"] == "invalid_request"
+        unknown = await rpc_error(state, "permissions.set_session_rules", **params, preset="root")
+        assert unknown["code"] == "invalid_request"
+
+        # Session rules replace whole parts of the Agent's rules, for this Session only.
+        narrowed = await rpc_result(
+            state,
+            "permissions.set_session_rules",
+            **params,
+            permission_rules={"write": "work_area"},
+        )
+        assert narrowed["session_rules"]["write"] == "work_area"
+        assert narrowed["ceiling_cleared"] is False
+        rules = resolver.resolve_agent(None, "coder", session_id="s1").permission_rules
+        assert (rules.read, rules.write, rules.web) == ("work_area", "work_area", "listed")
+        assert resolver.resolve_agent(None, "coder", session_id="s2").permission_rules.write is None
+        assert (
+            resolver.effective_config(None, "coder", session_id="s1")["permission_rules"]["source"]
+            == "session"
+        )
+        described = await rpc_result(state, "permissions.session", **params)
+        assert described["session_rules"] == narrowed["session_rules"]
+
+        # Full access lifts the Agent's rules and an inherited ceiling.
+        parent = PermissionBoundary.build(
+            normalize_permission_rules({"write": "scratch"}),
+            BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+        ).ceiling(source="parent")
+        assert parent is not None
+        stored = AgentOverrides(permission_ceiling=parent.to_ceiling_dict())
+
+        def link(metadata: dict[str, Any]) -> None:
+            metadata.update(stored.session_metadata())
+
+        state.runtime.chat_sessions.mutate_metadata(address, link)
+        full = await rpc_result(
+            state, "permissions.set_session_rules", **params, preset="full_access"
+        )
+        assert (full["session_preset"], full["ceiling_cleared"]) == ("full_access", True)
+        assert await rpc_result(state, "permissions.session", **params) == {
+            "restricted": False,
+            "layers": [],
+            "stored_ceiling": False,
+            "session_rules": full["session_rules"],
+            "session_preset": "full_access",
+        }
+
+        # null gives the Session the Agent's rules again.
+        reset = await rpc_result(
+            state, "permissions.set_session_rules", **params, permission_rules=None
+        )
+        assert (reset["session_rules"], reset["session_preset"]) == (None, None)
+        assert (await rpc_result(state, "permissions.session", **params))["restricted"] is True
+    # Every change tells open views of the Session to reload it.
+    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 3
 
 
 @pytest.mark.asyncio

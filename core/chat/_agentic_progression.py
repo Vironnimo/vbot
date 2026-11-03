@@ -221,8 +221,11 @@ class AgenticProgression:
                 evaluated_tool_key = None
             run.raise_if_cancelled()
             # A rule edit since the last round applies to this round's Tool Calls;
-            # steered input may have narrowed the Session's stored ceiling.
-            await refresh_run_permissions(self._dependencies, context, force=delivered)
+            # steered input may have narrowed the Session's stored ceiling. A
+            # changed boundary is told to the Model in this request's notes below.
+            permissions_rebuilt = await refresh_run_permissions(
+                self._dependencies, context, force=delivered
+            )
             # Tool changes are measured once per Run, after steering, and when
             # the Tool registry changed; the notes announcing them join this
             # request's boundary below, so the Tool list itself stays pinned.
@@ -342,6 +345,10 @@ class AgenticProgression:
                             session.add_note(effort_change.note_content())
                             state = replace(state, effort=state.effort.adopt(effort_change))
                             context.request_state = state
+                    if permissions_rebuilt:
+                        permissions_note = await self._requests.plan_permissions_change(context)
+                        if permissions_note is not None:
+                            session.add_note(permissions_note)
                 finally:
                     await context.session_snapshot.flush_deferred_notes(session)
                 boundary_notes.extend(session.drain_pending_notes())

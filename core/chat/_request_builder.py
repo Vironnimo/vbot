@@ -25,7 +25,11 @@ from core.chat._request_history import (
 from core.chat._request_media import RequestMedia
 from core.chat._request_targets import RequestTargets
 from core.chat._request_tool_catalog import RequestToolCatalog
-from core.chat._run_permissions import permissions_prompt_block
+from core.chat._run_permissions import (
+    PERMISSIONS_BLOCK_ID,
+    describe_permissions_change,
+    permissions_prompt_block,
+)
 from core.chat._run_state import RequestBuildInputs, _RequestState
 from core.chat._tool_epoch import (
     LiveToolCatalog,
@@ -200,7 +204,9 @@ class RequestBuilder:
             record_seen=SeenSkillsUpdate(baseline, tuple(new_names)),
         )
 
-    async def plan_prompt_block_change(self, context: _RunExecutionContext) -> str | None:
+    async def plan_prompt_block_change(
+        self, context: _RunExecutionContext, *, only: Collection[str] | None = None
+    ) -> str | None:
         """Return the note telling the Model which pinned prompt blocks changed, if any.
 
         The System Prompt keeps showing the prompt epoch's pinned Tool and Extension
@@ -208,6 +214,8 @@ class RequestBuilder:
         Model knows of them (the pin plus the epoch's earlier notes in the Run's
         snapshot) and returns one note for every change, which the Run persists
         with its input. ``None`` when the Session has no pins yet or nothing changed.
+        *only* compares just those block ids: a Run whose Permission Boundary
+        changed tells the Model at its next request (:meth:`plan_permissions_change`).
         """
         inputs = RequestBuildInputs.from_context(context, context.primary_target)
         failed_blocks: set[str] = set()
@@ -222,6 +230,7 @@ class RequestBuilder:
             session_blocks,
             failed_blocks,
             read_paths,
+            only,
         )
         await _CHAT_TRANSFORM_WORKERS.run(
             stamp_prompt_files_read,
@@ -240,6 +249,7 @@ class RequestBuilder:
         session_blocks: Sequence[BlockDefinition],
         failed_blocks: set[str],
         read_paths: list[FileRead],
+        only: Collection[str] | None,
     ) -> str | None:
         sessions = self._dependencies.sessions
         pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
@@ -268,8 +278,24 @@ class RequestBuilder:
             failed_blocks=failed_blocks,
             **render_inputs,
         )
-        change = plan_prompt_block_change(pin, messages, live, unavailable=failed_blocks)
+        change = plan_prompt_block_change(
+            pin,
+            messages,
+            live,
+            unavailable=failed_blocks,
+            describe={PERMISSIONS_BLOCK_ID: describe_permissions_change},
+            only=only,
+        )
         return None if change is None else change.note_content()
+
+    async def plan_permissions_change(self, context: _RunExecutionContext) -> str | None:
+        """The note telling the Model that its Permission Boundary changed during the Run.
+
+        The boundary applies at once (``refresh_run_permissions``); the
+        ``core:permissions`` text would otherwise reach the Model only at the
+        next Run, after Tool rounds it planned under the old rules.
+        """
+        return await self.plan_prompt_block_change(context, only=(PERMISSIONS_BLOCK_ID,))
 
     async def _session_prompt_blocks(
         self, inputs: RequestBuildInputs, *, failed_blocks: set[str] | None = None
@@ -279,8 +305,9 @@ class RequestBuilder:
         The Run's ``core:permissions`` block joins them: like them it follows the
         Run, not the prompt layout, and is pinned per prompt epoch.
         """
-        permissions = permissions_prompt_block(inputs.permissions)
-        blocks: list[BlockDefinition] = [permissions] if permissions is not None else []
+        blocks: list[BlockDefinition] = (
+            [permissions_prompt_block(inputs.permissions)] if inputs.permissions is not None else []
+        )
         binding = inputs.temporary_binding
         if binding is None:
             return tuple(blocks)
