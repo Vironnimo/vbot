@@ -1,4 +1,8 @@
 {
   "_comment": "Hand layer for Mistral. The deprecated magistral-medium prompt_mode overrides were removed after the provider catalog stopped publishing those models.",
-  "models": {}
+  "models": {
+    "mistral-large-4-0": {
+      "canonical": "mistral/mistral-large-4"
+    }
+  }
 }

@@ -14,6 +14,12 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 
+## Crouton Alpha (2026-11-03)
+
+The catalog lists `stealth/crouton-alpha` with free input/output, Context 1048576, output 943718, Tools, structured output, and text, image, file, audio and video inputs. It advertises mandatory Reasoning with `minimal` through `max`, so Agent effort `none` selects `minimal`. The Override fills the published price and ladder and keeps audio as Chat input. The separate transcription catalog does not list this id. Sources are the live [Model catalog](https://openrouter.ai/api/v1/models) and [endpoint feed](https://openrouter.ai/api/v1/models/stealth/crouton-alpha/endpoints).
+
+OpenRouter returned HTTP 502 on the production Adapter's Chat Completions probes, on independent raw Chat requests with `minimal`, `low`, and `max`, and on raw Responses and Messages requests. Chat Completions remains the inferred route.
+
 ## Catalog refresh and GPT-6.1 Terra (2026-10-27)
 
 The live catalog adds twenty ids and removes fourteen, including the replacement of free MiniMax M3.1 Flash with its paid id, Kimi K3.1 Pro, and GPT-6.1 Terra/Pro with their batch variants. Existing catalog projection and Chat defaults admit the additions without new wire exceptions. Production Adapter streaming, PNG input and a real Tool continuation passed on `openai/gpt-6.1-terra` through `api-key`; the response carries readable `reasoning` and opaque metadata. No complete replay-accounting, maximum-capacity, Pro, batch or other-new-Model inference claim follows from this smoke, and no blanket verified record is added.

@@ -426,6 +426,7 @@ async def test_provider_refresh_reloads_the_shared_registry_and_signals_models(
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     state = make_state(tmp_path, StubAdapter())
+    _serve_resources_from(state, tmp_path / "system-resources")
     state.runtime.providers.add(openrouter_provider())
     registry = state.runtime.models
 

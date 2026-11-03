@@ -30,7 +30,7 @@ Go uses `OPENCODE_API_KEY`, including named Account suffixes, in common with Zen
 
 ## Provider facts come from the models.dev section (rebuilt 2026-09-16)
 
-The opencode-go endpoint returns **bare ids** - no context window, output cap, modalities, family, or reasoning info. But models.dev carries a per-provider **`opencode-go` section** with all of those, so refresh pulls them into the generated `opencode-go.json` (`_discovery_projection.py` through the bound `ModelsDevCatalog.model()` fact view):
+Refresh normalizes the OpenCode Go listing and fills missing facts from the per-provider **`opencode-go` section** of models.dev. The generated `opencode-go.json` includes the following enrichment (`_discovery_projection.py` through the bound `ModelsDevCatalog.model()` fact view):
 
 - **Limits**: the gateway's own `context.window` / `output` - which legitimately deviate from the lab (e.g. `glm-5` output **32768** vs the canonical 131072; `minimax-m3` **1000000/131072**). "Fill, don't overwrite": a provider that *did* report a limit keeps it.
 - **Modalities**: widened to the models.dev set as a strict **superset** of what the endpoint reported (add, never drop) - so `minimax-m3`/`kimi`/`qwen*-plus` are correctly image/video-capable; `vision` is kept consistent.
@@ -250,9 +250,11 @@ The 2026-09-16 checks establish the tested wire features, not reliable completio
 
 ## Catalog Integrity
 
+The 2026-11-03 [Go listing](https://opencode.ai/inference/go/v1/models) contains 28 Models. Four ids that would have remained through Overrides also failed on the live API-key Connection. GLM 5.1 and Kimi K2.6 returned HTTP 410 `ModelDeprecated`, while Omen Alpha and MiniMax M2.5 returned HTTP 400 with an unavailable Model message. Removing those Overrides takes the four ids out of the Model DB.
+
 The 2026-10-18 refresh lists 37 Go Models. It adds `beam-free` and replaces the listed `step-5-preview-free` with `step-5-preview`; `cat-jam-free`, `deepseek-flash`, `deepseek-v4-flash`, and `deepseek-v4-flash-vision-exp` also leave the listing. Their partial Model Overrides are removed rather than retaining invalid Override-only entries; historical wire corrections remain available if an id returns. The [current Go table](https://opencode.ai/v2/docs/console/go/) names both new ids on Chat Completions. Both passed Adapter send/stream smoke requests with the API-key Connection on 2026-10-18, and Beam also passed an independent raw request. Their limits and effort ladders remain catalog facts and their wire status remains inferred; these checks establish basic access, not a full capability or replay audit. Step's new id has nonzero catalog pricing; do not carry the former free offer's price forward.
 
-The usable projection of the gateway's `/models` response applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The full refresh returned 36 raw ids on 2026-09-10, while the official endpoint table names 28 current Models and all 28 were present. Extra ids are gateway availability, not current protocol documentation; `omen-alpha` was later verified on the default Chat wire (Reappearing catalog ids).
+The usable projection of the gateway's `/models` response applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids. The full refresh returned 36 raw ids on 2026-09-10, including all 28 Models from the official endpoint table at the time.
 
 ## Prompt Caching
 

@@ -1,4 +1,29 @@
 {
   "provider_id": "openrouter",
-  "models": {}
+  "models": {
+    "stealth/crouton-alpha": {
+      "capabilities": {
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": ["minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "video_input",
+          "video_understanding"
+        ]
+      },
+      "pricing": {
+        "rates": {"input": 0, "output": 0},
+        "source": "openrouter:stealth/crouton-alpha"
+      }
+    }
+  }
 }

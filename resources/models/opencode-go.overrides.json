@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions (each Model's wire, response carrier, thinking controls, cheapest rung for none, replay scope and fidelity, listed Tools, media) live in resources/wire/opencode-go.json. Verified MiMo V2.6 Flash/Pro on 2026-09-22: binary thinking, readable-only full_history replay, 131072 output ceiling. GLM 5.1, MiniMax M2.5, Omen Alpha and Kimi K2.6 are complete records so they stay usable when a refreshed catalog lacks them (all four listed live on 2026-10-02). Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
+  "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions live in resources/wire/opencode-go.json. Model-specific evidence and gateway divergences remain in providers/opencode-go.md.",
   "models": {
     "deepseek-v4.1-flash": {
       "name": "DeepSeek V4.1 Flash",
@@ -22,18 +22,6 @@
         }
       }
     },
-    "glm-5.1": {
-      "canonical": "zhipuai/glm-5.1",
-      "name": "glm-5.1",
-      "capabilities": {
-        "reasoning": {
-          "supported": true
-        },
-        "vision": false,
-        "tools": true,
-        "json_mode": false
-      }
-    },
     "glm-5.2": {
       "capabilities": {
         "reasoning": {
@@ -44,25 +32,6 @@
           ],
           "supported": true
         }
-      }
-    },
-    "kimi-k2.6": {
-      "name": "kimi-k2.6",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "capabilities": {
-        "reasoning": {
-          "supported": true,
-          "control": "on_off"
-        },
-        "vision": true,
-        "tools": true,
-        "json_mode": false,
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ]
       }
     },
     "kimi-k3": {
@@ -98,29 +67,6 @@
           "supported": true,
           "control": "on_off"
         }
-      }
-    },
-    "minimax-m2.5": {
-      "canonical": "minimax/MiniMax-M2.5",
-      "name": "minimax-m2.5",
-      "capabilities": {
-        "reasoning": {
-          "supported": true
-        },
-        "vision": false,
-        "tools": true,
-        "json_mode": false
-      }
-    },
-    "omen-alpha": {
-      "name": "omen-alpha",
-      "capabilities": {
-        "reasoning": {
-          "supported": true
-        },
-        "vision": false,
-        "tools": true,
-        "json_mode": false
       }
     },
     "minimax-m3.1-flash": {

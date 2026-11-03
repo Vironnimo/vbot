@@ -277,7 +277,6 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
 
     expected_by_protocol = {
         "responses": (
-            "grok-4.6",
             "grok-4.7",
             "gpt-5.6-luna",
             "gpt-6-luna",
@@ -288,36 +287,27 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         "chat_completions": (
             "beam-free",
             "iceman-contributor-free",
-            "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
             "glm-5.2",
             "kimi-k3",
             "kimi-k3.1-pro",
-            "kimi-k2.6",
             "kimi-k2.7-code",
             "longcat-2.0",
             "deepseek-v4.1-flash",
             "deepseek-v4-pro",
-            "mimo-v2.5",
-            "mimo-v2.5-pro",
             "mimo-v2.6-flash",
             "mimo-v2.6-pro",
             "hy4-preview",
             "hy3",
             "minimax-m3.1-flash",
             "step-5-preview",
-            "omen-alpha",
         ),
         "messages": (
-            "minimax-m2.5",
             "minimax-m3",
-            "minimax-m2.7",
             "qwen3.8-max",
             "qwen3.8-flash",
             "qwen3.7-plus",
-            "qwen3.7-max",
-            "qwen3.6-plus",
             "claude-haiku-5-5",
         ),
     }
@@ -326,7 +316,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 38
+    assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(expected)
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
@@ -340,18 +330,8 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
     """Profiles describe inbound response carriers, not outbound replay."""
 
     expected = {
-        **dict.fromkeys(("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"), "reasoning"),
-        **dict.fromkeys(
-            (
-                "glm-5.1",
-                "omen-alpha",
-                "mimo-v2.5",
-                "mimo-v2.5-pro",
-                "mimo-v2.6-flash",
-                "mimo-v2.6-pro",
-            ),
-            "reasoning_content",
-        ),
+        **dict.fromkeys(("kimi-k3", "hy3", "hy4-preview"), "reasoning"),
+        **dict.fromkeys(("mimo-v2.6-flash", "mimo-v2.6-pro"), "reasoning_content"),
     }
 
     profiles = {model_id: _wire_profile(registry, "opencode-go", model_id) for model_id in expected}

@@ -16,5 +16,12 @@
       },
       "note": "Mistral's hosted GLM contract uses low/high/max and cannot disable thinking; inferred from zai-glm-5-3."
     }
+  ],
+  "rules": [
+    {
+      "when": {"ids": ["mistral-large-4", "mistral-large-4-0"]},
+      "set": {"reasoning": {"floor": ["low", "medium", "high"], "off": "lowest"}},
+      "note": "Mistral's direct Large 4 API accepts low, medium and high and rejects none. The Zen route has its own effort contract."
+    }
   ]
 }

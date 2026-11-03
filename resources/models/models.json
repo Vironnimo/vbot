@@ -6991,13 +6991,6 @@
       "last_updated": "2025-11-20",
       "max_output_tokens": 32768,
       "name": "Nano Banana Pro Preview",
-      "pricing": {
-        "rates": {
-          "input": 2.0,
-          "output": 120.0
-        },
-        "source": "models.dev:google/gemini-3-pro-image-preview"
-      },
       "release_date": "2025-11-20",
       "temperature": true
     },
@@ -7088,11 +7081,6 @@
           "image"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "minimal",
-            "high"
-          ],
           "supported": true
         },
         "supported_parameters": [
@@ -7107,13 +7095,6 @@
       "last_updated": "2026-02-26",
       "max_output_tokens": 65536,
       "name": "Nano Banana 2 Preview",
-      "pricing": {
-        "rates": {
-          "input": 0.5,
-          "output": 60.0
-        },
-        "source": "models.dev:google/gemini-3.1-flash-image-preview"
-      },
       "release_date": "2026-02-26",
       "temperature": true
     },
@@ -10350,8 +10331,7 @@
     "minimax/image-01": {
       "capabilities": {
         "input_modalities": [
-          "text",
-          "image"
+          "text"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -10361,7 +10341,7 @@
           "supported": false
         },
         "tools": false,
-        "vision": true
+        "vision": false
       },
       "context_window": 0,
       "family": "minimax",
@@ -11188,7 +11168,8 @@
         "reasoning": {
           "control": "levels",
           "levels": [
-            "none",
+            "low",
+            "medium",
             "high"
           ],
           "supported": true
@@ -11206,9 +11187,9 @@
       "name": "Mistral Large 4",
       "pricing": {
         "rates": {
-          "cache_read": 0.14,
-          "input": 1.36,
-          "output": 4.18
+          "cache_read": 0.07,
+          "input": 0.7,
+          "output": 2.1
         },
         "source": "models.dev:mistral/mistral-large-4"
       },

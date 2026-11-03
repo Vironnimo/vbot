@@ -26,21 +26,22 @@ from tests.core.providers.openrouter_test_support import (
     sent_body,
 )
 
-# The bundled catalog marks its Reasoning mandatory, with low as the cheapest rung.
-MANDATORY_REASONING_MODEL = "openai/gpt-6.1-sol"
-
 
 @pytest.mark.parametrize(
-    ("effort", "expected"),
+    ("model_id", "effort", "expected"),
     [
-        pytest.param(None, None, id="omitted-keeps-provider-default"),
-        pytest.param("none", "low", id="off-becomes-cheapest-supported-effort"),
+        pytest.param("openai/gpt-6.1-sol", None, None, id="omitted-keeps-provider-default"),
+        pytest.param(
+            "openai/gpt-6.1-sol", "none", "low", id="off-becomes-cheapest-supported-effort"
+        ),
+        pytest.param("stealth/crouton-alpha", "none", "minimal", id="crouton-lowest-effort"),
+        pytest.param("stealth/crouton-alpha", "max", "max", id="crouton-max-effort"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
 async def test_mandatory_reasoning_model_never_renders_off(
-    effort: str | None, expected: str | None
+    model_id: str, effort: str | None, expected: str | None
 ) -> None:
     registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
 
@@ -50,10 +51,10 @@ async def test_mandatory_reasoning_model_never_renders_off(
     route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
     adapter = openrouter_adapter(lookup)
 
-    await adapter.send(HELLO, model_id=MANDATORY_REASONING_MODEL, thinking_effort=effort)
+    await adapter.send(HELLO, model_id=model_id, thinking_effort=effort)
 
     body = sent_body(route)
-    intent = adapter.describe_reasoning_render(MANDATORY_REASONING_MODEL, effort)
+    intent = adapter.describe_reasoning_render(model_id, effort)
     if expected is None:
         assert "reasoning" not in body
         assert intent.kind == "default"

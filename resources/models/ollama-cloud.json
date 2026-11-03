@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-27T09:03:35.653419+00:00",
+  "fetched_at": "2026-11-03T22:54:55.944020+00:00",
   "models": {
     "beam": {
       "capabilities": {
@@ -51,7 +51,7 @@
         ],
         "json_mode": false,
         "output_modalities": [
-          "text"
+          "decisions"
         ],
         "reasoning": {
           "supported": false
@@ -59,10 +59,8 @@
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
-          "chat",
-          "text_output",
           "image_input",
-          "image_understanding"
+          "decision"
         ],
         "tools": false,
         "vision": true
@@ -674,6 +672,98 @@
           "output": 15.0
         },
         "source": "models.dev:ollama-cloud/kimi-k3"
+      }
+    },
+    "mimo-v2.6-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "mimo",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "mimo-v2.6-flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0028,
+          "input": 0.14,
+          "output": 0.28
+        },
+        "source": "models.dev:ollama-cloud/mimo-v2.6-flash"
+      }
+    },
+    "mimo-v2.6-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "mimo",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "mimo-v2.6-pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0036,
+          "input": 0.435,
+          "output": 0.87
+        },
+        "source": "models.dev:ollama-cloud/mimo-v2.6-pro"
       }
     },
     "minimax-m2.7": {
