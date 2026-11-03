@@ -81,7 +81,8 @@ export function setupSessionListDrawerSuite() {
   });
 
   return {
-    mount(overrides = {}) {
+    // `context` holds App's contexts, such as `permissionApprovals`.
+    mount(overrides = {}, { context = new Map() } = {}) {
       const props = reactiveProps({
         agentId: 'alpha',
         currentSessionId: 'session-1',
@@ -90,6 +91,7 @@ export function setupSessionListDrawerSuite() {
       mountedComponent = mount(SessionListDrawer, {
         target: document.body,
         props,
+        context,
       });
       flushSync();
       return props;

@@ -3,6 +3,11 @@
 from core.permissions._approval_access import ApprovalRequirement, PermissionGrant
 from core.permissions._command_check import CommandChecker, run_permission_decision
 from core.permissions._refusal import PermissionApprovalRejected
+from core.permissions._session_grants import (
+    GrantSuggestion,
+    normalize_session_grants,
+    suggest_session_grants,
+)
 from core.permissions.permissions import (
     CUSTOM_PRESET,
     PERMISSION_PRESETS,
@@ -57,6 +62,9 @@ from core.permissions.permissions import (
 )
 
 __all__ = [
+    "GrantSuggestion",
+    "normalize_session_grants",
+    "suggest_session_grants",
     "CUSTOM_PRESET",
     "PERMISSION_PRESETS",
     "PERMISSION_RULE_PARTS",

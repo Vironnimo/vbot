@@ -481,6 +481,8 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
         assert value not in json.dumps(request)
         assert request["arguments"]["content"] == "{{secret:API}}"
         assert request["display_redacted"] is True
+        # A review under full access has nothing a Session could remember.
+        assert request["session_grant"] is None
         assert manager.resolve_approval(request["id"], "allow")
         messages, _ = await task
         assert value not in json.dumps([message.to_dict() for message in messages])

@@ -26,6 +26,11 @@ export function agentActivityState(
         : status === 'unread'
           ? t('chat.agentActivity.stateUnread')
           : '';
+  if (status === 'approval') {
+    return [t('chat.agentActivity.stateApproval'), unread]
+      .filter(Boolean)
+      .join(' · ');
+  }
   if (status === 'running' || status === 'waiting') {
     return [workState(status, work, nowMs), unread].filter(Boolean).join(' · ');
   }
@@ -65,7 +70,9 @@ export function agentActivityTooltip({
     {
       label: t('chat.agentActivity.status'),
       value: agentActivityState(status, unreadCount, { work, nowMs }),
-      tone: status === 'running' || status === 'waiting' ? 'warning' : '',
+      tone: ['approval', 'running', 'waiting'].includes(status)
+        ? 'warning'
+        : '',
     },
   ];
   const { model } = parseModelSelectionValue(

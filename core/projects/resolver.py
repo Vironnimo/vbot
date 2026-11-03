@@ -83,7 +83,7 @@ from core.settings import AgentDefaults
 from core.tools.tool_loading import complete_tool_loading, inherit_tool_loading
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from core.agents.agents import Agent, AgentStore
     from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
@@ -485,6 +485,21 @@ class AgentResolver:
         """
         return self._session_resolution.set_session_permission_rules(address, rules)
 
+    def change_session_permission_grants(
+        self,
+        address: SessionAddress,
+        *,
+        add: Sequence[str] = (),
+        remove: Sequence[str] = (),
+    ) -> AgentOverrides:
+        """Add and remove Session Grants of one Session. Blocking.
+
+        See ``SessionResolution.change_session_permission_grants``.
+        """
+        return self._session_resolution.change_session_permission_grants(
+            address, add=add, remove=remove
+        )
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 
@@ -685,7 +700,7 @@ class AgentResolver:
             for name, value in overrides.agent_changes().items():
                 if name in effective:
                     effective[name] = {"value": value, "source": "session"}
-            if overrides.permission_rules is not None and not builtin:
+            if overrides.changes_permission_rules and not builtin:
                 effective["permission_rules"] = _session_permission_rules_source(
                     effective["permission_rules"], overrides
                 )
@@ -991,6 +1006,9 @@ def _session_permission_rules_source(
     stored = agent_source.get("value")
     agent_rules = normalize_permission_rules(stored) if stored is not None else None
     effective = overrides.rules_over(agent_rules)
+    if overrides.permission_rules is None and effective == agent_rules:
+        # Session Grants under full access change nothing.
+        return agent_source
     session_rules = overrides.permission_rules or {}
     parts = {
         **agent_source.get("parts", {}),

@@ -3,8 +3,11 @@
 ``permissions.validate`` normalizes a candidate rule set without saving it, with
 every problem, the preset it matches and a preview of what it lets the Agent
 reach. ``permissions.session`` describes the limits a Session's Runs work under,
-``permissions.set_session_rules`` sets the user's rules for one Session, and
-``permissions.clear_session_ceiling`` lifts the limits a Session inherited.
+``permissions.set_session_rules`` sets the user's rules for one Session,
+``permissions.remove_session_grants`` takes back what the user allowed for the
+rest of a Session, and ``permissions.clear_session_ceiling`` lifts the limits a
+Session inherited. ``permissions.pending`` and ``permissions.resolve`` answer
+the approval requests of live Runs.
 They read Agents or Sessions, so they run on the Session database's pool like
 Agent reads.
 """
@@ -26,6 +29,7 @@ from core.permissions import (
     editor_bases,
     matching_preset,
     normalize_permission_rules,
+    normalize_session_grants,
     permission_rules_to_dict,
     preset_definitions,
     resolve_rule_set,
@@ -162,6 +166,8 @@ async def _session_permissions(state: Any, params: JsonObject) -> JsonObject:
     that ``permissions.clear_session_ceiling`` removes. ``session_rules`` is the
     user's rule set for this Session (``permissions.set_session_rules``) and
     ``session_preset`` the preset it matches, both ``null`` without one.
+    ``session_grants`` are the Session Grants, the allow rules the user added
+    while approving Tool calls; the Agent's layer already includes them.
     """
     _reject_unsupported(
         params, {"agent_id", "session_id", "working_project_id"}, "permissions.session"
@@ -224,11 +230,13 @@ def _session_summary(
 
 def _session_rules(overrides: AgentOverrides) -> JsonObject:
     stored = overrides.permission_rules
+    grants = list(overrides.permission_grants)
     if stored is None:
-        return {"session_rules": None, "session_preset": None}
+        return {"session_rules": None, "session_preset": None, "session_grants": grants}
     return {
         "session_rules": dict(stored),
         "session_preset": matching_preset(normalize_permission_rules(stored)),
+        "session_grants": grants,
     }
 
 
@@ -326,16 +334,80 @@ async def _pending_approvals(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "decision"}, "permissions.resolve")
+    """Answer one approval request; ``remember`` also allows its rules for the whole Session.
+
+    ``remember`` (with ``allow`` only) lists Session Grants, usually the
+    request's ``session_grant`` suggestion, possibly edited by the user. They
+    are stored before the call goes on, so its Tool's recheck and every later
+    call of the Session see them.
+    """
+    _reject_unsupported(params, {"id", "decision", "remember"}, "permissions.resolve")
     request_id = _required_string(params, "id")
     decision = _required_string(params, "decision")
     if decision not in {"allow", "reject"}:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "decision must be allow or reject")
+    remember = params.get("remember")
+    if remember is not None:
+        if decision != "allow":
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "remember needs the decision allow")
+        if current_principal() is None:
+            raise RpcError("access_denied", "Only the user can allow access for a Session.")
+        try:
+            rules = [rule.text for rule in normalize_session_grants(remember)]
+        except PermissionRulesError as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.remember: {error}") from error
+        if not rules:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.remember names no rule")
+        request = next(
+            (
+                item
+                for item in state.chat_runs.approvals_snapshot()["requests"]
+                if item["id"] == request_id
+            ),
+            None,
+        )
+        if request is None:
+            raise RpcError(
+                "approval_not_found", "The approval request is no longer pending", routine=True
+            )
+        address = SessionAddress(
+            request.get("project_id"), request["agent_id"], request["session_id"]
+        )
+        try:
+            await state.runtime.chat_sessions.run_async(
+                state.runtime.agent_resolver.change_session_permission_grants, address, add=rules
+            )
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        publish_session_changed(state, address)
     if not state.chat_runs.resolve_approval(request_id, decision):
         raise RpcError(
             "approval_not_found", "The approval request is no longer pending", routine=True
         )
     return {"resolved": True}
+
+
+async def _remove_session_grants(state: Any, params: JsonObject) -> JsonObject:
+    """Take back Session Grants; a Run in progress applies it at its next Tool round."""
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "rules"}, "permissions.remove_session_grants"
+    )
+    if current_principal() is None:
+        raise RpcError("access_denied", "Only the user can change a Session's permission rules.")
+    address = _required_session_address(params)
+    rules = params.get("rules")
+    try:
+        normalize_session_grants(rules)
+    except PermissionRulesError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.rules: {error}") from error
+    try:
+        overrides = await state.runtime.chat_sessions.run_async(
+            state.runtime.agent_resolver.change_session_permission_grants, address, remove=rules
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_session_changed(state, address)
+    return {"session_grants": list(overrides.permission_grants)}
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
@@ -347,5 +419,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "permissions.validate": _validate_permission_rules,
         "permissions.session": _session_permissions,
         "permissions.set_session_rules": _set_session_rules,
+        "permissions.remove_session_grants": _remove_session_grants,
         "permissions.clear_session_ceiling": _clear_session_ceiling,
     }

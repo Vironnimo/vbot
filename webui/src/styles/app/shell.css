@@ -368,6 +368,13 @@
   box-shadow: inset 0 0 0 1.5px var(--amber);
 }
 
+/* A Tool call waits for the user: the one state that needs them, so it is
+   the loudest. */
+.tab-indicator--approval {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-30);
+}
+
 .tab-indicator--unread {
   background: var(--blue);
   box-shadow: 0 0 0 2px var(--blue-dim);

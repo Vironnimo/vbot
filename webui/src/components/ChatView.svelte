@@ -24,7 +24,7 @@
   import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
-  import { untrack } from 'svelte';
+  import { getContext, untrack } from 'svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { provideSpeechOrigin } from '$lib/speechAudio.svelte.js';
@@ -605,9 +605,13 @@
     }
   }
 
+  const permissionApprovals = getContext('permissionApprovals');
   const activity = createChatViewActivity({
     chatState,
     target,
+    get approvalRequests() {
+      return permissionApprovals?.requests ?? [];
+    },
     get active() {
       return active;
     },

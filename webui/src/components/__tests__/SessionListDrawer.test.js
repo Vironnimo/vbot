@@ -20,6 +20,7 @@ import { appendSessionInvalidation } from '../../lib/sessionInvalidation.js';
 import { sessionActivityFromSnapshot } from '../../lib/sessionActivity.js';
 import { t } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 describe('SessionListDrawer list', () => {
   const drawer = setupSessionListDrawerSuite();
@@ -216,6 +217,41 @@ describe('SessionListDrawer list', () => {
     expect(marker()).toBeNull();
     expect(document.querySelector('.session-row__unread')).not.toBeNull();
     expect(api.listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a Session waiting for the user’s approval before its work', async () => {
+    api.listSessions.mockResolvedValue({
+      sessions: [
+        session('session-1', { activity_state: 'working' }),
+        session('session-2', { activity_state: 'working' }),
+      ],
+    });
+    const approvals = reactiveProps({
+      requests: [
+        {
+          id: 'a1',
+          agent_id: 'alpha',
+          project_id: null,
+          session_id: 'session-2',
+        },
+      ],
+    });
+    drawer.mount(
+      {},
+      { context: new Map([['permissionApprovals', approvals]]) },
+    );
+    await waitForCondition(() => rowCount() === 2);
+    const marker = () => document.querySelector('.session-row__approval');
+    expect(sessionRowButton('session-2').contains(marker())).toBe(true);
+    expect(marker().getAttribute('aria-label')).toBe(
+      t('sessions.awaitingApproval'),
+    );
+    expect(document.querySelectorAll('.session-row__activity')).toHaveLength(1);
+
+    approvals.requests = [];
+    flushSync();
+    expect(marker()).toBeNull();
+    expect(document.querySelectorAll('.session-row__activity')).toHaveLength(2);
   });
 
   it('labels forked and Channel Sessions with icon-only markers', async () => {

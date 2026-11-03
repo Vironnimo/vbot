@@ -18,7 +18,12 @@
   const AGENT_PANEL_MIN_WIDTH = 260;
   // The roster's inline padding, which leaves room for focus rings.
   const ROSTER_INSET = 2;
-  const ACTIVITY_STATUSES = new Set(['running', 'waiting', 'unread']);
+  const ACTIVITY_STATUSES = new Set([
+    'approval',
+    'running',
+    'waiting',
+    'unread',
+  ]);
   // The Project groups this browser opened or closed in the picker.
   const EXPANDED_PROJECTS_KEY = 'vbot.chat.agentPicker.expandedProjects';
 
@@ -31,7 +36,8 @@
     // model, thinkingEffort }] }]. A Project without members is left out.
     projectGroups = [],
     // Per-Agent activity keyed by Agent address (a bare Identity Agent id or
-    // `agent@project`): { status: 'running' | 'waiting' | 'unread' | 'idle',
+    // `agent@project`): { status: 'approval' | 'running' | 'waiting' |
+    // 'unread' | 'idle',
     // unreadCount, latestUnreadAt, work }. `work` is what the Agent's working
     // or waiting Sessions do together (`agentSessionActivity`), null while
     // they are idle.
@@ -339,16 +345,18 @@
       0,
     );
     const status =
-      ['running', 'waiting', 'unread'].find((candidate) =>
+      ['approval', 'running', 'waiting', 'unread'].find((candidate) =>
         entries.some((entry) => entry.status === candidate),
       ) ?? 'idle';
     return { status, unreadCount };
   }
 
-  // Picker order: running Agents, then waiting ones, then unread ones (newest
-  // result first), then the rest in roster order.
+  // Picker order: Agents waiting for the user's approval, running Agents,
+  // then waiting ones, then unread ones (newest result first), then the rest
+  // in roster order.
   function byActivity(entries) {
     return [
+      ...entries.filter((entry) => entry.status === 'approval'),
       ...entries.filter((entry) => entry.status === 'running'),
       ...entries.filter((entry) => entry.status === 'waiting'),
       ...newestResultFirst(
@@ -413,6 +421,9 @@
   }
 
   function agentActivityLabel(name, status, unreadCount) {
+    if (status === 'approval') {
+      return t('chat.agentActivity.approval', { name });
+    }
     if (status === 'running') {
       if (unreadCount === 1) {
         return t('chat.agentActivity.runningUnreadOne', { name });

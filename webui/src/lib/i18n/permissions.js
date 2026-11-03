@@ -131,4 +131,10 @@ export default Object.freeze({
   'permissions.session.fullConfirmText':
     'This also removes the limits it inherited from a scheduled job or the Session that started it. They return when that job or Session runs here again.',
   'permissions.session.fullConfirm': 'Give full access',
+  'permissions.session.grants': 'Allowed while approving',
+  'permissions.session.grantsHelp':
+    'Rules you allowed for this Session when you approved a Tool call. They add to its rules but never lift a limit it inherited.',
+  'permissions.session.grantRemove': 'Remove',
+  'permissions.session.grantRemoveRule': 'Remove {rule}',
+  'permissions.session.grantsFailed': 'The rule could not be removed.',
 });

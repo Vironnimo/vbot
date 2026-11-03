@@ -30,7 +30,7 @@ Liveness and close: after 25 s without an event the shared socket sends a transp
 
 ## Permission approvals
 
-The Run manager owns pending permission requests. `connection_ready.permissions_approvals` is its authoritative `{revision, requests}` snapshot; `permissions_approvals` publishes the same complete snapshot on each change. A client resets to the hello snapshot on every connection and accepts later snapshots only when their revision increases, so resumed replay cannot resurrect a settled request and a new server may restart revision at zero. `permissions.pending` reads the same snapshot; `permissions.resolve` accepts `id` and `decision` (`allow` or `reject`) and returns `approval_not_found` if another client or cancellation already settled it. Browser disconnect does not cancel requests.
+The Run manager owns pending permission requests. `connection_ready.permissions_approvals` is its authoritative `{revision, requests}` snapshot; `permissions_approvals` publishes the same complete snapshot on each change. A client resets to the hello snapshot on every connection and accepts later snapshots only when their revision increases, so resumed replay cannot resurrect a settled request and a new server may restart revision at zero. `permissions.pending` reads the same snapshot; `permissions.resolve` accepts `id`, `decision` (`allow` or `reject`) and optional `remember` Session Grants (`permissions/approvals.md` -> Session Grants) and returns `approval_not_found` if another client or cancellation already settled it. Browser disconnect does not cancel requests.
 
 ## Client presence
 

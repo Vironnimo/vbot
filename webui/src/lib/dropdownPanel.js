@@ -15,7 +15,7 @@ const STATUS_DOTS = new Set(['idle', 'running', 'waiting', 'unread']);
 
 /**
  * Optional per-option decorations shared by both Dropdown variants:
- * `statusDot` ('idle' | 'running' | 'waiting' | 'unread') renders the app's
+ * `statusDot` ('idle' | 'approval' | 'running' | 'waiting' | 'unread') renders the app's
  * status dot before the label (also on the trigger for the selected option),
  * `badge` a compact count pill after it, `ariaLabel` replaces the option's
  * accessible name when the visible label alone omits that status, and

@@ -310,6 +310,19 @@ class PermissionBoundary:
             )
         )
 
+    def with_agent_allow(self, rules: Iterable[PermissionRule]) -> PermissionBoundary | None:
+        """This boundary with placeholder-free *rules* added to the Agent's own layer.
+
+        ``None`` without an own layer: then only inherited limits restrict the
+        Run, and no rule of the Agent's could widen them.
+        """
+        if not self._layers or self._layers[0].source != "agent":
+            return None
+        own = self._layers[0]
+        extra = tuple(rule for rule in rules if rule not in own.allow)
+        widened = replace(own, allow=(*own.allow, *extra))
+        return PermissionBoundary((widened, *self._layers[1:]), self._context)
+
     def check_path(
         self,
         path: PathLike,

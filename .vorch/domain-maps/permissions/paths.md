@@ -22,6 +22,10 @@ A restricted check touches the filesystem (`realpath`, 8.3 expansion), and `buil
 - `refused_below(folder, access) -> RefusedBelow`: the same, as a Tool result may name it: `rules`, the deny rules' parts spelled as the rules write them (letter case and closing `/**`, which the comparison keys of `refusable_below` fold on Windows; `spelled_like` in `_paths.py`), and `protected`, a flag for protected locations, whose paths the System Prompt never names. Search notes use it (`../tools/search_files.md`).
 - `readable_entries(folder, entries)` keeps the `os.DirEntry`s of a listing that may be read and checks only links and junctions unless `refusable_below` names something. Both cost nothing under full access; listings, suggestions and search exclusions use them (`../tools/file_state.md` -> Path resolution, `../tools/search_files.md`).
 
+## Paths beyond the Tool target
+
+Listings, missing-path suggestions, diagnostics, search roots and exclusions, image, media, Channel files, instruction files (`project` Tool, Working Project, folder notes), MCP roots and Assistant `file:` references are checked before any access, so no refused path is touched or named beyond a readable folder's entries and deny rules (`tools/file_state.md` -> Path resolution, `chat/request-building.md` for file references, `extensions/mcp.md` for roots).
+
 ## Limits
 
 - Hardlinks to files outside the permitted folders are not detected on read: a hardlink is an ordinary file name.

@@ -8,7 +8,7 @@ import {
   backgroundTasks,
   runningSubAgentCommands,
 } from '$lib/chatTimelinePresentation.js';
-import { formatAgentAddress } from '$lib/agentAddress.js';
+import { formatAgentAddress, qualifyAgentAddress } from '$lib/agentAddress.js';
 import { agentActivityState } from '../agentActivityTooltip.js';
 import { untrack } from 'svelte';
 
@@ -68,8 +68,16 @@ export function createChatViewActivity(context) {
     ),
   ]);
 
+  // The Agent addresses with a Tool call waiting for the user's approval.
+  let approvalAddresses = $derived(
+    (context.approvalRequests ?? []).map((request) =>
+      qualifyAgentAddress(request.agent_id, request.project_id),
+    ),
+  );
+
   // Per Agent address: its status dot, unread results and what its working
-  // or waiting Sessions do together (`work`, null while idle).
+  // or waiting Sessions do together (`work`, null while idle). A Tool call
+  // waiting for the user's approval outranks every other state.
   let pickerAgentActivity = $derived.by(() => {
     const displayedSessionKey = target.displayedSessionKey();
     return Object.fromEntries(
@@ -82,11 +90,9 @@ export function createChatViewActivity(context) {
         return [
           address,
           {
-            status: agentActivityStatus(
-              chatState,
-              address,
-              displayedSessionKey,
-            ),
+            status: approvalAddresses.includes(address)
+              ? 'approval'
+              : agentActivityStatus(chatState, address, displayedSessionKey),
             unreadCount: unreadResults.count,
             latestUnreadAt: unreadResults.latestAt,
             work: agentSessionActivity(chatState.sessionActivity, address),

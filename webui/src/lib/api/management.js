@@ -6,8 +6,12 @@ import {
   requirePlainObject,
 } from './transport.js';
 
-export function resolvePermissionApproval(id, decision) {
-  return rpc('permissions.resolve', { id, decision });
+// `remember` lists the Session Grants to keep for the request's Session; the
+// request's `session_grant` suggests them.
+export function resolvePermissionApproval(id, decision, { remember } = {}) {
+  const params = { id, decision };
+  if (remember) params.remember = remember;
+  return rpc('permissions.resolve', params);
 }
 
 // Settings and pickers ask for the same catalogs in one render turn. Share
@@ -183,6 +187,28 @@ export function setSessionPermissions(
   if (preset) params.preset = preset;
   else params.permission_rules = null;
   return rpc('permissions.set_session_rules', params, options);
+}
+
+// Take back Session Grants the user gave while approving Tool calls.
+export function removeSessionGrants(
+  { agentId, sessionId, rules } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.remove_session_grants',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'permissions.remove_session_grants',
+  );
+  return rpc(
+    'permissions.remove_session_grants',
+    { agent_id: agentId, session_id: sessionId, rules },
+    options,
+  );
 }
 
 export function renameAgent(id, newId, options = {}) {

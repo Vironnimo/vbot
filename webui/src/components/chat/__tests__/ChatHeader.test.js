@@ -160,6 +160,22 @@ describe('ChatHeader', () => {
     };
   }
 
+  it('marks an Agent waiting for the user’s approval above its other activity', () => {
+    mountHeader({
+      agentActivity: {
+        ...ACTIVITY,
+        beta: { ...ACTIVITY.beta, status: 'approval' },
+      },
+    });
+    const beta = pills()[1];
+    expect(
+      beta.firstElementChild.classList.contains('tab-indicator--approval'),
+    ).toBe(true);
+    expect(beta.getAttribute('aria-label')).toBe(
+      t('chat.agentActivity.approval', { name: 'Beta' }),
+    );
+  });
+
   it('shows the Agents that fit in roster order with any activity dot before the name', async () => {
     const onSelectAgent = vi.fn();
     await mountOverflowing({ onSelectAgent });
