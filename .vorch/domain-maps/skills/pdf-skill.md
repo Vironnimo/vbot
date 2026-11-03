@@ -25,6 +25,7 @@ Verified with Edge; `references/design.md` teaches them to Agents. `@page` size,
 ## Gotchas
 
 - ReportLab starts each page and each table cell in Helvetica; `markdown.py` sets `initialFontName` and every table's `FONTNAME`, or `Fonts:` lists an unused Helvetica.
+- On Windows, browser execution uses PowerShell's `Start-Process -Wait` to wait for the entire process tree: Edge can exit successfully before its child finishes writing the PDF. The existing print timeout also bounds this wait.
 - pypdf clones of encoded streams have no `/Length`; `edit._recompress` reads the encoded size from `_data`.
 - Importing the package in tests writes `__pycache__` into the Skill unless `sys.dont_write_bytecode` is set; the Skill package must stay free of it.
 

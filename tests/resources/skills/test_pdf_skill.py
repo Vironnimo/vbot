@@ -347,6 +347,8 @@ def test_html_document_is_printed_and_checked(
     browser = PDF_TOOLS["env"].find_browser(None).path
     if browser is None:
         pytest.skip("no Chromium-based browser on this host")
+    tmp_path = tmp_path / "Editor's proofs"
+    tmp_path.mkdir()
     # A desktop browser can exit successfully without printing. Automatic
     # selection tries another browser; an explicit selection stays authoritative.
     silent_browser = tmp_path / "silent-browser.exe"

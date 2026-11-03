@@ -132,6 +132,8 @@ def _arguments(browser: str, profile: str, output: Path, source: Path, wait: flo
 
 def _run(arguments: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
     try:
+        if sys.platform == "win32":
+            return _run_windows_browser(arguments, timeout)
         return subprocess.run(
             arguments,
             capture_output=True,
@@ -148,6 +150,45 @@ def _run(arguments: list[str], timeout: float) -> subprocess.CompletedProcess[st
         ) from error
     except OSError as error:
         raise CommandError(f"Cannot start the browser {arguments[0]}: {error}") from error
+
+
+def _run_windows_browser(arguments: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    # Edge can delegate printing to a child and exit before it writes the PDF.
+    # Start-Process -Wait waits for the entire process tree, including that child.
+    def quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    folder = tempfile.mkdtemp(prefix="vbot-pdf-output-")
+    try:
+        stdout = Path(folder) / "stdout.txt"
+        stderr = Path(folder) / "stderr.txt"
+        command = (
+            "$ErrorActionPreference = 'Stop'; "
+            "$process = Start-Process -WindowStyle Hidden -Wait -PassThru "
+            f"-FilePath {quote(arguments[0])} "
+            f"-ArgumentList {quote(subprocess.list2cmdline(arguments[1:]))} "
+            f"-RedirectStandardOutput {quote(str(stdout))} "
+            f"-RedirectStandardError {quote(str(stderr))}; exit $process.ExitCode"
+        )
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+        return subprocess.CompletedProcess(
+            arguments,
+            completed.returncode,
+            completed.stdout
+            + (stdout.read_text(encoding="utf-8", errors="replace") if stdout.is_file() else ""),
+            completed.stderr
+            + (stderr.read_text(encoding="utf-8", errors="replace") if stderr.is_file() else ""),
+        )
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _relevant_output(text: str) -> str:
