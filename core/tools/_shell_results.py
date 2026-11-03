@@ -458,11 +458,10 @@ def failure_hint(
         permissions=permissions,
     )
     if hint is None and report.exit_code == 0 and failed:
-        # Agents read exit code 0 as success although a test script before
-        # the last statement had failed.
+        # The shell's success does not establish the outcome of its programs.
         hint = (
-            "Exit code 0 comes from the last statement only: the failed programs exited with "
-            "an error before it, and the command went on after them."
+            "The shell exited with code 0, but the listed programs exited with errors. "
+            "Check their output and what completed before retrying."
         )
     jobs = ended_jobs_hint(report.command) if report.jobs_ended else None
     if jobs is not None:

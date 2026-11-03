@@ -513,6 +513,10 @@ Diagnostics (`_judge`):
   - unnecessary escapes before Unicode punctuation are removed;
   - the `note` names the change; pattern repairs also name `-F`.
 
+  If the retry is refused too, content and name searches report that refusal,
+  not the first engine's error. A PCRE2 lookbehind-length error therefore stays
+  visible instead of repeating that look-around needs PCRE2.
+
   When nothing applies, the call fails with the error kind, the offending
   pattern as sent with a caret under the offending part, and the `-F`
   correction (`explain_failure`, `_pattern_error`); an unrecognized escape is
@@ -763,6 +767,7 @@ blank placeholders, so no sentence has to warn about them.
 | `Left out of this search: src/secrets/**, **/*.key and vBot's own files - the permission rules refuse reading them.` | Results that silently omit denied or protected paths read as the whole tree; the note keeps the Agent from concluding that a file is absent or hunting for it through the shell (F4; review 2026-10-21). It names the parts: under the former `Paths the permission rules refuse to read are left out of this search.` an Agent never learned that a refused `secrets/` existed and told the user the project had no API key (eval 2026-10-22). The parts are the deny rules the System Prompt lists, in their spelling; protected locations stay unnamed, since the System Prompt names no path of vBot's own. Up to five parts, the rest counted. Only when the rules could refuse something below a searched folder. |
 | Unknown refusal: `ripgrep refused the search:` / `<message>` / `Nothing was searched. Correct the call as that message says; {"args": ["--help"]} lists the accepted flags.` | Replaces `<message>` / `Nothing was searched.`, which gave no next step; in the Swarm run of 2026-10-20 its message was a cut path fragment, which read like nothing at all (F5). |
 | Failure without a message: `The search engine failed without giving a reason. Nothing was searched. Retry the call.` | Replaces `search_files could not complete the search: the search engine exited with code 2. Retry the call.` / `Nothing was searched.`, which ran together two endings and named an exit code the Agent cannot act on (F5). |
+| A refused regex retry keeps the retry's native diagnostic inside the existing `The pattern is not a valid regular expression ...` error. | The original engine's unsupported-look-around message hid a PCRE2 lookbehind-length error, so the Agent received advice for a fallback already attempted (F5; Session review 2026-11-03). Applies to content and name searches. |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

@@ -170,6 +170,13 @@ _BUILD = "build --all"
             0,
             ["node.exe exited with code 1 (tests/check.js)"],
         ),
+        # A single GUI program can fail after PowerShell reported a successful launch.
+        (
+            "viewer.exe --headless --script check.gd",
+            (ProgramExit("viewer.exe", 1),),
+            0,
+            ["viewer.exe exited with code 1"],
+        ),
         # A Select-Object -First stage stopped reading on purpose: git did not fail.
         (
             "git log --reverse | Select-Object -First 1; build --all",
@@ -203,7 +210,7 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
     if failed_programs is not None:
         expected["failed_programs"] = failed_programs
     if exit_code == 0 and failed_programs:
-        assert "last statement" in result.pop("hint")
+        assert isinstance(result.pop("hint"), str)
     assert result == expected
     if exit_code == 0xC0000005:
         shown = shell_detail_blocks({"command": command}, tool_success(result))
