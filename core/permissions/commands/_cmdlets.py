@@ -46,44 +46,143 @@ if TYPE_CHECKING:
 
 _DRIVE_FUNCTION = re.compile(r"^([A-Za-z]):$")
 _WEB_CMDLETS = frozenset({"invoke-webrequest", "invoke-restmethod"})
+_VARIABLE_OUTPUT_PARAMETERS = (
+    "OutVariable",
+    "PipelineVariable",
+    "ErrorVariable",
+    "WarningVariable",
+    "InformationVariable",
+)
+_VARIABLE_SCOPES = ("global:", "script:", "local:", "private:", "using:")
+# The static binder cannot discover these FileSystem-provider parameters when
+# Path is a variable. They change returned content, not the accessed paths.
+_CONTENT_PARAMETERS = {
+    "get-content": frozenset({"raw", "encoding", "delimiter", "wait", "asbytestream"}),
+    "set-content": frozenset({"encoding", "nonewline", "asbytestream"}),
+    "add-content": frozenset({"encoding", "nonewline", "asbytestream"}),
+    "get-childitem": frozenset({"directory", "file", "attributes", "hidden", "readonly", "system"}),
+}
 
 
 def prepare(analysis: Analysis, context: Context, script: Script) -> None:
     """Variables and aliases a PowerShell script changes through cmdlets, before it is read."""
     for command in script.commands:
         name = (command.resolved or "").lower()
+        called = literal(command.words[0]) if command.words else None
+        if (
+            command.script_function
+            or command.invocation == "."
+            or (command.invocation == "&" and called is None)
+            or (called and called.lower().endswith(".ps1"))
+            or name == "invoke-expression"
+        ):
+            context.values_unknown = True
         binding = command.binding
         if binding is None:
             continue
+        for parameter in _VARIABLE_OUTPUT_PARAMETERS:
+            for value in items(binding.bound.get(parameter)):
+                text = literal(value)
+                _invalidate_variable(context, None if text is None else text.removeprefix("+"))
         if name in ("set-variable", "new-variable", "remove-variable", "clear-variable"):
             for value in items(binding.bound.get("Name")):
                 text = literal(value)
+                _invalidate_variable(context, text)
                 if text is None:
                     context.environment_changed = True
-                else:
-                    context.assigned.add(text.lower())
         elif name in ("set-alias", "new-alias"):
             for value in items(binding.bound.get("Name")):
                 text = literal(value)
                 if text is not None:
                     context.redefined.add(text.lower())
-        elif name in (
-            "set-item",
-            "new-item",
-            "remove-item",
-            "clear-item",
-            "set-content",
-            "rename-item",
-        ):
-            for parameter in ("Path", "LiteralPath"):
-                for value in items(binding.bound.get(parameter)):
-                    text = literal(value) or ""
-                    if text.lower().startswith(("env:", "variable:")):
-                        variable = text.split(":", 1)[1].lstrip("\\/").lower()
-                        prefix = "env:" if text.lower().startswith("env:") else ""
-                        context.assigned.add(prefix + variable)
-                        if prefix:
-                            analysis.environment_dynamic.add(environment_key(variable))
+
+
+def _invalidate_variable(context: Context, name: str | None) -> None:
+    if name is None:
+        context.values_unknown = True
+        return
+    name = name.lower()
+    for scope in _VARIABLE_SCOPES:
+        if name.startswith(scope):
+            name = name.removeprefix(scope)
+            break
+    if not name or _paths.has_glob(name):
+        context.values_unknown = True
+    context.assigned.add(name)
+    context.invalid_values.add(name)
+
+
+def _provider_target(text: str) -> tuple[str, str] | None:
+    if "::" in text:
+        provider, name = text.split("::", 1)
+        provider = provider.lower().rsplit("\\", 1)[-1]
+        if provider in ("variable", "environment"):
+            return "env" if provider == "environment" else "variable", name.lstrip("\\/")
+    lowered = text.lower()
+    for prefix, provider in (("variable:", "variable"), ("env:", "env")):
+        if lowered.startswith(prefix):
+            return provider, text[len(prefix) :].lstrip("\\/")
+    return None
+
+
+def _invalidate_provider(
+    analysis: Analysis, context: Context, provider: str, name: str | None
+) -> None:
+    if provider == "variable":
+        _invalidate_variable(context, name)
+    elif name is None or not name or _paths.has_glob(name):
+        context.values_unknown = True
+        context.environment_changed = True
+    else:
+        context.assigned.add("env:" + name.lower())
+        context.invalid_values.add("env:" + name.lower())
+        analysis.environment_dynamic.add(environment_key(name))
+
+
+def resolve_mutations(analysis: Analysis, context: Context, script: Script) -> bool:
+    """Invalidate values changed through providers, using this pass's scalar values."""
+    before = (
+        len(context.invalid_values),
+        len(analysis.environment_dynamic),
+        context.values_unknown,
+        context.environment_changed,
+    )
+    for raw in script.commands:
+        binding = raw.binding
+        name = (raw.resolved or "").lower()
+        parameters = cmdlet_parameters(name)
+        if binding is None or parameters is None:
+            continue
+        context.value_scope = raw.top_level
+        context.value_offset = raw.offset
+        for parameter, spec in parameters.items():
+            if spec.kind != "write":
+                continue
+            for value in items(binding.bound.get(parameter)):
+                if name == "new-item" and parameter in ("Path", "LiteralPath"):
+                    value = joined_path(value, binding.bound.get("Name"))
+                text = analysis.literal_of(context, raw, value)
+                if text is None:
+                    # An unknown write could reach either provider. No value
+                    # derived before it can then prove a later path.
+                    context.values_unknown = True
+                    context.environment_changed = True
+                    continue
+                target = _provider_target(text)
+                if target is None:
+                    continue
+                provider, variable = target
+                _invalidate_provider(analysis, context, provider, variable)
+                if name == "rename-item" and parameter in ("Path", "LiteralPath"):
+                    new_name = analysis.literal_of(context, raw, binding.bound.get("NewName"))
+                    _invalidate_provider(analysis, context, provider, new_name)
+    after = (
+        len(context.invalid_values),
+        len(analysis.environment_dynamic),
+        context.values_unknown,
+        context.environment_changed,
+    )
+    return after != before
 
 
 def powershell_command(analysis: Analysis, context: Context, raw: RawCommand) -> None:
@@ -128,13 +227,10 @@ def powershell_command(analysis: Analysis, context: Context, raw: RawCommand) ->
         analysis.emit(context, resolved, raw.words[1:], raw)
         analysis.tier_b(context, raw, raw.words[1:])
         return
-    # . script and & script run a script file, which they read.
-    if raw.invocation == "." or (
-        raw.invocation == "&"
-        and (_paths.is_clearly_path(name, windows_switches=True) or lowered.endswith(".ps1"))
-    ):
-        analysis.access(context, raw, "read", name_word, glob=False, tier="a")
+    analysis.program_path(context, raw, name_word, script=raw.invocation == ".")
     analysis.program(context, raw, _paths.program_name(name), raw.words[1:])
+    if raw.invocation != "." and analysis.native_text_output(name):
+        analysis.text_output(context, raw)
 
 
 def cmdlet(
@@ -188,8 +284,18 @@ def cmdlet(
     _path_parameters(analysis, context, raw, lowered, binding, parameters)
     if lowered in LISTING_CMDLETS:
         _register_listing(analysis, context, raw, lowered, binding)
-    elif lowered in FILTER_CMDLETS and raw.pipeline is not None:
+    elif (
+        lowered in FILTER_CMDLETS
+        and raw.pipeline is not None
+        # ExpandProperty can turn the input into arbitrary objects, including files.
+        and not (
+            lowered == "select-object"
+            and any(parameter in binding.bound for parameter in ("Property", "ExpandProperty"))
+        )
+    ):
         context.listings[(raw.pipeline.id, raw.pipeline.index)] = Listing(filter=True)
+    if lowered in ("get-content", "out-string", "select-string", "convert-path"):
+        analysis.text_output(context, raw)
     analysis.tier_b(context, raw, binding.unbound)
 
 
@@ -203,7 +309,14 @@ def _path_parameters(
 ) -> None:
     kinds = {spec.kind for spec in parameters.values()}
     strongest: AccessKind = "write" if "write" in kinds else "read"
-    if binding.errors or any(word.splat for word in raw.words[1:]):
+    harmless_errors = (
+        _CONTENT_PARAMETERS.get(lowered, frozenset())
+        if first_bound(binding, "Path", "LiteralPath") is not None
+        else frozenset()
+    )
+    if any(error.lower() not in harmless_errors for error in binding.errors) or any(
+        word.splat for word in raw.words[1:]
+    ):
         analysis.unresolve(
             UNRESOLVED_KIND[strongest], raw.source, "its parameters cannot be bound before it runs"
         )
@@ -256,6 +369,9 @@ def _path_parameters(
     bound_path = any(name in binding.bound for name in ("Path", "LiteralPath", "FilePath"))
     if has_path and not bound_path:
         if raw.pipeline is not None and raw.pipeline.index > 0 and lowered in CMDLETS:
+            listing = analysis.listing_before(context, raw.pipeline)
+            if lowered == "select-string" and listing is not None and listing.text:
+                return
             primary = (
                 parameters.get("Path") or parameters.get("LiteralPath") or parameters["FilePath"]
             )
@@ -303,6 +419,9 @@ def _rename_target(analysis: Analysis, context: Context, raw: RawCommand, bindin
     source = first_bound(binding, "Path", "LiteralPath")
     if new_name is None:
         return
+    source_text = analysis.literal_of(context, raw, source)
+    if source_text is not None and _provider_target(source_text) is not None:
+        return  # Provider names are variables, not sibling filesystem paths.
     text = analysis.literal_of(context, raw, new_name)
     if text is None:
         analysis.unresolve("path_write", raw.source, "the new name is computed when it runs")
@@ -334,8 +453,7 @@ def _start_process(analysis: Analysis, context: Context, raw: RawCommand, bindin
             "command", raw.source, "Start-Process starts a program computed when it runs"
         )
         return
-    if _paths.is_clearly_path(name, windows_switches=True):
-        analysis.access(context, raw, "read", program, glob=False, tier="a")
+    analysis.program_path(context, raw, program)
     listed = items(binding.bound.get("ArgumentList"))
     arguments: list[Word] = []
     for value in listed:

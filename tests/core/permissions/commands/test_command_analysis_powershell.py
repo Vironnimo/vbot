@@ -94,8 +94,141 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
         ),
         case(
             "$p = 'x'; Remove-Item $p",
-            id="assigned variable is dynamic",
+            id="once-assigned scalar path is resolved",
+            paths=("write w/p/x/**",),
+        ),
+        case(
+            '$base = "$env:USERPROFILE/docs"; $p = "$base/file.txt"; '
+            "Get-Content -LiteralPath $p -Raw -Encoding UTF8",
+            id="constant interpolation and filesystem provider options",
+            paths=("read h/docs", "read h/docs/file.txt"),
+        ),
+        case(
+            'Get-ChildItem "$env:USERPROFILE/docs" -Directory',
+            id="known environment path binds filesystem listing options",
+            paths=("read h/docs",),
+        ),
+        case(
+            "$p = 'x'; $lines = @(Get-Content -LiteralPath $p); "
+            "Set-Content -LiteralPath $p -Value 'new' -Encoding UTF8 -NoNewline; "
+            "[IO.File]::ReadAllText($p)",
+            id="constant targets in eager subexpressions and member calls",
+            paths=("read w/p/x", "write w/p/x"),
+        ),
+        case(
+            "$p = 'x'; $p = 'y'; Remove-Item $p",
+            id="reassigned variable stays unknown",
             unresolved=("path_write",),
+        ),
+        case(
+            "Get-Content $p; $p = 'x'",
+            id="constant is unavailable before its assignment",
+            unresolved=("path_read",),
+        ),
+        case(
+            "if ($true) { $p = 'x' }; Get-Content $p",
+            id="conditional assignments stay unknown",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x'; [ref]$p; Remove-Item $p",
+            id="reference exposure prevents constant propagation",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; [System.Management.Automation.PSReference]$p; Remove-Item $p",
+            id="full reference type prevents constant propagation",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; Get-Content $global:p; Get-Content $script:p",
+            id="scoped references never borrow a local constant",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x'; Set-Variable p y; Remove-Item $p",
+            id="variable cmdlet mutation prevents constant propagation",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; Set-Item variable:p y; Remove-Item $p",
+            id="provider variable mutation prevents constant propagation",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; $e = 'x'; $w = 'x'; $i = 'x'; $v = 'x'; "
+            "Write-Output y -ov +global:p -ErrorVariable script:e "
+            "-WarningVariable +local:w -InformationVariable i -PipelineVariable v; "
+            "Get-Content $p,$e,$w,$i,$v",
+            id="common parameter variables invalidate scalar values including scopes and append",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x'; Write-Output y -OutVariable $unknown; Remove-Item $p; "
+            "Set-Item env:USERPROFILE y; Get-Content $env:USERPROFILE",
+            id="unknown common parameter variable prevents constant propagation",
+            unresolved=("path_write", "path_read"),
+        ),
+        case(
+            "$p = 'x'; function f { [CmdletBinding()]param(); 'y' }; "
+            "f -OutVariable p; Set-Content $p z",
+            id="script function common parameters cannot preserve scalar values",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; $v = 'variable:p'; Set-Item $v y; Remove-Item $p",
+            id="indirect provider target invalidates its variable",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$a = 'x'; $b = 'x'; $c = 'x'; $d = 'x'; "
+            "Copy-Item variable:source variable:a; Move-Item variable:source variable:b; "
+            "New-Item variable: -Name c -Value y; Rename-Item variable:source -NewName d; "
+            "Get-Content $a,$b,$c,$d",
+            id="provider destination and item name mutations invalidate scalar values",
+            unresolved=("path_read",),
+        ),
+        case(
+            '$p = "$env:USERPROFILE/x"; $v = "env:USERPROFILE"; Set-Item $v y; Get-Content $p -Raw',
+            id="indirect environment mutation invalidates dependent constants",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x'; Set-Variable 'p*' y; Remove-Item $p",
+            id="wildcard variable mutation prevents constant propagation",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$HOME = 'x'; Remove-Item $HOME",
+            id="read-only automatic variables never become constants",
+            unresolved=("path_write",),
+        ),
+        case(
+            "$LASTEXITCODE = 'x'; cmd /c exit 1; Remove-Item $LASTEXITCODE; "
+            "$Matches = 'x'; 'a' -match 'a'; Get-Content $Matches",
+            id="implicitly changed automatic variables never become constants",
+            unresolved=("path_write", "path_read"),
+        ),
+        case(
+            "$p = 1e3; Get-Content $p",
+            id="numeric source spelling is not a string value",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x'; function f { Get-Content $p }; f",
+            id="constants are not propagated into deferred function bodies",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = $PWD; Get-Content $p",
+            id="mutable shell location is not a frozen scalar",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$p = 'x' > log; Get-Content $p",
+            id="redirected assignment has no known result",
+            paths=("write w/p/log",),
+            unresolved=("path_read",),
         ),
         case(
             "gci -Recurse | ? { $_.Length -gt 1 } | Remove-Item",
@@ -220,6 +353,74 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "Get-ChildItem *.md; Select-String -Path *.md x",
             id="wildcards stay patterns below their folder",
             paths=("read w/p/*.md",),
+        ),
+        case(
+            "git status | Select-String changed; cargo --version | Select-String version; "
+            "python --version | Select-String Python",
+            id="known native output is searched as text",
+        ),
+        case(
+            "& 'C:\\tools\\viewer.exe' --version | Select-String version",
+            id="explicit native program is a deny-checked mention and emits text",
+            commands=("viewer --version", "Select-String version"),
+            mentions=("read tools/viewer.exe",),
+        ),
+        case(
+            "Get-Content notes.txt | Where-Object { $_ } | Select-Object -First 5 | "
+            "Select-String note | Select-String again",
+            id="text stays text through preserving filters and text matches",
+            paths=("read w/p/notes.txt",),
+        ),
+        case(
+            "Get-ChildItem | Out-String | Select-String name",
+            id="out-string searches a listing display without reading listed contents",
+            paths=("read w/p",),
+        ),
+        case(
+            "Get-ChildItem | Select-String contents",
+            id="file objects still read the files they list",
+            paths=("read w/p", "read w/p/*"),
+        ),
+        case(
+            "Get-Content paths.txt | Remove-Item",
+            id="text consumed as paths still needs known targets",
+            paths=("read w/p/paths.txt",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "$env:PATH -split ';' | Select-String bin; "
+            "$lines = Get-Content notes.txt; $lines | Select-String note",
+            id="string expressions and a single text assignment stay text",
+            paths=("read w/p/notes.txt",),
+        ),
+        case(
+            "unknown-command | Select-String value; $objects | Select-String value",
+            id="unknown output may contain file objects",
+            unresolved=("path_read",),
+        ),
+        case(
+            "function git { Get-Item notes.txt }; git | Select-String note; "
+            "pwsh -NoProfile -Command 'Get-Item notes.txt' | Select-String note",
+            id="functions and PowerShell hosts do not promise native text output",
+            paths=("read w/p/notes.txt",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-Content paths.txt | Select-Object -ExpandProperty File | Select-String x",
+            id="property expansion does not preserve the text-output guarantee",
+            paths=("read w/p/paths.txt",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "& ..\\items.ps1 | Select-String x; . ..\\setup.ps1",
+            id="scripts retain read checks and unknown object output",
+            paths=("read w/items.ps1", "read w/setup.ps1"),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Start-Process C:\\tools\\viewer.exe -ArgumentList '--version'",
+            id="start-process checks native programs against read denies only",
+            mentions=("read tools/viewer.exe",),
         ),
         case(
             "${C:\\s\\key.txt}; ${C:\\s\\out.txt} = 'a'; ${C:\\s\\n.txt} += 'b'; "

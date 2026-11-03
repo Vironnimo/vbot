@@ -122,7 +122,7 @@ class UnresolvedElement:
     """Something the analysis could not resolve, and why.
 
     ``path_read``/``path_write``: a read or write whose path is computed when
-    the command runs or cannot be placed (a variable the script assigns, a
+    the command runs or cannot be placed (a mutable or computed variable, a
     relative path after a ``cd`` to such a path). ``cwd``: a directory change
     to an unknown folder. ``command``: a command this analysis cannot see
     into (a computed command name, ``Invoke-Expression`` of a computed

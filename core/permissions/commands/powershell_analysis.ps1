@@ -32,6 +32,12 @@ $script:Commands = [System.Collections.Generic.Dictionary[string, System.Managem
 foreach ($info in @(Get-Command -CommandType Cmdlet) + @(Get-ChildItem function:) + @(Get-ChildItem alias:)) {
     $script:Commands[$info.Name] = $info
 }
+$script:FixedVariables = @{}
+foreach ($variable in Get-Variable) {
+    if ($variable.Options -band ([System.Management.Automation.ScopedItemOptions]::ReadOnly -bor [System.Management.Automation.ScopedItemOptions]::Constant)) {
+        $script:FixedVariables[$variable.Name.ToLowerInvariant()] = $true
+    }
+}
 
 function New-List { return , [System.Collections.Generic.List[object]]::new() }
 
@@ -41,6 +47,11 @@ function Get-VariableName($VariableAst) {
         if ($name.StartsWith($scope)) { return $name.Substring($scope.Length) }
     }
     return $name
+}
+
+function Get-ReferenceName($VariableAst) {
+    # A scoped reference need not address a local assignment of the same name.
+    return $VariableAst.VariablePath.UserPath.ToLowerInvariant()
 }
 
 function Add-Text($Parts, [string]$Text) {
@@ -69,7 +80,7 @@ function ConvertTo-Word($Ast) {
                 if ($before.Contains('$')) { $word.parts = (New-List); $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text }); return $word }
                 Add-Text $word.parts $before
                 if ($nested -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                    $word.parts.Add(@{ k = 'v'; v = (Get-VariableName $nested) })
+                    $word.parts.Add(@{ k = 'v'; v = (Get-ReferenceName $nested) })
                 } else {
                     $word.parts.Add(@{ k = 'd'; v = $text })
                 }
@@ -81,7 +92,7 @@ function ConvertTo-Word($Ast) {
         'ConstantExpressionAst' { Add-Text $word.parts $Ast.Extent.Text }
         'VariableExpressionAst' {
             if ($Ast.Splatted) { $word.splat = $true; $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text }) }
-            else { $word.parts.Add(@{ k = 'v'; v = (Get-VariableName $Ast) }) }
+            else { $word.parts.Add(@{ k = 'v'; v = (Get-ReferenceName $Ast) }) }
         }
         'ArrayLiteralAst' {
             $word.items = (New-List)
@@ -116,6 +127,54 @@ function Get-SoleExpression($Pipeline) {
         if ($element -is [System.Management.Automation.Language.CommandExpressionAst] -and $element.Redirections.Count -eq 0) {
             return $element.Expression
         }
+    }
+    return $null
+}
+
+function Test-TopLevel($Node, $Root) {
+    for ($parent = $Node.Parent; $null -ne $parent; $parent = $parent.Parent) {
+        if ([object]::ReferenceEquals($parent, $Root.EndBlock)) { return $true }
+        if ($parent -is [System.Management.Automation.Language.StatementBlockAst]) {
+            if ($parent.Parent -is [System.Management.Automation.Language.ArrayExpressionAst] -or
+                $parent.Parent -is [System.Management.Automation.Language.SubExpressionAst]) { continue }
+            return $false
+        }
+        if ($parent -is [System.Management.Automation.Language.ScriptBlockAst]) { return $false }
+    }
+    return $false
+}
+
+function Test-TextExpression($Node) {
+    if ($Node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $Node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) { return $true }
+    if ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) {
+        $inner = Get-SoleExpression $Node.Pipeline
+        return $null -ne $inner -and (Test-TextExpression $inner)
+    }
+    if ($Node -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+        foreach ($element in $Node.Elements) { if (-not (Test-TextExpression $element)) { return $false } }
+        return $true
+    }
+    if ($Node -is [System.Management.Automation.Language.BinaryExpressionAst]) {
+        return [string]$Node.Operator -in 'Isplit', 'Csplit', 'Ireplace', 'Creplace', 'Join'
+    }
+    if ($Node -is [System.Management.Automation.Language.UnaryExpressionAst]) {
+        return [string]$Node.TokenKind -in 'Split', 'Join'
+    }
+    if ($Node -is [System.Management.Automation.Language.ConvertExpressionAst]) {
+        return $Node.Type.TypeName.FullName -in 'string', 'string[]', 'System.String', 'System.String[]'
+    }
+    return $false
+}
+
+function Get-ScalarWord($Node) {
+    if ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) {
+        $Node = Get-SoleExpression $Node.Pipeline
+    }
+    if ($Node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $Node -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or
+        ($Node -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $Node.Splatted)) {
+        return ConvertTo-Word $Node
     }
     return $null
 }
@@ -254,7 +313,7 @@ function Get-Analysis([string]$Text) {
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
-    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false; calls = (New-List); strings = (New-List); items = (New-List) }
+    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false; calls = (New-List); strings = (New-List); items = (New-List); assignments = (New-List) }
     foreach ($parseError in $parseErrors) {
         $result.errors.Add($parseError.Message)
         if ($parseError.IncompleteInput) { $result.incomplete = $true }
@@ -269,6 +328,7 @@ function Get-Analysis([string]$Text) {
                 $node -is [System.Management.Automation.Language.AssignmentStatementAst] -or
                 $node -is [System.Management.Automation.Language.ForEachStatementAst] -or
                 $node -is [System.Management.Automation.Language.ParameterAst] -or
+                ($node -is [System.Management.Automation.Language.ConvertExpressionAst] -and $node.Type.TypeName.FullName -match '^(ref|System.Management.Automation.PSReference)(\[\])?$') -or
                 $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
                 ($node -is [System.Management.Automation.Language.UnaryExpressionAst] -and
                     ([string]$node.TokenKind -match 'PlusPlus|MinusMinus|PostfixPlusPlus|PostfixMinusMinus'))
@@ -278,6 +338,7 @@ function Get-Analysis([string]$Text) {
         elseif ($node -is [System.Management.Automation.Language.ForEachStatementAst]) { $targets = @($node.Variable) }
         elseif ($node -is [System.Management.Automation.Language.ParameterAst]) { $targets = @($node.Name) }
         elseif ($node -is [System.Management.Automation.Language.UnaryExpressionAst]) { $targets = @($node.Child) }
+        elseif ($node -is [System.Management.Automation.Language.ConvertExpressionAst]) { $targets = @($node.Child) }
         else {
             # [Environment]::SetEnvironmentVariable and friends change variables
             # this analysis cannot follow.
@@ -291,10 +352,42 @@ function Get-Analysis([string]$Text) {
         }
     }
 
+    # Only an untyped, unique assignment executed directly by this script can
+    # establish a value. Branches, loop variables, parameters and refs stay unknown.
+    $assignmentCounts = @{}
+    foreach ($name in $result.assigned) { $assignmentCounts[$name] = 1 + $assignmentCounts[$name] }
+    foreach ($node in $ast.EndBlock.Statements) {
+        if ($node -isnot [System.Management.Automation.Language.AssignmentStatementAst] -or
+            [string]$node.Operator -ne 'Equals' -or
+            $node.Left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+        $name = $node.Left.VariablePath.UserPath.ToLowerInvariant()
+        if ($name -notmatch '^[a-z_][a-z0-9_]*$' -or $assignmentCounts[$name] -ne 1 -or
+            $script:FixedVariables.ContainsKey($name) -or
+            $name -in 'pwd', '_', 'psitem', 'lastexitcode', 'matches') { continue }
+        $entry = @{ name = $name; offset = $node.Extent.EndOffset; text = $false }
+        if ($node.Right -is [System.Management.Automation.Language.CommandExpressionAst] -and $node.Right.Redirections.Count -eq 0) {
+            $entry.value = Get-ScalarWord $node.Right.Expression
+            $entry.text = Test-TextExpression $node.Right.Expression
+        } elseif ($node.Right -is [System.Management.Automation.Language.PipelineAst] -and
+            $node.Right.PipelineElements.Count -eq 1 -and
+            $node.Right.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst]) {
+            $called = $node.Right.PipelineElements[0].GetCommandName()
+            $info = $null
+            if ($called -and -not $functions.Contains($called)) { [void]$script:Commands.TryGetValue($called, [ref]$info) }
+            if ($info -and [string]$info.CommandType -eq 'Alias') { $info = $info.ResolvedCommand }
+            $entry.text = $info -and $info.Name -in 'Get-Content', 'Out-String'
+        }
+        $result.assignments.Add($entry)
+    }
+
     foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandBaseAst] }, $true)) {
-        $entry = @{ offset = $node.Extent.StartOffset; source = $node.Extent.Text; redirects = (Get-Redirections $node); pipeline = (Get-Pipeline $node) }
+        $entry = @{ offset = $node.Extent.StartOffset; source = $node.Extent.Text; redirects = (Get-Redirections $node); pipeline = (Get-Pipeline $node); top_level = (Test-TopLevel $node $ast) }
         if ($node -isnot [System.Management.Automation.Language.CommandAst]) {
             $entry.expression = $true
+            $entry.output_text = Test-TextExpression $node.Expression
+            if ($node.Expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                $entry.output_variable = Get-ReferenceName $node.Expression
+            }
             $result.commands.Add($entry)
             continue
         }
@@ -334,7 +427,9 @@ function Get-Analysis([string]$Text) {
     }
     # .NET method calls and the strings expressions name, for paths and URLs outside commands.
     foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) {
-        $result.calls.Add((Get-Call $node))
+        $call = Get-Call $node
+        $call.top_level = Test-TopLevel $node $ast
+        $result.calls.Add($call)
     }
     # A property assignment ((gi x).IsReadOnly = $true) is a call of set_<Name>.
     foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {

@@ -278,6 +278,15 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
         pytest.param("bash", "awk 1 --file=secrets/key.txt", "deny_rule", id="mention-denied"),
         pytest.param("bash", "awk '{print}' notes --out=x", None, id="mention-allowed"),
         pytest.param("bash", "echo secrets/key.txt", None, id="no-path-program"),
+        pytest.param("bash", "../tools/viewer.exe --version", None, id="native-outside"),
+        pytest.param("bash", '"{native}" --version', None, id="native-absolute-outside"),
+        pytest.param(
+            "bash", "./secrets/viewer.exe --version", "deny_rule", id="native-read-denied"
+        ),
+        pytest.param(
+            "bash", "../data/viewer.exe --version", "protected_location", id="native-protected"
+        ),
+        pytest.param("bash", "../tools/run.sh", "not_permitted", id="script-outside"),
         # curl.exe on Windows requests fass.at for this name, other programs xn--fa-hia.at.
         pytest.param("bash", "curl -s https://faß.at/", "deny_rule", id="host-a-program-reads"),
         pytest.param(
@@ -297,6 +306,7 @@ async def test_real_analysis_reaches_the_same_decisions(
 ) -> None:
     work = tmp_path / "work"
     work.mkdir()
+    line = line.replace("{native}", (tmp_path / "tools" / "viewer.exe").as_posix())
     checker = CommandChecker(lambda: real_analyzer)
     rules: dict[str, object] = {
         "read": "work_area",
