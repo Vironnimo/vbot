@@ -588,30 +588,10 @@
             <ul class="cron-list" aria-label={t('cron.list.ariaLabel')}>
               {#each categoryJobs as job (job.id)}
                 <li>
-                  <div class="cron-item-row">
-                    <button
-                      type="button"
-                      class="cron-expand"
-                      aria-expanded={Boolean(expandedJobs[job.id])}
-                      aria-controls={`cron-runs-${job.id}`}
-                      aria-label={expandedJobs[job.id]
-                        ? t('cron.runs.collapse', { name: job.name })
-                        : t('cron.runs.expand', { name: job.name })}
-                      onclick={() =>
-                        (expandedJobs[job.id] = !expandedJobs[job.id])}
-                    >
-                      <svg
-                        viewBox="0 0 16 16"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                        ><path
-                          d={expandedJobs[job.id]
-                            ? 'm4 6 4 4 4-4'
-                            : 'm6 4 4 4-4 4'}
-                        /></svg
-                      >
-                    </button>
+                  <div
+                    class="cron-item-row"
+                    class:cron-item-row--expanded={expandedJobs[job.id]}
+                  >
                     <button
                       type="button"
                       class="cron-item secondary-list__item"
@@ -653,6 +633,24 @@
                           {listRowDetail(job, viewState.systemTimezone)}
                         </span>
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="cron-expand"
+                      aria-expanded={Boolean(expandedJobs[job.id])}
+                      aria-controls={`cron-runs-${job.id}`}
+                      aria-label={expandedJobs[job.id]
+                        ? t('cron.runs.collapse', { name: job.name })
+                        : t('cron.runs.expand', { name: job.name })}
+                      onclick={() =>
+                        (expandedJobs[job.id] = !expandedJobs[job.id])}
+                    >
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="12"
+                        height="12"
+                        aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+                      >
                     </button>
                   </div>
                   <div id={`cron-runs-${job.id}`}>

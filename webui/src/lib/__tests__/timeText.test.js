@@ -29,6 +29,12 @@ describe('time text', () => {
     expect(formatRelativeTime(value, NOW)).toBe(expected);
   });
 
+  it('shortens the distance in the narrow style', () => {
+    expect(
+      formatRelativeTime('2026-09-29T12:40:00Z', NOW, { style: 'narrow' }),
+    ).toBe('3h ago');
+  });
+
   it('pairs the moment in the application time zone with its distance', () => {
     const berlin = new Intl.DateTimeFormat('en', {
       dateStyle: 'medium',

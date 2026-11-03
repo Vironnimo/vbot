@@ -33,6 +33,7 @@ export default Object.freeze({
   'cron.runs.more': 'Show more',
   'cron.runs.read': 'Mark all as read',
   'cron.runs.loading': 'Loading Runs…',
+  'cron.runs.started': 'Started',
   'cron.runs.unread': '{count} unread Automation results',
   'computerControl.stopping': 'Stopping computer control…',
   'computerControl.hotkey':

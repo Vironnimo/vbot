@@ -5,7 +5,7 @@
   import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
   import { createCoalescedRefresh } from '$lib/sessionInvalidation.js';
   import { t } from '$lib/i18n.js';
-  import { runStatusLabel } from '$lib/statisticsView.js';
+  import { runStatusLabel, runStatusVariant } from '$lib/statisticsView.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -82,17 +82,25 @@
       >{t('common.retry')}</Button
     >
   {/if}
-  {#if activity.unread_count > 0 || activity.alert_at}
-    <Button variant="tertiary" disabled={reading} onClick={markRead}
-      >{t('cron.runs.read')}</Button
-    >
-  {/if}
   <ul aria-busy={loading}>
     {#each rows as run (run.run_id)}
       <li>
         <button
           class="cron-run"
           type="button"
+          use:tooltip={() => ({
+            title: run.title,
+            rows: [
+              {
+                label: t('cron.card.status'),
+                value: runStatusLabel(run.status),
+              },
+              {
+                label: t('cron.runs.started'),
+                value: formatAbsoluteTime(run.started_at),
+              },
+            ],
+          })}
           onclick={() =>
             onOpenSession(
               formatAgentAddress(run.agent_id, run.project_id),
@@ -108,12 +116,18 @@
               aria-label={t('notifications.unread')}
             ></span>{/if}
           <span class="cron-run-meta">
-            <time
-              datetime={run.started_at}
-              use:tooltip={formatAbsoluteTime(run.started_at)}
-              >{formatRelativeTime(run.started_at)}</time
+            {#if run.status !== 'completed'}
+              <span
+                class="cron-run-status cron-run-status--{runStatusVariant(
+                  run.status,
+                )}">{runStatusLabel(run.status)}</span
+              >
+            {/if}
+            <time datetime={run.started_at}
+              >{formatRelativeTime(run.started_at, Date.now(), {
+                style: 'narrow',
+              })}</time
             >
-            <span>{runStatusLabel(run.status)}</span>
           </span>
         </button>
       </li>
@@ -124,62 +138,122 @@
       {loading ? t('cron.runs.loading') : t('cron.runs.empty')}
     </p>
   {/if}
-  {#if nextBefore}
-    <Button variant="tertiary" disabled={loading} onClick={more}
-      >{t('cron.runs.more')}</Button
-    >
+  {#if nextBefore || activity.unread_count > 0 || activity.alert_at}
+    <div class="cron-runs-actions">
+      {#if nextBefore}
+        <button type="button" disabled={loading} onclick={more}
+          >{t('cron.runs.more')}</button
+        >
+      {/if}
+      {#if activity.unread_count > 0 || activity.alert_at}
+        <button type="button" disabled={reading} onclick={markRead}
+          >{t('cron.runs.read')}</button
+        >
+      {/if}
+    </div>
   {/if}
 </div>
 
 <style>
+  /* The history hangs under its Automation with its titles aligned to the
+     Automation's name: one line per Run, its time at the end and its status
+     only when the Run did not complete. */
   .cron-runs {
-    padding: 4px 8px 12px 24px;
+    padding: 0 0 4px 14px;
   }
   ul {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
     list-style: none;
     padding: 0;
-    margin: 4px 0;
+    margin: 0;
   }
   .cron-run {
     width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     text-align: left;
-    padding: 9px 8px;
+    padding: 3px 10px;
     border: 0;
-    border-radius: 6px;
-    color: var(--text-hi);
+    border-radius: var(--r-md);
+    color: var(--text-med);
     background: transparent;
+    font-size: var(--fs-label-md);
+    line-height: 1.35;
     cursor: pointer;
+    transition: background 120ms ease;
   }
   .cron-run:hover,
   .cron-run:focus-visible {
-    background: var(--surface-3);
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+  .cron-run:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--accent);
+    outline: none;
   }
   .cron-run-title {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .cron-run-meta {
-    grid-column: 1 / -1;
     display: flex;
-    justify-content: space-between;
-    gap: 8px;
+    flex-shrink: 0;
+    gap: 6px;
     color: var(--text-lo);
-    font-size: 11px;
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .cron-run-status--error {
+    color: var(--red);
+  }
+  .cron-run-status--warn {
+    color: var(--amber);
+  }
+  .cron-run-status--info {
+    color: var(--blue);
   }
   .unread-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
     background: var(--blue);
     border-radius: 50%;
-    align-self: center;
+  }
+  .cron-runs-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 3px 10px 2px;
+  }
+  .cron-runs-actions button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-med);
+    font: inherit;
+    font-size: var(--fs-label-sm);
+    cursor: pointer;
+  }
+  .cron-runs-actions button:hover:not(:disabled),
+  .cron-runs-actions button:focus-visible {
+    outline: none;
+    color: var(--text-hi);
+  }
+  .cron-runs-actions button:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   p {
-    margin: 8px;
+    margin: 0;
+    padding: 3px 10px;
     color: var(--text-lo);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
   }
 </style>

@@ -21,11 +21,12 @@ const NOW_SECONDS = 45;
 
 const relativeFormatters = new Map();
 
-function relativeFormatter(locale) {
-  let formatter = relativeFormatters.get(locale);
+function relativeFormatter(locale, style) {
+  const key = `${locale}|${style}`;
+  let formatter = relativeFormatters.get(key);
   if (!formatter) {
-    formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
-    relativeFormatters.set(locale, formatter);
+    formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style });
+    relativeFormatters.set(key, formatter);
   }
   return formatter;
 }
@@ -55,15 +56,20 @@ export function formatAbsoluteTime(value, { seconds = false } = {}) {
   });
 }
 
-/** Distance from `nowMs`: "now", "12 minutes ago", "in 3 hours". */
-export function formatRelativeTime(value, nowMs = Date.now()) {
+/** Distance from `nowMs`: "now", "12 minutes ago", "in 3 hours"; the
+ * `narrow` style reads "12m ago" where a dense list has no room. */
+export function formatRelativeTime(
+  value,
+  nowMs = Date.now(),
+  { style = 'long' } = {},
+) {
   const ms = toMs(value);
   if (!Number.isFinite(ms) || !Number.isFinite(nowMs)) {
     return '';
   }
   const diffSeconds = (ms - nowMs) / 1000;
   const distance = Math.abs(diffSeconds);
-  const formatter = relativeFormatter(activeLocaleTag());
+  const formatter = relativeFormatter(activeLocaleTag(), style);
   if (distance < NOW_SECONDS) {
     return formatter.format(0, 'second');
   }

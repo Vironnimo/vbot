@@ -338,7 +338,7 @@
         >{t('common.create')}</Button
       >
     </div>
-    <div class="secondary-pane__scroll secondary-list">
+    <div class="cron-list-scroll secondary-pane__scroll secondary-list">
       {#each rows as row (row.id)}
         <button
           type="button"
@@ -517,18 +517,34 @@
 {/if}
 
 <style>
+  /* Rows match the Schedules list: the name over the Agent, as dense as a
+     Session row. */
   .task-input-row {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 1px;
     width: 100%;
-    padding: 10px 12px;
+    padding: 4px 10px;
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
+    line-height: 1.3;
     text-align: left;
   }
+  .task-input-row + .task-input-row {
+    margin-top: 1px;
+  }
+  .task-input-row > span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .task-input-agent {
-    font-size: 12px;
-    color: var(--text-med);
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-weight: 400;
   }
   pre {
     white-space: pre-wrap;
