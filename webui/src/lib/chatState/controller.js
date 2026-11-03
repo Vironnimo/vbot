@@ -149,6 +149,7 @@ export function createChatController({
     loadCommandOutput,
     loadSubAgentWork,
     reconcileSubAgentRows,
+    reconcileSubAgentTree,
     stopCommand,
     stopSubAgentWork,
   } = childTasks;
@@ -844,6 +845,7 @@ export function createChatController({
     markSessionCompletionRead,
     reconcileRunSession,
     reconcileSubAgentRows,
+    reconcileSubAgentTree,
     refreshAgentActivity,
     refreshReflections: reflections.refresh,
     refreshSessionQueue,

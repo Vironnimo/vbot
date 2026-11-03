@@ -365,25 +365,30 @@ export function createChatViewActions(context) {
     });
   };
 
-  const handleCancelSubAgent = async ({ tool } = {}) => {
+  const handleCancelSubAgent = async ({ tool, target, subAgentId } = {}) => {
     await context.chatController.cancelSubAgent({
       tool,
+      target,
+      subAgentId,
       sessionState: context.target.activeSessionState,
       projectId: context.target.displayedSessionProjectId(),
     });
   };
 
-  const handleStopSubAgentWork = async ({ tool } = {}) => {
+  const handleStopSubAgentWork = async ({ tool, target } = {}) => {
     await context.chatController.stopSubAgentWork({
       tool,
+      target,
       sessionState: context.target.activeSessionState,
       projectId: context.target.displayedSessionProjectId(),
     });
   };
 
-  const handleSubAgentWorkWanted = ({ tool } = {}) => {
+  const handleSubAgentWorkWanted = ({ tool, target, subAgentId } = {}) => {
     void context.chatController.loadSubAgentWork({
       tool,
+      target,
+      subAgentId,
       projectId: context.target.displayedSessionProjectId(),
     });
   };

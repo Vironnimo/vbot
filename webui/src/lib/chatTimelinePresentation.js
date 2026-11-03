@@ -22,6 +22,7 @@ export {
   subAgentMessageTarget,
   subAgentTask,
   subAgentStatusDetails,
+  subAgentSessionStatusDetails,
   subAgentDotStatus,
   subAgentNavigationTarget,
   subAgentNeedsStatusVerification,

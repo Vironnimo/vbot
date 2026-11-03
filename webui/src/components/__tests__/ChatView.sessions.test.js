@@ -1501,15 +1501,46 @@ describe('ChatView Sessions', () => {
           title: 'Original research',
         },
       });
-      rpcMock.mockImplementation(
-        createChatRpcMock({
-          sessionMessages: {
-            'source-session': [
-              message('source-reply', 'Original Session history'),
-            ],
-          },
-        }),
-      );
+      const fallback = createChatRpcMock({
+        sessionMessages: {
+          'source-session': [
+            message('source-reply', 'Original Session history'),
+          ],
+        },
+      });
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'subagent.tree')
+          return {
+            subagents:
+              params.session_id === 'source-session'
+                ? [
+                    {
+                      id: 'sub-old',
+                      title: 'Earlier task',
+                      agent_id: 'alpha',
+                      session_id: 'old-child',
+                      parent_id: null,
+                      status: 'idle',
+                    },
+                    {
+                      id: 'sub-active',
+                      title: 'Still working',
+                      agent_id: 'alpha',
+                      session_id: 'active-child',
+                      parent_id: null,
+                      status: 'working',
+                    },
+                  ]
+                : [],
+          };
+        if (method === 'subagent.inspect')
+          return {
+            run_id: params.id === 'sub-old' ? 'old-run' : 'active-run',
+            status: params.id === 'sub-old' ? 'completed' : 'running',
+            started_at: '2026-11-03T10:00:00Z',
+          };
+        return fallback(method, params);
+      });
       await chat.mountChat();
 
       await waitForText(REFLECTION_NOTICE());
@@ -1528,6 +1559,18 @@ describe('ChatView Sessions', () => {
         limit: 100,
         child_limit: 100,
       });
+      // The source page contains no spawn calls; its complete task list
+      // still returns with the Session after visiting the Reflection.
+      document.querySelector('.chat-header__info-toggle').click();
+      await waitForText('Still working');
+      await waitForCondition(() =>
+        document.querySelector('.chat-activity__finished-toggle'),
+      );
+      document.querySelector('.chat-activity__finished-toggle').click();
+      await waitForText('Earlier task');
+      expect(
+        document.querySelectorAll('.chat-activity__task-row'),
+      ).toHaveLength(2);
     });
   });
 

@@ -2,6 +2,7 @@
   import {
     backgroundCommandStatusDetails,
     subAgentStatusDetails,
+    subAgentSessionStatusDetails,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -34,13 +35,20 @@
     const details =
       task.kind === 'command'
         ? backgroundCommandStatusDetails(task.tool, task.rowState, Date.now())
-        : subAgentStatusDetails(
-            task.tool,
-            task.runDotStatus,
-            subAgentStatuses,
-            Date.now(),
-            remainingWork(task),
-          );
+        : task.sessionEntry
+          ? subAgentSessionStatusDetails(
+              task.sessionEntry,
+              subAgentStatuses,
+              Date.now(),
+              remainingWork(task),
+            )
+          : subAgentStatusDetails(
+              task.tool,
+              task.runDotStatus,
+              subAgentStatuses,
+              Date.now(),
+              remainingWork(task),
+            );
     // A Sub-Agent's title shows on one line; its card carries it in full.
     const text =
       task.kind === 'subagent' && task.description
@@ -79,6 +87,10 @@
   };
 
   const isTaskCancelling = (task) => state.cancellingTaskIds.has(task.id);
+  const subAgentRequest = (task) =>
+    task.tool && !task.sessionEntry
+      ? { tool: task.tool }
+      : { target: task.target, subAgentId: task.subAgentId };
   const handleCancelTask = async (task) => {
     if (isTaskCancelling(task)) {
       return;
@@ -88,9 +100,9 @@
       if (task.kind === 'command') {
         await onStopBackgroundCommand({ commandId: task.commandId });
       } else if (task.workRunning) {
-        await onStopSubAgentWork({ tool: task.tool });
+        await onStopSubAgentWork(subAgentRequest(task));
       } else {
-        await onCancelSubAgent({ tool: task.tool });
+        await onCancelSubAgent(subAgentRequest(task));
       }
     } finally {
       state.cancellingTaskIds.delete(task.id);
@@ -248,8 +260,8 @@
     <div
       class="chat-activity__task-row"
       use:tooltip={rowDetails(task, subAgentWork[task.subAgentId])}
-      onpointerenter={() => onSubAgentWorkWanted({ tool: task.tool })}
-      onfocusin={() => onSubAgentWorkWanted({ tool: task.tool })}
+      onpointerenter={() => onSubAgentWorkWanted(subAgentRequest(task))}
+      onfocusin={() => onSubAgentWorkWanted(subAgentRequest(task))}
     >
       <Button
         variant="tertiary"

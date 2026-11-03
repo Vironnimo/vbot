@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { reflectionTaskRows } from '../../../lib/chatTimelinePresentation.js';
 import { init, t } from '../../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
+import { reactiveProps } from '../../__tests__/reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -646,71 +647,153 @@ describe('ChatActivityPanel', () => {
     expect(cardToggle('session').getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('opens the Sub-Agents below a Sub-Agent and their Sessions', () => {
-    const onNavigateToSubAgent = vi.fn();
-    const tree = [
-      {
-        id: 'sub-lead',
-        title: 'Lead',
-        agent_id: 'builder',
-        session_id: 'session-lead',
-        parent_id: null,
-        status: 'working',
-      },
-      {
-        id: 'sub-check',
-        title: 'Check',
-        agent_id: 'helper@vbot',
-        session_id: 'session-check',
-        parent_id: 'sub-lead',
-        status: 'working',
-      },
-      {
-        id: 'sub-deep',
-        title: 'Deep',
-        agent_id: 'helper@vbot',
-        session_id: 'session-deep',
-        parent_id: 'sub-check',
-        status: 'idle',
-      },
-    ];
-    openPanel({
-      timelineItems: [
-        runItem([
-          subAgentTask({
-            id: 'lead',
-            agentId: 'builder',
-            description: 'Lead',
-            status: 'running',
-          }),
-        ]),
-      ],
-      subAgentTree: tree,
-      onNavigateToSubAgent,
+  it.each([true, false])(
+    'opens the complete Sub-Agent tree (spawn loaded: %s)',
+    (spawnLoaded) => {
+      const onNavigateToSubAgent = vi.fn();
+      const tree = [
+        {
+          id: 'sub-lead',
+          title: 'Lead',
+          agent_id: 'builder',
+          session_id: 'session-lead',
+          parent_id: null,
+          status: 'working',
+        },
+        {
+          id: 'sub-check',
+          title: 'Check',
+          agent_id: 'helper@vbot',
+          session_id: 'session-check',
+          parent_id: 'sub-lead',
+          status: 'working',
+        },
+        {
+          id: 'sub-deep',
+          title: 'Deep',
+          agent_id: 'helper@vbot',
+          session_id: 'session-deep',
+          parent_id: 'sub-check',
+          status: 'idle',
+        },
+      ];
+      openPanel({
+        timelineItems: spawnLoaded
+          ? [
+              runItem([
+                subAgentTask({
+                  id: 'lead',
+                  agentId: 'builder',
+                  description: 'Lead',
+                  status: 'running',
+                }),
+              ]),
+            ]
+          : [],
+        subAgentTree: tree,
+        onNavigateToSubAgent,
+      });
+
+      const toggle = rowContaining('Lead').querySelector(
+        '.chat-activity__nested-toggle',
+      );
+      expect(toggle.textContent.trim()).toBe('1');
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(rowContaining('Check')).toBeUndefined();
+
+      toggle.click();
+      flushSync();
+      const nested = rowContaining('Check');
+      expect(nested.textContent).toContain(status('running'));
+      nested.querySelector('.chat-activity__nested-toggle').click();
+      flushSync();
+      expect(rowContaining('Deep').textContent).toContain(status('idle'));
+      expect(
+        rowContaining('Deep').querySelector('.chat-activity__nested-toggle'),
+      ).toBeNull();
+
+      nested.querySelector('.chat-activity__task-link').click();
+      expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+        agentId: 'helper@vbot',
+        sessionId: 'session-check',
+      });
+    },
+  );
+
+  it('keeps every Session Sub-Agent across History windows and follows reused Sessions once', async () => {
+    const tool = subAgentTask({
+      id: 'old',
+      agentId: 'helper@other',
+      description: 'Old task',
+      status: 'running',
     });
-
-    const toggle = rowContaining('Lead').querySelector(
-      '.chat-activity__nested-toggle',
-    );
-    expect(toggle.textContent.trim()).toBe('1');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(rowContaining('Check')).toBeUndefined();
-
-    toggle.click();
+    const onNavigateToSubAgent = vi.fn();
+    const onCancelSubAgent = vi.fn();
+    const onSubAgentWorkWanted = vi.fn();
+    const props = reactiveProps({
+      open: true,
+      timelineItems: [],
+      subAgentTree: [
+        {
+          id: 'sub-old',
+          title: 'Old task',
+          agent_id: 'helper@other',
+          session_id: 'session-old',
+          parent_id: null,
+          status: 'idle',
+        },
+        {
+          id: 'sub-active',
+          title: 'Active task',
+          agent_id: 'worker',
+          session_id: 'session-active',
+          parent_id: null,
+          status: 'working',
+        },
+      ],
+      subAgentStatuses: { 'session:helper@other::session-old': 'failed' },
+      onNavigateToSubAgent,
+      onCancelSubAgent,
+      onSubAgentWorkWanted,
+    });
+    mountPanel(props);
+    document.querySelector('.chat-activity__finished-toggle').click();
     flushSync();
-    const nested = rowContaining('Check');
-    expect(nested.textContent).toContain(status('running'));
-    nested.querySelector('.chat-activity__nested-toggle').click();
-    flushSync();
-    expect(rowContaining('Deep').textContent).toContain(status('idle'));
+    expect(taskRows()).toHaveLength(2);
     expect(
-      rowContaining('Deep').querySelector('.chat-activity__nested-toggle'),
-    ).toBeNull();
+      rowContaining('Old task').querySelector('[data-status="failed"]'),
+    ).not.toBeNull();
 
-    nested.querySelector('.chat-activity__task-link').click();
-    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
-      agentId: 'helper@vbot',
-      sessionId: 'session-check',
+    // Paging the spawn into view does not duplicate or resurrect its initial Run.
+    props.timelineItems = [runItem([tool])];
+    flushSync();
+    expect(taskRows()).toHaveLength(2);
+    expect(
+      rowContaining('Old task').querySelector('[data-status="failed"]'),
+    ).not.toBeNull();
+
+    // A replacement page or child window, including a Compaction separator,
+    // contains neither spawn. Membership and navigation stay Session-wide.
+    props.timelineItems = [
+      runItem([{ type: 'compaction_separator', id: 'compact' }]),
+    ];
+    props.subAgentStatuses = { 'session:helper@other::session-old': 'running' };
+    flushSync();
+    expect(taskRows()).toHaveLength(2);
+    const row = rowContaining('Old task');
+    row.querySelector('.chat-activity__task-link').click();
+    row.querySelector('[data-cancel-kind="subagent"]').click();
+    await Promise.resolve();
+    const target = { agentId: 'helper@other', sessionId: 'session-old' };
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith(target);
+    expect(onCancelSubAgent).toHaveBeenCalledWith({
+      target,
+      subAgentId: 'sub-old',
+    });
+    row.dispatchEvent(new Event('pointerenter'));
+    expect(onSubAgentWorkWanted).toHaveBeenCalledWith({
+      target,
+      subAgentId: 'sub-old',
     });
   });
 
