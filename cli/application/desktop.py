@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from cli.application.operations import child_environment
@@ -40,7 +41,8 @@ def open_desktop(
     instead of pairing. ``open_session`` names an Agent address and Session id
     for the Desktop to show; an already running Desktop receives it through its
     own handoff. The Desktop also receives :data:`RELAUNCH_ENV`, so it can
-    restart into a version activated while it runs.
+    restart into a version activated while it runs. On Windows the launch first
+    completes the shortcuts' taskbar identity, because updates do not reach them.
     """
     from cli.application.state import ensure_not_removing
 
@@ -64,6 +66,10 @@ def open_desktop(
                 arguments.extend(("--server-data-dir", install.server_data_directory))
         if open_session is not None:
             arguments.extend(("--open-session", *open_session))
+        if sys.platform == "win32":
+            from cli.application.windows_shortcuts import claim_desktop_shortcuts
+
+            claim_desktop_shortcuts(install.root)
         subprocess.Popen(
             arguments,
             cwd=version / "app",

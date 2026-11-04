@@ -16,6 +16,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from cli.application.payload import APP_DESKTOP_TARGET, SHAPES
+from desktop import _windows
 from scripts import build_windows
 from scripts.windows import native_hosts
 
@@ -502,8 +503,8 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
     )
 
     assert (
-        'Name: "{group}\\vBot Desktop"; Filename: "{app}\\vBot.GUI.exe"; Parameters: "desktop"'
-        in script
+        'Name: "{group}\\vBot Desktop"; Filename: "{app}\\vBot.GUI.exe"; Parameters: "desktop"; '
+        f'AppUserModelID: "{_windows.DESKTOP_APP_ID}"' in script
     )
     assert "application install --root" in script
     assert "DefaultDirName={localappdata}\\Programs\\vBot" in script

@@ -51,7 +51,7 @@ Name: "startup"; Description: "Start vBot when I sign in"
 [Icons]
 Name: "{group}\vBot"; Filename: "{app}\vBot.exe"
 #if InstallShape != "server"
-Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "desktop"
+Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "desktop"; AppUserModelID: "vBot.Desktop"
 #endif
 
 [UninstallDelete]

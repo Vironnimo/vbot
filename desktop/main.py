@@ -251,6 +251,10 @@ def _run_desktop(
     from desktop.zoom import DesktopZoom
 
     _http.prewarm_outbound_http()
+    if contract is not None:
+        # Only a packaged Desktop has installed shortcuts to share a button with;
+        # a development Desktop keeps a taskbar button of its own.
+        _windows.set_app_identity()
     webview = webview_module if webview_module is not None else load_webview()
 
     # Signs the window and the native requests in to servers in the access mode

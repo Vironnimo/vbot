@@ -1188,8 +1188,13 @@ def test_a_restart_successor_restores_the_window_its_predecessor_showed(
     else:
         monkeypatch.delenv(desktop_restart.RELAUNCH_ENV, raising=False)
 
+    identities: list[bool] = []
+    monkeypatch.setattr(desktop_main._windows, "set_app_identity", lambda: identities.append(True))
+
     fake_webview = _launch(tmp_path, settings=SAVED_PI)
 
+    # Only a packaged Desktop shares the taskbar button of the installed shortcuts.
+    assert identities == ([True] if packaged else [])
     kwargs = fake_webview.created_windows[0][1]
     assert _bridge(fake_webview).getDesktopCapabilities()["restart"] is packaged
     if not packaged:

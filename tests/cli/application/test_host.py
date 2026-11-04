@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -547,7 +548,14 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
 
     monkeypatch.setattr(host.subprocess, "Popen", launch)
     monkeypatch.setattr(desktop, "subprocess_creation_flags", lambda **_kwargs: 7)
+    if sys.platform == "win32":
+        from cli.application import windows_shortcuts
+
+        claimed: list[Path] = []
+        monkeypatch.setattr(windows_shortcuts, "claim_desktop_shortcuts", claimed.append)
     facade.open_desktop()
+    if sys.platform == "win32":
+        assert claimed == [install.root]
 
     arguments, options = launches[0]
     assert arguments == [
