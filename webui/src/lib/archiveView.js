@@ -246,6 +246,9 @@ export function archiveRow(entry, { retentionDays, agentNames, projectNames }) {
     scope: archiveScopeText(entry, { agentNames, projectNames }),
     sessions: sessionCountText(members.sessions),
     reflections: reflectionCountText(members.reflections),
+    privateAgents: entry?.private_agents?.length
+      ? t('archive.privateAgentsCount', { count: entry.private_agents.length })
+      : '',
     archived: t('archive.row.archivedAt', {
       date: formatDay(entry?.archived_at),
     }),
@@ -641,6 +644,8 @@ export function treeRoleLabel(role) {
   switch (role) {
     case 'agent':
       return t('archive.detail.treeAgent');
+    case 'private_agent':
+      return t('archive.privateAgents');
     case 'workspace':
       return t('archive.detail.treeWorkspace');
     case 'project':

@@ -53,6 +53,7 @@
         </span>
         <span class="archive-row__meta">
           {#if row.scope}<span>{row.scope}</span>{/if}
+          {#if row.privateAgents}<span>{row.privateAgents}</span>{/if}
           {#if row.sessions}<span>{row.sessions}</span>{/if}
           {#if row.reflections}<span>{row.reflections}</span>{/if}
           <span>{row.archived}</span>

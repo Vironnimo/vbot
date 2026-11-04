@@ -29,6 +29,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 ## Invariants
 
 - JavaScript, no TypeScript; Svelte 5 callback props, no event dispatchers.
+- Sidebar changes follow the Session list and Schedules (user requirement 2026-11-04); read `webui/design.md` -> Sidebar design requirement before implementation.
 - Back/Forward is consistent app-wide (user requirement): a change of the main content (view, selected record, sub-page, page-level tab) is one navigator step with a readable URL, corrections replace the current entry, filters/search/sort/scroll/disclosures/representation tabs are no steps, and Back first closes the topmost open layer. Views never touch `window.history`; they read and move their place through their navigation handle (`webui/app-shell.md` -> Navigation).
 - Optimistic continuity is allowed; server responses and events stay authoritative - Queue contents, continuation availability, usage, connection state, and settings reconcile to server truth.
 - Run SSE carries one Run's full stream; the app-wide WebSocket carries lifecycle and stable output, never audio bytes; a selected Terminal uses its dedicated socket, rebuilding from the ANSI snapshot after navigation, reconnect, gaps, TUI boundaries, or end.
@@ -41,7 +42,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 - Locales format dates/numbers; cache-hit percentages always use one decimal (user requirement). Decimal settings stay text while edited; normalize comma decimals at the payload boundary.
 - `dateTimePrefs.svelte.js` owns the app-wide IANA timezone projection seeded from `settings.get.general.timezone`; general settings updates it live, and other timestamp formatters use it, not the browser's zone. Calendar and Cron use their responses' `system_timezone` (same Settings value). Its formatters are cached per locale, options and zone, because the Timeline formats every row's times on each render and a new `Intl.DateTimeFormat` per call dominated Chat streaming Long Tasks.
 - `index.html` paints the canonical `Bg` (`#15130F`) inline before the Svelte bundle loads; keep it aligned with the implemented `--bg` token and the Desktop pywebview background so no white document/native layer appears between paints.
-- Nothing appears above the active view (user requirement; `webui/app-shell.md`). Shared feedback stays shared (`ToastStack`, hints, lib modules) - extend the owning controller, not views. Frontend behavior changes bring focused Vitest coverage. Existing visual arrangements are descriptive implementation state, not requirements for new or redesigned views; the task-specific visual companion is indexed below.
+- Nothing appears above the active view (user requirement; `webui/app-shell.md`). Shared feedback stays shared (`ToastStack`, hints, lib modules) - extend the owning controller, not views. Frontend behavior changes bring focused Vitest coverage.
 
 ## Constraints & gotchas
 
@@ -62,7 +63,7 @@ Read these only when your task matches - not by default.
 - The Extension page host or page client: frame bridge, page routes and layers, invalidations, page capabilities, Run streams, page styles -> `webui/extension-pages.md`
 - Live voice control, call media/owner socket, UI requests from a Live call, or spoken Run updates -> `model_tasks/live.md`
 - The Terminals view: xterm rendering, Terminal sockets, geometry, dictation -> `tools/terminal.md`
-- Understanding or changing shared appearance, assessing an existing layout, or needing visual context for a redesign -> relevant sections of `webui/design.md` (current state, not a mandatory template)
+- Sidebar rows/groups, shared appearance or redesign -> relevant sections of `webui/design.md` (current state plus explicit user requirements)
 - Finding the owning file/component/controller/style/test -> `webui/source-map.md`
 - App startup, the access gate and browser pairing, navigation, connection/reconnect, global events, invalidation, transport contracts -> `webui/app-shell.md`
 - Chat selection/Sessions/history/streaming/Queue/timeline/composer/attachments/speech -> `webui/chat.md`

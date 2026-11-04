@@ -10,8 +10,11 @@
   import TextField from '../ui/TextField.svelte';
   import AgentModelSettings from './AgentModelSettings.svelte';
   import AgentSoul from './AgentSoul.svelte';
+  import AgentPlacementPanel from './AgentPlacementPanel.svelte';
   let {
     agent = null,
+    agents = [],
+    onPlacementChanged = async () => {},
     availableModels,
     availableConnections,
     projectOptions,
@@ -196,6 +199,12 @@
       </div>
     </div>
   </section>
+
+  {#if agent && !agent.builtin}<AgentPlacementPanel
+      {agent}
+      {agents}
+      onChanged={onPlacementChanged}
+    />{/if}
 
   <section class="s-section" aria-labelledby="agent-section-model">
     <header class="s-section__head">

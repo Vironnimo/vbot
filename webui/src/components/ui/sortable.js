@@ -42,7 +42,10 @@ export const SORTABLE_SENSORS = [
       }
       return [new PointerActivationConstraints.Distance({ value: 4 })];
     },
-    preventActivation: (event) => isDragExempt(event.target),
+    preventActivation: (event, source) =>
+      isDragExempt(event.target) ||
+      (event.target instanceof Element &&
+        event.target.closest('[data-sortable-key]') !== source.element),
   }),
 ];
 

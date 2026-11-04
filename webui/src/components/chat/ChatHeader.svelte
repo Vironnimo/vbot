@@ -1,4 +1,5 @@
 <script>
+  import { isChatAgent } from '$lib/agentPlacement.js';
   import { tick } from 'svelte';
 
   import { formatAgentAddress } from '$lib/agentAddress.js';
@@ -109,7 +110,7 @@
   // with every panel unless toggled meanwhile.
   let toggledWhileOpen = $state(new Set());
 
-  let identityEntries = $derived(
+  let rosterEntries = $derived(
     agents.map((agent, index) =>
       describeAgent({
         address: agent.id,
@@ -119,6 +120,17 @@
         thinkingEffort: agent.thinking_effort,
         index,
       }),
+    ),
+  );
+  let identityEntries = $derived(
+    rosterEntries.filter((entry) =>
+      isChatAgent(agents.find((agent) => agent.id === entry.address)),
+    ),
+  );
+  let hiddenApprovalEntries = $derived(
+    rosterEntries.filter(
+      (entry) =>
+        !identityEntries.includes(entry) && entry.status === 'approval',
     ),
   );
   let groups = $derived(
@@ -153,6 +165,11 @@
   );
   let allEntries = $derived([
     ...identityEntries,
+    ...rosterEntries.filter(
+      (entry) =>
+        !identityEntries.includes(entry) &&
+        (entry.address === selectedAddress || entry.status === 'approval'),
+    ),
     ...groups.flatMap((group) => group.entries),
   ]);
   // Every Identity Agent in roster order (the order set in the Agents tab)
@@ -176,7 +193,9 @@
     !visibleBarEntries.includes(entry) && entry !== extraEntry;
   // The Identity Agents without a tab on the bar: "More agents" lists them
   // and counts them on its trigger.
-  let hiddenIdentityEntries = $derived(identityEntries.filter(offBar));
+  let hiddenIdentityEntries = $derived(
+    [...identityEntries, ...hiddenApprovalEntries].filter(offBar),
+  );
   // What the Agents reachable only through "More agents" are doing, shown on
   // its trigger.
   let hiddenActivity = $derived(groupActivity(allEntries.filter(offBar)));

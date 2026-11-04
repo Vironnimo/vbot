@@ -1,3 +1,4 @@
+import { agentPlacement } from './agentPlacement.js';
 import { parseModelSelectionValue } from './modelSelection.js';
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
 import {
@@ -83,6 +84,7 @@ export function createAgentFormValues(agent = {}) {
   const raw = isPlainObject(agent.config) ? agent.config : agent;
   return {
     id: asText(agent.id),
+    placement: agentPlacement(agent),
     name: asText(agent.name),
     description: asText(agent.description),
     model: asText(raw.model),
@@ -200,6 +202,9 @@ export function normalizeAgentForm(values, options = {}) {
 
   if (mode === AGENT_FORM_MODE_CREATE) {
     payload.id = normalized.id;
+    payload.placement = normalized.placement;
+    if (payload.placement.kind === 'private' && !payload.placement.owner_id)
+      errors.placement = 'required';
   } else if (hasValue(values?.id)) {
     payload.id = String(values.id).trim();
   }
@@ -289,6 +294,7 @@ export function effortForReasoning(effort, reasoning) {
 function normalizeValues(values = {}) {
   return {
     id: asText(values.id).trim(),
+    placement: values.placement ?? { kind: 'chat' },
     name: asText(values.name).trim(),
     // One line: the server refuses line breaks in a description.
     description: asText(values.description).split(/\s+/).join(' ').trim(),
@@ -427,7 +433,10 @@ export function withSubagentAllowedAgents(tools, allowedAgents) {
     DEFAULT_AGENT_ALLOWED_LIST,
   ]);
   const subagent = { ...(next.subagent ?? {}) };
-  if (normalizedAllowed.includes(DEFAULT_AGENT_ALLOWED_LIST)) {
+  if (
+    normalizedAllowed.length === 1 &&
+    normalizedAllowed[0] === DEFAULT_AGENT_ALLOWED_LIST
+  ) {
     delete subagent.allowed_agents;
   } else {
     subagent.allowed_agents = normalizedAllowed;
@@ -493,6 +502,9 @@ export function buildAgentTargetCatalog({
         name: option.value,
         displayName: option.label,
         kind: 'identity',
+        placement: agentPlacement(
+          identityAgents.find((agent) => agent.id === option.value),
+        ),
       };
     }
     const { agentId } = parseAgentAddress(option.value);

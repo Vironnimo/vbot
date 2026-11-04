@@ -1,4 +1,5 @@
 <script>
+  import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
   // Settings -> Secrets: the Agent Secrets Agents use through
   // `{{secret:NAME}}` references without seeing their values
   // (`agent_secrets.*`), apart from vBot's own credentials under
@@ -71,7 +72,12 @@
   let dialogError = $state('');
 
   const agentNames = $derived(
-    new Map(agents.map((agent) => [agent.id, agent.name || agent.id])),
+    new Map(
+      agentDisplayOrder(agents).map((agent) => [
+        agent.id,
+        agentDisplayName(agent, agents),
+      ]),
+    ),
   );
 
   $effect(() => {

@@ -122,6 +122,51 @@ describe('AgentsView behavior and access', () => {
     vi.useRealTimers();
   });
 
+  it('separates automatic Private targets and literal Helpers while preserving a wildcard', async () => {
+    const agents = [
+      baseAgent(),
+      {
+        ...baseAgent(),
+        id: 'child',
+        placement: { kind: 'private', owner_id: 'alpha', orphaned: false },
+      },
+      { ...baseAgent(), id: 'helper', placement: { kind: 'helper' } },
+      { ...baseAgent(), id: 'outsider' },
+      {
+        ...baseAgent(),
+        id: 'private-elsewhere',
+        placement: { kind: 'private', owner_id: 'outsider', orphaned: false },
+      },
+      {
+        ...baseAgent(),
+        id: 'orphan',
+        placement: { kind: 'private', owner_id: 'missing', orphaned: true },
+      },
+    ];
+    rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForElement('#agent-helper-targets-toggle');
+    const access = document.getElementById('agent-detail-panel-access');
+    const automatic = access.querySelector(
+      '[aria-labelledby="agent-automatic-targets-label"]',
+    );
+    expect(automatic.textContent).toContain('child');
+    expect(automatic.querySelector('[role="checkbox"]').disabled).toBe(true);
+    expect(access.textContent).not.toContain('private-elsewhere');
+    expect(access.textContent).not.toContain('orphan');
+    const helperToggle = getButtonByAriaLabel('Toggle agent helper');
+    expect(helperToggle.getAttribute('aria-checked')).toBe('false');
+    document.getElementById('agent-helper-targets-toggle').click();
+    vi.useFakeTimers();
+    helperToggle.click();
+    flushSync();
+    await advanceAutosave();
+    expect(getAgentUpdateCalls()[0][1].tools.subagent.allowed_agents).toEqual([
+      '*',
+      'helper',
+    ]);
+  });
+
   it('sends custom system prompt toggle changes from the agent detail pane', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 

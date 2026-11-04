@@ -1,4 +1,8 @@
 <script>
+  import {
+    agentPlacement,
+    automaticAgentTargets,
+  } from '$lib/agentPlacement.js';
   import { t } from '$lib/i18n.js';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
@@ -18,6 +22,7 @@
   } from '$lib/agentForm.js';
   import { toolAccessIncludes } from '$lib/toolAccess.js';
   let {
+    agents = [],
     availableTools,
     skillCatalog = { skills: [], agents: [], projects: [] },
     availableAgentTargets,
@@ -45,6 +50,20 @@
   const WILDCARD_ACCESS = '*';
 
   let projectAgentsOpen = $state(false);
+  let helperAgentsOpen = $state(false);
+  let caller = $derived(
+    agents.find((agent) => agent.id === formValues.id) ?? formValues,
+  );
+  let automaticTargets = $derived(automaticAgentTargets(agents, caller));
+  let automaticItems = $derived(
+    automaticTargets.map((agent) => ({
+      name: agent.id,
+      detailTitle: agent.name || agent.id,
+      allowed: true,
+      locked: true,
+      lockedReason: t('agents.access.alwaysAvailable'),
+    })),
+  );
 
   // Filter text shared by the groups of the Skills and Sub-Agent sections.
   let skillQuery = $state('');
@@ -118,6 +137,7 @@
     visibleAgentTargetItems.map((target) => ({
       name: target.name,
       kind: target.kind,
+      placement: target.placement,
       allowed: target.isAllowed,
       detailTitle:
         target.displayName && target.displayName !== target.name
@@ -145,7 +165,14 @@
   );
 
   let identityAgentItems = $derived(
-    agentTargetItems.filter((target) => target.kind !== 'project'),
+    agentTargetItems.filter(
+      (target) =>
+        target.kind !== 'project' && target.placement?.kind !== 'helper',
+    ),
+  );
+
+  let helperAgentItems = $derived(
+    agentTargetItems.filter((target) => target.placement?.kind === 'helper'),
   );
 
   let projectAgentItems = $derived(
@@ -165,9 +192,15 @@
   function setAgentGroupAccess(items, isAllowed) {
     if (items.every((item) => item.allowed === isAllowed)) return;
     const groupNames = new Set(items.map((item) => item.name));
-    const selectedNames = agentsAreWildcard
-      ? agentTargetItems.map((item) => item.name)
-      : configuredAgentTargets;
+    const helpersOnly = items.every(
+      (item) => item.placement?.kind === 'helper',
+    );
+    const selectedNames =
+      agentsAreWildcard && !helpersOnly
+        ? agentTargetItems
+            .filter((item) => item.allowed)
+            .map((item) => item.name)
+        : configuredAgentTargets;
     const nextNames = selectedNames.filter((name) => !groupNames.has(name));
     if (isAllowed) nextNames.push(...groupNames);
     formValues.tools = withSubagentAllowedAgents(formValues.tools, nextNames);
@@ -180,26 +213,36 @@
   function agentTargetAccessItems() {
     const currentItems = configuredAgentTargets;
     const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
-    const catalog = Array.isArray(availableAgentTargets)
-      ? availableAgentTargets.filter(
-          (target) =>
-            target.kind !== 'identity' || target.name !== formValues.id,
-        )
+    const callerPlacement = agentPlacement(caller);
+    const fullCatalog = Array.isArray(availableAgentTargets)
+      ? availableAgentTargets
       : [];
-    const knownNames = new Set(catalog.map((target) => target.name));
+    const catalog = fullCatalog.filter(
+      (target) =>
+        target.kind !== 'identity' ||
+        (target.name !== formValues.id &&
+          target.placement?.kind !== 'private' &&
+          !(
+            callerPlacement.kind === 'private' &&
+            !callerPlacement.orphaned &&
+            target.name === callerPlacement.owner_id
+          )),
+    );
+    const knownNames = new Set(fullCatalog.map((target) => target.name));
     const missingTargets = hasWildcard
       ? []
       : currentItems
-          .filter((name) => !knownNames.has(name))
+          .filter((name) => name !== formValues.id && !knownNames.has(name))
           .map((name) => ({
             name,
             kind: name.includes('@') ? 'project' : 'identity',
             unavailable: true,
           }));
-
     return [...catalog, ...missingTargets].map((target) => ({
       ...target,
-      isAllowed: hasWildcard || currentItems.includes(target.name),
+      isAllowed:
+        currentItems.includes(target.name) ||
+        (hasWildcard && target.placement?.kind !== 'helper'),
     }));
   }
 
@@ -208,36 +251,17 @@
   }
 
   function updateAgentTargetAccessItem(itemName, isAllowed) {
-    const allTargetNames = agentTargetAccessItems().map(
-      (target) => target.name,
-    );
-    if (allTargetNames.length === 0) {
-      formValues.tools = withSubagentAllowedAgents(formValues.tools, []);
-      return;
-    }
-
+    const catalog = agentTargetAccessItems();
+    const target = catalog.find((item) => item.name === itemName);
     const currentItems = [...configuredAgentTargets];
-    if (currentItems.includes(WILDCARD_ACCESS)) {
-      formValues.tools = withSubagentAllowedAgents(
-        formValues.tools,
-        isAllowed
-          ? [WILDCARD_ACCESS]
-          : allTargetNames.filter((name) => name !== itemName),
-      );
-      return;
-    }
-
-    const nextItems = currentItems.filter((item) =>
-      allTargetNames.includes(item),
-    );
-    const existingIndex = nextItems.indexOf(itemName);
-
-    if (isAllowed && existingIndex === -1) {
-      nextItems.push(itemName);
-    } else if (!isAllowed && existingIndex !== -1) {
-      nextItems.splice(existingIndex, 1);
-    }
-    formValues.tools = withSubagentAllowedAgents(formValues.tools, nextItems);
+    const nextItems =
+      currentItems.includes(WILDCARD_ACCESS) &&
+      target?.placement?.kind !== 'helper'
+        ? catalog.filter((item) => item.isAllowed).map((item) => item.name)
+        : currentItems;
+    const next = nextItems.filter((name) => name !== itemName);
+    if (isAllowed) next.push(itemName);
+    formValues.tools = withSubagentAllowedAgents(formValues.tools, next);
   }
 </script>
 
@@ -369,6 +393,15 @@
             t('agents.access.filterAgentsPlaceholder'),
           )}
         {/if}
+        {#if automaticItems.length}
+          <AgentSelectionGroup
+            title={t('agents.access.alwaysAvailable')}
+            titleId="agent-automatic-targets-label"
+            items={automaticItems}
+            query={agentQuery}
+            groupToggle={false}
+          />
+        {/if}
         <AgentSelectionGroup
           title={t('agents.access.identityAgents')}
           titleId="agent-identity-targets-label"
@@ -380,6 +413,23 @@
           onToggle={updateAgentTargetAccessItem}
           onSetAll={(next) => setAgentGroupAccess(identityAgentItems, next)}
         />
+        {#if helperAgentItems.length > 0}
+          <AgentSelectionGroup
+            title={t('agents.access.helperAgents')}
+            titleId="agent-helper-targets-label"
+            items={helperAgentItems}
+            query={agentQuery}
+            allLabel={t('agents.access.helperAgents')}
+            toggleLabel={agentToggleLabel}
+            collapsible
+            open={helperAgentsOpen}
+            toggleId="agent-helper-targets-toggle"
+            contentId="agent-helper-targets"
+            onOpenChange={(next) => (helperAgentsOpen = next)}
+            onToggle={updateAgentTargetAccessItem}
+            onSetAll={(next) => setAgentGroupAccess(helperAgentItems, next)}
+          />
+        {/if}
         {#if projectAgentItems.length > 0}
           <AgentSelectionGroup
             class="agents-view__project-targets"

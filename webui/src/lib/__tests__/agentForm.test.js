@@ -11,12 +11,15 @@ import {
   effortForReasoning,
   normalizeAgentForm,
   reasoningForModelValue,
+  subagentAllowedAgents,
+  withSubagentAllowedAgents,
 } from '../agentForm.js';
 
 describe('createAgentFormValues', () => {
   it('creates default values for a new agent form', () => {
     expect(createAgentFormValues()).toEqual({
       id: '',
+      placement: { kind: 'chat' },
       name: '',
       description: '',
       model: '',
@@ -165,6 +168,7 @@ describe('normalizeAgentForm', () => {
     // inherited; create payloads omit them.
     expect(result.payload).toEqual({
       id: 'coder',
+      placement: { kind: 'chat' },
       name: 'Coder',
       description: 'Reviews code changes',
       model: 'openai/gpt-4.1',
@@ -395,8 +399,18 @@ describe('buildAgentTargetCatalog', () => {
         ],
       }),
     ).toEqual([
-      { name: 'alpha', displayName: 'Alpha', kind: 'identity' },
-      { name: 'worker', displayName: 'Worker', kind: 'identity' },
+      {
+        name: 'alpha',
+        displayName: 'Alpha',
+        kind: 'identity',
+        placement: { kind: 'chat' },
+      },
+      {
+        name: 'worker',
+        displayName: 'Worker',
+        kind: 'identity',
+        placement: { kind: 'chat' },
+      },
       {
         name: 'builder@vbot',
         displayName: 'Builder',
@@ -459,4 +473,24 @@ describe('thinking-effort gating', () => {
   ])('maps %j onto %j as %j', (effort, capabilities, expected) => {
     expect(effortForReasoning(effort, capabilities)).toBe(expected);
   });
+});
+
+it('preserves literal Helper grants beside a wildcard and sends placement only on create', () => {
+  const tools = withSubagentAllowedAgents({}, ['*', 'helper']);
+  expect(subagentAllowedAgents(tools)).toEqual(['*', 'helper']);
+  const values = createAgentFormValues({
+    id: 'helper',
+    placement: { kind: 'helper' },
+    tools,
+  });
+  expect(normalizeAgentForm(values).payload).toMatchObject({
+    placement: { kind: 'helper' },
+    tools,
+  });
+  expect(
+    normalizeAgentForm(
+      { ...values, placement: { kind: 'chat' } },
+      { mode: AGENT_FORM_MODE_EDIT, initialValues: values },
+    ).payload,
+  ).toEqual({ id: 'helper' });
 });
