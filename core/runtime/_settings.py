@@ -37,12 +37,14 @@ class SettingsChangeEffects:
     layer was rescanned (Skill directories, or Extension Skill folders), so the
     Skill inventory may differ. ``agents_changed``: the shared Agent defaults
     (``defaults.agent``, the default Permission Rules included) changed, so
-    every Agent's effective configuration may differ.
+    every Agent's effective configuration may differ. ``model_favorites_changed``:
+    the favorite Models changed, so open Model pickers may differ.
     """
 
     commands_changed: bool = False
     skills_changed: bool = False
     agents_changed: bool = False
+    model_favorites_changed: bool = False
 
 
 async def apply_settings_change(
@@ -122,6 +124,7 @@ async def apply_settings_change(
         commands_changed=extension_layer_changed,
         skills_changed=extension_layer_changed or skills_changed,
         agents_changed=_agent_defaults(previous) != _agent_defaults(current),
+        model_favorites_changed=previous.get("model_favorites") != current.get("model_favorites"),
     )
 
 

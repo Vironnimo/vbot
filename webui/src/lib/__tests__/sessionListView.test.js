@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { t } from '../i18n.js';
 import {
+  appendSessionList,
   applySessionList,
   createSessionListFilters,
   createSessionListState,
@@ -83,6 +84,32 @@ describe('Session filter storage', () => {
 });
 
 describe('sessionListView helpers', () => {
+  it('puts pins first, the newest pin first, in lists and through later pages', () => {
+    const rows = (state) => state.sessions.map((session) => session.id);
+    const first = applySessionList(createSessionListState(), [
+      { id: 'active', last_active_at: '2026-05-15T11:00:00+00:00' },
+      {
+        id: 'older-pin',
+        pinned_at: '2026-05-01T00:00:00+00:00',
+        last_active_at: '2026-05-16T00:00:00+00:00',
+      },
+      {
+        id: 'newer-pin',
+        pinned_at: '2026-05-02T00:00:00+00:00',
+        last_active_at: '2026-01-01T00:00:00+00:00',
+      },
+    ]);
+
+    expect(rows(first)).toEqual(['newer-pin', 'older-pin', 'active']);
+    expect(
+      rows(
+        appendSessionList(first, [
+          { id: 'old', last_active_at: '2026-05-14T00:00:00+00:00' },
+        ]),
+      ),
+    ).toEqual(['newer-pin', 'older-pin', 'active', 'old']);
+  });
+
   it('normalizes session lists, sorts by last activity, and preserves selected session', () => {
     const state = {
       ...createSessionListState(),

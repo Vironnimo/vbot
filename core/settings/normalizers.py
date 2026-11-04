@@ -287,6 +287,18 @@ def normalize_skill_directories(directories: Any) -> list[str]:
     return normalized_directories
 
 
+def normalize_model_favorites(favorites: Any) -> list[str]:
+    """Return the user's favorite Model ids without duplicates, in stored order."""
+
+    if favorites is None:
+        return []
+    if not isinstance(favorites, list):
+        raise StorageError("settings.model_favorites must be a list")
+    if not all(isinstance(model, str) and model.strip() for model in favorites):
+        raise StorageError("Model favorites must be non-empty strings")
+    return list(dict.fromkeys(model.strip() for model in favorites))
+
+
 def normalize_subagent_integer(key: str, value: Any, default: int) -> int:
     """Return a positive integer sub-agent setting, falling back to ``default``."""
 
@@ -762,6 +774,7 @@ __all__ = [
     "normalize_reflection_settings",
     "normalize_librarian_settings",
     "normalize_session_title_settings",
+    "normalize_model_favorites",
     "normalize_skill_directories",
     "normalize_speech_settings",
     "normalize_subagent_integer",

@@ -15,4 +15,8 @@ An Agent told to "use deepseek flash" finds that Model at several Providers, and
 - Without `sort`, or with `sort: "name"`, the response is unchanged: the WebUI and TUI read it.
 - `vbot model list` sends `sort: "usage"` unless `--sort name` is given and prints the groups under headings, with `requests:` per row and a `Note:` explaining `::<connection>` when any row carries one (`cli/model_management.py`).
 
+## Favorites
+
+Favorite Models are the user's own, kept as Model ids in the `model_favorites` setting (public path `models.favorites`), so they follow the user across windows and Devices and cover every Connection of a Model. An id that left the catalog stays stored and counts again when the Model returns. `model.favorites` reads them; `model.set_favorite {model, favorite}` changes one id under the settings mutation lock, because two windows that saved their whole list would lose each other's change. Picker behavior: `webui/shared-controls.md` (`test_model_favorites_change_one_id_at_a_time_and_reach_other_windows`).
+
 Tests: `tests/server/rpc/test_model_methods.py::test_model_list_sorted_by_usage_puts_used_models_and_their_connections_first`, `tests/core/statistics/test_statistics_accounting.py::test_model_route_usage_counts_completed_chat_requests_of_own_conversations`, `tests/cli/test_cli_model.py::test_model_list_groups_models_by_usage`.

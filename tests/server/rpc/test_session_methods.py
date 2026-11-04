@@ -86,6 +86,11 @@ def _assert_store_untouched(sessions: FakeSessions) -> None:
         ),
         ("session.rename", {"agent_id": "builder", "session_id": "s1", "title": 42}, "title"),
         (
+            "session.set_pinned",
+            {"agent_id": "builder", "session_id": "s1", "pinned": "yes"},
+            "pinned",
+        ),
+        (
             "session.list",
             {
                 "agent_id": "builder",
@@ -534,6 +539,11 @@ async def test_session_project_groups_list_every_agent_by_working_project(
         assert [(row["id"], row["agent_address"]) for row in rest["sessions"]] == [
             ("in-vbot", "coder")
         ]
+        sessions.set_pinned(SessionAddress("vbot", "builder", "team"), True)
+        split = await rpc_result(state, "session.project_groups", limit=1, split_pinned=True)
+        assert [row["agent_address"] for row in split["groups"][0]["pinned"]] == ["builder@vbot"]
+        assert [row["id"] for row in split["groups"][0]["sessions"]] == ["in-vbot"]
+        sessions.set_pinned(SessionAddress("vbot", "builder", "team"), False)
         single = await rpc_result(state, "session.list", agent_id="builder@vbot")
         assert [row["id"] for row in single["sessions"]] == ["team"]
         assert (
@@ -837,6 +847,34 @@ async def test_session_rename_sets_or_clears_the_title(
             "scope": {"project_id": project_id, "agent_id": "builder", "session_id": "s1"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_pins_reach_split_lists_and_refresh_other_windows(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="s1")
+    state.runtime.chat_sessions.create("coder", session_id="s2")
+
+    pinned = await rpc_result(
+        state, "session.set_pinned", agent_id="coder", session_id="s1", pinned=True
+    )
+
+    assert pinned["pinned_at"] is not None
+    assert resource_changes(state, "sessions")[-1]["scope"] == {
+        "project_id": None,
+        "agent_id": "coder",
+        "session_id": "s1",
+    }
+    listed = await rpc_result(state, "session.list", agent_id="coder", split_pinned=True)
+    assert [row["id"] for row in listed["pinned"]] == ["s1"]
+    assert listed["pinned"][0]["agent_address"] == "coder"
+    assert [row["id"] for row in listed["sessions"]] == ["s2"]
+    assert listed["total_count"] == 2
+
+    unpinned = await rpc_result(
+        state, "session.set_pinned", agent_id="coder", session_id="s1", pinned=False
+    )
+    assert unpinned["pinned_at"] is None
 
 
 # ---------------------------------------------------------------------------

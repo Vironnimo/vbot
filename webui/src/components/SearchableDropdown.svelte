@@ -8,6 +8,7 @@
   } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
+  import { holdModelFavoriteOrder } from '$lib/modelFavorites.svelte.js';
   import { tooltip } from '$lib/tooltip.js';
   import OptionMarker from './OptionMarker.svelte';
 
@@ -170,6 +171,8 @@
         triggerLabel: option?.triggerLabel ?? '',
         group: option?.group ?? '',
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
+        // `{ active, toggle }`: the row offers a star next to its option.
+        favorite: option?.favorite ?? null,
         ...optionDecorations(option),
       };
     });
@@ -426,6 +429,11 @@
     }
     if (event.key === 'Enter') {
       const row = activeRow;
+      if (event.shiftKey && row?.option?.favorite) {
+        event.preventDefault();
+        row.option.favorite.toggle();
+        return;
+      }
       if (row?.kind === 'group') {
         event.preventDefault();
         toggleGroup(row.group.id);
@@ -538,6 +546,14 @@
     close();
   }
 
+  // A changed favorite moves its row once the panel has closed.
+  $effect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    return holdModelFavoriteOrder();
+  });
+
   $effect(() => {
     if (!isOpen) {
       return undefined;
@@ -589,6 +605,43 @@
       <span class="count-badge">{option.badge}</span>
     {/if}
   </button>
+{/snippet}
+
+{#snippet optionRow(option, domId, treeLevel = 0)}
+  {#if option.favorite}
+    <div
+      class="searchable-dropdown__option-row"
+      class:searchable-dropdown__option-row--favorite={option.favorite.active}
+      role="none"
+    >
+      {@render optionButton(option, domId, treeLevel)}
+      <button
+        class="searchable-dropdown__favorite"
+        type="button"
+        tabindex="-1"
+        aria-pressed={option.favorite.active}
+        aria-label={option.favorite.active
+          ? t('dropdown.removeFavorite')
+          : t('dropdown.addFavorite')}
+        use:tooltip={{
+          text: option.favorite.active
+            ? t('dropdown.removeFavoriteHint')
+            : t('dropdown.addFavoriteHint'),
+          placement: 'right',
+        }}
+        onmousedown={(event) => event.preventDefault()}
+        onclick={() => option.favorite.toggle()}
+      >
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <path
+            d="M6 1.2 7.5 4.3l3.4.5-2.5 2.4.6 3.4L6 9l-3 1.6.6-3.4L1.1 4.8l3.4-.5Z"
+          />
+        </svg>
+      </button>
+    </div>
+  {:else}
+    {@render optionButton(option, domId, treeLevel)}
+  {/if}
 {/snippet}
 
 {#snippet labelText(option)}{#if option.labelLead}<span
@@ -750,7 +803,7 @@
             {#if row.kind === 'group'}
               {@render groupRow(row)}
             {:else}
-              {@render optionButton(row.option, row.domId, row.level)}
+              {@render optionRow(row.option, row.domId, row.level)}
             {/if}
           {/each}
         {:else if filteredOptions.length > 0}
@@ -768,7 +821,7 @@
                   {section.label}
                 </div>
                 {#each section.items as item (item.option.value)}
-                  {@render optionButton(
+                  {@render optionRow(
                     item.option,
                     `${listboxId}-option-${item.index}`,
                   )}
@@ -776,7 +829,7 @@
               </div>
             {:else}
               {#each section.items as item (item.option.value)}
-                {@render optionButton(
+                {@render optionRow(
                   item.option,
                   `${listboxId}-option-${item.index}`,
                 )}

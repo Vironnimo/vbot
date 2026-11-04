@@ -11,6 +11,10 @@ import {
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+import {
+  configureModelFavorites,
+  loadModelFavorites,
+} from '$lib/modelFavorites.svelte.js';
 import { sameServerPath } from '$lib/pathPicker.js';
 import {
   createPageRefresh,
@@ -40,6 +44,11 @@ export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
   const client = host.bridgeClient ?? createExtensionPageClient();
+  configureModelFavorites({
+    load: () => client.readModelFavorites(),
+    save: (model, favorite) => client.setModelFavorite(model, favorite),
+    onError: (message) => client.toast(message, 'error'),
+  });
 
   const call = (operation, arguments_ = {}) =>
     client.operation(operation, arguments_);
@@ -764,6 +773,7 @@ export function createSwarmPageModel(host) {
     const opening = profile === 'new' ? 'new-profile' : 'profile';
     pending = opening;
     error = '';
+    void loadModelFavorites();
     try {
       const nextCatalog = (await call('catalog'))?.catalog ?? {};
       if (disposed || request !== selectionRequest) return;

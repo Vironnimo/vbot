@@ -456,6 +456,25 @@
   --session-row-trail: 14px;
 }
 
+/* The line between the pinned rows of a list and the rows after them. */
+.session-drawer__list:not(.session-group__list)
+  > .session-row--pinned
+  + .session-row:not(.session-row--pinned) {
+  margin-top: 9px;
+}
+
+.session-drawer__list:not(.session-group__list)
+  > .session-row--pinned
+  + .session-row:not(.session-row--pinned)::before {
+  position: absolute;
+  top: -5px;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  background: var(--border);
+  content: '';
+}
+
 .session-row:hover,
 .session-row:focus-within {
   background: var(--surface-2);
@@ -616,6 +635,19 @@
   gap: 6px;
   padding-right: var(--session-row-trail);
   transition: padding-right 120ms ease;
+}
+
+.session-row__pin {
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-lo);
+}
+
+.session-row__pin > svg {
+  width: 100%;
+  height: 100%;
 }
 
 .session-row__name {

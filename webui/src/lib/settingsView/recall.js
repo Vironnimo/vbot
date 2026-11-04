@@ -2,6 +2,10 @@
 // Model picker's options and the chosen Model's description, and the
 // semantic index status line.
 
+import {
+  favoritesFirst,
+  modelFavoriteFields,
+} from '../modelFavorites.svelte.js';
 import { activeLocaleTag, t, tOr } from '../i18n.js';
 import { modelIdParts } from '../modelSelection.js';
 import { formatRelativeTime } from '../timeText.js';
@@ -202,15 +206,18 @@ export function buildEmbeddingModelOptions(targets, selectedId = '') {
     ],
   ];
   const options = groups.flatMap(([group, members]) =>
-    members.map((target) => ({
-      value: target.id,
-      label: target.label,
-      secondaryLabel: optionFacts(target),
-      group,
-      disabled: !target.usable && !embeddingTargetNeedsInstall(target),
-      searchText: `${target.label} ${target.id}`,
-      tooltip: textOrEmpty(target.facts?.note),
-    })),
+    favoritesFirst(
+      members.map((target) => ({
+        value: target.id,
+        label: target.label,
+        secondaryLabel: optionFacts(target),
+        group,
+        disabled: !target.usable && !embeddingTargetNeedsInstall(target),
+        searchText: `${target.label} ${target.id}`,
+        tooltip: textOrEmpty(target.facts?.note),
+        ...modelFavoriteFields(target.id),
+      })),
+    ),
   );
   if (selectedId && !list.some((target) => target.id === selectedId)) {
     options.push({

@@ -120,6 +120,7 @@ _SESSION_LIST_COLUMNS = f"""
     s.compaction_policy_json,
     s.agent_overrides_json,
     s.working_project_id,
+    s.pinned_at,
     json_extract(s.metadata_json, '$.goal') AS goal_json,
     json_extract(s.metadata_json, '$.fast_mode') AS fast_mode,
     CASE WHEN s.agent_id = 'live-voice' AND s.project_id = '' THEN (
@@ -456,6 +457,25 @@ def _subagent_parent_from_state(state: sqlite3.Row) -> JsonObject | None:
     return values
 
 
+def _session_list_listable_sql() -> str:
+    """Return the ``sessions AS s`` predicate no Session list filter can lift.
+
+    Ephemeral Sessions, a built-in Agent's kinds outside its own scope and the
+    Sessions of Extension-managed temporary Agents are never listed, pinned or not.
+    """
+    from core.agents import LIBRARIAN_AGENT_ID, LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
+
+    return (
+        f"(s.list_visibility_mask & {_LIST_VISIBILITY_EPHEMERAL}) = 0 AND "
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 OR "
+        f"(s.project_id = '' AND s.agent_id = '{LIBRARIAN_AGENT_ID}')) AND "
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIVE}) = 0 OR (s.project_id = '' AND "
+        f"s.agent_id IN ('{LIVE_VOICE_AGENT_ID}', '{LIVE_BACKEND_AGENT_ID}'))) AND "
+        "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
+        "WHERE owner_binding.session_key = s.session_key)"
+    )
+
+
 def _session_list_visibility_sql(
     *,
     include_subagents: bool,
@@ -465,8 +485,6 @@ def _session_list_visibility_sql(
     include_channels: bool,
 ) -> tuple[str, list[Any]]:
     """Return the ``sessions AS s`` predicate of one Session-list filter set."""
-    from core.agents import LIBRARIAN_AGENT_ID, LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
-
     is_subagent = (
         "((s.list_visibility_mask & "
         f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
@@ -488,13 +506,7 @@ def _session_list_visibility_sql(
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
-        f"(s.list_visibility_mask & {_LIST_VISIBILITY_EPHEMERAL}) = 0 AND "
-        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 OR "
-        f"(s.project_id = '' AND s.agent_id = '{LIBRARIAN_AGENT_ID}')) AND "
-        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIVE}) = 0 OR (s.project_id = '' AND "
-        f"s.agent_id IN ('{LIVE_VOICE_AGENT_ID}', '{LIVE_BACKEND_AGENT_ID}'))) AND "
-        "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
-        "WHERE owner_binding.session_key = s.session_key) AND "
+        f"{_session_list_listable_sql()} AND "
         "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "
         "OR COALESCE(TRIM(s.platform_conv_id), '') = '') AND "
         f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "

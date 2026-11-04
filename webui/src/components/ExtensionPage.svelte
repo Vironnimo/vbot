@@ -12,12 +12,14 @@
   } from '$lib/navigation.svelte.js';
   import {
     invokeExtensionPageOperation,
+    listModelFavorites,
     openExtensionPageRun,
     cancelExtensionPageToolCall,
     readExtensionPageHistory,
     readExtensionPageTimelineChildren,
     readExtensionPageToolCall,
     listServerDirectory,
+    setModelFavorite,
     subscribeRunEvents,
   } from '$lib/api.js';
 
@@ -39,6 +41,8 @@
     'run.unsubscribe',
     'run.cancel_tool',
     'directory.list',
+    'favorite_models.list',
+    'favorite_models.set',
   ]);
 
   let {
@@ -676,6 +680,17 @@
       ) {
         onToast(data.params.message, data.params.variant);
         result = {};
+      } else if (data.method === 'favorite_models.list') {
+        result = await listModelFavorites();
+      } else if (
+        data.method === 'favorite_models.set' &&
+        typeof data.params.model === 'string' &&
+        typeof data.params.favorite === 'boolean'
+      ) {
+        result = await setModelFavorite(
+          data.params.model,
+          data.params.favorite,
+        );
       } else throw new Error('Extension capability is unavailable');
       post(context, {
         type: 'vbot.extension.result',

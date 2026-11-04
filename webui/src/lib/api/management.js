@@ -240,6 +240,19 @@ export function listModels(params = {}, options = {}) {
   return readCatalog('model.list', params, options);
 }
 
+export function listModelFavorites(options = {}) {
+  return rpc('model.favorites', {}, options);
+}
+
+export function setModelFavorite(model, favorite, options = {}) {
+  requireNonEmptyString(
+    model,
+    'Model id must be a non-empty string',
+    'model.set_favorite',
+  );
+  return rpc('model.set_favorite', { model, favorite }, options);
+}
+
 export function refreshModelDatabase(params = {}, options = {}) {
   requirePlainObject(
     params,

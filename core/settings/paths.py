@@ -41,6 +41,7 @@ from core.settings.normalizers import (
     normalize_extensions_settings,
     normalize_librarian_settings,
     normalize_local_models_settings,
+    normalize_model_favorites,
     normalize_model_task_settings,
     normalize_notification_settings,
     normalize_providers_settings,
@@ -154,6 +155,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
             "timezone": effective_timezone_name(raw_settings),
         },
         "appearance": appearance,
+        "models": {"favorites": normalize_model_favorites(raw_settings.get("model_favorites"))},
         "skills": {
             "directories": normalize_skill_directories(raw_settings.get("skill_directories"))
         },
@@ -591,6 +593,7 @@ def _raw_path(public_path: tuple[str, ...]) -> tuple[str, ...]:
     if public_path == ("server", "timezone"):
         return ("timezone",)
     prefix_mappings = {
+        ("models", "favorites"): ("model_favorites",),
         ("skills", "directories"): ("skill_directories",),
         ("extensions", "directories"): ("extension_directories",),
         ("attachments", "max_size_bytes"): ("attachment_max_size_bytes",),

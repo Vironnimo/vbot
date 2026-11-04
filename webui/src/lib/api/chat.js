@@ -103,6 +103,7 @@ function sessionListPageParams(query) {
     params.cursor = query.cursor;
   }
   for (const [queryKey, rpcKey] of [
+    ['splitPinned', 'split_pinned'],
     ['includeSubagents', 'include_subagents'],
     ['includeMemoryReflections', 'include_memory_reflections'],
     ['includeSkillReflections', 'include_skill_reflections'],
@@ -290,6 +291,24 @@ export function markSessionRead(agentId, sessionId, runId, options = {}) {
       session_id: sessionId,
       ...(Array.isArray(runId) ? { run_ids: runId } : { run_id: runId }),
     },
+    options,
+  );
+}
+
+export function setSessionPinned(agentId, sessionId, pinned, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.set_pinned',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.set_pinned',
+  );
+  return rpc(
+    'session.set_pinned',
+    { agent_id: agentId, session_id: sessionId, pinned: pinned === true },
     options,
   );
 }

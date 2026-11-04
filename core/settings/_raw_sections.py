@@ -278,6 +278,17 @@ def _validate_directory_list(diagnostics: list[JsonDiagnostic], path: str, value
             _error(diagnostics, item_path, "must be an absolute or home-relative path")
 
 
+def _validate_model_favorites(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        _error(diagnostics, "$.model_favorites", "must be a list")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, f"$.model_favorites[{index}]", "must be a non-empty string")
+
+
 def _validate_compaction(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if value is None:
         return

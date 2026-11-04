@@ -73,6 +73,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "max_active_subagents",
         "max_active_subagents_total",
         "max_subagent_depth",
+        "model_favorites",
         "model_tasks",
         "notifications",
         "port",

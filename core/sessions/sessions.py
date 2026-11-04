@@ -499,6 +499,13 @@ class ChatSessionManager:
     async def set_title_async(self, address: SessionAddress, title: str) -> str | None:
         return await self._store.run_async(self.set_title, address, title)
 
+    def set_pinned(self, address: SessionAddress, pinned: bool) -> str | None:
+        """Pin or unpin a live Session; return its pin time, ``None`` when unpinned."""
+        return self._store.set_pinned(address, pinned)
+
+    async def set_pinned_async(self, address: SessionAddress, pinned: bool) -> str | None:
+        return await self._store.run_async(self.set_pinned, address, pinned)
+
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         return [
             ChatSession(self._store, address)

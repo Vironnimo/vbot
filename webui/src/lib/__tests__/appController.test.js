@@ -8,7 +8,19 @@ import {
   CONNECTION_STATUS_CONNECTED,
   CONNECTION_STATUS_DISCONNECTED,
 } from '../connectionState.js';
+import { modelFavoriteFields } from '../modelFavorites.svelte.js';
 import { MAX_SESSION_INVALIDATIONS } from '../sessionInvalidation.js';
+
+const favorites = vi.hoisted(() => ({
+  load: vi.fn().mockResolvedValue({ models: [] }),
+  save: vi.fn().mockResolvedValue({ models: [] }),
+}));
+
+vi.mock('../api.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listModelFavorites: favorites.load,
+  setModelFavorite: favorites.save,
+}));
 
 function setup(overrides = {}) {
   const state = createAppControllerState();
@@ -412,6 +424,23 @@ describe('App controller', () => {
 
     expect(readApplicationUpdate).toHaveBeenCalledTimes(2);
     expect(state.applicationUpdate).toEqual({ installed: true, available });
+  });
+
+  it('reads the favorite Models on connect and when they change, and reports a failed save', async () => {
+    const { actions, controller } = setup();
+    const favorite = () => modelFavoriteFields('a/b').favorite;
+
+    favorites.load.mockResolvedValueOnce({ models: ['a/b'] });
+    await controller.handleServerEvent({ type: 'connection_ready' });
+    await vi.waitFor(() => expect(favorite().active).toBe(true));
+
+    favorites.load.mockResolvedValueOnce({ models: [] });
+    await controller.handleServerEvent(resourceChanged('model_favorites'));
+    expect(favorite().active).toBe(false);
+
+    favorites.save.mockRejectedValueOnce(new Error('offline'));
+    await favorite().toggle();
+    expect(actions.onAppError).toHaveBeenCalledOnce();
   });
 
   it.each(['activity', 'data store'])(

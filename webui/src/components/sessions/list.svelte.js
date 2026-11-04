@@ -24,8 +24,18 @@ import {
 
 const SESSION_INITIAL_DISPLAY_LIMIT = 35;
 const SESSION_DISPLAY_INCREMENT = 20;
-// The newest Sessions a Project group shows, and the step for More/Less.
-export const PROJECT_GROUP_PAGE_SIZE = 5;
+// The rows a Project group starts with, and the step for More/Less. Its pinned
+// Sessions always show and take the place of newest Sessions, down to a floor.
+const PROJECT_GROUP_PAGE_SIZE = 5;
+const PROJECT_GROUP_MIN_UNPINNED = 3;
+
+const initialGroupDisplayCount = (group) =>
+  Math.max(
+    PROJECT_GROUP_MIN_UNPINNED,
+    PROJECT_GROUP_PAGE_SIZE - group.pinned.length,
+  );
+const shownGroupSessions = (group) =>
+  Math.min(group.displayCount, group.sessions.length);
 
 // Owns authoritative Session-list snapshots, selection and pagination for
 // both list modes. Source changes and refreshes share one request generation.
@@ -58,9 +68,14 @@ export function createSessionList(context) {
     ...projectState,
     groups: projectState.groups.map((group) => ({
       ...group,
-      sessions: group.sessions.slice(0, group.displayCount),
+      sessions: [
+        ...group.pinned,
+        ...group.sessions.slice(0, group.displayCount),
+      ],
+      shownUnpinned: shownGroupSessions(group),
       hasMore:
         group.sessions.length > group.displayCount || group.nextCursor !== null,
+      hasLess: shownGroupSessions(group) > initialGroupDisplayCount(group),
     })),
   });
   let loadingMoreGroupKey = $state(null);
@@ -327,11 +342,7 @@ export function createSessionList(context) {
     const result = await listSessions(listedAgents, {
       limit,
       cursor,
-      includeSubagents: context.filters.subagents,
-      includeMemoryReflections: context.filters.memoryReflections,
-      includeSkillReflections: context.filters.skillReflections,
-      includeCron: context.filters.cron,
-      includeChannels: context.filters.channels === true,
+      ...categoryQuery(),
       requiredSession: requiredSessionId
         ? { agentId: asText(context.agentId), sessionId: requiredSessionId }
         : null,
@@ -339,7 +350,10 @@ export function createSessionList(context) {
     const namesByAddress = new SvelteMap(
       context.rosterAgents.map((entry) => [entry.address, entry.name]),
     );
-    const sessions = (result?.sessions ?? []).map((session) => {
+    const sessions = [
+      ...(result?.pinned ?? []),
+      ...(result?.sessions ?? []),
+    ].map((session) => {
       const owner = asText(session?.agent_address) || targetAgentId;
       return {
         ...session,
@@ -391,6 +405,7 @@ export function createSessionList(context) {
   };
 
   const categoryQuery = () => ({
+    splitPinned: true,
     includeSubagents: context.filters.subagents,
     includeMemoryReflections: context.filters.memoryReflections,
     includeSkillReflections: context.filters.skillReflections,
@@ -413,7 +428,7 @@ export function createSessionList(context) {
       projectState = {
         groups: applyProjectGroups(result).map((group) => ({
           ...group,
-          displayCount: PROJECT_GROUP_PAGE_SIZE,
+          displayCount: initialGroupDisplayCount(group),
         })),
         loading: false,
         error: null,
@@ -448,8 +463,8 @@ export function createSessionList(context) {
     setGroupDisplayCount(
       group.projectId,
       Math.max(
-        PROJECT_GROUP_PAGE_SIZE,
-        group.sessions.length - PROJECT_GROUP_PAGE_SIZE,
+        initialGroupDisplayCount(group),
+        group.shownUnpinned - PROJECT_GROUP_PAGE_SIZE,
       ),
     );
   };
@@ -461,7 +476,7 @@ export function createSessionList(context) {
     if (!cached || loadingMoreGroupKey !== null) {
       return;
     }
-    const displayCount = group.sessions.length + PROJECT_GROUP_PAGE_SIZE;
+    const displayCount = shownGroupSessions(cached) + PROJECT_GROUP_PAGE_SIZE;
     const cursor = cached.nextCursor;
     if (cached.sessions.length >= displayCount || cursor === null) {
       setGroupDisplayCount(group.projectId, displayCount);

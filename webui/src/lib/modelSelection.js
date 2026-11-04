@@ -1,4 +1,9 @@
 import { t } from './i18n.js';
+import {
+  favoritesFirst,
+  modelFavoriteFields,
+} from './modelFavorites.svelte.js';
+
 const DEFAULT_ACCOUNT_ID = 'default';
 
 // Soft suitability filter threshold for agent-model pickers: models below this
@@ -123,10 +128,12 @@ export function filterModelSelectOptions(
   const canonicalValue = canonicalModelSelectionValue(exactValue);
 
   // The currently selected value stays visible even when unsuitable, so an
-  // existing configuration is never silently masked by the filter.
+  // existing configuration is never silently masked by the filter; a favorite
+  // is the user's own choice and stays too.
   return options.filter(
     (option) =>
       option.suitable !== false ||
+      option.favorite?.listed ||
       option.value === exactValue ||
       option.value === canonicalValue,
   );
@@ -165,9 +172,14 @@ function suitabilityBadgeLabel(reasons) {
 // Option fields every catalog Model option carries: its suitability and, when
 // at least one of its usable Connections has a verified wire profile
 // (model.list `wire_profiles`), a quiet "verified" check naming the latest
-// verification date. Inferred and configured Models carry no marker.
+// verification date. Inferred and configured Models carry no marker. The
+// favorite fields make every Model picker offer the star.
 function modelOptionFields(model) {
-  return { ...suitabilityFields(model), ...wireProfileFields(model) };
+  return {
+    ...suitabilityFields(model),
+    ...wireProfileFields(model),
+    ...modelFavoriteFields(model?.id),
+  };
 }
 
 function wireProfileFields(model) {
@@ -288,8 +300,11 @@ export function buildModelSelectOptions({
       !catalogOptions.some(
         (option) => option.value === selectedModelOption.value,
       )
-      ? [emptyOption, selectedModelOption, ...catalogOptions]
-      : [emptyOption, ...catalogOptions];
+      ? [
+          emptyOption,
+          ...favoritesFirst([selectedModelOption, ...catalogOptions]),
+        ]
+      : [emptyOption, ...favoritesFirst(catalogOptions)];
   }
 
   return [
@@ -303,7 +318,7 @@ export function buildModelSelectOptions({
       ),
       isUnavailable: true,
     },
-    ...catalogOptions,
+    ...favoritesFirst(catalogOptions),
   ];
 }
 

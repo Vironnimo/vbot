@@ -327,6 +327,7 @@ _SESSION_LIST_FILTER_PARAMS = frozenset(
         "include_skill_reflections",
         "include_cron",
         "include_channels",
+        "split_pinned",
     }
 )
 
@@ -345,6 +346,7 @@ def _session_list_filters(params: JsonObject) -> SessionListFilters:
         include_skill_reflections=_optional_bool(params, "include_skill_reflections", default=True),
         include_cron=_optional_bool(params, "include_cron", default=True),
         include_channels=_optional_bool(params, "include_channels", default=True),
+        split_pinned=_optional_bool(params, "split_pinned", default=False),
     )
 
 
@@ -436,6 +438,7 @@ def _session_list_page_payload(
 ) -> JsonObject:
     return {
         "sessions": _session_list_rows(state, page.sessions, agent_policy),
+        "pinned": _session_list_rows(state, page.pinned, agent_policy),
         "next_cursor": _session_list_cursor_payload(page.next_cursor),
         "total_count": page.total_count,
     }
@@ -985,6 +988,25 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": address.agent_id, "session_id": address.session_id, "title": stored_title}
 
 
+async def _set_session_pinned(state: Any, params: JsonObject) -> JsonObject:
+    """Pin or unpin one Session for the Session lists of every Accessor."""
+    _reject_unsupported(params, {"agent_id", "session_id", "pinned"}, "session.set_pinned")
+    address = _required_session_address(params)
+    pinned = params.get("pinned")
+    if not isinstance(pinned, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.pinned must be a boolean")
+    try:
+        pinned_at = await state.runtime.chat_sessions.set_pinned_async(address, pinned)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_session_changed(state, address)
+    return {
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
+        "pinned_at": pinned_at,
+    }
+
+
 async def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject:
     """Set a full Session Policy override, or clear it back to live inheritance."""
     _reject_unsupported(
@@ -1069,6 +1091,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.fork": _fork_session,
         "session.delete": _delete_session,
         "session.rename": _rename_session,
+        "session.set_pinned": _set_session_pinned,
         "session.set_compaction_policy": _set_session_compaction_policy,
         "session.set_agent_overrides": _set_session_agent_overrides,
         "session.set_fast_mode": _set_session_fast_mode,

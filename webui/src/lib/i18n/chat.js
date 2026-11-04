@@ -726,6 +726,10 @@ export default Object.freeze({
   'sessions.delete_confirm_title': 'Delete session “{name}”?',
   'sessions.delete_permanent_confirm_title':
     'Delete session “{name}” permanently?',
+  'sessions.pin': 'Pin',
+  'sessions.unpin': 'Unpin',
+  'sessions.pinned': 'Pinned',
+  'sessions.pinError': 'The session could not be pinned.',
   'sessions.rename': 'Rename',
   'sessions.rename_label': 'Rename session',
   'sessions.rename_placeholder': 'Session name',

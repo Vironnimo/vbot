@@ -293,6 +293,68 @@
   white-space: nowrap;
 }
 
+/* A Model row: the star sits over the option's end, out of its label's way. */
+.searchable-dropdown__option-row {
+  position: relative;
+}
+
+.searchable-dropdown__option-row .searchable-dropdown__option {
+  padding-right: 32px;
+}
+
+.searchable-dropdown__favorite {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  background: transparent;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition:
+    color 100ms ease,
+    opacity 100ms ease;
+}
+
+.searchable-dropdown__favorite svg {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linejoin: round;
+  stroke-width: 1.1;
+}
+
+.searchable-dropdown__option-row:hover .searchable-dropdown__favorite,
+.searchable-dropdown__option.active + .searchable-dropdown__favorite,
+.searchable-dropdown__favorite:focus-visible {
+  opacity: 1;
+}
+
+.searchable-dropdown__favorite:hover {
+  color: var(--text-hi);
+}
+
+.searchable-dropdown__option-row--favorite .searchable-dropdown__favorite {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.searchable-dropdown__option-row--favorite .searchable-dropdown__favorite svg {
+  fill: currentcolor;
+}
+
+/* Without a pointer that hovers, the star must be reachable all the same. */
+@media (hover: none) {
+  .searchable-dropdown__favorite {
+    opacity: 0.6;
+  }
+}
+
 .dropdown-primitive__trigger-label--placeholder,
 .searchable-dropdown__trigger-label--placeholder {
   color: var(--text-lo);

@@ -23,6 +23,8 @@ vi.mock('$lib/api.js', () => ({
   readExtensionPageTimelineChildren: (...args) => runChildren(...args),
   readExtensionPageToolCall: (...args) => toolCall(...args),
   listServerDirectory: vi.fn(),
+  listModelFavorites: vi.fn().mockResolvedValue({ models: ['a/b'] }),
+  setModelFavorite: vi.fn().mockResolvedValue({ models: [] }),
   subscribeRunEvents: vi.fn(),
 }));
 const api = await import('$lib/api.js');
@@ -520,6 +522,24 @@ describe('ExtensionPage frame bridge', () => {
       expect(page.reply('catalog')).toMatchObject(expected(result));
     },
   );
+
+  it('reads and changes the favorite Models for the page', async () => {
+    const page = openPage();
+
+    page.call('read', 'favorite_models.list', {});
+    await page.replied('read');
+    expect(page.reply('read')).toMatchObject({
+      type: 'vbot.extension.result',
+      result: { models: ['a/b'] },
+    });
+
+    page.call('change', 'favorite_models.set', {
+      model: 'a/b',
+      favorite: false,
+    });
+    await page.replied('change');
+    expect(api.setModelFavorite).toHaveBeenCalledWith('a/b', false);
+  });
 
   it('forwards Tool cancellation only from the current page frame', async () => {
     const page = openPage();

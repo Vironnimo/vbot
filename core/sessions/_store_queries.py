@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress, SessionListFilters, SessionRecallVisibility
 
 _LIST_FROM = f"FROM sessions AS s {_store_values._DERIVED_METADATA_JOIN}"
+# Pinned Sessions one split list reads; pins are chosen by hand, so few exist.
+_PINNED_READ_LIMIT = 200
 
 
 def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
@@ -317,6 +319,8 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
         summary["subagent_parent"] = parent
     summary.update(_store_values._derived_metadata_from_state(state))
     summary.setdefault(_store_values._WORKING_PROJECT_KEY, None)
+    if state["pinned_at"] is not None:
+        summary["pinned_at"] = str(state["pinned_at"])
     if state["compaction_policy_json"] is not None:
         summary["compaction_policy"] = _store_values._json_from_payload(
             str(state["compaction_policy_json"]), "Session compaction policy"
@@ -404,13 +408,20 @@ def list_summaries_page(
         include_cron=filters.include_cron,
         include_channels=filters.include_channels,
     )
+    live_scope_sql = f"s.state = 'live' AND {scope_sql}"
     rows, total, has_more = _ordered_page(
         connection,
-        f"s.state = 'live' AND {scope_sql} AND {visibility_sql}",
+        f"{live_scope_sql} AND {visibility_sql}{_unpinned_sql(filters)}",
         [*scope_params, *visibility_params],
         limit=limit,
         cursor=cursor,
     )
+    pinned_rows: list[sqlite3.Row] = []
+    if filters.split_pinned:
+        pinned_rows, pinned_total = _pinned_rows(
+            connection, live_scope_sql, scope_params, first_page=cursor is None
+        )
+        total += pinned_total
     required_row: sqlite3.Row | None = None
     if required_address is not None:
         required_scope = _store_values._scope(required_address)
@@ -422,11 +433,52 @@ def list_summaries_page(
                 "AND s.agent_id = ? AND s.session_id = ?",
                 (*visibility_params, *required_scope),
             ).fetchone()
-    if required_row is not None and not bool(required_row["list_visible"]):
+    if (
+        required_row is not None
+        and not bool(required_row["list_visible"])
+        and not (filters.split_pinned and required_row["pinned_at"] is not None)
+    ):
         total += 1
-    listed_rows = [*rows, *([] if required_row is None else [required_row])]
+    listed_rows = [*rows, *pinned_rows, *([] if required_row is None else [required_row])]
     changes = change_totals(connection, [int(row["session_key"]) for row in listed_rows])
-    return lambda: _summaries_page(rows, required_row, total, changes, has_more=has_more)
+    return lambda: _summaries_page(
+        rows, required_row, total, changes, has_more=has_more, pinned_rows=pinned_rows
+    )
+
+
+def _unpinned_sql(filters: SessionListFilters) -> str:
+    """Return the predicate suffix that leaves a split list's pinned Sessions out of its pages."""
+    return " AND s.pinned_at IS NULL" if filters.split_pinned else ""
+
+
+def _pinned_rows(
+    connection: sqlite3.Connection,
+    base_where: str,
+    base_params: Sequence[Any],
+    *,
+    first_page: bool,
+) -> tuple[list[sqlite3.Row], int]:
+    """Select the pinned rows of ``base_where``, newest pin first, and how many exist.
+
+    The list's filters do not apply: a pin keeps a Session in view whatever kind
+    it is. Only the first page carries the rows.
+    """
+    where = (
+        f"{base_where} AND s.pinned_at IS NOT NULL AND {_store_values._session_list_listable_sql()}"
+    )
+    total = int(
+        connection.execute(
+            f"SELECT COUNT(*) FROM sessions AS s WHERE {where}", base_params
+        ).fetchone()[0]
+    )
+    if not first_page or total == 0:
+        return [], total
+    rows = connection.execute(
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS} {_LIST_FROM} WHERE {where} "
+        "ORDER BY s.pinned_at DESC, s.project_id, s.agent_id, s.session_id LIMIT ?",
+        (*base_params, _PINNED_READ_LIMIT),
+    ).fetchall()
+    return rows, total
 
 
 def _ordered_page(
@@ -518,10 +570,11 @@ def list_project_groups(
         include_channels=filters.include_channels,
     )
     projects_param, excluded_param = group_params
+    unpinned_sql = _unpinned_sql(filters)
     rows = connection.execute(
         f"WITH listed AS (SELECT s.session_key, s.last_activity_at, s.project_id, "
         f"s.agent_id, s.session_id, {group_sql} AS list_group FROM sessions AS s "
-        f"WHERE {listed_sql} AND {visibility_sql}), "
+        f"WHERE {listed_sql} AND {visibility_sql}{unpinned_sql}), "
         "ranked AS (SELECT session_key, list_group, ROW_NUMBER() OVER ("
         "PARTITION BY list_group ORDER BY last_activity_at DESC, project_id, agent_id, "
         "session_id) AS list_position, COUNT(*) OVER (PARTITION BY list_group) "
@@ -532,18 +585,36 @@ def list_project_groups(
         "WHERE r.list_position <= ? ORDER BY r.list_group, r.list_position",
         (projects_param, excluded_param, *visibility_params, limit),
     ).fetchall()
-    changes = change_totals(connection, [int(row["session_key"]) for row in rows])
+    pinned_rows: list[sqlite3.Row] = []
+    if filters.split_pinned:
+        pinned_rows = connection.execute(
+            f"SELECT {_store_values._SESSION_LIST_COLUMNS}, {group_sql} AS list_group {_LIST_FROM} "
+            f"WHERE {listed_sql} AND s.pinned_at IS NOT NULL "
+            f"AND {_store_values._session_list_listable_sql()} "
+            "ORDER BY s.pinned_at DESC, s.project_id, s.agent_id, s.session_id LIMIT ?",
+            (projects_param, excluded_param, _PINNED_READ_LIMIT),
+        ).fetchall()
+    changes = change_totals(connection, [int(row["session_key"]) for row in (*rows, *pinned_rows)])
 
     def decode() -> dict[str | None, SessionListPage]:
         grouped: dict[str, list[sqlite3.Row]] = {}
         for row in rows:
             grouped.setdefault(str(row["list_group"]), []).append(row)
+        pinned: dict[str, list[sqlite3.Row]] = {}
+        for row in pinned_rows:
+            pinned.setdefault(str(row["list_group"]), []).append(row)
         pages: dict[str | None, SessionListPage] = {}
         for project_id in (*grouping.project_ids, None):
             group_rows = grouped.get(project_id or "", [])
-            total = int(group_rows[0]["list_group_total"]) if group_rows else 0
+            group_pinned = pinned.get(project_id or "", [])
+            unpinned_total = int(group_rows[0]["list_group_total"]) if group_rows else 0
             pages[project_id] = _summaries_page(
-                group_rows, None, total, changes, has_more=total > len(group_rows)
+                group_rows,
+                None,
+                unpinned_total + len(group_pinned),
+                changes,
+                has_more=unpinned_total > len(group_rows),
+                pinned_rows=group_pinned,
             )
         return pages
 
@@ -571,13 +642,24 @@ def list_project_page(
     )
     rows, total, has_more = _ordered_page(
         connection,
-        f"{listed_sql} AND {visibility_sql} AND {group_sql} = ?",
+        f"{listed_sql} AND {visibility_sql} AND {group_sql} = ?{_unpinned_sql(filters)}",
         [group_params[1], *visibility_params, group_params[0], project_id or ""],
         limit=limit,
         cursor=cursor,
     )
-    changes = change_totals(connection, [int(row["session_key"]) for row in rows])
-    return lambda: _summaries_page(rows, None, total, changes, has_more=has_more)
+    pinned_rows: list[sqlite3.Row] = []
+    if filters.split_pinned:
+        pinned_rows, pinned_total = _pinned_rows(
+            connection,
+            f"{listed_sql} AND {group_sql} = ?",
+            [group_params[1], group_params[0], project_id or ""],
+            first_page=cursor is None,
+        )
+        total += pinned_total
+    changes = change_totals(connection, [int(row["session_key"]) for row in (*rows, *pinned_rows)])
+    return lambda: _summaries_page(
+        rows, None, total, changes, has_more=has_more, pinned_rows=pinned_rows
+    )
 
 
 def _summaries_page(
@@ -587,10 +669,11 @@ def _summaries_page(
     changes: dict[int, JsonObject],
     *,
     has_more: bool,
+    pinned_rows: Sequence[sqlite3.Row] = (),
 ) -> SessionListPage:
     summaries = [_with_changes(_summary(row), row, changes) for row in rows]
     if required_row is not None and _store_values._address(required_row) not in {
-        _store_values._address(row) for row in rows
+        _store_values._address(row) for row in (*rows, *pinned_rows)
     }:
         summaries.append(_with_changes(_summary(required_row), required_row, changes))
     last = rows[-1] if has_more and rows else None
@@ -605,6 +688,7 @@ def _summaries_page(
             session_id=str(last["session_id"]),
         ),
         total_count=total_count,
+        pinned=tuple(_with_changes(_summary(row), row, changes) for row in pinned_rows),
     )
 
 
