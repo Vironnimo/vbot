@@ -36,7 +36,7 @@ First-run window at roughly 80% of the primary display capped at 1440x960 logica
 
 ## Icons and title
 
-Platform icons come from `desktop/icon.ico` (Windows; WinForms requires ICO - PNG input is rejected by `System.Drawing.Icon`) and `desktop/icon.png` (other platforms), passed to pywebview when present with a platform-default fallback. The window title is `vBot`; no native application menu is attached. The window enables document text selection (`text_select=True`), so the WebUI's Desktop context menu can copy selected text.
+Platform icons come from `desktop/icon.ico` (Windows; WinForms requires ICO - PNG input is rejected by `System.Drawing.Icon`) and `desktop/icon.png` (other platforms), passed to pywebview when present with a platform-default fallback. The window title is `vBot`; no native application menu is attached. A packaged Desktop sets the AppUserModelID `vBot.Desktop` before any window exists, so its window appears on the installed shortcut's taskbar button (`cli/application.md`); a development Desktop has no relaunch contract, sets none and keeps its own button. The window enables document text selection (`text_select=True`), so the WebUI's Desktop context menu can copy selected text.
 
 ## Per-user settings store
 

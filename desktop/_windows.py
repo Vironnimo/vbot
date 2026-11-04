@@ -1,6 +1,6 @@
 """Windows-native glue for the Desktop shell.
 
-DPI bootstrap and screen conversion, the per-user single-instance guard with
+The taskbar identity, DPI bootstrap and screen conversion, the per-user single-instance guard with
 its activation request handoff, the WebView2 browser arguments (secure remote
 HTTP origins, autoplay), the WebView2 microphone permission hook, the window's
 WebView2 zoom, and the Win32 DLL loading that the Desktop's ctypes bindings
@@ -48,6 +48,9 @@ ACTIVATION_REQUEST_MAX_AGE_SECONDS = 60.0
 #: How long a restart successor waits for its predecessor to release the guard.
 HANDOFF_CLAIM_TIMEOUT_SECONDS = 30.0
 _HANDOFF_CLAIM_POLL_SECONDS = 0.1
+#: The taskbar places the window on the installed shortcuts' button through this
+#: identity. Keep equal to ``cli/application/windows_shortcuts.py`` and ``vbot.iss``.
+DESKTOP_APP_ID = "vBot.Desktop"
 
 
 def win32_library(name: str) -> ctypes.CDLL:
@@ -62,6 +65,21 @@ def win32_last_error() -> int:
     if sys.platform != "win32":
         raise OSError("Win32 errors exist only on Windows")
     return ctypes.get_last_error()
+
+
+def set_app_identity() -> None:
+    """Join the installed shortcuts' taskbar button; must run before any window exists."""
+    if sys.platform != "win32":
+        return
+
+    from ctypes import wintypes
+
+    set_identity = win32_library("shell32").SetCurrentProcessExplicitAppUserModelID
+    set_identity.argtypes = [wintypes.LPCWSTR]
+    set_identity.restype = ctypes.c_long
+    result = set_identity(DESKTOP_APP_ID)
+    if result < 0:
+        logger.warning("Desktop taskbar identity could not be set (0x%08X)", result & 0xFFFFFFFF)
 
 
 def configure_dpi() -> None:
