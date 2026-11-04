@@ -78,7 +78,6 @@
 
 <script>
   import AppShell from './components/AppShell.svelte';
-  import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
   import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
@@ -109,11 +108,7 @@
   import { startClientMetrics } from '$lib/clientMetrics.js';
   import { loadComponent } from '$lib/lazyContent.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
-  import {
-    availableUpdate,
-    dismissUpdateNotice,
-    updateNoticeDismissed,
-  } from '$lib/applicationUpdate.js';
+  import { availableUpdate } from '$lib/applicationUpdate.js';
   import { provideAutosaveContext } from '$lib/autosave.js';
   import {
     flushComposerMemory,
@@ -134,6 +129,7 @@
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
   import { createAppExtensions } from './app/extensions.svelte.js';
+  import { createAppNotices } from './app/notices.svelte.js';
   import { createLiveUiActions } from './app/liveUiActions.js';
   import { createAppAutosave } from './app/autosave.svelte.js';
   import AutosaveTransitionPrompt from './app/AutosaveTransitionPrompt.svelte';
@@ -213,19 +209,6 @@
   let archiveRefreshToken = $derived(appControllerState.archiveRefreshToken);
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
-  let webuiOutdated = $derived(appControllerState.webuiOutdated);
-  let applicationUpdate = $derived(
-    availableUpdate(appControllerState.applicationUpdate),
-  );
-  // Versions dismissed in this page; storage keeps the newest across reloads.
-  let dismissedUpdate = $state('');
-  let updateNotice = $derived(
-    applicationUpdate &&
-      applicationUpdate.version_id !== dismissedUpdate &&
-      !updateNoticeDismissed(applicationUpdate.version_id)
-      ? applicationUpdate
-      : null,
-  );
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
@@ -419,6 +402,7 @@
 
   // Every (re)connection may follow an update that replaced the served WebUI.
   const checkWebuiBuild = async () => {
+    appNotices.connectionOpened();
     try {
       appControllerState.webuiOutdated =
         await isWebuiOutdated(getServedWebuiBuild);
@@ -577,9 +561,28 @@
     event.returnValue = '';
   }
 
-  const desktopRestartBusy = $derived(
-    Boolean(desktop.update?.restarting) || desktop.restartRequesting,
-  );
+  let extensionNotice = $state.raw(null);
+  const appNotices = createAppNotices({
+    get applicationUpdate() {
+      return availableUpdate(appControllerState.applicationUpdate);
+    },
+    get webuiOutdated() {
+      return appControllerState.webuiOutdated;
+    },
+    get restartOffered() {
+      return desktop.restartOffered;
+    },
+    get restartFailed() {
+      return Boolean(desktop.update?.failed);
+    },
+    get restartBusy() {
+      return Boolean(desktop.update?.restarting) || desktop.restartRequesting;
+    },
+    restart: () => restartDesktopApp({ interactive: true }),
+    get extensionNotice() {
+      return extensionNotice;
+    },
+  });
 </script>
 
 <svelte:window onbeforeunload={protectPendingEdits} />
@@ -603,74 +606,6 @@
   onStopVoiceRecording={desktop.handleStopVoiceRecording}
   onToast={desktop.showToast}
 >
-  {#if desktop.restartOffered}
-    <!-- A Desktop restart also loads the new WebUI, so it replaces the
-         reload banner. -->
-    <Banner variant="info" class="app-desktop-restart">
-      <span class="app-desktop-restart__text">
-        {desktop.update?.failed && !desktopRestartBusy
-          ? t('app.desktopRestart.failed')
-          : t('app.desktopRestart.pending')}
-      </span>
-      <Button
-        variant="secondary"
-        loading={desktopRestartBusy}
-        onClick={() => restartDesktopApp({ interactive: true })}
-      >
-        {#if desktopRestartBusy}
-          {t('app.desktopRestart.restarting')}
-        {:else if desktop.update?.failed}
-          {t('common.retry')}
-        {:else}
-          {t('app.desktopRestart.restart')}
-        {/if}
-      </Button>
-    </Banner>
-  {:else if webuiOutdated}
-    <Banner variant="info" class="app-webui-outdated">
-      <span class="app-webui-outdated__text">
-        {t('app.webuiOutdated')}
-      </span>
-      <Button variant="secondary" onClick={() => window.location.reload()}>
-        {t('app.webuiOutdatedReload')}
-      </Button>
-    </Banner>
-  {/if}
-  {#if updateNotice}
-    <Banner variant="info" class="app-update-available">
-      <span class="app-update-available__text">
-        {t('app.updateAvailable', { version: updateNotice.label })}
-      </span>
-      <Button
-        variant="secondary"
-        onClick={() => {
-          dismissUpdateNotice(updateNotice.version_id);
-          dismissedUpdate = updateNotice.version_id;
-        }}
-      >
-        {t('app.updateAvailableDismiss')}
-      </Button>
-    </Banner>
-  {/if}
-  {#if setup.showFinishSetup}
-    <Banner variant="info" class="app-finish-setup">
-      <span class="app-finish-setup__text">
-        {t('onboarding.finishSetupHint')}
-      </span>
-      <Button variant="secondary" onClick={setup.reopenOnboarding}>
-        {t('onboarding.finishSetup')}
-      </Button>
-    </Banner>
-  {/if}
-  <ExtensionRequests
-    subscribeInvalidations={extensions.subscribeInvalidations}
-  />
-  {#if speechAudio.active && (activeViewId !== 'chat' || chatNavigation.shownSession?.agentId !== speechAudio.active.agentId || chatNavigation.shownSession?.sessionId !== speechAudio.active.sessionId)}
-    <SpeechPlaybackBar
-      owner={speechAudio}
-      onOpenSession={(entry) => chatNavigation.openSessionLink(entry)}
-    />
-  {/if}
   {#snippet sidebarFooter()}
     <LiveVoice
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
@@ -680,26 +615,6 @@
       onToast={desktop.showToast}
     />
   {/snippet}
-  {#if dataStoreIncident}
-    <Banner variant="error" role="alert" class="app-data-store-incident">
-      <div class="app-data-store-incident__copy">
-        <strong>{t('dataStore.recoveredTitle')}</strong>
-        <span>
-          {t('dataStore.recoveredMessage')}
-        </span>
-        <span class="app-data-store-incident__meta">
-          {t('dataStore.database')}: {dataStoreIncident.database}
-          · {t('dataStore.snapshot')}: {dataStoreIncident.restored_snapshot_id}
-          · {t('dataStore.possibleLoss')}: {dataStoreIncident
-            .possible_loss_interval?.start}
-          → {dataStoreIncident.possible_loss_interval?.end}
-        </span>
-      </div>
-      <Button variant="secondary" onClick={acknowledgeDataStoreRecovery}>
-        {t('dataStore.acknowledge')}
-      </Button>
-    </Banner>
-  {/if}
   {#key serverRecoveryGeneration}
     {#if setup.onboardingActive}
       <LazyContent load={loadOnboardingView}>
@@ -949,9 +864,45 @@
   {/key}
   <ToastStack
     toasts={desktop.toastState.toasts}
+    notices={appNotices.list}
     onDismiss={desktop.dismissAppToast}
-  />
+  >
+    {#if speechAudio.active && (activeViewId !== 'chat' || chatNavigation.shownSession?.agentId !== speechAudio.active.agentId || chatNavigation.shownSession?.sessionId !== speechAudio.active.sessionId)}
+      <SpeechPlaybackBar
+        owner={speechAudio}
+        onOpenSession={(entry) => chatNavigation.openSessionLink(entry)}
+      />
+    {/if}
+  </ToastStack>
 </AppShell>
+
+<ExtensionRequests
+  subscribeInvalidations={extensions.subscribeInvalidations}
+  onNoticeChange={(notice) => (extensionNotice = notice)}
+/>
+
+{#if dataStoreIncident}
+  <!-- Data may be missing, so this is confirmed, not closed. -->
+  <Modal title={t('dataStore.recoveredTitle')} closeDisabled>
+    {#snippet body()}
+      <div class="modal-body app-data-store-incident" role="alert">
+        <p>{t('dataStore.recoveredMessage')}</p>
+        <p class="app-data-store-incident__meta">
+          {t('dataStore.database')}: {dataStoreIncident.database}
+          · {t('dataStore.snapshot')}: {dataStoreIncident.restored_snapshot_id}
+          · {t('dataStore.possibleLoss')}: {dataStoreIncident
+            .possible_loss_interval?.start}
+          → {dataStoreIncident.possible_loss_interval?.end}
+        </p>
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="primary" onClick={acknowledgeDataStoreRecovery}>
+        {t('dataStore.acknowledge')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
 
 <AutosaveTransitionPrompt transition={autosave} />
 
@@ -988,71 +939,15 @@
 {/if}
 
 <style>
-  /* Slim re-entry banner for a dismissed-but-incomplete first-run setup. Sits
-     above the active view inside the content column and disappears the instant
-     a provider is connected. */
-  :global(.app-finish-setup),
-  :global(.app-webui-outdated),
-  :global(.app-update-available),
-  :global(.app-desktop-restart) {
-    flex-shrink: 0;
-    gap: 14px;
-    padding: 8px 20px;
-    border-width: 0 0 1px 3px;
-    border-color: var(--border) var(--border) var(--border) var(--blue);
-    border-radius: 0;
-    background: var(--surface);
-  }
-
-  :global(.app-data-store-incident) {
-    position: sticky;
-    top: 0;
-    z-index: 4;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 20px;
-    border-width: 0 0 1px 3px;
-    border-radius: 0;
-    box-shadow: 0 8px 24px rgb(20 20 18 / 8%);
-  }
-
-  .app-data-store-incident__copy {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .app-data-store-incident__copy span {
+  .app-data-store-incident p {
+    margin: 0;
     color: var(--text-med);
     font-size: var(--fs-body-sm);
   }
 
-  .app-data-store-incident__meta {
+  .app-data-store-incident .app-data-store-incident__meta {
+    margin-top: var(--space-sm);
     overflow-wrap: anywhere;
-    font-size: var(--fs-caption) !important;
-  }
-
-  .app-finish-setup__text,
-  .app-webui-outdated__text,
-  .app-update-available__text,
-  .app-desktop-restart__text {
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-  }
-
-  @media (max-width: 640px) {
-    :global(.app-finish-setup),
-    :global(.app-webui-outdated),
-    :global(.app-update-available),
-    :global(.app-desktop-restart) {
-      padding: 8px 14px;
-    }
-
-    :global(.app-data-store-incident) {
-      align-items: stretch;
-      padding: 10px 14px;
-    }
+    font-size: var(--fs-caption);
   }
 </style>

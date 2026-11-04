@@ -24,7 +24,7 @@
   import RequestedUrl from './RequestedUrl.svelte';
 
   const componentId = $props.id();
-  let { subscribeInvalidations = null } = $props();
+  let { subscribeInvalidations = null, onNoticeChange = null } = $props();
   let requests = $state([]);
   let selected = $state(null);
   let drafts = $state({});
@@ -44,6 +44,30 @@
     selected?.kind === 'elicitation' && selected.payload?.mode === 'url',
   );
   let requester = $derived(selected?.connection ?? selected?.extension ?? '');
+
+  // Unanswered requests stay in the app-wide toast stack, without a close.
+  let waiting = $derived(requests.length);
+  $effect(() => {
+    onNoticeChange?.(
+      waiting
+        ? {
+            id: 'extension-requests',
+            variant: 'warn',
+            message:
+              waiting === 1
+                ? t('extensions.inputWaitingOne')
+                : t('extensions.inputWaiting', { count: waiting }),
+            actions: [
+              {
+                label: t('extensions.reviewInput'),
+                variant: 'primary',
+                onClick: () => review(requests[0]),
+              },
+            ],
+          }
+        : null,
+    );
+  });
 
   // An Extension publishes a pending-inputs change whenever its list gains or
   // loses an entry, so the list is read only then. An invalidation without an
@@ -158,19 +182,6 @@
     }
   }
 </script>
-
-{#if requests.length}
-  <Banner variant="warn" role="status">
-    <span
-      >{requests.length === 1
-        ? t('extensions.inputWaitingOne')
-        : t('extensions.inputWaiting', { count: requests.length })}</span
-    >
-    <Button variant="primary" onClick={() => review(requests[0])}
-      >{t('extensions.reviewInput')}</Button
-    >
-  </Banner>
-{/if}
 
 {#if selected}
   <Modal

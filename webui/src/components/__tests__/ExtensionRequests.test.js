@@ -20,6 +20,7 @@ const { default: ExtensionRequests } =
 
 init('en');
 const REVIEW = t('extensions.reviewInput');
+let notice = null;
 const SEND = t('extensions.sendResponse');
 const DECLINE = t('extensions.declineInput');
 const CANCEL = t('extensions.cancelInput');
@@ -54,9 +55,13 @@ function invalidate(owner, resource = null) {
 }
 
 function mountRequests() {
+  notice = null;
   component = mount(ExtensionRequests, {
     target: document.body,
-    props: { subscribeInvalidations },
+    props: {
+      subscribeInvalidations,
+      onNoticeChange: (next) => (notice = next),
+    },
   });
 }
 
@@ -78,9 +83,9 @@ async function openRequest(payload, fields = {}) {
   mountRequests();
   await vi.waitFor(() => {
     flushSync();
-    expect(button(REVIEW)).toBeDefined();
+    expect(notice?.actions[0].label).toBe(REVIEW);
   });
-  button(REVIEW).click();
+  notice.actions[0].onClick();
   flushSync();
   return document.querySelector('[role="dialog"]');
 }
@@ -180,7 +185,7 @@ describe('Extension requests', () => {
     first({ requests: [] });
     await vi.waitFor(() => {
       flushSync();
-      expect(button(REVIEW)).toBeDefined();
+      expect(notice?.actions[0].label).toBe(REVIEW);
     });
     expect(listRequests).toHaveBeenCalledTimes(2);
   });
@@ -209,9 +214,8 @@ describe('Extension requests', () => {
         distance: formatRelativeTime(expiresAt),
       }),
     );
-    expect(document.body.textContent).toContain(
-      t('extensions.inputWaitingOne'),
-    );
+    expect(notice.message).toBe(t('extensions.inputWaitingOne'));
+    expect(notice.onDismiss).toBeUndefined();
     expect(dialog.textContent).toContain(
       t('extensions.inputTitle', { name: 'blender' }),
     );

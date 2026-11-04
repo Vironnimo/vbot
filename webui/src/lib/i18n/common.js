@@ -110,7 +110,6 @@ export default Object.freeze({
   'app.webuiOutdatedReload': 'Reload',
   'app.updateAvailable':
     'vBot {version} is available. Install it with Update in the vBot tray menu, or run vbot update on the server.',
-  'app.updateAvailableDismiss': 'Dismiss',
   'app.desktopRestart.pending':
     'vBot was updated. Restart the app to use the new version.',
   'app.desktopRestart.failed':
@@ -274,8 +273,6 @@ export default Object.freeze({
   'onboarding.progress.model': 'First Model',
   'onboarding.provider': 'Provider',
   'onboarding.retry': 'Try again',
-  'onboarding.finishSetup': 'Finish setup',
-  'onboarding.finishSetupHint': 'Connect an AI service to start chatting.',
   'onboarding.service.loading': 'Loading Providers…',
   'onboarding.service.loadError': 'Providers could not be loaded.',
   'onboarding.service.search': 'Search Providers…',

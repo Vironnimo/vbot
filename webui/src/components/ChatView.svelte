@@ -27,6 +27,7 @@
   import { getContext, untrack } from 'svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
+  import { keepClearOfToasts } from '$lib/toastClearance.js';
   import { provideSpeechOrigin } from '$lib/speechAudio.svelte.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
@@ -921,7 +922,7 @@
               </div>
             </div>
           {/if}
-          <div class="chat-view__composer-shell">
+          <div class="chat-view__composer-shell" use:keepClearOfToasts>
             {#if actions.chatToast}
               <div
                 class="chat-view__command-toast"

@@ -33,6 +33,9 @@ vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
 });
 
+const OUTDATED_NOTICE = '[data-toast-id="webui-outdated"]';
+const UPDATE_NOTICE = '[data-toast-id="application-update"]';
+
 const ALPHA = [
   { id: 'alpha', name: 'Alpha', current_session_id: 'session-parent' },
 ];
@@ -112,30 +115,23 @@ describe('App', () => {
     },
   );
 
-  it('keeps a dismissed onboarding hidden and offers a Finish setup re-entry', async () => {
+  it('keeps a dismissed onboarding hidden while Chat offers the Provider connection', async () => {
     localStorage.setItem('vbot.onboardingDismissed', '1');
     rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
     mountApp();
 
     await waitForCondition(() => {
-      expect(document.querySelector('.app-finish-setup')).toBeTruthy();
+      expect(document.body.textContent).toContain(t('chat.noProvider.title'));
     });
     expect(document.querySelector('.onboarding-view')).toBeFalsy();
-
-    document.querySelector('.app-finish-setup button').click();
-    flushSync();
-
-    await waitForCondition(() => {
-      expect(document.querySelector('.onboarding-view')).toBeTruthy();
-    });
   });
 
-  it('drops the Finish setup re-entry and its dismissal once a Provider change connects vBot', async () => {
+  it('drops the onboarding dismissal once a Provider change connects vBot', async () => {
     localStorage.setItem('vbot.onboardingDismissed', '1');
     rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
     const handlers = mountApp();
     await waitForCondition(() => {
-      expect(document.querySelector('.app-finish-setup')).toBeTruthy();
+      expect(document.body.textContent).toContain(t('chat.noProvider.title'));
     });
 
     rpcMock.mockImplementation(createOnboardingRpcMock({ connected: true }));
@@ -146,9 +142,8 @@ describe('App', () => {
     });
 
     await waitForCondition(() => {
-      expect(document.querySelector('.app-finish-setup')).toBeNull();
+      expect(localStorage.getItem('vbot.onboardingDismissed')).toBeNull();
     });
-    expect(localStorage.getItem('vbot.onboardingDismissed')).toBeNull();
   });
 
   it.each([false, true])(
@@ -448,7 +443,7 @@ describe('App', () => {
       connection.onEvent({ type: 'connection_ready', active_runs: [] });
       await Promise.resolve();
       flushSync();
-      expect(document.querySelector('.app-webui-outdated')).toBeNull();
+      expect(document.querySelector(OUTDATED_NOTICE)).toBeNull();
 
       getServedWebuiBuildMock.mockResolvedValue('build-served');
       connection.onEvent({
@@ -459,14 +454,56 @@ describe('App', () => {
       await waitForCondition(() =>
         expect(
           buttonWithText(
-            '.app-webui-outdated button',
+            `${OUTDATED_NOTICE} button`,
             t('app.webuiOutdatedReload'),
           ),
         ).toBeTruthy(),
       );
+
+      // Closed, it stays away until the next connection.
+      document.querySelector(`${OUTDATED_NOTICE} .toast-close`).click();
+      flushSync();
+      expect(document.querySelector(OUTDATED_NOTICE)).toBeNull();
+      connection.onEvent({ type: 'connection_ready', active_runs: [] });
+      await waitForCondition(() =>
+        expect(document.querySelector(OUTDATED_NOTICE)).toBeTruthy(),
+      );
     } finally {
       meta.remove();
     }
+  });
+
+  it('holds a recovered data store in a Dialog until it is acknowledged', async () => {
+    const incident = {
+      incident_id: 'incident-1',
+      database: 'sessions',
+      restored_snapshot_id: 'snapshot-1',
+      possible_loss_interval: { start: 'start', end: 'end' },
+    };
+    const acknowledged = vi.fn(() => ({ incidents: [] }));
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'data_store.status': () => ({ incidents: [incident] }),
+          'data_store.incident_acknowledge': acknowledged,
+        },
+      }),
+    );
+    mountApp().onEvent({ type: 'connection_ready', active_runs: [] });
+
+    const dialog = () => document.querySelector('[role="dialog"]');
+    await waitForCondition(() =>
+      expect(dialog()?.textContent).toContain(t('dataStore.recoveredTitle')),
+    );
+    expect(dialog().textContent).toContain('sessions');
+    expect(dialog().querySelector('[aria-label]')?.disabled).toBe(true);
+
+    buttonWithText(
+      '[role="dialog"] button',
+      t('dataStore.acknowledge'),
+    ).click();
+    await waitForCondition(() => expect(dialog()).toBeNull());
+    expect(acknowledged).toHaveBeenCalledOnce();
   });
 
   it('names a newer vBot version until its notice is dismissed', async () => {
@@ -487,22 +524,19 @@ describe('App', () => {
 
     const notice = t('app.updateAvailable', { version: '0.4.36' });
     await waitForCondition(() =>
-      expect(
-        document.querySelector('.app-update-available')?.textContent,
-      ).toContain(notice),
+      expect(document.querySelector(UPDATE_NOTICE)?.textContent).toContain(
+        notice,
+      ),
     );
-    buttonWithText(
-      '.app-update-available button',
-      t('app.updateAvailableDismiss'),
-    ).click();
+    document.querySelector(`${UPDATE_NOTICE} .toast-close`).click();
     flushSync();
-    expect(document.querySelector('.app-update-available')).toBeNull();
+    expect(document.querySelector(UPDATE_NOTICE)).toBeNull();
 
     // The dismissal holds for this version; it is stored in this browser.
     connection.onEvent({ type: 'connection_ready', active_runs: [] });
     await Promise.resolve();
     flushSync();
-    expect(document.querySelector('.app-update-available')).toBeNull();
+    expect(document.querySelector(UPDATE_NOTICE)).toBeNull();
   });
 
   it('offers Desktop server switching outside the inert app content', async () => {
