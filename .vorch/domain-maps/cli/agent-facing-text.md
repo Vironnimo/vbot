@@ -20,6 +20,8 @@ Placement additions in `references/agents.md` and CLI help:
 | `--subagent-allow replaces additional delegation targets ... keeps self-delegation and automatic Private targets.` | Corrects the former self-only promise for empty lists. |
 | `--owner is required exactly with --placement private.` | Refuses malformed placement before RPC with a usable correction. |
 | `Nothing was changed.` | Reports that the local placement validation has no side effects. |
+| `The last Chat Agent cannot be removed.` | Matches the placement-aware delete guard even when Helpers remain. |
+| `Inspect the Agent list and keep at least one in chat.` | Names the actual recovery condition instead of counting every Identity Agent. |
 
 Why each sentence of the Agent-facing text the CLI domain owns exists: the bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`) and the CLI refusals and recovery texts Agents read, such as `agent_busy` in `cli/_recovery.py`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 

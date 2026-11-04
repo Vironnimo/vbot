@@ -63,7 +63,10 @@ _CODE_GUIDANCE = {
     "before changing or removing those references.",
     "session_in_use": "The Session is still referenced. Inspect the Cron jobs or Bootstrap "
     "jobs named above before changing their Session or removing them.",
-    "last_agent": "The last Agent cannot be removed. Inspect the Agent list and keep at least one.",
+    "last_agent": (
+        "The last Chat Agent cannot be removed. "
+        "Inspect the Agent list and keep at least one in chat."
+    ),
     "agent_order_conflict": "The Agent list changed. Read its current order before submitting "
     "a new complete order.",
     "settings_conflict": "Another writer kept changing these Settings while this command "
