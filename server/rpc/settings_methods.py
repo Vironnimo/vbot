@@ -38,6 +38,7 @@ from server.events import (
     RESOURCE_KIND_COMMANDS,
     RESOURCE_KIND_DATA_STORE,
     RESOURCE_KIND_EXTENSIONS,
+    RESOURCE_KIND_MODEL_FAVORITES,
     RESOURCE_KIND_SKILLS,
 )
 from server.rpc._mutations import serialized_mutation, serialized_read
@@ -306,6 +307,8 @@ def _publish_settings_effects(state: Any, effects: SettingsChangeEffects) -> Non
         publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     if effects.agents_changed:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    if effects.model_favorites_changed:
+        publish_resource_changed(state, RESOURCE_KIND_MODEL_FAVORITES)
 
 
 def _validate_public_settings_candidate(

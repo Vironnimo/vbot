@@ -56,6 +56,7 @@ from core.settings.normalizers import (
     normalize_extensions_settings,
     normalize_librarian_settings,
     normalize_local_models_settings,
+    normalize_model_favorites,
     normalize_model_task_settings,
     normalize_notification_settings,
     normalize_providers_settings,
@@ -445,6 +446,30 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_skill_directories(settings.get("skill_directories"))
+
+    def load_model_favorites(self) -> list[str]:
+        """Return the user's favorite Model ids."""
+
+        return normalize_model_favorites(self.load_settings().get("model_favorites"))
+
+    def set_model_favorite(self, model: str, favorite: bool) -> list[str]:
+        """Add or remove one favorite Model id and return the resulting ids."""
+
+        def apply(settings: dict[str, Any]) -> list[str]:
+            favorites = [
+                entry
+                for entry in normalize_model_favorites(settings.get("model_favorites"))
+                if entry != model
+            ]
+            if favorite:
+                favorites.append(model)
+            if favorites:
+                settings["model_favorites"] = favorites
+            else:
+                settings.pop("model_favorites", None)
+            return favorites
+
+        return self.update_settings(apply)
 
     def load_subagent_settings(self) -> dict[str, int]:
         """Return normalized persisted Sub-Agent settings."""

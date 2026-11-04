@@ -243,6 +243,54 @@ describe('SearchableDropdown', () => {
     },
   );
 
+  it('toggles a favorite by its star or Shift+Enter without choosing the option', async () => {
+    const onChange = vi.fn();
+    const toggle = vi.fn();
+    mountedComponent = mount(SearchableDropdown, {
+      target: document.body,
+      props: {
+        onChange,
+        options: [
+          {
+            value: 'beta',
+            label: 'Beta',
+            favorite: { active: true, listed: true, toggle },
+          },
+          { value: 'gamma', label: 'Gamma' },
+        ],
+      },
+    });
+    flushSync();
+    await mountedComponent.open();
+    flushSync();
+
+    const star = document.querySelector('.searchable-dropdown__favorite');
+    expect(
+      document.querySelectorAll('.searchable-dropdown__favorite'),
+    ).toHaveLength(1);
+    expect(star.getAttribute('aria-pressed')).toBe('true');
+    expect(star.getAttribute('aria-label')).toBe('Remove from favorites');
+    expect(star.closest('[role="option"]')).toBeNull();
+
+    star.click();
+    expect(toggle).toHaveBeenCalledTimes(1);
+
+    document.activeElement.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    flushSync();
+    expect(toggle).toHaveBeenCalledTimes(2);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(
+      document.querySelector('.searchable-dropdown__favorite'),
+    ).not.toBeNull();
+  });
+
   it('renders option decorations and an invalid choice and opens programmatically', async () => {
     mountedComponent = mount(SearchableDropdown, {
       target: document.body,

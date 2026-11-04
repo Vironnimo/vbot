@@ -386,6 +386,10 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     pushRoute: (route) => call('route.push', { route }),
     replaceRoute: (route) => call('route.replace', { route }),
     toast: (message, variant = 'info') => call('toast', { message, variant }),
+    // The user's favorite Models, which a page gives to `modelFavorites.svelte.js`.
+    readModelFavorites: () => call('favorite_models.list'),
+    setModelFavorite: (model, favorite) =>
+      call('favorite_models.set', { model, favorite }),
     registerAutosave(participant) {
       if (autosaveParticipant)
         throw new Error('An autosave participant is already registered');

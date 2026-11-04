@@ -15,8 +15,8 @@ from core.providers.accounts import ConnectionRef
 from core.statistics import ModelRouteUse
 from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_MODELS
-from server.rpc._mutations import state_lock
+from server.events import RESOURCE_KIND_MODEL_FAVORITES, RESOURCE_KIND_MODELS
+from server.rpc._mutations import serialized_mutation, state_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -468,12 +468,48 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
     return result
 
 
+async def _model_favorites(state: Any, params: JsonObject) -> JsonObject:
+    """Return the Model ids the user marked as favorites, for every Model picker."""
+    _reject_unsupported(params, set(), "model.favorites")
+    try:
+        favorites = await _MODEL_READ_WORKERS.run(state.runtime.storage.load_model_favorites)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"models": favorites}
+
+
+async def _set_model_favorite(state: Any, params: JsonObject) -> JsonObject:
+    """Add or remove one favorite by Model id, whose every Connection then counts.
+
+    One item at a time, because two windows that each saved their whole list
+    would lose each other's change. The id need not be in today's catalog: a
+    favorite of a Model that left it waits for the Model to return.
+    """
+    _reject_unsupported(params, {"model", "favorite"}, "model.set_favorite")
+    model = _required_string(params, "model").strip()
+    favorite = params.get("favorite")
+    if not isinstance(favorite, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.favorite must be a boolean")
+    try:
+        favorites = await _MODEL_READ_WORKERS.run(
+            state.runtime.storage.set_model_favorite, model, favorite
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_MODEL_FAVORITES)
+    return {"models": favorites}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered model RPC handlers."""
     return {
+        "model.favorites": _model_favorites,
         "model.forget_wire_facts": _forget_wire_facts,
         "model.get": _get_model,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
+        "model.set_favorite": serialized_mutation(
+            _set_model_favorite, lock_attribute="_settings_mutation_lock"
+        ),
         "provider.routing_options": _routing_provider_options,
     }

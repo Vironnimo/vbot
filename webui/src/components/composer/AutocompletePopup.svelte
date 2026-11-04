@@ -10,6 +10,8 @@
     ariaLabel,
     eyebrow,
     row,
+    // Optional control beside a row's option, such as a favorite star.
+    rowAction = undefined,
     headerDetail = undefined,
     footerLabel = '',
     onFooterAction = () => {},
@@ -59,19 +61,22 @@
       </div>
     {/if}
     {#each items as item, index (keyOf(item))}
-      <button
-        type="button"
-        class={`autocomplete-popup__option autocomplete-popup__option--${kind} ${kind}-autocomplete__option`}
-        class:active={index === activeIndex}
-        class:ignored={kind === 'file' && item.ignored}
-        role="option"
-        aria-selected={index === activeIndex}
-        onmouseenter={() => onHover(index)}
-        onmousedown={(event) => event.preventDefault()}
-        onclick={() => onSelect(item)}
-      >
-        {@render row(item)}
-      </button>
+      <div class="autocomplete-popup__row" role="none">
+        <button
+          type="button"
+          class={`autocomplete-popup__option autocomplete-popup__option--${kind} ${kind}-autocomplete__option`}
+          class:active={index === activeIndex}
+          class:ignored={kind === 'file' && item.ignored}
+          role="option"
+          aria-selected={index === activeIndex}
+          onmouseenter={() => onHover(index)}
+          onmousedown={(event) => event.preventDefault()}
+          onclick={() => onSelect(item)}
+        >
+          {@render row(item)}
+        </button>
+        {@render rowAction?.(item)}
+      </div>
     {/each}
     {#if items.length > 0 && footerLabel}
       <button
@@ -129,21 +134,25 @@
     font-style: italic;
   }
 
+  .autocomplete-popup__row {
+    position: relative;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .autocomplete-popup__row:last-of-type {
+    border-bottom: 0;
+  }
+
   .autocomplete-popup__option {
     width: 100%;
     padding: 7px 10px;
     border: 0;
-    border-bottom: 1px solid var(--border);
     color: var(--text-med);
     background: transparent;
     text-align: left;
     transition:
       background-color 120ms ease,
       color 120ms ease;
-  }
-
-  .autocomplete-popup__option:last-of-type {
-    border-bottom: 0;
   }
 
   .autocomplete-popup__option:hover,

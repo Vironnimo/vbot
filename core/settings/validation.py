@@ -73,6 +73,7 @@ from core.settings._raw_sections import (
     _validate_extensions,
     _validate_librarian,
     _validate_local_models,
+    _validate_model_favorites,
     _validate_model_tasks,
     _validate_notifications,
     _validate_port_settings,
@@ -435,6 +436,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         "$.extension_directories",
         data.get("extension_directories"),
     )
+    _validate_model_favorites(diagnostics, data.get("model_favorites"))
     _validate_positive_integer(
         diagnostics,
         "$.attachment_max_size_bytes",

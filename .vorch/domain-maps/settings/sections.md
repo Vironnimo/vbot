@@ -6,6 +6,8 @@ The contracts of individual Settings sections and paths: per-section update sema
 
 Live side effects come either from read-at-use accessors or from the shared Runtime Settings coordinator (`core/runtime/_settings.py`, `runtime.md`) used by both mutation surfaces: OpenRouter routing snapshots per Run, Skills directories reload, Recall reloads backend, Extension directories rebuild, disabled-set applies surgically, `keep_awake` toggles power request, application `timezone` updates Calendar and Cron, a changed `archive` section wakes the archive's retention sweep.
 
+`models.favorites` publishes `model_favorites` (`models/model-list.md` -> Favorites).
+
 ## Task Model paths
 
 Changing a Task Model target leaf resets prior options before explicit option edits; unsetting that target removes the complete binding and overlaps every option edit for that task. An option named `target`, at any depth inside `options`, is an ordinary option: unsetting it preserves its siblings. Unchanged effective Task Model bindings skip live catalog validation.

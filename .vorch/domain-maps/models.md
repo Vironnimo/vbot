@@ -86,4 +86,4 @@ Read these only when your task matches - not by default.
 
 - Changing Model DB roots, the manifest, root selection, refresh staging/publication, `model.refresh_db`, carry-forward enrichment, refresh-time reasoning derivation or per-Connection Context windows, or registry reload concurrency -> `models/refresh.md`
 - Changing token pricing, repricing, tiers or cost computation -> `models/pricing.md`
-- Changing how `model.list` orders Models by usage or picks `preferred_id` -> `models/model-list.md`
+- Changing how `model.list` orders Models by usage or picks `preferred_id`, or favorites -> `models/model-list.md`

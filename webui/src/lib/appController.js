@@ -6,6 +6,8 @@ import {
   invalidateCatalogReads,
   isRunServerEvent,
   listBackgroundActivity,
+  listModelFavorites,
+  setModelFavorite,
 } from './api.js';
 import { mergeBoundedEntries } from './clientCaches.js';
 import { noteInvalidation } from './clientMetrics.js';
@@ -38,9 +40,14 @@ import {
   RESOURCE_TOKEN_SKILLS,
   RESOURCE_TOKEN_TERMINALS,
   RESOURCE_KIND_APPLICATION,
+  RESOURCE_KIND_MODEL_FAVORITES,
   RESOURCE_KIND_DATA_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
+import {
+  configureModelFavorites,
+  loadModelFavorites,
+} from './modelFavorites.svelte.js';
 import { createRunEventFeed } from './runEventFeed.svelte.js';
 import {
   applySessionActivityChange,
@@ -164,6 +171,11 @@ export function createAppController({
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
+  configureModelFavorites({
+    load: listModelFavorites,
+    save: setModelFavorite,
+    onError: onAppError,
+  });
   let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
   let destroyed = false;
   let activityRevision = 0;
@@ -318,6 +330,7 @@ export function createAppController({
       const refreshOwners = [
         loadDataStoreStatus,
         loadApplicationUpdate,
+        loadModelFavorites,
         loadBackgroundActivity,
         onReloadExtensionPages,
         onCheckWebuiBuild,
@@ -445,6 +458,9 @@ export function createAppController({
     }
     if (kind === RESOURCE_KIND_APPLICATION) {
       await loadApplicationUpdate();
+    }
+    if (kind === RESOURCE_KIND_MODEL_FAVORITES) {
+      await loadModelFavorites();
     }
     if (kind === 'agents') {
       const scope = event.payload?.scope ?? {};

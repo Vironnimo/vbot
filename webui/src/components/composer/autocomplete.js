@@ -74,6 +74,7 @@ function normalizeOptions(items) {
           : '',
       secondaryLabel: option.secondaryLabel ?? '',
       marker: optionDecorations(option).marker,
+      favorite: option.favorite ?? null,
       searchText:
         `${option.label ?? option.value} ${option.secondaryLabel ?? ''}`
           .trim()

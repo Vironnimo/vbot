@@ -17,12 +17,14 @@ from core.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._wire_profile_files import parse_wire_profile_file
 from core.statistics import ModelRouteUse, StatisticsUnavailableError
 from server.rpc import model_methods
+from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
     _no_models_dev_fetch,
     make_state,
     openrouter_provider,
+    resource_changes,
     rpc_error,
     rpc_result,
 )
@@ -769,3 +771,36 @@ async def test_provider_routing_options_delegates_to_openrouter_adapter(
     assert result == {"providers": [{"slug": "anthropic", "name": "Anthropic"}]}
     assert adapter.model_ids == ["anthropic/claude-sonnet-4"]
     assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_model_favorites_change_one_id_at_a_time_and_reach_other_windows(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    assert await rpc_result(state, "model.favorites") == {"models": []}
+    await rpc_result(state, "model.set_favorite", model="openai/gpt", favorite=True)
+    added = await rpc_result(state, "model.set_favorite", model=" retired/model ", favorite=True)
+    assert added == {"models": ["openai/gpt", "retired/model"]}
+    assert resource_changes(state, "model_favorites")
+
+    removed = await rpc_result(state, "model.set_favorite", model="openai/gpt", favorite=False)
+    assert removed == {"models": ["retired/model"]}
+    assert await rpc_result(state, "model.favorites") == removed
+    cleared = await rpc_result(state, "model.set_favorite", model="retired/model", favorite=False)
+    assert cleared == {"models": []}
+    assert "model_favorites" not in state.runtime.storage.load_settings()
+
+    # A change through the Settings paths reaches open windows just the same.
+    changes = len(resource_changes(state, "model_favorites"))
+    await rpc_result(
+        state,
+        "settings.patch",
+        operations=[{"op": "set", "path": "models.favorites", "value": ["local/model"]}],
+    )
+    assert len(resource_changes(state, "model_favorites")) == changes + 1
+    assert await rpc_result(state, "model.favorites") == {"models": ["local/model"]}
+
+    error = await rpc_error(state, "model.set_favorite", model="openai/gpt", favorite="yes")
+    assert error["code"] == RPC_ERROR_INVALID_REQUEST

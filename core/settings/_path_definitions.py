@@ -143,6 +143,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         allowed_values=tuple(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES)),
     ),
     _static(
+        "models.favorites",
+        "array",
+        "Model ids the Model pickers list first, for every Connection of the Model.",
+        default=[],
+    ),
+    _static(
         "skills.directories",
         "array",
         "Additional absolute or home-relative Skill directories.",

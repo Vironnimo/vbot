@@ -15,6 +15,10 @@ import {
 } from '$lib/api.js';
 import { createDebouncedAutosave, useAutosaveContext } from '$lib/autosave.js';
 import { t, tOr } from '$lib/i18n.js';
+import {
+  favoritesFirst,
+  modelFavoriteFields,
+} from '$lib/modelFavorites.svelte.js';
 import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 import { createSettingsDraft } from '$lib/settingsSave.js';
 import {
@@ -417,18 +421,21 @@ export function createTaskModelEditor({
     return targetsByType[taskType] ?? [];
   }
 
-  // The searchable picker's choices: "Not configured", every target, and a
-  // saved target the server no longer lists.
+  // The searchable picker's choices: "Not configured", every target with the
+  // favorites first, and a saved target the server no longer lists.
   function targetOptions(taskType) {
     const current = binding(taskType);
     const options = [
       { value: '', label: t('settings.specializedModels.noTarget') },
-      ...targets(taskType).map((target) => ({
-        value: target.id,
-        label:
-          target.kind === 'local' ? `${target.label} (local)` : target.label,
-        searchText: `${target.label} ${target.id} ${target.kind === 'local' ? 'local' : ''}`,
-      })),
+      ...favoritesFirst(
+        targets(taskType).map((target) => ({
+          value: target.id,
+          label:
+            target.kind === 'local' ? `${target.label} (local)` : target.label,
+          searchText: `${target.label} ${target.id} ${target.kind === 'local' ? 'local' : ''}`,
+          ...modelFavoriteFields(target.id),
+        })),
+      ),
     ];
 
     if (
