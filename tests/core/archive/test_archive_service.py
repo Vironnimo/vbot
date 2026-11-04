@@ -66,8 +66,10 @@ async def test_private_agents_archive_and_restore_with_their_owner(
     agents, sessions = world.agents, world.sessions
     owner = agent_with_session(world, "owner")
     member = agent_with_session(world, "worker", placement=AgentPlacement("private", "owner"))
+    agents.create("sibling", placement=AgentPlacement("private", "owner"))
     agents.create("other")
-    original_order = [agent.id for agent in agents.list()]
+    original_order = ["worker", "sibling", "owner", "other"]
+    agents.reorder(original_order, expected_revision=agents.list_with_order().order_revision)
     owner_address = SessionAddress(None, "owner", owner.current_session_id)
     member_address = SessionAddress(None, "worker", member.current_session_id)
     for address in (owner_address, member_address):
@@ -79,19 +81,19 @@ async def test_private_agents_archive_and_restore_with_their_owner(
 
     archived = await world.service.archive_agent("owner")
     entry = world.entry(archived.entry_id)
-    assert archived.private_agent_ids == ("worker",)
+    assert archived.private_agent_ids == ("sibling", "worker")
     assert entry.session_count == 2
     assert {tree.role for tree in entry.trees} == {"agent", "private_agent"}
-    assert entry.facts["private_agents"][0]["agent_id"] == "worker"
+    assert [item["agent_id"] for item in entry.facts["private_agents"]] == ["sibling", "worker"]
     assert not agents.exists("owner") and not agents.exists("worker")
     assert world.sessions.archive_ledger.agent_entry_ids("worker") == (entry.entry_id,)
     [blocker] = (await world.service.restore_check(earlier_archive.entry_id)).blockers
     assert blocker.details["entry_id"] == entry.entry_id
-    assert set(world.skill_invalidations) == {"owner", "worker"}
+    assert set(world.skill_invalidations) == {"owner", "worker", "sibling"}
     assert (None, "worker", None) in world.recall_removals
 
     restored = await world.service.restore(entry.entry_id, target_id=target)
-    assert restored.private_agent_ids == ("worker",)
+    assert restored.private_agent_ids == ("sibling", "worker")
     assert set(restored.addresses) == {replace(owner_address, agent_id=target), member_address}
     assert agents.get("worker").placement == AgentPlacement("private", target, owner.created_at)
     assert agents.get("worker").current_session_id == member.current_session_id

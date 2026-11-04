@@ -219,15 +219,21 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
     facts = entry.facts
     grant_agent_ids: tuple[str, ...] = ()
     if entry.kind == ARCHIVE_KIND_AGENT:
-        roster_index = facts.get("roster_index")
-        services.agents.place_in_roster(
-            target, roster_index if isinstance(roster_index, int) else None
+        positions = [(target, facts.get("roster_index"))]
+        positions.extend(
+            (member["agent_id"], member.get("roster_index"))
+            for member in facts.get("private_agents") or ()
         )
-        for member in facts.get("private_agents") or ():
-            index = member.get("roster_index")
-            services.agents.place_in_roster(
-                member["agent_id"], index if isinstance(index, int) else None
-            )
+        # Insert earlier slots first: moving a preceding private member later
+        # would shift an already placed owner and change the Chat Agent order.
+        for agent_id, index in sorted(
+            positions,
+            key=lambda item: (
+                not isinstance(item[1], int),
+                item[1] if isinstance(item[1], int) else 0,
+            ),
+        ):
+            services.agents.place_in_roster(agent_id, index if isinstance(index, int) else None)
         grants = [grant for grant in facts.get("grants") or () if isinstance(grant, Mapping)]
         grant_agent_ids = services.agents.restore_delegation_grants(target, grants)
         if target != entry.subject_id and holds_agent_id_grants(services, entry, entry.subject_id):
