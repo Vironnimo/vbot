@@ -1,4 +1,5 @@
 <script>
+  import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
   // Connects a hosted MCP service from the MCP Extension's catalog in one
   // dialog: choose a service and Connect, sign in to it in the browser when
   // it needs an account, then choose the Agents that may use it. Opened for
@@ -333,7 +334,7 @@
       if (stopped || current !== agentsRead) return;
       tools = toolsResult.tools;
       access = mcpAgentAccess(
-        agentsResult.agents,
+        agentDisplayOrder(agentsResult.agents),
         tools,
         target.id,
         target.siblings,
@@ -348,7 +349,12 @@
     try {
       const result = await listAgents();
       if (stopped || current !== agentsRead) return;
-      access = mcpAgentAccess(result.agents, tools, target.id, target.siblings);
+      access = mcpAgentAccess(
+        agentDisplayOrder(result.agents),
+        tools,
+        target.id,
+        target.siblings,
+      );
     } catch {
       // The listed Agents stay until their next change.
     }
@@ -601,7 +607,11 @@
                   onChange={(checked) => {
                     if (checked) chosen.add(item.agent.id);
                     else chosen.delete(item.agent.id);
-                  }}>{item.agent.name || item.agent.id}</Checkbox
+                  }}
+                  >{agentDisplayName(
+                    item.agent,
+                    access.map((item) => item.agent),
+                  )}</Checkbox
                 >
                 {#if item.granted}
                   <Badge variant="neutral">{t('mcp.catalogHasAccess')}</Badge>

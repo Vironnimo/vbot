@@ -97,7 +97,7 @@ class ConversationController:
         self.roster = [
             (f"{row.get('name', row['id'])} · {row['id']}", row["id"])
             for row in self.agents
-            if not row.get("builtin")
+            if not row.get("builtin") and (row.get("placement") or {}).get("kind", "chat") == "chat"
         ]
         for project in self.projects:
             for member in (project.get("scan") or {}).get("team", []):

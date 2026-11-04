@@ -1,4 +1,6 @@
 <script>
+  import { untrack } from 'svelte';
+  import { isChatAgent } from '$lib/agentPlacement.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -29,6 +31,8 @@
   } from '$lib/modelSelection.js';
 
   let {
+    agents = [],
+    initialPlacement = { kind: 'chat' },
     availableModels = [],
     availableConnections = [],
     // The global agent defaults (`settings.get` → `defaults.agent`), fetched by
@@ -42,7 +46,14 @@
     onToast = () => {},
   } = $props();
 
-  let formValues = $state(createAgentFormValues());
+  let formValues = $state(
+    createAgentFormValues({ placement: untrack(() => initialPlacement) }),
+  );
+  let ownerOptions = $derived(
+    agents
+      .filter(isChatAgent)
+      .map((agent) => ({ value: agent.id, label: agent.name || agent.id })),
+  );
   let formErrors = $state({});
   let errorMessage = $state('');
   let isSaving = $state(false);
@@ -230,6 +241,55 @@
             />
           {/snippet}
         </FormField>
+
+        <FormField
+          controlId="agent-create-placement"
+          label={t('agents.placement.title')}
+        >
+          {#snippet children(field)}
+            <Dropdown
+              id={field.controlId}
+              ariaLabel={t('agents.placement.title')}
+              ariaLabelledby={field.labelId}
+              value={formValues.placement.kind}
+              options={[
+                { value: 'chat', label: t('agents.placement.chat') },
+                { value: 'helper', label: t('agents.placement.helper') },
+                {
+                  value: 'private',
+                  label: t('agents.placement.private'),
+                  disabled: ownerOptions.length === 0,
+                },
+              ]}
+              onValueChange={(kind) =>
+                (formValues.placement =
+                  kind === 'private'
+                    ? { kind, owner_id: ownerOptions[0]?.value ?? '' }
+                    : { kind })}
+            />
+          {/snippet}
+        </FormField>
+        {#if formValues.placement.kind === 'private'}
+          <FormField
+            controlId="agent-create-owner"
+            label={t('agents.placement.owner')}
+            error={formErrors.placement ? fieldError('placement') : ''}
+          >
+            {#snippet children(field)}
+              <Dropdown
+                id={field.controlId}
+                ariaLabel={t('agents.placement.owner')}
+                ariaLabelledby={field.labelId}
+                ariaDescribedby={field.describedBy}
+                invalid={field.invalid}
+                value={formValues.placement.owner_id}
+                options={ownerOptions}
+                onValueChange={(owner_id) =>
+                  (formValues.placement = { kind: 'private', owner_id })}
+              />
+            {/snippet}
+          </FormField>
+        {/if}
 
         <FormField
           controlId="agent-create-name"

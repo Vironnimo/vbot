@@ -1,3 +1,4 @@
+import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
 import { onDestroy, onMount } from 'svelte';
 import {
   createChannel,
@@ -133,9 +134,9 @@ export function createChannelsSettings(context) {
     })),
   );
   let channelAgentOptions = $derived(
-    channelAgents.map((agent) => ({
+    agentDisplayOrder(channelAgents).map((agent) => ({
       value: agent.id,
-      label: agent.name,
+      label: agentDisplayName(agent, channelAgents),
     })),
   );
   let creatingChannel = $derived(
@@ -287,7 +288,10 @@ export function createChannelsSettings(context) {
   }
 
   function channelAgentName(agentId) {
-    return channelAgents.find((agent) => agent.id === agentId)?.name ?? agentId;
+    return agentDisplayName(
+      channelAgents.find((agent) => agent.id === agentId) ?? { id: agentId },
+      channelAgents,
+    );
   }
 
   // The one status chip in a Channel row. A disabled Channel shows none (its

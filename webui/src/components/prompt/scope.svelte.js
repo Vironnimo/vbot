@@ -1,3 +1,4 @@
+import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
 import { SvelteMap } from 'svelte/reactivity';
 import {
   createAgentTargetCatalogLoader,
@@ -137,13 +138,24 @@ export function createPromptScope(context) {
 
   // An Agent scope is named like its Agent, as the server names it.
   function withAgentNames(scopes) {
-    return scopes.map((scope) => {
-      const agent =
-        scope.type === 'agent'
-          ? agents.find((item) => item.id === scope.agent_id)
-          : null;
-      return agent ? { ...scope, label: agent.name || agent.id } : scope;
-    });
+    const order = agentDisplayOrder(agents).map((agent) => agent.id);
+    const position = (scope) =>
+      scope.type !== 'agent'
+        ? -1
+        : order.includes(scope.agent_id)
+          ? order.indexOf(scope.agent_id)
+          : order.length;
+    return [...scopes]
+      .sort((left, right) => position(left) - position(right))
+      .map((scope) => {
+        const agent =
+          scope.type === 'agent'
+            ? agents.find((item) => item.id === scope.agent_id)
+            : null;
+        return agent
+          ? { ...scope, label: agentDisplayName(agent, agents) }
+          : scope;
+      });
   }
 
   // Lazily load project teams so the preview picker can offer project agents as
@@ -286,13 +298,13 @@ export function createPromptScope(context) {
 
     return [
       defaultPromptScope(),
-      ...currentAgents
+      ...agentDisplayOrder(currentAgents)
         .filter((agent) => agent.custom_system_prompt_enabled)
         .map((agent) =>
           normalizePromptScope({
             type: 'agent',
             agent_id: agent.id,
-            label: agent.name || agent.id,
+            label: agentDisplayName(agent, agents),
           }),
         ),
     ];

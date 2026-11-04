@@ -1,3 +1,4 @@
+import { firstChatAgent } from '../agentPlacement.js';
 import { isTerminalRunEvent } from '../api.js';
 import {
   SESSION_WAITING,
@@ -99,13 +100,16 @@ export function setAgents(
       : agent,
   );
   if (!state.selectedAgentId && state.agents.length > 0) {
-    state.selectedAgentId = state.agents[0].id;
+    state.selectedAgentId = (
+      firstChatAgent(state.agents) ?? state.agents[0]
+    ).id;
   }
   if (
     state.selectedAgentId &&
     !state.agents.some((agent) => agent.id === state.selectedAgentId)
   ) {
-    state.selectedAgentId = state.agents[0]?.id ?? '';
+    state.selectedAgentId =
+      (firstChatAgent(state.agents) ?? state.agents[0])?.id ?? '';
   }
   return state.selectedAgentId;
 }

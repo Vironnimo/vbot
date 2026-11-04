@@ -12,13 +12,14 @@ from typing import Any
 
 import pytest
 
-from core.agents import AgentError
+from core.agents import AgentError, AgentPlacement
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_FILES,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_ORIGIN_RECOVERED,
     ARCHIVE_TREE_AGENT,
+    ARCHIVE_TREE_PRIVATE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ArchiveEntryBusyError,
     ArchiveEntryFilter,
@@ -35,6 +36,101 @@ from tests.core.archive.archive_test_support import world as world
 
 def _fail(*_args: Any, **_kwargs: Any) -> Any:
     raise OSError("stopped here")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_live", ["owner", "worker"])
+async def test_a_partly_restored_private_group_finishes_forward(
+    world: ArchiveWorld, first_live: str
+) -> None:
+    owner = agent_with_session(world, "owner")
+    worker = agent_with_session(world, "worker", placement=AgentPlacement("private", "owner"))
+    archived = await world.service.archive_agent("owner")
+    ledger = world.sessions.archive_ledger
+    ledger.begin_restore(
+        archived.entry_id,
+        {
+            "target_id": "renamed",
+            "strip_channel_keys": True,
+            "source_created_at": owner.created_at,
+            "workspace": None,
+            "root_project_id": None,
+            "private_agents": [
+                {
+                    "agent_id": "worker",
+                    "source_created_at": worker.created_at,
+                    "workspace": None,
+                    "root_project_id": None,
+                }
+            ],
+        },
+    )
+    source = world.payload(
+        archived.entry_id, "agent" if first_live == "owner" else "private/worker"
+    )
+    live = world.data_dir / "agents" / ("renamed" if first_live == "owner" else "worker")
+    os.replace(source, live)
+    (live / "workspace" / "after-crash.txt").write_text("keep", encoding="utf-8")
+
+    world.service.recover()
+    world.service.recover()
+
+    assert ledger.entry(archived.entry_id) is None
+    assert (live / "workspace" / "after-crash.txt").read_text(encoding="utf-8") == "keep"
+    assert world.agents.get("worker").placement == AgentPlacement(
+        "private", "renamed", owner.created_at
+    )
+    assert world.sessions.exists(SessionAddress(None, "renamed", owner.current_session_id))
+    assert world.sessions.exists(SessionAddress(None, "worker", worker.current_session_id))
+
+
+def test_an_interrupted_private_group_archive_returns_every_tree(world: ArchiveWorld) -> None:
+    owner = agent_with_session(world, "owner")
+    worker = agent_with_session(world, "worker", placement=AgentPlacement("private", "owner"))
+    ledger = world.sessions.archive_ledger
+    entry = ledger.begin(
+        ARCHIVE_KIND_AGENT,
+        subject_id="owner",
+        agent_id="owner",
+        trees=lambda entry_id: (
+            ArchiveTree(f"archive/entries/{entry_id}/agent", ARCHIVE_TREE_AGENT, "agents/owner"),
+            ArchiveTree(
+                f"archive/entries/{entry_id}/private/worker",
+                ARCHIVE_TREE_PRIVATE_AGENT,
+                "agents/worker",
+            ),
+        ),
+    )
+    for agent_id, name in (("owner", "agent"), ("worker", "private/worker")):
+        payload = world.payload(entry.entry_id, name)
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(world.data_dir / "agents" / agent_id, payload)
+
+    world.service.recover()
+
+    assert ledger.entry(entry.entry_id) is None
+    assert world.agents.get("worker").placement == worker.placement
+    assert world.sessions.exists(SessionAddress(None, "owner", owner.current_session_id))
+    assert world.sessions.exists(SessionAddress(None, "worker", worker.current_session_id))
+
+
+@pytest.mark.asyncio
+async def test_an_orphan_group_payload_is_adopted_with_private_members(world: ArchiveWorld) -> None:
+    world.agents.create("owner")
+    world.agents.create("worker", placement=AgentPlacement("private", "owner"))
+    for agent_id, name in (("owner", "agent"), ("worker", "private/worker")):
+        payload = world.payload("arc_orphan", name)
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(world.data_dir / "agents" / agent_id, payload)
+
+    world.service.recover()
+
+    [listing] = (await world.service.list(ArchiveEntryFilter())).entries
+    assert listing.restorable
+    assert {tree.role for tree in listing.entry.trees} == {"agent", "private_agent"}
+    assert listing.entry.facts["private_agents"][0]["agent_id"] == "worker"
+    await world.service.restore(listing.entry.entry_id, target_id="renamed")
+    assert world.agents.resolved_placement(world.agents.get("worker"))["owner_id"] == "renamed"
 
 
 def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Path) -> None:

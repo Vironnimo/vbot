@@ -33,6 +33,20 @@ describe('App selection', () => {
     dispose();
   });
 
+  it('falls back to a Chat Agent but retains an existing hidden selection', () => {
+    const agents = [
+      { id: 'helper', placement: { kind: 'helper' } },
+      { id: 'chat' },
+    ];
+    selection.syncAgents(agents);
+    expect(selection.selectedAgentId).toBe('chat');
+    selection.selectAgent('helper');
+    selection.syncAgents(agents);
+    expect(selection.selectedAgentId).toBe('helper');
+    selection.syncAgents([{ id: 'hidden', placement: { kind: 'helper' } }]);
+    expect(selection.selectedAgentId).toBe('hidden');
+  });
+
   it('keeps the newest roster and selection when an older server read arrives last', async () => {
     const older = deferred();
     listAgents

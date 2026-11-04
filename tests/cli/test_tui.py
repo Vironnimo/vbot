@@ -6,8 +6,9 @@ import asyncio
 import copy
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, override
-from unittest.mock import ANY
+from types import SimpleNamespace
+from typing import Any, cast, override
+from unittest.mock import ANY, AsyncMock
 
 import httpx
 import pytest
@@ -27,6 +28,26 @@ from cli.tui.transport import ClientError, TerminalClient
 from tests.cli.cli_test_support import make_instance
 
 type JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+async def test_agent_roster_hides_helpers_but_retains_explicit_conversation_targets() -> None:
+    rows = [
+        {"id": "main", "name": "Main"},
+        {"id": "helper", "name": "Helper", "placement": {"kind": "helper"}},
+        {"id": "private", "placement": {"kind": "private", "owner_id": "main"}},
+    ]
+    app = SimpleNamespace(
+        client=SimpleNamespace(rpc=AsyncMock(side_effect=[{"agents": rows}, {"projects": []}])),
+        _header=lambda: None,
+    )
+    controller = conversation_module.ConversationController(
+        cast(ConversationApp, app), agent="helper", session=None, project=None
+    )
+    await controller.load_roster()
+    assert controller.roster == [("Main · main", "main")]
+    assert controller.agents == rows
+    assert controller.initial_agent == "helper"
 
 
 class Server(TerminalClient):

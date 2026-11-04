@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.agents import AgentPlacement
 from core.automation import AutomationReference
 from core.chat import (
     ChatMessage,
@@ -102,7 +103,12 @@ _BUILTINS = {"librarian": "librarian", "live-voice": "live_voice"}
 
 def _identity(agent_id: str) -> SimpleNamespace:
     """An Identity Agent; ``librarian`` and ``live-voice`` are built-in Agents."""
-    return SimpleNamespace(id=agent_id, name=agent_id, builtin=_BUILTINS.get(agent_id))
+    return SimpleNamespace(
+        id=agent_id,
+        name=agent_id,
+        builtin=_BUILTINS.get(agent_id),
+        placement=AgentPlacement(kind="helper") if agent_id == "helper" else None,
+    )
 
 
 class _MoveAgents:
@@ -231,6 +237,7 @@ class _MoveHarness:
     ("source_project", "target_address", "target_agent", "target_project", "reset", "update"),
     [
         (None, "planner", "planner", None, True, True),  # identity -> identity
+        (None, "helper", "helper", None, True, True),  # hidden Identity target stays addressable
         (None, "planner@vbot", "planner", "vbot", True, False),  # identity -> project
         ("vbot", "assistant", "assistant", None, False, True),  # project -> identity
         ("vbot", "planner@acme", "planner", "acme", False, False),  # project -> project

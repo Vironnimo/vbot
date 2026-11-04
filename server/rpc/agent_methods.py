@@ -13,7 +13,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, cast
 
-from core.agents import AgentStore, SoulFile
+from core.agents import AgentPlacement, AgentStore, SoulFile
 from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
 from core.permissions import PermissionRulesError, normalize_permission_rules
@@ -24,6 +24,7 @@ from core.settings import (
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
     SettingsValidationError,
+    is_valid_agent_id,
     validate_temperature,
     validate_thinking_effort,
     validate_top_p,
@@ -120,7 +121,7 @@ def _agent_list_response(state: Any, listing: Any) -> JsonObject:
     return {
         # The roster read holds each Agent's persisted values: no file is read again.
         "agents": [
-            _agent_response(state, agent, listing.persisted.get(agent.id))
+            _agent_response(state, agent, listing.persisted.get(agent.id), roster=listing.agents)
             for agent in listing.agents
         ],
         "order_revision": listing.order_revision,
@@ -392,11 +393,14 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         chat_sessions = state.runtime.chat_sessions
-        if not any(
-            agent.id != agent_id
-            for agent in await chat_sessions.run_async(state.runtime.agents.list)
+        agents = await chat_sessions.run_async(state.runtime.agents.list)
+        candidate = next((agent for agent in agents if agent.id == agent_id), None)
+        if (
+            candidate is not None
+            and candidate.placement is None
+            and not any(agent.id != agent_id and agent.placement is None for agent in agents)
         ):
-            raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
+            raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent in chat")
         try:
             # Identity scope only: a same-named Project Team agent remains
             # independent. The archive owns the Run guard and the reference check.
@@ -404,12 +408,15 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
         except ArchiveSubjectInUseError as exc:
             raise RpcError(
                 RPC_ERROR_AGENT_IN_USE,
-                f"cannot delete agent referenced by {', '.join(exc.references)}: {agent_id}",
+                f"cannot delete agent referenced by {', '.join(exc.references)}: {exc.subject_id}",
+                data={"agent_id": exc.subject_id},
             ) from exc
         except RunAdmissionBlockedError as exc:
+            blocked_id = getattr(exc, "agent_id", agent_id)
             raise RpcError(
                 RPC_ERROR_AGENT_BUSY,
-                f"cannot delete agent with active or queued runs: {agent_id}",
+                f"cannot delete agent with active or queued runs: {blocked_id}",
+                data={"agent_id": blocked_id},
             ) from exc
         # Read after the archive: it removed the Agent from their delegation lists.
         roster = await chat_sessions.run_async(state.runtime.agents.list_with_order)
@@ -422,6 +429,7 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
         "archive_entry_id": outcome.entry_id,
         "session_count": outcome.session_count,
         "external_workspace": outcome.external_workspace,
+        "private_agent_ids": list(outcome.private_agent_ids),
     }
     await publish_archived_sessions(state, outcome.review_addresses)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
@@ -448,6 +456,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "tool_loading",
         "librarian_enabled",
         "permission_rules",
+        "placement",
     }
     if not for_create:
         public_fields.add("current_session_id")
@@ -497,6 +506,24 @@ def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
+    if key == "placement":
+        if isinstance(value, dict):
+            kind = value.get("kind")
+            if kind == "chat" and set(value) == {"kind"}:
+                return None
+            if kind == "helper" and set(value) == {"kind"}:
+                return AgentPlacement("helper")
+            if (
+                kind == "private"
+                and set(value) == {"kind", "owner_id"}
+                and isinstance(value["owner_id"], str)
+                and is_valid_agent_id(value["owner_id"])
+            ):
+                return AgentPlacement("private", value["owner_id"])
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.placement must be chat, helper, or private with owner_id",
+        )
     if key == "subagent_allow":
         return _validate_string_list(key, value)
     if key in ("name", "description"):

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,9 +33,9 @@ from core.sessions import (
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_ROOT,
     ARCHIVE_TREE_AGENT,
+    ARCHIVE_TREE_PRIVATE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ArchiveEntry,
-    ArchiveEntryFilter,
     ArchiveEntryRef,
     ArchiveScope,
     ArchiveTree,
@@ -74,7 +74,9 @@ def prune_empty_parents(services: ArchiveServices, path: Path) -> None:
         current = current.parent
 
 
-def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutcome:
+def archive_agent(
+    services: ArchiveServices, agent_id: str, private_ids: tuple[str, ...] = ()
+) -> AgentArchiveOutcome:
     """Move an Identity Agent and its live global Sessions into a new entry."""
     ledger = services.sessions.archive_ledger
     with services.snapshot_barrier.compound_mutation():
@@ -86,22 +88,44 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
                 ArchiveTree(
                     payload_path(entry_id, "agent"), ARCHIVE_TREE_AGENT, f"agents/{agent_id}"
                 ),
+                *(
+                    ArchiveTree(
+                        payload_path(entry_id, f"private/{member_id}"),
+                        ARCHIVE_TREE_PRIVATE_AGENT,
+                        f"agents/{member_id}",
+                    )
+                    for member_id in private_ids
+                ),
             ),
         )
         tree = services.data_dir / payload_path(ref.entry_id, "agent")
+        member_trees = [
+            services.data_dir / payload_path(ref.entry_id, f"private/{member_id}")
+            for member_id in private_ids
+        ]
         try:
-            with services.agents.archive_files(agent_id, tree) as archived:
+            with ExitStack() as stack:
+                archived = stack.enter_context(services.agents.archive_files(agent_id, tree))
+                members = [
+                    stack.enter_context(services.agents.archive_files(member_id, member_tree))
+                    for member_id, member_tree in zip(private_ids, member_trees, strict=True)
+                ]
                 external_workspace = (
                     archived.agent.workspace if archived.workspace_external else None
                 )
+                facts = _agent_facts(archived)
+                if members:
+                    facts["private_agents"] = [
+                        {**_agent_facts(member), "agent_id": member.agent.id} for member in members
+                    ]
                 session_count = ledger.commit_scope(
                     ref.entry_key,
-                    ArchiveScope(agent_id=agent_id),
-                    facts=_agent_facts(archived),
+                    ArchiveScope(agent_id=agent_id, private_agent_ids=private_ids),
+                    facts=facts,
                     cleanup_pending=True,
                 )
         except BaseException:
-            _abandon_unless_retained(services, ref, (tree,))
+            _abandon_unless_retained(services, ref, (tree, *member_trees))
             raise
     policy_agent_ids: tuple[str, ...] = ()
     try:
@@ -113,24 +137,35 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
             "Archive cleanup failed; it completes at the next start (entry=%s)", ref.entry_id
         )
     return AgentArchiveOutcome(
-        ref.entry_id, agent_id, session_count, policy_agent_ids, external_workspace
+        ref.entry_id,
+        agent_id,
+        session_count,
+        policy_agent_ids,
+        external_workspace,
+        private_agent_ids=private_ids,
     )
 
 
-def holds_agent_id_grants(services: ArchiveServices, entry: ArchiveEntry) -> bool:
+def holds_agent_id_grants(services: ArchiveServices, entry: ArchiveEntry, agent_id: str) -> bool:
     """Whether the Agent Secret grants naming the archived Agent's id are its own.
 
     Grants name only an id, and a new Agent is never created under an id they
     name; so they are the archived Agent's unless a live Agent has its id again
     or another entry archived an Agent of that id, which keep them.
     """
-    agent_id = entry.subject_id
     if services.agents.exists(agent_id):
         return False
-    others = services.sessions.archive_ledger.page(
-        ArchiveEntryFilter(kind=ARCHIVE_KIND_AGENT, agent_id=agent_id), limit=2
+    others = services.sessions.archive_ledger.agent_entry_ids(agent_id)
+    return all(other == entry.entry_id for other in others)
+
+
+def private_agent_ids(entry: ArchiveEntry) -> tuple[str, ...]:
+    """The group's private member ids, from the recorded trees."""
+    return tuple(
+        tree.source_path.removeprefix("agents/")
+        for tree in entry.trees
+        if tree.role == ARCHIVE_TREE_PRIVATE_AGENT and tree.source_path is not None
     )
-    return all(other.entry_id == entry.entry_id for other in others.entries)
 
 
 def _repair_review_currents(
@@ -143,7 +178,9 @@ def _repair_review_currents(
         if (
             address.project_id is None
             and (
-                scope is None or scope.project_id is not None or address.agent_id != scope.agent_id
+                scope is None
+                or scope.project_id is not None
+                or address.agent_id not in (scope.agent_id, *scope.private_agent_ids)
             )
             and not services.sessions.exists(address)
         ):
@@ -195,10 +232,10 @@ def cleanup_agent(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, 
     cleanup finishes without touching or recording them.
     """
     ledger = services.sessions.archive_ledger
-    _repair_review_currents(services, entry.entry_key, ArchiveScope(agent_id=entry.agent_id))
-    if services.agents.exists(entry.subject_id):
-        ledger.finish_cleanup(entry.entry_key)
-        return ()
+    members = private_agent_ids(entry)
+    _repair_review_currents(
+        services, entry.entry_key, ArchiveScope(agent_id=entry.agent_id, private_agent_ids=members)
+    )
     recorded = [grant for grant in entry.facts.get("grants") or () if isinstance(grant, Mapping)]
 
     def record(grants: Iterable[Mapping[str, Any]]) -> None:
@@ -206,7 +243,16 @@ def cleanup_agent(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, 
         merged = [*recorded, *(grant for grant in grants if grant.get("agent_id") not in known)]
         ledger.update_facts(entry.entry_key, {"grants": merged})
 
-    policy_agent_ids = services.agents.remove_delegation_grants(entry.subject_id, record)
+    policy_agent_ids = (
+        list(services.agents.remove_delegation_grants(entry.subject_id, record))
+        if not services.agents.exists(entry.subject_id)
+        else []
+    )
+    for member_id in members:
+        if not services.agents.exists(member_id):
+            policy_agent_ids.extend(
+                services.agents.remove_delegation_grants(member_id, lambda _grants: None)
+            )
     try:
         # Reading the roster drops the archived id from the stored order.
         services.agents.list_with_order()
@@ -217,7 +263,7 @@ def cleanup_agent(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, 
             error,
         )
     ledger.finish_cleanup(entry.entry_key)
-    return policy_agent_ids
+    return tuple(dict.fromkeys(policy_agent_ids))
 
 
 def archive_project(

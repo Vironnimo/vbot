@@ -72,6 +72,23 @@ class AgentNotFoundError(AgentError):
     """Raised when an agent cannot be found."""
 
 
+class AgentPlacementError(AgentError):
+    """A refused placement transition, with a stable reason for accessors."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class AgentPlacement:
+    """A hidden Identity Agent's placement and private owner incarnation proof."""
+
+    kind: Literal["helper", "private"]
+    owner_id: str | None = None
+    owner_binding: str | None = None
+
+
 class AgentReferencedError(AgentError):
     """Raised when a rename or a new Agent takes an Agent id that references still name.
 
@@ -175,6 +192,7 @@ class Agent:
     # What the Agent is for, in one short line the user writes; Sub-Agent catalogs
     # show it so other Agents pick it only for fitting work (written only when set).
     description: str = ""
+    placement: AgentPlacement | None = None
 
     @property
     def permission_ceiling(self) -> PermissionCeiling | None:

@@ -21,6 +21,7 @@ from core.archive._types import (
 )
 from core.archive.archive import ArchiveService, ArchiveServices
 from core.archive.errors import (
+    ArchiveAgentBusyError,
     ArchiveEntryBusyError,
     ArchiveEntryError,
     ArchiveEntryNotFoundError,
@@ -33,6 +34,7 @@ from core.archive.errors import (
 __all__ = [
     "RESTORE_CONFLICT_CODES",
     "AgentArchiveOutcome",
+    "ArchiveAgentBusyError",
     "ArchiveEntryBusyError",
     "ArchiveEntryDetail",
     "ArchiveEntryError",

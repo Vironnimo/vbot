@@ -1,4 +1,5 @@
 <script>
+  import { canDeleteAgent, privateAgents } from '$lib/agentPlacement.js';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
 
   import {
@@ -160,6 +161,7 @@
   let deletePermanently = $state(false);
   let deletingAgentId = $state('');
   let isCreateModalOpen = $state(false);
+  let createPlacement = $state({ kind: 'chat' });
   let isLoading = $state(false);
   let loadError = $state('');
   let availableModels = $state([]);
@@ -532,8 +534,11 @@
     notifyAgentsChanged();
   }
 
-  function openCreateModal() {
-    return autosaveContext.requestTransition(openCreateModalAfterSave);
+  function openCreateModal(placement = { kind: 'chat' }) {
+    return autosaveContext.requestTransition(() => {
+      createPlacement = placement?.kind ? placement : { kind: 'chat' };
+      return openCreateModalAfterSave();
+    });
   }
 
   async function openCreateModalAfterSave() {
@@ -564,7 +569,7 @@
 
   // Every deletion, from a list row or the editor, is confirmed first.
   function requestAgentDelete(agent) {
-    if (!agent || agents.length < 2 || deletingAgentId) return;
+    if (!canDeleteAgent(agent, agents) || deletingAgentId) return;
     deletePermanently = false;
     deleteCandidate = agent;
   }
@@ -602,8 +607,17 @@
 
   // The server's refusals name internal references; say what the user can do.
   function deleteErrorText(error) {
-    if (error?.code === 'agent_in_use') return t('agents.deleteInUse');
-    if (error?.code === 'agent_busy') return t('agents.deleteBusy');
+    const member = agents.find(
+      (agent) => agent.id === error?.details?.data?.agent_id,
+    );
+    if (error?.code === 'agent_in_use')
+      return member
+        ? t('agents.deleteInUseMember', { name: member.name || member.id })
+        : t('agents.deleteInUse');
+    if (error?.code === 'agent_busy')
+      return member
+        ? t('agents.deleteBusyMember', { name: member.name || member.id })
+        : t('agents.deleteBusy');
     if (error?.code === 'last_agent') return t('errors.minimumAgents');
     return error?.message || '';
   }
@@ -653,7 +667,8 @@
       {#key editorKey}
         <AgentEditor
           agent={selectedAgent}
-          agentsCount={agents.length}
+          {agents}
+          onPlacementChanged={() => loadAgents({ showLoading: false })}
           isDeleting={Boolean(selectedAgent) &&
             deletingAgentId === selectedAgent.id}
           {availableModels}
@@ -850,9 +865,20 @@
         : t('agents.deleteConfirmTitle', {
             name: deleteCandidate.name || deleteCandidate.id,
           })}
-      body={deletePermanently
-        ? t('agents.deletePermanentConfirm')
-        : t('agents.deleteConfirm')}
+      body={[
+        deletePermanently
+          ? t('agents.deletePermanentConfirm')
+          : t('agents.deleteConfirm'),
+        privateAgents(agents, deleteCandidate.id).length
+          ? t('agents.deleteConfirmPrivate', {
+              names: privateAgents(agents, deleteCandidate.id)
+                .map((agent) => agent.name || agent.id)
+                .join(', '),
+            })
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       confirmLabel={deletePermanently
         ? t('archive.deletePermanently')
         : t('common.delete')}
@@ -870,6 +896,8 @@
 
   {#if isCreateModalOpen}
     <AgentCreateModal
+      {agents}
+      initialPlacement={createPlacement}
       {availableModels}
       {availableConnections}
       agentDefaults={createModalAgentDefaults}

@@ -4,6 +4,8 @@ Read when changing how `AgentStore` renames, archives or restores an Identity Ag
 
 ## Store operations
 
+- `rename`, `revert_rename`, `recover_rename`, `archive_files` and `restore_files` change `sessions.db` and the Agent tree as one unit (the archive service commits the Sessions inside the last two), and `create` writes the Agent tree with its `agent.json` (no Session), so each enters the injected snapshot barrier before its document change and the store lock (`database.md` -> Snapshot consistency).
+
 `AgentStore` composes `_mutations.py` (validated creation/configuration changes and Workspace compensation), `_rename.py` (durable rename record and recovery), `_roster.py` (enumeration and order revisions), `_builtins.py` (availability and seeding), and `_archive.py` (archive/restore file moves plus cross-Agent grants/roster steps). `_types.py` holds records, errors and built-in constants. The public store retains the shared locks, persistence and Session coordination.
 
 - `ensure_bootstrap()` creates a bootstrap Agent only when zero valid Agents exist; invalid directories stay for diagnosis and an occupied `main`, or one that `id_references` names, shifts to the first free `main-N`.
@@ -17,6 +19,8 @@ Read when changing how `AgentStore` renames, archives or restores an Identity Ag
 `read_soul`/`write_soul` (`_soul.py`) serve the user's SOUL.md editor. The Agent may rewrite its SOUL.md at any time, so a read returns a `revision` (SHA-256 of the bytes, empty for a missing file) and a write names the revision it replaces: a changed file raises `SoulConflictError` carrying the current file and stays untouched. The write holds the store lock across the Workspace lookup and the atomic replace, so a rename or archive cannot move the Workspace away during it; a built-in Agent's SOUL.md is refused (`BuiltinAgentError`). Coverage: `tests/server/rpc/test_agent_methods.py` (`test_soul_writes_name_the_revision_they_replace`).
 
 ## Tree moves
+
+An owner and its verified Private Agents archive as one group; the archive service keeps every file context open through the Session commit (`archive/operations.md`). `restore_files` and `complete_restore_files` accept `owner_id` to retarget a member's placement during group restore-as without changing its binding. A Private Agent restored alone reconnects to a uniquely proven renamed Chat owner, otherwise keeps its orphaned placement.
 
 A custom Workspace outside the Agent's directory stays where it is: the entry records it, a restore re-attaches it, and nothing deletes it. A rename between volumes copies first (a link inside the tree, Windows junctions included, is recreated as a link to the same target, as a rename would keep it), sets the original aside by renaming it and only then deletes it; a failed deletion leaves a hidden `.<name>.moved-*` leftover next to the source and a log warning, not a failed move. Every archive gets its own payload; none replaces another. A failed archival or restore reaches the caller as `AgentError`; if compensation also fails, the message names where the Agent's files remain. Seeding never overwrites existing workspace files (`test_agents_archive.py`, `test_tree_move.py`).
 

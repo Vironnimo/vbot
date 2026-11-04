@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +36,13 @@ def _runtime(
 ) -> SimpleNamespace:
     active_teams = teams or {}
     return SimpleNamespace(
-        agents=SimpleNamespace(list=lambda: list(identities or [])),
+        agents=SimpleNamespace(
+            list=lambda: list(identities or []),
+            automatic_targets=lambda caller, roster=None: [],
+            placement_target_allowed=lambda caller, target, *, listed, wildcard, roster=None: (
+                listed or wildcard
+            ),
+        ),
         projects=SimpleNamespace(
             list=lambda: [SimpleNamespace(project_id=project_id) for project_id in active_teams]
         ),
@@ -113,3 +120,32 @@ def test_identity_explicit_catalog_omits_unknown_and_calling_agent_entries(
     if bound_identity != "replacement":
         expected.append("researcher")
     assert [target.agent_id for target in targets] == expected
+
+
+def test_placement_filters_catalog_and_adds_private_targets(tmp_path):
+    from core.agents import AgentPlacement, AgentStore
+    from core.database import write_bootstrap_marker
+
+    write_bootstrap_marker(tmp_path)
+    with closing(AgentStore(tmp_path)) as agents:
+        agents.create("owner", tools={"subagent": {"allowed_agents": []}})
+        agents.create("outsider")
+        agents.create("helper", placement=AgentPlacement("helper"))
+        agents.create("private", placement=AgentPlacement("private", "owner"))
+        agents.create("sibling", placement=AgentPlacement("private", "owner"))
+        runtime = _runtime()
+        runtime.agents = agents
+
+        def targets(name):
+            return [
+                target.agent_id
+                for target in build_subagent_prompt_targets(runtime, agents.get(name), None)
+            ]
+
+        assert targets("outsider") == ["owner"]
+        assert targets("owner") == ["private", "sibling"]
+        assert targets("private") == ["sibling"]
+        agents.update("outsider", subagent_allow=["*", "helper"])
+        assert targets("outsider") == ["helper", "owner"]
+        agents.update("private", subagent_allow=["*", "owner"])
+        assert targets("private") == ["outsider", "sibling"]

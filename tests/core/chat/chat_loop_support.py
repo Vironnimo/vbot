@@ -192,6 +192,9 @@ class StubAgent:
 
 
 class StubAgents:
+    def placement_requires_guard(self, caller_id: str, target_id: str) -> bool:
+        return False
+
     def __init__(self, agent: StubAgent) -> None:
         self._agent = agent
 

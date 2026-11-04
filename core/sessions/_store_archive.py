@@ -18,6 +18,7 @@ from typing import Any, cast
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_mutations, _store_values
 from core.sessions._archive_types import (
+    ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_OWNER_GROUP,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_KIND_SESSION,
@@ -269,7 +270,9 @@ def begin(
 
 def _scope_predicate(scope: ArchiveScope) -> tuple[str, tuple[Any, ...]]:
     if scope.project_id is None and scope.agent_id:
-        return "s.project_id = '' AND s.agent_id = ? AND s.state = 'live'", (scope.agent_id,)
+        ids = (scope.agent_id, *scope.private_agent_ids)
+        placeholders = ", ".join("?" for _ in ids)
+        return f"s.project_id = '' AND s.agent_id IN ({placeholders}) AND s.state = 'live'", ids
     if scope.project_id and scope.agent_id is None:
         return "s.project_id = ? AND s.state = 'live'", (scope.project_id,)
     raise ValueError("an archive scope names an Identity Agent or a Project")
@@ -584,6 +587,10 @@ def _restore_targets(
             str(member["project_id"]) == (entry.project_id or "")
             and (entry.kind == ARCHIVE_KIND_PROJECT or str(member["agent_id"]) == entry.agent_id)
         )
+        if entry.kind == ARCHIVE_KIND_AGENT:
+            original_owner = (
+                str(member["project_id"]) == "" and str(member["agent_id"]) == entry.agent_id
+            )
         target = SessionAddress(
             project_id=(str(member["project_id"]) or None)
             if project_id is None or not original_owner
@@ -690,7 +697,7 @@ def commit_restore(
             "session_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
             (*_store_values._scope(target), session_key),
         )
-        if strip_channel_keys:
+        if strip_channel_keys and _store_values._address(original) != target:
             _strip_channel_routing(connection, session_key)
     if row["kind"] == ARCHIVE_KIND_PROJECT:
         if project_id is not None:
@@ -967,3 +974,15 @@ def newest_entry_id(connection: sqlite3.Connection, kind: str, subject_id: str) 
         (kind, subject_id),
     ).fetchone()
     return None if row is None else str(row[0])
+
+
+def agent_entry_ids(connection: sqlite3.Connection, agent_id: str) -> tuple[str, ...]:
+    """Entries holding an Agent's tree, including private members, newest first."""
+    rows = connection.execute(
+        "SELECT e.entry_id FROM archive_entries AS e WHERE e.kind = ? AND "
+        "(e.subject_id = ? OR EXISTS (SELECT 1 FROM archive_entry_trees AS t "
+        "WHERE t.entry_key = e.entry_key AND t.role = 'private_agent' AND t.source_path = ?)) "
+        "ORDER BY e.archived_at DESC, e.entry_id DESC",
+        (ARCHIVE_KIND_AGENT, agent_id, f"agents/{agent_id}"),
+    ).fetchall()
+    return tuple(str(row[0]) for row in rows)

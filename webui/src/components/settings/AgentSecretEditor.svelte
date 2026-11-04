@@ -1,4 +1,5 @@
 <script>
+  import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
   // The add, edit and bind dialog of Settings -> Secrets. Adding stores the
   // typed values (`agent_secrets.create`); binding creates a Secret whose
   // values stay in a password manager (`source`, `source_reference`,
@@ -142,9 +143,9 @@
     ),
   );
   const agentOptions = $derived([
-    ...agents.map((agent) => ({
+    ...agentDisplayOrder(agents).map((agent) => ({
       id: agent.id,
-      label: agent.name || agent.id,
+      label: agentDisplayName(agent, agents),
     })),
     ...grants
       .filter((id) => !agents.some((agent) => agent.id === id))

@@ -49,6 +49,7 @@ ARCHIVE_ORIGIN_RECOVERED = "recovered"
 
 # Tree roles: an Agent tree, a moved Workspace, a Project anchor, other files.
 ARCHIVE_TREE_AGENT = "agent"
+ARCHIVE_TREE_PRIVATE_AGENT = "private_agent"
 ARCHIVE_TREE_WORKSPACE = "workspace"
 ARCHIVE_TREE_PROJECT = "project"
 ARCHIVE_TREE_FILES = "files"
@@ -162,6 +163,7 @@ class ArchiveScope:
 
     project_id: str | None = None
     agent_id: str | None = None
+    private_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,7 @@ __all__ = [
     "ARCHIVE_STATE_RESTORED",
     "ARCHIVE_STATE_RESTORING",
     "ARCHIVE_TREE_AGENT",
+    "ARCHIVE_TREE_PRIVATE_AGENT",
     "ARCHIVE_TREE_FILES",
     "ARCHIVE_TREE_PROJECT",
     "ARCHIVE_TREE_WORKSPACE",

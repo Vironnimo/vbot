@@ -1,10 +1,17 @@
+import {
+  agentDisplayOrder,
+  agentDisplayName as placementDisplayName,
+} from '$lib/agentPlacement.js';
 import { t } from '$lib/i18n.js';
 
 // Presentation only: the server owns availability, identity, and write scopes.
 export const SKILL_PAGE_SIZE = 50;
 
 export function agentDisplayName(agentId, agents) {
-  return agents.find((agent) => agent.id === agentId)?.name || agentId;
+  return placementDisplayName(
+    agents.find((agent) => agent.id === agentId) ?? { id: agentId },
+    agents,
+  );
 }
 
 function projectDisplayName(entry, projects) {
@@ -127,10 +134,10 @@ export function skillCollections(
       section: 'library',
       count: archived.length,
     },
-    ...agents.map((agent) => ({
+    ...agentDisplayOrder(agents).map((agent) => ({
       key: `agent:${agent.id}`,
       id: agent.id,
-      label: agent.name || agent.id,
+      label: placementDisplayName(agent, agents),
       section: 'agents',
       count: activeSkillCount(agent),
     })),

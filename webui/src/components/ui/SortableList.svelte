@@ -88,6 +88,12 @@
   }
 
   async function handleKeydown(index, event) {
+    // Nested lists own their rows; a child's move never moves its owner too.
+    if (
+      event.target instanceof Element &&
+      event.target.closest('[data-sortable-key]') !== event.currentTarget
+    )
+      return;
     const to = keyboardMoveTarget(event, index);
     if (to === null) {
       return;

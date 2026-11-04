@@ -24,6 +24,8 @@ Orphan payload classification never follows a symbolic link or Windows junction 
 
 ## Interrupted restores
 
+An Agent group's restore plan records every private member's id, creation timestamp, Workspace and default Project. With no tree live, recovery rolls back as before. Once any owner or member tree is live, each tree must exist in exactly one of its payload or live locations: recovery moves remaining payloads forward, verifies and rewrites every configuration, then commits all Sessions together. Missing, duplicate, unavailable or unproven trees leave the entry pending and name the affected member; live files never move back. Orphan payload adoption records each real directory under `private/` as a `private_agent` tree, including its payload facts, without following links.
+
 Agent and Project restore plans persist `source_created_at` before any file move. Recovery requires a valid timestamp matching the destination's raw persisted `created_at` under the owning store's lock; a reused id cannot attach archived Sessions to a replacement or overwrite its configuration. A plan without that proof, or a document with no persisted timestamp, stays `restoring` for inspection rather than treating synthesized defaults as identity. Ordinary restores remain available for unstamped payloads.
 
 Agent restore plans also persist the selected `workspace` and `root_project_id`. If the tree is already live, recovery replays that configuration through `AgentStore.complete_restore_files` before the Session commit, using the normal restore rewrite without repairing an archived current-Session pointer. This includes the default Workspace chosen when a moved legacy Workspace's original folder is occupied (`test_archive_recovery.py`).

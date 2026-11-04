@@ -146,6 +146,140 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
+  it('shows the placement tree, reorders private siblings only, and names them before deleting the owner', async () => {
+    localStorage.clear();
+    const agents = [
+      baseAgent(),
+      {
+        ...baseAgent(),
+        id: 'child',
+        name: 'Child',
+        placement: { kind: 'private', owner_id: 'alpha', orphaned: false },
+      },
+      { ...baseAgent(), id: 'bravo', name: 'Bravo' },
+      {
+        ...baseAgent(),
+        id: 'sibling',
+        name: 'Sibling',
+        placement: { kind: 'private', owner_id: 'alpha', orphaned: false },
+      },
+      {
+        ...baseAgent(),
+        id: 'helper',
+        name: 'Helper',
+        placement: { kind: 'helper' },
+      },
+    ];
+    rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { sharedSelectedAgentId: 'child' },
+    });
+    await waitForCondition(() => agentButton('sibling'));
+    expect(listedAgentIds()).toEqual(['alpha', 'child', 'sibling', 'bravo']);
+    expect(agentButton('helper')).toBeNull();
+    pressMoveUp(agentButton('sibling'));
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'agent.reorder'),
+    );
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.reorder'),
+    ).toHaveLength(1);
+    expect(
+      rpcMock.mock.calls.find(([method]) => method === 'agent.reorder')[1]
+        .agent_ids,
+    ).toEqual(['alpha', 'sibling', 'bravo', 'child', 'helper']);
+    const menu = openRowMenu(agentButton('alpha'));
+    menu
+      .find((item) => item.textContent.includes(t('agents.menu.delete')))
+      .click();
+    flushSync();
+    const dialog = getDialog(t('agents.deleteConfirmTitle', { name: 'Alpha' }));
+    expect(dialog.textContent).toContain('Child');
+    expect(dialog.textContent).toContain('Sibling');
+  });
+
+  it('writes a Helper grant from Used by without replacing the caller wildcard', async () => {
+    const agents = [
+      baseAgent(),
+      {
+        ...baseAgent(),
+        id: 'helper',
+        name: 'Helper',
+        placement: { kind: 'helper' },
+      },
+    ];
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents,
+        agentUpdate: (params) => {
+          const index = agents.findIndex((agent) => agent.id === params.id);
+          agents[index] = {
+            ...agents[index],
+            tools: { subagent: { allowed_agents: params.subagent_allow } },
+          };
+          return agents[index];
+        },
+      }),
+    );
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { sharedSelectedAgentId: 'helper' },
+    });
+    await waitForCondition(() =>
+      document.querySelector('[aria-labelledby="agent-used-by-group"]'),
+    );
+    const group = document.querySelector(
+      '[aria-labelledby="agent-used-by-group"]',
+    );
+    group.querySelector('[role="checkbox"]').click();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      subagent_allow: ['*', 'helper'],
+    });
+    expect(
+      group.querySelector('[role="checkbox"]').getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('confirms lost literal grants before moving an Agent to Private', async () => {
+    const agents = [
+      baseAgent(),
+      { ...baseAgent(), id: 'bravo', name: 'Bravo' },
+      {
+        ...baseAgent(),
+        id: 'charlie',
+        name: 'Charlie',
+        tools: { subagent: { allowed_agents: ['alpha'] } },
+      },
+    ];
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents,
+        agentUpdate: (params) => {
+          const index = agents.findIndex((agent) => agent.id === params.id);
+          agents[index] = { ...agents[index], ...params };
+          return agents[index];
+        },
+      }),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForCondition(() => document.getElementById('agent-placement'));
+    openSimpleDropdown('agent-placement');
+    selectSimpleOption('agent-placement', t('agents.placement.private'));
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain('Charlie');
+    getButton(t('common.confirm')).click();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      placement: { kind: 'private', owner_id: 'bravo' },
+    });
+  });
+
   it('places shared defaults before the roster and returns from them to the same mounted Agent editor', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -429,9 +563,9 @@ describe('AgentsView', () => {
     expect(agentItem.querySelector('.agent-item-sub').textContent.trim()).toBe(
       'gpt-5.2',
     );
-    expect(agentItem.closest('.agent-list-row').firstElementChild).toBe(
-      agentItem,
-    );
+    expect(
+      agentItem.closest('.agent-list-row').querySelector('.agent-item'),
+    ).toBe(agentItem);
 
     // The row's details card gives the complete Model and the id.
     document.body.dispatchEvent(
@@ -556,6 +690,27 @@ describe('AgentsView', () => {
     expect(modal.querySelector('#agent-create-name')).toBeTruthy();
     expect(modal.querySelector('#agent-create-model')).toBeTruthy();
     expect(modal.querySelector('#agent-create-thinking-effort')).toBeTruthy();
+    const placementTrigger = modal.querySelector('#agent-create-placement');
+    expect(
+      document
+        .getElementById('agent-create-placement-label')
+        .textContent.trim(),
+    ).toBe(t('agents.placement.title'));
+    expect(placementTrigger.getAttribute('aria-labelledby')).toContain(
+      'agent-create-placement-label',
+    );
+    openSimpleDropdown('agent-create-placement');
+    selectSimpleOption('agent-create-placement', t('agents.placement.private'));
+    const ownerTrigger = modal.querySelector('#agent-create-owner');
+    expect(
+      document.getElementById('agent-create-owner-label').textContent.trim(),
+    ).toBe(t('agents.placement.owner'));
+    expect(ownerTrigger.getAttribute('aria-labelledby')).toContain(
+      'agent-create-owner-label',
+    );
+    openSimpleDropdown('agent-create-placement');
+    selectSimpleOption('agent-create-placement', t('agents.placement.chat'));
+
     // Sampling stays with the inherited values; it is set in the editor.
     expect(modal.querySelector('input[inputmode="decimal"]')).toBeNull();
     expect(modal.querySelector('#agent-fallback-model')).toBeNull();
@@ -870,6 +1025,7 @@ describe('AgentsView', () => {
       'Open chat',
       'Open in split view',
       'Copy ID',
+      'New private Agent',
       'Delete…',
     ]);
     items[0].click();
@@ -885,13 +1041,17 @@ describe('AgentsView', () => {
     );
 
     // Cancelling the confirmation deletes nothing.
-    openRowMenu(agentButton('bravo'))[3].click();
+    openRowMenu(agentButton('bravo'))
+      .find((item) => item.textContent.includes(t('agents.menu.delete')))
+      .click();
     flushSync();
     getButton(t('common.cancel')).click();
     flushSync();
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
 
-    openRowMenu(agentButton('bravo'))[3].click();
+    openRowMenu(agentButton('bravo'))
+      .find((item) => item.textContent.includes(t('agents.menu.delete')))
+      .click();
     flushSync();
     getDialog(t('agents.deleteConfirmTitle', { name: 'Bravo' }));
     getButton(t('common.delete')).click();
@@ -904,8 +1064,11 @@ describe('AgentsView', () => {
     expect(textInputValue('agent-name')).toBe('Alpha');
 
     items = openRowMenu(agentButton('alpha'));
-    expect(items[3].disabled).toBe(true);
-    expect(items[3].textContent).toContain(t('agents.menu.lastAgent'));
+    const lastDelete = items.find((item) =>
+      item.textContent.includes(t('agents.menu.delete')),
+    );
+    expect(lastDelete.disabled).toBe(true);
+    expect(lastDelete.textContent).toContain(t('agents.menu.lastAgent'));
   });
 
   it('confirms deleting the shown Agent from its editor, reports a refusal and then shows another Agent', async () => {

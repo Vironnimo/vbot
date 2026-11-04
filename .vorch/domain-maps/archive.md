@@ -40,6 +40,7 @@ How long an archived entry rests before the retention sweep purges it, counted f
 
 ## Payload layout and data snapshots
 
+- An owner's verified Private Agents share its entry, guards and restore. Members keep their Session addresses on restore-as; their trees use `private_agent` at `private/<id>` (`archive/operations.md`).
 - A new entry's payload is `archive/entries/<entry_id>/agent` or `.../project`. Legacy payloads keep their legacy paths; their trees are recorded, so no code branches on the layout. Archiving the same id again creates another entry with its own payload; no code path replaces or deletes another entry's payload.
 - An Identity Agent's Workspace outside its own directory stays where it is, is re-attached on restore and is never deleted (`archive/operations.md` -> Workspace handling).
 - A purge deletes exactly the recorded trees with `remove_tree(path, within=archive/)` (`core/utils/tree_move.py`: never follows links, refuses anything outside `archive/`). Nothing else under `archive/` is ever claimed or deleted.
@@ -72,11 +73,9 @@ Entries `archived` longer than the retention period (`archive.retention_days`: 1
 
 ## Recovery
 
-`recover()` runs in bootstrap after a pending Agent rename settled and before Channels, Cron and Runs start, in safe startup modes too (`_recovery.py`, `runtime.md`). Every step is idempotent; a step or an entry whose recovery fails is logged and retried at the next start: neither startup nor safe mode fails because of the archive folder. States, actions and provenance limits: `archive/recovery.md`.
+`recover()` runs after pending Agent renames and before Channels, Cron and Runs, including safe startup (`_recovery.py`, `runtime.md`). Failures are logged and retried next start without blocking startup; steps are idempotent. States and provenance: `archive/recovery.md`.
 
-## Migration of earlier archives
-
-The Session database migration `sessions.0001_archive_entries` turned archives written before entries existed into `backfill` entries (`archive/legacy-adoption.md`).
+A partly live Agent group finishes forward or stays pending; live files never move back (`archive/recovery.md` -> Interrupted restores).
 
 ## Constraints & Gotchas
 
@@ -95,5 +94,5 @@ Read these only when your task matches - not by default.
 - Changing an archive or restore operation: its order, outcomes, entry facts, restore blockers or warnings, Workspace handling, review members or the list/show reads -> `archive/operations.md`
 - Changing purge, permanent delete, the retention setting, due computation or the retention sweep -> `archive/purge-and-retention.md`
 - Changing startup recovery, interrupted archive or restore states, or restore provenance warnings -> `archive/recovery.md`
-- Changing the archive migration or the startup adoption of archived Sessions without an entry, or reasoning about `backfill` entries and legacy archive layouts -> `archive/legacy-adoption.md`
+- Changing the archive migration (`sessions.0001_archive_entries`), startup adoption, `backfill` entries or legacy layouts -> `archive/legacy-adoption.md`
 - Changing the archive RPCs (`archive.list`, `archive.show`, `archive.restore`, `archive.purge`), their error codes and `data`, or the archive fields of the `agent.delete`, `project.rm` and `session.delete` results -> `archive/rpcs.md`

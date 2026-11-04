@@ -203,6 +203,7 @@ def restore_files(
     *,
     workspace: str | None,
     root_project_id: str | None,
+    owner_id: str | None = None,
 ) -> Iterator[Agent]:
     """Move an archived Agent payload to ``agents/<target_id>`` for the caller's commit.
 
@@ -226,7 +227,12 @@ def restore_files(
         agents_dir = store.data_dir / "agents"
         home = store._agent_dir(target_id)
         restored = _restored_agent(
-            store, data, target_id, workspace=workspace, root_project_id=root_project_id
+            store,
+            data,
+            target_id,
+            workspace=workspace,
+            root_project_id=root_project_id,
+            owner_id=owner_id,
         )
         try:
             archived_document = (source / "agent.json").read_bytes()
@@ -250,10 +256,23 @@ def _restored_agent(
     *,
     workspace: str | None,
     root_project_id: str | None,
+    owner_id: str | None = None,
 ) -> Agent:
     agent = _agent_from_dict(
         data, data_dir=store.data_dir, default_workspace=store._default_workspace(data["id"])
     )
+    placement = agent.placement
+    if placement is not None and placement.kind == "private":
+        if owner_id is not None:
+            placement = replace(placement, owner_id=owner_id)
+        elif store.resolved_placement(agent)["orphaned"]:
+            owners = [
+                candidate
+                for candidate in store.list()
+                if candidate.placement is None and candidate.created_at == placement.owner_binding
+            ]
+            if len(owners) == 1:
+                placement = replace(placement, owner_id=owners[0].id)
     restored_workspace = (
         _rebase_path_with_tree(
             agent.workspace, store._agent_dir(agent.id), store._agent_dir(target_id)
@@ -264,6 +283,7 @@ def _restored_agent(
     return _delegation.without_unbound_grants(
         replace(
             agent,
+            placement=placement,
             id=target_id,
             workspace=str(restored_workspace),
             root_project_id=root_project_id,
@@ -295,6 +315,7 @@ def complete_restore_files(
     expected_created_at: str | None,
     workspace: str | None,
     root_project_id: str | None,
+    owner_id: str | None = None,
 ) -> None:
     """Replay the config rewrite after an interrupted move, without repairing Session pointers."""
     with store._snapshot_barrier.compound_mutation(), store._change():
@@ -313,7 +334,12 @@ def complete_restore_files(
                 f"The restore target cannot be verified as the archived Agent: {target_id}"
             ) from error
         restored = _restored_agent(
-            store, data, target_id, workspace=workspace, root_project_id=root_project_id
+            store,
+            data,
+            target_id,
+            workspace=workspace,
+            root_project_id=root_project_id,
+            owner_id=owner_id,
         )
         _write_restored_agent(store, restored)
 

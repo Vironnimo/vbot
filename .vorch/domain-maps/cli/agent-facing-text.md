@@ -1,5 +1,28 @@
 # CLI Agent-facing text
 
+Placement additions in `references/agents.md` and CLI help:
+
+| Text | Reason |
+|---|---|
+| `agent create\|update --placement chat\|helper\|private chooses where an Identity Agent appears.` | Exposes the same placement mutation as the Agents editor. |
+| `Omit it to create a Chat Agent or keep an existing Agent's placement.` | Distinguishes create's default from update's sparse semantics. |
+| `With private, pass --owner <agent-id> naming a Chat Agent; omit --owner for the other placements.` | Prevents incomplete or contradictory calls. |
+| `agent list and agent show report Helper and Private placement, including a missing owner.` | Gives the read path for the resulting placement and orphan state. |
+| `Helpers and Private Agents stay out of conversation selection; Open chat in the Agents tab and an explicit chat target still reach them.` | Avoids treating a hidden identity as inaccessible to the user. |
+| `An owner automatically reaches its Private Agents, and they reach their siblings, even with an empty delegation list; they cannot target their owner.` | Prevents redundant grants and cyclic owner targeting. |
+| `Other Agents cannot target them.` | Makes the Private boundary explicit. |
+| `Helpers need a literal entry in the caller's --subagent-allow list: '*' covers Chat Agents and Project Teams, so keep it alongside a Helper id when both are wanted.` | Prevents granting a Helper through wildcard or dropping existing wildcard access. |
+| `Creating a Helper or Private Agent without --subagent-allow starts with no additional targets.` | Names the narrower creation default. |
+| `Making an Agent Private removes its entries from other Agents' delegation lists.` | Makes loss of existing grants visible before the change. |
+| `Deleting an owner archives its Private Agents together; a restore brings the whole group back.` | Names the group lifecycle effect. |
+| `To keep a member separately, change its placement first.` | Gives the supported way to retain an individual member. |
+| `At least one Agent stays in chat, and an owner with Private Agents cannot become Helper or Private until its members move elsewhere.` | Explains transition refusals and the recovery route. |
+| `--subagent-allow replaces additional delegation targets ... keeps self-delegation and automatic Private targets.` | Corrects the former self-only promise for empty lists. |
+| `--owner is required exactly with --placement private.` | Refuses malformed placement before RPC with a usable correction. |
+| `Nothing was changed.` | Reports that the local placement validation has no side effects. |
+| `The last Chat Agent cannot be removed.` | Matches the placement-aware delete guard even when Helpers remain. |
+| `Inspect the Agent list and keep at least one in chat.` | Names the actual recovery condition instead of counting every Identity Agent. |
+
 Why each sentence of the Agent-facing text the CLI domain owns exists: the bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`) and the CLI refusals and recovery texts Agents read, such as `agent_busy` in `cli/_recovery.py`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to configuring and inspecting vBot. Its name says it documents vBot, not only the CLI; the earlier name `vbot-cli` read as a command reference. It also owns writing an Agent's SOUL.md (`references/soul.md`), creating an Agent for a purpose and Agent names (`references/agents.md`), because these go through `vbot agent` and the Agent's Workspace (user decision 2026-10-07).

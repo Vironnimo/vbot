@@ -150,6 +150,12 @@ describe('archive view rules', () => {
       true,
     ],
     [
+      'an owner whose Private Agent id is taken',
+      { kind: 'agent' },
+      { blockers: [{ code: 'private_agent_id_taken', agent_id: 'child' }] },
+      false,
+    ],
+    [
       'an Agent missing its files',
       { kind: 'agent' },
       { blockers: [{ code: 'payload_missing' }] },

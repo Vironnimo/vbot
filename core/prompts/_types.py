@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +214,16 @@ class PromptAgentStore(Protocol):
 
     def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
         """Whether an explicit grant still addresses the current Identity Agent."""
+        ...
+
+    def placement_target_allowed(
+        self, caller_id: str, target_id: str, *, listed: bool, wildcard: bool
+    ) -> bool:
+        """Whether placement permits this Identity target."""
+        ...
+
+    def automatic_targets(self, caller_id: str) -> builtins.list[str]:
+        """Private targets available without an allow-list grant."""
         ...
 
 

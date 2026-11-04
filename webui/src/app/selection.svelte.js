@@ -1,3 +1,4 @@
+import { firstChatAgent } from '$lib/agentPlacement.js';
 import { listProjects, listAgents, reorderProjects } from '$lib/api.js';
 
 export function createAppSelection() {
@@ -256,11 +257,11 @@ export function createAppSelection() {
       selectedAgentId &&
       !agents.some((agent) => agent.id === selectedAgentId)
     ) {
-      selectedAgentId = agents[0]?.id ?? '';
+      selectedAgentId = (firstChatAgent(agents) ?? agents[0])?.id ?? '';
       return;
     }
     if (!selectedAgentId && agents.length > 0) {
-      selectedAgentId = agents[0].id;
+      selectedAgentId = (firstChatAgent(agents) ?? agents[0]).id;
     }
   };
 

@@ -802,7 +802,7 @@ CREATE INDEX archive_entry_sessions_by_entry
   ON archive_entry_sessions (entry_key, session_key);
 
 -- Payload trees of an entry: data-dir relative POSIX paths under archive/.
--- role is agent, workspace, project or files; source_path is where the tree
+-- role is agent, private_agent, workspace, project or files; source_path is where the tree
 -- came from (absolute or data-dir relative), for restore, recovery and display.
 CREATE TABLE archive_entry_trees (
   path TEXT PRIMARY KEY,

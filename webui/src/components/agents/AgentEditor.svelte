@@ -1,4 +1,5 @@
 <script>
+  import { canDeleteAgent } from '$lib/agentPlacement.js';
   import {
     AGENT_DESCRIPTION_MAX_LENGTH,
     AGENT_FORM_MODE_CREATE,
@@ -34,7 +35,8 @@
 
   let {
     agent = null,
-    agentsCount = 0,
+    agents = [],
+    onPlacementChanged = async () => {},
     // The view deletes this Agent after its confirmation.
     isDeleting = false,
     availableModels = [],
@@ -99,7 +101,7 @@
     }).errors;
   });
 
-  let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
+  let canDeleteSelectedAgent = $derived(canDeleteAgent(agent, agents));
   // The agent points at a custom identity/Memory home rather than its
   // default home under the agent folder — gates the "set to default" action.
   let workspaceIsCustom = $derived(
@@ -631,6 +633,8 @@
 
     <AgentOverviewPanel
       {agent}
+      {agents}
+      {onPlacementChanged}
       {availableModels}
       {availableConnections}
       {projectOptions}
@@ -656,6 +660,7 @@
       {viewErrorMessage}
     />
     <AgentAccessPanel
+      {agents}
       {availableTools}
       {skillCatalog}
       {availableAgentTargets}

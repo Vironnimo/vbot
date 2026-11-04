@@ -1,4 +1,37 @@
 export default Object.freeze({
+  'agents.placement.title': 'Placement',
+  'agents.placement.chat': 'In chat',
+  'agents.placement.helper': 'Helper',
+  'agents.placement.private': 'Private to…',
+  'agents.placement.privateTo': 'Private to {owner}',
+  'agents.placement.owner': 'Owner',
+  'agents.placement.chatHelp': 'Shown on the Agent bar.',
+  'agents.placement.helperHelp':
+    'Not on the Agent bar. Agents you allow can use it as a Sub-Agent.',
+  'agents.placement.privateHelp':
+    "Not on the Agent bar. Only its owner and the owner's other private Agents can use it.",
+  'agents.placement.hasPrivateAgents': 'Move its private Agents first.',
+  'agents.placement.lastChatAgent': 'At least one Agent stays in chat.',
+  'agents.placement.ownerInvalid': 'This Agent cannot be an owner.',
+  'agents.placement.orphaned': 'Owner missing',
+  'agents.placement.orphanedHelp':
+    'No Agent can use it until you give it a place.',
+  'agents.placement.privateConfirmTitle': 'Make “{name}” private to {owner}?',
+  'agents.placement.privateConfirm': '{holders} will lose access to it.',
+  'agents.list.helperAgents': 'Helper Agents',
+  'agents.list.newPrivateAgent': 'New private Agent',
+  'agents.list.privateCount': '{count} private Agents',
+  'agents.usedBy.title': 'Used by',
+  'agents.usedBy.help': 'Agents that may start this Helper as a Sub-Agent.',
+  'agents.access.alwaysAvailable': 'Always available',
+  'agents.access.helperAgents': 'Helper Agents',
+  'agents.deleteConfirmPrivate':
+    'Its private Agents are deleted with it: {names}.',
+  'agents.deleteInUseMember':
+    '{name} is still used by a Cron job or Channel, so nothing was deleted.',
+  'agents.deleteBusyMember': '{name} is still working, so nothing was deleted.',
+  'archive.privateAgentsCount': '+{count} private Agents',
+  'archive.privateAgents': 'Private Agents',
   'agents.contextMemory': 'Context & Memory',
   'agents.customCompactionHelp':
     'Turn on to customize how this Agent condenses long conversations.',
@@ -577,7 +610,7 @@ export default Object.freeze({
   'agents.menu.idCopied': 'Copied {id}',
   'agents.menu.copyFailed': 'The ID could not be copied.',
   'agents.menu.delete': 'Delete…',
-  'agents.menu.lastAgent': 'Last agent',
+  'agents.menu.lastAgent': 'Last Agent in chat',
   'toolAccess.searchLabel': 'Filter Tools',
   'toolAccess.searchPlaceholder': 'Filter Tools…',
   'toolAccess.resetOverride': 'Reset to repository policy',
@@ -678,7 +711,7 @@ export default Object.freeze({
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
   'agents.form.agentWildcardNote':
-    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. A default project does not narrow this.',
+    'All eligible Chat Agents and all Agents on every registered Project, including ones added later. Helpers need an individual grant. Your own Agent and the Private Agents listed as always available need no grant. A default project does not narrow this.',
   'agents.form.agentAddressNote':
     'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. A default project does not change this list.',
   'agents.form.modelSearchPlaceholder': 'Filter models…',

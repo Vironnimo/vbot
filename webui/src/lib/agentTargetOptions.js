@@ -15,6 +15,7 @@
 
 import { formatAgentAddress } from './agentAddress.js';
 import { asText } from './values.js';
+import { agentDisplayOrder, agentDisplayName } from './agentPlacement.js';
 
 const AGENT_TARGET_GROUP_IDENTITY = 'identity';
 export const AGENT_TARGET_GROUP_PROJECT = 'project';
@@ -28,14 +29,14 @@ export function buildAgentTargetOptions(identityAgents, projectTeams) {
   const options = [];
 
   const identities = Array.isArray(identityAgents) ? identityAgents : [];
-  for (const agent of identities) {
+  for (const agent of agentDisplayOrder(identities)) {
     const id = asText(agent?.id);
     if (!id) {
       continue;
     }
     options.push({
       value: id,
-      label: asText(agent?.name) || id,
+      label: agentDisplayName(agent, identities),
       secondaryLabel: id,
       group: AGENT_TARGET_GROUP_IDENTITY,
       projectId: null,

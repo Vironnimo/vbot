@@ -671,7 +671,9 @@ def _build_agent_directory(
     """
     lines = ["Move this session to another agent with /agent <id> [task].", ""]
 
-    personal = sorted(agent.id for agent in agents.list()) if agents else []
+    personal = (
+        sorted(agent.id for agent in agents.list() if agent.placement is None) if agents else []
+    )
     lines.append("Personal agents:")
     if personal:
         lines.extend(f"  {format_agent_address(agent_id, None)}" for agent_id in personal)

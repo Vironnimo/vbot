@@ -1015,6 +1015,8 @@ def _write_skill_requiring(root: Path, name: str, dependency: str) -> None:
 def test_manager_projects_each_agents_effective_skill_access(
     runtime: Runtime, tmp_path: Path, metadata_reads: Counter[Path]
 ) -> None:
+    from core.agents import AgentPlacement
+
     for name in ("alpha", "beta", "zeta"):
         write_skill(runtime.global_skills_dir, name, f"{name} playbook.")
     _write_skill_requiring(runtime.global_skills_dir, "needs-alpha", "alpha")
@@ -1029,7 +1031,9 @@ def test_manager_projects_each_agents_effective_skill_access(
         "main", root_project_id="p", excluded_skills=["alpha", "main-off", "zeta"]
     )
     # A root Project that no longer exists falls back to the Agent's own scope.
-    runtime.agents.create("two", "Two", allowed_skills=["beta"])
+    runtime.agents.create(
+        "two", "Two", allowed_skills=["beta"], placement=AgentPlacement("private", "main")
+    )
     runtime.agents.update("two", root_project_id="gone")
 
     # The manager refresh reads external changes even while the runtime keeps
@@ -1046,6 +1050,7 @@ def test_manager_projects_each_agents_effective_skill_access(
         == "Fresh metadata fixture."
     )
     main, two = inventory["agents"]
+    assert two["placement"] == {"kind": "private", "owner_id": "main", "orphaned": False}
     watched = {
         "alpha",
         "beta",
@@ -1070,6 +1075,7 @@ def test_manager_projects_each_agents_effective_skill_access(
         "allowed_skills": ["*"],
         "excluded_skills": ["alpha", "main-off", "zeta"],
         "mode": "all",
+        "placement": {"kind": "chat"},
     }
     assert [skill["name"] for skill in main["skills"]] == sorted(
         skill["name"] for skill in main["skills"]

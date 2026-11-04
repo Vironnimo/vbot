@@ -31,6 +31,8 @@ from core.permissions import (
 )
 
 AGENT_UPDATE_FLAGS = (
+    "--placement",
+    "--owner",
     "--name",
     "--model",
     "--clear-model",
@@ -390,6 +392,7 @@ def _format_agent_row(agent: object) -> str:
             f" thinking_effort={thinking_effort}",
             f" current_session_id={current_session_id}",
             f" context_window={context_window}",
+            *([f" placement={_placement_text(agent)}"] if _placement_text(agent) else []),
         ],
         separator="",
     )
@@ -400,6 +403,19 @@ _LIBRARIAN_LINE = (
     "builtin: librarian (curates the skills of your other agents; only model, "
     "fallback_models, temperature, top_p and thinking_effort can change)"
 )
+
+
+def _placement_text(agent: Mapping[str, Any]) -> str:
+    placement = agent.get("placement")
+    if not isinstance(placement, dict):
+        return ""
+    if placement.get("kind") == "helper":
+        return "helper"
+    if placement.get("kind") == "private":
+        owner = _string_or_default(placement.get("owner_id"), "?")
+        missing = ", owner missing" if placement.get("orphaned") else ""
+        return f"private (owner: {owner}{missing})"
+    return ""
 
 
 def _format_agent_detail(agent: Mapping[str, Any]) -> str:
@@ -432,6 +448,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     ]
     if agent.get("builtin") == "librarian":
         lines.insert(3, _LIBRARIAN_LINE)
+    if placement := _placement_text(agent):
+        lines.insert(3, f"placement: {placement}")
     project_index = next(
         index for index, line in enumerate(lines) if line.startswith("default_project:")
     )

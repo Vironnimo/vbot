@@ -291,7 +291,22 @@ def _add_agent_change_arguments(
         "--subagent-allow",
         nargs="*",
         metavar="<agent-id>",
-        help="Replace additional delegation targets; empty permits self-delegation only",
+        help=(
+            "Replace additional delegation targets; empty keeps self and automatic private targets"
+        ),
+    )
+    parser.add_argument(
+        "--placement",
+        choices=("chat", "helper", "private"),
+        help=(
+            "Place the Agent in chat, as a Helper, or privately under an owner. "
+            "Omit for chat on create, or to keep its placement on update"
+        ),
+    )
+    parser.add_argument(
+        "--owner",
+        metavar="<agent-id>",
+        help="Chat Agent that owns this Private Agent. Required exactly with --placement private",
     )
     parser.add_argument(
         "--compaction-policy",

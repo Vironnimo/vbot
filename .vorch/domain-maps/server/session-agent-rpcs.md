@@ -11,6 +11,8 @@ The server side of `session.*`, `agent.*`, `tool.list`, `permissions.*` and `lea
 
 `agent.soul.get {id}` and `agent.soul.set {id, content, revision}` read and replace an Identity Agent's SOUL.md (`agent.md` -> Conventions & Rules) and answer `{content, revision, path, prompt_limit_bytes}`, where `prompt_limit_bytes` is `INLINE_FILE_MAX_BYTES`, above which a System Prompt carries only a size notice (`prompts/prompt-files.md`). A write based on an older revision fails `soul_conflict` with the current file as `data {content, revision}`; a successful one publishes `resource_changed(agents)` and logs `Agent SOUL.md updated` at INFO. Both run on the Session database's pool like the other Agent store work.
 
+`agent.create` and `agent.update` accept public `placement` without an owner binding; Agent payloads expose the resolved placement and orphan status. Refused transitions return `agent_placement` with `data.reason` (`agent/placement.md`). Roster payloads resolve owner proof from their already-read roster.
+
 `agent.update` also accepts `subagent_allow`, a string list that patches only the delegation allow-list through the Agent store's locked sparse update (`agent/configuration.md` -> Tool permission and Tool settings). It is update-only and conflicts with a full `tools` replacement; change reporting still names the persisted `tools` field.
 
 `session.set_fast_mode {agent_id, session_id, enabled}` accepts a Boolean and atomically changes only the Session's `fast_mode` metadata, then publishes a scoped Session invalidation. It never remembers an Agent default; `session.get` and lists expose the preference when true. Chat applies it at the next Model request (`chat/run-execution.md` -> Fast mode).

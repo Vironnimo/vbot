@@ -154,3 +154,25 @@ describe('Agent target catalog loading', () => {
     expect(await loader.load()).toBeNull();
   });
 });
+
+it('groups Private Agents under their owner without hiding Helpers from target pickers', () => {
+  const agents = [
+    { id: 'helper', placement: { kind: 'helper' } },
+    {
+      id: 'child',
+      name: 'Child',
+      placement: { kind: 'private', owner_id: 'owner', orphaned: false },
+    },
+    { id: 'owner', name: 'Owner' },
+  ];
+  expect(
+    buildAgentTargetOptions(agents, []).map(({ value, label }) => ({
+      value,
+      label,
+    })),
+  ).toEqual([
+    { value: 'owner', label: 'Owner' },
+    { value: 'child', label: 'Owner / Child' },
+    { value: 'helper', label: 'helper' },
+  ]);
+});

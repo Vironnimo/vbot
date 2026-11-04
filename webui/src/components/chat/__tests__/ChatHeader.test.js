@@ -160,6 +160,42 @@ describe('ChatHeader', () => {
     };
   }
 
+  it('keeps hidden Agents off the bar and picker except for the displayed Agent and approval', async () => {
+    const hidden = [
+      { id: 'helper', name: 'Helper', placement: { kind: 'helper' } },
+      {
+        id: 'private',
+        name: 'Private',
+        placement: { kind: 'private', owner_id: 'alpha', orphaned: false },
+      },
+    ];
+    mountHeader({
+      agents: [AGENTS[0], ...hidden],
+      selectedAddress: 'helper',
+      agentActivity: { private: { status: 'approval', unreadCount: 0 } },
+    });
+    expect(pillLabels()).toEqual([idle('Alpha'), idle('Helper')]);
+    await openMoreAgents();
+    expect(
+      document.body.querySelector('[role="listbox"]').textContent,
+    ).toContain('Private');
+    expect(
+      document.body.querySelector('[role="listbox"]').textContent,
+    ).not.toContain('Helper');
+  });
+
+  it('shows no hidden activity or picker entry for an unopened Helper', () => {
+    mountHeader({
+      agents: [
+        AGENTS[0],
+        { id: 'helper', name: 'Helper', placement: { kind: 'helper' } },
+      ],
+      agentActivity: { helper: { status: 'running', unreadCount: 2 } },
+    });
+    expect(pillLabels()).toEqual([idle('Alpha')]);
+    expect(moreAgentsTrigger()).toBeNull();
+  });
+
   it('marks an Agent waiting for the user’s approval above its other activity', () => {
     mountHeader({
       agentActivity: {

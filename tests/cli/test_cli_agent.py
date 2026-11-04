@@ -105,6 +105,31 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
     ]
 
 
+@pytest.mark.parametrize(
+    ("placement", "display"),
+    [
+        ({"kind": "helper"}, "helper"),
+        ({"kind": "private", "owner_id": "researcher"}, "private (owner: researcher)"),
+        (
+            {"kind": "private", "owner_id": "researcher", "orphaned": True},
+            "private (owner: researcher, owner missing)",
+        ),
+    ],
+)
+def test_agent_reads_expose_hidden_placement(
+    rpc: FakeRpc, run_cli: RunCli, placement: dict[str, Any], display: str
+) -> None:
+    payload = agent_payload() | {"placement": placement}
+    rpc.reply("agent.get", payload)
+    rpc.reply("agent.list", {"agents": [payload]})
+    code, out, _err = run_cli("agent", "show", "coder")
+    assert code == 0
+    assert f"placement: {display}" in out.splitlines()
+    code, out, _err = run_cli("agent", "list")
+    assert code == 0
+    assert f"placement={display}" in out
+
+
 def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply("agent.create", {"id": "writer"})
     note = "Bash(git push:*) was saved as Shell(git push *)."
@@ -113,6 +138,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
     code, out, _err = run_cli(
         "agent", "create", "writer", "Writer",
         "--description", "Drafts texts",
+        "--placement", "private", "--owner", "researcher",
         "--project-memory", "false",
         "--model", "openai/gpt-5.2",
         "--tool-access-mode", "selected",
@@ -133,6 +159,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
                 "id": "writer",
                 "name": "Writer",
                 "description": "Drafts texts",
+                "placement": {"kind": "private", "owner_id": "researcher"},
                 "project_memory_enabled": False,
                 "model": "openai/gpt-5.2",
                 "tool_access": {"mode": "selected", "allowed": ["read_file"]},
@@ -225,6 +252,21 @@ def test_agent_create_confirms_the_saved_agent(
 @pytest.mark.parametrize(
     ("options", "changes"),
     [
+        pytest.param(
+            ("--placement", "chat"),
+            {"placement": {"kind": "chat"}},
+            id="placement-chat",
+        ),
+        pytest.param(
+            ("--placement", "helper"),
+            {"placement": {"kind": "helper"}},
+            id="placement-helper",
+        ),
+        pytest.param(
+            ("--placement", "private", "--owner", "researcher"),
+            {"placement": {"kind": "private", "owner_id": "researcher"}},
+            id="placement-private",
+        ),
         pytest.param(
             (
                 "--clear-temperature",
@@ -360,6 +402,13 @@ def test_agent_update_sends_only_the_given_changes(
 @pytest.mark.parametrize(
     ("options", "named_options"),
     [
+        pytest.param(("--placement", "private"), ("--owner",), id="private-without-owner"),
+        pytest.param(("--owner", "researcher"), ("--placement",), id="owner-without-placement"),
+        pytest.param(
+            ("--placement", "helper", "--owner", "researcher"),
+            ("--owner",),
+            id="helper-with-owner",
+        ),
         pytest.param(
             (),
             (

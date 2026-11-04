@@ -360,9 +360,10 @@
   color: var(--text-lo);
 }
 
-/* The one disclosure marker: a small chevron that points right when closed
-   and down when open. Plain <summary> elements get it automatically; custom
-   disclosure buttons render <span class="disclosure-chevron">. */
+/* Shared form/content disclosure marker: right when closed, down when open.
+   Plain <summary> elements get it automatically; custom content disclosures
+   can use <span class="disclosure-chevron">. Sidebar controls follow the
+   compact Session list/Schedules row geometry and use their own SVGs. */
 .disclosure-chevron,
 summary:not([class])::before {
   display: inline-block;

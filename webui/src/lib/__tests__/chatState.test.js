@@ -34,17 +34,42 @@ describe('Session state', () => {
     expect(sessionState.key).toBe('alpha::session-one');
   });
 
-  it('falls back to the first canonical Agent when selection is unavailable', () => {
-    const state = createChatState();
-    state.selectedAgentId = 'removed';
-
-    const selectedAgentId = setAgents(state, [
-      { id: 'preferred-first', current_session_id: 'session-one' },
-      { id: 'alpha', current_session_id: 'session-two' },
-    ]);
-
-    expect(selectedAgentId).toBe('preferred-first');
-  });
+  it.each([
+    ['', true, 'preferred-first'],
+    ['removed', true, 'preferred-first'],
+    ['helper', true, 'helper'],
+    ['private', true, 'private'],
+    ['removed', false, 'helper'],
+  ])(
+    'reconciles selection %s with Chat Agents present=%s to %s',
+    (selected, hasChat, expected) => {
+      const state = createChatState();
+      state.selectedAgentId = selected;
+      const hidden = [
+        {
+          id: 'helper',
+          placement: { kind: 'helper' },
+          current_session_id: 'session-helper',
+        },
+        {
+          id: 'private',
+          placement: {
+            kind: 'private',
+            owner_id: 'preferred-first',
+            orphaned: false,
+          },
+          current_session_id: 'session-private',
+        },
+      ];
+      const chats = hasChat
+        ? [
+            { id: 'preferred-first', current_session_id: 'session-one' },
+            { id: 'alpha', current_session_id: 'session-two' },
+          ]
+        : [];
+      expect(setAgents(state, [...hidden, ...chats])).toBe(expected);
+    },
+  );
 
   it('does not create session state when reading the current session', () => {
     const state = createChatState();

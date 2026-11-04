@@ -37,18 +37,26 @@ class PromptToolPolicy:
     def _subagent_targets(self, agent: PromptAgent) -> list[str]:
         allowed = subagent_allowed_agents(agent_tool_settings(getattr(agent, "tools", {})))
         bindings = getattr(agent, "delegation_bindings", {})
-        if not bindings or "*" in allowed or getattr(agent, "project_id", None) is not None:
+        if "*" in allowed or getattr(agent, "project_id", None) is not None:
             return allowed
-        return [
+        if self._agents is None:
+            return [target for target in allowed if target == agent.id or target not in bindings]
+        targets = [
             target
             for target in allowed
             if target == agent.id
-            or target not in bindings
+            or "@" in target
             or (
-                self._agents is not None
-                and self._agents.delegation_target_allowed(target, bindings[target])
+                (
+                    target not in bindings
+                    or self._agents.delegation_target_allowed(target, bindings[target])
+                )
+                and self._agents.placement_target_allowed(
+                    agent.id, target, listed=True, wildcard=False
+                )
             )
         ]
+        return list(dict.fromkeys([*targets, *self._agents.automatic_targets(agent.id)]))
 
     def tool_availability(
         self,

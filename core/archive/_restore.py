@@ -16,6 +16,7 @@ from __future__ import annotations
 import builtins
 import os
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,7 @@ from core.agents import Agent, AgentError, default_workspace_dir
 from core.archive._operations import (
     cleanup_currents,
     holds_agent_id_grants,
+    private_agent_ids,
     prune_empty_parents,
     reroot_agents,
     stored_path,
@@ -45,6 +47,7 @@ from core.sessions import (
     ARCHIVE_STATE_PURGING,
     ARCHIVE_STATE_RESTORING,
     ARCHIVE_TREE_AGENT,
+    ARCHIVE_TREE_PRIVATE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ARCHIVE_TREE_WORKSPACE,
     SESSION_ID_PATTERN,
@@ -79,6 +82,15 @@ _PAYLOAD_PROBLEMS = {
 
 
 @dataclass(frozen=True)
+class _PrivatePlan:
+    agent_id: str
+    source: Path
+    source_created_at: str
+    workspace: str | None
+    root_project_id: str | None
+
+
+@dataclass(frozen=True)
 class _Plan:
     """A checked restore and how it runs."""
 
@@ -92,6 +104,7 @@ class _Plan:
     # A Workspace an older vBot moved into the archive: its payload tree and its destination.
     workspace_move: tuple[Path, Path] | None = None
     source_created_at: str | None = None
+    private_agents: tuple[_PrivatePlan, ...] = ()
 
 
 @dataclass
@@ -145,6 +158,15 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
     if entry.kind == ARCHIVE_KIND_AGENT:
         restore_plan["workspace"] = plan.workspace
         restore_plan["root_project_id"] = plan.root_project_id
+        restore_plan["private_agents"] = [
+            {
+                "agent_id": member.agent_id,
+                "source_created_at": member.source_created_at,
+                "workspace": member.workspace,
+                "root_project_id": member.root_project_id,
+            }
+            for member in plan.private_agents
+        ]
     if plan.workspace_move is not None:
         restore_plan["workspace_destination"] = str(plan.workspace_move[1])
     with services.snapshot_barrier.compound_mutation():
@@ -182,6 +204,7 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
         addresses=addresses,
         warnings=plan.check.warnings,
         grant_agent_ids=grant_agent_ids,
+        private_agent_ids=private_agent_ids(entry),
     )
 
 
@@ -196,13 +219,24 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
     facts = entry.facts
     grant_agent_ids: tuple[str, ...] = ()
     if entry.kind == ARCHIVE_KIND_AGENT:
-        roster_index = facts.get("roster_index")
-        services.agents.place_in_roster(
-            target, roster_index if isinstance(roster_index, int) else None
+        positions = [(target, facts.get("roster_index"))]
+        positions.extend(
+            (member["agent_id"], member.get("roster_index"))
+            for member in facts.get("private_agents") or ()
         )
+        # Insert earlier slots first: moving a preceding private member later
+        # would shift an already placed owner and change the Chat Agent order.
+        for agent_id, index in sorted(
+            positions,
+            key=lambda item: (
+                not isinstance(item[1], int),
+                item[1] if isinstance(item[1], int) else 0,
+            ),
+        ):
+            services.agents.place_in_roster(agent_id, index if isinstance(index, int) else None)
         grants = [grant for grant in facts.get("grants") or () if isinstance(grant, Mapping)]
         grant_agent_ids = services.agents.restore_delegation_grants(target, grants)
-        if target != entry.subject_id and holds_agent_id_grants(services, entry):
+        if target != entry.subject_id and holds_agent_id_grants(services, entry, entry.subject_id):
             # Its Agent Secret grants waited under the old id.
             services.move_agent_secrets(entry.subject_id, target)
     elif entry.kind == ARCHIVE_KIND_PROJECT:
@@ -231,11 +265,12 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
     if entry.kind not in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT):
         ledger.abort_restore(entry.entry_key)
         return "rolled_back"
-    agent = entry.kind == ARCHIVE_KIND_AGENT
+    if entry.kind == ARCHIVE_KIND_AGENT:
+        return _settle_agent(services, entry)
     target = _restore_target(entry)
-    tree = _tree(entry, ARCHIVE_TREE_AGENT if agent else ARCHIVE_TREE_PROJECT)
+    tree = _tree(entry, ARCHIVE_TREE_PROJECT)
     payload = None if tree is None else stored_path(services, tree.path)
-    live = services.data_dir / ("agents" if agent else "projects") / target
+    live = services.data_dir / "projects" / target
     payload_present = payload is not None and is_dir_strict(payload)
     live_present = exists_strict(live, follow_symlinks=False)
     if payload_present or not live_present:
@@ -248,27 +283,7 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
     config_problem = (
         "; ".join(blocker.message for blocker in findings.blockers) if findings.blockers else None
     )
-    if agent and config_problem is None:
-        # A crash after the tree move may precede the config rewrite. Replay it
-        # through the Agent owner before making the Sessions live, keeping their
-        # current pointer and the planned Workspace/default Project intact.
-        try:
-            services.agents.complete_restore_files(
-                target,
-                source_id=entry.subject_id,
-                expected_created_at=(
-                    plan.get("source_created_at") if isinstance(plan, Mapping) else None
-                ),
-                workspace=plan.get("workspace") if isinstance(plan, Mapping) else None,
-                root_project_id=(
-                    plan.get("root_project_id", entry.facts.get("root_project_id"))
-                    if isinstance(plan, Mapping)
-                    else entry.facts.get("root_project_id")
-                ),
-            )
-        except AgentError as error:
-            config_problem = str(error)
-    elif not agent and config_problem is None:
+    if config_problem is None:
         try:
             services.projects.complete_restore_files(
                 target,
@@ -281,15 +296,15 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
             config_problem = str(error)
     if config_problem is not None:
         problem = config_problem
-    elif not (services.agents.exists(target) if agent else services.projects.exists(target)):
-        problem = f"it holds no valid {'Agent' if agent else 'Project'} {target}"
+    elif not services.projects.exists(target):
+        problem = f"it holds no valid Project {target}"
     else:
         renamed = target != entry.subject_id
         new_id = target if renamed else None
         try:
             ledger.commit_restore(
                 entry.entry_key,
-                **({"agent_id": new_id} if agent else {"project_id": new_id}),
+                project_id=new_id,
                 strip_channel_keys=renamed,
             )
         except ArchiveEntryError as error:
@@ -309,6 +324,104 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
                 "problem": problem,
             }
         },
+    )
+    return "stuck"
+
+
+def _settle_agent(services: ArchiveServices, entry: ArchiveEntry) -> str:
+    """Finish a partly live group forward; live trees never return to the payload."""
+    ledger = services.sessions.archive_ledger
+    target = _restore_target(entry)
+    recorded = entry.facts.get("restore_plan")
+    plan = recorded if isinstance(recorded, Mapping) else {}
+    members = {
+        item["agent_id"]: item
+        for item in plan.get("private_agents", ())
+        if isinstance(item, Mapping) and isinstance(item.get("agent_id"), str)
+    }
+    trees = [
+        tree
+        for tree in entry.trees
+        if tree.role in (ARCHIVE_TREE_AGENT, ARCHIVE_TREE_PRIVATE_AGENT)
+    ]
+    states = []
+    for tree in trees:
+        member_id = (
+            target
+            if tree.role == ARCHIVE_TREE_AGENT
+            else (tree.source_path or "").removeprefix("agents/")
+        )
+        live = services.data_dir / "agents" / member_id
+        payload = stored_path(services, tree.path)
+        states.append(
+            (
+                tree,
+                member_id,
+                live,
+                payload,
+                exists_strict(live, follow_symlinks=False),
+                is_dir_strict(payload),
+            )
+        )
+    if not any(live_present for _tree, _id, _live, _payload, live_present, _present in states):
+        _return_moved_workspace(services, entry)
+        ledger.abort_restore(entry.entry_key)
+        return "rolled_back"
+    problem: str | None = None
+    problem_path = str(services.data_dir / "agents" / target)
+    for tree, member_id, live, _payload, live_present, payload_present in states:
+        if live_present == payload_present:
+            problem = f"Agent {member_id} has both a live tree and payload, or neither"
+        elif tree.role == ARCHIVE_TREE_PRIVATE_AGENT and member_id not in members:
+            problem = f"Agent {member_id} has no recorded restore plan"
+        elif not live_present and services.agents.restore_target_problem(member_id) is not None:
+            problem = f"Agent {member_id} cannot return to its recorded location"
+        if problem is not None:
+            problem_path = str(live)
+            break
+    findings = _Findings()
+    if problem is None:
+        _check_member_scopes(services, entry, findings)
+        if findings.blockers:
+            problem = "; ".join(blocker.message for blocker in findings.blockers)
+    if problem is None:
+        try:
+            for tree, member_id, live, payload, live_present, _present in states:
+                problem_path = str(live)
+                if not live_present:
+                    # Validate before moving a payload into a contract location.
+                    inspected = services.agents.inspect_archived(payload)
+                    if inspected.problem is not None:
+                        raise AgentError(f"Agent {member_id}: {inspected.problem}")
+                    move_tree(payload, live)
+                member_plan = plan if tree.role == ARCHIVE_TREE_AGENT else members[member_id]
+                services.agents.complete_restore_files(
+                    member_id,
+                    source_id=entry.subject_id if tree.role == ARCHIVE_TREE_AGENT else member_id,
+                    expected_created_at=member_plan.get("source_created_at"),
+                    workspace=member_plan.get("workspace"),
+                    root_project_id=member_plan.get(
+                        "root_project_id",
+                        entry.facts.get("root_project_id")
+                        if tree.role == ARCHIVE_TREE_AGENT
+                        else None,
+                    ),
+                    owner_id=target if tree.role == ARCHIVE_TREE_PRIVATE_AGENT else None,
+                )
+            ledger.commit_restore(
+                entry.entry_key,
+                agent_id=target if target != entry.subject_id else None,
+                strip_channel_keys=target != entry.subject_id,
+            )
+        except (AgentError, ArchiveEntryError, OSError) as error:
+            problem = str(error)
+        else:
+            restored = ledger.entry_by_key(entry.entry_key)
+            if restored is not None:
+                follow_up(services, restored)
+            return "completed"
+    ledger.update_facts(
+        entry.entry_key, {"restore_plan": {**plan, "live_path": problem_path, "problem": problem}}
     )
     return "stuck"
 
@@ -419,9 +532,9 @@ def _checked(entry: ArchiveEntry, target: str, findings: _Findings) -> RestoreCh
 
 
 def _payload_source(
-    services: ArchiveServices, entry: ArchiveEntry, role: str, findings: _Findings
+    services: ArchiveServices, entry: ArchiveEntry, role: str | ArchiveTree, findings: _Findings
 ) -> Path | None:
-    tree = _tree(entry, role)
+    tree = _tree(entry, role) if isinstance(role, str) else role
     source = None if tree is None else stored_path(services, tree.path)
     problem = None
     try:
@@ -524,16 +637,58 @@ def _plan_agent(
                 "Its policy is left unchanged; review its delegation allow-list explicitly.",
                 agent_id=holder,
             )
+    members: list[_PrivatePlan] = []
+    for tree in entry.trees:
+        if tree.role != ARCHIVE_TREE_PRIVATE_AGENT:
+            continue
+        member_id = (tree.source_path or "").removeprefix("agents/")
+        member_source = _payload_source(services, entry, tree, findings)
+        if services.agents.restore_target_problem(member_id) is not None or member_id == target:
+            findings.block(
+                "private_agent_id_taken",
+                f"Agent {member_id} exists and this entry brings back an Agent of that id; "
+                "rename or delete it, then restore again",
+                agent_id=member_id,
+            )
+        if member_source is None:
+            continue
+        inspected_member = services.agents.inspect_archived(member_source)
+        if inspected_member.problem is not None:
+            _payload_problem(inspected_member.problem, findings)
+        member = inspected_member.agent
+        if member is None:
+            continue
+        if member.id != member_id:
+            _payload_problem("payload_invalid", findings)
+            continue
+        member_root = _plan_root(services, member, findings)
+        member_workspace, _move = _plan_workspace(
+            services, entry, member_source, member, member_id, findings, legacy_workspace=False
+        )
+        members.append(
+            _PrivatePlan(member_id, member_source, member.created_at, member_workspace, member_root)
+        )
     if agent is None or source is None:
         return _Plan(_checked(entry, target, findings), entry, source)
-    root = agent.root_project_id
-    if root is not None and not services.projects.exists(root):
-        findings.warn(
-            "root_project_missing",
-            f"Project {root} does not exist; the Agent is restored without it",
-            project_id=root,
-        )
-        root = None
+    if (
+        agent.placement is not None
+        and agent.placement.kind == "private"
+        and services.agents.resolved_placement(agent)["orphaned"]
+    ):
+        matches = [
+            candidate
+            for candidate in services.agents.list()
+            if candidate.placement is None and candidate.created_at == agent.placement.owner_binding
+        ]
+        if len(matches) != 1:
+            findings.warn(
+                "private_owner_missing",
+                f"Its owner {agent.placement.owner_id} is no longer there. "
+                "It comes back without an owner, and no Agent can use it "
+                "until you give it a place.",
+                owner_id=agent.placement.owner_id,
+            )
+    root = _plan_root(services, agent, findings)
     workspace, workspace_move = _plan_workspace(services, entry, source, agent, target, findings)
     return _Plan(
         _checked(entry, target, findings),
@@ -543,7 +698,20 @@ def _plan_agent(
         root_project_id=root,
         workspace_move=workspace_move,
         source_created_at=agent.created_at,
+        private_agents=tuple(members),
     )
+
+
+def _plan_root(services: ArchiveServices, agent: Agent, findings: _Findings) -> str | None:
+    root = agent.root_project_id
+    if root is not None and not services.projects.exists(root):
+        findings.warn(
+            "root_project_missing",
+            f"Project {root} does not exist; the Agent is restored without it",
+            project_id=root,
+        )
+        root = None
+    return root
 
 
 def _plan_workspace(
@@ -553,6 +721,8 @@ def _plan_workspace(
     agent: Agent,
     target: str,
     findings: _Findings,
+    *,
+    legacy_workspace: bool = True,
 ) -> tuple[str | None, tuple[Path, Path] | None]:
     """Where the restored Agent's Workspace lives.
 
@@ -562,7 +732,7 @@ def _plan_workspace(
     its folder, or becomes the default Workspace when that folder is in use.
     """
     default = str(default_workspace_dir(services.data_dir, target).resolve())
-    moved_tree = _tree(entry, ARCHIVE_TREE_WORKSPACE)
+    moved_tree = _tree(entry, ARCHIVE_TREE_WORKSPACE) if legacy_workspace else None
     try:
         moved_present = moved_tree is not None and is_dir_strict(
             stored_path(services, moved_tree.path)
@@ -696,6 +866,8 @@ def _check_member_scopes(
     }
     if entry.kind == ARCHIVE_KIND_AGENT:
         scopes.discard(("", entry.agent_id))
+        for member_id in private_agent_ids(entry):
+            scopes.discard(("", member_id))
     elif entry.kind == ARCHIVE_KIND_PROJECT:
         scopes = {scope for scope in scopes if scope[0] != entry.project_id}
     else:
@@ -723,7 +895,8 @@ def _check_member_scopes(
             # A rename takes the archived Sessions along, so a missing Agent was
             # deleted: its newest entry restores it, or else only a new Agent of
             # that id can take its Sessions.
-            entry_id = ledger.newest_entry_id(ARCHIVE_KIND_AGENT, agent_id)
+            entries = ledger.agent_entry_ids(agent_id)
+            entry_id = entries[0] if entries else None
             findings.block(
                 "scope_missing",
                 f"Agent {agent_id} does not exist; restore its archive entry {entry_id} first"
@@ -777,12 +950,25 @@ def _move_and_commit(
     if plan.workspace_move is not None:
         move_tree(*plan.workspace_move)
     try:
-        with services.agents.restore_files(
-            plan.source,
-            target,
-            workspace=plan.workspace,
-            root_project_id=plan.root_project_id,
-        ):
+        with ExitStack() as stack:
+            stack.enter_context(
+                services.agents.restore_files(
+                    plan.source,
+                    target,
+                    workspace=plan.workspace,
+                    root_project_id=plan.root_project_id,
+                )
+            )
+            for member in plan.private_agents:
+                stack.enter_context(
+                    services.agents.restore_files(
+                        member.source,
+                        member.agent_id,
+                        workspace=member.workspace,
+                        root_project_id=member.root_project_id,
+                        owner_id=target,
+                    )
+                )
             return ledger.commit_restore(
                 entry.entry_key,
                 agent_id=target if renamed else None,
@@ -799,7 +985,9 @@ def _move_and_commit(
 def _abort(services: ArchiveServices, plan: _Plan) -> None:
     """Return a failed restore's entry to ``archived`` once its files are back in the payload."""
     try:
-        source_returned = plan.source is None or is_dir_strict(plan.source)
+        source_returned = (plan.source is None or is_dir_strict(plan.source)) and all(
+            is_dir_strict(member.source) for member in plan.private_agents
+        )
     except OSError:
         source_returned = False
     if not source_returned:

@@ -479,21 +479,35 @@ def _resolve_target_address(address: str, caller_project_id: str | None) -> tupl
 
 
 def _target_binding(
-    context: ToolContext, target_agent_id: str, target_project_id: str | None
+    runtime: RuntimeServices,
+    context: ToolContext,
+    target_agent_id: str,
+    target_project_id: str | None,
 ) -> str | int | None:
     """Return an explicit Identity grant's captured incarnation, if it has one."""
     if (
         context.project_id is not None
         or target_project_id is not None
         or target_agent_id == context.agent_id
-        or "*" in subagent_allowed_agents(context.tool_settings)
     ):
+        return None
+    target = runtime.agents.find(target_agent_id)
+    if target is not None:
+        placement = runtime.agents.resolved_placement(target)
+        if placement["kind"] == "private" and not placement["orphaned"]:
+            return None
+        if placement["kind"] == "chat" and "*" in subagent_allowed_agents(context.tool_settings):
+            return None
+    elif "*" in subagent_allowed_agents(context.tool_settings):
         return None
     return context.delegation_bindings.get(target_agent_id)
 
 
 def _target_is_allowed(
-    context: ToolContext, target_agent_id: str, target_project_id: str | None
+    runtime: RuntimeServices,
+    context: ToolContext,
+    target_agent_id: str,
+    target_project_id: str | None,
 ) -> bool:
     """Check the caller's Tool settings and enforce the Project boundary independently."""
     if context.project_id is not None and target_project_id != context.project_id:
@@ -501,6 +515,13 @@ def _target_is_allowed(
     if target_agent_id == context.agent_id and target_project_id == context.project_id:
         return True
     allowed = subagent_allowed_agents(context.tool_settings)
+    if context.project_id is None and target_project_id is None:
+        return runtime.agents.placement_target_allowed(
+            context.agent_id,
+            target_agent_id,
+            listed=target_agent_id in allowed,
+            wildcard="*" in allowed,
+        )
     if "*" in allowed:
         return True
     address = (

@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.agents import AgentPlacement
 from core.chat import CommandDispatcher, CommandOutcome, ReplySurface
 from core.chat.commands import (
     AgentArgument,
@@ -34,6 +35,13 @@ from tests.core.chat.commands_test_support import (
 class _StubStoredAgent:
     def __init__(self, agent_id: str) -> None:
         self.id = agent_id
+        self.placement = (
+            AgentPlacement(kind="helper")
+            if agent_id == "helper"
+            else AgentPlacement(kind="private", owner_id="assistant")
+            if agent_id == "private"
+            else None
+        )
 
 
 class _StubAgentStore:
@@ -247,7 +255,7 @@ def test_agent_without_argument_lists_personal_and_team_directory() -> None:
         ChatRunManager(),
         agent_resolver=cast(AgentResolver, _StubTeamResolver(["builder", "planner"])),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
-        agents=cast(Any, _StubAgentStore(["assistant", "coder"])),
+        agents=cast(Any, _StubAgentStore(["assistant", "coder", "helper", "private"])),
     )
 
     result = _execute_sync(dispatcher, "/agent", agent_id="assistant")
@@ -258,6 +266,8 @@ def test_agent_without_argument_lists_personal_and_team_directory() -> None:
     reply = result.feedback.text
     assert "assistant" in reply
     assert "coder" in reply
+    assert "helper" not in reply
+    assert "private" not in reply
     # Team agents are shown project-qualified, teaching the address the move expects.
     assert "builder@vbot" in reply
     assert "planner@vbot" in reply
@@ -365,6 +375,7 @@ def test_parse_agent_argument_splits_first_token_as_address() -> None:
     assert parse_agent_argument("builder@vbot do X") == AgentArgument(
         address="builder@vbot", task="do X"
     )
+
     assert parse_agent_argument("  planner   ship it  ") == AgentArgument(
         address="planner", task="ship it"
     )

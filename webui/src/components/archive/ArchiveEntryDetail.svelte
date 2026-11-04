@@ -341,6 +341,24 @@
         </dl>
       </section>
 
+      {#if entry?.private_agents?.length}
+        <section class="s-section" aria-labelledby="archive-private-agents">
+          <div class="s-section__head">
+            <h3 class="s-section__title" id="archive-private-agents">
+              {t('archive.privateAgents')}
+            </h3>
+          </div>
+          <ul class="s-group archive-items">
+            {#each entry.private_agents as member (member.agent_id)}<li
+                class="archive-item"
+              >
+                <span class="archive-item__title"
+                  >{member.name || member.agent_id}</span
+                >
+              </li>{/each}
+          </ul>
+        </section>
+      {/if}
       {#if sessions.length > 0}
         {@render memberSection(
           'archive-detail-sessions',

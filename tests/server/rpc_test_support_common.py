@@ -122,6 +122,7 @@ class StubAgent:
     permission_ceiling: Any = None
     rule_files: tuple[Any, ...] = ()
     builtin: str | None = None
+    placement: Any = None
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
     updated_at: str = "2026-05-04T00:00:00Z"
@@ -188,6 +189,21 @@ class StubAgents:
 
     def get_raw(self, agent_id: str) -> StubAgent:
         return self._get_raw(agent_id)
+
+    def resolved_placement(self, agent, roster=None):
+        from core.agents import _placement
+
+        return _placement.resolved(agent, self._agents.get)
+
+    def private_agents(self, owner_id, roster=None):
+        return [
+            agent
+            for agent in (self.list() if roster is None else roster)
+            if agent.placement is not None
+            and agent.placement.kind == "private"
+            and agent.placement.owner_id == owner_id
+            and not self.resolved_placement(agent)["orphaned"]
+        ]
 
     def default_workspace(self, agent_id: str) -> str:
         return str(default_workspace_dir(Path("C:/data"), agent_id))

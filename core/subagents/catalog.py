@@ -104,82 +104,65 @@ def _identity_targets(
     allowed: list[str],
     delegation_bindings: Mapping[str, str | int],
 ) -> list[SubAgentPromptTarget]:
-    if "*" in allowed:
-        return _all_identity_scope_targets(runtime, caller_agent_id)
-
-    identities = {agent.id: agent for agent in runtime.agents.list()}
-    projects = {project.project_id: project for project in runtime.projects.list()}
+    wildcard = "*" in allowed
+    roster = runtime.agents.list()
+    identities = {agent.id: agent for agent in roster}
     targets: dict[str, SubAgentPromptTarget] = {}
-    for configured_target in allowed:
-        try:
-            target_agent_id, target_project_id = parse_agent_address(configured_target)
-        except InvalidAgentAddressError:
-            _LOGGER.warning("Skipping invalid configured Sub-Agent target %r", configured_target)
+    candidates = set(identities) if wildcard else set()
+    candidates.update(target for target in allowed if "@" not in target and target != "*")
+    candidates.update(runtime.agents.automatic_targets(caller_agent_id, roster))
+    for target_id in candidates - {caller_agent_id}:
+        identity = identities.get(target_id)
+        if identity is None:
             continue
+        binding = delegation_bindings.get(target_id)
+        listed = target_id in allowed and (
+            binding is None or runtime.agents.delegation_target_allowed(target_id, binding)
+        )
+        if runtime.agents.placement_target_allowed(
+            caller_agent_id, target_id, listed=listed, wildcard=wildcard, roster=roster
+        ):
+            targets[target_id] = SubAgentPromptTarget(
+                target_id, identity.name, identity.description
+            )
 
-        if target_project_id is None:
-            if target_agent_id == caller_agent_id:
-                continue
-            binding = delegation_bindings.get(target_agent_id)
-            if binding is not None and not runtime.agents.delegation_target_allowed(
-                target_agent_id, binding
-            ):
-                continue
-            identity = identities.get(target_agent_id)
-            if identity is not None:
-                targets[target_agent_id] = SubAgentPromptTarget(
-                    agent_id=target_agent_id,
-                    name=identity.name,
-                    description=identity.description,
+    projects = runtime.projects.list()
+    if wildcard:
+        for project in projects:
+            try:
+                team = runtime.agent_resolver.team_for_project(project.project_id)
+            except (AgentResolutionError, OSError, ValueError) as error:
+                _LOGGER.warning(
+                    "Skipping unavailable Project %r in Sub-Agent prompt catalog: %s",
+                    project.project_id,
+                    error,
                 )
-            continue
-
-        project = projects.get(target_project_id)
-        if project is None:
-            continue
-        member = _project_member(runtime, target_project_id, target_agent_id)
-        if member is None:
-            continue
-        qualified_id = format_agent_address(target_agent_id, target_project_id)
-        targets[qualified_id] = SubAgentPromptTarget(
-            agent_id=qualified_id,
-            name=member.display_name,
-            description=member.description,
-        )
-    return [targets[target_id] for target_id in sorted(targets)]
-
-
-def _all_identity_scope_targets(
-    runtime: RuntimeServices,
-    caller_agent_id: str,
-) -> list[SubAgentPromptTarget]:
-    targets: dict[str, SubAgentPromptTarget] = {}
-    for identity in runtime.agents.list():
-        if identity.id == caller_agent_id:
-            continue
-        targets[identity.id] = SubAgentPromptTarget(
-            agent_id=identity.id, name=identity.name, description=identity.description
-        )
-
-    for project in runtime.projects.list():
-        try:
-            team = runtime.agent_resolver.team_for_project(project.project_id)
-        except (AgentResolutionError, OSError, ValueError) as error:
-            _LOGGER.warning(
-                "Skipping unavailable Project %r in Sub-Agent prompt catalog: %s",
-                project.project_id,
-                error,
-            )
-            continue
-        for member in team:
-            if member.unavailable_reason:
-                continue  # A Team member that cannot run is no delegation target.
-            qualified_id = format_agent_address(member.agent_id, project.project_id)
-            targets[qualified_id] = SubAgentPromptTarget(
-                agent_id=qualified_id,
-                name=member.display_name,
-                description=member.description,
-            )
+                continue
+            for member in team:
+                if member.unavailable_reason:
+                    continue
+                qualified_id = format_agent_address(member.agent_id, project.project_id)
+                targets[qualified_id] = SubAgentPromptTarget(
+                    qualified_id, member.display_name, member.description
+                )
+    else:
+        project_ids = {project.project_id for project in projects}
+        for configured_target in allowed:
+            try:
+                target_id, project_id = parse_agent_address(configured_target)
+            except InvalidAgentAddressError:
+                _LOGGER.warning(
+                    "Skipping invalid configured Sub-Agent target %r", configured_target
+                )
+                continue
+            if project_id is None or project_id not in project_ids:
+                continue
+            configured_member = _project_member(runtime, project_id, target_id)
+            if configured_member is not None:
+                qualified_id = format_agent_address(target_id, project_id)
+                targets[qualified_id] = SubAgentPromptTarget(
+                    qualified_id, configured_member.display_name, configured_member.description
+                )
     return [targets[target_id] for target_id in sorted(targets)]
 
 

@@ -345,6 +345,49 @@ describe('ArchiveEntriesPanel', () => {
     expect(listMock).toHaveBeenCalledTimes(3);
   });
 
+  it.each([0, 2])(
+    'shows Private group members on the archive row and entry page with %s Sessions',
+    async (sessionCount) => {
+      const group = {
+        ...CODER,
+        session_count: sessionCount,
+        private_agents: [{ agent_id: 'child', name: 'Child' }],
+      };
+      listMock.mockResolvedValue(page([group]));
+      const detail = detailOf(group, {
+        possible: false,
+        blockers: [
+          {
+            code: 'private_agent_id_taken',
+            agent_id: 'child',
+            message: 'Child id is taken',
+          },
+        ],
+      });
+      if (!sessionCount) detail.sessions = [];
+      showMock.mockResolvedValue(detail);
+      mountView();
+      await waitForCondition(() => rowIds().length === 1);
+      expect(row('e-coder').textContent).toContain(
+        t('archive.privateAgentsCount', { count: 1 }),
+      );
+      row('e-coder').querySelector('.archive-row__main').click();
+      await waitForCondition(() =>
+        document.getElementById('archive-private-agents'),
+      );
+      expect(
+        document.getElementById('archive-private-agents').parentElement
+          .parentElement.textContent,
+      ).toContain('Child');
+      expect(document.body.textContent).toContain('Child id is taken');
+      expect(
+        [...document.querySelectorAll('button')].some(
+          (element) => element.textContent.trim() === t('archive.restoreAs'),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it('opens Restore as when a restore meets a taken ID and restores under the new ID', async () => {
     const navigation = dialogAwareNavigation();
     listMock.mockResolvedValue(page([CODER]));

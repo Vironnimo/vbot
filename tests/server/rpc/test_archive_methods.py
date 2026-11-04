@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from core.agents import AgentPlacement
 from core.sessions import SessionAddress
 from core.utils.timestamps import format_canonical_timestamp
 from server.events import ServerEventBus
@@ -87,8 +88,26 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         "not_restorable_reason": None,
         "may_hold_user_folders": False,
         "accepts_target_id": True,
+        "private_agents": [],
     }
     assert first["entries"][1]["label"] == "Notes"
+
+
+@pytest.mark.asyncio
+async def test_group_archive_payload_names_the_private_agents(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    agents = state.runtime.agents
+    agents.create("owner", "Owner")
+    agents.create("worker", "Worker", placement=AgentPlacement("private", "owner"))
+    archived = await state.runtime.archive.archive_agent("owner")
+    listed = await rpc_result(state, "archive.list")
+    shown = await rpc_result(state, "archive.show", entry_id=archived.entry_id)
+    assert listed["entries"][0]["private_agents"] == [{"agent_id": "worker", "name": "Worker"}]
+    assert shown["entry"]["private_agents"] == listed["entries"][0]["private_agents"]
+    restored = await rpc_result(
+        state, "archive.restore", entry_id=archived.entry_id, target_id="renamed"
+    )
+    assert restored["restored"] == {"agent_id": "renamed", "private_agent_ids": ["worker"]}
 
 
 @pytest.mark.asyncio
@@ -202,7 +221,7 @@ async def test_restore_refuses_a_taken_id_and_restores_under_a_new_one(tmp_path:
         "entry_id": entry_id,
         "kind": "agent",
         "subject_id": "coder",
-        "restored": {"agent_id": "coder-2"},
+        "restored": {"agent_id": "coder-2", "private_agent_ids": []},
         "session_count": 1,
         "grant_agent_ids": ["manager"],
         "warnings": [],
@@ -354,7 +373,7 @@ async def test_restore_waits_for_the_automation_reference_lock(tmp_path: Path) -
         assert not restore.done()
         assert not state.runtime.agents.exists("coder")
 
-    assert (await restore)["restored"] == {"agent_id": "coder"}
+    assert (await restore)["restored"] == {"agent_id": "coder", "private_agent_ids": []}
 
 
 @pytest.mark.asyncio
