@@ -196,6 +196,24 @@ def mutate_metadata(
     return previous, updated
 
 
+def set_pinned(connection: sqlite3.Connection, address: SessionAddress, pinned: bool) -> str | None:
+    """Pin or unpin one live Session and return its pin time.
+
+    Pinning a pinned Session keeps its place: the time stays the first pin's.
+    """
+    row = connection.execute(
+        "UPDATE sessions SET "
+        "pinned_at = CASE WHEN ? THEN COALESCE(pinned_at, ?) END, "
+        "state_revision = state_revision + 1 "
+        "WHERE project_id = ? AND agent_id = ? AND session_id = ? AND state = 'live' "
+        "RETURNING pinned_at",
+        (int(pinned), utc_now_timestamp(), *_store_values._scope(address)),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+    return None if row[0] is None else str(row[0])
+
+
 def record_subagent_reply_target(
     connection: sqlite3.Connection, address: SessionAddress, target: str
 ) -> None:

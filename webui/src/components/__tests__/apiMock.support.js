@@ -110,6 +110,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         scope,
         entry_id: entryId,
       }),
+    listModelFavorites: () => call('model.favorites'),
+    setModelFavorite: (model, favorite) =>
+      call('model.set_favorite', { model, favorite }),
     listModels: (params = {}) =>
       Object.keys(params).length === 0
         ? call('model.list')
@@ -160,6 +163,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         session_id: sessionId,
         ...(permanent ? { permanent } : {}),
       }),
+    setSessionPinned: (agentId, sessionId, pinned) =>
+      call('session.set_pinned', {
+        agent_id: agentId,
+        session_id: sessionId,
+        pinned,
+      }),
     renameSession: (agentId, sessionId, title) =>
       call('session.rename', {
         agent_id: agentId,
@@ -180,16 +189,19 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
           ? { agent_ids: agentIds }
           : { agent_id: agentIds }),
         ...(query.limit ? { limit: query.limit } : {}),
+        ...(query.splitPinned ? { split_pinned: true } : {}),
       }),
     listSessionProjectGroups: (query = {}) =>
       call('session.project_groups', {
         ...(query.limit ? { limit: query.limit } : {}),
+        ...(query.splitPinned ? { split_pinned: true } : {}),
       }),
     listProjectSessions: (projectId, query = {}) =>
       call('session.list', {
         working_project_id: projectId,
         ...(query.limit ? { limit: query.limit } : {}),
         ...(query.cursor ? { cursor: query.cursor } : {}),
+        ...(query.splitPinned ? { split_pinned: true } : {}),
       }),
     getSession: (agentId, sessionId) =>
       call('session.get', { agent_id: agentId, session_id: sessionId }),

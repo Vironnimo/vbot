@@ -20,6 +20,7 @@ from core.sessions import (
     SessionListPage,
     SessionProjectGrouping,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.utils.timestamps import canonical_timestamp
 from tests.core.sessions.history_fixtures import (
     admit_run,
@@ -239,6 +240,140 @@ def test_project_groups_list_every_agents_sessions_by_working_project(manager) -
     )
     assert [summary["id"] for summary in rest.sessions] == ["alpha-old"]
     assert (rest.total_count, rest.next_cursor) == (3, None)
+
+
+def _listed(
+    address: SessionAddress, manager, minute: int, run_kind: str = "user", **fields
+) -> None:
+    manager._store.create(address, created_at=f"2026-08-01T12:{minute:02d}:00+00:00", **fields)
+    _classify(manager, address, {"run_kinds": [run_kind]})
+
+
+def test_split_list_shows_pins_apart_from_its_activity_pages(manager) -> None:
+    for minute, session_id in enumerate(("old", "middle", "new", "pinned-first", "pinned-second")):
+        _listed(_address("coder", session_id), manager, minute)
+    _listed(_address("coder", "pinned-cron"), manager, 9, "cron")
+    _listed(_address("coder", "pinned-in-project"), manager, 8, working_project_id="alpha")
+    _listed(_address("writer", "other-agent"), manager, 7)
+    for session_id in ("pinned-first", "pinned-second", "pinned-cron", "pinned-in-project"):
+        assert manager.set_pinned(_address("coder", session_id), True) is not None
+    manager.set_pinned(_address("writer", "other-agent"), True)
+    # Pinning again keeps the place; the writes above order the pins, newest first.
+    with sqlite3.connect(manager._store.path) as connection:
+        for offset, session_id in enumerate(
+            ("pinned-first", "pinned-second", "pinned-in-project", "pinned-cron")
+        ):
+            connection.execute(
+                "UPDATE sessions SET pinned_at = ? WHERE session_id = ?",
+                (f"2026-08-02T12:0{offset}:00+00:00", session_id),
+            )
+    pin_time = manager.set_pinned(_address("coder", "pinned-first"), True)
+    assert pin_time == "2026-08-02T12:00:00+00:00"
+    filters = SessionListFilters(include_cron=False, split_pinned=True)
+
+    first = manager.list_summaries_page([(None, "coder")], limit=2, filters=filters)
+
+    # Pins reach past the filters, in pin order, and their page rows leave the activity order.
+    pinned_ids = ["pinned-cron", "pinned-in-project", "pinned-second", "pinned-first"]
+    assert [summary["id"] for summary in first.pinned] == pinned_ids
+    assert first.pinned[0]["pinned_at"] == "2026-08-02T12:03:00+00:00"
+    assert [summary["id"] for summary in first.sessions] == ["new", "middle"]
+    assert first.total_count == 7
+
+    second = manager.list_summaries_page(
+        [(None, "coder")], limit=2, cursor=first.next_cursor, filters=filters
+    )
+    assert second.pinned == ()
+    assert [summary["id"] for summary in second.sessions] == ["old"]
+    assert second.total_count == 7
+
+    # A required Session that is pinned is listed and counted once.
+    required = manager.list_summaries_page(
+        [(None, "coder")],
+        limit=2,
+        filters=filters,
+        required_address=_address("coder", "pinned-cron"),
+    )
+    assert [summary["id"] for summary in required.sessions] == ["new", "middle"]
+    assert required.total_count == 7
+
+    across_agents = manager.list_summaries_page(
+        [(None, "coder"), (None, "writer")], limit=2, filters=filters
+    )
+    assert "other-agent" in {summary["id"] for summary in across_agents.pinned}
+
+    # Without the split a pin only marks its row, as every other list reader expects.
+    plain = manager.list_summaries_page(
+        [(None, "coder")], limit=20, filters=SessionListFilters(include_cron=False)
+    )
+    assert plain.pinned == ()
+    assert plain.total_count == 6
+    assert plain.sessions[0]["pinned_at"] == "2026-08-02T12:02:00+00:00"
+
+    assert manager.set_pinned(_address("coder", "pinned-first"), False) is None
+    unpinned = manager.list_summaries_page([(None, "coder")], limit=5, filters=filters)
+    assert "pinned-first" in {summary["id"] for summary in unpinned.sessions}
+    assert "pinned_at" not in next(
+        summary for summary in unpinned.sessions if summary["id"] == "pinned-first"
+    )
+
+
+def test_split_lists_never_show_a_pinned_session_that_is_not_listable(manager) -> None:
+    hidden = _address("coder", "ephemeral")
+    _listed(hidden, manager, 1)
+    manager.set_metadata(hidden, {"ephemeral": True})
+    manager.set_pinned(hidden, True)
+
+    page = manager.list_summaries_page(
+        [(None, "coder")], limit=5, filters=SessionListFilters(split_pinned=True)
+    )
+
+    assert (page.pinned, page.total_count) == ((), 0)
+
+
+def test_pinning_a_missing_session_raises(manager) -> None:
+    with pytest.raises(SessionNotFoundError):
+        manager.set_pinned(_address("coder", "missing"), True)
+
+
+def test_project_groups_keep_pins_in_their_group(manager) -> None:
+    grouping = SessionProjectGrouping(("alpha", "beta"), excluded_agent_ids=("librarian",))
+    for minute in range(4):
+        _listed(_address("coder", f"alpha-{minute}"), manager, minute, working_project_id="alpha")
+    _listed(_address("builder", "team", "alpha"), manager, 5)
+    _listed(_address("coder", "workspace"), manager, 6)
+    _listed(_address("coder", "pinned-cron"), manager, 7, "cron", working_project_id="alpha")
+    _listed(_address("librarian", "pass"), manager, 8, working_project_id="alpha")
+    for address in (
+        _address("coder", "alpha-0"),
+        _address("builder", "team", "alpha"),
+        _address("coder", "pinned-cron"),
+        _address("coder", "workspace"),
+        _address("librarian", "pass"),
+    ):
+        manager.set_pinned(address, True)
+    filters = SessionListFilters(include_cron=False, split_pinned=True)
+
+    groups = manager.list_project_groups(grouping, limit=2, filters=filters)
+
+    alpha = groups["alpha"]
+    assert {summary["id"] for summary in alpha.pinned} == {"alpha-0", "team", "pinned-cron"}
+    assert [summary["id"] for summary in alpha.sessions] == ["alpha-3", "alpha-2"]
+    assert alpha.total_count == 6
+    assert [summary["id"] for summary in groups[None].pinned] == ["workspace"]
+    assert groups[None].sessions == ()
+    assert groups["beta"].pinned == ()
+
+    rest = manager.list_project_page(
+        grouping, "alpha", limit=5, cursor=alpha.next_cursor, filters=filters
+    )
+    assert rest.pinned == ()
+    assert [summary["id"] for summary in rest.sessions] == ["alpha-1"]
+    assert (rest.total_count, rest.next_cursor) == (6, None)
+
+    start = manager.list_project_page(grouping, "alpha", limit=1, filters=filters)
+    assert {summary["id"] for summary in start.pinned} == {"alpha-0", "team", "pinned-cron"}
+    assert start.total_count == 6
 
 
 def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -> None:

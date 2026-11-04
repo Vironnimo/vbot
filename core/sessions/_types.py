@@ -578,11 +578,19 @@ class SessionSearchResult:
 
 @dataclass(frozen=True)
 class SessionListFilters:
+    """Which Sessions a Session list shows.
+
+    With ``split_pinned``, pinned Sessions leave the activity order and its
+    pages: they arrive once in ``SessionListPage.pinned``, whatever the other
+    filters hide, and ``total_count`` counts them on every page.
+    """
+
     include_subagents: bool = True
     include_memory_reflections: bool = True
     include_skill_reflections: bool = True
     include_cron: bool = True
     include_channels: bool = True
+    split_pinned: bool = False
 
 
 @dataclass(frozen=True)
@@ -598,6 +606,7 @@ class SessionListPage:
     sessions: tuple[JsonObject, ...]
     next_cursor: SessionListCursor | None
     total_count: int
+    pinned: tuple[JsonObject, ...] = ()
 
 
 @dataclass(frozen=True)

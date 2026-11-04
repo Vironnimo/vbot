@@ -41,10 +41,7 @@
     parseAgentAddress,
     qualifyAgentAddress,
   } from '$lib/agentAddress.js';
-  import {
-    createSessionList,
-    PROJECT_GROUP_PAGE_SIZE,
-  } from './sessions/list.svelte.js';
+  import { createSessionList } from './sessions/list.svelte.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
   import {
@@ -530,6 +527,11 @@
       items: [
         ...openElsewhere,
         {
+          id: 'pin',
+          label: session.pinned_at ? t('sessions.unpin') : t('sessions.pin'),
+          onSelect: () => actions.togglePin(session),
+        },
+        {
           id: 'rename',
           label: t('sessions.rename'),
           onSelect: () => actions.startRename(session),
@@ -976,7 +978,7 @@
             {t('sessions.projects.empty')}
           </p>
         {/if}
-        {#if group.hasMore || group.sessions.length > PROJECT_GROUP_PAGE_SIZE}
+        {#if group.hasMore || group.hasLess}
           <div class="session-group__paging">
             {#if group.hasMore}
               <button
@@ -988,7 +990,7 @@
                 {t('sessions.projects.showMore')}
               </button>
             {/if}
-            {#if group.sessions.length > PROJECT_GROUP_PAGE_SIZE}
+            {#if group.hasLess}
               <button
                 type="button"
                 class="session-group__less"
@@ -1012,6 +1014,7 @@
   <li
     class="session-row"
     class:session-row--marked={marker !== null}
+    class:session-row--pinned={session.pinned_at}
     class:session-row--menu-open={rowMenuKey === sessionRowKey(session)}
     class:session-row--editing={actions.editingSessionId === session.id &&
       actions.editingAgentAddress ===
@@ -1093,6 +1096,24 @@
                 class="tab-indicator tab-indicator--unread"
                 aria-hidden="true"
               ></span>
+            </span>
+          {/if}
+          {#if session.pinned_at}
+            <span
+              class="session-row__pin"
+              role="img"
+              aria-label={t('sessions.pinned')}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M6 2.5h4M6.75 2.5l-.5 4.25L4 9.5h8L9.75 6.75l-.5-4.25M8 9.5v4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
             </span>
           {/if}
           <p class="session-row__name">

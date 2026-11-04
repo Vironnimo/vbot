@@ -184,7 +184,9 @@ class FakeSessions:
                 {**row, "project_id": project_id, "agent_id": agent_id}
                 for row in self.metadata_rows
             )
-        return SimpleNamespace(sessions=tuple(rows), next_cursor=None, total_count=len(rows))
+        return SimpleNamespace(
+            sessions=tuple(rows), pinned=(), next_cursor=None, total_count=len(rows)
+        )
 
     def list_completion_activity(
         self, scopes: list[tuple[str | None, str]]

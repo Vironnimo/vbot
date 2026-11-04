@@ -130,8 +130,9 @@ export function projectGroupKey(projectId) {
   return asOptionalText(projectId) ?? '';
 }
 
-// The `session.project_groups` groups in server order, each with its
-// normalized Sessions, the cursor of its next page and its total count.
+// The `session.project_groups` groups in server order, each with its pinned
+// Sessions apart from its normalized activity pages, the cursor of its next
+// page and its total count, which counts the pins too.
 export function applyProjectGroups(result) {
   const groups = [];
   for (const group of Array.isArray(result?.groups) ? result.groups : []) {
@@ -141,6 +142,7 @@ export function applyProjectGroups(result) {
     const sessions = Array.isArray(group.sessions) ? group.sessions : [];
     groups.push({
       projectId: asOptionalText(group.project_id),
+      pinned: normalizeSessions(group.pinned),
       sessions: normalizeSessions(sessions),
       nextCursor: isPlainObject(group.next_cursor) ? group.next_cursor : null,
       totalCount: Number.isSafeInteger(group.total_count)
@@ -342,6 +344,7 @@ export function visibleSessionsForSelection(
   return (Array.isArray(sessions) ? sessions : []).filter(
     (session) =>
       session?.id === normalizedSelectedSessionId ||
+      session?.pinned_at ||
       !isSessionHiddenByDefault(session) ||
       isReportedBackgroundSession(session) ||
       isHiddenCategoryEnabled(session, normalizedFilters),
@@ -481,6 +484,7 @@ function normalizeSession(session) {
     agent_name: asOptionalText(session?.agent_name),
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
+    pinned_at: asOptionalText(session?.pinned_at),
     has_unread_completion: session?.has_unread_completion === true,
     ...rowActivity(
       session?.activity_state,
@@ -587,7 +591,17 @@ function normalizeForkSource(source) {
   };
 }
 
+// Pinned Sessions lead, the newest pin first, and keep their place while they
+// are active; the others follow by activity.
 function compareSessions(left, right) {
+  const leftPin = parseTimestamp(left.pinned_at);
+  const rightPin = parseTimestamp(right.pinned_at);
+  if (leftPin !== rightPin) {
+    if (leftPin === null) return 1;
+    if (rightPin === null) return -1;
+    return rightPin - leftPin;
+  }
+
   const leftTimestamp = resolveTimestamp(left);
   const rightTimestamp = resolveTimestamp(right);
 

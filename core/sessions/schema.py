@@ -96,6 +96,7 @@ CREATE TABLE sessions (
   agent_overrides_json TEXT CHECK (agent_overrides_json IS NULL OR (json_valid(agent_overrides_json) AND json_type(agent_overrides_json) = 'object')),
   working_project_id TEXT,
   notification_policy TEXT NOT NULL DEFAULT 'all',
+  pinned_at TEXT,
   CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
@@ -120,6 +121,11 @@ CREATE INDEX sessions_live_scope_order
 CREATE INDEX sessions_live_global_order
   ON sessions (last_activity_at DESC, project_id, agent_id, session_id)
   WHERE state = 'live';
+
+-- The pinned Sessions a split Session list shows, newest pin first.
+CREATE INDEX sessions_live_pinned
+  ON sessions (pinned_at DESC, project_id, agent_id, session_id)
+  WHERE state = 'live' AND pinned_at IS NOT NULL;
 
 -- Visibility-filtered Session list counts of one scope.
 CREATE INDEX sessions_live_scope_visibility

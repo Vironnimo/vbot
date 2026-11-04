@@ -9,6 +9,7 @@ import {
   confirmDialog,
   flushSync,
   rowCount,
+  session,
   setupSessionListDrawerSuite,
   waitForCondition,
   viewTab,
@@ -84,6 +85,7 @@ describe('SessionListDrawer row actions', () => {
         (item) => item.textContent.trim(),
       );
     const expectedItems = [
+      t('sessions.pin'),
       t('sessions.rename'),
       t('sessions.compactionPolicy'),
       DELETE_ITEM,
@@ -117,6 +119,44 @@ describe('SessionListDrawer row actions', () => {
     // context menu opens.
     expect(rightClick.defaultPrevented).toBe(true);
     expect(menuItems()).toEqual(expectedItems);
+  });
+
+  it('pins and unpins a row of the Agent that owns it, and reports a failure', async () => {
+    api.listSessions.mockResolvedValue({
+      pinned: [
+        session('kept', {
+          agent_address: 'builder@vbot',
+          pinned_at: '2026-05-10T00:00:00+00:00',
+        }),
+      ],
+      sessions: [session('open', { agent_address: 'alpha' })],
+    });
+    drawer.mount();
+    await waitForCondition(() => rowCount() === 2);
+    const loadsBefore = api.listSessions.mock.calls.length;
+
+    chooseRowAction(t('sessions.unpin'), 'kept');
+    expect(api.setSessionPinned).toHaveBeenLastCalledWith(
+      'builder@vbot',
+      'kept',
+      false,
+    );
+    await waitForCondition(
+      () => api.listSessions.mock.calls.length === loadsBefore + 1,
+    );
+
+    api.setSessionPinned.mockRejectedValueOnce(new Error('Pin refused'));
+    chooseRowAction(t('sessions.pin'), 'open');
+    expect(api.setSessionPinned).toHaveBeenLastCalledWith(
+      'alpha',
+      'open',
+      true,
+    );
+    await waitForCondition(() =>
+      document
+        .querySelector('.session-drawer')
+        .textContent.includes('Pin refused'),
+    );
   });
 
   it('renames inline from the shown name: IME keys stay with the composition, Escape cancels and Enter saves', async () => {

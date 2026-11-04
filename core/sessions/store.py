@@ -415,6 +415,11 @@ class SessionStore:
             lambda connection: _store_mutations.replace_metadata(connection, address, metadata)
         )
 
+    def set_pinned(self, address: SessionAddress, pinned: bool) -> str | None:
+        return self._execute_write(
+            lambda connection: _store_mutations.set_pinned(connection, address, pinned)
+        )
+
     def mutate_metadata(
         self,
         address: SessionAddress,

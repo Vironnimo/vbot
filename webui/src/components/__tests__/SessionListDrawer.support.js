@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   listSessionProjectGroups: vi.fn(),
   listProjectSessions: vi.fn(),
   renameSession: vi.fn(),
+  setSessionPinned: vi.fn(),
   deleteSession: vi.fn(),
   setSessionCompactionPolicy: vi.fn(),
 }));
@@ -62,6 +63,7 @@ export function setupSessionListDrawerSuite() {
       title: 'Release planning',
     });
     api.setSessionCompactionPolicy.mockReset();
+    api.setSessionPinned.mockReset().mockResolvedValue({});
     api.deleteSession.mockReset().mockResolvedValue({
       agent_id: 'alpha',
       session_id: 'session-1',

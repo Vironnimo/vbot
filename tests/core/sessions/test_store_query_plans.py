@@ -552,6 +552,18 @@ def test_session_list_reads_follow_the_declared_order_indexes(history) -> None:
     )
     assert not [plan for plan in scoped_changes if "SCAN" in plan]
 
+    split = plans(
+        lambda recorder: _store_queries.list_summaries_page(
+            recorder,
+            [("project", "agent"), (None, "other")],
+            limit=20,
+            cursor=None,
+            filters=SessionListFilters(split_pinned=True),
+            required_address=None,
+        )()
+    )
+    assert "sessions_live_pinned" in split[2]
+
 
 def test_payload_reads_start_from_the_payload_id(history) -> None:
     address, _anchor, connection = history

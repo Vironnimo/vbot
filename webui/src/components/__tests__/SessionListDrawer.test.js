@@ -41,6 +41,52 @@ describe('SessionListDrawer list', () => {
     expect(api.listSessions.mock.calls.at(-1)[1]).toMatchObject({ limit: 35 });
   });
 
+  it('lists pins first, whatever their last activity or hidden category', async () => {
+    api.listSessions.mockResolvedValue({
+      pinned: [
+        session('pinned-cron', {
+          pinned_at: '2026-05-12T00:00:00+00:00',
+          last_active_at: '2026-05-01T00:00:00+00:00',
+          is_background_only: true,
+          run_kinds: ['cron'],
+        }),
+        session('pinned-old', {
+          pinned_at: '2026-05-11T00:00:00+00:00',
+          last_active_at: '2026-05-02T00:00:00+00:00',
+        }),
+      ],
+      sessions: [
+        session('newest', { last_active_at: '2026-05-20T00:00:00+00:00' }),
+      ],
+      next_cursor: { session_id: 'newest' },
+      total_count: 4,
+    });
+    api.listSessions.mockResolvedValueOnce({
+      pinned: [],
+      sessions: [
+        session('session-1', { last_active_at: '2026-05-20T00:00:00+00:00' }),
+      ],
+    });
+    const props = drawer.mount({ reloadToken: 0 });
+    await waitForCondition(() => rowCount() === 1);
+    props.reloadToken += 1;
+    flushSync();
+    await waitForCondition(() => rowCount() === 3);
+
+    expect(api.listSessions.mock.calls.at(-1)[1]).toMatchObject({
+      splitPinned: true,
+    });
+    expect(
+      [...document.querySelectorAll('.session-row__name')].map((row) =>
+        row.textContent.trim(),
+      ),
+    ).toEqual(['pinned-cron', 'pinned-old', 'newest']);
+    expect(document.querySelectorAll('.session-row--pinned')).toHaveLength(2);
+    expect(
+      document.querySelector('.session-drawer__more-hint').textContent,
+    ).toContain('1');
+  });
+
   it('reloads once per burst of Session changes that name a listed Agent', async () => {
     let invalidationId = 0;
     const push = (props, scope) => {
@@ -851,6 +897,77 @@ describe('SessionListDrawer by Project', () => {
       (item) => item.textContent.trim(),
     );
 
+  it.each([
+    ['one pin', 1, 4],
+    ['two pins', 2, 3],
+    ['more pins than the group starts with', 6, 3],
+  ])(
+    'shows every pin of a group and at least three other rows: %s',
+    async (_name, pinCount, unpinnedShown) => {
+      const pinned = Array.from({ length: pinCount }, (_, index) =>
+        session(`pin-${index}`, {
+          agent_address: 'alpha',
+          pinned_at: `2026-05-1${index}T00:00:00+00:00`,
+        }),
+      ).reverse();
+      const page = (from, length) =>
+        Array.from({ length }, (_, index) =>
+          session(`open-${from + index}`, {
+            agent_address: 'alpha',
+            last_active_at: `2026-05-0${9 - from - index}T00:00:00+00:00`,
+          }),
+        );
+      api.listSessionProjectGroups.mockResolvedValue({
+        groups: [
+          {
+            project_id: 'vbot',
+            pinned,
+            sessions: page(0, 5),
+            next_cursor: vbotCursor,
+            total_count: pinCount + 7,
+          },
+        ],
+      });
+      api.listProjectSessions.mockResolvedValue({
+        sessions: page(5, 2),
+        next_cursor: null,
+        total_count: pinCount + 7,
+      });
+      drawer.mount({
+        agents: roster,
+        projects,
+        projectTeams,
+        initialFilters: { view: 'projects' },
+      });
+      await waitForCondition(() => groupNames().length === 1);
+      const expected = (shown) => [
+        ...pinned.map((row) => row.id),
+        ...page(0, 7)
+          .slice(0, shown)
+          .map((row) => row.id),
+      ];
+
+      expect(groupRows('vBot')).toEqual(expected(unpinnedShown));
+      expect(group('vBot').querySelector('.session-group__less')).toBeNull();
+      expect(
+        group('vBot').querySelectorAll(
+          '.session-row--pinned [role="img"][aria-label="Pinned"]',
+        ),
+      ).toHaveLength(pinCount);
+
+      buttonByText(t('sessions.projects.showMore')).click();
+      flushSync();
+      await waitForCondition(
+        () =>
+          groupRows('vBot').length ===
+          pinCount + Math.min(unpinnedShown + 5, 7),
+      );
+      buttonByText(t('sessions.projects.less')).click();
+      flushSync();
+      expect(groupRows('vBot')).toEqual(expected(unpinnedShown));
+    },
+  );
+
   it('groups every Agent’s Sessions by Project and adjusts visible rows in steps of five', async () => {
     serveGroups(
       12,
@@ -898,6 +1015,7 @@ describe('SessionListDrawer by Project', () => {
     });
     expect(api.listSessionProjectGroups).toHaveBeenCalledWith({
       limit: 5,
+      splitPinned: true,
       includeSubagents: false,
       includeMemoryReflections: false,
       includeSkillReflections: false,

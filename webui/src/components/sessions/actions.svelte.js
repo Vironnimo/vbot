@@ -3,6 +3,7 @@ import { asText, sessionDeleteErrorText } from './presentation.js';
 import {
   renameSession,
   setSessionCompactionPolicy,
+  setSessionPinned,
   deleteSession,
 } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
@@ -101,6 +102,21 @@ export function createSessionActions(context) {
       renameError = error.message || t('sessions.rename_error');
     } finally {
       renameSaving = false;
+    }
+  };
+
+  const togglePin = async (session) => {
+    context.closeMenu();
+    actionError = null;
+    try {
+      await setSessionPinned(
+        session.agent_address || asText(context.agentId),
+        session.id,
+        !session.pinned_at,
+      );
+      await context.loadSessions();
+    } catch (error) {
+      actionError = error.message || t('sessions.pinError');
     }
   };
 
@@ -253,6 +269,7 @@ export function createSessionActions(context) {
     }
   };
   return {
+    togglePin,
     get editingSessionId() {
       return editingSessionId;
     },
