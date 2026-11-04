@@ -482,7 +482,9 @@ class SubAgentCoordinator:
         )
         target_address = agent_address or format_agent_address(target_agent_id, target_project_id)
         overrides = _parse_session_overrides(arguments)
-        if not _target_is_allowed(context, target_agent_id, target_project_id):
+        if not await sessions.run_async(
+            _target_is_allowed, runtime, context, target_agent_id, target_project_id
+        ):
             choices = await sessions.run_async(target_choices, runtime, context)
             return tool_failure(
                 "agent_not_allowed",
@@ -580,14 +582,32 @@ class SubAgentCoordinator:
         sessions = runtime.chat_sessions
         new_subagent_id = new_id("sub")
         async with AsyncExitStack() as lifecycle:
-            binding = _target_binding(context, target_agent_id, target_project_id)
-            if binding is not None:
+            binding = await sessions.run_async(
+                _target_binding, runtime, context, target_agent_id, target_project_id
+            )
+            placement_guard = (
+                context.project_id is None
+                and target_project_id is None
+                and await sessions.run_async(
+                    runtime.agents.placement_requires_guard, context.agent_id, target_agent_id
+                )
+            )
+            if binding is not None or placement_guard:
                 # Agent create/rename/archive/restore hold this same lock. Keep
                 # the identity check and Run admission together; afterwards an
                 # active Run itself prevents replacing its Agent.
                 await lifecycle.enter_async_context(runtime.automation_references.lock)
-                if not await sessions.run_async(
-                    runtime.agents.delegation_target_allowed, target_agent_id, binding
+                allowed = await sessions.run_async(
+                    _target_is_allowed, runtime, context, target_agent_id, target_project_id
+                )
+                binding = await sessions.run_async(
+                    _target_binding, runtime, context, target_agent_id, target_project_id
+                )
+                if not allowed or (
+                    binding is not None
+                    and not await sessions.run_async(
+                        runtime.agents.delegation_target_allowed, target_agent_id, binding
+                    )
                 ):
                     choices = await sessions.run_async(target_choices, runtime, context)
                     return tool_failure(

@@ -1,6 +1,6 @@
 # Glossary
 
-What vBot's shared terms mean and what they are not, so they are not confused with the coding agent's own environment or other systems. How a concept currently works lives in its domain map.
+vBot's shared terms, distinguished from the coding agent's environment and other systems. How a concept works lives in its domain map.
 
 ## Agent
 A Session participant that vBot runs: it supplies the identity, instructions and runtime configuration (Model, Tools, Skills) for a Session's Runs. vBot has Identity Agents, Project Agents and temporary Agents managed by an Extension (`agent.md`). Not the coding agent working on this repository, a background process, or a Session.
@@ -115,6 +115,12 @@ An Agent of a Project's Team, which vBot resolves at runtime from its repository
 
 ## Identity Agent
 An Agent that vBot stores with its own configuration, Workspace and Memory, which persist across Sessions (`agent.md`). Not a Project Agent or a temporary Agent.
+
+## Private Agent
+An Identity Agent that belongs to one Chat Agent, its owner: it is left out of conversation selection, and only the owner and the owner's other Private Agents can start it as a Sub-Agent (`agent/placement.md`). Not a Sub-Agent, which is a Session; not a Project Agent or a Built-in Agent.
+
+## Helper Agent
+An Identity Agent left out of conversation selection that other Agents can start as a Sub-Agent only after an individual grant (`agent/placement.md`). Not a Private Agent, which has one owner, and not a Sub-Agent, which is a Session.
 
 ## Built-in Agent
 An Identity Agent vBot creates and keeps itself and hides from the user's roster, such as the Librarian (`agent.md` -> Built-in Agents). Not a bundled template, a Project Agent, or a user's Agent that happens to use the same name.

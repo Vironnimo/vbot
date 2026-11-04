@@ -205,7 +205,9 @@ def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
     return load
 
 
-def _agent_response(state: Any, agent: Any, persisted: Any = None) -> JsonObject:
+def _agent_response(
+    state: Any, agent: Any, persisted: Any = None, *, roster: Any = None
+) -> JsonObject:
     """Build an Identity Agent's payload.
 
     *persisted* is the Agent's ``get_raw`` view when the caller already holds
@@ -219,6 +221,7 @@ def _agent_response(state: Any, agent: Any, persisted: Any = None) -> JsonObject
     return {
         "id": agent.id,
         "name": agent.name,
+        "placement": state.runtime.agents.resolved_placement(agent, roster),
         # What the Agent is for, written by the user; empty when none is set.
         "description": getattr(agent, "description", ""),
         "model": agent.model,

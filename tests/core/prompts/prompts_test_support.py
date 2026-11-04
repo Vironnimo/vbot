@@ -96,6 +96,22 @@ class StubAgentStore:
         agent = self._agents.get(target_id)
         return agent is not None and getattr(agent, "created_at", None) == binding
 
+    def placement_target_allowed(self, caller_id, target_id, *, listed, wildcard):
+        from core.agents import _placement
+
+        return _placement.target_allowed(
+            self._agents.get(caller_id),
+            self._agents.get(target_id),
+            self._agents.get,
+            listed=listed,
+            wildcard=wildcard,
+        )
+
+    def automatic_targets(self, caller_id):
+        from core.agents import _placement
+
+        return _placement.automatic_targets(caller_id, self._agents.values())
+
 
 class StubTools:
     """Tool registry stub recording the allow-lists and profiles it was asked for."""

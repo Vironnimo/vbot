@@ -59,6 +59,7 @@ class AgentArchiveOutcome:
     external_workspace: str | None = None
     # Reviews outside the removed scope retain a live owner and need scoped UI invalidation.
     review_addresses: tuple[SessionAddress, ...] = ()
+    private_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,7 @@ class RestoreOutcome:
     addresses: tuple[SessionAddress, ...]
     warnings: tuple[RestoreProblem, ...]
     grant_agent_ids: tuple[str, ...] = ()
+    private_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -36,6 +36,7 @@ from core.sessions import (
     ARCHIVE_STATE_RESTORING,
     ARCHIVE_TREE_AGENT,
     ARCHIVE_TREE_FILES,
+    ARCHIVE_TREE_PRIVATE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ArchiveEntry,
     ArchiveTree,
@@ -281,9 +282,39 @@ def _payload_contents(
         if inspected.agent is not None:
             subject = inspected.agent.id
             facts["name"] = inspected.agent.name
+        trees = [ArchiveTree(f"{directory}/agent", ARCHIVE_TREE_AGENT, f"agents/{subject}")]
+        private_dir = child / "private"
+        private_facts = []
+        if is_dir_strict(private_dir) and not is_link_status(private_dir.lstat()):
+            for member_dir in sorted(private_dir.iterdir()):
+                if not is_dir_strict(member_dir) or is_link_status(member_dir.lstat()):
+                    continue
+                member = services.agents.inspect_archived(member_dir)
+                member_facts = _format_facts(member.problem, AGENT_FORMAT_VERSION)
+                member_facts["agent_id"] = member_dir.name
+                if member.agent is not None:
+                    member_facts["name"] = member.agent.name
+                    member_facts["root_project_id"] = member.agent.root_project_id
+                    member_facts["workspace"] = {
+                        "path": member.agent.workspace,
+                        "external": not Path(member.agent.workspace)
+                        .resolve()
+                        .is_relative_to((services.data_dir / "agents" / member.agent.id).resolve()),
+                        "moved": False,
+                    }
+                private_facts.append(member_facts)
+                trees.append(
+                    ArchiveTree(
+                        f"{directory}/private/{member_dir.name}",
+                        ARCHIVE_TREE_PRIVATE_AGENT,
+                        f"agents/{member_dir.name}",
+                    )
+                )
+        if private_facts:
+            facts["private_agents"] = private_facts
         return (
             ARCHIVE_KIND_AGENT,
-            (ArchiveTree(f"{directory}/agent", ARCHIVE_TREE_AGENT, f"agents/{subject}"),),
+            tuple(trees),
             subject,
             facts,
         )

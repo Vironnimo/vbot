@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from core.agents import AgentStore
+from core.agents import AgentPlacement, AgentStore
 from core.chat import ChatMessage
 from core.database import DatabaseUnavailableError, SnapshotBarrier
 from core.runs import Run, RunKind
@@ -172,6 +172,8 @@ async def test_an_agent_with_an_active_run_cannot_be_renamed_or_deleted(
     error = await rpc_error(state, method, **params)
 
     assert error["code"] == "agent_busy"
+    if method == "agent.delete":
+        assert error["data"]["agent_id"] == "coder"
     assert _agent_names(state) == before
     release.set()
     assert await run.wait() == "done"
@@ -290,14 +292,16 @@ async def test_agent_delete_refuses_a_referenced_agent(
     error = await rpc_error(state, "agent.delete", id="coder")
 
     assert error["code"] == code
+    assert error["data"]["agent_id"] == "coder"
     assert named in error["message"]
     assert _agent_names(state) == before
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("moved_review", [False, True])
+@pytest.mark.parametrize("private_member", [False, True])
 async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moved_review: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moved_review: bool, private_member: bool
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
@@ -305,6 +309,9 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
     archived_agent = agents.create("coder")
     state.runtime.chat_sessions.create("coder", session_id="work")
+    if private_member:
+        agents.create("worker", placement=AgentPlacement("private", "coder"))
+        state.runtime.chat_sessions.create("worker", session_id="private-work")
     grant_holder = agents.create(
         "manager", "Manager", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}}
     )
@@ -331,7 +338,7 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     entry = state.runtime.chat_sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("agent", "coder")
     assert (result["session_count"], result["purged"], result["purge_pending"]) == (
-        3 if moved_review else 1,
+        (3 if moved_review else 1) + int(private_member),
         False,
         False,
     )
@@ -344,7 +351,10 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
         }
     ]
     # The archived Sessions leave Recall.
-    assert state.runtime.recall.removed_agents == ["coder"]
+    assert state.runtime.recall.removed_agents == (
+        ["coder", "worker"] if private_member else ["coder"]
+    )
+    assert result["private_agent_ids"] == (["worker"] if private_member else [])
 
     if review is not None:
         assert manager["current_session_id"] == "landing"
@@ -364,14 +374,24 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
 
 
 @pytest.mark.asyncio
-async def test_agent_delete_refuses_the_last_agent(tmp_path: Path) -> None:
+async def test_agent_delete_refuses_the_last_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state = make_state(tmp_path, StubAdapter())
-
-    error = await rpc_error(state, "agent.delete", id="coder")
-
-    assert error["code"] == "last_agent"
-    assert list(_agent_names(state)) == ["coder"]
-    assert state.runtime.recall.removed_agents == []
+    agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
+    state.runtime.agents = agents
+    monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
+    agents.create("coder")
+    agents.create("helper", placement=AgentPlacement("helper"))
+    try:
+        error = await rpc_error(state, "agent.delete", id="coder")
+        assert error["code"] == "last_agent"
+        assert set(_agent_names(state)) == {"coder", "helper"}
+        assert state.runtime.recall.removed_agents == []
+        await rpc_result(state, "agent.delete", id="helper")
+        assert list(_agent_names(state)) == ["coder"]
+    finally:
+        agents.close()
 
 
 @pytest.mark.asyncio

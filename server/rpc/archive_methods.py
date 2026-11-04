@@ -250,6 +250,10 @@ def _entry_payload(listing: ArchiveListing) -> JsonObject:
         "not_restorable_reason": listing.not_restorable_reason,
         "may_hold_user_folders": listing.may_hold_user_folders,
         "accepts_target_id": listing.accepts_target_id,
+        "private_agents": [
+            {"agent_id": member["agent_id"], "name": member.get("name", member["agent_id"])}
+            for member in entry.facts.get("private_agents") or ()
+        ],
     }
 
 
@@ -331,7 +335,10 @@ def _restore_check_payload(check: RestoreCheck) -> JsonObject:
 def _restore_payload(outcome: RestoreOutcome) -> JsonObject:
     restored: JsonObject
     if outcome.kind == ARCHIVE_KIND_AGENT:
-        restored = {"agent_id": outcome.target_id}
+        restored = {
+            "agent_id": outcome.target_id,
+            "private_agent_ids": list(outcome.private_agent_ids),
+        }
     elif outcome.kind == ARCHIVE_KIND_PROJECT:
         restored = {"project_id": outcome.target_id}
     else:

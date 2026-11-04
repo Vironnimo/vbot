@@ -17,6 +17,7 @@ from core.sessions import (
     ARCHIVE_KIND_SESSION,
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_TREE_AGENT,
+    ARCHIVE_TREE_PRIVATE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ArchiveEntry,
     ArchiveEntryCursor,
@@ -139,17 +140,19 @@ def _not_restorable_reason(services: ArchiveServices, entry: ArchiveEntry) -> st
     if entry.kind not in _FORMAT_VERSIONS:
         return None
     version = _FORMAT_VERSIONS[entry.kind]
-    recorded = entry.facts.get("payload_format")
-    if recorded == "older" or (
-        isinstance(recorded, int) and not isinstance(recorded, bool) and recorded < version
-    ):
-        return "older_format"
-    if recorded == "newer" or (isinstance(recorded, int) and recorded > version):
-        return "newer_format"
-    if recorded != version:
-        return "payload_invalid"
+    records = [entry.facts, *(entry.facts.get("private_agents") or ())]
+    for record in records:
+        recorded = record.get("payload_format")
+        if recorded == "older" or (
+            isinstance(recorded, int) and not isinstance(recorded, bool) and recorded < version
+        ):
+            return "older_format"
+        if recorded == "newer" or (isinstance(recorded, int) and recorded > version):
+            return "newer_format"
+        if recorded != version:
+            return "payload_invalid"
     role = _PAYLOAD_ROLES[entry.kind]
-    trees = [tree for tree in entry.trees if tree.role == role]
+    trees = [tree for tree in entry.trees if tree.role in (role, ARCHIVE_TREE_PRIVATE_AGENT)]
     try:
         if not trees or not all(is_dir_strict(stored_path(services, tree.path)) for tree in trees):
             return "payload_missing"

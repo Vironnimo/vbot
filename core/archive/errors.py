@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from core.archive._types import RestoreProblem
+from core.runs import RunAdmissionBlockedError
 from core.sessions import ArchiveEntryBusyError, ArchiveEntryError, ArchiveEntryNotFoundError
 
 
@@ -14,6 +15,14 @@ class ArchiveRetentionUnknownError(Exception):
     Retention then deletes nothing instead of falling back to a default period
     that may be shorter than the one the user chose.
     """
+
+
+class ArchiveAgentBusyError(RunAdmissionBlockedError):
+    """The named member prevents archiving its whole Agent group."""
+
+    def __init__(self, agent_id: str) -> None:
+        super().__init__(f"Agent {agent_id} is still working")
+        self.agent_id = agent_id
 
 
 class ArchiveSubjectInUseError(ArchiveEntryError):

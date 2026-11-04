@@ -715,3 +715,37 @@ async def test_reenabling_a_custom_prompt_preserves_the_agent_customizations(
 
     assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "agent custom"
     assert storage.read_block_layout("coder") == customized
+
+
+@pytest.mark.asyncio
+async def test_placement_rpc_contract_and_transition_reasons(tmp_path: Path):
+    state = _real_agent_state(tmp_path, {})
+    state.agent_delete_lock = asyncio.Lock()
+    state.event_bus = SimpleNamespace(publish=lambda _event, _payload: None)
+    await rpc_result(state, "agent.create", id="owner")
+    helper = await rpc_result(state, "agent.create", id="helper", placement={"kind": "helper"})
+    assert helper["placement"] == {"kind": "helper"}
+    error = await rpc_error(state, "agent.update", id="owner", placement={"kind": "helper"})
+    assert error["code"] == "agent_placement" and error["data"]["reason"] == "last_chat_agent"
+    await rpc_result(state, "agent.create", id="other")
+    private = await rpc_result(
+        state, "agent.update", id="helper", placement={"kind": "private", "owner_id": "owner"}
+    )
+    assert private["placement"] == {"kind": "private", "owner_id": "owner", "orphaned": False}
+    assert "owner_binding" not in str(private)
+    listing = await rpc_result(state, "agent.list")
+    assert "owner_binding" not in str(listing)
+    error = await rpc_error(state, "agent.update", id="owner", placement={"kind": "helper"})
+    assert error["code"] == "agent_placement" and error["data"]["reason"] == "has_private_agents"
+    error = await rpc_error(
+        state, "agent.create", id="bad", placement={"kind": "private", "owner_id": "helper"}
+    )
+    assert error["code"] == "agent_placement" and error["data"]["reason"] == "owner_invalid"
+    for invalid in (
+        {"kind": "private"},
+        {"kind": "helper", "owner_id": "owner"},
+        {"kind": "chat", "owner_binding": "secret"},
+        None,
+    ):
+        error = await rpc_error(state, "agent.update", id="other", placement=invalid)
+        assert error["code"] == "invalid_request"

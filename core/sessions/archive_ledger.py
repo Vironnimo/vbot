@@ -329,6 +329,12 @@ class SessionArchiveLedger:
             lambda connection: _store_archive.newest_entry_id(connection, kind, subject_id)
         )
 
+    def agent_entry_ids(self, agent_id: str) -> tuple[str, ...]:
+        """Entries holding this Agent, alone or in its owner's group, newest first."""
+        return self._store._read(
+            lambda connection: _store_archive.agent_entry_ids(connection, agent_id)
+        )
+
     def unrecorded(self, directories: Sequence[str]) -> tuple[str, ...]:
         """The data-dir relative ``directories`` that no entry's payload tree covers or lies in."""
         return self._store._read(

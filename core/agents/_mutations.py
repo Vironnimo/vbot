@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.agents import _delegation
+from core.agents import _delegation, _placement
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
     DEFAULT_MODEL,
@@ -44,6 +44,7 @@ from core.agents._types import (
     Agent,
     AgentAlreadyExistsError,
     AgentError,
+    AgentPlacement,
     AgentUpdateResult,
     BuiltinAgent,
     BuiltinAgentError,
@@ -107,6 +108,7 @@ class AgentMutations:
         permission_rules: PermissionRules | Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
+        placement: AgentPlacement | None = None,
     ) -> Agent:
         """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
         with self._owner._snapshot_barrier.compound_mutation(), self._owner._change():
@@ -138,7 +140,10 @@ class AgentMutations:
             validated_tool_access = _validate_tool_access(tool_access)
             validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
             validated_excluded_skills = _validate_excluded_skills(excluded_skills)
+            placement = _placement.transition(self._owner, agent_id, placement, None)
             validated_tools = normalize_agent_tools(tools)
+            if placement is not None and "subagent" not in validated_tools:
+                validated_tools["subagent"] = {"allowed_agents": []}
             validated_custom_system_prompt_enabled = _validate_bool_field(
                 "custom_system_prompt_enabled", custom_system_prompt_enabled
             )
@@ -187,10 +192,12 @@ class AgentMutations:
                 created_at=now,
                 updated_at=now,
                 builtin=builtin,
+                placement=placement,
             )
             agent = _with_builtin_capabilities(agent)
 
             try:
+                _placement.reject_new_private_grants(self._owner, agent, None)
                 agent = _delegation.bind_changes(self._owner, agent, None)
                 self._owner._seed_workspace(Path(agent.workspace))
                 self._owner._write_agent(agent)
@@ -252,11 +259,18 @@ class AgentMutations:
                     raise AgentError("copy_workspace_identity_files requires a workspace change")
                 return AgentUpdateResult(_apply_defaults(agent, self._owner._agent_defaults()))
 
+            placement = agent.placement
+            if "placement" in changes:
+                placement = _placement.transition(
+                    self._owner, agent_id, changes.pop("placement"), agent
+                )
+
             allowed_fields = set(Agent.__dataclass_fields__) - {
                 "id",
                 "created_at",
                 "updated_at",
                 "delegation_bindings",
+                "placement",
             }
             unknown_fields = sorted(set(changes) - allowed_fields)
             if unknown_fields:
@@ -338,12 +352,13 @@ class AgentMutations:
             if changes.get("current_session_id"):
                 self._owner._validate_current_session(agent_id, changes["current_session_id"])
 
-            if not changes:
+            if not changes and placement == agent.placement:
                 return AgentUpdateResult(_apply_defaults(agent, self._owner._agent_defaults()))
 
             updated_agent = _with_builtin_capabilities(
-                replace(agent, **changes, updated_at=utc_now_timestamp())
+                replace(agent, **changes, placement=placement, updated_at=utc_now_timestamp())
             )
+            _placement.reject_new_private_grants(self._owner, updated_agent, agent)
             updated_agent = _delegation.bind_changes(self._owner, updated_agent, agent)
             relocation = _WorkspaceRelocation()
             try:
@@ -359,6 +374,17 @@ class AgentMutations:
             except Exception:
                 relocation.rollback()
                 raise
+            if placement != agent.placement:
+                if placement is not None and placement.kind == "private":
+                    self._owner._remove_from_allow_lists(
+                        agent_id, best_effort=True, preserve_own=True
+                    )
+                _LOGGER.info(
+                    "Agent placement changed (agent=%s kind=%s owner=%s)",
+                    agent_id,
+                    placement.kind if placement else "chat",
+                    placement.owner_id if placement else None,
+                )
             if updated_agent.permission_rules != agent.permission_rules:
                 _log_permission_rules(agent_id, updated_agent.permission_rules)
             return AgentUpdateResult(

@@ -170,3 +170,33 @@ def test_validate_agent_data_reports_one_error_per_invalid_field(
         del data["id"]
 
     assert _diagnostics(data) == [("error", *diagnostic)]
+
+
+@pytest.mark.parametrize(
+    "placement",
+    [
+        None,
+        [],
+        {},
+        {"kind": "chat"},
+        {"kind": "helper", "extra": True},
+        {"kind": "helper", "owner_id": "owner"},
+        {"kind": "private", "owner_id": "coder", "owner_binding": "2026-01-01T00:00:00Z"},
+        {"kind": "private", "owner_id": "bad/path", "owner_binding": "2026-01-01T00:00:00Z"},
+        {"kind": "private", "owner_id": "owner", "owner_binding": "invalid"},
+    ],
+)
+def test_validate_agent_placement_fails_closed(placement):
+    diagnostics = validate_agent_data({**_valid_agent_data(), "placement": placement})
+    assert any(item.severity == "error" and item.path == "$.placement" for item in diagnostics)
+    assert any(
+        item.path == "$.placement"
+        for item in validate_agent_data(
+            {
+                **_valid_agent_data(),
+                "id": "librarian",
+                "builtin": "librarian",
+                "placement": {"kind": "helper"},
+            }
+        )
+    )

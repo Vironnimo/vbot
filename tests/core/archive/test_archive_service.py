@@ -13,14 +13,16 @@ from typing import Any
 
 import pytest
 
-from core.agents import AgentReferencedError
+from core.agents import AgentPlacement, AgentReferencedError
 from core.archive import (
     AgentArchiveOutcome,
+    ArchiveAgentBusyError,
     ArchiveEntryBusyError,
     ArchiveEntryNotFoundError,
     ArchiveNotRestorableError,
     ArchiveRestoreConflictError,
     ArchiveService,
+    ArchiveSubjectInUseError,
     KeptEntry,
     PendingPurge,
     ProjectArchiveOutcome,
@@ -54,6 +56,116 @@ def _repo(tmp_path: Path, name: str = "repo") -> Path:
     repo = tmp_path / name
     repo.mkdir()
     return repo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["owner", "restored-owner"])
+async def test_private_agents_archive_and_restore_with_their_owner(
+    world: ArchiveWorld, target: str
+) -> None:
+    agents, sessions = world.agents, world.sessions
+    owner = agent_with_session(world, "owner")
+    member = agent_with_session(world, "worker", placement=AgentPlacement("private", "owner"))
+    agents.create("other")
+    original_order = [agent.id for agent in agents.list()]
+    owner_address = SessionAddress(None, "owner", owner.current_session_id)
+    member_address = SessionAddress(None, "worker", member.current_session_id)
+    for address in (owner_address, member_address):
+        sessions.set_metadata(
+            address, {"source_channel_id": "channel-owned", "title": address.agent_id}
+        )
+    earlier = sessions.create("worker", session_id="earlier").address
+    earlier_archive = await world.service.archive_session(earlier)
+
+    archived = await world.service.archive_agent("owner")
+    entry = world.entry(archived.entry_id)
+    assert archived.private_agent_ids == ("worker",)
+    assert entry.session_count == 2
+    assert {tree.role for tree in entry.trees} == {"agent", "private_agent"}
+    assert entry.facts["private_agents"][0]["agent_id"] == "worker"
+    assert not agents.exists("owner") and not agents.exists("worker")
+    assert world.sessions.archive_ledger.agent_entry_ids("worker") == (entry.entry_id,)
+    [blocker] = (await world.service.restore_check(earlier_archive.entry_id)).blockers
+    assert blocker.details["entry_id"] == entry.entry_id
+    assert set(world.skill_invalidations) == {"owner", "worker"}
+    assert (None, "worker", None) in world.recall_removals
+
+    restored = await world.service.restore(entry.entry_id, target_id=target)
+    assert restored.private_agent_ids == ("worker",)
+    assert set(restored.addresses) == {replace(owner_address, agent_id=target), member_address}
+    assert agents.get("worker").placement == AgentPlacement("private", target, owner.created_at)
+    assert agents.get("worker").current_session_id == member.current_session_id
+    assert sessions.get_metadata(member_address)["source_channel_id"] == "channel-owned"
+    assert (
+        "source_channel_id" in sessions.get_metadata(replace(owner_address, agent_id=target))
+    ) == (target == "owner")
+    assert [agent.id for agent in agents.list()] == [
+        target if item == "owner" else item for item in original_order
+    ]
+    await world.service.restore(earlier_archive.entry_id)
+    assert sessions.exists(earlier)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["run", "channel", "taken-id"])
+async def test_a_private_member_blocks_the_whole_group(world: ArchiveWorld, blocker: str) -> None:
+    owner = agent_with_session(world, "owner")
+    member = agent_with_session(world, "worker", placement=AgentPlacement("private", "owner"))
+    if blocker == "run":
+        async with world.runs.agent_admission_guard("worker", project_id=None):
+            with pytest.raises(ArchiveAgentBusyError) as busy:
+                await world.service.archive_agent("owner")
+            assert busy.value.agent_id == "worker"
+    elif blocker == "channel":
+
+        async def references(agent_id: str) -> tuple[str, ...]:
+            return ("channel:test",) if agent_id == "worker" else ()
+
+        service = ArchiveService(replace(world.services, agent_references=references))
+        with pytest.raises(ArchiveSubjectInUseError) as used:
+            await service.archive_agent("owner")
+        assert used.value.subject_id == "worker"
+    else:
+        archived = await world.service.archive_agent("owner")
+        world.agents.create("worker")
+        for target in (None, "another-owner"):
+            with pytest.raises(ArchiveNotRestorableError) as taken:
+                await world.service.restore(archived.entry_id, target_id=target)
+            assert [item.code for item in taken.value.blockers] == ["private_agent_id_taken"]
+        assert not world.agents.exists("owner")
+        assert world.payload(archived.entry_id, "private/worker").is_dir()
+        return
+    assert world.agents.exists("owner") and world.agents.exists("worker")
+    assert world.sessions.exists(SessionAddress(None, "owner", owner.current_session_id))
+    assert world.sessions.exists(SessionAddress(None, "worker", member.current_session_id))
+    assert not world.commands.closed
+    assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_state", ["renamed", "missing", "replaced"])
+async def test_private_restored_alone_keeps_only_its_proven_owner(
+    world: ArchiveWorld, owner_state: str
+) -> None:
+    agents = world.agents
+    agents.create("owner")
+    agents.create("worker", placement=AgentPlacement("private", "owner"))
+    archived = await world.service.archive_agent("worker")
+    if owner_state == "renamed":
+        renamed = agents.rename("owner", "new-owner")
+        agents.finish_rename(renamed.rename)
+    else:
+        await world.service.archive_agent("owner")
+        if owner_state == "replaced":
+            agents.create("owner")
+    restored = await world.service.restore(archived.entry_id)
+    agent = agents.get("worker")
+    view = agents.resolved_placement(agent)
+    assert view["orphaned"] == (owner_state != "renamed")
+    assert view["owner_id"] == ("new-owner" if owner_state == "renamed" else "owner")
+    assert [item.code for item in restored.warnings] == (
+        [] if owner_state == "renamed" else ["private_owner_missing"]
+    )
 
 
 @pytest.mark.asyncio
@@ -947,8 +1059,10 @@ async def test_purging_an_agent_whose_cleanup_did_not_finish_completes_it_first(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private_member", [False, True])
 async def test_an_archived_agents_secret_grants_wait_for_its_restore_and_go_with_its_purge(
     world: ArchiveWorld,
+    private_member: bool,
 ) -> None:
     agents, secrets = world.agents, world.secrets
 
@@ -957,13 +1071,15 @@ async def test_an_archived_agents_secret_grants_wait_for_its_restore_and_go_with
 
     agent_with_session(world, "coder")
     agents.create("manager")
+    if private_member:
+        agents.create("worker", placement=AgentPlacement("private", "coder"))
     for name, holders in (("API", ["coder"]), ("SHARED", ["coder", "manager"])):
         secrets.create(
             name=name,
             kind="token",
             values={"value": f"{name}-value-1234"},
             actor="user",
-            agents=holders,
+            agents=[*holders, "worker"] if private_member else holders,
         )
 
     archived = await world.service.archive_agent("coder")
@@ -978,6 +1094,7 @@ async def test_an_archived_agents_secret_grants_wait_for_its_restore_and_go_with
     archived = await world.service.archive_agent("coder")
     await world.service.restore(archived.entry_id, target_id="coder-new")
     assert granted("coder") == [] and granted("coder-new") == ["API", "SHARED"]
+    assert granted("worker") == (["API", "SHARED"] if private_member else [])
 
     # Another archived Agent cannot return under an id whose grants wait.
     waiting = await world.service.archive_agent("coder-new")
@@ -990,6 +1107,7 @@ async def test_an_archived_agents_secret_grants_wait_for_its_restore_and_go_with
     # A purge drops the grants, never the Secrets or another Agent's grants.
     await world.service.purge([waiting.entry_id])
     assert granted("coder-new") == []
+    assert granted("worker") == []
     assert {secret.name: secret.agents for secret in secrets.all()} == {
         "API": (),
         "SHARED": ("manager",),

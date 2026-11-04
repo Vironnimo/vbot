@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.agents import _delegation
+from core.agents import _delegation, _placement
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
     AGENT_RENAME_FORMAT,
@@ -277,8 +277,10 @@ class AgentRenames:
                 rename.old_id,
                 rename.new_id,
             )
+        policy_agent_ids = self._retarget_allowed_agents(rename.source_id, rename.target_id)
+        _placement.retarget_owner(self._owner, rename.source_id, rename.target_id, created_at)
         return _AppliedRename(
-            policy_agent_ids=self._retarget_allowed_agents(rename.source_id, rename.target_id),
+            policy_agent_ids=policy_agent_ids,
             session_link_count=link_count,
         )
 

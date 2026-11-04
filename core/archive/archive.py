@@ -45,7 +45,7 @@ from core.archive._types import (
     RestoreOutcome,
     SessionArchiveOutcome,
 )
-from core.archive.errors import ArchiveSubjectInUseError
+from core.archive.errors import ArchiveAgentBusyError, ArchiveSubjectInUseError
 from core.runs import RunAdmissionBlockedError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
@@ -108,7 +108,7 @@ async def _release_nothing(_sessions: Sequence[SessionAddress]) -> None:
 
 def _in_scope(address: SessionAddress, scope: ArchiveScope) -> bool:
     return address.project_id == scope.project_id and (
-        scope.agent_id is None or address.agent_id == scope.agent_id
+        scope.agent_id is None or address.agent_id in (scope.agent_id, *scope.private_agent_ids)
     )
 
 
@@ -286,19 +286,31 @@ class ArchiveService:
         stays where it is. The Agent's id leaves every delegation list.
         """
         services = self._services
-        scope = ArchiveScope(agent_id=agent_id)
-        async with services.runs.agent_admission_guard(agent_id, project_id=None):
-            references = await services.agent_references(agent_id)
-            if references:
-                raise ArchiveSubjectInUseError(ARCHIVE_KIND_AGENT, agent_id, references)
+        private_agents = await services.sessions.run_async(services.agents.private_agents, agent_id)
+        private_ids = tuple(sorted(agent.id for agent in private_agents))
+        agent_ids = (agent_id, *private_ids)
+        scope = ArchiveScope(agent_id=agent_id, private_agent_ids=private_ids)
+        async with AsyncExitStack() as guards:
+            for member_id in agent_ids:
+                try:
+                    await guards.enter_async_context(
+                        services.runs.agent_admission_guard(member_id, project_id=None)
+                    )
+                except RunAdmissionBlockedError as error:
+                    raise ArchiveAgentBusyError(member_id) from error
+            for member_id in agent_ids:
+                references = await services.agent_references(member_id)
+                if references:
+                    raise ArchiveSubjectInUseError(ARCHIVE_KIND_AGENT, member_id, references)
             async with self._scope_review_guard(scope) as (addresses, reviews):
-                await services.terminals.close_agent_scope(agent_id, None)
-                await services.commands.close_agent_scope(agent_id, None)
+                for member_id in agent_ids:
+                    await services.terminals.close_agent_scope(member_id, None)
+                    await services.commands.close_agent_scope(member_id, None)
                 await self._close_review_work(reviews)
                 scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
                 async with services.snapshot_barrier.compound_mutation_async():
                     outcome = await services.sessions.run_async(
-                        _operations.archive_agent, services, agent_id
+                        _operations.archive_agent, services, agent_id, private_ids
                     )
                     archived_reviews = await self._finish_scope_archive(
                         outcome.entry_id, scope, reviews
@@ -308,21 +320,26 @@ class ArchiveService:
                 await self._close_session_transports(addresses)
             # The archive has succeeded; what follows only brings caches, listeners
             # and the Recall index in step, so a failure there never hides it.
-            try:
-                services.invalidate_agent_skills(agent_id)
-            except Exception:
-                _LOGGER.exception("Could not drop an archived Agent's Skills (agent=%s)", agent_id)
+            for member_id in agent_ids:
+                try:
+                    services.invalidate_agent_skills(member_id)
+                except Exception:
+                    _LOGGER.exception(
+                        "Could not drop an archived Agent's Skills (agent=%s)", member_id
+                    )
         self._notify()
         _LOGGER.info(
             "Archive entry created (entry=%s kind=agent subject=%s sessions=%d policies=%d "
-            "actor=%s)",
+            "private_agents=%d actor=%s)",
             outcome.entry_id,
             agent_id,
             outcome.session_count,
             len(outcome.policy_agent_ids),
+            len(private_ids),
             actor,
         )
-        await services.remove_agent_from_recall(agent_id)
+        for member_id in agent_ids:
+            await services.remove_agent_from_recall(member_id)
         return outcome
 
     async def archive_project(
@@ -596,7 +613,8 @@ class ArchiveService:
                 _restore.restore, services, entry_id, target_id
             )
             if entry.kind == ARCHIVE_KIND_AGENT:
-                services.invalidate_agent_skills(target)
+                for member_id in (target, *outcome.private_agent_ids):
+                    services.invalidate_agent_skills(member_id)
             elif entry.kind == ARCHIVE_KIND_PROJECT:
                 services.invalidate_project(target)
         self._notify()
@@ -616,10 +634,12 @@ class ArchiveService:
         runs = self._services.runs
         async with AsyncExitStack() as guards:
             if entry.kind == ARCHIVE_KIND_AGENT:
-                await guards.enter_async_context(
-                    runs.agent_admission_guard(target, project_id=None)
-                )
-                scope = ArchiveScope(agent_id=entry.agent_id)
+                private_ids = _operations.private_agent_ids(entry)
+                for member_id in dict.fromkeys((target, *private_ids)):
+                    await guards.enter_async_context(
+                        runs.agent_admission_guard(member_id, project_id=None)
+                    )
+                scope = ArchiveScope(agent_id=entry.agent_id, private_agent_ids=private_ids)
             elif entry.kind == ARCHIVE_KIND_PROJECT:
                 await guards.enter_async_context(runs.project_admission_guard(target))
                 scope = ArchiveScope(project_id=entry.project_id)

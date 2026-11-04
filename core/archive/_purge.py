@@ -22,6 +22,7 @@ from core.archive._operations import (
     cleanup_agent,
     cleanup_currents,
     holds_agent_id_grants,
+    private_agent_ids,
     prune_empty_parents,
     stored_path,
 )
@@ -168,9 +169,11 @@ def _purge_claimed(
             path = stored_path(services, tree.path)
             remove_tree(path, within=archive_root, stop=check_stop)
             prune_empty_parents(services, path)
-        if entry.kind == ARCHIVE_KIND_AGENT and holds_agent_id_grants(services, entry):
-            # Kept for a restore that can no longer happen.
-            services.release_agent_secrets(entry.subject_id)
+        if entry.kind == ARCHIVE_KIND_AGENT:
+            for agent_id in (entry.subject_id, *private_agent_ids(entry)):
+                if holds_agent_id_grants(services, entry, agent_id):
+                    # Kept for a restore that can no longer happen.
+                    services.release_agent_secrets(agent_id)
         ledger.finish_purge(entry.entry_key)
     except _StoppedError:
         _LOGGER.debug("Archive entry purge stopped; it continues later (entry=%s)", entry.entry_id)

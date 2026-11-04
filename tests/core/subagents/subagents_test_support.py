@@ -130,6 +130,21 @@ class FakeAgents:
     def list(self) -> list[SimpleNamespace]:
         return [SimpleNamespace(id=agent_id, name=agent_id) for agent_id in sorted(self._agent_ids)]
 
+    def find(self, agent_id: str) -> SimpleNamespace | None:
+        return self.get(agent_id) if agent_id in self._agent_ids else None
+
+    def resolved_placement(self, agent, roster=None):
+        return {"kind": "chat"}
+
+    def placement_requires_guard(self, caller_id, target_id):
+        return False
+
+    def placement_target_allowed(self, caller_id, target_id, *, listed, wildcard, roster=None):
+        return listed or wildcard or caller_id == target_id
+
+    def automatic_targets(self, caller_id, roster=None):
+        return []
+
 
 class FakeAgentResolver:
     """Resolves every known Agent; Session overrides and working Projects are the real resolver's.

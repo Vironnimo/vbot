@@ -10,6 +10,14 @@ Creating an Agent seeds a workspace from bundled templates and creates no Sessio
 
 ## Terms
 
+### Placement
+
+Where an Identity Agent lives: Chat, Helper or Private (`agent/placement.md`).
+
+### Chat Agent
+
+An Identity Agent with no stored placement, shown in ordinary conversation selection (`agent/placement.md`).
+
 ### Rooting
 
 The older term for the Default Project (GLOSSARY -> Default Project). Code and stored names keep the older term Rooting (`root_project_id`, `agents_rooted_in`, `unrooted_agents`, `--copy-rooted-agent-files`).
@@ -51,16 +59,15 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 
 ## Store Operations
 
-- `agents.py` keeps the locked public store and Session coordination; internal store units and compensated lifecycle operations are mapped in `agent/lifecycle.md`. Schema normalization stays in `_config.py`, Workspace paths/seeding/relocation in `_workspace.py`, delegation bindings in `_delegation.py`, temporary Agents in `temporary.py`. Model fallback validation reuses Settings' `validate_fallback_chain`; diagnostics and mutation errors keep their surface-specific wording.
+- `agents.py` keeps the locked public store and Session coordination; internal store units and compensated lifecycle operations are mapped in `agent/lifecycle.md`. Placement and its owner proof and target rule live in `_placement.py` (`agent/placement.md`). Schema normalization stays in `_config.py`, Workspace paths/seeding/relocation in `_workspace.py`, delegation bindings in `_delegation.py`, temporary Agents in `temporary.py`. Model fallback validation reuses Settings' `validate_fallback_chain`; diagnostics and mutation errors keep their surface-specific wording.
 - `create` seeds the Workspace and persists the config without creating a Session; a failure removes its new Agent directory again. Returned Agents are effective-resolved. `get` bakes defaults and stays strict for addressed invalid agents; `list` isolates individual unreadable configs (log+skip) and degrades to empty roster on enumeration failure so bootstrap can still run. `list_with_order`/`reorder` guard roster replacement with optimistic revision + exact-set matching (`AgentOrderConflictError` otherwise).
-- `rename`, `revert_rename`, `recover_rename`, `archive_files` and `restore_files` change `sessions.db` and the Agent tree as one unit (the archive service commits the Sessions inside the last two), and `create` writes the Agent tree with its `agent.json` (no Session), so each enters the injected snapshot barrier before its document change and the store lock (`database.md` -> Snapshot consistency).
 - `exists` is the validity-aware, never-raising probe behind identity-only gates such as private-skill layering and the skill RPC write scope. `find` returns its valid config without defaults, Workspace seeding or current-Session repair, or `None`; unproven delegation grants are excluded (`agent/delegation.md`). Skill scoping reads `excluded_skills` through it.
 - `lifecycle_guard` lets another domain hold the store's existing mutation lock across private-home lookup, writes and invalidation; like a mutation it admits an Agent document change first, so guarded work waits for a running data snapshot before it takes the lock. Runtime injects it into the registered Skill authoring Tool to protect shared-owner trees from concurrent rename/archive. Guarded work runs in a worker and must not call back into the Event Loop; Agent deletion also offloads its roster read, and the archive service its archive (`tests/core/runtime/test_runtime_skill_lifecycle.py`).
 
 ## Constraints & Gotchas
 
 - Archive and restore move the Agent tree through `move_tree` (`core/utils/tree_move.py`), which is all or nothing: a refused or failed move leaves its source exactly as it was and creates no destination, so compensation only moves trees back and never deletes payload content (that may be the last complete copy of the Agent's data). Rename, archive and restore mechanics -> `agent/lifecycle.md`.
-- `agent.delete` refuses the last Agent; the archive service refuses one with active/queued Runs (`agent_busy`) or one referenced by Channels or by a live automation (`agent_in_use`, listed by `Runtime.agent_references`): a non-terminal identity Bootstrap job or an identity Cron job that can still fire, as `AutomationReferences.agent_references` reports (`automation.md`); the handler holds the reference lock and the service the admission guard across the check and the archive. `AgentStore.archive_files` owns only the file move and its compensation, not those product-level guards. Delegation allow-lists never block deletion: the archive records and removes the Agent's grants, and a restore re-adds them only for the same holder incarnation (`agent/delegation.md`).
+- `agent.delete` refuses the last Chat Agent; the archive service refuses one with active/queued Runs (`agent_busy`) or one referenced by Channels or by a live automation (`agent_in_use`, listed by `Runtime.agent_references`): a non-terminal identity Bootstrap job or an identity Cron job that can still fire, as `AutomationReferences.agent_references` reports (`automation.md`); the handler holds the reference lock and the service the admission guard across the check and the archive. `AgentStore.archive_files` owns only the file move and its compensation, not those product-level guards. Delegation allow-lists never block deletion: the archive records and removes the Agent's grants, and a restore re-adds them only for the same holder incarnation (`agent/delegation.md`).
 - Rename holds reference lock plus admission guards for both ids, refuses open Sub-Agent relations/collisions/invalid ids, a new id that still owns live Sessions or archived ones a rename would move (`archive:<entry id>`), and a new id that a reference of another owner still names - a Channel, a non-terminal identity Cron or Bootstrap job or an Agent Secret grant - with `AgentReferencedError` (RPC `agent_in_use`) naming each one, before anything changes. It moves every live reference and keeps terminal history/logs historical. The whole rename, retargeting and revert included, holds the snapshot barrier, so an online data snapshot never sees the Sessions renamed but the Channels or Cron jobs not (`core/runtime/_agent_rename.py`; order in `runtime/agent-rename.md`).
 - Roster order is the selection fallback for accessors without valid saved selection - it never changes current selections, Sessions, default Projects, or Run configuration; Project Agents come from Team scan order and are not in this document.
 
@@ -72,6 +79,7 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 
 Read these only when your task matches - not by default.
 
+- Changing Placement, Private/Helper targeting, owner proof, transitions or selection visibility -> `agent/placement.md`
 - Changing an `agent.json` field, its validation or surfaces (`description` and its suggestion, Models and fallbacks, Workspace relocation, current-Session repair, `tool_access` and `tools.<tool>` settings, `tool_loading`, Skills, `librarian_enabled`) or `agents/order.json` -> `agent/configuration.md`
 - Rename, archive or restore mechanics in the store (store operations, tree moves, references a rename moves/refuses, rename record/recovery, `ensure_bootstrap`) and SOUL.md edits -> `agent/lifecycle.md`
 - Delegation allow-list grants across archive, restore and rename: explicit target bindings, grant removal and re-adding, `agents/retirements.json`, `delegation_target_allowed` -> `agent/delegation.md`

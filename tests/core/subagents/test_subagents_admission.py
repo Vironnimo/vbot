@@ -366,3 +366,67 @@ async def test_failed_override_preparation_never_executes_input_or_leaks_capacit
     )
     assert (await harness.resolver.session_overrides_async(address)).model == "fixture/original"
     assert all(turn.run is None for turn in harness.loop.turns if turn.content == "not executed")
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "owner",
+        "sibling",
+        "outsider",
+        "replaced-owner",
+        "helper",
+        "replaced-helper",
+        "changed-under-lock",
+    ],
+)
+async def test_placement_admission_uses_live_owner_and_helper_proofs(
+    harness: SubAgentHarness, scenario
+):
+    from contextlib import asynccontextmanager
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from core.agents import AgentPlacement, AgentStore
+
+    agents = AgentStore(harness.storage.data_dir, sessions=harness.sessions)
+    parent = agents.create("parent", model="fixture/model")
+    agents.create("outside", model="fixture/model")
+    helper = scenario in ("helper", "replaced-helper")
+    worker = agents.create(
+        "worker",
+        model="fixture/model",
+        placement=AgentPlacement("helper") if helper else AgentPlacement("private", "parent"),
+    )
+    if scenario == "outsider":
+        agents.update("worker", placement=AgentPlacement("private", "outside"))
+    elif scenario == "sibling":
+        agents.update("worker", placement=AgentPlacement("private", "outside"))
+        agents.update("parent", placement=AgentPlacement("private", "outside"))
+    elif scenario == "replaced-owner":
+        agents._write_agent(replace(parent, created_at="2020-01-01T00:00:00Z"))
+    elif scenario == "replaced-helper":
+        agents._write_agent(replace(worker, created_at="2020-01-01T00:00:00Z"))
+
+    @asynccontextmanager
+    async def reference_lock():
+        if scenario == "changed-under-lock":
+            agents.update("worker", placement=AgentPlacement("private", "outside"))
+        yield
+
+    harness.runtime.agents = agents
+    harness.runtime.automation_references = SimpleNamespace(lock=reference_lock())
+    harness.resolver._agents = cast(Any, agents)
+    result = await harness.call(
+        {"agent_id": "worker", "description": "Review", "content": "placement admission"},
+        allowed_agents=["*", "worker"] if helper or scenario == "outsider" else [],
+        delegation_bindings={"worker": worker.created_at},
+    )
+    if scenario in ("owner", "sibling", "helper"):
+        assert result["ok"], result
+        await harness.settle()
+    else:
+        assert result["error"]["code"] == "agent_not_allowed"
+        assert not harness.loop.turns
+    agents.close()

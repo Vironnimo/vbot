@@ -8,6 +8,7 @@ from core.agents import (
     AgentError,
     AgentNotFoundError,
     AgentOrderConflictError,
+    AgentPlacementError,
     AgentReferencedError,
     InvalidAgentOrderError,
     SoulConflictError,
@@ -61,6 +62,7 @@ from server.rpc.errors import (
     RPC_ERROR_AGENT_IN_USE,
     RPC_ERROR_AGENT_NOT_FOUND,
     RPC_ERROR_AGENT_ORDER_CONFLICT,
+    RPC_ERROR_AGENT_PLACEMENT,
     RPC_ERROR_ARCHIVE_ENTRY_BUSY,
     RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND,
     RPC_ERROR_ARCHIVE_NOT_RESTORABLE,
@@ -191,6 +193,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, (AgentNotFoundError, ResolutionAgentNotFoundError)):
         return RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(error))
+    if isinstance(error, AgentPlacementError):
+        return RpcError(RPC_ERROR_AGENT_PLACEMENT, str(error), data={"reason": error.reason})
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
     if isinstance(error, SoulConflictError):

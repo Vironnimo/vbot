@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.agents import _archive, _delegation
+from core.agents import _archive, _delegation, _placement
 from core.agents import _workspace as workspace_ops
 from core.agents._builtins import BuiltinAgents
 from core.agents._config import (
@@ -60,6 +60,8 @@ from core.agents._types import (
     AgentListResult,
     AgentNotFoundError,
     AgentOrderConflictError,
+    AgentPlacement,
+    AgentPlacementError,
     AgentReferencedError,
     AgentRename,
     AgentRenameResult,
@@ -103,6 +105,8 @@ __all__ = [
     "AgentListResult",
     "AgentNotFoundError",
     "AgentOrderConflictError",
+    "AgentPlacement",
+    "AgentPlacementError",
     "AgentReferencedError",
     "AgentRename",
     "AgentRenameResult",
@@ -252,6 +256,7 @@ class AgentStore:
         permission_rules: PermissionRules | Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
+        placement: AgentPlacement | None = None,
     ) -> Agent:
         """Create and persist a new Agent and its Workspace; it has no Session yet.
 
@@ -285,6 +290,7 @@ class AgentStore:
             permission_rules=permission_rules,
             librarian_enabled=librarian_enabled,
             description=description,
+            placement=placement,
         )
 
     def id_references(self, agent_id: str) -> tuple[str, ...]:
@@ -533,7 +539,7 @@ class AgentStore:
         return self._renames.recover_rename()
 
     def _remove_from_allow_lists(
-        self, agent_id: str, *, best_effort: bool = False
+        self, agent_id: str, *, best_effort: bool = False, preserve_own: bool = False
     ) -> tuple[str, ...]:
         """Remove a bare Identity Agent id from every delegation allow-list.
 
@@ -555,6 +561,8 @@ class AgentStore:
             return ()
         changed: builtins.list[str] = []
         for agent, allowed_agents in naming:
+            if preserve_own and agent.id == agent_id:
+                continue
             tools = deepcopy(agent.tools)
             tools["subagent"]["allowed_agents"] = [
                 item for item in allowed_agents if item != agent_id
@@ -639,6 +647,7 @@ class AgentStore:
         *,
         workspace: str | None,
         root_project_id: str | None,
+        owner_id: str | None = None,
     ) -> AbstractContextManager[Agent]:
         """Move an archived Agent directory back as ``target_id`` for the caller's commit.
 
@@ -647,7 +656,12 @@ class AgentStore:
         moves the tree back into ``source``.
         """
         return _archive.restore_files(
-            self, source, target_id, workspace=workspace, root_project_id=root_project_id
+            self,
+            source,
+            target_id,
+            workspace=workspace,
+            root_project_id=root_project_id,
+            owner_id=owner_id,
         )
 
     def complete_restore_files(
@@ -658,6 +672,7 @@ class AgentStore:
         expected_created_at: str | None,
         workspace: str | None,
         root_project_id: str | None,
+        owner_id: str | None = None,
     ) -> None:
         """Complete an interrupted restore's config rewrite on its already moved tree.
 
@@ -671,6 +686,7 @@ class AgentStore:
             expected_created_at=expected_created_at,
             workspace=workspace,
             root_project_id=root_project_id,
+            owner_id=owner_id,
         )
 
     def delegation_grant_problem(self, grant: Mapping[str, Any]) -> str | None:
@@ -835,6 +851,56 @@ class AgentStore:
                 raise AgentError(str(error)) from error
         if agent is not original and agent.tools != original.tools:
             _LOGGER.info("Unproven delegation grants revoked (agent=%s)", agent.id)
+
+    def resolved_placement(
+        self, agent: Agent, roster: Iterable[Agent] | None = None
+    ) -> dict[str, Any]:
+        """Public placement without its private owner proof; a roster avoids more reads."""
+        with self._write_lock:
+            find = self.find if roster is None else {item.id: item for item in roster}.get
+            return _placement.resolved(agent, find)
+
+    def private_agents(
+        self, owner_id: str, roster: Iterable[Agent] | None = None
+    ) -> builtins.list[Agent]:
+        """Return only verified Private Agents belonging to this owner."""
+        with self._write_lock:
+            return _placement.private_agents(owner_id, self.list() if roster is None else roster)
+
+    def automatic_targets(
+        self, caller_id: str, roster: Iterable[Agent] | None = None
+    ) -> builtins.list[str]:
+        """Private Agents of a caller's group, excluding the caller and its owner."""
+        with self._write_lock:
+            return _placement.automatic_targets(
+                caller_id, self.list() if roster is None else roster
+            )
+
+    def placement_target_allowed(
+        self,
+        caller_id: str,
+        target_id: str,
+        *,
+        listed: bool,
+        wildcard: bool,
+        roster: Iterable[Agent] | None = None,
+    ) -> bool:
+        """Apply the Identity-to-Identity target rule against current owner proofs."""
+        if caller_id == target_id:
+            return True
+        with self._write_lock:
+            find = self.find if roster is None else {item.id: item for item in roster}.get
+            return _placement.target_allowed(
+                find(caller_id), find(target_id), find, listed=listed, wildcard=wildcard
+            )
+
+    def placement_requires_guard(self, caller_id: str, target_id: str) -> bool:
+        """Whether placement admission needs serialization with lifecycle changes."""
+        with self._write_lock:
+            return any(
+                agent is not None and agent.placement is not None
+                for agent in (self.find(caller_id), self.find(target_id))
+            )
 
     def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
         """Whether a captured explicit grant still addresses this Identity Agent.

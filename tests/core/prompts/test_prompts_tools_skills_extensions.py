@@ -556,3 +556,49 @@ def test_on_demand_tools_are_listed_in_their_block_instead_of_the_tool_list(
     assert manager.provider_tool_definitions(no_tools) == []
     for nothing_to_load in (keeps_all, no_tools):
         assert "load_tools" not in manager.build_system_prompt(nothing_to_load)
+
+
+@pytest.mark.parametrize(
+    ("caller", "expected"),
+    [
+        ("owner", ["owner", "private", "sibling"]),
+        ("private", ["private", "sibling"]),
+        ("outsider", ["outsider"]),
+    ],
+)
+def test_provider_subagent_enum_contains_only_permitted_private_targets(
+    workspace, tmp_path, caller, expected
+):
+    from core.agents import AgentPlacement
+
+    registry = ToolRegistry()
+    registry.register(
+        name="subagent",
+        description="Start",
+        parameters={
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        handler=lambda _context, _arguments: tool_success({}),
+    )
+    owner = replace(
+        _agent(workspace, agent_id="owner"),
+        created_at="owner-proof",
+        tools={"subagent": {"allowed_agents": []}},
+    )
+    private = replace(
+        _agent(workspace, agent_id="private"),
+        placement=AgentPlacement("private", "owner", "owner-proof"),
+        tools={"subagent": {"allowed_agents": ["owner"]}},
+    )
+    sibling = replace(private, id="sibling")
+    outsider = replace(
+        _agent(workspace, agent_id="outsider"), tools={"subagent": {"allowed_agents": ["private"]}}
+    )
+    agents = [owner, private, sibling, outsider]
+    manager = _manager(tmp_path, tools=registry, agents=agents)
+    [definition] = manager.provider_tool_definitions(
+        next(agent for agent in agents if agent.id == caller)
+    )
+    assert definition["parameters"]["properties"]["agent_id"]["enum"] == expected

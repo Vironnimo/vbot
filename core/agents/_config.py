@@ -19,6 +19,7 @@ from core.agents._types import (
     LIBRARIAN_TOOLS,
     Agent,
     AgentError,
+    AgentPlacement,
     AgentRename,
     InvalidAgentIdError,
     _AgentOrderDocument,
@@ -146,6 +147,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "context_commands",
         "created_at",
         "delegation_bindings",
+        "placement",
         "current_session_id",
         "description",
         "custom_system_prompt_enabled",
@@ -197,6 +199,8 @@ AGENT_SHAPE = json_document(
         # left out (``validate_permission_rules_diagnostics``), so there is nothing
         # to strip or merge back: the owner writes the whole set.
         "permission_rules": OPAQUE,
+        # Unknown placement fields invalidate the lock rather than silently opening it.
+        "placement": OPAQUE,
         "delegation_bindings": json_map(OPAQUE),
         "tools": json_map(
             OPAQUE,
@@ -291,6 +295,14 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         from ._delegation import validate_bindings
 
         diagnostics.extend(validate_bindings(data["delegation_bindings"]))
+    if "placement" in data:
+        from ._placement import validate_placement
+
+        diagnostics.extend(
+            validate_placement(
+                data["placement"], agent_id=data.get("id"), builtin=data.get("builtin")
+            )
+        )
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
     validate_string(diagnostics, "$.description", data.get("description"), required=False)
@@ -764,6 +776,7 @@ def _agent_from_dict(
         context_commands=_validate_context_commands(data.get("context_commands")),
         tools=normalize_agent_tools(data.get("tools")),
         delegation_bindings=dict(data.get("delegation_bindings", {})),
+        placement=AgentPlacement(**data["placement"]) if "placement" in data else None,
         custom_system_prompt_enabled=bool(
             data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)
         ),
@@ -824,6 +837,12 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
     """Return the persisted ``agent.json`` fields of one Agent."""
     persisted = asdict(agent)
     persisted["tool_access"] = agent.tool_access.to_dict()
+    if agent.placement is None:
+        persisted.pop("placement")
+    else:
+        persisted["placement"] = {
+            key: value for key, value in asdict(agent.placement).items() if value is not None
+        }
     if not persisted["tools"]:
         persisted.pop("tools")
     if not persisted["delegation_bindings"]:
