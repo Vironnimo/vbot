@@ -34,9 +34,12 @@ const PENDING = { pending: true, restarting: false, failed: false };
 const CONFIRM_DIALOG =
   '[role="dialog"][aria-labelledby="confirm-dialog-title"]';
 
-const restartBanner = () => document.querySelector('.app-desktop-restart');
-const restartButton = () => restartBanner()?.querySelector('button') ?? null;
-const reloadBanner = () => document.querySelector('.app-webui-outdated');
+const restartNotice = () =>
+  document.querySelector('[data-toast-id^="desktop-restart"]');
+const restartButton = () =>
+  restartNotice()?.querySelector('.toast-actions button') ?? null;
+const reloadNotice = () =>
+  document.querySelector('[data-toast-id="webui-outdated"]');
 const errorToasts = () =>
   [...document.querySelectorAll('.toast.error .toast-msg')].map(
     (message) => message.textContent,
@@ -214,8 +217,8 @@ describe('App Desktop restart', () => {
         pushUpdate(PENDING);
 
         await waitForCondition(() => {
-          expect(Boolean(restartBanner())).toBe(offered);
-          expect(Boolean(reloadBanner())).toBe(!offered);
+          expect(Boolean(restartNotice())).toBe(offered);
+          expect(Boolean(reloadNotice())).toBe(!offered);
         });
         if (offered) {
           expect(restartButton().textContent.trim()).toBe(
@@ -237,7 +240,7 @@ describe('App Desktop restart', () => {
     installDesktop();
     rpcMock.mockImplementation(createAppRpcMock());
     await mountWithRestartOffered();
-    expect(restartBanner().textContent).toContain(
+    expect(restartNotice().textContent).toContain(
       t('app.desktopRestart.pending'),
     );
 
@@ -251,7 +254,7 @@ describe('App Desktop restart', () => {
     });
 
     pushUpdate({ pending: true, restarting: false, failed: true });
-    expect(restartBanner().textContent).toContain(
+    expect(restartNotice().textContent).toContain(
       t('app.desktopRestart.failed'),
     );
     expect(restartButton().disabled).toBe(false);
@@ -262,7 +265,7 @@ describe('App Desktop restart', () => {
     );
 
     pushUpdate({ pending: false, restarting: false, failed: false });
-    expect(restartBanner()).toBeNull();
+    expect(restartNotice()).toBeNull();
   });
 
   it('saves pending edits and composer drafts before the user’s restart', async () => {

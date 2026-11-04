@@ -50,16 +50,6 @@ export function createAppSetup(context) {
 
   let operational = $derived(isOperational(settings));
 
-  // Slim re-entry banner: shown only once the wizard was set aside while the
-  // system is still not operational. It disappears the instant a provider is
-  // connected (operational flips true).
-  let showFinishSetup = $derived(
-    settings !== null &&
-      !operational &&
-      onboardingDismissed &&
-      !onboardingActive,
-  );
-
   // Fetch application settings and seed the app-wide appearance from them. Also
   // the source of the operational state that drives onboarding.
   const loadAppSettings = async () => {
@@ -144,9 +134,6 @@ export function createAppSetup(context) {
     },
     get operational() {
       return operational;
-    },
-    get showFinishSetup() {
-      return showFinishSetup;
     },
     get loadAppSettings() {
       return loadAppSettings;

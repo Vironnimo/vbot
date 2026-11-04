@@ -204,7 +204,7 @@ twice. Starting another player manually pauses the previous one. Later `canplay`
 events must not undo Pause. Identity Agent rename updates the origin address.
 
 When the speaking Session is not selected in Chat, `SpeechPlaybackBar.svelte`
-shows the shared controls, origin link and waiting count above the current view;
+shows the shared controls, origin link and waiting count as a card at the bottom of the toast stack;
 Stop clears the active output and waiting list. Tool failure and Run cancellation
 remove that Run's playback; its durable artifact stays playable by hand from History.
 Run completion, failure or interruption lets its generated audio, active and waiting,
