@@ -451,7 +451,7 @@ def _native_response(provider_id: str, readable_field: str) -> dict[str, Any]:
                     "content": "Reading the file.",
                     readable_field: READABLE_REASONING,
                     "reasoning_details": [
-                        {"type": "reasoning.encrypted", "data": "foreign-encrypted"}
+                        {"type": "reasoning.encrypted", "data": "native-encrypted"}
                     ],
                     "tool_calls": [
                         {
@@ -494,6 +494,7 @@ def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[Ch
         pytest.param("ollama-cloud", "deepseek-v4.1-flash", "api-key", id="chat-reasoning"),
         pytest.param("ollama-cloud", "kimi-k3.1-pro", "api-key", id="ollama-kimi-k31"),
         pytest.param("opencode-go", "kimi-k3.1-pro", "api-key", id="go-kimi-k31"),
+        pytest.param("opencode-go", "iceman-contributor-free", "api-key", id="go-iceman-opaque"),
     ],
 )
 async def test_bundled_models_replay_persisted_tool_history_only_on_its_original_route(
@@ -552,7 +553,7 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
     for same_route, payload in payloads.items():
         assert _wire_tool_ids(profile, payload) == (["call_native"], ["call_native"])
         serialized = json.dumps(payload)
-        if same_route and provider_id == "opencode-zen":
+        if same_route and (provider_id == "opencode-zen" or model_id == "iceman-contributor-free"):
             assert READABLE_REASONING not in serialized
         else:
             # A route change preserves portable Tool context as a quoted note.
@@ -566,6 +567,16 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
                 assert all(item.get("type") != "reasoning" for item in payload["input"])
             continue
         prior = next(item for item in payload["messages"] if item["role"] == "assistant")
+        if model_id == "iceman-contributor-free":
+            assert prior.get("reasoning_details") == (
+                [{"type": "reasoning.encrypted", "data": "native-encrypted"}]
+                if same_route
+                else None
+            )
+            assert readable_field not in prior
+            assert "reasoning" not in prior
+            continue
+        assert "native-encrypted" not in serialized
         # OpenCode Go keeps an empty carrier on a Tool Call whose Reasoning it drops.
         dropped = "" if provider_id == "opencode-go" else None
         assert prior.get(readable_field) == (READABLE_REASONING if same_route else dropped)

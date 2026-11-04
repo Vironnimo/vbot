@@ -85,6 +85,10 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("minimax-m3.1-flash", "none", None, "low", ("effort", "low")),
         ("minimax-m3.1-flash", "max", None, "max", ("effort", "max")),
         ("step-5-preview-free", "none", None, "low", ("effort", "low")),
+        ("step-5-preview", "none", None, "low", ("effort", "low")),
+        ("beam-free", "none", None, "low", ("effort", "low")),
+        ("iceman-contributor-free", "none", None, "low", ("effort", "low")),
+        ("iceman-contributor-free", "xhigh", None, "xhigh", ("effort", "xhigh")),
     ],
 )
 @pytest.mark.asyncio
@@ -113,7 +117,6 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     description = adapter.describe_reasoning_render(model_id, effort)
     assert (description.kind, description.effort_level) == intent
     assert adapter.reasoning_replay_policy(model_id) == REASONING_REPLAY_FULL_HISTORY
-    assert adapter.reasoning_replay_fidelity(model_id) == REASONING_REPLAY_FIDELITY_READABLE_ONLY
 
 
 @pytest.mark.parametrize(
@@ -229,6 +232,7 @@ async def test_inferred_minimum_effort_follows_the_new_models_reported_ladder(
     [
         pytest.param("kimi-k3", REASONING_REPLAY_FIDELITY_READABLE_ONLY, id="chat"),
         pytest.param("unprofiled-model", REASONING_REPLAY_FIDELITY_READABLE_ONLY, id="unknown"),
+        pytest.param("iceman-contributor-free", REASONING_REPLAY_FIDELITY_META_ONLY, id="iceman"),
         pytest.param(MESSAGES_MODEL, REASONING_REPLAY_FIDELITY_META_ONLY, id="messages"),
         pytest.param(RESPONSES_MODEL, REASONING_REPLAY_FIDELITY_META_ONLY, id="responses"),
     ],
@@ -242,8 +246,9 @@ def test_every_wire_replays_full_history_with_its_own_fidelity(
     assert adapter.reasoning_replay_fidelity(model_id) == fidelity
 
 
+@pytest.mark.parametrize("model_id", ["deepseek-v4.1-flash", "iceman-contributor-free"])
 @pytest.mark.asyncio
-async def test_chat_wire_replays_only_readable_reasoning_for_every_assistant() -> None:
+async def test_chat_wire_replays_one_reasoning_class_for_every_assistant(model_id: str) -> None:
     reasoning = "EXACT old Reasoning: äöü\nline two\n"
     history: list[dict[str, Any]] = [{"role": "user", "content": "First"}]
     # A Tool Call without Reasoning still carries an empty reasoning_content:
@@ -263,7 +268,11 @@ async def test_chat_wire_replays_only_readable_reasoning_for_every_assistant() -
                 "role": "assistant",
                 "content": None if calls else "Answer",
                 "reasoning": text,
-                "reasoning_meta": {"reasoning_details": [{"trace": "opaque"}]} if text else None,
+                "reasoning_meta": (
+                    {"reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}]}
+                    if text and text != "second reasoning"
+                    else None
+                ),
                 "tool_calls": [call] if calls else None,
             },
             {"role": "tool", "tool_call_id": call["id"], "content": "text"}
@@ -273,19 +282,32 @@ async def test_chat_wire_replays_only_readable_reasoning_for_every_assistant() -
 
     with respx.mock:
         route = respx.post(CHAT_URL).mock(return_value=success_response("chat", streaming=False))
-        await go_adapter().send(history, model_id="deepseek-v4.1-flash")
+        await go_adapter().send(history, model_id=model_id)
 
     assistants = [m for m in _sent_payload(route)["messages"] if m["role"] == "assistant"]
-    assert [m.get("reasoning_content") for m in assistants] == [
-        reasoning,
-        "second reasoning",
-        None,
-        None,
-        "tool reasoning",
-        "",
-        "",
-    ]
-    assert all("reasoning_details" not in m and "reasoning" not in m for m in assistants)
+    if model_id == "iceman-contributor-free":
+        assert all("reasoning_content" not in m for m in assistants)
+        assert [m.get("reasoning_details") for m in assistants] == [
+            [{"type": "reasoning.encrypted", "data": "opaque"}],
+            None,
+            None,
+            None,
+            [{"type": "reasoning.encrypted", "data": "opaque"}],
+            None,
+            None,
+        ]
+    else:
+        assert [m.get("reasoning_content") for m in assistants] == [
+            reasoning,
+            "second reasoning",
+            None,
+            None,
+            "tool reasoning",
+            "",
+            "",
+        ]
+        assert all("reasoning_details" not in m for m in assistants)
+    assert all("reasoning" not in m for m in assistants)
     assert all("<reasoning_history>" not in (m.get("content") or "") for m in assistants)
 
 

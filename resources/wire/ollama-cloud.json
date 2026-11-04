@@ -17,13 +17,14 @@
   },
   "rules": [
     {
-      "when": {"ids": ["minimax-m3.1-flash"]},
+      "when": {"ids": ["minimax-m3.1-flash", "beam"]},
       "set": {"reasoning": {"off": "low"}},
-      "note": "M3.1 Flash keeps reasoning when sent none (live 2026-10-19); use the accepted low effort for an off selection."
+      "note": "M3.1 Flash (2026-10-19) and Beam (2026-11-04) keep reasoning when sent none; use the accepted low effort for an off selection."
     },
     {
       "when": {
         "ids": [
+          "beam",
           "deepseek-v4-pro:0813",
           "deepseek-v4.1-flash",
           "deepseek-v4.1-flash:1017",
@@ -40,7 +41,10 @@
           "minimax-m2.7",
           "minimax-m3",
           "minimax-m3.1-flash",
+          "mimo-v2.6-flash",
+          "mimo-v2.6-pro",
           "mistral-large-4",
+          "muse-spark-open",
           "nemotron-3-nano:30b",
           "nemotron-3-super",
           "nemotron-3-ultra"

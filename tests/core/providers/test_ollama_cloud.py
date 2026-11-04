@@ -559,7 +559,16 @@ async def test_v41_image_profile_converts_gif_before_cloud_request(model_id: str
 )
 @pytest.mark.parametrize(
     ("model_id", "output_limit"),
-    [(V41, 393_216), ("deepseek-v4.1-flash:1017", 384_000), ("kimi-k3.1-pro", 131_072)],
+    [
+        (V41, 393_216),
+        ("deepseek-v4.1-flash:1017", 384_000),
+        ("kimi-k3.1-pro", 131_072),
+        ("minimax-m3.1-flash", 512_000),
+        ("mimo-v2.6-flash", 131_072),
+        ("mimo-v2.6-pro", 131_072),
+        ("beam", 131_072),
+        ("muse-spark-open", 131_072),
+    ],
 )
 @respx.mock
 @pytest.mark.asyncio
@@ -616,7 +625,12 @@ async def test_cloud_models_replay_persisted_reasoning_on_fresh_adapter(
         payload = sent_body(route)
         replayed = payload["messages"][1]
         assert payload["model"] == model_id
-        assert payload["reasoning_effort"] == wire_effort
+        expected_effort = (
+            "low"
+            if effort == "none" and model_id in {"beam", "minimax-m3.1-flash"}
+            else wire_effort
+        )
+        assert payload["reasoning_effort"] == expected_effort
         assert payload["max_tokens"] == output_limit
         assert payload["tools"][0]["function"]["name"] == "get_weather"
         assert replayed["reasoning"] == "test-owned reasoning sentinel"
