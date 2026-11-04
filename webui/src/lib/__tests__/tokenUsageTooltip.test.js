@@ -55,7 +55,7 @@ describe('contextUsageCardModel', () => {
         id: 'session',
         title: '',
         rows: [
-          `${label('cacheHitRate')}: 30%`,
+          `${label('cacheHitRate')}: 30.0%`,
           `${label('totalInput')}: 10,000`,
           `${label('totalOutput')}: 400`,
           `· ${label('reasoning')}: 90`,
@@ -66,7 +66,7 @@ describe('contextUsageCardModel', () => {
         title: label('lastTurn'),
         rows: [
           `${label('input')}: 36,704`,
-          `· ${label('cacheRead')}: 6,656 (18%)`,
+          `· ${label('cacheRead')}: 6,656 (18.1%)`,
           `· ${label('cacheWrite')}: 1,200`,
           `· ${label('uncached')}: 28,848`,
           `${label('output')}: 2,190`,
@@ -92,13 +92,13 @@ describe('contextUsageCardModel', () => {
     expect(card.summary).toBe('900');
     expect(card.sections.map(rowsText)).toEqual([
       [
-        `${label('cacheHitRate')}: 0%`,
+        `${label('cacheHitRate')}: 0.0%`,
         `${label('totalInput')}: 500`,
         `${label('totalOutput')}: 20`,
       ],
       [
         `${label('input')}: 500`,
-        `· ${label('cacheRead')}: 0 (0%)`,
+        `· ${label('cacheRead')}: 0 (0.0%)`,
         `· ${label('cacheWrite')}: 0`,
         `· ${label('uncached')}: 500`,
         `${label('output')}: 20`,

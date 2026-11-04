@@ -556,7 +556,7 @@ describe('ChatActivityPanel', () => {
         total: {
           input_tokens: 120000,
           output_tokens: 3400,
-          cache_read_tokens: 90000,
+          cache_read_tokens: 117360,
           cost_usd: 1.25,
         },
         subAgentCount: 2,
@@ -602,7 +602,7 @@ describe('ChatActivityPanel', () => {
     expect(facts[t('chat.activity.overview.tokens')].textContent).toContain(
       '120K',
     );
-    expect(facts[t('chat.activity.overview.cache')].textContent).toBe('75%');
+    expect(facts[t('chat.activity.overview.cache')].textContent).toBe('97.8%');
     expect(facts[t('chat.activity.overview.cost')].textContent).toBe('$1.25');
     // The changed files show in the card itself.
     expect(

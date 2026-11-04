@@ -145,6 +145,7 @@ describe('statisticsView numbers', () => {
       [null, 950, 12_345, 1_234_567].map((value) => formatTokens(value, 'en')),
     ).toEqual(['—', '950', '12.3K', '1.2M']);
     expect(formatPercent(0.1234, 'en')).toBe('12.3%');
+    expect(formatPercent(0.978, 'de')).toBe('97,8\u00a0%');
     expect(formatPercent(null, 'en')).toBe('—');
     expect(formatShare(1, 3, 'en')).toBe('33.3%');
     expect(formatShare(1, 0, 'en')).toBe('—');

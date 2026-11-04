@@ -440,7 +440,7 @@ describe('ChatView', () => {
           {
             title: '',
             rows: [
-              'Cache hit rate: 80%',
+              'Cache hit rate: 80.0%',
               'Total input: 40,000',
               'Total output: 1,500',
             ],
@@ -449,7 +449,7 @@ describe('ChatView', () => {
             title: 'Last turn',
             rows: [
               'Input: 3,886',
-              '· Read from cache: 3,000 (77%)',
+              '· Read from cache: 3,000 (77.2%)',
               '· Written to cache: 200',
               '· Uncached: 686',
               'Output: 92',
@@ -465,7 +465,7 @@ describe('ChatView', () => {
             title: 'Last turn',
             rows: [
               'Input: 3,886',
-              '· Read from cache: 0 (0%)',
+              '· Read from cache: 0 (0.0%)',
               '· Written to cache: 0',
               '· Uncached: 3,886',
               'Output: 92',

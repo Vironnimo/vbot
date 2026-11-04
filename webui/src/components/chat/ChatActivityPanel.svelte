@@ -8,7 +8,11 @@
     backgroundTasks,
   } from '$lib/chatTimelinePresentation.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
-  import { formatCost, formatTokens } from '$lib/statisticsView.js';
+  import {
+    formatCost,
+    formatPercent,
+    formatTokens,
+  } from '$lib/statisticsView.js';
   import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -265,10 +269,7 @@
       tokensSplit: split(tokens),
       cache:
         input > 0 && cacheRead > 0
-          ? new Intl.NumberFormat(locale, {
-              style: 'percent',
-              maximumFractionDigits: 0,
-            }).format(Math.min(1, cacheRead / input))
+          ? formatPercent(Math.min(1, cacheRead / input), locale)
           : '',
       cost: Number.isFinite(total?.cost_usd) ? cost(total) : '',
       costSplit: split(cost),
