@@ -89,6 +89,12 @@ def test_placement_transitions_defaults_and_private_grants(store: AgentStore):
     for holder in ("owner", "outsider"):
         with pytest.raises(AgentError):
             store.update(holder, subagent_allow=["helper"])
+    # A future grant is removed on Private creation, so moving it to Helper does not revive it.
+    store.update("outsider", subagent_allow=["*", "future"])
+    store.create("future", placement=AgentPlacement("private", "owner"))
+    assert subagent_allowed_agents(store.get("outsider").tools) == ["*"]
+    store.update("future", placement=AgentPlacement("helper"))
+    assert subagent_allowed_agents(store.get("outsider").tools) == ["*"]
     # An old, bound literal entry is tolerated during unrelated edits and stays inert.
     store._write_agent(outsider)
     assert store.update("outsider", name="Other").name == "Other"

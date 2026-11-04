@@ -551,6 +551,7 @@ def test_owner_rename_retargets_only_matching_private_agents_and_recovery_conver
 ):
     from dataclasses import replace
 
+    store._defaults_provider = lambda: {"model": "fixture/model", "temperature": 0.7}
     owner = store.create("owner")
     private = store.create("private", placement=AgentPlacement("private", "owner"))
     orphan = store.create("orphan", placement=AgentPlacement("private", "owner"))
@@ -559,10 +560,14 @@ def test_owner_rename_retargets_only_matching_private_agents_and_recovery_conver
     )
     result = store.rename("owner", "renamed")
     assert store.get("private").placement == AgentPlacement("private", "renamed", owner.created_at)
+    assert persisted(store, "private")["model"] == ""
+    assert persisted(store, "private")["temperature"] is None
     orphan_placement = store.get("orphan").placement
     assert orphan_placement is not None and orphan_placement.owner_id == "owner"
     store.recover_rename()
     assert [item.id for item in store.private_agents("renamed")] == ["private"]
     store.revert_rename(result.rename)
     assert store.get("private").placement == private.placement
+    assert persisted(store, "private")["model"] == ""
+    assert persisted(store, "private")["temperature"] is None
     assert store.resolved_placement(store.get("orphan"))["orphaned"]

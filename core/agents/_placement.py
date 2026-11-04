@@ -186,7 +186,7 @@ def reject_new_private_grants(store: AgentStore, agent: Agent, previous: Agent |
 def retarget_owner(store: AgentStore, old_id: str, new_id: str, binding: str | None) -> None:
     if binding is None:
         return
-    for agent in store.list():
+    for agent in store.list_with_order().persisted.values():
         placement = agent.placement
         if (
             placement is not None

@@ -204,6 +204,9 @@ class AgentMutations:
             except Exception:
                 shutil.rmtree(agent_dir, ignore_errors=True)
                 raise
+            if placement is not None and placement.kind == "private":
+                # Future grants to this previously absent id do not survive private placement.
+                self._owner._remove_from_allow_lists(agent_id, best_effort=True, preserve_own=True)
             # ``list_with_order`` appends this newly valid Agent after every existing
             # roster entry and persists that projection. The config write remains the
             # creation commit point; an auxiliary order write failure is logged there
