@@ -22,6 +22,7 @@ from cli.application.state import (
     load_operation,
 )
 from core.access.config import access_config
+from core.utils import atomic
 
 
 def _server_install(root: Path) -> Installation:
@@ -119,11 +120,42 @@ def test_active_version_cannot_escape_versions_directory(tmp_path: Path):
         install.version()
 
 
-def test_operation_round_trip_and_invalid_phase_or_boolean_rejection(tmp_path: Path):
+@pytest.mark.parametrize(
+    "replace_overlap",
+    [
+        None,
+        pytest.param(
+            "record",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows replace read overlap"),
+        ),
+        pytest.param(
+            "details",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows replace read overlap"),
+        ),
+    ],
+)
+def test_operation_round_trip_and_invalid_phase_or_boolean_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_overlap: str | None
+):
     install = _server_install(tmp_path)
     install.save()
     operation = Operation(id="upd_example", previous_version="rel_old", candidate_version="rel_new")
     operation.save(install)
+
+    if replace_overlap is not None:
+        path = tmp_path / "operations" / f"{operation.id}.json"
+        if replace_overlap == "details":
+            path = path.parent / "details" / path.name
+        original_read = Path.read_text
+
+        def interrupted_read(target: Path, *args, **kwargs):
+            if target == path:
+                monkeypatch.setattr(Path, "read_text", original_read)
+                raise PermissionError("record is being replaced")
+            return original_read(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", interrupted_read)
+        monkeypatch.setattr(atomic, "_sleep", lambda _delay: None)
 
     assert load_operation(install, operation.id) == operation
     path = tmp_path / "operations" / f"{operation.id}.json"

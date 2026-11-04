@@ -24,7 +24,7 @@ from core.access.config import (
     check_bind_host,
     inferred_access_mode,
 )
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_text, read_replaced_text
 from core.utils.file_lock import acquire_file_lock, release_file_lock
 from core.utils.file_status import exists_strict
 from core.utils.ids import is_safe_id, new_id
@@ -144,7 +144,7 @@ def read_json(path: Path, *, limit: int = 1024 * 1024) -> dict[str, Any]:
     try:
         if path.stat().st_size > limit:
             raise ApplicationError(f"Application record is too large: {path.name}")
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(read_replaced_text(path))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ApplicationError(f"Cannot read application record: {path.name}") from exc
     if not isinstance(value, dict):
