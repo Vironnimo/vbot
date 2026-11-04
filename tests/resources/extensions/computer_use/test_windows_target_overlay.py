@@ -11,6 +11,7 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from resources.extensions.computer_use import _win32, _win_overlay
 from resources.extensions.computer_use.target import TargetError
@@ -52,6 +53,9 @@ class OverlayDesktop:
         monkeypatch.setattr(_win_overlay, "sys", SimpleNamespace(platform="win32"))
         monkeypatch.setattr(_win_overlay, "time", SimpleNamespace(sleep=lambda _: None))
         monkeypatch.setattr(_win_overlay, "_FADE_STEP", _win_overlay._FADE_SECONDS)
+        # Lifecycle waits must not include system font discovery or text rendering.
+        pill = Image.new("RGBA", (240, 30))
+        monkeypatch.setattr(_win_overlay, "_pill", lambda _scale: pill)
 
     def monitors(self):
         return [_win32.Monitor("display", 0, 0, 640, 480, True, 96)]
