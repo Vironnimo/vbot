@@ -161,17 +161,25 @@
 </script>
 
 {#each shown as request (request.id)}
-  <Banner
-    appearance="compact"
-    class="chat-view__footer-banner secret-request"
-    role="status"
-    data-secret-request={request.name}
-  >
-    <span class="secret-request__text">
+  <Banner appearance="tray" role="status" data-secret-request={request.name}>
+    <svg
+      class="tray-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      ><circle cx="8" cy="15" r="4" /><path d="m11 12 8-8m-3 3 3 3" /></svg
+    >
+    <p>
       {request.replaces
         ? t('chat.secretRequest.replaceNotice', { name: request.name })
         : t('chat.secretRequest.notice', { name: request.name })}
-    </span>
+    </p>
     <span class="secret-request__actions">
       <Button
         variant="tertiary"
@@ -286,11 +294,6 @@
 {/if}
 
 <style>
-  .secret-request__text {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
   .secret-request__actions {
     display: inline-flex;
     flex-shrink: 0;

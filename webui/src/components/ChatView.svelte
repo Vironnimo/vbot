@@ -703,6 +703,41 @@
 
 <svelte:window onkeydown={handleNewSessionShortcut} />
 
+{#snippet returnIcon()}
+  <svg
+    class="tray-icon"
+    viewBox="0 0 16 16"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6.5 4 2.5 8l4 4" />
+    <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
+  </svg>
+{/snippet}
+
+{#snippet setupIcon()}
+  <svg
+    class="tray-icon"
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 8v5m0 3v.01" />
+  </svg>
+{/snippet}
+
 <section
   class="view view-chat active chat-view"
   data-chat-width={chatWidth}
@@ -858,99 +893,6 @@
           class="chat-view__footer-stack"
           bind:this={layout.footerStackElement}
         >
-          {#if navigation.subAgentSessionActive}
-            <Banner
-              appearance="compact"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <strong>
-                {t('chat.subagentSessionNotice')}
-              </strong>
-              <Button
-                variant="tertiary"
-                class="chat-view__subagent-session-return"
-                disabled={chatState.loadingHistory}
-                onClick={navigation.handleReturnToCurrentSession}
-              >
-                {navigation.subAgentParentTarget
-                  ? t('chat.returnToParentSession')
-                  : t('chat.returnToCurrentSession')}
-              </Button>
-            </Banner>
-          {:else if navigation.reflectionSessionActive}
-            <Banner
-              appearance="compact"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <strong>
-                {t('chat.reflectionSessionNotice')}
-              </strong>
-              {#if navigation.reflectionSourceTarget}
-                <Button
-                  variant="tertiary"
-                  class="chat-view__reflection-session-return"
-                  disabled={chatState.loadingHistory}
-                  onClick={navigation.handleReturnToReflectionSource}
-                >
-                  {t('chat.returnToMainSession')}
-                </Button>
-              {/if}
-            </Banner>
-          {/if}
-          {#if providerSetupMissing}
-            <Banner
-              appearance="compact"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <strong>
-                {t('chat.noProvider.title')}
-              </strong>
-              <Button
-                variant="tertiary"
-                class="chat-view__no-provider-action"
-                onClick={onConnectProvider}
-              >
-                {t('chat.noProvider.action')}
-              </Button>
-            </Banner>
-          {:else if agentModelMissing}
-            <Banner
-              appearance="compact"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <strong>
-                {t('chat.noModel.title')}
-              </strong>
-              <Button
-                variant="tertiary"
-                class="chat-view__no-model-action"
-                onClick={onPickModel}
-              >
-                {t('chat.noModel.action')}
-              </Button>
-            </Banner>
-          {/if}
-          <div class="chat-view__measure">
-            <SecretRequests
-              agentId={displayedSecretAddress.agentId}
-              projectId={displayedSecretAddress.projectId}
-              sessionId={target.activeSessionState?.sessionId ?? ''}
-              refreshToken={agentSecretsRefreshToken}
-            />
-            <QueuedMessages
-              scopeKey={composerDraftKey}
-              {subscribeAgentRenames}
-              queuedMessages={target.activeSessionState?.queue ?? []}
-              onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
-              onSteerQueuedMessage={actions.handleSteerQueuedMessage}
-              canSteer={target.activeSessionState?.status === 'running'}
-              onEditQueuedMessage={actions.handleEditQueuedMessage}
-            />
-          </div>
           {#if chatState.historyError || chatState.actionError || chatState.commandsError || target.activeSessionState?.actionError || target.activeSessionState?.streamError}
             <div class="chat-view__composer-feedback" aria-live="polite">
               <div class="chat-view__measure chat-view__feedback-inner">
@@ -991,6 +933,85 @@
                 </p>
               </div>
             {/if}
+            <div class="composer-tray">
+              {#if navigation.subAgentSessionActive}
+                <Banner appearance="tray" aria-live="polite">
+                  {@render returnIcon()}
+                  <p>{t('chat.subagentSessionNotice')}</p>
+                  <Button
+                    variant="tertiary"
+                    class="chat-view__subagent-session-return"
+                    disabled={chatState.loadingHistory}
+                    onClick={navigation.handleReturnToCurrentSession}
+                  >
+                    {navigation.subAgentParentTarget
+                      ? t('chat.returnToParentSession')
+                      : t('chat.returnToCurrentSession')}
+                  </Button>
+                </Banner>
+              {:else if navigation.reflectionSessionActive}
+                <Banner appearance="tray" aria-live="polite">
+                  {@render returnIcon()}
+                  <p>{t('chat.reflectionSessionNotice')}</p>
+                  {#if navigation.reflectionSourceTarget}
+                    <Button
+                      variant="tertiary"
+                      class="chat-view__reflection-session-return"
+                      disabled={chatState.loadingHistory}
+                      onClick={navigation.handleReturnToReflectionSource}
+                    >
+                      {t('chat.returnToMainSession')}
+                    </Button>
+                  {/if}
+                </Banner>
+              {/if}
+              {#if providerSetupMissing}
+                <Banner appearance="tray" aria-live="polite">
+                  {@render setupIcon()}
+                  <p>{t('chat.noProvider.title')}</p>
+                  <Button
+                    variant="tertiary"
+                    class="chat-view__no-provider-action"
+                    onClick={onConnectProvider}
+                  >
+                    {t('chat.noProvider.action')}
+                  </Button>
+                </Banner>
+              {:else if agentModelMissing}
+                <Banner appearance="tray" aria-live="polite">
+                  {@render setupIcon()}
+                  <p>{t('chat.noModel.title')}</p>
+                  <Button
+                    variant="tertiary"
+                    class="chat-view__no-model-action"
+                    onClick={onPickModel}
+                  >
+                    {t('chat.noModel.action')}
+                  </Button>
+                </Banner>
+              {/if}
+              <SecretRequests
+                agentId={displayedSecretAddress.agentId}
+                projectId={displayedSecretAddress.projectId}
+                sessionId={target.activeSessionState?.sessionId ?? ''}
+                refreshToken={agentSecretsRefreshToken}
+              />
+              <QueuedMessages
+                scopeKey={composerDraftKey}
+                {subscribeAgentRenames}
+                queuedMessages={target.activeSessionState?.queue ?? []}
+                onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
+                onSteerQueuedMessage={actions.handleSteerQueuedMessage}
+                canSteer={target.activeSessionState?.status === 'running'}
+                onEditQueuedMessage={actions.handleEditQueuedMessage}
+              />
+              {#if composerAvailable && !liveCallSession && sessionSettings.view?.goal}
+                <ComposerGoal
+                  goal={sessionSettings.view.goal}
+                  onCommand={actions.handleGoalCommand}
+                />
+              {/if}
+            </div>
             {#if liveCallSession}
               <Banner appearance="compact" class="chat-view__footer-banner">
                 <p>
@@ -998,12 +1019,6 @@
                 </p>
               </Banner>
             {:else if composerAvailable}
-              {#if sessionSettings.view?.goal}
-                <ComposerGoal
-                  goal={sessionSettings.view.goal}
-                  onCommand={actions.handleGoalCommand}
-                />
-              {/if}
               <ChatComposer
                 bind:this={composer}
                 disabled={composerDisabled}

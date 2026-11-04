@@ -11,7 +11,10 @@
   //
   // `appearance="compact"` uses the quiet composer surface and compact tertiary
   // actions shared by Chat context notices and the Queue. It wraps to available
-  // width rather than forcing a stacked layout on mobile.
+  // width rather than forcing a stacked layout on mobile. `appearance="tray"` is
+  // one row of the Chat's composer tray (`.composer-tray`): no surface of its
+  // own, hairlines between rows, and a `<p>` that takes the width left of the
+  // actions.
   //
   // `rest` is spread onto the element so each call site keeps its own
   // `role`/`aria-live`; margins and width stay at the call site via `class`.
@@ -34,6 +37,7 @@
       'banner',
       `banner--${variantClass}`,
       appearance === 'compact' ? 'banner--compact' : '',
+      appearance === 'tray' ? 'banner--tray' : '',
       className,
     ]
       .filter(Boolean)

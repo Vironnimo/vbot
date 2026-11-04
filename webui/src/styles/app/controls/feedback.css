@@ -176,15 +176,57 @@
   margin-inline-start: auto;
 }
 
+/* One row of the composer tray (chatView.css): the tray carries the surface,
+   the rows only separate. */
+.banner--tray {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 2px 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 2px 6px 2px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
+}
+
+.banner--tray + .banner--tray {
+  border-top: 1px solid var(--border);
+}
+
+.banner--tray > p {
+  flex: 1 1 0;
+  min-width: min(160px, 100%);
+  overflow-wrap: anywhere;
+}
+
+.banner--tray .tray-icon {
+  flex-shrink: 0;
+  color: var(--text-lo);
+}
+
+.banner--tray .btn-tertiary,
+.banner--tray .btn-primary {
+  flex-shrink: 0;
+  min-height: 24px;
+  padding: 2px 6px;
+  font-size: var(--fs-label-sm);
+}
+
 @media (pointer: coarse) {
-  .banner--compact .btn-tertiary {
+  .banner--compact .btn-tertiary,
+  .banner--tray .btn-tertiary,
+  .banner--tray .btn-primary {
     min-height: 40px;
     min-width: 40px;
   }
 }
 
 @media (max-width: 640px) {
-  .banner:not(.banner--compact) {
+  .banner:not(.banner--compact, .banner--tray) {
     align-items: stretch;
     flex-direction: column;
   }

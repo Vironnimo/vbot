@@ -45,7 +45,7 @@ function ringOffset() {
 
 function footerNotices() {
   return Array.from(
-    document.querySelectorAll('.chat-view__footer-banner strong'),
+    document.querySelectorAll('.composer-tray .banner--tray > p'),
   ).map((notice) => notice.textContent.trim());
 }
 
