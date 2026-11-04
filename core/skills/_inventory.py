@@ -287,7 +287,10 @@ class SkillInventory:
             "skills": skills,
             "archived": self._archived_entries(agents),
             "agents": [
-                self._agent_skill_access(agent, package_ids, projects_by_id, bundles, scan)
+                {
+                    **self._agent_skill_access(agent, package_ids, projects_by_id, bundles, scan),
+                    "placement": self._owner._agents.resolved_placement(agent, agents),
+                }
                 for agent in agents
             ],
             "projects": project_pools,

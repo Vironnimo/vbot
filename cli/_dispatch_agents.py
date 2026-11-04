@@ -73,6 +73,15 @@ def dispatch_agent_command(
         return list_agents(instance)
     if args.command == "show":
         return show_agent(instance, args.id)
+    placement = getattr(args, "placement", None)
+    owner = getattr(args, "owner", None)
+    if (placement == "private") != bool(owner) or (owner is not None and placement != "private"):
+        return CommandResult(
+            ok=False,
+            message="--owner is required exactly with --placement private. Nothing was changed.",
+            instance=instance,
+            refused=True,
+        )
     tool_access_error = _agent_tool_access_args_error(args)
     if tool_access_error is not None:
         return CommandResult(ok=False, message=tool_access_error, instance=instance, refused=True)
@@ -119,6 +128,10 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
 
 def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
+    if args.placement is not None:
+        changes["placement"] = {"kind": args.placement}
+        if args.placement == "private":
+            changes["placement"]["owner_id"] = args.owner
     if args.command == "update" and getattr(args, "name", None) is not None:
         changes["name"] = args.name
     if getattr(args, "description", None) is not None:
