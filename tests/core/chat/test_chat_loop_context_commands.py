@@ -71,7 +71,7 @@ def _context_notes(messages: list[ChatMessage]) -> list[ChatMessage]:
         for message in messages
         if message.role == "note"
         and isinstance(message.content, str)
-        and message.content.startswith("When this Session started")
+        and "vBot ran the commands" in message.content
     ]
 
 
