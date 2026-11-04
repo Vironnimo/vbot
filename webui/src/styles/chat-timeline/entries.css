@@ -12,6 +12,10 @@
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  /* Short Sessions reserve the scrollbar's column too, so the timeline and the
+     composer keep their position when the Session changes or starts to
+     scroll. */
+  scrollbar-gutter: stable;
   background: var(--bg);
 }
 
