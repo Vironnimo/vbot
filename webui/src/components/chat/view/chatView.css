@@ -175,6 +175,39 @@
   white-space: pre-wrap;
 }
 
+/* Everything that waits above the input sits in one tab on the composer's top
+   edge: inset past the input's rounded corners, in the input's own border, so
+   tray and input read as one object while the input stays the wider, main part.
+   Absent rows render nothing, and an empty tray draws nothing. */
+.composer-tray {
+  --composer-tray-inset: 12px;
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-inline: var(--composer-tray-inset);
+  border: 1px solid var(--border-2);
+  border-bottom: 0;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: var(--composer-surface);
+}
+
+.composer-tray:not(:has(> *)) {
+  display: none;
+}
+
+.composer-tray:has(> *) + .input-area {
+  padding-top: 0;
+}
+
+/* Without an input (a Live call's Session, the same Session in both areas) the
+   tray closes on its own above the notice that stands in the input's place. */
+.composer-tray:not(:has(+ .input-area)) {
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+}
+
 .chat-view__footer-banner {
   flex-shrink: 0;
   margin: 0
@@ -195,6 +228,11 @@
 
   .chat-view__composer-feedback {
     padding: 0 14px 10px;
+  }
+
+  /* The input itself keeps 14px to the window here (`--composer-pad-x`). */
+  .composer-tray {
+    --composer-tray-inset: 24px;
   }
 
   .chat-view__content-shell {

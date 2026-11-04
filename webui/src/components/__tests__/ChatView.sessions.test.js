@@ -1126,13 +1126,12 @@ describe('ChatView Sessions', () => {
         });
         expect(selectedAgentName()).toBe(scenario.childAgentName);
         const notice = document.querySelector(
-          '.chat-view__footer-stack .chat-view__footer-banner',
+          '.chat-view__footer-stack .composer-tray .banner--tray',
         );
-        expect(notice.querySelector('strong').textContent).toContain(
+        expect(notice.querySelector('p').textContent).toContain(
           SUB_AGENT_NOTICE(),
         );
         expect(notice.querySelectorAll('button')).toHaveLength(1);
-        expect(notice.querySelector('p')).toBeNull();
         expect(composerInput().disabled).toBe(false);
         // Without parent metadata the notice offers the current Session.
         expect(returnToParentButton()).toBeFalsy();

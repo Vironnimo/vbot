@@ -161,7 +161,7 @@
 
 {#if displayedMessages.length > 0}
   <Banner
-    appearance="compact"
+    appearance="tray"
     class="queued-messages"
     role="complementary"
     aria-label={t('queue.title')}
@@ -224,6 +224,18 @@
               </p>
             {/if}
           {:else}
+            <svg
+              class="tray-icon"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              aria-hidden="true"
+              ><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg
+            >
             <div class="queued-messages__preview">
               <!-- The preview opens the editor for editable items; it stays a
                    focusable control either way so keyboard users reach the
@@ -304,13 +316,13 @@
 {/if}
 
 <style>
-  :global(.queued-messages) {
-    flex-shrink: 0;
+  /* The rows reach the tray's edges to draw their hairlines. */
+  :global(.banner--tray.queued-messages) {
+    padding: 0;
   }
   ol {
     display: flex;
     flex-direction: column;
-    gap: 1px;
     width: 100%;
     margin: 0;
     padding: 0;
@@ -321,11 +333,15 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-    padding: 2px 0;
+    min-height: 32px;
+    padding: 2px 6px 2px 12px;
+  }
+  li + li {
+    border-top: 1px solid var(--border);
   }
   li.editing {
     flex-wrap: wrap;
-    padding: 6px 0;
+    padding-block: 6px;
   }
   .queued-messages__preview {
     flex: 1;
@@ -345,7 +361,7 @@
     font-family: inherit;
     overflow: hidden;
     color: var(--text-med);
-    font-size: var(--fs-body-sm);
+    font-size: var(--fs-label-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

@@ -5,6 +5,7 @@
   // the Session's `session.get` row (`view/sessionSettings.svelte.js`).
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
 
   const noop = () => {};
@@ -36,7 +37,23 @@
 </script>
 
 {#if goal?.objective}
-  <div class="composer-goal" role="status" aria-label={t('chat.goal.label')}>
+  <Banner
+    appearance="tray"
+    class="composer-goal"
+    role="status"
+    aria-label={t('chat.goal.label')}
+  >
+    <svg
+      class="tray-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      aria-hidden="true"
+      ><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></svg
+    >
     <span class="composer-goal__status composer-goal__status--{status}">
       {t(`chat.goal.status.${status}`)}
     </span>
@@ -52,36 +69,18 @@
     <span class="composer-goal__actions">
       <Button
         variant="tertiary"
-        class="composer-goal__action"
         onClick={() => onCommand(running ? 'pause' : 'resume')}
       >
         {running ? t('chat.goal.pause') : t('chat.goal.resume')}
       </Button>
-      <Button
-        variant="tertiary"
-        class="composer-goal__action"
-        onClick={() => onCommand('clear')}
-      >
+      <Button variant="tertiary" onClick={() => onCommand('clear')}>
         {t('chat.goal.clear')}
       </Button>
     </span>
-  </div>
+  </Banner>
 {/if}
 
 <style>
-  .composer-goal {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    margin-bottom: 6px;
-    padding: 5px 10px;
-    border: 1px solid var(--border-2);
-    border-radius: 8px;
-    font-size: var(--fs-label-sm);
-    line-height: 1.4;
-  }
-
   .composer-goal__status {
     flex-shrink: 0;
     font-weight: 600;
@@ -116,16 +115,7 @@
     gap: 2px;
   }
 
-  :global(.composer-goal__action) {
-    padding: 2px 6px;
-    font-size: var(--fs-label-sm);
-  }
-
   @media (max-width: 640px) {
-    .composer-goal {
-      flex-wrap: wrap;
-    }
-
     .composer-goal__objective {
       flex-basis: 100%;
       order: -1;
