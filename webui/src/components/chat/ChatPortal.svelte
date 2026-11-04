@@ -21,6 +21,7 @@
   // app's own origin (another port) but may not navigate the WebUI's tab.
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     PORTAL_STATUS_CLOSED,
     PORTAL_STATUS_LOADING,
@@ -181,6 +182,7 @@
             target="_blank"
             rel="noopener noreferrer"
             referrerpolicy="no-referrer"
+            use:tooltip={{ text: url, mono: true, selectable: true }}
           >
             {t('chat.portal.openInNewTab')}
             <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">

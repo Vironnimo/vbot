@@ -215,13 +215,58 @@ describe('MarkdownContent', () => {
     },
   );
 
-  it('leaves ordinary and foreign file-shaped links with their browser behavior', () => {
-    mountMarkdown({
-      source:
-        '[web](https://example.com/report "Web title") [foreign](https://example.com/api/files/token "not local")',
-    });
-    expect(document.querySelector('[data-delivered-file]')).toBeNull();
-    expect(document.querySelector('a').title).toBe('Web title');
+  function hoverHint(link) {
+    link.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+    return document.querySelector('#app-tooltip[data-floating-open="true"]');
+  }
+
+  it.each([
+    [
+      'its address',
+      '[docs](https://example.com/guide)',
+      'https://example.com/guide',
+      '',
+    ],
+    [
+      'the address a link text disguises',
+      '[https://bank.example](https://evil.example/login)',
+      'https://evil.example/login',
+      '',
+    ],
+    [
+      'the address and title of a foreign file-shaped link',
+      '[foreign](https://example.com/api/files/token "Web title")',
+      'https://example.com/api/files/token',
+      'Web title',
+    ],
+    [
+      'the resolved address of a relative link',
+      '[relative](/docs/guide)',
+      `${window.location.origin}/docs/guide`,
+      '',
+    ],
+  ])('shows %s on hover', (_case, source, address, title) => {
+    vi.useFakeTimers();
+    mountMarkdown({ source });
+    const link = document.querySelector('a');
+    expect(link.hasAttribute('title')).toBe(false);
+    expect(link.dataset.deliveredFile).toBeUndefined();
+    const hint = hoverHint(link);
+    expect(hint.querySelector('.app-tooltip__text').textContent).toBe(address);
+    expect(hint.dataset.selectable).toBe('true');
+    expect(hint.querySelector('.app-tooltip__title')?.textContent ?? '').toBe(
+      title,
+    );
+  });
+
+  it.each([
+    ['a bare URL that already spells its address', 'https://example.com/a'],
+    ['a link within the page, whose host owns its hint', '[post](#post/4)'],
+  ])('shows no hint for %s', (_case, source) => {
+    vi.useFakeTimers();
+    mountMarkdown({ source });
+    expect(hoverHint(document.querySelector('a'))).toBeNull();
   });
 });
 

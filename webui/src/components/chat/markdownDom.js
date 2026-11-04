@@ -91,6 +91,42 @@ function createMarkdownDom(target) {
   };
 }
 
+function isDeliveredFile(link) {
+  return (
+    link.origin === window.location.origin &&
+    /^\/api\/files\/[A-Za-z0-9_.-]+$/.test(link.pathname)
+  );
+}
+
+// Where a link leads, read at hover so a growing link costs nothing while it
+// streams. The resolved address, not the text, is what a click follows. A
+// Markdown title moves here from the native bubble. Text that already spells
+// the address leaves nothing to show.
+function addressHintContent(link, title) {
+  const text = link.textContent.trim();
+  if (!title && (text === link.getAttribute('href') || text === link.href)) {
+    return '';
+  }
+  return { title, text: link.href, mono: true, selectable: true };
+}
+
+function addressHint(link, dom) {
+  const title = dom.sourceAttribute(link, 'title') ?? '';
+  return {
+    signature: JSON.stringify(['address', title]),
+    mount() {
+      link.removeAttribute('title');
+      const hint = tooltip(link, () => addressHintContent(link, title));
+      return () => {
+        hint.destroy();
+        const current = dom.sourceAttribute(link, 'title');
+        if (current !== null && current !== undefined)
+          link.setAttribute('title', current);
+      };
+    },
+  };
+}
+
 // Svelte action: rendering and decoration share one lifetime, so a streaming
 // update only mounts/destroys controls whose own content actually changed.
 export function renderMarkdownDom(target, options) {
@@ -121,85 +157,77 @@ export function renderMarkdownDom(target, options) {
         },
       });
     }
-    if (fileLinks) {
-      for (const link of target.querySelectorAll(
-        'a:not([data-file-external])',
-      )) {
-        const href = link.getAttribute('href') || '';
-        let url;
-        try {
-          url = new URL(href, window.location.href);
-        } catch {
-          continue;
-        }
-        if (
-          url.origin !== window.location.origin ||
-          !/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(url.pathname)
-        )
-          continue;
-        const filename = link.textContent.trim();
-        const path = dom.sourceAttribute(link, 'title') ?? '';
-        const previewable = /\.html?$/i.test(filename);
-        const actionHint = previewable
-          ? options.previewHint
-          : options.actionsHint;
-        const externalLabel = options.externalLabel(filename);
-        wanted.set(link, {
-          signature: JSON.stringify([
-            'file',
-            href,
-            filename,
-            path,
-            actionHint,
-            externalLabel,
-          ]),
-          mount() {
-            link.dataset.deliveredFile = href;
-            link.dataset.fileName = filename;
-            link.dataset.filePath = path;
-            link.setAttribute('aria-haspopup', 'menu');
-            link.removeAttribute('title');
-            const pathHint = tooltip(link, {
-              text: path,
-              mono: true,
-              selectable: true,
-              rows: [{ value: actionHint, tone: 'muted' }],
-            });
-            let external;
-            let externalHint;
-            if (previewable) {
-              link.dataset.previewFile = href;
-              external = document.createElement('a');
-              external.href = href;
-              external.target = '_blank';
-              external.rel = 'noopener noreferrer';
-              external.dataset.fileExternal = '';
-              external.dataset.previewFile = href;
-              external.dataset.deliveredFile = href;
-              external.dataset.fileName = filename;
-              external.dataset.filePath = path;
-              external.setAttribute('aria-label', externalLabel);
-              external.textContent = '↗';
-              link.after(external);
-              externalHint = tooltip(external, externalLabel);
-            }
-            return () => {
-              pathHint.destroy();
-              externalHint?.destroy();
-              external?.remove();
-              delete link.dataset.deliveredFile;
-              delete link.dataset.fileName;
-              delete link.dataset.previewFile;
-              delete link.dataset.filePath;
-              link.removeAttribute('aria-haspopup');
-              link.removeAttribute('aria-expanded');
-              const title = dom.sourceAttribute(link, 'title');
-              if (title !== null && title !== undefined)
-                link.setAttribute('title', title);
-            };
-          },
-        });
+    for (const link of target.querySelectorAll('a:not([data-file-external])')) {
+      const href = link.getAttribute('href') || '';
+      // A link within the page leads nowhere to show; its host owns its hint
+      // (Swarm's post, Wiki page and participant references).
+      if (href.startsWith('#')) continue;
+      if (!fileLinks || !isDeliveredFile(link)) {
+        wanted.set(link, addressHint(link, dom));
+        continue;
       }
+      const filename = link.textContent.trim();
+      const path = dom.sourceAttribute(link, 'title') ?? '';
+      const previewable = /\.html?$/i.test(filename);
+      const actionHint = previewable
+        ? options.previewHint
+        : options.actionsHint;
+      const externalLabel = options.externalLabel(filename);
+      wanted.set(link, {
+        signature: JSON.stringify([
+          'file',
+          href,
+          filename,
+          path,
+          actionHint,
+          externalLabel,
+        ]),
+        mount() {
+          link.dataset.deliveredFile = href;
+          link.dataset.fileName = filename;
+          link.dataset.filePath = path;
+          link.setAttribute('aria-haspopup', 'menu');
+          link.removeAttribute('title');
+          const pathHint = tooltip(link, {
+            text: path,
+            mono: true,
+            selectable: true,
+            rows: [{ value: actionHint, tone: 'muted' }],
+          });
+          let external;
+          let externalHint;
+          if (previewable) {
+            link.dataset.previewFile = href;
+            external = document.createElement('a');
+            external.href = href;
+            external.target = '_blank';
+            external.rel = 'noopener noreferrer';
+            external.dataset.fileExternal = '';
+            external.dataset.previewFile = href;
+            external.dataset.deliveredFile = href;
+            external.dataset.fileName = filename;
+            external.dataset.filePath = path;
+            external.setAttribute('aria-label', externalLabel);
+            external.textContent = '↗';
+            link.after(external);
+            externalHint = tooltip(external, externalLabel);
+          }
+          return () => {
+            pathHint.destroy();
+            externalHint?.destroy();
+            external?.remove();
+            delete link.dataset.deliveredFile;
+            delete link.dataset.fileName;
+            delete link.dataset.previewFile;
+            delete link.dataset.filePath;
+            link.removeAttribute('aria-haspopup');
+            link.removeAttribute('aria-expanded');
+            const title = dom.sourceAttribute(link, 'title');
+            if (title !== null && title !== undefined)
+              link.setAttribute('title', title);
+          };
+        },
+      });
     }
     for (const [node, decoration] of decorations) {
       if (wanted.get(node)?.signature === decoration.signature) continue;

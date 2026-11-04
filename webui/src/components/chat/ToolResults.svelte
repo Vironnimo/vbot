@@ -6,6 +6,7 @@
   import { boundedScroll } from '$lib/boundedScroll.js';
   import { t } from '$lib/i18n.js';
   import { formatAbsoluteTime } from '$lib/timeText.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   let { items } = $props();
 </script>
@@ -30,7 +31,11 @@
                 class="tool-results__title tool-results__link"
                 href={item.url}
                 target="_blank"
-                rel="noopener noreferrer">{item.title}</a
+                rel="noopener noreferrer"
+                use:tooltip={item.title === item.url
+                  ? ''
+                  : { text: item.url, mono: true, selectable: true }}
+                >{item.title}</a
               >
             {:else}
               <span class="tool-results__title">{item.title}</span>
