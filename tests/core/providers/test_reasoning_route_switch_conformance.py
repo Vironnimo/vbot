@@ -492,6 +492,8 @@ def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[Ch
         pytest.param("opencode-go", "deepseek-v4.1-flash", "api-key", id="chat-reasoning-content"),
         pytest.param("opencode-go", "longcat-2.5-preview-free", "api-key", id="longcat-replay"),
         pytest.param("ollama-cloud", "deepseek-v4.1-flash", "api-key", id="chat-reasoning"),
+        pytest.param("ollama-cloud", "kimi-k3.1-pro", "api-key", id="ollama-kimi-k31"),
+        pytest.param("opencode-go", "kimi-k3.1-pro", "api-key", id="go-kimi-k31"),
     ],
 )
 async def test_bundled_models_replay_persisted_tool_history_only_on_its_original_route(

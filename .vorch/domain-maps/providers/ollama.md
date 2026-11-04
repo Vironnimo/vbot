@@ -46,6 +46,25 @@ GLM-5.2, GLM-5.3, GLM-5.3-Flash, and Kimi K3 accept cross-Run `reasoning` with i
 
 The native `/api/chat` and Anthropic-compatible `/v1/messages` probes produced no wider replay scope for the selected Models than `/v1/chat/completions`; the native probe must send explicit `think` or its result is invalid. `/v1/responses` is documented as non-stateful, lacks `previous_response_id` and `conversation`, and lists reasoning summaries rather than a historical Reasoning carrier or request effort control. It returns reasoning output items, but manually replaying those items for Kimi K2.7 Code and MiniMax M2.7/M3 changed Provider input tokens by zero with and without Tools while visible controls added 47 to 125 tokens. Direct Cloud therefore stays on `/v1/chat/completions`: it has the verified common Reasoning control, response/history carrier, streaming Usage, Tool, and image contract vBot needs. This is a Provider-wire decision, not a claim that the same endpoint is best for local Ollama.
 
+### Kimi K3.1 Pro (2026-11-04)
+
+The shared catalog now lists `kimi-k3.1-pro` on `ollama-cloud:api-key`. Its `/api/show` facts supply images, Tools, Context 1,048,576 and the exact `low/medium/high/max` ladder. The Override joins `moonshotai/kimi-k3.1-pro` for the missing upstream facts (including the catalog output limit 131,072) and fixes the display name. An oversized raw request was rejected with a gateway ceiling of 1,048,576; this is front-door validation, not proof of that generation capacity, so it does not inflate the catalog limit.
+
+Production Adapter send, stream, all four efforts, explicit off, sampling acceptance, PNG input and Tool continuation passed. Raw and streamed `reasoning_effort: none` returned no Reasoning; two parallel Tool Calls and their continuation also completed with Reasoning off. Response and history use `reasoning`; the exact id joins the carrier rule so a fresh Adapter can replay persisted history before observing any response. Replay stays `full_history` with `readable_only` fidelity.
+
+Real streamed Tool and plain answer turns went through Chat accumulation, disposable SQLite save/reopen and Chat history shaping. Every A/B/C request used a fresh production Adapter, `high` effort and a 4096-token output allowance. A omitted Reasoning, B returned the exact emitted carrier, and C moved the same text into visible content. The rest of each request stayed fixed:
+
+| Shape | A | B | C |
+| --- | ---: | ---: | ---: |
+| Current Tool-result continuation | 347 | 384 | 384 |
+| Tool history, later Run with Tools | 402 | 439 | 439 |
+| Plain answer, later Run with Tools | 286 | 342 | 342 |
+| Plain answer, later Run without Tools | 201 | 257 | 257 |
+
+Raw non-streaming replays of the captured current-Run and Tool-free bodies matched those counts exactly. The separate verification script also measured consumption of the previous Tool continuation's answer Reasoning (462/493/493). No opaque carrier was duplicated. Fresh-Adapter, SQLite route isolation, output defaults and carrier regression tests cover the local contract. Context/output capacity, non-PNG media, structured output, local Ollama and alternate endpoints were not audited; no blanket verification marker is added.
+
+Official sources read 2026-11-04: [Model page](https://ollama.com/library/kimi-k3.1-pro), [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility) and [thinking controls](https://docs.ollama.com/capabilities/thinking). Other current Cloud entries still lacking a complete replay-accounting matrix include MiniMax M3.1 Flash, MiMo V2.6 Flash/Pro, Beam and Muse Spark Open; they keep inferred `full_history`, not a sibling's restrictive exception.
+
 ### MiniMax M3.1 Flash (2026-10-19)
 
 The direct Cloud catalog adds `minimax-m3.1-flash`. Production Adapter send, stream, Tool continuation, the accepted effort levels and PNG input pass on `api-key`. The Cloud vocabulary still maps `xhigh` to `max`. Explicit `none` also returns Reasoning, so an exact rule maps that selection to `low`; the response carrier is `reasoning`, and its readable history carrier is pinned accordingly. Context 1,000,000 and output 512,000 remain catalog facts, not measured maximum capacities. No replay-accounting audit was performed: the new id keeps `full_history` and does not inherit M3's measured `none` replay exception. Local Ollama and alternate endpoints were not tested.

@@ -133,12 +133,12 @@
       "when": {"prefix": "kimi-"},
       "set": {
         "protocol": "chat_completions",
-        "reasoning": {"floor": ["low", "high", "max"], "off": "lowest"},
+        "reasoning": {"floor": ["low", "high", "max"], "off": "none"},
         "response": {
-          "reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
         }
       },
-      "note": "New Kimi generations inherit the current Go K3 effort controls. Exact earlier K2 controls remain corrections; reported ladders and response fields override these defaults."
+      "note": "New Kimi generations infer K3.1 Pro's low/high/max ladder, explicit none and reasoning_content response carrier (live 2026-11-04). Exact earlier K2/K3 controls and carriers remain corrections; catalog facts override these defaults."
     },
     {
       "when": {"prefix": ["mimo-", "longcat-"]},
@@ -150,6 +150,19 @@
     }
   ],
   "rules": [
+    {
+      "when": {"ids": ["kimi-k3.1-pro"]},
+      "set": {
+        "reasoning": {"off": "none"},
+        "request": {
+          "parameters": {
+            "temperature": {"mode": "drop"},
+            "top_p": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "K3.1 Pro accepts none and stops reasoning, unlike the inferred K3 minimum. Sampling is fixed upstream at temperature 1 and top_p 0.95; other values return HTTP 400 (live 2026-11-04)."
+    },
     {
       "when": {"ids": ["glm-5.3-flash"]},
       "set": {"media": {"request_max_images": 30}},

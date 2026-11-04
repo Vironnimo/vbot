@@ -1,6 +1,10 @@
 {
     "provider_id": "ollama-cloud",
     "models": {
+        "kimi-k3.1-pro": {
+            "canonical": "moonshotai/kimi-k3.1-pro",
+            "name": "Kimi K3.1 Pro"
+        },
         "deepseek-v4.1-flash": {
             "max_output_tokens": 393216,
             "recommended_temperature": 1.0,

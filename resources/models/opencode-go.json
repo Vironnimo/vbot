@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-03T22:54:58.230914+00:00",
+  "fetched_at": "2026-11-04T21:23:42.362225+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -644,6 +644,49 @@
           "output": 0.58
         },
         "source": "models.dev:opencode-go/hy3"
+      }
+    },
+    "hy4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "Hy",
+      "max_output_tokens": 65536,
+      "name": "Hy4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.042,
+          "input": 0.834,
+          "output": 2.501
+        },
+        "source": "models.dev:opencode-go/hy4"
       }
     },
     "hy4-preview": {

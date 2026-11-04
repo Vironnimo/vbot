@@ -77,6 +77,28 @@ def test_request_context_is_an_opaque_prompt_cache_affinity() -> None:
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.parametrize("model_id", ["kimi-k3", "kimi-k3.1-pro"])
+@pytest.mark.asyncio
+async def test_k31_fixed_sampling_leaves_provider_defaults_without_changing_k3(
+    model_id: str, streaming: bool
+) -> None:
+    adapter = go_adapter()
+    try:
+        with respx.mock:
+            route = respx.post(CHAT_URL).mock(
+                return_value=success_response("chat", streaming=streaming)
+            )
+            await go_request(adapter, model_id, streaming=streaming, temperature=0.3, top_p=0.9)
+        payload = json.loads(route.calls.last.request.content)
+        sampling = {key: payload[key] for key in ("temperature", "top_p") if key in payload}
+        assert sampling == (
+            {} if model_id == "kimi-k3.1-pro" else {"temperature": 0.3, "top_p": 0.9}
+        )
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.parametrize(
     ("wire", "model_id"),
     [

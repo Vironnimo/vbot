@@ -59,8 +59,11 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         # Existing older V4 Models keep their established effort-only controls.
         ("deepseek-v4-flash", None, None, None, ("default", None)),
         ("deepseek-v4-flash", "high", None, "high", ("effort", "high")),
-        ("kimi-k99", "none", None, "low", ("effort", "low")),
+        ("kimi-k99", "none", None, "none", ("off", "none")),
         ("kimi-k99", "max", None, "max", ("effort", "max")),
+        ("kimi-k3", "none", None, "low", ("effort", "low")),
+        ("kimi-k3.1-pro", "none", None, "none", ("off", "none")),
+        ("kimi-k3.1-pro", "max", None, "max", ("effort", "max")),
         ("glm-99", "medium", None, "low", ("effort", "low")),
         ("glm-99", "max", None, "max", ("effort", "max")),
         ("mimo-v99", "none", {"type": "disabled"}, None, ("off", None)),
@@ -185,7 +188,7 @@ async def test_responses_wire_never_sends_an_unsupported_off_effort(
     assert _sent_payload(route).get("reasoning") == reasoning
 
 
-@pytest.mark.parametrize("model_id", ["grok-future", "kimi-k99"])
+@pytest.mark.parametrize("model_id", ["grok-future"])
 @pytest.mark.asyncio
 async def test_inferred_minimum_effort_follows_the_new_models_reported_ladder(
     model_id: str,

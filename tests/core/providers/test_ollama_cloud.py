@@ -558,14 +558,15 @@ async def test_v41_image_profile_converts_gif_before_cloud_request(model_id: str
     ],
 )
 @pytest.mark.parametrize(
-    ("model_id", "output_limit"), [(V41, 393_216), ("deepseek-v4.1-flash:1017", 384_000)]
+    ("model_id", "output_limit"),
+    [(V41, 393_216), ("deepseek-v4.1-flash:1017", 384_000), ("kimi-k3.1-pro", 131_072)],
 )
 @respx.mock
 @pytest.mark.asyncio
-async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
+async def test_cloud_models_replay_persisted_reasoning_on_fresh_adapter(
     current_run: bool, effort: str, wire_effort: str, model_id: str, output_limit: int
 ) -> None:
-    """Protect the locally serialized contract verified live on 2026-09-11 and 2026-10-18."""
+    """A fresh Adapter preserves the verified carrier, controls and Tool correlation."""
 
     adapter = bundled_cloud_adapter()
     scope = f"ollama-cloud/{model_id}::api-key"

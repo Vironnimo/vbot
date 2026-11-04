@@ -17084,6 +17084,33 @@
       "release_date": "2026-04-20",
       "temperature": true
     },
+    "tencent/hy4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "Hy",
+      "last_updated": "2026-11-04",
+      "max_output_tokens": 65536,
+      "name": "Hy4",
+      "release_date": "2026-11-04",
+      "temperature": true
+    },
     "tencent/hy4-preview": {
       "capabilities": {
         "input_modalities": [
