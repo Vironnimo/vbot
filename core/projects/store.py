@@ -176,6 +176,7 @@ class ProjectStore:
         auto_instructions: bool = True,
         folder_instructions: bool = True,
         memory_enabled: bool = True,
+        context_commands: list[str] | None = None,
     ) -> Project:
         """Create and persist a project anchor.
 
@@ -200,6 +201,7 @@ class ProjectStore:
                 auto_instructions=auto_instructions,
                 folder_instructions=folder_instructions,
                 memory_enabled=memory_enabled,
+                context_commands=context_commands,
             )
             _reject_reserved_project_id(project.project_id)
 

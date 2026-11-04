@@ -2,7 +2,8 @@
 
 Context commands are shell lines a Project or an Identity Agent runs when a
 Session starts; their output reaches the Agent before its first Model request
-(``chat/context-commands.md``). This module only validates the stored list.
+(``chat/context-commands.md``). This module validates the stored list and names
+the list a new Project starts with.
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ from typing import Any
 
 MAX_CONTEXT_COMMANDS = 10
 MAX_CONTEXT_COMMAND_CHARS = 4000
+# Stored in a new Project, where the user can remove it. Sessions start it in
+# parallel, so it must not take the index lock from a concurrent git add or commit.
+NEW_PROJECT_CONTEXT_COMMANDS = ("git --no-optional-locks status --short --branch",)
 
 
 def normalize_context_commands(value: Any) -> list[str]:

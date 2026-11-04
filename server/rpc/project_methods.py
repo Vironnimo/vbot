@@ -62,7 +62,7 @@ from core.settings import (
 )
 from core.tools.availability import normalize_tool_access
 from core.tools.tool_loading import normalize_tool_loading
-from core.utils.context_commands import normalize_context_commands
+from core.utils.context_commands import NEW_PROJECT_CONTEXT_COMMANDS, normalize_context_commands
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -245,6 +245,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             auto_instructions=auto_instructions,
             folder_instructions=folder_instructions,
             memory_enabled=memory_enabled,
+            context_commands=list(NEW_PROJECT_CONTEXT_COMMANDS),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

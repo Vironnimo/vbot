@@ -93,6 +93,7 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     assert project["skills_project_disabled"] == []
     assert project["default_temperature"] == 0.4
     assert project["default_thinking_effort"] == "high"
+    assert project["context_commands"] == ["git --no-optional-locks status --short --branch"]
     assert _team(result) == ["builder"]
     assert result["scan"]["report"]["clean"] is True
     assert state.runtime.projects.exists("vbot")

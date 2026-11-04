@@ -6,6 +6,7 @@ Read when changing the commands a Session starts with: which Runs run them, wher
 
 - `context_commands` is an optional list of shell lines on a Project (`project.json`) and on an Identity Agent (`agent.json`): at most 10 single-line commands of at most 4,000 characters, stripped, each once in order (the WebUI edits one per line), written only when non-empty (additive to Generation 1). The shape is validated in one place, `core/utils/context_commands.py`, and reported as a diagnostic `$.context_commands` by both document validators.
 - Set through RPC `project.set` and `agent.update` (`agent.create` takes none), the CLI `project set --context-commands <command>...` and `agent update --context-commands <command>...` (no values clears), and the WebUI Project and Agent settings (one command per line). Project and Agent payloads always carry the list.
+- `project.add` stores `NEW_PROJECT_CONTEXT_COMMANDS` (`git --no-optional-locks status --short --branch`) in every new Project (user decision 2026-11-05): an ordinary list entry the user can remove, an empty list means none, and existing Projects stay as they are. Outside a Git repository the Agent reads the failure with its exit code, which is the useful answer there. `--no-optional-locks` keeps parallel Sessions from taking the index lock from a concurrent `git add` or commit; Permission Rules match it as `git status`.
 - Built-in Agents have none. Project Agents have no own list: a Session in a Project runs the Project's.
 
 ## When they run
