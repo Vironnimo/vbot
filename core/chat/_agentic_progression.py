@@ -78,6 +78,8 @@ from core.runs import (
     RunInterruptedError,
 )
 from core.sessions import (
+    SESSION_GOAL_META_KEY,
+    SESSION_GOAL_OPEN_STATUSES,
     SessionAddress,
     SessionWriteLeaseScope,
 )
@@ -157,7 +159,7 @@ class AgenticProgression:
         emitted_change_stats: dict[str, object] | None = None
         # The Tool registry revision and prompt epoch whose Tool changes were
         # last announced; ``None`` evaluates at the next request boundary.
-        evaluated_tool_key: tuple[int, str] | None = None
+        evaluated_tool_key: tuple[int, str, bool] | None = None
         # Set when a final answer is followed by selected steering input.
         awaiting_steering = False
         track = session_track(run.agent_id, run.session_id, project_id)
@@ -227,13 +229,24 @@ class AgenticProgression:
             permissions_rebuilt = await refresh_run_permissions(
                 self._dependencies, context, force=delivered
             )
+            # Goals can be created or completed by a Tool inside this Run.
+            goal = await self._dependencies.sessions.metadata_value_async(
+                session_address, SESSION_GOAL_META_KEY
+            )
+            context.goal_session = (
+                isinstance(goal, dict) and goal.get("status") in SESSION_GOAL_OPEN_STATUSES
+            )
             # Tool changes are measured once per Run, after steering, and when
             # the Tool registry changed; the notes announcing them join this
             # request's boundary below, so the Tool list itself stays pinned.
             tool_catalog = None
             tool_epoch = state.tool_epoch
             if context.tool_progress.finalization_reason is None and tool_epoch is not None:
-                tool_key = (self._dependencies.tools.revision, tool_epoch.pin.epoch)
+                tool_key = (
+                    self._dependencies.tools.revision,
+                    tool_epoch.pin.epoch,
+                    context.goal_session,
+                )
                 # A rebuilt state has not measured what its On-demand Tools load.
                 if tool_key != evaluated_tool_key or (
                     state.tool_loads is None and tool_epoch.loadable_names

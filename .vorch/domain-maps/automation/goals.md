@@ -1,8 +1,9 @@
 # Session Goals
 
-The user's `/goal` and the automatic Runs that pursue it, owned by
-`core/automation/goals.py::GoalService`. The Agent's side is the `update_goal`
-Tool (`tools/update_goal.md`). Design record and research: the git-ignored plan
+Goals started with the user's `/goal` or the Agent's configurable `create_goal`,
+and the automatic Runs that pursue them, owned by
+`core/automation/goals.py::GoalService`. The Session-granted `update_goal`
+stops continuation (`tools/update_goal.md`). Design record and research: the git-ignored plan
 `.vorch/plans/session-goals.md` (2026-10-15).
 
 ## State
@@ -14,6 +15,22 @@ One goal per Session, in open Session metadata `goal`
 `updated_at`. Forks strip it; an Agent Takeover keeps it, paused; `/handoff`
 does not carry it. Session summaries (`session.get`, `session.list`) expose
 `objective`, `status`, `pause_reason`, `turns` and `max_turns` as `goal`.
+An Agent-reported block stores its concrete `blocked_reason`; completing or
+resuming clears it. A new `blocked` status requires three automatic turns and
+a non-empty reason. The Agent judges whether the same condition persisted;
+the kernel checks the turn count only.
+
+`create_from_agent` creates an active goal with the default 30-turn limit inside
+the exact current Run with direct user input, starting no second Run and
+refusing replacement of an open goal. Chat supplies the host-authored
+`direct_user_input` execution fact for real User/Channel input and delivered
+human steering; the Run's original kind/internal flag stays unchanged. The Tool refuses Sub-Agent Sessions
+and group conversations. Both creation paths share the existing lifecycle and
+goal rows. Disabling `create_goal` does not affect a user-started goal or its
+`update_goal` Session Grant.
+Agent-created goal rows are recorded through a fresh Session handle outside
+the Run; after that write, the changed notification carries `history=True` so
+live accessors reload the new divider as well as the goal bar.
 
 | Status | Meaning | Leaves it |
 |---|---|---|
@@ -74,8 +91,9 @@ observer on every Run. After the Run's terminal commit, a spawned decision runs:
    unavailable or a command such as a dev server never ends.
 7. Otherwise count the turn and start an internal `system` Run through
    `ChatLoop.start_run` with the Session's latest reply surface, the input
-   `GOAL_CONTINUE_TEXT`, or `GOAL_LAST_TURN_TEXT` for the turn that reaches the
-   limit, and the `turn` row as its context note. A Channel surface relays the Run through `set_run_relay`. A start that
+   `goal_continuation_text`: the quoted objective, automatic turn/count limit
+   and work/evidence instructions, plus `GOAL_LAST_TURN_TEXT` at the limit,
+   and the `turn` row as its context note. A Channel surface relays the Run through `set_run_relay`. A start that
    loses the Session to another Run uncounts the turn; a failed start pauses
    `run_failed`.
 
@@ -123,9 +141,12 @@ conversations (user decision 2026-10-15).
 
 Chat grants `update_goal` as a Session Grant while the goal is `active`,
 `blocked` or `paused` (`has_open_goal`). While it is open, the Compaction
-finalizer keeps the latest note starting with `SESSION_GOAL_NOTE_PREFIX` (the
-goal-set note) verbatim after the summary; pause notes and per-turn inputs are
-not retained.
+finalizer keeps the latest `GoalEvent("set")` note verbatim after the summary;
+`SESSION_GOAL_NOTE_PREFIX` also identifies untyped goal notes already in
+History. Pause notes and per-turn inputs are not retained. Chat refreshes the
+open-goal grant at each Model-request boundary, so a goal created inside a Run
+offers `update_goal` in that Run through ordinary Tool-change announcements
+without replacing the pinned Tool list.
 
 ## WebUI
 
@@ -142,7 +163,7 @@ status lines, inside a Run or between Runs (`webui/chat.md`).
   visible `user` Runs (they were internal until 2026-10-17, which hid the
   user's `/goal` message).
 - No `no_progress` pause (Continuation).
-- The goal-set note is found by its prefix, not by a note id in metadata.
+- The goal-set note is found by its display record or existing prefix, not by a note id in metadata.
 - The indicator sits above the composer, not in the chat header.
 
 ## Agent-facing text
@@ -154,10 +175,20 @@ in the `update_goal` definition; reasons for those sentences:
 
 | Text | Reason |
 |---|---|
-| `The user set a goal for this session with /goal:` + quoted objective | The Agent must know what to pursue; quoting keeps it user data, not kernel voice. |
-| `When your turn ends while the goal is active, vBot starts your next turn automatically, until you mark the goal complete or blocked with update_goal.` | Without it Agents ask "Shall I continue?" or wrap up each turn as finished (Goose, Hermes). It names only complete and blocked: naming paused invites pausing on the Agent's own initiative. |
-| `Your previous turn ended while the goal is still active. Continue with the next step toward it.` | Without it the Agent reads a turn without user text as a new request and recaps instead of working. A standing rule never goes into this repeated reminder. |
-| `This is the last automatic turn; ... end your turn with what is done and what remains.` | Without it the pause cuts the work off mid-step and the user gets no account of what remains. |
+| `Session goal: {objective}` | Identifies user- and Agent-started goals without falsely attributing a `/goal` command; the objective is JSON-quoted. |
+| `When your turn ends while this goal is active, vBot starts your next turn automatically.` | Without it Agents ask "Shall I continue?" or wrap up each turn as finished (Goose, Hermes). |
+| `Use update_goal to mark the goal complete or blocked.` | Names terminal control without inviting an unsolicited pause. |
+| `Goal: ...` / `Automatic turn: N/M` | Each automatic Run receives its objective and allowance position rather than reconstructing them. |
+| `Continue work on this goal in the same Session.` | Keeps automatic input focused on unfinished work; DSH-derived text approved 2026-11-05. |
+| `Ground your next step in the current state of the work and relevant Tool results; earlier narration can be outdated.` | Prevents stale narration from replacing evidence without forcing workspace reads for non-file tasks. |
+| `Make concrete progress and verify the result.` | Directs continuation toward work and checking rather than another recap. |
+| `Before claiming completion, gather evidence that the whole objective is achieved.` | Requires evidence for the whole objective rather than only the last step. |
+| `Then mark the goal complete with update_goal.` | Connects verified completion with the operation that stops automatic Runs. |
+| `Otherwise, leave it active so the remaining work can continue in the next turn.` | Keeps unfinished useful work inside continuation. |
+| `Apply the status rules in update_goal when deciding whether to report a blocker.` | Leaves the detailed status policy in its owning definition. |
+| `This is the last automatic turn; after it, the goal pauses until the user resumes it.` | Announces the impending stop before work begins. |
+| `Take the next useful step, then tell the user what is done and what remains.` | Ends the allowance with useful work and an account of the remainder. |
+| `Reaching the turn limit does not make the goal complete.` | Prevents allowance exhaustion from substituting for success. |
 | `The user resumed the goal. Continue with the next step toward it.` | Context note before the user's `/goal resume`; without it the Agent cannot tell that the command resumed work and what to do. |
 | `The goal was paused because <reason>. The user can resume it with /goal resume.` | When the user later asks why work stopped, the Agent can only answer from it. Written as a fact, not a state that can change after the note. |
 

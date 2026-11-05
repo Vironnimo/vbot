@@ -628,7 +628,10 @@ class StubPrompts:
             if self.tool_registry is not None
             else []
         )
-        if allowed is None or "*" in allowed or "get_weather" in allowed:
+        definitions = [d for d in definitions if d["name"] not in policy.denied]
+        if "get_weather" not in policy.denied and (
+            allowed is None or "*" in allowed or "get_weather" in allowed
+        ):
             weather = {
                 "name": "get_weather",
                 "description": "Get weather.",

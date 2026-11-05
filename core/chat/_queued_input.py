@@ -30,7 +30,7 @@ from core.chat.messages import (
     InputOrigin,
     ReplySurface,
 )
-from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run
+from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run, RunKind
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -125,6 +125,14 @@ async def persist_steering_input(
     )
     if request.reply_surface is not None:
         context.request = replace(context.request, reply_surface=request.reply_surface)
+    if (
+        not request.internal
+        and not request.parent_agent_input
+        and not request.session_message
+        and item.admission.run_kind in (RunKind.USER, RunKind.CHANNEL)
+        and (request.sender is None or request.sender.kind != "session")
+    ):
+        context.direct_user_input = True
     if reply_to_user:
         report_subagent_user_input(dependencies, session.address, message.id)
     context.run.emit(

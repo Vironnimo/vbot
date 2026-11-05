@@ -50,6 +50,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "bash",
     "calendar",
     "classify",
+    "create_goal",
     "cron",
     "edit",
     "execute_code",

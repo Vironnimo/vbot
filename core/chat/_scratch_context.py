@@ -82,7 +82,10 @@ def latest_goal_note_id(session_messages: list[ChatMessage]) -> str | None:
         if (
             message.role == "note"
             and isinstance(message.content, str)
-            and message.content.startswith(SESSION_GOAL_NOTE_PREFIX)
+            and (
+                (message.goal_event is not None and message.goal_event.event == "set")
+                or message.content.startswith(SESSION_GOAL_NOTE_PREFIX)
+            )
         ):
             return message.id
     return None

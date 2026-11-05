@@ -11,10 +11,10 @@ import pytest
 import pytest_asyncio
 
 from core.automation.goals import (
-    GOAL_CONTINUE_TEXT,
     GOAL_LAST_TURN_TEXT,
     GOAL_RESUMED_TEXT,
     GoalService,
+    goal_continuation_text,
 )
 from core.chat import ChatSessionManager, ReplySurface
 from core.chat.commands import CommandExecutionContext
@@ -167,17 +167,37 @@ async def harness(tmp_path: Path) -> AsyncIterator[_Harness]:
 
 def _marks(goals: GoalService, status: Any) -> Turn:
     async def turn(run: Run) -> None:
-        await goals.update_from_agent(_ADDRESS, status, run_id=run.id)
+        if status == "blocked":
+            # These cases exercise stopped-goal lifecycle, after the blocking
+            # threshold. The threshold itself is covered through Tool dispatch.
+            goals._sessions.mutate_metadata(  # noqa: SLF001
+                _ADDRESS, lambda metadata: metadata[SESSION_GOAL_META_KEY].update(turns=3)
+            )
+        await goals.update_from_agent(
+            _ADDRESS,
+            status,
+            run_id=run.id,
+            blocked_reason="Needs user input" if status == "blocked" else None,
+        )
 
     return turn
 
 
+@pytest.mark.parametrize("agent_starts", [False, True], ids=["command", "create-goal"])
 async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
-    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, agent_starts: bool
 ) -> None:
-    harness.loop.turns = [_works, _works, _marks(harness.goals, "complete")]
+    harness.loop.turns = [_works, _marks(harness.goals, "complete")]
+    if agent_starts:
 
-    await harness.command("Ship <the> release")
+        async def creates(run: Run) -> None:
+            await harness.goals.create_from_agent(_ADDRESS, "Ship <the> release", run_id=run.id)
+            assert not harness.loop.started
+
+        await harness.user_run(creates)
+    else:
+        harness.loop.turns.insert(0, _works)
+        await harness.command("Ship <the> release")
     read_started, release_read = asyncio.Event(), asyncio.Event()
     metadata_value_async = harness.sessions.metadata_value_async
 
@@ -195,17 +215,27 @@ async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
         finally:
             release_read.set()
 
-    first, *automatic = harness.loop.started
-    # The user's command is the first Run's visible input; its note tells the
-    # Model, the objective quoted as user text.
-    assert first == ("/goal Ship <the> release", RunKind.USER)
-    internal, set_note = harness.loop.inputs[0]
-    assert not internal and set_note is not None
-    assert cast(str, set_note.content).startswith(
-        "The user set a goal for this session with /goal:\n"
+    automatic = harness.loop.started
+    if not agent_starts:
+        first, *automatic = automatic
+        assert first == ("/goal Ship <the> release", RunKind.USER)
+        assert not harness.loop.inputs[0][0]
+    set_note = next(
+        message
+        for message in harness.sessions.get(_ADDRESS).load()
+        if message.goal_event is not None and message.goal_event.event == "set"
     )
+    assert set_note.goal_event is not None and set_note.goal_event.event == "set"
     assert '"Ship \\u003cthe\\u003e release"' in cast(str, set_note.content)
-    assert automatic == [(GOAL_CONTINUE_TEXT, RunKind.SYSTEM)] * 2
+    assert automatic == [
+        (
+            goal_continuation_text({"objective": "Ship <the> release", "turns": turn}),
+            RunKind.SYSTEM,
+        )
+        for turn in (1, 2)
+    ]
+    assert all('"Ship \\u003cthe\\u003e release"' in content for content, _kind in automatic)
+    assert all(f"{turn}/30" in content for turn, (content, _kind) in enumerate(automatic, 1))
     assert harness.goal()["status"] == "complete"
     assert harness.goal()["turns"] == 2
     assert await harness.command(None) == (
@@ -228,10 +258,11 @@ async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
     await harness.settle()
 
     assert [content for content, _kind in harness.loop.started[1:]] == [
-        GOAL_CONTINUE_TEXT,
-        GOAL_LAST_TURN_TEXT,
+        goal_continuation_text({"objective": "Refactor the parser", "turns": turn, "max_turns": 2})
+        for turn in (1, 2)
     ]
     assert harness.goal()["status"] == "paused"
+    assert GOAL_LAST_TURN_TEXT in harness.loop.started[-1][0]
     assert harness.goal()["pause_reason"] == "limit"
     assert harness.goal()["objective"] == "Refactor the parser"
     assert harness.notes()[-1] == (
@@ -299,7 +330,10 @@ async def test_a_user_reply_reactivates_a_blocked_goal_but_background_results_do
     await harness.user_run()
     await harness.settle()
 
-    assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
+    assert harness.loop.started[-1] == (
+        goal_continuation_text({"objective": "Deploy the service", "turns": 1}),
+        RunKind.SYSTEM,
+    )
     assert harness.goal()["status"] == "complete"
     assert harness.goal()["turns"] == 1
     assert [row["event"] for row in harness.rows()] == [
@@ -344,7 +378,10 @@ async def test_running_background_work_holds_the_next_automatic_turn(
     )
     await harness.settle()
 
-    assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
+    assert harness.loop.started[-1] == (
+        goal_continuation_text({"objective": "Run the benchmark suite", "turns": 1}),
+        RunKind.SYSTEM,
+    )
     assert harness.goal()["status"] == "complete"
 
 
@@ -374,7 +411,10 @@ async def test_unavailable_pending_work_keeps_the_goal_fallback(
     deferred = harness.goals._deferred[_ADDRESS]  # noqa: SLF001
     await deferred
     await harness.settle()
-    assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
+    assert harness.loop.started[-1] == (
+        goal_continuation_text({"objective": "Finish the report", "turns": 1}),
+        RunKind.SYSTEM,
+    )
     assert harness.goal()["status"] == "complete"
 
 

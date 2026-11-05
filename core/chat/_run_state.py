@@ -61,7 +61,7 @@ from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
     ReasoningReplayPolicy,
 )
-from core.runs import Run, RunStatus
+from core.runs import Run, RunKind, RunStatus
 from core.secrets.agent_secrets import EMPTY_MASKER
 from core.sessions import (
     SESSION_GOAL_META_KEY,
@@ -391,6 +391,8 @@ class _RunExecutionContext:
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
+    # Real human input admitted in this Run, including later steering.
+    direct_user_input: bool = False
     # The Session leaves ``subagent`` out of its Tool list for this Run (a
     # Sub-Agent at the nesting limit).
     subagent_tool_withheld: bool = False
@@ -1132,6 +1134,13 @@ async def create_run_execution_context(
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
+            direct_user_input=(
+                not request.internal
+                and not request.parent_agent_input
+                and not request.session_message
+                and run.run_kind in (RunKind.USER, RunKind.CHANNEL)
+                and (request.sender is None or request.sender.kind != "session")
+            ),
             subagent_tool_withheld=subagent_tool_withheld,
             goal_session=goal_session,
             permissions=permissions.boundary,

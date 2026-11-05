@@ -76,6 +76,6 @@ Read these only when your task matches - not by default.
 - Launching or killing OS child processes -> `tools/os-processes.md`
 - Python programs that call Tools, the `execute_code` client, output or execution lifecycle -> `tools/execute_code.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`
-- The `update_goal` Tool of a Session Goal: its grant, results and texts -> `tools/update_goal.md`
+- Session Goal Tools (`create_goal`, `update_goal`): selection versus Session grant, results and texts -> `tools/update_goal.md`
 - On-demand Tools: the `load_tools` Tool, which Tools are on demand, loadable-Tool inputs, and the `summary` every loadable Tool must declare -> `tools/load_tools.md`
 - Choosing how a Tool informs the Model beyond its own Result (notes, System Reminders, announcements) -> `model-communication.md`

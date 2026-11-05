@@ -270,6 +270,7 @@ class ModelStepBoundary:
             skill_registry=context.skill_registry,
             reply_surface=context.request.reply_surface,
             subagent_session=context.subagent_session,
+            direct_user_input=context.direct_user_input,
             permissions=context.permissions,
             approval_manager=self._dependencies.run_manager,
             approval_refresh_hook=refresh_approval,

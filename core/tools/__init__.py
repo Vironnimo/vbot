@@ -491,6 +491,7 @@ _SUBMODULES = frozenset(
         "terminal_store",
         "tools",
         "update_goal",
+        "create_goal",
         "update_handoff",
         "web_fetch",
         "web_search",

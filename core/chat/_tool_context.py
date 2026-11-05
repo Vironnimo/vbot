@@ -74,6 +74,7 @@ class ToolDispatchContext:
     skill_registry: SkillRegistry | None = None
     reply_surface: ReplySurface | None = None
     subagent_session: bool = False
+    direct_user_input: bool = False
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None

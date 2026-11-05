@@ -150,6 +150,7 @@ from core.tools import (
 from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
 from core.tools.command_manager import CommandManager
+from core.tools.create_goal import register_create_goal_tool
 from core.tools.cron import SessionAncestors, register_cron_tool
 from core.tools.execute_code import register_execute_code_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
@@ -955,6 +956,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tool_prompt_blocks,
         )
         register_update_goal_tool(runtime._tools, runtime._goal_service)
+        register_create_goal_tool(runtime._tools, runtime._goal_service)
         register_secrets_tool(
             runtime._tools,
             runtime._agent_secrets,

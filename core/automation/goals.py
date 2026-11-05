@@ -25,7 +25,6 @@ from core.chat.wire_shaping import quote_external_value
 from core.runs import ActiveRunError, ChatRunManager, Run, RunKind, RunStatus
 from core.sessions import (
     SESSION_GOAL_META_KEY,
-    SESSION_GOAL_NOTE_PREFIX,
     SessionAddress,
 )
 from core.utils.log_conditions import LoggedConditions
@@ -47,25 +46,32 @@ PauseReason = Literal["user", "stop", "limit", "run_failed", "restart", "takeove
 
 DEFAULT_GOAL_TURN_LIMIT = 30
 MAX_GOAL_TURN_LIMIT = 200
+MIN_BLOCKED_GOAL_TURNS = 3
 # An automatic Run waits for running Sub-Agents and background commands whose
 # result wakes the Session. A command that never ends, such as a dev server,
 # would hold the goal forever, so the goal continues after this long anyway.
 GOAL_WAIT_FALLBACK_SECONDS = 10 * 60
 
-# Agent-facing reminders (reasons: ``.vorch/domain-maps/tools/update_goal.md``).
+# Agent-facing reminders (reasons: ``.vorch/domain-maps/automation/goals.md``).
 GOAL_SET_TEXT = (
-    SESSION_GOAL_NOTE_PREFIX + "\n{objective}\n"
-    "When your turn ends while the goal is active, vBot starts your next turn "
-    "automatically, until you mark the goal complete or blocked with update_goal."
+    "Session goal: {objective}\n\n"
+    "When your turn ends while this goal is active, vBot starts your next turn "
+    "automatically. Use update_goal to mark the goal complete or blocked."
 )
 GOAL_CONTINUE_TEXT = (
-    "Your previous turn ended while the goal is still active. "
-    "Continue with the next step toward it."
+    "Goal: {objective}\nAutomatic turn: {turn}/{max_turns}\n\n"
+    "Continue work on this goal in the same Session. Ground your next step in the "
+    "current state of the work and relevant Tool results; earlier narration can be "
+    "outdated. Make concrete progress and verify the result. Before claiming completion, "
+    "gather evidence that the whole objective is achieved. Then mark the goal complete "
+    "with update_goal. Otherwise, leave it active so the remaining work can continue in "
+    "the next turn. Apply the status rules in update_goal when deciding whether to report "
+    "a blocker."
 )
 GOAL_LAST_TURN_TEXT = (
-    "Your previous turn ended while the goal is still active. This is the last "
-    "automatic turn; after it the goal pauses until the user resumes it. Continue "
-    "with the next step, then end your turn with what is done and what remains."
+    "This is the last automatic turn; after it, the goal pauses until the user resumes "
+    "it. Take the next useful step, then tell the user what is done and what remains. "
+    "Reaching the turn limit does not make the goal complete."
 )
 GOAL_RESUMED_TEXT = "The user resumed the goal. Continue with the next step toward it."
 GOAL_PAUSED_TEXT = "The goal was paused because {reason}. The user can resume it with /goal resume."
@@ -100,6 +106,36 @@ class GoalUpdate:
 
 class NoGoalError(LookupError):
     """The Session has no goal."""
+
+
+class GoalOperationError(ValueError):
+    """A refused goal operation, before any state changes."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def goal_continuation_text(goal: dict[str, Any]) -> str:
+    """Render one admitted automatic turn, quoting its objective as user data."""
+    turns = int(goal.get("turns", 0))
+    limit = int(goal.get("max_turns", DEFAULT_GOAL_TURN_LIMIT))
+    text = GOAL_CONTINUE_TEXT.format(
+        objective=quote_external_value(goal["objective"]), turn=turns, max_turns=limit
+    )
+    return f"{text}\n\n{GOAL_LAST_TURN_TEXT}" if turns >= limit else text
+
+
+def _new_goal(objective: str, max_turns: int) -> dict[str, Any]:
+    now = _now()
+    return {
+        "objective": objective,
+        "status": "active",
+        "turns": 0,
+        "max_turns": max_turns,
+        "created_at": now,
+        "updated_at": now,
+    }
 
 
 def _now() -> str:
@@ -210,8 +246,77 @@ class GoalService:
 
     # -- Transitions ---------------------------------------------------------------
 
+    async def create_from_agent(
+        self,
+        address: SessionAddress,
+        objective: str,
+        *,
+        run_id: str,
+        direct_user_input: bool = False,
+    ) -> dict[str, Any]:
+        """Set a goal in a Run with direct user input, without starting another Run."""
+        objective = objective.strip()
+        if not objective:
+            raise GoalOperationError(
+                "invalid_arguments",
+                "Nothing was changed. objective must name the requested result.",
+            )
+        created: dict[str, Any] = {}
+
+        def mutate(metadata: dict[str, Any]) -> None:
+            run = self._run_manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            if (
+                run is None
+                or run.id != run_id
+                or not (
+                    direct_user_input
+                    or (not run.internal and run.run_kind in (RunKind.USER, RunKind.CHANNEL))
+                )
+                or run.cancel_requested
+            ):
+                raise GoalOperationError(
+                    "goal_creation_not_allowed",
+                    "Nothing was changed. Create a goal only during a direct user request; "
+                    "continue the current task without creating one.",
+                )
+            current = _goal(metadata.get(SESSION_GOAL_META_KEY))
+            if current is not None and current["status"] != "complete":
+                raise GoalOperationError(
+                    "goal_exists",
+                    "Nothing was changed. This Session already has an open goal. "
+                    "Continue that goal, or ask the user to clear or resume it with /goal.",
+                )
+            created.update(_new_goal(objective, DEFAULT_GOAL_TURN_LIMIT))
+            metadata[SESSION_GOAL_META_KEY] = created
+
+        async with self._lock(address):
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+            self._cancel_deferred(address)
+        _LOGGER.info(
+            "Goal set (agent=%s session=%s max_turns=%d actor=tool)",
+            address.agent_id,
+            address.session_id,
+            DEFAULT_GOAL_TURN_LIMIT,
+        )
+        recorded = await self._record(
+            address,
+            GoalEvent("set", objective=objective, max_turns=DEFAULT_GOAL_TURN_LIMIT),
+            GOAL_SET_TEXT.format(objective=quote_external_value(objective)),
+        )
+        self._notify(address, history=recorded)
+        return dict(created)
+
     async def update_from_agent(
-        self, address: SessionAddress, status: AgentGoalStatus, *, run_id: str
+        self,
+        address: SessionAddress,
+        status: AgentGoalStatus,
+        *,
+        run_id: str,
+        blocked_reason: str | None = None,
     ) -> GoalUpdate:
         """Apply the Agent's ``update_goal`` call. Raises ``NoGoalError`` without a goal."""
         outcome: dict[str, bool] = {}
@@ -224,7 +329,26 @@ class GoalService:
             if goal["status"] == status:
                 outcome["changed"] = False
                 return
+            if status == "blocked":
+                if int(goal.get("turns", 0)) < MIN_BLOCKED_GOAL_TURNS:
+                    raise GoalOperationError(
+                        "goal_blocked_too_early",
+                        "Nothing was changed. blocked requires at least "
+                        f"{MIN_BLOCKED_GOAL_TURNS} automatic turns; this goal has reached "
+                        f"{int(goal.get('turns', 0))}. Leave it active and continue with the "
+                        "next useful step.",
+                    )
+                if not isinstance(blocked_reason, str) or not blocked_reason.strip():
+                    raise GoalOperationError(
+                        "invalid_arguments",
+                        "Nothing was changed. Set blocked_reason to the condition preventing "
+                        "further progress when marking a goal blocked.",
+                    )
             goal = {**goal, "status": status, "status_run_id": run_id, "updated_at": _now()}
+            if status == "blocked":
+                goal["blocked_reason"] = cast(str, blocked_reason).strip()
+            else:
+                goal.pop("blocked_reason", None)
             if status == "paused":
                 goal["pause_reason"] = "agent"
             else:
@@ -382,15 +506,7 @@ class GoalService:
         async with self._lock(address):
             if self._busy(address):
                 return _notice("Stop the current turn first, then set the goal.")
-            now = _now()
-            goal = {
-                "objective": objective,
-                "status": "active",
-                "turns": 0,
-                "max_turns": max_turns,
-                "created_at": now,
-                "updated_at": now,
-            }
+            goal = _new_goal(objective, max_turns)
 
             def mutate(metadata: dict[str, Any]) -> None:
                 metadata[SESSION_GOAL_META_KEY] = goal
@@ -398,7 +514,7 @@ class GoalService:
             await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
             self._cancel_deferred(address)
             _LOGGER.info(
-                "Goal set (agent=%s session=%s max_turns=%d)",
+                "Goal set (agent=%s session=%s max_turns=%d actor=command)",
                 address.agent_id,
                 address.session_id,
                 max_turns,
@@ -461,6 +577,7 @@ class GoalService:
                 resumed = {**current, "status": "active", "turns": 0, "updated_at": _now()}
                 resumed.pop("pause_reason", None)
                 resumed.pop("status_run_id", None)
+                resumed.pop("blocked_reason", None)
                 metadata[SESSION_GOAL_META_KEY] = resumed
 
             await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
@@ -549,6 +666,7 @@ class GoalService:
                 return
             active = {**current, "status": "active", "turns": 0, "updated_at": _now()}
             active.pop("status_run_id", None)
+            active.pop("blocked_reason", None)
             metadata[SESSION_GOAL_META_KEY] = active
             changed["goal"] = True
 
@@ -615,7 +733,7 @@ class GoalService:
         """Count and admit under the same lock as every live goal state transition."""
         if self._closed or self._queued(address):
             return None, None
-        turn: dict[str, int] = {}
+        turn: dict[str, Any] = {}
 
         def count(metadata: dict[str, Any]) -> None:
             current = _goal(metadata.get(SESSION_GOAL_META_KEY))
@@ -625,11 +743,12 @@ class GoalService:
             metadata[SESSION_GOAL_META_KEY] = {**current, "turns": turns, "updated_at": _now()}
             turn["turns"] = turns
             turn["max_turns"] = int(current.get("max_turns", DEFAULT_GOAL_TURN_LIMIT))
+            turn["objective"] = current["objective"]
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, count)
         if not turn:
             return None, None
-        message = GOAL_LAST_TURN_TEXT if turn["turns"] >= turn["max_turns"] else GOAL_CONTINUE_TEXT
+        message = goal_continuation_text(turn)
         row = ChatMessage.note(
             "", goal_event=GoalEvent("turn", turn=turn["turns"], max_turns=turn["max_turns"])
         )

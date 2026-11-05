@@ -164,6 +164,7 @@ class ToolExecutor:
                 project_memory_enabled=config.project_memory_enabled,
                 skill_agent_id=config.skill_agent_id,
                 run_kind=config.run_kind,
+                direct_user_input=config.direct_user_input,
                 subagent_session=config.subagent_session,
                 programmatic=config.programmatic,
                 tool_call_hook=config.tool_call_hook,

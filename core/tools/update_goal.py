@@ -23,9 +23,7 @@ _LOGGER = get_logger("tools.update_goal")
 
 # Reasons for every sentence: ``.vorch/domain-maps/tools/update_goal.md``.
 UPDATE_GOAL_TOOL_DESCRIPTION = (
-    "Mark the session goal complete, blocked or paused, which stops its automatic turns. "
-    "Mark it complete only when you checked every part of the goal against the current "
-    "state, not because you are stopping work."
+    "Mark the Session goal complete, blocked or paused, stopping its automatic turns."
 )
 UPDATE_GOAL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -34,17 +32,38 @@ UPDATE_GOAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": ["complete", "blocked", "paused"],
             "description": (
-                "blocked: you cannot take another step without the user or an external "
-                "change; ask the user in your reply. paused: only when the user asks you "
-                "to stop or pause the goal."
+                "complete: verify every part of the objective against the current result "
+                "before marking it complete. blocked: the same condition has prevented "
+                "progress for at least 3 consecutive automatic turns, and no useful step "
+                "remains without user input or an external change. Difficulty or uncertainty "
+                "alone is not a blocker. paused: only when the user asks you to stop or "
+                "pause the goal."
             ),
-        }
+        },
+        "blocked_reason": {
+            "type": "string",
+            "description": (
+                "The condition preventing further progress. Required for blocked; omit otherwise."
+            ),
+        },
     },
     "required": ["status"],
 }
 _RESULTS: dict[str, str] = {
-    "complete": "Goal marked complete; no further automatic turns. Finish your reply to the user.",
-    "blocked": "Goal marked blocked; automatic turns continue after the user replies.",
+    "complete": (
+        "Goal marked complete; no further automatic turns. Tell the user what was "
+        "accomplished, how it was verified, and where to find the results. Say what the "
+        "user needs to review or do next, if anything. Base the report on this Session's "
+        "evidence; identify missing information instead of inventing it. Finish your reply "
+        "without further Tool calls."
+    ),
+    "blocked": (
+        "Goal marked blocked; automatic turns resume after the user replies. Tell the "
+        "user what is done, which condition prevents progress, what you tried, and exactly "
+        "what is needed to continue. Base the report on this Session's evidence; identify "
+        "missing information instead of inventing it. Finish your reply without further "
+        "Tool calls."
+    ),
     "paused": (
         "Goal paused. The user can resume it with /goal resume or delete it with /goal clear."
     ),
@@ -64,9 +83,7 @@ _STATUS_ALIASES: dict[str, str] = {
     "stopped": "paused",
 }
 _DISPLAY = {"complete": "Goal complete", "blocked": "Goal blocked", "paused": "Goal paused"}
-NO_GOAL_MESSAGE = (
-    "Nothing was changed. This session has no goal; only the user can set one with /goal."
-)
+NO_GOAL_MESSAGE = "Nothing was changed. This Session has no goal. The user can set one with /goal."
 
 
 def register_update_goal_tool(registry: ToolRegistry, goals: GoalService) -> None:
@@ -86,6 +103,7 @@ def register_update_goal_tool(registry: ToolRegistry, goals: GoalService) -> Non
         session_scoped=True,
         activation=TOOL_ACTIVATION_SESSION_GRANT,
         execution_slot_required=False,
+        announce_changes=("description", "parameters"),
         result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_summary),
     )
@@ -108,7 +126,7 @@ def _summary(arguments: JsonObject) -> str | None:
 async def _update_goal(
     goals: GoalService, context: ToolContext, arguments: JsonObject
 ) -> JsonObject:
-    from core.automation.goals import NoGoalError
+    from core.automation.goals import GoalOperationError, NoGoalError
 
     status = _status(arguments)
     if status is None:
@@ -122,8 +140,13 @@ async def _update_goal(
     address = SessionAddress(context.project_id, context.agent_id, context.session_id)
     try:
         update = await goals.update_from_agent(
-            address, cast("AgentGoalStatus", status), run_id=context.run_id
+            address,
+            cast("AgentGoalStatus", status),
+            run_id=context.run_id,
+            blocked_reason=arguments.get("blocked_reason"),
         )
+    except GoalOperationError as error:
+        return tool_failure(error.code, str(error))
     except NoGoalError:
         return tool_failure("no_goal", NO_GOAL_MESSAGE)
     except Exception:
@@ -139,7 +162,11 @@ async def _update_goal(
             "session. Try the call again once; if it fails again, tell the user.",
         )
     text = _RESULTS[status] if update.changed else f"The goal is already {status}; nothing changed."
-    extra = [key for key in arguments if key != "status"] if isinstance(arguments, dict) else []
+    extra = (
+        [key for key in arguments if key not in ("status", "blocked_reason")]
+        if isinstance(arguments, dict)
+        else []
+    )
     for key in extra:
         text += f" {key} has no effect; tell the user in your reply."
     return tool_success({"content": text})

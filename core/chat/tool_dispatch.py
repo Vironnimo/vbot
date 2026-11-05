@@ -173,6 +173,7 @@ class ToolRound:
             project_memory_enabled=agent.project_memory_enabled,
             skill_agent_id=getattr(agent, "skill_agent_id", None),
             run_kind=run.run_kind,
+            direct_user_input=context.direct_user_input,
             subagent_session=context.subagent_session,
             permissions=context.permissions,
             approval_hook=request_approval if context.approval_manager is not None else None,

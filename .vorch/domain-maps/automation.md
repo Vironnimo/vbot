@@ -10,7 +10,7 @@ Programmatic Runs, scheduling, background reviews and Librarian Skill curation i
 
 ### Session Goal
 
-An objective the user sets for one Session, which automatic Runs pursue one after another until the Agent reports it complete, blocked or paused, or the kernel pauses it (`automation/goals.md`). Not a Cron job or Bootstrap job: it has no schedule and belongs to its Session.
+An objective set for a Session by the user or its Agent from a direct user request, pursued through automatic Runs (`automation/goals.md`). Not a Cron or Bootstrap job: it has no schedule and belongs to its Session.
 
 ## Interfaces
 
