@@ -67,6 +67,7 @@ from core.sessions import (
     SessionAddress,
 )
 from core.tools.file_state import FileRead
+from core.tools.on_demand import CALL_TOOL_NAME
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -501,6 +502,7 @@ class RequestBuilder:
                     else inputs.tool_route_model_family
                 ),
                 route_on_demand=inputs.tool_route_on_demand_tools,
+                proxy_available=pin is None or CALL_TOOL_NAME in pin.names,
                 told=pin.names if pin is not None else (),
             )
         if pin is None:

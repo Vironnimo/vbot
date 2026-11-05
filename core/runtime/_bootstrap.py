@@ -148,6 +148,7 @@ from core.tools import (
     register_web_search_tool,
 )
 from core.tools.calendar import register_calendar_tool
+from core.tools.call_tool import register_call_tool
 from core.tools.classify import register_classify_tool
 from core.tools.command_manager import CommandManager
 from core.tools.create_goal import register_create_goal_tool
@@ -432,6 +433,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         # Chat lists it only for Agents that load Tools on demand (core/tools/on_demand.py).
         register_load_tools_tool(runtime._tools, runtime._tool_prompt_blocks)
+        register_call_tool(runtime._tools)
         register_read_tool(
             runtime._tools,
             attachment_store=runtime._attachment_store,

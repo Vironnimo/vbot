@@ -21,7 +21,7 @@ from typing import Any
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.model_names import called_tool_name, model_tool_name
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_LIST_PRODUCER
+from core.tools.on_demand import CALL_TOOL_NAME, LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_LIST_PRODUCER
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -95,6 +95,9 @@ _CALL_LOADED = (
     "Call the loaded Tools by name with normal Tool calls, also when your Tool list does not "
     "show them."
 )
+_CALL_LOADED_PROXY = "Call a loaded Tool through call_tool, using its name and arguments."
+_ALREADY_PROXY = "- {name}: already callable through call_tool"
+_ALL_AVAILABLE_PROXY = "Every Tool you can use is already available; call it through call_tool."
 _EMPTY_CALL = "Nothing was loaded: the call named no Tool."
 _NONE_FOUND = "Nothing was loaded: no Tool named {names} can be loaded."
 _ALL_AVAILABLE = "Every Tool you can use is already available; call it directly by name."
@@ -150,6 +153,7 @@ def _load_tools(registry: ToolRegistry, context: ToolContext, arguments: JsonObj
     """
 
     requested: list[str] = arguments.get("names") or []
+    proxy = context.offers(CALL_TOOL_NAME)
     loadable = {
         name: definition
         for name, definition in context.loadable_tools.items()
@@ -163,7 +167,7 @@ def _load_tools(registry: ToolRegistry, context: ToolContext, arguments: JsonObj
     shown = [name for name in (context.offered_tools or ()) if context.can_call(name)]
     candidates = [*loadable, *unavailable, *(name for name in shown if name not in loadable)]
     if not requested:
-        raise ToolContractError(_refusal(_EMPTY_CALL, loadable, unavailable))
+        raise ToolContractError(_refusal(_EMPTY_CALL, loadable, unavailable, proxy=proxy))
 
     lines: list[str] = []
     loaded: list[str] = []
@@ -185,14 +189,17 @@ def _load_tools(registry: ToolRegistry, context: ToolContext, arguments: JsonObj
         elif name in shown:
             seen.add(name)
             usable = True
-            lines.append(_ALREADY_AVAILABLE.format(name=model_tool_name(name)))
+            available = _ALREADY_PROXY if proxy else _ALREADY_AVAILABLE
+            lines.append(available.format(name=model_tool_name(name)))
         elif raw not in unknown:
             unknown.append(raw)
             lines.append(_NOT_LOADABLE.format(name=raw))
 
     if unknown and len(unknown) == len(lines):
         names = _joined(json.dumps(name, ensure_ascii=False) for name in unknown)
-        raise ToolContractError(_refusal(_NONE_FOUND.format(names=names), loadable, unavailable))
+        raise ToolContractError(
+            _refusal(_NONE_FOUND.format(names=names), loadable, unavailable, proxy=proxy)
+        )
 
     remaining = {name: definition for name, definition in loadable.items() if name not in seen}
     if unknown and remaining:
@@ -202,7 +209,7 @@ def _load_tools(registry: ToolRegistry, context: ToolContext, arguments: JsonObj
     parts = ["\n".join(lines)]
     parts.extend(_section(name, loadable[name]) for name in loaded)
     if loaded:
-        parts.append(_CALL_LOADED)
+        parts.append(_CALL_LOADED_PROXY if proxy else _CALL_LOADED)
         context.record_loaded_tools(loaded)
     return tool_success({"content": "\n\n".join(parts)})
 
@@ -235,11 +242,14 @@ def _unavailable_line(registry: ToolRegistry, name: str) -> str:
     return _UNAVAILABLE.format(name=model_tool_name(name))
 
 
-def _refusal(cause: str, loadable: Mapping[str, Any], unavailable: Sequence[str]) -> str:
+def _refusal(
+    cause: str, loadable: Mapping[str, Any], unavailable: Sequence[str], *, proxy: bool = False
+) -> str:
     """Say that nothing was loaded, why, and which call loads what the Agent can load."""
 
     if not loadable:
-        return f"{cause} {_NONE_LOADABLE if unavailable else _ALL_AVAILABLE}"
+        available = _ALL_AVAILABLE_PROXY if proxy else _ALL_AVAILABLE
+        return f"{cause} {_NONE_LOADABLE if unavailable else available}"
     example = json.dumps({"names": _loadable_names(loadable)[:1]}, ensure_ascii=False)
     return f"{cause} {_loadable_sentence(loadable)} {_RETRY.format(example=example)}"
 

@@ -306,6 +306,8 @@ class ToolContext:
     subagent_session: bool = False
     # A program consumes the structured result instead of its bounded Model view.
     programmatic: bool = False
+    # Immediate host-dispatched parent, including the fixed call_tool transport.
+    parent_tool_name: str | None = None
     tool_call_hook: ToolCallHook | None = field(default=None, repr=False, compare=False)
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
@@ -1034,6 +1036,7 @@ class ToolExecutionConfig:
     # See ``ToolContext.subagent_session``.
     subagent_session: bool = False
     programmatic: bool = False
+    parent_tool_name: str | None = None
     tool_call_hook: ToolCallHook | None = field(default=None, repr=False, compare=False)
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None

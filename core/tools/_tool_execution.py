@@ -167,6 +167,7 @@ class ToolExecutor:
                 direct_user_input=config.direct_user_input,
                 subagent_session=config.subagent_session,
                 programmatic=config.programmatic,
+                parent_tool_name=config.parent_tool_name,
                 tool_call_hook=config.tool_call_hook,
                 permissions=config.permissions,
                 approval_hook=config.approval_hook,

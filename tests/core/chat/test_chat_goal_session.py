@@ -17,7 +17,9 @@ from core.runs import GOAL_EVENT_RECORDED_EVENT, RunKind
 from core.sessions import SESSION_GOAL_META_KEY
 from core.tools import ToolAccess, ToolRegistry, tool_success
 from core.tools.availability import TOOL_ACTIVATION_SESSION_GRANT, UPDATE_GOAL_TOOL_NAME
+from core.tools.call_tool import register_call_tool
 from core.tools.create_goal import register_create_goal_tool
+from core.tools.load_tools import register_load_tools_tool
 from core.tools.update_goal import register_update_goal_tool
 from tests.core.chat.chat_loop_compaction_test_support import auto_compact, compaction_runtime
 from tests.core.chat.chat_loop_support import (
@@ -94,8 +96,9 @@ async def test_update_goal_is_offered_while_the_session_goal_is_open(
     [(False, False), (False, True), (True, False)],
     ids=["user-starts-tool-unselected", "user-starts-tool-denied", "agent-starts"],
 )
+@pytest.mark.parametrize("proxy", [False, True], ids=["direct", "proxy"])
 async def test_a_started_goal_grants_update_goal_inside_the_current_run(
-    tmp_path: Path, agent_starts: bool, denied: bool
+    tmp_path: Path, agent_starts: bool, denied: bool, proxy: bool
 ) -> None:
     class CreationDeniedAgent(StubAgent):
         @property
@@ -116,13 +119,19 @@ async def test_a_started_goal_grants_update_goal_inside_the_current_run(
         [
             {
                 "tool_calls": [
-                    {"id": "complete", "name": "update_goal", "arguments": {"status": "complete"}}
+                    {
+                        "id": "complete",
+                        "name": "call_tool" if proxy else "update_goal",
+                        "arguments": {"name": "update_goal", "arguments": {"status": "complete"}}
+                        if proxy
+                        else {"status": "complete"},
+                    }
                 ]
             },
             {"content": "Finished", "tool_calls": None},
         ]
     )
-    adapter = StubAdapter(responses)
+    adapter = StubAdapter(responses, on_demand_tools=not proxy)
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=(CreationDeniedAgent if denied else StubAgent)(
@@ -140,6 +149,8 @@ async def test_a_started_goal_grants_update_goal_inside_the_current_run(
     )
     register_create_goal_tool(runtime.tools, goals)
     register_update_goal_tool(runtime.tools, goals)
+    register_load_tools_tool(runtime.tools)
+    register_call_tool(runtime.tools)
     changes: list[tuple[Any, bool]] = []
     goals.add_changed_callback(lambda address, history: changes.append((address, history)))
     try:
@@ -164,6 +175,12 @@ async def test_a_started_goal_grants_update_goal_inside_the_current_run(
         first = {t["name"] for t in adapter.requests[0]["kwargs"]["tools"]}
         assert ("create_goal" in first) is agent_starts
         assert ("update_goal" in first) is not agent_starts
+        if proxy:
+            assert "call_tool" in first and "load_tools" in first
+            assert all(
+                request["kwargs"]["tools"] == adapter.requests[0]["kwargs"]["tools"]
+                for request in adapter.requests
+            )
         if agent_starts:
             # New Tools are announced in history while the epoch's Tool list stays pinned.
             assert "blocked_reason" in str(adapter.requests[1]["messages"])
@@ -176,6 +193,62 @@ async def test_a_started_goal_grants_update_goal_inside_the_current_run(
             assert notes[0].run_id is None
         else:
             assert [event.payload["id"] for event in recorded] == [notes[0].id]
+    finally:
+        await goals.aclose()
+
+
+async def test_a_manual_goal_in_an_existing_proxy_epoch_needs_no_creation_tool(
+    tmp_path: Path,
+) -> None:
+    adapter = StubAdapter(
+        [
+            {"content": "Ready"},
+            {
+                "tool_calls": [
+                    {
+                        "id": "complete",
+                        "name": "call_tool",
+                        "arguments": {"name": "update_goal", "arguments": {"status": "complete"}},
+                    }
+                ]
+            },
+            {"content": "Finished"},
+        ],
+        on_demand_tools=False,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[]),
+        adapter=adapter,
+        tools=ToolRegistry(),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="goal")
+    loop = build_chat_loop(runtime)
+    goals = GoalService(
+        sessions=runtime.chat_sessions, run_manager=runtime.chat_run_manager, chat_loop=loop
+    )
+    register_load_tools_tool(runtime.tools)
+    register_call_tool(runtime.tools)
+    register_update_goal_tool(runtime.tools, goals)
+    try:
+        await (await loop.start_run("coder", "Hello", session_id="goal")).wait()
+        outcome = await goals.execute_command(
+            CommandExecutionContext(
+                agent_id="coder",
+                session_id="goal",
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+                command_text="/goal Finish it",
+            ),
+            "Finish it",
+        )
+        await outcome.runs[0].run.wait()
+        goal = await goals.goal(session.address)
+        assert goal is not None and goal["status"] == "complete"
+        fixed = adapter.requests[0]["kwargs"]["tools"]
+        assert {definition["name"] for definition in fixed} == {"load_tools", "call_tool"}
+        assert all(request["kwargs"]["tools"] == fixed for request in adapter.requests)
+        assert "update_goal" in str(adapter.requests[1]["messages"])
     finally:
         await goals.aclose()
 

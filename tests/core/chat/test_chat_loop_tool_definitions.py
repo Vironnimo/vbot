@@ -872,10 +872,14 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
 
 
 @pytest.mark.asyncio
-async def test_a_route_without_on_demand_tools_lists_every_tool(tmp_path: Path) -> None:
-    """A Model that calls only listed Tools gets every Tool listed, whatever tool_loading says."""
+async def test_a_route_without_native_on_demand_calls_loaded_tools_through_a_fixed_proxy(
+    tmp_path: Path,
+) -> None:
+    """A listed-only Model loads definitions and calls them without growing tools[]."""
+    from core.tools.call_tool import register_call_tool
 
     tools, dispatched = _on_demand_tools()
+    register_call_tool(tools)
     runtime = tool_runtime(
         tmp_path,
         tools,
@@ -883,7 +887,11 @@ async def test_a_route_without_on_demand_tools_lists_every_tool(tmp_path: Path) 
         allowed_tools=["read", "search", "fetch"],
         tool_loading=_ON_DEMAND,
         adapter=StubAdapter(
-            [tool_turn(("use", "search", {"query": "vbot"})), final("done")],
+            [
+                tool_turn(("load", "load_tools", {"names": ["search"]})),
+                tool_turn(("use", "call_tool", {"name": "search", "arguments": {"query": "vbot"}})),
+                final("done"),
+            ],
             on_demand_tools=False,
         ),
     )
@@ -892,12 +900,33 @@ async def test_a_route_without_on_demand_tools_lists_every_tool(tmp_path: Path) 
 
     assert dispatched == ["search"]
     sent = _tools_sent(runtime)
-    assert sorted(tool["name"] for tool in sent[0]) == ["fetch", "read", "search"]
-    assert sent == [sent[0]] * 2
+    assert sorted(tool["name"] for tool in sent[0]) == ["call_tool", "load_tools", "read"]
+    assert sent == [sent[0]] * 3
     system = runtime.adapter.requests[0]["messages"][0]["content"]
-    assert "load_tools" not in system
-    assert "Search the web." not in system
-    assert _announced(runtime) == []
+    assert "Search the web." in system
+    assert _announced(runtime) == [("loaded", "search")]
+
+
+@pytest.mark.asyncio
+async def test_a_preexisting_epoch_never_adds_the_proxy_to_its_tool_list(tmp_path: Path) -> None:
+    from core.tools.call_tool import register_call_tool
+
+    tools, _ = _on_demand_tools()
+    register_call_tool(tools)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [final("ready")],
+        allowed_tools=["read", "search", "fetch"],
+        tool_loading={"on_demand": False},
+    )
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "Hello", session_id="session-one")
+    original = _tools_sent(runtime)[0]
+    runtime.adapter = StubAdapter([final("done")], on_demand_tools=False)
+    await loop.send("coder", "Continue", session_id="session-one")
+    assert _tools_sent(runtime)[0] == original
+    assert "call_tool" not in {definition["name"] for definition in original}
 
 
 @pytest.mark.asyncio

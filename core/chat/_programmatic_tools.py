@@ -26,6 +26,7 @@ from core.tools import (
     called_tool_name,
     tool_failure,
 )
+from core.tools.on_demand import CALL_TOOL_NAME
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
 
@@ -48,6 +49,7 @@ class ProgrammaticTools(_EmittingToolRegistry):
         self._skill_notes: dict[str, ChatMessage] = {}
         self._declarations: dict[str, ChatMessage] = {}
         self._message_ids: dict[str, str] = {}
+        self._active_calls: set[str] = set()
         super().__init__(
             context.registry,
             context.run,
@@ -61,28 +63,59 @@ class ProgrammaticTools(_EmittingToolRegistry):
             assistant_message_ids=self._message_ids,
             tool_repetition_observer=context.tool_repetition_observer,
         )
+
+        def record_proxy_load(_call_id: str, names: Sequence[str]) -> None:
+            if config.tool_load_registrar is not None:
+                config.tool_load_registrar(parent.tool_call_id, names)
+
         self._config = replace(
             config,
-            programmatic=True,
+            programmatic=parent.tool_name != CALL_TOOL_NAME,
+            parent_tool_name=parent.tool_name,
             # The process owns the invocation tasks and cancels them when it
             # closes; this check also stops calls waiting behind a barrier.
             cancellation_hook=lambda: (
-                context.run.cancel_requested or context.run.tool_call_cancelled(parent.tool_call_id)
+                context.run.cancel_requested
+                or (
+                    parent.tool_name != CALL_TOOL_NAME
+                    and context.run.tool_call_cancelled(parent.tool_call_id)
+                )
             ),
+            tool_call_cancel_check=(
+                lambda call_id: (
+                    context.run.tool_call_cancelled(call_id)
+                    or context.run.tool_call_cancelled(parent.tool_call_id)
+                )
+            )
+            if parent.tool_name == CALL_TOOL_NAME
+            else config.tool_call_cancel_check,
             skill_activation_hook=self._activate_programmatic_skill,
             # Loading a definition for Python does not establish that the Model
             # consumed it. The existing catalog remains available to the Model.
-            tool_load_registrar=None,
+            tool_load_registrar=(record_proxy_load if parent.tool_name == CALL_TOOL_NAME else None),
         )
         self._batch = ToolExecutor(self).start_batch(
             self._config, context=contextvars.copy_context()
         )
+        if parent.tool_name == CALL_TOOL_NAME:
+            parent.on_cancel(self._cancel_proxy_calls)
+
+    def _cancel_proxy_calls(self) -> None:
+        for call_id in self._active_calls:
+            self._context.run.begin_tool_call(call_id)
+            self._context.run.cancel_tool_call(call_id)
 
     async def call(
         self, name: str, arguments: JsonObject, positional: Sequence[Any] = ()
     ) -> JsonObject:
         context = self._context
         context.run.raise_if_cancelled()
+        if self._parent.tool_name == CALL_TOOL_NAME and context.run.tool_call_cancelled(
+            self._parent.tool_call_id
+        ):
+            return tool_failure(
+                "cancelled_by_user", "Nothing was run. The user stopped this Tool call."
+            )
         name = called_tool_name(
             name,
             self._config.allowed_tools or (),
@@ -118,8 +151,13 @@ class ProgrammaticTools(_EmittingToolRegistry):
         self._declarations[call_id] = declaration
         self._message_ids[call_id] = declaration.id
         index = len(self._batch)
-        self._batch.add(ScheduledToolCall(id=call_id, name=name, arguments=arguments))
-        return await self._batch.result(index)
+        self._active_calls.add(call_id)
+        try:
+            self._batch.add(ScheduledToolCall(id=call_id, name=name, arguments=arguments))
+            return await self._batch.result(index)
+        finally:
+            self._active_calls.discard(call_id)
+            context.run.clear_tool_cancel(call_id)
 
     def _activate_programmatic_skill(
         self, call_id: str, name: str, content: str, package: SkillPackageRef | None
@@ -174,12 +212,15 @@ class ProgrammaticTools(_EmittingToolRegistry):
             programmatic=True,
             parent_tool_call_id=self._parent.tool_call_id,
         )
+        native_media = self.take_media_for_call(context.tool_call_id, tool_message_id=message.id)
         media = [
             *_read_media_outputs(
                 result, tool_call_id=context.tool_call_id, tool_message_id=message.id
             ),
-            *self.take_media_for_call(context.tool_call_id, tool_message_id=message.id),
+            *native_media,
         ]
+        if self._parent.tool_name == CALL_TOOL_NAME:
+            self._parent.result_media.extend(native_media)
         facts = self._context.with_result_payloads(tool_result_facts([message]))
         messages = [message]
         if note := self._skill_notes.pop(context.tool_call_id, None):
@@ -187,6 +228,21 @@ class ProgrammaticTools(_EmittingToolRegistry):
         await settle_before_cancelling(
             self._context.persist_activity(declaration.id, messages, facts, media)
         )
+        if (
+            note is not None
+            and self._parent.tool_name == CALL_TOOL_NAME
+            and isinstance(result.get("data"), dict)
+        ):
+            # The typed Skill note carries the instructions and expires at
+            # Compaction. Repeating them in an untyped proxy Result would not.
+            result = {
+                **result,
+                "data": {
+                    key: value
+                    for key, value in result["data"].items()
+                    if key not in {"content", "resource_files", "environment_access"}
+                },
+            }
         return result
 
     async def aclose(self) -> None:
