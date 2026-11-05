@@ -391,6 +391,19 @@ def test_normalize_response_follows_the_model_wire_before_the_response_shape(
     assert normalized["content"] == content
 
 
+@pytest.mark.asyncio
+async def test_curated_output_limit_goes_past_the_general_cap() -> None:
+    model_id = "deepseek-v4.1-flash"
+    catalog = go_model(model_id, context_window=1_000_000, max_output_tokens=384_000)
+    adapter = go_adapter({model_id: catalog}.get, defaults={"max_tokens": 4096})
+
+    with respx.mock:
+        route = respx.post(CHAT_URL).mock(return_value=success_response("chat", streaming=False))
+        await adapter.send(HELLO, model_id=model_id)
+
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == 384_000
+
+
 @pytest.mark.parametrize(
     ("model_id", "context_window", "kwargs", "prompt", "bounds"),
     [

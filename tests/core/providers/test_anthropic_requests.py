@@ -6,6 +6,7 @@ import base64
 import copy
 import io
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -721,6 +722,22 @@ async def test_thinking_effort_renders_the_models_wire_control(model, kwargs, ex
     payload = await sent_payload(make_adapter(model=model), **kwargs)
 
     _assert_payload_fields(payload, expected)
+
+
+@pytest.mark.asyncio
+async def test_thinking_budget_fits_a_curated_output_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = make_adapter(model=claude_model(control="budget"))
+    profile = adapter.wire_profile(MODEL_ID)
+    curated = replace(profile, request=replace(profile.request, output_limit_default=20_000))
+    monkeypatch.setattr(adapter, "wire_profile", lambda _model_id: curated)
+
+    payload = await sent_payload(adapter, thinking_effort="max")
+
+    assert payload["max_tokens"] == 20_000
+    assert payload["thinking"]["budget_tokens"] < 20_000
+    assert adapter.minimum_output_tokens(MODEL_ID, "max") <= 20_000
 
 
 @pytest.mark.asyncio

@@ -598,9 +598,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         rules = self.wire_profile(model_id).request
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
+            output_limit_default=rules.output_limit_default,
             model_output_limit=self._model_max_output_tokens(model_id),
-            provider_default=rules.output_limit_default
-            or (self._config.defaults.get("max_tokens") if self._config.defaults else None),
+            provider_default=self._config.defaults.get("max_tokens")
+            if self._config.defaults
+            else None,
             effective_context_window=self._request_context_window(model_id),
             request_input=resolve_request_input_budget(model_id, estimate_input),
             input_limit=self.input_token_limit(model_id),

@@ -311,6 +311,10 @@ class RequestRules:
     always added to the request's headers and replace any header of the same
     name the Adapter sets, auth included. Every chat request path of every
     Adapter applies all three.
+    ``output_limit_default`` is the allowance vBot chose to ask for when the
+    caller sets none: it applies up to the Model ceiling, wins over that ceiling
+    and a flat Provider default, and is not bound by the general allowance cap.
+    ``output_limit_cap`` is a hard bound on the result, explicit limits included.
     ``output_limit_collapse`` sends exactly one output-limit field: every
     output-limit alias a caller supplies collapses into ``output_limit_field``
     and the smallest positive value wins.

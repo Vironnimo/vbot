@@ -528,13 +528,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         1. An explicit positive caller value (a non-positive one is ignored — it
            would 400 at the wire, so it is treated as unspecified).
-        2. The model's catalog output ceiling — the default, so each model uses
+        2. The wire profile's ``output_limit_default``, up to the catalog ceiling.
+        3. The model's catalog output ceiling — the default, so each model uses
            its own full allowance instead of a flat provider cap. This is what
            keeps a thinking budget from starving the answer: a shared 8K-style
            cap would let a mid/high effort budget consume the whole allowance.
-        3. The wire profile's ``output_limit_default``, then the provider-config
-           ``max_tokens`` default, as the fallback only when the ceiling is
-           unknown (no lookup / offline refresh).
+        4. The provider-config ``max_tokens`` default, as the fallback only when
+           the ceiling is unknown (no lookup / offline refresh).
 
         The wire profile's ``output_limit_cap`` bounds the result.
         """
@@ -551,13 +551,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ),
         )
         rules = self.wire_profile(model_id).request
-        default = rules.output_limit_default or (
-            self._config.defaults.get("max_tokens") if self._config.defaults else None
-        )
         resolved = resolve_request_output_limit(
             explicit_limit=explicit,
+            output_limit_default=rules.output_limit_default,
             model_output_limit=self._model_max_output_tokens(model_id),
-            provider_default=default,
+            provider_default=self._config.defaults.get("max_tokens")
+            if self._config.defaults
+            else None,
             effective_context_window=self._request_context_window(model_id),
             request_input=request_input,
             input_limit=self.input_token_limit(model_id),

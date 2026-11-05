@@ -70,7 +70,8 @@ REQUEST_OUTPUT_ALLOWANCE_CAP = 131_072
 An allowance reserves room in the Context window whether or not a reply uses
 it, and a gateway checks ``input + allowance`` before the Model runs, so a
 catalog ceiling near the window turns ordinary inputs into rejections. An
-explicit caller limit is not bound by this.
+explicit caller limit and a wire profile's ``output_limit_default`` are not
+bound by this.
 """
 
 
@@ -127,6 +128,7 @@ class RequestInput:
 def resolve_request_output_limit(
     *,
     explicit_limit: Any,
+    output_limit_default: Any = None,
     model_output_limit: Any,
     provider_default: Any,
     effective_context_window: int,
@@ -136,7 +138,8 @@ def resolve_request_output_limit(
 ) -> int | None:
     """Resolve and context-clamp one request's output-token allowance.
 
-    Precedence remains explicit positive caller limit, positive Model ceiling,
+    Precedence is explicit positive caller limit, the wire profile's
+    ``output_limit_default`` up to the Model ceiling, positive Model ceiling,
     then positive Provider default; the last two stay within
     :data:`REQUEST_OUTPUT_ALLOWANCE_CAP`. The input must fit the Provider's input
     limit (``input_limit``, when it reports one) and leave room in the effective
@@ -154,7 +157,9 @@ def resolve_request_output_limit(
     it fails before I/O rather than changing thinking.
     """
 
-    requested = _positive_int(explicit_limit)
+    requested = _positive_int(explicit_limit) or curated_output_limit(
+        output_limit_default, model_output_limit
+    )
     if requested is None:
         ceiling = _positive_int(model_output_limit) or _positive_int(provider_default)
         if ceiling is not None:
@@ -189,6 +194,14 @@ def resolve_request_output_limit(
         return None
     available_output = max(remaining - request_input.margin, (remaining + 1) // 2)
     return min(requested, max(available_output, minimum_output_tokens))
+
+
+def curated_output_limit(output_limit_default: Any, model_output_limit: Any) -> int | None:
+    """Return the allowance a wire profile chose, within the Model ceiling."""
+
+    chosen = _positive_int(output_limit_default)
+    ceiling = _positive_int(model_output_limit)
+    return min(chosen, ceiling) if chosen is not None and ceiling is not None else chosen
 
 
 def _positive_int(value: Any) -> int | None:

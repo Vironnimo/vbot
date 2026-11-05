@@ -198,18 +198,23 @@ def test_resolve_request_output_limit(
 
 
 @pytest.mark.parametrize(
-    ("explicit_limit", "floor", "expected"),
+    ("explicit_limit", "curated", "floor", "expected"),
     [
-        pytest.param(None, 0, REQUEST_OUTPUT_ALLOWANCE_CAP, id="ceiling-capped"),
-        pytest.param(500_000, 0, 500_000, id="explicit-limit-stays"),
-        pytest.param(None, 300_000, 300_000, id="thinking-floor-stays"),
+        pytest.param(None, None, 0, REQUEST_OUTPUT_ALLOWANCE_CAP, id="ceiling-capped"),
+        pytest.param(500_000, None, 0, 500_000, id="explicit-limit-stays"),
+        pytest.param(None, None, 300_000, 300_000, id="thinking-floor-stays"),
+        pytest.param(None, 393_216, 0, 393_216, id="curated-above-cap"),
+        pytest.param(None, 32_000, 0, 32_000, id="curated-below-cap"),
+        pytest.param(None, 943_719, 0, 943_718, id="curated-within-ceiling"),
+        pytest.param(900, 393_216, 0, 900, id="explicit-limit-over-curated"),
     ],
 )
 def test_output_allowance_cap_bounds_only_what_vbot_chose(
-    explicit_limit: int | None, floor: int, expected: int
+    explicit_limit: int | None, curated: int | None, floor: int, expected: int
 ) -> None:
     resolved = resolve_request_output_limit(
         explicit_limit=explicit_limit,
+        output_limit_default=curated,
         model_output_limit=943_718,
         provider_default=None,
         effective_context_window=1_048_576,
