@@ -268,8 +268,13 @@ def _preview_state(
     ``route_on_demand`` is true.
     """
 
-    async def serves_on_demand_tools(_agent: Any) -> bool:
-        return route_on_demand
+    async def preview_tool_definitions(_agent: Any) -> list[dict[str, Any]]:
+        definitions = await manager.provider_tool_definitions_async(_agent)
+        if not route_on_demand:
+            definitions.append(
+                {"name": "call_tool", "description": "test proxy", "parameters": {"type": "object"}}
+            )
+        return definitions
 
     def resolve_agent(
         _project_id: str | None, agent_id: str, *, session_id: str | None = None
@@ -297,7 +302,7 @@ def _preview_state(
             "usage_recorder": SimpleNamespace(input_estimate_factor=lambda _model: estimate_factor),
         },
     )
-    state.chat_loop = SimpleNamespace(serves_on_demand_tools=serves_on_demand_tools)
+    state.chat_loop = SimpleNamespace(preview_tool_definitions=preview_tool_definitions)
     return state
 
 
@@ -931,7 +936,7 @@ async def test_preview_inspects_only_effective_provider_definitions(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route_on_demand", [True, False], ids=["on-demand", "route-lists-all"])
+@pytest.mark.parametrize("route_on_demand", [True, False], ids=["native", "proxy"])
 async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(
     tmp_path: Path, route_on_demand: bool
 ) -> None:
@@ -954,15 +959,11 @@ async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(
     result = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
 
     entries = [(entry["definition"]["name"], entry.get("on_demand")) for entry in result["tools"]]
-    if not route_on_demand:
-        # A Model that calls only listed Tools gets every Tool listed.
-        assert entries == [("kept", None), ("lazy", None)]
-        assert result["tool_count"] == 2
-        assert "## Tools Loaded on Demand" not in result["text"]
-        return
-    assert entries == [("kept", None), ("lazy", True), ("load_tools", None)]
+    assert entries == [("kept", None), ("lazy", True), ("load_tools", None)] + (
+        [] if route_on_demand else [("call_tool", None)]
+    )
     listed = [entry["definition"] for entry in result["tools"] if "on_demand" not in entry]
-    assert result["tool_count"] == 2
+    assert result["tool_count"] == (2 if route_on_demand else 3)
     assert result["tool_tokens"] == estimate_json_tokens(listed)[0]
     # The prompt text lists the On-demand Tool instead.
     assert "## Tools Loaded on Demand" in result["text"]

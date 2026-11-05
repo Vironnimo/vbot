@@ -27,7 +27,7 @@ from core.tools import (
 from core.tools.availability import (
     resolve_tool_access,
 )
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
+from core.tools.on_demand import CALL_TOOL_NAME, LOAD_TOOLS_TOOL_NAME
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -347,6 +347,8 @@ def _dispatch_allowed_tools(
     ]
     if LOAD_TOOLS_TOOL_NAME in effective:
         allowed.append(LOAD_TOOLS_TOOL_NAME)
+    if CALL_TOOL_NAME in effective:
+        allowed.append(CALL_TOOL_NAME)
     return allowed
 
 

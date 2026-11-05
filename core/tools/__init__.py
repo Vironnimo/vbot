@@ -463,6 +463,7 @@ _SUBMODULES = frozenset(
         "image",
         "live",
         "load_tools",
+        "call_tool",
         "media_generation",
         "memory",
         "model_names",

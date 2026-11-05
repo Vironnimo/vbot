@@ -19,6 +19,7 @@ from core.tools.model_names import model_tool_name
 from core.tools.tool_loading import DEFAULT_ALWAYS_LOADED_TOOLS
 
 LOAD_TOOLS_TOOL_NAME = "load_tools"
+CALL_TOOL_NAME = "call_tool"
 # The System Prompt producer that lists the On-demand Tools by name and summary.
 ON_DEMAND_TOOL_LIST_PRODUCER = "on_demand_tool_list"
 
@@ -79,7 +80,9 @@ def on_demand_tools(
     return frozenset(
         name
         for name in tool_names
-        if name != LOAD_TOOLS_TOOL_NAME and name not in kept and name not in grants
+        if name not in {LOAD_TOOLS_TOOL_NAME, CALL_TOOL_NAME}
+        and name not in kept
+        and name not in grants
     )
 
 
@@ -122,6 +125,7 @@ def on_demand_tool_entries(
 
 
 __all__ = [
+    "CALL_TOOL_NAME",
     "LOAD_TOOLS_TOOL_NAME",
     "ON_DEMAND_TOOL_LIST_PRODUCER",
     "always_loaded_tools",

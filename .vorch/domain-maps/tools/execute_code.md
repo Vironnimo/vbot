@@ -28,7 +28,7 @@ The program runs like `python program.py`: the host writes the unchanged source 
 - MCP Tools return the complete preserved protocol payload, including content blocks and any `structuredContent`, before the Model-facing preview and text-flattening step. Binary media still follows MCP's attachment preservation; this is not a promise to return the original base64 bytes. Other Tools keep their own data contracts, including pagination or bounded reads (`extensions/mcp.md`).
 - Tool definitions still come from ordinary `load_tools` and MCP discovery. Calling `load_tools` inside Python does not mark its unprinted definitions as known by the Model. Explicit Skill activation and Project-context changes retain their normal context effects; hiding a child Result is not a way to suppress those effects.
 
-The bridge permits at most 1,000 Tool calls per execution, 2 MiB per request and 32 MiB per response. A response over its bound is a failure after the Tool ran, never a refusal that promises no effects. Recursive `execute_code` calls are refused. The bridge never reconnects and replays an unanswered request: after a connection loss, whether a mutation ran is unknown.
+The bridge permits at most 1,000 Tool calls per execution, 2 MiB per request and 32 MiB per response. A response over its bound is a failure after the Tool ran, never a refusal that promises no effects. Recursive `execute_code` calls are refused. An outer `call_tool` may dispatch Python; the host-authored `parent_tool_name` distinguishes that transport from recursion. The bridge never reconnects and replays an unanswered request: after a connection loss, whether a mutation ran is unknown.
 
 ## Authority and lifetime
 

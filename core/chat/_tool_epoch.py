@@ -31,7 +31,7 @@ from typing import Any, Literal, cast
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
 from core.tools import definition_change_announced, is_tool_result_envelope, model_tool_name
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
+from core.tools.on_demand import CALL_TOOL_NAME, LOAD_TOOLS_TOOL_NAME
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("chat")
@@ -53,6 +53,14 @@ _ADDED_UNLISTED = (
 )
 _ADDED_LISTED = (
     "The Tool {name} was enabled for you in this Session and now appears in your Tool list."
+)
+_ADDED_PROXY = (
+    "The Tool {name} was enabled for you in this Session. Call it through call_tool; "
+    'set name to "{name}" and arguments to its parameter values.'
+)
+_CHANGED_PROXY = (
+    "The Tool {name} changed in this Session. Call it through call_tool; "
+    'set name to "{name}" and arguments to its parameter values.'
 )
 _AVAILABLE_AGAIN = "The Tool {name} is available to you again."
 _REMOVED = (
@@ -118,6 +126,7 @@ class ToolChange:
     pinned: bool = False
     detail: str | None = None
     summary: str | None = None
+    proxy: bool = False
 
     def note_content(self) -> str:
         """Return the note content that persists this change."""
@@ -137,6 +146,8 @@ class ToolChange:
         }
         if self.summary is not None:
             payload["summary"] = self.summary
+        if self.proxy:
+            payload["proxy"] = True
         return TOOL_CHANGE_NOTE_PREFIX + json.dumps(
             payload, ensure_ascii=False, separators=(",", ":")
         )
@@ -169,6 +180,7 @@ def tool_change_from_note(message: ChatMessage) -> ToolChange | None:
         or not isinstance(payload.get("listed"), bool)
         or not isinstance(payload.get("pinned"), bool)
         or (change == "on_demand" and payload.get("summary") is None)
+        or not isinstance(payload.get("proxy", False), bool)
     ):
         return None
     description = payload.get("description")
@@ -188,6 +200,7 @@ def tool_change_from_note(message: ChatMessage) -> ToolChange | None:
         pinned=payload["pinned"],
         detail=payload.get("detail"),
         summary=payload.get("summary"),
+        proxy=payload.get("proxy", False),
     )
 
 
@@ -221,9 +234,10 @@ def render_tool_change(change: ToolChange) -> str:
         schema=compact_schema(definition.get("parameters", {})),
     )
     if change.change == "added":
-        return _ADDED_UNLISTED.format(name=name) + described
+        added = _ADDED_PROXY if change.proxy else _ADDED_UNLISTED
+        return added.format(name=name) + described
     detail = _CHANGE_DETAIL.format(detail=change.detail) if change.detail else ""
-    changed = _CHANGED_PINNED if change.pinned else _CHANGED
+    changed = _CHANGED_PINNED if change.pinned else _CHANGED_PROXY if change.proxy else _CHANGED
     return changed.format(name=name) + detail + described
 
 
@@ -313,7 +327,11 @@ class ToolEpochPin:
             definition
             for definition in catalog.offered
             if definition["name"] not in left_out
-            and (left_out or definition["name"] != LOAD_TOOLS_TOOL_NAME)
+            and (
+                left_out
+                or CALL_TOOL_NAME in catalog.usable
+                or definition["name"] != LOAD_TOOLS_TOOL_NAME
+            )
         ]
         names = {str(definition["name"]) for definition in offered}
         return cls(
@@ -672,7 +690,8 @@ class ToolEpochView:
             epoch=self.pin.epoch,
             source=source,
             definition=_model_definition(offered),
-            listed=not unlisted_tool_calls,
+            listed=not unlisted_tool_calls and CALL_TOOL_NAME not in self.pin.names,
+            proxy=CALL_TOOL_NAME in self.pin.names,
         )
 
     def loads(self, catalog: LiveToolCatalog) -> dict[str, ToolChange]:
@@ -721,6 +740,7 @@ class ToolEpochView:
             definition=definition,
             listed=pinned,
             pinned=pinned,
+            proxy=not pinned and CALL_TOOL_NAME in self.pin.names,
         )
 
 
@@ -753,12 +773,17 @@ def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
     """
 
     called: dict[str, str] = {}
+    proxies: set[str] = set()
     for message in messages:
-        if message.programmatic:
+        if message.programmatic and message.parent_tool_call_id not in proxies:
             continue
         if message.role in ("compaction_checkpoint", "agent_takeover"):
             called.clear()
+            proxies.clear()
         elif message.role == "assistant":
+            proxies.update(
+                call.id for call in message.tool_calls or () if call.name == CALL_TOOL_NAME
+            )
             called.update(
                 (call.id, call.name) for call in message.tool_calls or () if call.rejection is None
             )

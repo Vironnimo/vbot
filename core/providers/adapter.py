@@ -448,10 +448,9 @@ class ProviderAdapter(ABC):
     def on_demand_tools(self, model_id: str) -> bool:
         """Return whether ``model_id`` can be served On-demand Tools on this route.
 
-        False for a route whose Model calls only Tools the request's ``tools[]``
-        lists: a loaded Tool would have to join that list, which costs the
-        cached prompt prefix, so the chat layer lists every Tool from the start
-        instead. The wire profile's ``request.on_demand_tools`` decides.
+        False for a route whose Model calls only listed Tools: Chat gives it
+        a fixed call_tool proxy instead. True keeps native unlisted calls.
+        The wire profile's ``request.on_demand_tools`` decides.
         """
         return self.wire_profile(model_id).request.on_demand_tools
 

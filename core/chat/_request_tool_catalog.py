@@ -21,9 +21,7 @@ from core.chat.events import _close_adapter
 from core.chat.messages import (
     JsonObject,
 )
-from core.chat.model_resolution import (
-    _model_family,
-)
+from core.chat.model_resolution import _model_family
 from core.prompts.pinned_context import (
     PINNED_TOOL_DEFINITIONS_SLOT,
 )
@@ -43,7 +41,13 @@ from core.tools import (
     offer_edit_dialect,
     tool_is_ready,
 )
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries, on_demand_tools
+from core.tools.availability import TOOL_ACCESS_MODE_NONE
+from core.tools.on_demand import (
+    CALL_TOOL_NAME,
+    LOAD_TOOLS_TOOL_NAME,
+    on_demand_tool_entries,
+    on_demand_tools,
+)
 from core.tools.terminal import project_terminal_tool_definitions
 from core.utils.errors import VBotError
 
@@ -95,6 +99,7 @@ class RequestToolCatalog:
             wire_media_types=target.wire_media_types,
             model_family=target.model_family,
             route_on_demand=target.on_demand_tools,
+            proxy_available=CALL_TOOL_NAME in told,
             known=known,
             told=told,
         )
@@ -212,8 +217,10 @@ class RequestToolCatalog:
         return (
             (
                 tool_epoch.fallback_request_tools(loads)
-                if list_all
-                else tool_epoch.request_tools(list_announced=list_announced)
+                if list_all and CALL_TOOL_NAME not in tool_epoch.pin.names
+                else tool_epoch.request_tools(
+                    list_announced=list_announced and CALL_TOOL_NAME not in tool_epoch.pin.names
+                )
             ),
             allowed_tool_names,
             tuple(name for name in live_tool_grants if name in allowed),
@@ -230,14 +237,14 @@ class RequestToolCatalog:
         wire_media_types: frozenset[str],
         model_family: str,
         route_on_demand: bool,
+        proxy_available: bool = True,
         known: Collection[str] = (),
         told: Collection[str] = (),
     ) -> LiveToolCatalog:
         """Measure the Tools *agent* may use now on one route.
 
-        A route without On-demand Tools (*route_on_demand* false) lists every
-        Tool, whatever the Agent's ``tool_loading`` says: its Model calls only
-        listed Tools, and listing a loaded one would cost the prompt cache.
+        A route without native On-demand Tools gets a fixed proxy in a fresh
+        epoch. An existing pin without that proxy keeps its previous transport.
         *withheld_tools* are not usable although the Agent's Tool policy allows
         them: the Session has no use for them.
         """
@@ -271,6 +278,15 @@ class RequestToolCatalog:
             and not await self._dependencies.image_understanding_available()
         ):
             usable.discard(ANALYZE_IMAGE_TOOL_NAME)
+        proxy = proxy_available and (not route_on_demand or CALL_TOOL_NAME in told)
+        if proxy and agent.tool_access.mode != TOOL_ACCESS_MODE_NONE:
+            controls = self._dependencies.tools.provider_definitions(
+                [LOAD_TOOLS_TOOL_NAME, CALL_TOOL_NAME], include_internal=True
+            )
+            control_names = {str(d["name"]) for d in controls}
+            offered = [d for d in offered if d["name"] not in control_names] + controls
+            usable.update(str(definition["name"]) for definition in controls)
+            sources.update({str(d["name"]): definition_source(d) for d in controls})
         on_demand = (
             await _CHAT_TRANSFORM_WORKERS.run(
                 partial(
@@ -281,20 +297,21 @@ class RequestToolCatalog:
                     session_tool_grants=session_tool_grants,
                 )
             )
-            if route_on_demand
+            if route_on_demand or proxy
             else ()
         )
         # load_tools is offered while a Tool is there to load, and usable while
         # any usable Tool is on demand: readiness and route gates alone never
         # remove it from a prompt epoch that knows it.
-        if not on_demand:
+        if not on_demand and not proxy:
             offered = [
                 definition
                 for definition in offered
                 if definition.get("name") != LOAD_TOOLS_TOOL_NAME
             ]
-        if not route_on_demand or not on_demand_tools(
-            agent, usable, session_tool_grants=session_tool_grants
+        if not proxy and (
+            not route_on_demand
+            or not on_demand_tools(agent, usable, session_tool_grants=session_tool_grants)
         ):
             usable.discard(LOAD_TOOLS_TOOL_NAME)
         return LiveToolCatalog(
@@ -387,52 +404,31 @@ class RequestToolCatalog:
             definition for definition in tools if definition.get("name") != ANALYZE_IMAGE_TOOL_NAME
         ]
 
-    async def serves_on_demand_tools(self, agent: Any) -> bool:
-        """Return whether a Run of *agent* on its Model's route gets On-demand Tools.
-
-        False when the route lists every Tool whatever the Agent's
-        ``tool_loading`` says (the Adapter's ``on_demand_tools``). An Agent whose
-        Model resolves to no route keeps its own setting.
-        """
-        try:
-            target = await self.targets.for_agent(agent)
-        except VBotError:
-            return True
-        try:
-            return target.on_demand_tools
-        finally:
-            await _close_adapter(target.adapter)
-
     async def preview_tool_definitions(
         self, agent: Any, *, session_tool_grants: Sequence[str] = ()
     ) -> list[JsonObject]:
-        """Apply the production Tool-route rules without starting a Run or calling a Model.
-
-        Every Tool the Agent may use is listed with its definition, so
-        ``load_tools`` is left out.
-        """
-        definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
-            agent,
-            session_tool_grants=session_tool_grants,
-        )
-        tools = [tool for tool in definitions if tool.get("name") != LOAD_TOOLS_TOOL_NAME]
-        dialect = edit_dialect(_model_family(self._dependencies, agent))
-        if not any(tool.get("name") == ANALYZE_IMAGE_TOOL_NAME for tool in tools):
-            return await self._route_tool_definitions(
-                tools,
-                tool_access=agent.tool_access,
+        """Inspect the production catalog, including its fixed transport Tools."""
+        try:
+            target = await self.targets.for_agent(agent)
+        except VBotError:
+            catalog = await self._live_tool_catalog(
+                agent,
+                session_tool_grants=session_tool_grants,
                 input_modalities=frozenset(),
                 wire_media_types=frozenset(),
-                edit_dialect=dialect,
+                model_family=_model_family(self._dependencies, agent),
+                route_on_demand=True,
             )
-        target = await self.targets.for_agent(agent)
+            return list(catalog.offered)
         try:
-            return await self._route_tool_definitions(
-                tools,
-                tool_access=agent.tool_access,
+            catalog = await self._live_tool_catalog(
+                agent,
+                session_tool_grants=session_tool_grants,
                 input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
-                edit_dialect=dialect,
+                model_family=target.model_family,
+                route_on_demand=target.on_demand_tools,
             )
+            return list(catalog.offered)
         finally:
             await _close_adapter(target.adapter)

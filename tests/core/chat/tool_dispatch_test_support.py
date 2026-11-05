@@ -114,6 +114,7 @@ class ToolDispatchHarness:
         tool_contracts: Mapping[str, ToolContract] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         removed_tool_names: frozenset[str] = frozenset(),
+        tool_repetition_observer: Callable[[str, JsonObject], str | None] | None = None,
     ) -> Dispatched:
         active_run = run or self.run
         messages, media_outputs = await _dispatch_resolved_tool_calls(
@@ -136,6 +137,7 @@ class ToolDispatchHarness:
                 tool_contracts=tool_contracts or {},
                 tool_denial_resolver=tool_denial_resolver,
                 removed_tool_names=removed_tool_names,
+                tool_repetition_observer=tool_repetition_observer,
             ),
             tool_calls,
         )

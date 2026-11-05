@@ -33,6 +33,7 @@ from core.tools import (
     tool_failure,
     tool_failure_for_exception,
 )
+from core.tools.on_demand import CALL_TOOL_NAME
 from core.utils.logging import get_logger
 from core.utils.surrogates import without_lone_surrogates
 from core.utils.timestamps import format_canonical_timestamp
@@ -185,7 +186,11 @@ class _EmittingToolRegistry(ToolRegistry):
         # Payloads persist only with a result this dispatch returns.
         returned = False
         try:
-            if self._tool_repetition_observer is not None and self._note_hook is not None:
+            if (
+                context.tool_name != CALL_TOOL_NAME
+                and self._tool_repetition_observer is not None
+                and self._note_hook is not None
+            ):
                 note = self._tool_repetition_observer(context.tool_name, arguments)
                 if note is not None:
                     self._note_hook(note)
@@ -606,7 +611,7 @@ class _EmittingToolRegistry(ToolRegistry):
             else self._assistant_message_id
         )
         identity: JsonObject = {"assistant_message_id": message_id}
-        if context.programmatic:
+        if self._parent_tool_call_id is not None:
             identity.update(programmatic=True, parent_tool_call_id=self._parent_tool_call_id)
         return identity
 
