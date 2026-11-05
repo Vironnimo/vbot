@@ -163,35 +163,38 @@ async def test_caller_kwargs_override_provider_defaults_unless_none(temperature,
 _CEILING_MODEL = catalog_model(max_output_tokens=128_000, context_window=200_000)
 
 
+_FLAT_DEFAULT_CONFIG = replace(OPENROUTER_CONFIG, id="flat-default")
+
+
 @pytest.mark.parametrize(
     ("config", "model", "kwargs", "expected"),
     [
         pytest.param(
-            OPENROUTER_CONFIG, _CEILING_MODEL, {}, {"max_tokens": 128_000}, id="model-ceiling"
+            _FLAT_DEFAULT_CONFIG, _CEILING_MODEL, {}, {"max_tokens": 128_000}, id="model-ceiling"
         ),
         pytest.param(
-            OPENROUTER_CONFIG,
+            _FLAT_DEFAULT_CONFIG,
             _CEILING_MODEL,
             {"max_tokens": 512},
             {"max_tokens": 512},
             id="explicit",
         ),
         pytest.param(
-            OPENROUTER_CONFIG,
+            _FLAT_DEFAULT_CONFIG,
             _CEILING_MODEL,
             {"max_tokens": 0},
             {"max_tokens": 128_000},
             id="non-positive-explicit-ignored",
         ),
         pytest.param(
-            OPENROUTER_CONFIG,
+            _FLAT_DEFAULT_CONFIG,
             _CEILING_MODEL,
             {"max_completion_tokens": 777},
             {"max_completion_tokens": 777},
             id="explicit-alias-suppresses-ceiling-and-config-default",
         ),
         pytest.param(
-            OPENROUTER_CONFIG,
+            _FLAT_DEFAULT_CONFIG,
             catalog_model(max_output_tokens=None),
             {},
             {"max_tokens": 4096},

@@ -19,7 +19,7 @@ from core.providers.opencode_go import (
     OPENCODE_SESSION_ID_KWARG,
     OpenCodeGoAdapter,
 )
-from core.providers.providers import AuthConfig
+from core.providers.providers import REQUEST_OUTPUT_ALLOWANCE_CAP, AuthConfig
 from core.providers.wire_observations import WireObservations
 from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 
@@ -394,13 +394,20 @@ def test_normalize_response_follows_the_model_wire_before_the_response_shape(
 @pytest.mark.parametrize(
     ("model_id", "context_window", "kwargs", "prompt", "bounds"),
     [
-        pytest.param(CHAT_MODEL, 1_000_000, {}, "Write an app.", (384_000, 384_000), id="catalog"),
+        pytest.param(
+            CHAT_MODEL,
+            1_000_000,
+            {},
+            "Write an app.",
+            (REQUEST_OUTPUT_ALLOWANCE_CAP, REQUEST_OUTPUT_ALLOWANCE_CAP),
+            id="catalog",
+        ),
         pytest.param(
             "deepseek/deepseek-v4-flash",
             1_000_000,
             {},
             "Write an app.",
-            (384_000, 384_000),
+            (REQUEST_OUTPUT_ALLOWANCE_CAP, REQUEST_OUTPUT_ALLOWANCE_CAP),
             id="vendor-prefixed",
         ),
         pytest.param(

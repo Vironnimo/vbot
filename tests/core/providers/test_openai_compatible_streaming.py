@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any, override
 
 import httpx
@@ -81,7 +82,7 @@ async def test_stream_request_asks_for_usage_and_leaves_reads_to_chat_clocks(
         route = respx.post(OPENROUTER_URL).mock(
             return_value=sse_response(sse(_delta_chunk(content="Hi")))
         )
-        await collect(make_adapter(OPENROUTER_CONFIG), **kwargs)
+        await collect(make_adapter(replace(OPENROUTER_CONFIG, id="flat-default")), **kwargs)
 
     request = route.calls.last.request
     payload = json.loads(request.content)

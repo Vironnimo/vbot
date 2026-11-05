@@ -58,7 +58,6 @@ _EFFORT_UPDATES_REJECTED: _Rejection = ("effort_updates", "rejected")
 _MAX_OUTPUT_STATED: _Rejection = ("limit", "max_output_tokens")
 _CONTEXT_WINDOW_STATED: _Rejection = ("limit", "context_window")
 _IMAGE_COUNT_STATED: _Rejection = ("limit", "request_max_images")
-_INPUT_COUNT_STATED: _Rejection = ("limit", "input_count_permille")
 
 
 @dataclass(frozen=True)
@@ -81,10 +80,6 @@ class ObservedFacts:
     """The Context window a rejection stated for this Model on this Connection."""
     request_max_images: int | None = None
     """The image count a rejection stated for this Model on this Connection."""
-    input_count_permille: int | None = None
-    """How the input a rejection counted compares with what vBot budgeted for that
-    request, in thousandths (1116: the wire counted 11.6% more). A gateway can
-    check requests with a count of its own that differs from the Usage it reports."""
 
     def is_empty(self) -> bool:
         return self == _NO_FACTS
@@ -115,8 +110,6 @@ class ObservedFacts:
             return replace(self, context_window=None)
         if rejection == _IMAGE_COUNT_STATED:
             return replace(self, request_max_images=None)
-        if rejection == _INPUT_COUNT_STATED:
-            return replace(self, input_count_permille=None)
         return replace(
             self, rejected_efforts=tuple(item for item in self.rejected_efforts if item != name)
         )
@@ -319,22 +312,6 @@ class WireObservations:
             rejection=_CONTEXT_WINDOW_STATED,
         )
 
-    def record_input_count(
-        self, provider_id: str, connection_id: str, model_id: str, permille: int
-    ) -> None:
-        """A rejection counted more input than vBot budgeted; the highest ratio stays."""
-
-        self._update(
-            provider_id,
-            connection_id,
-            model_id,
-            lambda facts: replace(
-                facts, input_count_permille=max(permille, facts.input_count_permille or 0)
-            ),
-            f"the wire counts input at {permille / 1000:.3f} times vBot's budget",
-            rejection=_INPUT_COUNT_STATED,
-        )
-
     def record_request_max_images(
         self, provider_id: str, connection_id: str, model_id: str, limit: int
     ) -> None:
@@ -459,7 +436,6 @@ class WireObservations:
                     | ({_MAX_OUTPUT_STATED} if updated.max_output_tokens is not None else set())
                     | ({_CONTEXT_WINDOW_STATED} if updated.context_window is not None else set())
                     | ({_IMAGE_COUNT_STATED} if updated.request_max_images is not None else set())
-                    | ({_INPUT_COUNT_STATED} if updated.input_count_permille is not None else set())
                 )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
@@ -568,11 +544,6 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
                 "value": item.request_max_images,
                 "learned_at": _stamp(times.get(_IMAGE_COUNT_STATED)),
             }
-        if item.input_count_permille is not None:
-            entry["input_count_permille"] = {
-                "value": item.input_count_permille,
-                "learned_at": _stamp(times.get(_INPUT_COUNT_STATED)),
-            }
         if entry:
             targets[key] = entry
     return {"format_version": OBSERVATIONS_FORMAT_VERSION, "targets": targets}
@@ -616,7 +587,6 @@ def _read(
         max_output = _limit(entry.get("max_output_tokens"), now)
         context_window = _limit(entry.get("context_window"), now)
         image_count = _limit(entry.get("request_max_images"), now)
-        input_count = _limit(entry.get("input_count_permille"), now)
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
@@ -632,8 +602,6 @@ def _read(
             times[_CONTEXT_WINDOW_STATED] = context_window[1]
         if image_count is not None:
             times[_IMAGE_COUNT_STATED] = image_count[1]
-        if input_count is not None:
-            times[_INPUT_COUNT_STATED] = input_count[1]
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
@@ -647,7 +615,6 @@ def _read(
             max_output_tokens=max_output[0] if max_output is not None else None,
             context_window=context_window[0] if context_window is not None else None,
             request_max_images=image_count[0] if image_count is not None else None,
-            input_count_permille=input_count[0] if input_count is not None else None,
         )
     return facts, learned_at
 

@@ -11,6 +11,7 @@ import pytest
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
     LOCAL_CONTEXT_DEFAULT_CAP,
+    REQUEST_OUTPUT_ALLOWANCE_CAP,
     ProviderConfig,
     RequestInput,
     context_capacity,
@@ -197,22 +198,23 @@ def test_resolve_request_output_limit(
 
 
 @pytest.mark.parametrize(
-    ("input_tokens", "expected"),
+    ("explicit_limit", "floor", "expected"),
     [
-        pytest.param(100_000, 880_000, id="the-ratio-leaves-its-excess-free"),
-        pytest.param(960_000, 40_000, id="an-input-the-ratio-would-fill-keeps-the-measured-room"),
+        pytest.param(None, 0, REQUEST_OUTPUT_ALLOWANCE_CAP, id="ceiling-capped"),
+        pytest.param(500_000, 0, 500_000, id="explicit-limit-stays"),
+        pytest.param(None, 300_000, 300_000, id="thinking-floor-stays"),
     ],
 )
-def test_a_learned_wire_input_ratio_only_lowers_the_output_allowance(
-    input_tokens: int, expected: int
+def test_output_allowance_cap_bounds_only_what_vbot_chose(
+    explicit_limit: int | None, floor: int, expected: int
 ) -> None:
     resolved = resolve_request_output_limit(
-        explicit_limit=None,
+        explicit_limit=explicit_limit,
         model_output_limit=943_718,
         provider_default=None,
-        effective_context_window=1_000_000,
-        request_input=RequestInput.measured(input_tokens),
-        wire_input_ratio=1.2,
+        effective_context_window=1_048_576,
+        request_input=RequestInput.measured(100_000),
+        minimum_output_tokens=floor,
     )
 
     assert resolved == expected
