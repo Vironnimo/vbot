@@ -80,6 +80,33 @@ export function computerOptions(computers, selected = [], capability = null) {
   }));
 }
 
+// The computer a conversation's execution policy names, with its state; a
+// policy that is not known yet names none.
+export function executionLabel(value, computers) {
+  if (!value) return t('computers.sessionUnknown');
+  const policy = normalizeExecution(value);
+  const selected = computersWithSelection(
+    computers,
+    policy.allowed_computer_ids,
+  ).find((computer) => computer.id === policy.computer_id);
+  if (!policy.allowed_computer_ids.includes(policy.computer_id)) {
+    return t('computers.selectedRevoked', { name: computerName(selected) });
+  }
+  return selected?.known && !selected.online
+    ? t('computers.selectedOffline', { name: computerName(selected) })
+    : computerName(selected);
+}
+
+// True when a known policy reaches beyond the server alone, the default.
+export function executionLeavesServer(value) {
+  if (!value) return false;
+  const { computer_id, allowed_computer_ids } = normalizeExecution(value);
+  return (
+    computer_id !== 'server' ||
+    allowed_computer_ids.some((id) => id !== 'server')
+  );
+}
+
 export function createComputers({ read = listComputers } = {}) {
   let computers = $state([]);
   let loaded = $state(false);

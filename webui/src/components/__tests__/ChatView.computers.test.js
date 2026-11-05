@@ -37,12 +37,23 @@ const execution = {
   computer_id: 'pc_laptop',
   allowed_computer_ids: ['pc_laptop'],
 };
+const moreButton = () =>
+  document.querySelector('button[aria-label="More Session settings"]');
 const openComputers = () => {
-  document
-    .querySelector('button[aria-label="Computers for this conversation"]')
-    .click();
+  moreButton().click();
+  flushSync();
+  document.querySelector('[role="menuitem"]').click();
   flushSync();
 };
+// The state the more menu names for the conversation's computer.
+function computerStatus() {
+  moreButton()?.click();
+  flushSync();
+  const status = document.querySelector('[role="menuitem"]')?.textContent ?? '';
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  flushSync();
+  return status;
+}
 const defaultPicker = () =>
   document.querySelector('button[aria-label="Default computer"]');
 async function chooseComputer(name) {
@@ -97,11 +108,7 @@ describe('ChatView computer selection', () => {
       await waitForCondition(
         () =>
           getSessionMock.mock.calls.length > 0 &&
-          document
-            .querySelector(
-              'button[aria-label="Computers for this conversation"]',
-            )
-            ?.textContent.includes('Computer not loaded'),
+          computerStatus().includes('Computer not loaded'),
       );
       openComputers();
       expect(defaultPicker()).toBeNull();
@@ -161,11 +168,7 @@ describe('ChatView computer selection', () => {
       ComputerContextHost,
     );
     flushSync();
-    await waitForCondition(() =>
-      document.querySelector(
-        'button[aria-label="Computers for this conversation"]',
-      ),
-    );
+    await waitForCondition(() => moreButton());
     openComputers();
     await chooseComputer('Work laptop');
     const serverGrant = document.querySelector(
@@ -185,11 +188,8 @@ describe('ChatView computer selection', () => {
     expect(rpcCalls('session.set_execution')).toEqual([]);
     findNewSessionButton().click();
     flushSync();
-    await waitForCondition(() =>
-      document
-        .querySelector('button[aria-label="Computers for this conversation"]')
-        ?.textContent.includes('Server'),
-    );
+    await waitForCondition(() => computerStatus().includes('Server'));
+    expect(document.querySelector('[data-more-changed]')).toBeNull();
   });
 
   it('keeps an offline or missing Session computer selected and saves an explicit replacement', async () => {
@@ -224,11 +224,8 @@ describe('ChatView computer selection', () => {
       ComputerContextHost,
     );
     flushSync();
-    await waitForCondition(() =>
-      document
-        .querySelector('button[aria-label="Computers for this conversation"]')
-        ?.textContent.includes('Offline'),
-    );
+    await waitForCondition(() => computerStatus().includes('Offline'));
+    expect(document.querySelector('[data-more-changed]')).not.toBeNull();
     openComputers();
     expect(defaultPicker().textContent).toContain('Work laptop');
     listed = computers.filter((computer) => computer.id !== 'pc_laptop');
@@ -272,9 +269,7 @@ describe('ChatView computer selection', () => {
     );
     flushSync();
     await waitForCondition(() =>
-      document
-        .querySelector('button[aria-label="Computers for this conversation"]')
-        ?.textContent.includes('Work laptop · Not allowed'),
+      computerStatus().includes('Work laptop · Not allowed'),
     );
     openComputers();
     expect(document.querySelector('.modal-body').textContent).toContain(
@@ -311,11 +306,7 @@ describe('ChatView computer selection', () => {
       ComputerContextHost,
     );
     flushSync();
-    await waitForCondition(() =>
-      document
-        .querySelector('button[aria-label="Computers for this conversation"]')
-        ?.textContent.includes('Work laptop'),
-    );
+    await waitForCondition(() => computerStatus().includes('Work laptop'));
     openComputers();
     await waitForCondition(() => defaultPicker()?.disabled);
     expect(

@@ -22,8 +22,6 @@ export default {
     'Allow another computer when your task needs it. For Terminal and Computer Use, the Agent can use only the computers you select here.',
   'computers.running':
     'Computer access can be changed once the current Run ends.',
-  'computers.sessionHint':
-    'Choose where Terminal and Computer Use run for this conversation.',
   'computers.selectedOffline': '{name} · Offline',
   'computers.selectedRevoked': '{name} · Not allowed',
   'computers.defaultRevoked':

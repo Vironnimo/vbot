@@ -11,12 +11,11 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
 
-  // A compact "Restricted" mark for a Session (or a draft's next Session)
-  // whose Runs work under Permission Rules; a quiet open lock for a Session
-  // with full access, and nothing for a draft with full access. Its hover
-  // card lists every layer that applies (`permissions.session`): the Agent's
-  // own rules and each inherited limit, then the honest limits of the checks
-  // (`.vorch/domain-maps/permissions.md`). For a Session, the card lets the
+  // A lock for a Session (or a draft's next Session): closed and amber when
+  // its Runs work under Permission Rules, open and white with full access.
+  // Its hover card lists every layer that applies (`permissions.session`):
+  // the Agent's own rules and each inherited limit, then the honest limits of
+  // the checks (`.vorch/domain-maps/permissions.md`). For a Session, the card lets the
   // user give it its own access (`permissions.set_session_rules`): the
   // Agent's rules or a preset; full access also removes inherited limits,
   // so with stored ones it asks first. A Session that stores inherited limits
@@ -261,11 +260,9 @@
   );
   let restricted = $derived(Boolean(summary?.restricted));
   let grants = $derived(sessionId ? (summary?.session_grants ?? []) : []);
-  // A Session can always change its access; a draft shows only its limits.
-  let shown = $derived(Boolean(summary && (restricted || sessionId)));
 </script>
 
-{#if shown}
+{#if summary}
   <span class="session-permissions-anchor">
     <button
       type="button"
@@ -292,9 +289,6 @@
           <path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7" />
         {/if}
       </svg>
-      {#if restricted}
-        <span>{t('permissions.session.badge')}</span>
-      {/if}
     </button>
     <div
       class="floating-card session-permissions-card"
@@ -468,20 +462,18 @@
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 4px;
-    min-height: 26px;
-    padding: 2px 6px;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
     border: 1px solid transparent;
     border-radius: var(--r-md);
     color: var(--amber);
     background: transparent;
-    font: inherit;
-    font-size: var(--fs-label-sm);
-    line-height: 1.4;
     cursor: default;
   }
   .session-permissions--full {
-    color: var(--text-lo);
+    color: var(--text-hi);
   }
   button.session-permissions:hover,
   button.session-permissions:focus-visible {

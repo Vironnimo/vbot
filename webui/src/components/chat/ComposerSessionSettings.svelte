@@ -13,8 +13,11 @@
   //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: Provider default or a level the effective Model
   //   offers; hidden for a Model without reasoning.
-  // - Output speed and request latency: independent server projections,
-  //   each identifying the Model step that supplied its measurement.
+  // - Output speed: the row shows the rate, its tooltip also the request
+  //   latency. Both are independent server projections, so latency alone
+  //   takes the rate's place until a step has a measurable rate.
+  // - More menu: rarely needed Session settings, so they do not crowd the
+  //   row; its dot says one of them differs from the default.
   import {
     THINKING_EFFORT_OPTIONS,
     effortOptionsForReasoning,
@@ -32,9 +35,17 @@
     selectModelValue,
   } from '$lib/modelSelection.js';
   import { formatDurationMs } from '$lib/chatTimelinePresentation/time.js';
+  import {
+    executionLabel,
+    executionLeavesServer,
+    useComputers,
+  } from '$lib/computers.svelte.js';
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from '../ui/contextMenu.js';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import SessionPermissionsBadge from '../permissions/SessionPermissionsBadge.svelte';
   import SessionComputerSettings from './SessionComputerSettings.svelte';
@@ -269,9 +280,21 @@
       ? label
       : t('chat.sessionSettings.approximateSpeed', { value: label });
   });
-  let speedTooltip = $derived.by(() => {
-    if (!speedLabel) return null;
-    const speed = outputSpeed;
+  let latencyLabel = $derived(
+    Number.isFinite(outputLatency?.first_token_ms)
+      ? t('chat.sessionSettings.latencyValue', {
+          duration: formatDurationMs(outputLatency.first_token_ms),
+        })
+      : '',
+  );
+  let measureLabel = $derived(speedLabel || latencyLabel);
+
+  function modelName(value) {
+    const { model } = parseModelSelectionValue(value);
+    return modelNames.get(model) || model;
+  }
+
+  function speedRows(speed) {
     const rows = [
       {
         label: t('chat.sessionSettings.speedRate'),
@@ -280,10 +303,9 @@
     ];
     // The Model that answered; the footer may already name another one.
     if (speed.model) {
-      const { model } = parseModelSelectionValue(speed.model);
       rows.push({
         label: t('chat.sessionSettings.model'),
-        value: modelNames.get(model) || model,
+        value: modelName(speed.model),
       });
     }
     if (Number.isFinite(speed.tokens) && Number.isFinite(speed.window_ms)) {
@@ -296,6 +318,10 @@
           : t('chat.sessionSettings.speedMeasuredValue', { tokens, duration }),
       });
     }
+    return rows;
+  }
+
+  function speedNotes(speed) {
     const notes = [t('chat.sessionSettings.speedHint')];
     if (speed.basis === 'answer') {
       notes.push(t('chat.sessionSettings.speedAnswerOnly'));
@@ -304,30 +330,19 @@
     } else {
       notes.push(t('chat.sessionSettings.speedStreamedOutput'));
     }
-    return {
-      title: t('chat.sessionSettings.speed'),
-      text: notes.join(' '),
-      rows,
-      placement: 'top',
-    };
-  });
+    return notes;
+  }
 
-  let latencyLabel = $derived(
-    Number.isFinite(outputLatency?.first_token_ms)
-      ? t('chat.sessionSettings.latencyValue', {
-          duration: formatDurationMs(outputLatency.first_token_ms),
-        })
-      : '',
-  );
-  let latencyTooltip = $derived.by(() => {
-    if (!latencyLabel) return null;
-    const latency = outputLatency;
+  function latencyRows(latency, shownModel) {
     const rows = [];
-    if (latency.model) {
-      const { model } = parseModelSelectionValue(latency.model);
+    // A short step moves latency on and keeps the preceding rate, so the two
+    // measurements can come from different Models.
+    if (latency.model && latency.model !== shownModel) {
       rows.push({
-        label: t('chat.sessionSettings.model'),
-        value: modelNames.get(model) || model,
+        label: shownModel
+          ? t('chat.sessionSettings.latencyModel')
+          : t('chat.sessionSettings.model'),
+        value: modelName(latency.model),
       });
     }
     rows.push({
@@ -343,10 +358,25 @@
         value: formatDurationMs(latency.first_answer_ms),
       });
     }
+    return rows;
+  }
+
+  let measureTooltip = $derived.by(() => {
+    if (!measureLabel) return null;
+    const speed = speedLabel ? outputSpeed : null;
+    const latency = latencyLabel ? outputLatency : null;
     return {
-      title: t('chat.sessionSettings.latency'),
-      text: t('chat.sessionSettings.latencyHint'),
-      rows,
+      title: speed
+        ? t('chat.sessionSettings.speed')
+        : t('chat.sessionSettings.latency'),
+      text: [
+        ...(speed ? speedNotes(speed) : []),
+        ...(latency ? [t('chat.sessionSettings.latencyHint')] : []),
+      ].join(' '),
+      rows: [
+        ...(speed ? speedRows(speed) : []),
+        ...(latency ? latencyRows(latency, speed?.model) : []),
+      ],
       placement: 'top',
     };
   });
@@ -390,6 +420,39 @@
     return level && THINKING_EFFORT_OPTIONS.includes(level)
       ? t(`agents.form.thinkingEffortOption.${level}`)
       : level;
+  }
+
+  // --- More menu -------------------------------------------------------
+
+  const computers = useComputers();
+  let moreMenu = $state.raw(null);
+  let computersOpen = $state(false);
+  let computerLabel = $derived(
+    executionLabel(view.execution, computers?.computers ?? []),
+  );
+  let moreChanged = $derived(executionLeavesServer(view.execution));
+  let moreTooltip = $derived({
+    title: t('chat.sessionSettings.more'),
+    text: moreChanged ? computerLabel : '',
+    placement: 'top',
+  });
+
+  function openMoreMenu(event) {
+    moreMenu = {
+      ...contextMenuAnchor(event),
+      label: t('chat.sessionSettings.more'),
+      items: [
+        {
+          id: 'computers',
+          label: t('computers.label'),
+          hint: computerLabel,
+          onSelect: () => {
+            computersOpen = true;
+            void computers?.refresh();
+          },
+        },
+      ],
+    };
   }
 </script>
 
@@ -469,13 +532,32 @@
         ? (view.project.value ?? null)
         : undefined}
     />
-    <SessionComputerSettings
-      value={view.execution}
-      disabled={view.executionLocked}
-      onChange={onSelectExecution}
-      onRetry={view.retryExecution}
-    />
-    {#if speedLabel || latencyLabel}
+    <Button
+      variant="tertiary"
+      icon
+      class="session-settings__more"
+      ariaLabel={t('chat.sessionSettings.more')}
+      tooltip={moreTooltip}
+      aria-haspopup="menu"
+      aria-expanded={moreMenu !== null}
+      onClick={openMoreMenu}
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <circle cx="3.5" cy="8" r="1.25" />
+        <circle cx="8" cy="8" r="1.25" />
+        <circle cx="12.5" cy="8" r="1.25" />
+      </svg>
+      {#if moreChanged}
+        <span class="session-settings__more-dot" data-more-changed></span>
+      {/if}
+    </Button>
+    {#if measureLabel}
       <span class="session-settings__field session-settings__field--icon">
         <svg
           class="session-settings__icon"
@@ -487,30 +569,18 @@
           <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" />
           <path d="M8 11.5l2.5-3.5" />
         </svg>
-        {#if speedLabel}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (The measurement details are keyboard-accessible.) -->
-          <span
-            class="session-settings__value session-settings__value--speed"
-            role="group"
-            tabindex="0"
-            aria-label={t('chat.sessionSettings.speed')}
-            use:tooltip={speedTooltip}
-          >
-            <span class="session-settings__value-label">{speedLabel}</span>
-          </span>
-        {/if}
-        {#if latencyLabel}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (The latency details are keyboard-accessible.) -->
-          <span
-            class="session-settings__value session-settings__value--speed"
-            role="group"
-            tabindex="0"
-            aria-label={t('chat.sessionSettings.latency')}
-            use:tooltip={latencyTooltip}
-          >
-            <span class="session-settings__value-label">{latencyLabel}</span>
-          </span>
-        {/if}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (The measurement details are keyboard-accessible.) -->
+        <span
+          class="session-settings__value session-settings__value--speed"
+          role="group"
+          tabindex="0"
+          aria-label={speedLabel
+            ? t('chat.sessionSettings.speed')
+            : t('chat.sessionSettings.latency')}
+          use:tooltip={measureTooltip}
+        >
+          <span class="session-settings__value-label">{measureLabel}</span>
+        </span>
       </span>
     {/if}
   </div>
@@ -589,6 +659,18 @@
   </div>
 </div>
 
+<ContextMenu menu={moreMenu} onClose={() => (moreMenu = null)} />
+
+{#if computersOpen}
+  <SessionComputerSettings
+    value={view.execution}
+    disabled={view.executionLocked}
+    onClose={() => (computersOpen = false)}
+    onChange={onSelectExecution}
+    onRetry={view.retryExecution}
+  />
+{/if}
+
 <style>
   /* A quiet row under the input box: transparent triggers in small muted
      text, a neutral surface on hover, the shared focus ring. A Session's own
@@ -621,6 +703,28 @@
     flex: 0 1 auto;
     justify-content: flex-end;
     margin-left: auto;
+  }
+
+  .session-settings__start
+    :global(.btn-tertiary.btn-icon.session-settings__more) {
+    position: relative;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+  }
+
+  .session-settings__more-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    pointer-events: none;
   }
 
   .session-settings__fast {
@@ -767,12 +871,6 @@
 
   .session-settings__value--speed {
     font-variant-numeric: tabular-nums;
-  }
-
-  .session-settings__field--icon
-    .session-settings__value--speed
-    + .session-settings__value--speed {
-    padding-left: 6px;
   }
 
   .session-settings__value-label {

@@ -202,11 +202,14 @@ describe('SessionPermissionsBadge', () => {
     ).toBe('full');
   });
 
-  it('shows a draft with full access nothing', async () => {
+  it('shows a draft with full access the open lock, without access choices', async () => {
     permissionsMock.mockResolvedValue({ restricted: false, layers: [] });
     await render({ workingProjectId: null });
 
-    expect(document.querySelector('[data-session-permissions]')).toBeNull();
+    const lock = document.querySelector('[data-session-permissions]');
+    expect(lock.getAttribute('data-session-permissions')).toBe('full');
+    expect(lock.textContent.trim()).toBe('');
+    expect(document.querySelector('[data-session-access]')).toBeNull();
   });
 
   it('names the scratch area and states the limits of the checks', async () => {
@@ -310,7 +313,11 @@ describe('SessionPermissionsBadge', () => {
     });
     await render({ sessionId: 's1' });
 
-    expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
+    const lock = document.querySelector('[data-session-permissions]');
+    expect(lock.getAttribute('aria-label')).toContain(
+      t('permissions.session.badge'),
+    );
+    expect(lock.textContent.trim()).toBe('');
     expect(clearButton()).toBeUndefined();
   });
 });

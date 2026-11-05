@@ -644,7 +644,7 @@ export default Object.freeze({
   'chat.sessionSettings.speedValue': '{rate} tok/s',
   'chat.sessionSettings.approximateSpeed': '≈{value}',
   'chat.sessionSettings.speedHint':
-    'The latest step with a measurable output rate. A newer response may have no rate; its latency is shown separately.',
+    'The latest step with a measurable output rate; a newer response may have none.',
   'chat.sessionSettings.speedRate': 'Tokens per second',
   'chat.sessionSettings.firstToken': 'Time to first token',
   'chat.sessionSettings.firstAnswer': 'Time to first answer',
@@ -659,8 +659,10 @@ export default Object.freeze({
     'Provider-reported decode rate, measured during generation rather than from output arriving at vBot.',
   'chat.sessionSettings.latency': 'Latest response latency',
   'chat.sessionSettings.latencyValue': 'TTFT {duration}',
+  'chat.sessionSettings.latencyModel': 'First token from',
   'chat.sessionSettings.latencyHint':
-    'Time from sending the latest measured request until its first text, Reasoning or Tool-call output arrived. Provider queueing and prompt processing are included. This is measured even when the response is too short for an output rate.',
+    'Time to first token runs from sending the latest measured request to its first text, Reasoning or Tool-call output, including Provider queueing and prompt processing.',
+  'chat.sessionSettings.more': 'More Session settings',
   'sessions.title': 'Sessions',
   'sessions.newSession': 'New Session',
   'sessions.loading': 'Loading sessions…',
