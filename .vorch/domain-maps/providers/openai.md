@@ -246,7 +246,7 @@ The subscription usage fetcher in `core/providers/usage.py` (see `providers/usag
 - Provider defaults are merged with `setdefault`; caller kwargs win.
 - Extra headers are merged after auth headers.
 - The Codex `OpenAI-Beta` and `originator` headers are adapter-owned and must never leak into the chat-completions path. Adding them to provider-level `extra_headers` is forbidden.
-- No OpenAI route serves On-demand Tools (Wire Contract -> Tools loaded on demand); do not "fix" a GPT Agent that ignores loaded Tools in Tool text.
+- No OpenAI route calls unlisted Tools natively (Wire Contract -> Tools loaded on demand); On-demand Tools run through `call_tool`, so do not "fix" a GPT Agent that ignores loaded Tools by listing them.
 - Only one adapter class (`OpenAIAdapter`) exists for this provider; the endpoint variant (Codex or Platform) is selected per construction from `connection_mode`, the protocol per Model from the wire profile. Do not introduce a separate `openai_subscription` provider or adapter, and do not route Models by id in Adapter code - add a wire-file entry.
 - OpenCode Zen and xAI subclass `OpenAIAdapter`. xAI is profile-driven like OpenAI (`providers/xai.md`). Zen's Responses Models use the same profile-driven Responses path, with the Responses protocol of `resources/wire/opencode-zen.json` (floor `low..xhigh`, `max_tokens`/`max_output_tokens`/`top_p`, images only) and rejection learning (`providers/opencode-zen.md`). There is no declared-Responses hook; a Responses request shape change belongs in the subclass's wire file.
 - Do not route the `subscription` connection through the generic `/chat/completions` path; its supported runtime path is `/codex/responses`.

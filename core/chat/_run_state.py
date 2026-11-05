@@ -354,8 +354,9 @@ class _ModelTarget:
     max_image_bytes: int | None = None
     # Configured or learned image-count limit of one request on this route, if known.
     max_request_images: int | None = None
-    # Whether the route serves On-demand Tools (the Adapter's ``on_demand_tools``);
-    # on the primary route false lists every Tool a new Tool pin offers.
+    # Whether the route's Models call Tools outside the request's Tool list (the
+    # Adapter's ``on_demand_tools``); false adds the transport Tools on the primary
+    # route and lists every Tool on a fallback whose epoch has no proxy.
     on_demand_tools: bool = True
     # The Model's family from the Model catalog ("" when unknown); on the primary
     # route it decides the file edit Tools a new Tool pin offers.

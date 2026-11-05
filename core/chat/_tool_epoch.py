@@ -324,7 +324,8 @@ class ToolEpochPin:
 
         The On-demand Tools stay out of the Tool list, except those in *keep*
         (the Tools the Agent called in the epoch a Compaction ended).
-        ``load_tools`` is listed only while at least one Tool stays out.
+        ``load_tools`` is listed only while at least one Tool stays out or the
+        catalog offers the transport Tools.
         """
 
         left_out = {name for name in catalog.on_demand if name not in keep}

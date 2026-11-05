@@ -431,7 +431,8 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._change_tracker = ChangeTracker(
             scratch_root=runtime._storage.layout.scratch_temporary
         )
-        # Chat lists it only for Agents that load Tools on demand (core/tools/on_demand.py).
+        # Chat lists these only for Agents that load Tools on demand
+        # (core/tools/on_demand.py) and on routes that need the proxy.
         register_load_tools_tool(runtime._tools, runtime._tool_prompt_blocks)
         register_call_tool(runtime._tools)
         register_read_tool(

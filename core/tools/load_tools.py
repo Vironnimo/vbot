@@ -8,7 +8,8 @@ the prompt epoch (``ToolContext.record_loaded_tools``). Loading changes no
 permission: an On-demand Tool is callable before it is loaded.
 
 The Tool is internal: it is never part of a Tool policy or ``tool.list``, and
-it is offered only while the Agent has a Tool to load.
+it is offered only while the Agent has a Tool to load or the route needs the
+fixed ``call_tool`` transport.
 """
 
 from __future__ import annotations

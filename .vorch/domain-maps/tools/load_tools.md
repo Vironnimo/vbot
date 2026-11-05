@@ -65,8 +65,11 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 
 When the admitted Tool list contains `call_tool`, a successful load ends with
 `Call a loaded Tool through call_tool, using its name and arguments.` An
-already known definition says `already callable through call_tool`; a refusal
-with nothing left to load directs calls through that proxy. Direct-call routes
+already known definition says `already callable; call it directly when your Tool
+list shows it, otherwise through call_tool`; a refusal with nothing left to load
+says the same for every Tool. Both name the two ways because the known Tools
+mix listed ones with unlisted ones, and sending a listed Tool through the proxy
+cost an extra wrapper. Direct-call routes
 retain their existing texts. These sentences prevent the Model from calling a
 loaded name that its wire Tool list cannot expose (Coder Session, 2026-11-05).
 The System Prompt's existing load-before-use block remains valid for both paths.
