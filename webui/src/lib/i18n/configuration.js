@@ -401,7 +401,7 @@ export default Object.freeze({
   'settings.toolLoading.description':
     'Only Tools marked Always loaded are sent with every request. Agents load the others when they need them, which saves context.',
   'settings.toolLoading.help':
-    'Agents see the other allowed Tools by name with a one-line summary and load their full definitions with the load_tools Tool before they first call one. What an Agent may use does not change.\n\nOpenAI Models can only call Tools sent with the request, so with them every Tool is sent. Every Agent and Project Agent that does not choose for itself follows this setting and this list; an Agent that changes its list replaces the whole list. Built-in Agents are not affected.',
+    'Agents see the other allowed Tools by name with a one-line summary and load their full definitions with the load_tools Tool before they first call one. What an Agent may use does not change.\n\nEvery Agent and Project Agent that does not choose for itself follows this setting and this list; an Agent that changes its list replaces the whole list. Built-in Agents are not affected.',
   'settings.toolLoading.builtInList':
     'The built-in list of always-loaded Tools applies. Select Tools below to choose your own list.',
   'settings.toolLoading.ownList':

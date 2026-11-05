@@ -324,7 +324,7 @@
   {/if}
   <div class="msg-content assistant-run-content">
     {#snippet runChild(child)}
-      {#if child.type === 'tool_call' && child.parentToolCallId}
+      {#if child.type === 'tool_call' && child.parentToolCallId && !child.proxied}
         <div
           class="programmatic-tool"
           role="group"

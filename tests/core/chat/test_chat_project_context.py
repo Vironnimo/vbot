@@ -14,6 +14,7 @@ from core.sessions import is_skill_context_note, skill_tool_activation
 from core.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools.call_tool import register_call_tool
 from core.tools.skill import register_skill_tool
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -148,8 +149,10 @@ def _skill_runtime(
     responses: list[dict[str, Any]],
     resolve_skills: Any,
     allowed_tools: list[str],
+    *,
+    on_demand_tools: bool = True,
 ) -> tuple[Any, StubAdapter]:
-    adapter = StubAdapter(responses)
+    adapter = StubAdapter(responses, on_demand_tools=on_demand_tools)
     agent = StubAgent(
         id="coder", model="openai/gpt-5.2", allowed_tools=allowed_tools, allowed_skills=[]
     )
@@ -167,13 +170,15 @@ def _loaded_skills(runtime: Any, session_id: str) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("programmatic", [False, True])
+@pytest.mark.parametrize("route", ["direct", "python", "proxy"])
 async def test_project_tool_grants_project_skill_in_current_run_without_prompt_change(
     tmp_path: Path,
-    programmatic: bool,
+    route: str,
 ) -> None:
+    programmatic = route == "python"
     resolve_skills, resolutions = _project_skill_resolver(tmp_path, requires_env=programmatic)
     tools = ToolRegistry()
+    register_call_tool(tools)
     tools.register(
         "project",
         "Load Project Context.",
@@ -217,20 +222,28 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
 
     tools.register("program", "test-sentinel", {"type": "object"}, program)
     tools.register("probe", "test-sentinel", {"type": "object"}, probe)
-    responses = (
-        [_call("call-program", "program", {})]
-        if programmatic
-        else [
+    responses = {
+        "python": [_call("call-program", "program", {})],
+        "direct": [
             _call("call-project", "project", {"project_id": "vbot"}),
             _call("call-skill", "skill", {"name": "deploy"}),
-        ]
-    )
+        ],
+        "proxy": [
+            _call(
+                "call-project",
+                "call_tool",
+                {"name": "project", "arguments": {"project_id": "vbot"}},
+            ),
+            _call("call-skill", "call_tool", {"name": "skill", "arguments": {"name": "deploy"}}),
+        ],
+    }[route]
     runtime, adapter = _skill_runtime(
         tmp_path,
         tools,
         [*responses, {"content": "Done", "tool_calls": None}],
         resolve_skills,
         ["project", "skill", "program", "probe"],
+        on_demand_tools=route != "proxy",
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
@@ -242,6 +255,8 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
     assert ("vbot", "coder") in resolutions
     system_prompts = [str(request["messages"][0]["content"]) for request in adapter.requests]
     assert len(set(system_prompts)) == 1
+    if route == "proxy":
+        assert str(adapter.requests[-1]["messages"]).count("Project-only instructions.") == 1
     if programmatic:
         assert len(observed) == 1
         assert observed[0].skill_project_id == "vbot"

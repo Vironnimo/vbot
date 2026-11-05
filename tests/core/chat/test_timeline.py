@@ -293,6 +293,41 @@ def test_programmatic_calls_keep_parent_grouping_and_identity_after_reload(
             assert raw is not None and raw["arguments"] == child["arguments"]
 
 
+def test_a_proxied_call_shows_one_row_for_its_target_or_the_proxy_when_refused() -> None:
+    timeline = RunTimeline("run")
+    for call_id in ("reached", "refused"):
+        timeline.apply(
+            {
+                "type": "tool_call_started",
+                "payload": {
+                    "assistant_message_id": "assistant",
+                    "tool_call": {
+                        "id": call_id,
+                        "name": "call_tool",
+                        "arguments": {"name": "read"},
+                    },
+                },
+            }
+        )
+    timeline.apply(
+        {
+            "type": "tool_call_started",
+            "payload": {
+                "programmatic": True,
+                "parent_tool_call_id": "reached",
+                "tool_call": {"id": "pcall", "name": "read", "arguments": {"path": "a"}},
+            },
+        }
+    )
+    children = [
+        item for item in run_block(timeline.snapshot())["items"] if item["type"] == "tool_call"
+    ]
+    assert [(item["name"], item.get("proxied", False)) for item in children] == [
+        ("read", True),
+        ("call_tool", False),
+    ]
+
+
 def test_cancelled_history_keeps_programmatic_calls_without_parent_declaration() -> None:
     records = [
         message(

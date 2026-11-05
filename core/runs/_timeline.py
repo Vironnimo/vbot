@@ -16,6 +16,8 @@ from typing import Any
 from core.runs._timeline_arguments import ToolArgumentPreview
 from core.runs._timeline_tools import bounded_preview, merged_secrets_used, presented_display
 
+_PROXY_TOOL = "call_tool"
+
 JsonObject = dict[str, Any]
 _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
 # An answer row's message leaves out what its Tool and Reasoning rows show.
@@ -156,11 +158,17 @@ class RunTimeline:
             if parent is not None and parent in present:
                 by_parent.setdefault(parent, []).append(child)
                 linked.add(child["id"])
-        ordered = []
+        ordered: list[JsonObject] = []
         for child in children:
-            if child["id"] not in linked:
+            if child["id"] in linked:
+                continue
+            calls = by_parent.get(child["id"], ())
+            if calls and child.get("name") == _PROXY_TOOL:
+                # The proxy only carries its target: that row stands for the whole call.
+                ordered.extend({**call, "proxied": True} for call in calls)
+            else:
                 ordered.append(child)
-                ordered.extend(by_parent.get(child["id"], ()))
+                ordered.extend(calls)
         return ordered
 
     def _join_parts(self, child: JsonObject) -> None:
