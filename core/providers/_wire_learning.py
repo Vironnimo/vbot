@@ -16,10 +16,10 @@ Context window replaces the catalog window the Adapter budgets against.
 
 A Context rejection of a request whose input fits the window is the output
 allowance's fault, whatever vBot's own count said: a gateway can check
-``input + output`` with a count of its own (``providers/request-policy.md`` ->
-Request limits and context). The input such a rejection states is learned as
-its ratio to vBot's budget, so later allowances leave that difference free, and
-the rejected request itself goes out again with a smaller allowance.
+``input + output`` with a rough count of its own (``providers/request-policy.md``
+-> Request limits and context). That request goes out again with the room the
+rejection states. The count belongs to this payload, so nothing about it is
+learned for later requests.
 
 An explicit image-count rejection instead records the limit and raises
 ``ProviderImageLimitError``: Chat alone knows which delivered images can retire.
@@ -48,7 +48,6 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from core.providers.adapter import scoped_request_input
 from core.providers.errors import (
     ProviderAuthError,
     ProviderContextOverflowError,
@@ -258,6 +257,11 @@ class _Lesson:
         """A Context rejection that a smaller output allowance can answer."""
         return self.kind == "context_window" and self.counted_input < self.limit
 
+    @property
+    def output_room(self) -> int:
+        """The output a Context rejection leaves free; ``0`` when it does not say."""
+        return self.limit - self.counted_input if self.counted_input > 0 else 0
+
 
 async def execute_learning_from_rejections[T](
     execute_attempt: Callable[[PreparedRequest], Awaitable[T]],
@@ -330,9 +334,6 @@ async def execute_learning_from_rejections[T](
                 wire.observe_max_output_tokens(model_id, lesson.limit)
             elif lesson.kind == "context_window":
                 wire.observe_context_window(model_id, lesson.limit)
-                budget = scoped_request_input(model_id)
-                if budget is not None and lesson.shrinks_output:
-                    wire.observe_input_count(model_id, lesson.counted_input, budget.tokens)
             elif lesson.kind == "parameter":
                 wire.observe_rejected_parameter(model_id, lesson.rejected[0])
                 rejected_parameters.add(lesson.rejected[0])
@@ -352,6 +353,7 @@ async def execute_learning_from_rejections[T](
                         tuple(rejected_parameters),
                         tuple(exclusive_groups),
                         lesson.shrinks_output,
+                        lesson.output_room,
                     ),
                 )
             except ProviderError as rebuild_error:
@@ -494,7 +496,9 @@ class _LessonRevision:
     rejected_parameters: tuple[str, ...]
     exclusive_groups: tuple[tuple[str, ...], ...]
     shrink_output: bool = False
-    """The rejected allowance must not go out again: a rebuild that kept it sends half."""
+    """The rejected allowance must not go out again."""
+    output_room: int = 0
+    """What the rejection left free; without it a rebuild that kept the allowance sends half."""
 
     def __call__(self, rebuilt: dict[str, Any]) -> bool:
         for parameter in self.rejected_parameters:
@@ -508,7 +512,7 @@ class _LessonRevision:
             for parameter in carried[1:]:
                 _remove_sampling_parameter(rebuilt, self.protocol, parameter)
         if self.shrink_output:
-            _halve_kept_output_allowance(rebuilt, self.sent)
+            _lower_output_allowance(rebuilt, self.sent, self.output_room)
         return rebuilt != self.sent
 
 
@@ -694,19 +698,20 @@ def _output_allowance(payload: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _halve_kept_output_allowance(rebuilt: dict[str, Any], sent: Mapping[str, Any]) -> None:
-    """Send half of a rejected allowance that the rebuild did not lower."""
+def _lower_output_allowance(rebuilt: dict[str, Any], sent: Mapping[str, Any], room: int) -> None:
+    """Fit a rejected allowance into the stated room, else halve one the rebuild kept."""
 
     rejected = _output_allowance(sent)
     kept = _output_allowance(rebuilt)
-    if rejected is None or kept is None or kept < rejected:
+    if rejected is None or kept is None or (not room and kept < rejected):
         return
+    lowered = min(kept, room) if room else max(rejected // 2, 1)
     for path in _OUTPUT_LIMIT_FIELDS:
         if _value_at(rebuilt, path) == kept:
             carrier: dict[str, Any] = rebuilt
             for key in path[:-1]:
                 carrier = carrier[key]
-            carrier[path[-1]] = max(rejected // 2, 1)
+            carrier[path[-1]] = lowered
 
 
 def _stated(lowered: str, wordings: tuple[re.Pattern[str], ...]) -> int | None:

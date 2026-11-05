@@ -856,8 +856,6 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_max_output_tokens("acme", "api-key", "m", 4000)
     store.record_context_window("acme", "api-key", "m", 65536)
     store.record_request_max_images("acme", "api-key", "m", 30)
-    store.record_input_count("acme", "api-key", "m", 1116)
-    store.record_input_count("acme", "api-key", "m", 1089)
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -885,7 +883,6 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert reloaded.facts_for("acme", "api-key", "m").effort_updates_rejected
     assert reloaded.facts_for("acme", "api-key", "m").context_window == 65536
     assert reloaded.facts_for("acme", "api-key", "m").request_max_images == 30
-    assert reloaded.facts_for("acme", "api-key", "m").input_count_permille == 1116
     assert reloaded.forget("acme", model_id="unknown") == 1
     assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
     assert reloaded.forget("acme", "api-key") == 1

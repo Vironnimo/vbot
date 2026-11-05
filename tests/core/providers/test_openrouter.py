@@ -4,6 +4,7 @@ and the stateless Responses route for GPT-5.6."""
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -189,6 +190,30 @@ async def test_routing_policy_renders_the_provider_preferences(
     await openrouter_adapter(routing=routing).send(HELLO, model_id="anthropic/claude-sonnet-4")
 
     assert sent_body(route)["provider"] == expected_provider
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param({}, None, id="no-caller-limit"),
+        pytest.param({"max_tokens": 900}, 900, id="caller-limit"),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_chat_leaves_the_output_allowance_to_openrouter(
+    kwargs: dict[str, Any], expected: int | None
+) -> None:
+    """OpenRouter refuses ``input + max_tokens`` beyond the window before the Model runs."""
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+    model = replace(
+        catalog_model("stealth/crouton-alpha"), context_window=1_048_576, max_output_tokens=943_718
+    )
+    adapter = openrouter_adapter(model_lookup=catalog_lookup(model))
+
+    await adapter.send(HELLO, model_id="stealth/crouton-alpha", **kwargs)
+
+    assert sent_body(route).get("max_tokens") == expected
 
 
 def test_session_id_is_stable_per_cache_lineage_scoped_and_opaque() -> None:

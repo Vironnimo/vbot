@@ -22,7 +22,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderRequestTooLargeError,
 )
-from core.providers.providers import ProviderRegistry
+from core.providers.providers import REQUEST_OUTPUT_ALLOWANCE_CAP, ProviderRegistry
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
@@ -631,7 +631,7 @@ async def test_cloud_models_replay_persisted_reasoning_on_fresh_adapter(
             else wire_effort
         )
         assert payload["reasoning_effort"] == expected_effort
-        assert payload["max_tokens"] == output_limit
+        assert payload["max_tokens"] == min(output_limit, REQUEST_OUTPUT_ALLOWANCE_CAP)
         assert payload["tools"][0]["function"]["name"] == "get_weather"
         assert replayed["reasoning"] == "test-owned reasoning sentinel"
         assert "reasoning_content" not in replayed

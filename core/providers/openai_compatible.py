@@ -500,6 +500,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
+                if key in OUTPUT_LIMIT_PARAMETER_NAMES and rules.output_limit_field is None:
+                    continue
                 if key == "max_tokens" and any(
                     alias in request_kwargs
                     for alias in ("max_completion_tokens", "max_output_tokens")
@@ -565,7 +567,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         :meth:`_build_payload`). The selected allowance is then capped against
         the current messages, Tool definitions, and effective context window so
         a ceiling equal to the whole context cannot produce an invalid request.
-        Mirrors the Anthropic adapter's context-aware ``max_tokens``.
+        Mirrors the Anthropic adapter's context-aware ``max_tokens``. A wire
+        whose ``output_limit_field`` is empty sends only an explicit caller
+        limit and leaves the allowance to the Provider.
 
         This is the output-limit step of every Chat Completions and Responses
         request (the shared Responses codec requires it). The input estimate is
@@ -603,7 +607,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit_limit
             ),
-            wire_input_ratio=self.wire.learned_input_ratio(model_id),
         )
         if resolved is None:
             return

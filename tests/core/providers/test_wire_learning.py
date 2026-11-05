@@ -622,34 +622,34 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
     assert adapter.reported_context_window(path.model_id) == stated_window
 
 
-_CROUTON_REJECTION = (
-    "This endpoint's maximum context length is 1048576 tokens. However, you requested "
-    "about 1056535 tokens (110179 of text input, 2638 of tool input, 943718 in the "
+_GATEWAY_REJECTION = (
+    "This endpoint's maximum context length is 200000 tokens. However, you requested "
+    "about 230000 tokens (105000 of text input, 5000 of tool input, 120000 in the "
     "output). Please reduce the length of either one."
 )
 
 
-def _crouton_adapter() -> Any:
+def _near_window_ceiling_adapter() -> Any:
     return compatible.make_adapter(
-        model=compatible.catalog_model(context_window=1048576, max_output_tokens=943718)
+        model=compatible.catalog_model(context_window=200000, max_output_tokens=120000)
     )
 
 
 @pytest.mark.parametrize(
-    ("path", "rejection", "budgets", "expected"),
+    ("path", "rejection", "budget", "expected"),
     [
         pytest.param(
-            replace(paths.CHAT, adapter=_crouton_adapter),
-            _CROUTON_REJECTION,
-            [RequestInput.measured(101116, estimated_change=8388), RequestInput.measured(150000)],
-            [943718, 933633, 881175],
+            replace(paths.CHAT, adapter=_near_window_ceiling_adapter),
+            _GATEWAY_REJECTION,
+            RequestInput.measured(79000),
+            [120000, 90000],
             id="gateway-counts-more-than-usage",
         ),
         pytest.param(
-            replace(paths.CHAT, adapter=_crouton_adapter).streaming(paths.chat_sse),
-            _CROUTON_REJECTION,
-            [RequestInput.measured(101116, estimated_change=8388), RequestInput.measured(150000)],
-            [943718, 933633, 881175],
+            replace(paths.CHAT, adapter=_near_window_ceiling_adapter).streaming(paths.chat_sse),
+            _GATEWAY_REJECTION,
+            RequestInput.measured(79000),
+            [120000, 90000],
             id="gateway-counts-more-than-usage-stream",
         ),
         pytest.param(
@@ -660,51 +660,43 @@ def _crouton_adapter() -> Any:
                 ),
             ),
             "input length and `max_tokens` exceed context limit: 180000 + 21000 > 200000",
-            [RequestInput.measured(179000), RequestInput.measured(150000)],
-            [21000, 19926, 32000],
+            RequestInput.measured(179000),
+            [21000, 20000],
             id="messages-sum",
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_a_rejected_output_allowance_is_lowered_and_stays_clear_of_the_wire_count(
+async def test_a_rejected_output_allowance_goes_out_again_within_the_stated_room(
     path: paths.RequestPath,
     rejection: str,
-    budgets: list[RequestInput],
+    budget: RequestInput,
     expected: list[int],
 ) -> None:
-    """A gateway checks ``input + output`` with its own count; measured input stays measured.
-
-    The rejected request goes out again with what the rejection left free, and
-    a later larger input is clamped without another rejection.
-    """
+    """A gateway checks ``input + output`` with its own count; measured input stays measured."""
     adapter = path.adapter()
-    field = ("max_tokens",)
     with respx.mock, caller_owns_retries():
-        route = respx.post(path.url).mock(
-            side_effect=[_rejection(400, rejection), path.success(), path.success()]
-        )
-        for budget in budgets:
-            with request_input_budget(path.model_id, budget):
-                await paths.request(adapter, path, {})
+        route = respx.post(path.url).mock(side_effect=[_rejection(400, rejection), path.success()])
+        with request_input_budget(path.model_id, budget):
+            await paths.request(adapter, path, {})
 
-    assert [_sent(call.request, field) for call in route.calls] == expected
+    assert [_sent(call.request, ("max_tokens",)) for call in route.calls] == expected
 
 
 @pytest.mark.asyncio
 async def test_a_stated_window_without_a_count_halves_a_kept_output_allowance() -> None:
-    path = replace(paths.CHAT, adapter=_crouton_adapter)
+    path = replace(paths.CHAT, adapter=_near_window_ceiling_adapter)
     adapter = path.adapter()
     with respx.mock, caller_owns_retries():
         route = respx.post(path.url).mock(
             side_effect=[
-                _rejection(400, "This model's maximum context length is 1048576 tokens."),
+                _rejection(400, "This model's maximum context length is 200000 tokens."),
                 path.success(),
             ]
         )
         await paths.request(adapter, path, {})
 
-    assert [_sent(call.request, ("max_tokens",)) for call in route.calls] == [943718, 471859]
+    assert [_sent(call.request, ("max_tokens",)) for call in route.calls] == [120000, 60000]
 
 
 @pytest.mark.parametrize(
