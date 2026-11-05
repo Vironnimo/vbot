@@ -40,8 +40,4 @@ def member_tool_names(policy: ToolAccess, catalog: Sequence[Any] = ()) -> tuple[
         if not added:
             break
         names.update(added)
-    if names:
-        # Discovery grants nothing: load_tools filters its results by this Run's
-        # ceiling and live denial resolver.
-        names.add("load_tools")
     return tuple(sorted(names))

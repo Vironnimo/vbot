@@ -32,7 +32,9 @@ def _proxy(name: str, arguments: dict[str, Any], call_id: str = "proxy") -> Tool
     return ToolCall(id=call_id, name="call_tool", arguments={"name": name, "arguments": arguments})
 
 
-@pytest.mark.parametrize("denial", [None, "restriction", "live", "removed", "arguments"])
+@pytest.mark.parametrize(
+    "denial", [None, "transport", "restriction", "live", "removed", "arguments"]
+)
 async def test_proxy_preserves_target_validation_authority_and_result(
     tmp_path: Path, denial: str | None
 ) -> None:
@@ -58,13 +60,15 @@ async def test_proxy_preserves_target_validation_authority_and_result(
         [_proxy("target", {} if denial == "arguments" else {"value": 7})],
         base_allowed_tools=["call_tool", "target"],
         tool_restriction=[] if denial == "restriction" else None,
-        tool_denial_resolver=(lambda name: "test refusal" if name == "target" else None)
-        if denial == "live"
-        else None,
+        tool_denial_resolver={
+            # A Run's denial lists what it allows; the proxy is never among the names.
+            "transport": lambda name: None if name == "target" else "test refusal",
+            "live": lambda name: "test refusal" if name == "target" else None,
+        }.get(str(denial)),
         removed_tool_names=frozenset({"target"}) if denial == "removed" else frozenset(),
     )
     [envelope] = result.results
-    if denial is None:
+    if denial in (None, "transport"):
         assert envelope == tool_success({"value": 7})
         assert seen == [{"value": 7}]
     else:

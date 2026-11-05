@@ -737,10 +737,9 @@ class ToolRegistry:
             tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
         ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}.")
-        if context.tool_denial_resolver is not None:
-            denial = context.tool_denial_resolver(context.tool_name)
-            if denial is not None:
-                raise ToolNotAllowedError(denial)
+        denial = context.tool_denial(context.tool_name)
+        if denial is not None:
+            raise ToolNotAllowedError(denial)
         return tool
 
     async def dispatch(

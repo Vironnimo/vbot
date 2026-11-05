@@ -18,6 +18,12 @@ from typing import Any
 
 TOOL_LOADING_FIELDS = frozenset({"on_demand", "always_loaded"})
 
+LOAD_TOOLS_TOOL_NAME = "load_tools"
+CALL_TOOL_NAME = "call_tool"
+# The Tools that only bring other Tools within reach. Each target passes every
+# check of its own, so these two grant nothing and a Run's denial never covers them.
+TOOL_TRANSPORT_NAMES = frozenset({LOAD_TOOLS_TOOL_NAME, CALL_TOOL_NAME})
+
 # The Tools an Agent keeps in its Tool list while neither it nor the global
 # default names its always-loaded Tools.
 DEFAULT_ALWAYS_LOADED_TOOLS: tuple[str, ...] = (
@@ -99,7 +105,10 @@ def complete_tool_loading(value: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 __all__ = [
+    "CALL_TOOL_NAME",
     "DEFAULT_ALWAYS_LOADED_TOOLS",
+    "LOAD_TOOLS_TOOL_NAME",
+    "TOOL_TRANSPORT_NAMES",
     "TOOL_LOADING_FIELDS",
     "complete_tool_loading",
     "inherit_tool_loading",

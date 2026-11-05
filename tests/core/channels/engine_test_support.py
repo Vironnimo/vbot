@@ -586,7 +586,7 @@ def assert_member_trigger(
     kwargs = dict(awaited_args.kwargs)
     assert kwargs.pop("sender") == sender
     assert kwargs.pop("reply_surface") == reply_surface
-    assert kwargs.pop("tool_restriction") == ("load_tools", "web_fetch", "web_search")
+    assert kwargs.pop("tool_restriction") == ("web_fetch", "web_search")
     assert kwargs.pop("run_kind") is RunKind.CHANNEL
     resolver = kwargs.pop("tool_denial_resolver")
     assert callable(resolver)
