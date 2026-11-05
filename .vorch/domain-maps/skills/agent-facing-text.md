@@ -50,24 +50,26 @@ The reasons below describe intended behavior and failure prevention, not an asse
 | `Assign an assessment to each material claim.` | Places classification after research and separates claims. |
 | `Before choosing the assessment, match...` | Requires a claim-to-passage check at the decision point; GLM gave verdicts and links without a page read in the screenshot Eval (2026-10-31). |
 | `If you have only search snippets or remembered facts...` | Names the missing action and the unresolved fallback instead of allowing plausible recollection or snippets to stand in for inspected evidence. |
-| `Use these meanings, translated...` | Gives stable semantics while preserving the user's language. |
+| `Use these meanings and markers...` | Gives stable semantics while preserving the user's language. The fixed emoji markers are the one status signal that shows on every Accessor without new rendering, including plain-text Channels. |
 | `Supported: the evidence supports...` | Constrains support to the claim's actual time and scope. |
 | `Refuted: evidence contradicts...` | Requires contrary evidence, not merely missing confirmation. |
 | `Misleading: a factual element is accurate...` | Distinguishes false context or inference from wholly fabricated facts. |
 | `Unresolved: available evidence is insufficient...` | Preserves uncertainty and names its cause rather than implying that a matter has no answer. |
 | `A rule forbidding an act does not prove...` | GLM treated a reported covert vote as impossible from the historical eligibility rules, despite lacking evidence about the alleged individual event (screenshot Eval, 2026-10-31). |
 | `For mixed claims, assess their parts...` | Avoids labeling an entire article false because one statement fails. |
-| `State non-checkable opinions or predictions...` | Provides a report outcome for content outside factual verification. |
+| `Mark non-checkable opinions or predictions...` | Provides a report outcome and marker for content outside factual verification. |
 | `Explain uncertainty through the evidence...` | Prevents uncalibrated numerical confidence and unsupported attribution of deceptive intent. |
 | `Done when every assessment follows...` | Separates the Agent's inference from what the source actually states. |
-| `Answer in the user's language...` | Makes the conclusion immediately useful to the person requesting the check. |
-| `For one claim, give the assessment...` | Scales the result to the number of claims and attaches evidence to each conclusion. |
-| `Include the date of the check...` | Makes later reuse of changing facts interpretable and exposes consequential gaps. |
+| `Answer in the user's language in the pattern below...` | User requirement (2026-11-05): a check must be scannable instead of a text to read in full. A fixed pattern in the Skill gives this on every Accessor without a rendering contract. |
+| `Give each material claim its own block...` | Attaches evidence to each conclusion and bounds each reason, so one claim cannot grow into the prose the pattern replaces. |
+| `Use blocks instead of a table...` | Telegram and email send plain text, and Discord does not render Markdown tables, so a table reaches them as raw pipes. |
+| `Where Markdown is not rendered...` | Telegram and email send plain text, where bold markers and `[title](url)` links stay visible as raw syntax. |
+| `Put relevant event or data dates...` | Makes later reuse of changing facts interpretable and exposes consequential gaps. |
 | `Cite pages you actually read...` | Prevents unsupported links and direct-source claims based on second-hand reporting. |
-| `Keep the first answer focused...` | Avoids a long research diary when a short answer settles the request. |
-| `Done when the user can see...` | Checks the report for an intelligible evidence-to-conclusion connection. |
-| `Replace the angle-bracket placeholders...` and the answer pattern | Shows the expected assessment/evidence/uncertainty structure without baking a factual answer into future checks. |
-| `For several claims, repeat...` | Applies the pattern to mixed claims without repeating a check date on every row. |
+| `Keep the first answer to this pattern...` | Avoids a long research diary when a short answer settles the request. |
+| `Done when the first lines show...` | Checks the report for scannable results and an intelligible evidence-to-conclusion connection. |
+| `Replace the angle-bracket placeholders...` and the answer pattern | Shows the expected assessment/evidence/uncertainty structure without baking a factual answer into future checks. The result line counts assessments instead of giving one overall verdict, which keeps a mixed article from being labeled false as a whole; the check date stays last and appears once. |
+| `For one claim, leave out the result line...` | A count of one repeats its block's assessment. |
 
 ## Skill authoring and maintenance
 
