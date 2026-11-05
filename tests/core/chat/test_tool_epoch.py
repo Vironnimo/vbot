@@ -23,6 +23,7 @@ from core.chat._tool_epoch import (
     ToolEpochView,
     called_tool_names,
     definition_source,
+    render_tool_change,
     tool_change_from_note,
     without_other_epoch_tool_changes,
 )
@@ -303,6 +304,31 @@ def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_
     # while a usable Tool is on demand.
     gone = _catalog(read, _definition("search"), loader, on_demand={"search": "Search."})
     assert _plan(view, gone) == [("removed", "fetch", False, False)]
+
+
+def test_the_proxy_joins_an_epoch_once_a_tool_exists_that_the_pin_does_not_list() -> None:
+    read = _definition("read")
+    extra = _definition("extra")
+    proxy = _definition("call_tool")
+    loader = _definition("load_tools")
+    view = ToolEpochView(pin=_pin(read))
+
+    assert _plan(view, _catalog(read, loader, proxy)) == []
+
+    catalog = _catalog(read, extra, loader, proxy)
+    assert _plan(view, catalog) == [
+        ("added", "call_tool", True, False),
+        ("added", "extra", False, False),
+    ]
+    view = view.with_changes(view.plan(catalog))
+    assert view.request_tools() == [read, proxy]
+    assert "through call_tool" in render_tool_change(view.changes[-1])
+
+    # Its removal ends the listing, and its return is announced again.
+    without = view.with_changes(view.plan(_catalog(read, extra)))
+    assert [change.change for change in without.changes[-1:]] == ["removed"]
+    assert without.request_tools() == [read]
+    assert _plan(without, catalog)[0] == ("added", "call_tool", True, False)
 
 
 def test_switching_on_demand_loading_mid_epoch_keeps_every_tool_the_model_knows() -> None:

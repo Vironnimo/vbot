@@ -421,6 +421,10 @@ class _RunExecutionContext:
     def __post_init__(self) -> None:
         self.stream_draft = StreamDraft(self.session)
 
+    def fallback_lists_all_tools(self, target: _ModelTarget) -> bool:
+        """Return whether *target* is a fallback whose Model calls only listed Tools."""
+        return target is not self.primary_target and not target.on_demand_tools
+
 
 class _HistoryWrite(Protocol):
     def __call__(self, *, since: SessionReadCursor) -> Awaitable[SessionReadBatch | None]: ...
@@ -750,8 +754,8 @@ class RequestBuildInputs:
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
     fresh_prompt_epoch: bool = False
-    # List every Tool the Model may call, On-demand Tools included: for every
-    # fallback route, so its Tool list never changes while it serves the Run.
+    # List every Tool the Model may call, On-demand Tools included: for a
+    # fallback route whose Model calls only listed Tools.
     list_all_tools: bool = False
     # With ``fresh_prompt_epoch``: On-demand Tools the new Tool pin lists anyway
     # (those the Agent called in the epoch a Compaction ended).
@@ -796,7 +800,7 @@ class RequestBuildInputs:
             subagent_tool_withheld=context.subagent_tool_withheld,
             goal_session=context.goal_session,
             permissions=context.permissions,
-            list_all_tools=target is not context.primary_target,
+            list_all_tools=context.fallback_lists_all_tools(target),
         )
 
     def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:

@@ -96,8 +96,14 @@ _CALL_LOADED = (
     "show them."
 )
 _CALL_LOADED_PROXY = "Call a loaded Tool through call_tool, using its name and arguments."
-_ALREADY_PROXY = "- {name}: already callable through call_tool"
-_ALL_AVAILABLE_PROXY = "Every Tool you can use is already available; call it through call_tool."
+_ALREADY_PROXY = (
+    "- {name}: already callable; call it directly when your Tool list shows it, "
+    "otherwise through call_tool"
+)
+_ALL_AVAILABLE_PROXY = (
+    "Every Tool you can use is already available; call it directly when your Tool list "
+    "shows it, otherwise through call_tool."
+)
 _EMPTY_CALL = "Nothing was loaded: the call named no Tool."
 _NONE_FOUND = "Nothing was loaded: no Tool named {names} can be loaded."
 _ALL_AVAILABLE = "Every Tool you can use is already available; call it directly by name."

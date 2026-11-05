@@ -868,7 +868,49 @@ async def test_a_route_without_native_on_demand_calls_loaded_tools_through_a_fix
 
 
 @pytest.mark.asyncio
-async def test_a_preexisting_epoch_never_adds_the_proxy_to_its_tool_list(tmp_path: Path) -> None:
+async def test_a_model_change_to_a_listed_only_route_reaches_on_demand_tools_through_the_proxy(
+    tmp_path: Path,
+) -> None:
+    from core.tools.call_tool import register_call_tool
+
+    tools, dispatched = _on_demand_tools()
+    register_call_tool(tools)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [final("ready")],
+        allowed_tools=["read", "search", "fetch"],
+        tool_loading=_ON_DEMAND,
+    )
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "Hello", session_id="session-one")
+    original = _tools_sent(runtime)[0]
+    assert sorted(tool["name"] for tool in original) == ["load_tools", "read"]
+
+    runtime.adapter = StubAdapter(
+        [
+            tool_turn(("load", "load_tools", {"names": ["search"]})),
+            tool_turn(("use", "call_tool", {"name": "search", "arguments": {"query": "vbot"}})),
+            final("done"),
+        ],
+        on_demand_tools=False,
+    )
+    await loop.send("coder", "Search", session_id="session-one")
+
+    assert dispatched == ["search"]
+    sent = _tools_sent(runtime)
+    assert [tool["name"] for tool in sent[0]] == [
+        *(tool["name"] for tool in original),
+        "call_tool",
+    ]
+    assert sent == [sent[0]] * 3
+    assert _announced(runtime) == [("added", "call_tool"), ("loaded", "search")]
+
+
+@pytest.mark.asyncio
+async def test_a_fully_listed_epoch_keeps_its_tool_list_on_a_listed_only_route(
+    tmp_path: Path,
+) -> None:
     from core.tools.call_tool import register_call_tool
 
     tools, _ = _on_demand_tools()
