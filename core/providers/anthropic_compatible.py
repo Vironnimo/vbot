@@ -564,6 +564,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit
             ),
+            wire_input_ratio=self.wire.learned_input_ratio(model_id),
         )
         if resolved is not None and rules.output_limit_cap is not None:
             resolved = min(resolved, rules.output_limit_cap)

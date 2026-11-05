@@ -18,6 +18,8 @@ The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus Open
 
 The catalog lists `stealth/crouton-alpha` with free input/output, Context 1048576, output 943718, Tools, structured output, and text, image, file, audio and video inputs. It advertises mandatory Reasoning with `minimal` through `max`, so Agent effort `none` selects `minimal`. The Override fills the published price and ladder and keeps audio as Chat input. The separate transcription catalog does not list this id. Sources are the live [Model catalog](https://openrouter.ai/api/v1/models) and [endpoint feed](https://openrouter.ai/api/v1/models/stealth/crouton-alpha/endpoints).
 
+Two Sub-Agent Runs on 2026-11-05 ended in HTTP 400 with the catalog ceiling as `max_tokens`: OpenRouter stated 112817 and 108148 input tokens where the last Usage reported 92728 and 92612 and the requests had grown by about 8000 and 7000 tokens, so its pre-flight count ran about 9-12% above vBot's budget. Requests up to that Usage had passed. The generic handling is in `providers/request-policy.md` -> Request limits and context. Inference from these two traces: the count differs per request, and a higher ratio arrives as one more rejection that heals itself.
+
 OpenRouter returned HTTP 502 on the production Adapter's Chat Completions probes, on independent raw Chat requests with `minimal`, `low`, and `max`, and on raw Responses and Messages requests. Chat Completions remains the inferred route.
 
 ## Catalog refresh and GPT-6.1 Terra (2026-10-27)

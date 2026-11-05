@@ -603,6 +603,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit_limit
             ),
+            wire_input_ratio=self.wire.learned_input_ratio(model_id),
         )
         if resolved is None:
             return

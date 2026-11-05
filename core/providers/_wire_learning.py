@@ -14,6 +14,13 @@ requests start from the corrected shape and a configured Model entry is never
 silently overridden; a stated output maximum bounds every layer, and a stated
 Context window replaces the catalog window the Adapter budgets against.
 
+A Context rejection of a request whose input fits the window is the output
+allowance's fault, whatever vBot's own count said: a gateway can check
+``input + output`` with a count of its own (``providers/request-policy.md`` ->
+Request limits and context). The input such a rejection states is learned as
+its ratio to vBot's budget, so later allowances leave that difference free, and
+the rejected request itself goes out again with a smaller allowance.
+
 An explicit image-count rejection instead records the limit and raises
 ``ProviderImageLimitError``: Chat alone knows which delivered images can retire.
 It can arrive after heartbeats or Usage, but never teaches after Model output.
@@ -41,6 +48,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from core.providers.adapter import scoped_request_input
 from core.providers.errors import (
     ProviderAuthError,
     ProviderContextOverflowError,
@@ -206,6 +214,14 @@ _STATED_CONTEXT_WINDOW: tuple[re.Pattern[str], ...] = (
 )
 """Rejection wordings that state the Model's Context window (lowercased)."""
 
+_STATED_REQUEST_TOTAL = re.compile(r"requested (?:about )?(\d+) tokens")
+"""OpenAI, vLLM and OpenRouter state input and output allowance together:
+"however, you requested about 1056535 tokens (110179 of text input, 2638 of tool
+input, 943718 in the output)" (lowercased)."""
+
+_STATED_SUM_INPUT = re.compile(r"exceed context limit: (\d+) \+ \d+ > \d+")
+"""Anthropic Messages states the input as the first summand (lowercased)."""
+
 _LLAMA_CPP_CONTEXT_ERROR = "exceed_context_size_error"
 _LLAMA_CPP_CONTEXT_WINDOW = re.compile(r'"n_ctx"\s*:\s*(\d+)')
 """llama.cpp's server rejects an oversized request with this error type and
@@ -234,6 +250,13 @@ class _Lesson:
     description: str
     limit: int = 0
     """The stated output maximum or Context window."""
+    counted_input: int = 0
+    """The input tokens a Context rejection states it counted, when it does."""
+
+    @property
+    def shrinks_output(self) -> bool:
+        """A Context rejection that a smaller output allowance can answer."""
+        return self.kind == "context_window" and self.counted_input < self.limit
 
 
 async def execute_learning_from_rejections[T](
@@ -267,7 +290,11 @@ async def execute_learning_from_rejections[T](
     - an output maximum the detail states in a known wording, below the output
       allowance the payload carries, becomes the Model's output cap;
     - a Context window the detail states in a known wording becomes the window
-      the Adapter clamps the output allowance against.
+      the Adapter clamps the output allowance against, and the input it states
+      the ratio the Adapter leaves free above its own budget;
+    - a stated Context window whose rejection does not count the input beyond
+      it lowers the output allowance the payload carries: to what the rebuild
+      resolves when learning changed it, else to half.
 
     Parameters rejected or combined during this request stay removed even when
     an explicit Model entry keeps sending them. A stated limit is learned from a
@@ -303,6 +330,9 @@ async def execute_learning_from_rejections[T](
                 wire.observe_max_output_tokens(model_id, lesson.limit)
             elif lesson.kind == "context_window":
                 wire.observe_context_window(model_id, lesson.limit)
+                budget = scoped_request_input(model_id)
+                if budget is not None and lesson.shrinks_output:
+                    wire.observe_input_count(model_id, lesson.counted_input, budget.tokens)
             elif lesson.kind == "parameter":
                 wire.observe_rejected_parameter(model_id, lesson.rejected[0])
                 rejected_parameters.add(lesson.rejected[0])
@@ -321,6 +351,7 @@ async def execute_learning_from_rejections[T](
                         profile.protocol,
                         tuple(rejected_parameters),
                         tuple(exclusive_groups),
+                        lesson.shrinks_output,
                     ),
                 )
             except ProviderError as rebuild_error:
@@ -462,6 +493,8 @@ class _LessonRevision:
     protocol: str
     rejected_parameters: tuple[str, ...]
     exclusive_groups: tuple[tuple[str, ...], ...]
+    shrink_output: bool = False
+    """The rejected allowance must not go out again: a rebuild that kept it sends half."""
 
     def __call__(self, rebuilt: dict[str, Any]) -> bool:
         for parameter in self.rejected_parameters:
@@ -474,6 +507,8 @@ class _LessonRevision:
             ]
             for parameter in carried[1:]:
                 _remove_sampling_parameter(rebuilt, self.protocol, parameter)
+        if self.shrink_output:
+            _halve_kept_output_allowance(rebuilt, self.sent)
         return rebuilt != self.sent
 
 
@@ -632,7 +667,46 @@ def _learn_limit(lowered: str, payload: Mapping[str, Any]) -> _Lesson | None:
         (),
         f"a request beyond its stated Context window of {window} tokens",
         window,
+        _stated_input(lowered, payload),
     )
+
+
+def _stated_input(lowered: str, payload: Mapping[str, Any]) -> int:
+    """The input tokens a Context rejection counted; ``0`` when it does not say."""
+
+    match = _STATED_SUM_INPUT.search(lowered)
+    if match is not None:
+        return int(match.group(1))
+    match = _STATED_REQUEST_TOTAL.search(lowered)
+    allowance = _output_allowance(payload)
+    if match is None or allowance is None:
+        return 0
+    return max(int(match.group(1)) - allowance, 0)
+
+
+def _output_allowance(payload: Mapping[str, Any]) -> int | None:
+    """The output allowance ``payload`` carries, on any protocol."""
+
+    for path in _OUTPUT_LIMIT_FIELDS:
+        value = _value_at(payload, path)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _halve_kept_output_allowance(rebuilt: dict[str, Any], sent: Mapping[str, Any]) -> None:
+    """Send half of a rejected allowance that the rebuild did not lower."""
+
+    rejected = _output_allowance(sent)
+    kept = _output_allowance(rebuilt)
+    if rejected is None or kept is None or kept < rejected:
+        return
+    for path in _OUTPUT_LIMIT_FIELDS:
+        if _value_at(rebuilt, path) == kept:
+            carrier: dict[str, Any] = rebuilt
+            for key in path[:-1]:
+                carrier = carrier[key]
+            carrier[path[-1]] = max(rejected // 2, 1)
 
 
 def _stated(lowered: str, wordings: tuple[re.Pattern[str], ...]) -> int | None:

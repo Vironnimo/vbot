@@ -9,6 +9,7 @@ docstring of :mod:`core.providers.wire_profile` for the layer order.
 from __future__ import annotations
 
 import functools
+import math
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -158,11 +159,31 @@ class WireBinding:
                 self.provider_id, self.connection_id, model_id, window
             )
 
+    def observe_input_count(self, model_id: str, counted: int, budgeted: int) -> None:
+        """A rejection counted ``counted`` input tokens where vBot budgeted ``budgeted``."""
+
+        if self.observations is None or budgeted <= 0 or counted <= budgeted:
+            return
+        permille = math.ceil(counted * 1000 / budgeted)
+        self.observations.record_input_count(
+            self.provider_id, self.connection_id, model_id, permille
+        )
+
     def observe_request_max_images(self, model_id: str, limit: int) -> None:
         if self.observations is not None:
             self.observations.record_request_max_images(
                 self.provider_id, self.connection_id, model_id, limit
             )
+
+    def learned_input_ratio(self, model_id: str) -> float:
+        """How much more input this wire counts than vBot budgets; ``1.0`` when unknown."""
+
+        if self.observations is None:
+            return 1.0
+        permille = self.observations.facts_for(
+            self.provider_id, self.connection_id, model_id
+        ).input_count_permille
+        return 1.0 if permille is None else permille / 1000
 
     def learned_context_window(self, model_id: str) -> int | None:
         """The Context window a rejection stated for ``model_id`` on this Connection."""

@@ -619,6 +619,9 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
         parts.append(f"output limit: {facts.max_output_tokens} tokens")
     if facts.context_window is not None:
         parts.append(f"context window: {facts.context_window} tokens")
+    if facts.input_count_permille is not None:
+        ratio = facts.input_count_permille / 1000
+        parts.append(f"counts input at {ratio:.3f} times the budget")
     return "; ".join(parts)
 
 

@@ -89,6 +89,7 @@ __all__ = [
     "project_tool_result_content_fallbacks",
     "request_input_budget",
     "resolve_request_input_budget",
+    "scoped_request_input",
     "terminal_outcome_from_response",
     "tool_result_content_blocks",
     "tool_result_function_response",
@@ -172,10 +173,16 @@ def resolve_request_input_budget(
     model_id: str, local_estimate: int | Callable[[], int]
 ) -> RequestInput:
     """Use the scoped projection, else a local estimate evaluated only when needed."""
-    budget = _REQUEST_INPUT_BUDGET.get()
-    if budget is not None and budget[0] == model_id:
-        return budget[1]
+    budget = scoped_request_input(model_id)
+    if budget is not None:
+        return budget
     return RequestInput.estimate(local_estimate() if callable(local_estimate) else local_estimate)
+
+
+def scoped_request_input(model_id: str) -> RequestInput | None:
+    """The projection scoped to the current send of ``model_id``, if any."""
+    budget = _REQUEST_INPUT_BUDGET.get()
+    return budget[1] if budget is not None and budget[0] == model_id else None
 
 
 def estimate_wire_request_input_tokens(

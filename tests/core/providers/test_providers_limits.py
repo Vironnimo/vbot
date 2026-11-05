@@ -197,6 +197,28 @@ def test_resolve_request_output_limit(
 
 
 @pytest.mark.parametrize(
+    ("input_tokens", "expected"),
+    [
+        pytest.param(100_000, 880_000, id="the-ratio-leaves-its-excess-free"),
+        pytest.param(960_000, 40_000, id="an-input-the-ratio-would-fill-keeps-the-measured-room"),
+    ],
+)
+def test_a_learned_wire_input_ratio_only_lowers_the_output_allowance(
+    input_tokens: int, expected: int
+) -> None:
+    resolved = resolve_request_output_limit(
+        explicit_limit=None,
+        model_output_limit=943_718,
+        provider_default=None,
+        effective_context_window=1_000_000,
+        request_input=RequestInput.measured(input_tokens),
+        wire_input_ratio=1.2,
+    )
+
+    assert resolved == expected
+
+
+@pytest.mark.parametrize(
     "request_input",
     [RequestInput.estimate, RequestInput.measured],
     ids=["estimated", "measured"],

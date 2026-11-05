@@ -125,6 +125,7 @@ def resolve_request_output_limit(
     request_input: RequestInput,
     input_limit: int | None = None,
     minimum_output_tokens: int = 0,
+    wire_input_ratio: float = 1.0,
 ) -> int | None:
     """Resolve and context-clamp one request's output-token allowance.
 
@@ -143,6 +144,14 @@ def resolve_request_output_limit(
     ``minimum_output_tokens`` protects a stable thinking budget: clamping can
     consume the margin but cannot cross that floor, and insufficient room for
     it fails before I/O rather than changing thinking.
+
+    ``wire_input_ratio`` is the learned ratio of the input a Provider rejection
+    counted to the input vBot budgeted (``WireBinding.learned_input_ratio``). A
+    gateway can check ``input + output`` against the window with a count of its
+    own, above the Usage it later reports, so only the allowance leaves that
+    difference free. The capacity checks keep the measured input: a learned
+    ratio never refuses a request. Where it would leave no room at all, the
+    allowance ignores it and the Provider decides.
     """
 
     requested = next(
@@ -183,7 +192,9 @@ def resolve_request_output_limit(
     if requested is None:
         # No output allowance to resolve — the capacity checks above were the job.
         return None
-    available_output = max(remaining - request_input.margin, (remaining + 1) // 2)
+    wire_excess = math.ceil(input_tokens * wire_input_ratio) - input_tokens
+    room = remaining - wire_excess if 0 < wire_excess < remaining else remaining
+    available_output = max(room - request_input.margin, (room + 1) // 2)
     return min(requested, max(available_output, minimum_output_tokens))
 
 
