@@ -111,8 +111,12 @@ async def test_new_session_admission_keeps_the_selected_project_identity(
         )
     )
     pending = asyncio.create_task(request)
+    reached_boundary = asyncio.create_task(entered.wait())
     try:
-        await asyncio.wait_for(entered.wait(), timeout=1)
+        await asyncio.wait((reached_boundary, pending), return_when=asyncio.FIRST_COMPLETED)
+        if pending.done():
+            await pending
+            pytest.fail("admission completed before reaching the test boundary")
         with pytest.raises(RunAdmissionBlockedError):
             async with runtime.chat_runs.agent_admission_guard("coder", project_id=None):
                 pytest.fail("the Agent must remain stable throughout preparation")
@@ -141,7 +145,9 @@ async def test_new_session_admission_keeps_the_selected_project_identity(
         async with runtime.chat_runs.agent_admission_guard("coder", project_id=None):
             pass
     finally:
-        release.set()
+        reached_boundary.cancel()
+        pending.cancel()
+        await asyncio.gather(reached_boundary, pending, return_exceptions=True)
         await runtime.chat_runs.aclose()
         projects.close()
         runtime.chat_sessions.close()
