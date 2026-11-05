@@ -345,8 +345,6 @@ class AgenticProgression:
                             state,
                             tool_catalog,
                             session,
-                            unlisted_tool_calls=context.primary_target.unlisted_tool_calls,
-                            list_announced=not target.unlisted_tool_calls,
                             list_all=target is not context.primary_target,
                         )
                         context.request_state = state
@@ -907,7 +905,6 @@ class AgenticProgression:
                         state = await self._requests.tool_catalog.adopt_tool_changes(
                             state,
                             loaded_tools,
-                            list_announced=not target.unlisted_tool_calls,
                             list_all=target is not context.primary_target,
                         )
                         context.request_state = state

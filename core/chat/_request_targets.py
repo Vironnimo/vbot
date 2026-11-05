@@ -151,7 +151,6 @@ class RequestTargets:
             chunk_timeout_seconds=stream_stall_timeout(adapter),
             max_image_bytes=self.image_size_limit(adapter, model_id),
             max_request_images=_resolve_request_image_limit(adapter, model_id),
-            unlisted_tool_calls=not adapter.list_announced_tools(model_id),
             on_demand_tools=adapter.on_demand_tools(model_id),
             model_family=_model_family_for_target(self._dependencies, provider_id, model_id),
         )

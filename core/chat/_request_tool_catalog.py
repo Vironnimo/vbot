@@ -110,8 +110,6 @@ class RequestToolCatalog:
         catalog: LiveToolCatalog,
         session: ChatSession,
         *,
-        unlisted_tool_calls: bool,
-        list_announced: bool,
         list_all: bool,
     ) -> _RequestState:
         """Add a note for each Tool change since *state*'s Tool epoch and adopt it.
@@ -123,7 +121,7 @@ class RequestToolCatalog:
         tool_epoch = state.tool_epoch
         if tool_epoch is None:
             return state
-        changes = tool_epoch.plan(catalog, unlisted_tool_calls=unlisted_tool_calls)
+        changes = tool_epoch.plan(catalog)
         for change in changes:
             session.add_note(change.note_content())
         tool_epoch = tool_epoch.with_changes(changes)
@@ -135,7 +133,6 @@ class RequestToolCatalog:
         tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
             tool_epoch,
             catalog.session_tool_grants,
-            list_announced=list_announced,
             list_all=list_all,
             tool_loads=tool_loads,
         )
@@ -154,14 +151,11 @@ class RequestToolCatalog:
         state: _RequestState,
         changes: Sequence[ToolChange],
         *,
-        list_announced: bool,
         list_all: bool,
     ) -> _RequestState:
         """Return *state* after *changes* the Run persisted itself (Tools ``load_tools`` loaded).
 
-        The loaded Tools join the request Tools on routes that list announced
-        Tools; every other route, a fallback included, keeps sending the same
-        Tool list.
+        Every route, a fallback included, keeps sending the same Tool list.
         """
         tool_epoch = state.tool_epoch
         if tool_epoch is None or not changes:
@@ -170,7 +164,6 @@ class RequestToolCatalog:
         tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
             tool_epoch,
             state.session_tool_grants,
-            list_announced=list_announced,
             list_all=list_all,
             tool_loads=state.tool_loads,
         )
@@ -188,7 +181,6 @@ class RequestToolCatalog:
         tool_epoch: ToolEpochView,
         live_tool_grants: Sequence[str],
         *,
-        list_announced: bool,
         list_all: bool = False,
         tool_loads: Mapping[str, ToolChange] | None = None,
     ) -> tuple[list[JsonObject], tuple[str, ...], tuple[str, ...], Mapping[str, ToolContract]]:
@@ -218,9 +210,7 @@ class RequestToolCatalog:
             (
                 tool_epoch.fallback_request_tools(loads)
                 if list_all and CALL_TOOL_NAME not in tool_epoch.pin.names
-                else tool_epoch.request_tools(
-                    list_announced=list_announced and CALL_TOOL_NAME not in tool_epoch.pin.names
-                )
+                else tool_epoch.request_tools()
             ),
             allowed_tool_names,
             tuple(name for name in live_tool_grants if name in allowed),

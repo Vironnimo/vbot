@@ -563,7 +563,6 @@ class RequestBuilder:
         ) = await self.tool_catalog._tool_fields(
             tool_epoch,
             live_tool_grants,
-            list_announced=inputs.list_announced_tools,
             list_all=inputs.list_all_tools,
             tool_loads=tool_loads,
         )

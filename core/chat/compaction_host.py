@@ -319,7 +319,6 @@ class ChatCompactionHost:
                     has_open_goal, self._dependencies.sessions, session.address
                 ),
                 permissions=permissions.boundary,
-                list_announced_tools=adapter.list_announced_tools(model_id),
                 tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
                 temporary_binding=temporary_binding,
             )

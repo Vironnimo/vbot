@@ -66,10 +66,6 @@ class AdapterHookDefaults:
     def set_debug_context(self, context: Any) -> None:
         del context
 
-    def list_announced_tools(self, model_id: str) -> bool:
-        del model_id
-        return False
-
     def on_demand_tools(self, model_id: str) -> bool:
         del model_id
         return True

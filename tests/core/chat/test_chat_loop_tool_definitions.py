@@ -443,36 +443,6 @@ async def test_an_announced_tool_change_reaches_the_session_and_validates_calls(
     assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 3
 
 
-@pytest.mark.asyncio
-async def test_a_route_that_drops_unlisted_tool_calls_lists_announced_tools(
-    tmp_path: Path,
-) -> None:
-    tools, dispatched = _name_recording_tools("probe")
-    runtime = tool_runtime(
-        tmp_path,
-        tools,
-        [],
-        adapter=StubAdapter(
-            [final("ready"), tool_turn(("call", "extra")), final("done")],
-            list_announced_tools=True,
-        ),
-    )
-    loop = build_chat_loop(runtime)
-
-    await loop.send("coder", "Start", session_id="session-one")
-    tools.register("extra", "Extra Tool.", {"type": "object"}, tools.get("probe").handler)
-    await loop.send("coder", "Use it", session_id="session-one")
-
-    pinned = _tools_sent(runtime)[0]
-    extra = {"name": "extra", "description": "Extra Tool.", "parameters": {"type": "object"}}
-    assert dispatched == ["extra"]
-    assert _tools_sent(runtime)[1:] == [[*pinned, extra]] * 2
-    assert (
-        "The Tool extra was enabled for you in this Session and now appears in your Tool list."
-        in _reminders(runtime.adapter.requests[1])
-    )
-
-
 def _analyze_image_runtime(
     tmp_path: Path,
     *,
@@ -807,9 +777,8 @@ def _loaded_text(result: JsonObject) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("list_announced", [False, True], ids=["pinned-list", "listing-route"])
 async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_needed(
-    tmp_path: Path, list_announced: bool
+    tmp_path: Path,
 ) -> None:
     tools, dispatched = _on_demand_tools()
     runtime = tool_runtime(
@@ -827,7 +796,6 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
                 tool_turn(("again", "load_tools", {"names": "search, fetch"})),
                 final("bye"),
             ],
-            list_announced_tools=list_announced,
         ),
     )
     loop = build_chat_loop(runtime)
@@ -839,15 +807,7 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
     assert dispatched == ["search", "fetch"]
     pinned = _tools_sent(runtime)[0]
     assert [tool["name"] for tool in pinned] == ["read", "load_tools"]
-    if list_announced:
-        assert _tools_sent(runtime)[1:] == [
-            [*pinned, _SEARCH],
-            [*pinned, _SEARCH],
-            [*pinned, _SEARCH],
-            [*pinned, _SEARCH, _FETCH],
-        ]
-    else:
-        assert _tools_sent(runtime) == [pinned] * 5
+    assert _tools_sent(runtime) == [pinned] * 5
     # The System Prompt lists the On-demand Tools by summary and stays the same throughout.
     system = requests[0]["messages"][0]["content"]
     assert "- fetch: Fetch one web page.\n- search: Search the web." in system

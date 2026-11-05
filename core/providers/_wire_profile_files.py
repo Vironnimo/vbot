@@ -236,7 +236,6 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "extra_headers": _MapOf(_string()),
         "tool_schema": _enum(TOOL_SCHEMA_PROFILES),
         "tool_call_ids": _enum(TOOL_CALL_ID_PROFILES),
-        "list_announced_tools": _bool(),
         "on_demand_tools": _bool(),
         "fast_mode": _bool(),
         "prompt_cache": _enum(PROMPT_CACHE_STYLES),

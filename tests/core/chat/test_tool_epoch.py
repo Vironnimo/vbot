@@ -61,10 +61,9 @@ def _pin(*definitions: JsonObject) -> ToolEpochPin:
     return ToolEpochPin.start(_catalog(*definitions))
 
 
-def _plan(view: ToolEpochView, catalog: LiveToolCatalog, *, unlisted: bool = True) -> list[Any]:
+def _plan(view: ToolEpochView, catalog: LiveToolCatalog) -> list[Any]:
     return [
-        (change.change, change.tool, change.listed, change.pinned)
-        for change in view.plan(catalog, unlisted_tool_calls=unlisted)
+        (change.change, change.tool, change.listed, change.pinned) for change in view.plan(catalog)
     ]
 
 
@@ -122,21 +121,19 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
         usable=("dormant",),
     )
 
-    # A change the Tool does not name stays silent; the capability decides the listed flag.
+    # A change the Tool does not name stays silent.
     assert _plan(view, catalog) == [
         ("removed", "removed", False, False),
         ("added", "added", False, False),
     ]
-    assert _plan(view, catalog, unlisted=False)[1] == ("added", "added", True, False)
 
-    view = view.with_changes(view.plan(catalog, unlisted_tool_calls=True))
+    view = view.with_changes(view.plan(catalog))
     assert _plan(view, catalog) == []
     assert view.allowed_names == ("kept", "added")
     assert view.removed_names == frozenset({"removed"})
     assert view.announced_names == ("added",)
     assert view.definitions() == [kept, added]
-    assert view.request_tools(list_announced=False) == [kept, removed]
-    assert view.request_tools(list_announced=True) == [kept, removed, added]
+    assert view.request_tools() == [kept, removed]
 
     # A changed Tool is pinned only when the pinned list shows its previous definition.
     changed = _definition("kept", count={"type": "integer"})
@@ -152,10 +149,10 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
         ("added", "removed", True, True),
         ("changed", "added", False, False),
     ]
-    view = view.with_changes(view.plan(back, unlisted_tool_calls=True))
+    view = view.with_changes(view.plan(back))
     assert view.definitions() == [changed, removed, reshaped]
-    # Pinned Tools keep their pinned bytes; a listed announced Tool shows its change.
-    assert view.request_tools(list_announced=True) == [kept, removed, reshaped]
+    # Pinned Tools keep their pinned bytes.
+    assert view.request_tools() == [kept, removed]
     assert _plan(view, back) == []
 
 
@@ -175,23 +172,20 @@ def test_fold_keeps_only_the_announcements_of_the_pinned_epoch() -> None:
     assert without_other_epoch_tool_changes(messages, pin.epoch) == [messages[0], messages[2]]
 
 
-@pytest.mark.parametrize("unlisted", [True, False])
-def test_a_pinned_tool_enabled_again_keeps_its_last_announced_definition(unlisted: bool) -> None:
+def test_a_pinned_tool_enabled_again_keeps_its_last_announced_definition() -> None:
     probe = _definition("probe", a={"type": "string"})
     view = ToolEpochView(pin=_pin(probe))
     changed = _definition("probe", b={"type": "integer"})
     announced = {"probe": ("parameters",)}
-    view = view.with_changes(
-        view.plan(_catalog(changed, announce_changes=announced), unlisted_tool_calls=unlisted)
-    )
-    view = view.with_changes(view.plan(_catalog(usable=()), unlisted_tool_calls=unlisted))
+    view = view.with_changes(view.plan(_catalog(changed, announce_changes=announced)))
+    view = view.with_changes(view.plan(_catalog(usable=())))
     assert view.removed_names == frozenset({"probe"})
 
     back = _catalog(changed, announce_changes=announced)
-    assert _plan(view, back, unlisted=unlisted) == [("added", "probe", True, True)]
-    view = view.with_changes(view.plan(back, unlisted_tool_calls=unlisted))
+    assert _plan(view, back) == [("added", "probe", True, True)]
+    view = view.with_changes(view.plan(back))
     assert view.definitions() == [changed]
-    assert view.request_tools(list_announced=True) == [probe]
+    assert view.request_tools() == [probe]
 
 
 @pytest.mark.parametrize(
@@ -230,9 +224,7 @@ def test_a_tool_change_is_announced_only_for_the_parts_the_tool_names(
         current = copy.deepcopy(known)
         edit(current)
         catalog = _catalog(current, announce_changes={"probe": announce})
-        return [change.change for change in view.plan(catalog, unlisted_tool_calls=True)] == [
-            "changed"
-        ]
+        return [change.change for change in view.plan(catalog)] == ["changed"]
 
     assert {part for part, edit in edits.items() if changed(edit)} == announced
 
@@ -261,23 +253,21 @@ def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_defin
     view = ToolEpochView.fold(view.pin, [note])
     assert view.loadable_names == ("fetch",)
     assert view.definitions() == [read, search]
-    assert view.request_tools(list_announced=False) == [read]
-    assert view.request_tools(list_announced=True) == [read, search]
+    assert view.request_tools() == [read]
     assert view.fallback_request_tools(view.loads(catalog)) == fallback_tools
     assert _plan(view, catalog) == []
 
-    # Removed and enabled again: the loaded Tool returns with its definition, so a route that
-    # lists announced Tools keeps listing it; the Tool known by name only is announced for
-    # loading again.
-    view = view.with_changes(view.plan(_catalog(read), unlisted_tool_calls=False))
+    # Removed and enabled again: the loaded Tool returns with its definition; the Tool known by
+    # name only is announced for loading again.
+    view = view.with_changes(view.plan(_catalog(read)))
     assert view.allowed_names == ("read",)
-    assert _plan(view, catalog, unlisted=False) == [
+    assert _plan(view, catalog) == [
         ("on_demand", "fetch", False, False),
-        ("added", "search", True, False),
+        ("added", "search", False, False),
     ]
-    view = view.with_changes(view.plan(catalog, unlisted_tool_calls=False))
+    view = view.with_changes(view.plan(catalog))
     assert view.loadable_names == ("fetch",)
-    assert view.request_tools(list_announced=True) == [read, search]
+    assert view.request_tools() == [read]
 
 
 def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_it_on_demand() -> (
@@ -293,7 +283,7 @@ def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_
         on_demand={"search": "Search the web", "fetch": ""},
     )
 
-    changes = view.plan(catalog, unlisted_tool_calls=False)
+    changes = view.plan(catalog)
 
     # load_tools arrives with the first Tool to load, ahead of the notes that name it.
     assert [(change.change, change.tool, change.definition) for change in changes] == [
@@ -307,7 +297,7 @@ def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_
     assert restored == list(changes)
     view = view.with_changes(changes)
     assert view.loadable_names == ("search", "fetch")
-    assert view.request_tools(list_announced=True) == [read, loader]
+    assert view.request_tools() == [read]
     assert _plan(view, catalog) == []
     # A removal of a Tool known by name only is announced like any other; load_tools stays
     # while a usable Tool is on demand.
@@ -328,7 +318,7 @@ def test_switching_on_demand_loading_mid_epoch_keeps_every_tool_the_model_knows(
         ("removed", "load_tools", False, False),
         ("added", "search", False, False),
     ]
-    view = view.with_changes(view.plan(off, unlisted_tool_calls=True))
+    view = view.with_changes(view.plan(off))
     assert view.loadable_names == ()
     assert view.definitions() == [read, search]
 

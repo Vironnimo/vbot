@@ -354,9 +354,6 @@ class _ModelTarget:
     max_image_bytes: int | None = None
     # Configured or learned image-count limit of one request on this route, if known.
     max_request_images: int | None = None
-    # Whether the route returns calls to Tools outside the request's Tool list
-    # (the Adapter's ``list_announced_tools`` is false).
-    unlisted_tool_calls: bool = True
     # Whether the route serves On-demand Tools (the Adapter's ``on_demand_tools``);
     # on the primary route false lists every Tool a new Tool pin offers.
     on_demand_tools: bool = True
@@ -753,9 +750,6 @@ class RequestBuildInputs:
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
     fresh_prompt_epoch: bool = False
-    # List announced Tool additions in the request's Tool list: for a route
-    # that drops calls to unlisted Tools.
-    list_announced_tools: bool = False
     # List every Tool the Model may call, On-demand Tools included: for every
     # fallback route, so its Tool list never changes while it serves the Run.
     list_all_tools: bool = False
@@ -802,7 +796,6 @@ class RequestBuildInputs:
             subagent_tool_withheld=context.subagent_tool_withheld,
             goal_session=context.goal_session,
             permissions=context.permissions,
-            list_announced_tools=not target.unlisted_tool_calls,
             list_all_tools=target is not context.primary_target,
         )
 
