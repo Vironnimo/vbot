@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import os
-import sys
 import tempfile
 from collections.abc import Callable, Container
 from functools import cache
@@ -16,7 +15,7 @@ from typing import Any
 from core.permissions import CommandChecker
 from core.sessions import SessionAddress
 from core.tools._argument_repair import load_json_value
-from core.tools._code_process import CodeExecutionResult, run_python
+from core.tools._code_process import CodeExecutionResult, python_executable, run_python
 from core.tools._permission_preflight import authorize_command
 from core.tools._tool_display import display_notice, display_text
 from core.tools.arguments import required_string
@@ -134,7 +133,7 @@ class _ExecuteCode:
             context,
             self._checker,
             arguments=arguments,
-            argv=[sys.executable, "-c", code],
+            argv=[python_executable(), "-c", code],
             cwd=cwd,
             env=environment,
         )

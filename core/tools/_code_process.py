@@ -41,6 +41,19 @@ type ToolInvoker = Callable[[str, JsonObject, list[Any]], Awaitable[JsonObject]]
 type ExecutionStatus = Literal["completed", "failed", "timed_out", "stopped"]
 
 
+def python_executable() -> str:
+    """Use CPython itself when a packaged Windows role hosts this process."""
+    executable = Path(sys.executable)
+    if sys.platform == "win32" and executable.name.casefold() in {
+        "vbot.server.exe",
+        "vbot.desktop.exe",
+        "vbot.update.exe",
+        "vbot.python.exe",
+    }:
+        return str(executable.with_name("python.exe"))
+    return sys.executable
+
+
 @dataclass(frozen=True)
 class CodeExecutionResult:
     status: ExecutionStatus
@@ -271,7 +284,7 @@ async def run_python(
         # -S: only the standard library, the same in every installation; vBot's
         # own dependencies are not the program's.
         argv = [
-            sys.executable,
+            python_executable(),
             "-I",
             "-S",
             "-B",

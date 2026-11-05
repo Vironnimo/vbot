@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import psutil  # type: ignore[import-untyped]
@@ -74,9 +75,39 @@ except KeyError as error:
 
 
 @pytest.mark.asyncio
-async def test_python_runs_like_a_main_script(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "packaged",
+    [
+        False,
+        pytest.param(
+            True, marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows host")
+        ),
+    ],
+)
+async def test_python_runs_like_a_main_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged: bool
+) -> None:
     async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
+
+    if packaged:
+        # Model a native Server host while retaining the real bridge and child.
+        # The disposable runtime maps its CPython binary to the test interpreter.
+        runtime = tmp_path / "runtime"
+        monkeypatch.setattr(
+            _code_process,
+            "sys",
+            SimpleNamespace(platform=sys.platform, executable=str(runtime / "vBot.Server.exe")),
+        )
+        launch = _code_process.create_subprocess_exec
+
+        async def packaged_launch(
+            program: str, *args: Any, **kwargs: Any
+        ) -> asyncio.subprocess.Process:
+            assert Path(program) == runtime / "python.exe"
+            return await launch(sys.executable, *args, **kwargs)
+
+        monkeypatch.setattr(_code_process, "create_subprocess_exec", packaged_launch)
 
     tmp_path.joinpath("helper.py").write_text("", encoding="utf-8")
     result = await run_python(

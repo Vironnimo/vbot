@@ -12,6 +12,13 @@ The Tool follows `bash` activation (the Model name is `powershell` on Windows), 
 
 Only `code` is advertised. The normalizer accepts plain Python source and the `python`, `script`, `source` and `command` aliases without rewriting the program. Each call starts a new interpreter in `ToolContext.effective_cwd`, with a 300-second hard deadline. Imports, variables and threads never carry into another call. The bundled vBot interpreter runs the child; a project's activated environment does not select another interpreter. The child runs with `-S`: only the standard library is importable, the same in every installation, and vBot's own dependencies (pypdf, httpx, ...) stay out of the program's reach. Without it they were importable in packaged installs but not in a checkout running a system interpreter, so the definition could not say what is available (review 2026-10-27). After the trusted bootstrap imports finish, the working directory joins Python's import path, so the project's own modules import; their third-party imports fail.
 
+Packaged Windows role hosts select their sibling `runtime/python.exe` for both
+command preflight and the child launch. `sys.executable` there names a native
+role host, which inserts its own module before those Python options;
+the native generic host also supplies vBot's application/dependency paths.
+Direct CPython preserves the worker's `-I -S` isolation. Development and Linux
+keep their current interpreter; selection never searches `PATH`.
+
 The program runs like `python program.py`: the host writes the unchanged source to a temporary `program.py` (removed with the cell), and the child runs it as `__main__` with that `__file__`, so `multiprocessing` and `ProcessPoolExecutor` can import its functions. After the program, the child takes Python's exit steps: it waits for non-daemon threads and runs `atexit` handlers before reporting its exit code. Tracebacks omit the child's own frames. Source that Python cannot compile is reported as not run (`CodeExecutionResult.ran`).
 
 - `from vbot_tools import tools` supplies synchronous `tools.<name>(**arguments)` calls using the ordinary Tool names and parameters. `from vbot_tools import read` is accepted too. Name resolution and argument repair remain the normal dispatch owners' responsibility.

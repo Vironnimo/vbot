@@ -6,13 +6,14 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import core.tools.execute_code as execute_code
 import core.tools.shell_environment as shell_environment
-from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools import ToolContext, ToolRegistry, _code_process, tool_success
 from core.tools._code_process import CodeExecutionResult
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
@@ -115,10 +116,20 @@ async def test_refused_code_never_starts(
 
 
 @pytest.mark.parametrize("denied", [False, True])
+@pytest.mark.parametrize("packaged", [False, True])
 @pytest.mark.asyncio
 async def test_python_launch_uses_existing_command_rules_and_confined_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: bool, packaged: bool
 ) -> None:
+    interpreter = sys.executable
+    if packaged:
+        runtime = tmp_path / "runtime"
+        monkeypatch.setattr(
+            _code_process,
+            "sys",
+            SimpleNamespace(platform="win32", executable=str(runtime / "vBot.Server.exe")),
+        )
+        interpreter = str(runtime / "python.exe")
     analyzer = FakeAnalyzer(plan("python -c program"))
     rules = {"deny": ["Shell(python *)"]} if denied else {}
     monkeypatch.setattr(
@@ -150,7 +161,7 @@ async def test_python_launch_uses_existing_command_rules_and_confined_environmen
         ["execute_code", "bash"],
     )
     assert analyzer.argvs
-    assert all(call == ((sys.executable, "-c", "print(1)"), tmp_path) for call in analyzer.argvs)
+    assert all(call == ((interpreter, "-c", "print(1)"), tmp_path) for call in analyzer.argvs)
     assert launched is not denied
     if denied:
         assert result["error"]["code"] == "permission_denied", result
