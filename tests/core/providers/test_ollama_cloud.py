@@ -631,7 +631,11 @@ async def test_cloud_models_replay_persisted_reasoning_on_fresh_adapter(
             else wire_effort
         )
         assert payload["reasoning_effort"] == expected_effort
-        assert payload["max_tokens"] == min(output_limit, REQUEST_OUTPUT_ALLOWANCE_CAP)
+        # The wire profile curates V4.1 Flash's allowance above the general cap.
+        expected_limit = (
+            output_limit if model_id == V41 else min(output_limit, REQUEST_OUTPUT_ALLOWANCE_CAP)
+        )
+        assert payload["max_tokens"] == expected_limit
         assert payload["tools"][0]["function"]["name"] == "get_weather"
         assert replayed["reasoning"] == "test-owned reasoning sentinel"
         assert "reasoning_content" not in replayed

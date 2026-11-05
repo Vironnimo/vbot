@@ -281,6 +281,11 @@
       "when": {"prefix": ["qwen"]},
       "set": {"replay": {"scope": "tool_turns"}},
       "note": "The gateway bills historical answer-turn Reasoning of every Qwen Model (verify_wire_profile replay check, live 2026-10-03). Qwen's own chat template keeps earlier Reasoning only with preserve_thinking, so answer turns drop it and Tool Call turns keep it."
+    },
+    {
+      "when": {"ids": ["deepseek-v4.1-flash"]},
+      "set": {"request": {"output_limit_default": 384000}},
+      "note": "Asks for the curated ceiling above the general allowance cap: it leaves well over half of the 1000000 window free."
     }
   ],
   "models": {

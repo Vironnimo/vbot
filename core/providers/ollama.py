@@ -388,7 +388,7 @@ class OllamaAdapter(ProviderAdapter):
         options: dict[str, Any] = {}
         merged_defaults = dict(self._config.defaults or {})
         merged_defaults.update(request_kwargs)
-        if merged_defaults.get("max_tokens") is None and rules.output_limit_default is not None:
+        if request_kwargs.get("max_tokens") is None and rules.output_limit_default is not None:
             merged_defaults["max_tokens"] = rules.output_limit_default
         for kwarg_name, option_name in _OPTION_KWARG_MAP.items():
             value = merged_defaults.get(kwarg_name)

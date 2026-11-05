@@ -40,7 +40,7 @@ from core.providers._tool_result_text import (
     tool_result_function_response,
     tool_result_text,
 )
-from core.providers.providers import RequestInput
+from core.providers.providers import RequestInput, curated_output_limit
 from core.providers.reasoning import (
     ReasoningIntent,
     ReasoningReplayFidelity,
@@ -555,13 +555,14 @@ class ProviderAdapter(ABC):
             return 0
         config = getattr(self, "_config", None)
         defaults = getattr(config, "defaults", None) or {}
+        ceiling = self._model_max_output_tokens(model_id)
         allowance = next(
             (
                 value
                 for value in (
                     explicit_limit,
-                    self._model_max_output_tokens(model_id),
-                    profile.request.output_limit_default,
+                    curated_output_limit(profile.request.output_limit_default, ceiling),
+                    ceiling,
                     defaults.get("max_tokens"),
                 )
                 if isinstance(value, int) and not isinstance(value, bool) and value > 0
