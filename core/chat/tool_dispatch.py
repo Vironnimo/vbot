@@ -119,6 +119,7 @@ class ToolRound:
             removed_tool_names=context.removed_tool_names,
             rejections=self._rejections,
             result_payloads=context,
+            tool_repetition_observer=context.tool_repetition_observer,
         )
         workspace = _agent_workspace(agent, context.data_root)
 

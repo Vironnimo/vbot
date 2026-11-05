@@ -82,6 +82,7 @@ class _EmittingToolRegistry(ToolRegistry):
         removed_tool_names: Collection[str] = frozenset(),
         parent_tool_call_id: str | None = None,
         assistant_message_ids: Mapping[str, str] | None = None,
+        tool_repetition_observer: Callable[[str, JsonObject], str | None] | None = None,
     ) -> None:
         self._registry = registry
         self._removed_tool_names = frozenset(removed_tool_names)
@@ -89,6 +90,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._assistant_message_id = assistant_message_id
         self._assistant_message_ids = assistant_message_ids
         self._parent_tool_call_id = parent_tool_call_id
+        self._tool_repetition_observer = tool_repetition_observer
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
@@ -183,6 +185,10 @@ class _EmittingToolRegistry(ToolRegistry):
         # Payloads persist only with a result this dispatch returns.
         returned = False
         try:
+            if self._tool_repetition_observer is not None and self._note_hook is not None:
+                note = self._tool_repetition_observer(context.tool_name, arguments)
+                if note is not None:
+                    self._note_hook(note)
             rejection = self._rejections.get(context.tool_call_index)
             if rejection is not None:
                 return await self._answer_without_running(

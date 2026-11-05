@@ -96,6 +96,9 @@ class ToolDispatchContext:
     current_skill_context: Callable[[], tuple[str | None, SkillRegistry | None]] | None = field(
         default=None, repr=False, compare=False
     )
+    tool_repetition_observer: Callable[[str, JsonObject], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
     programmatic_results: list[ChatMessage] = field(
         default_factory=list, init=False, repr=False, compare=False
     )

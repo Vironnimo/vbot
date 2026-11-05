@@ -457,10 +457,24 @@ async def test_steering_keeps_current_run_reasoning(tmp_path: Path, steer: bool)
         "content": "Before",
         "reasoning": "Plan the probe",
         "reasoning_meta": {"signature": "sig-1"},
-        "tool_calls": [{"id": "a", "name": "probe", "arguments": {}}],
+        "tool_calls": [
+            {"id": "a", "name": "probe", "arguments": {}},
+            {"id": "b", "name": "probe", "arguments": {}},
+        ],
         "terminal_outcome": "tool_calls",
     }
-    adapter = PausedAdapter([first, {"content": "After", "tool_calls": None}])
+    adapter = PausedAdapter(
+        [
+            first,
+            {
+                "tool_calls": [
+                    {"id": "c", "name": "probe", "arguments": {}},
+                    {"id": "d", "name": "probe", "arguments": {}},
+                ],
+            },
+            {"content": "After", "tool_calls": None},
+        ]
+    )
     tools = ToolRegistry()
     tools.register(
         "probe", "Probe", {"type": "object"}, lambda _ctx, _args: tool_success({"done": True})
@@ -482,4 +496,9 @@ async def test_steering_keeps_current_run_reasoning(tmp_path: Path, steer: bool)
     assert tool_turn["reasoning_meta"] == {"signature": "sig-1"}
     assert [m["content"] for m in sent if m["role"] == "user"][-1] == (
         "Steer" if steer else "Original"
+    )
+    # New User input resets repetition advice without discarding Run reasoning.
+    notes = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    assert len([m for m in notes if m.role == "note" and '"probe"' in str(m.content)]) == (
+        0 if steer else 1
     )

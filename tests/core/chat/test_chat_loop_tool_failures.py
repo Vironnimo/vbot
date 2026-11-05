@@ -377,10 +377,81 @@ async def test_identical_failed_tool_call_finalizes_with_pinned_tools_after_the_
     _assert_requests_keep_pinned_tools(runtime.adapter.requests)
     assert persisted_roles(history(runtime)) == [
         "user",
-        *(["assistant", "tool"] * MAX_IDENTICAL_FAILED_TOOL_CALLS),
+        *(["assistant", "tool"] * 3),
+        "note",
+        *(["assistant", "tool"] * 2),
+        "note",
+        *(["assistant", "tool"] * 3),
+        "note",
         "note",
         "assistant",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("siblings", [False, True], ids=["successive-steps", "one-batch"])
+async def test_repeated_successful_calls_warn_without_disabling_tools(
+    tmp_path: Path, siblings: bool
+) -> None:
+    invocations: list[JsonObject] = []
+    arguments = {"action": "inspect", "value": "same"}
+    calls: list[tuple[str, str, Any]] = [
+        ("before-1", "probe", arguments),
+        ("before-2", "probe", arguments),
+        ("different", "probe", {**arguments, "value": "different"}),
+        *[
+            (
+                f"repeat-{index}",
+                "probe",
+                arguments if index % 2 else {"value": "same", "action": "inspect"},
+            )
+            for index in range(9)
+        ],
+    ]
+    responses = [tool_turn(*calls)] if siblings else [tool_turn(call) for call in calls]
+    runtime = tool_runtime(
+        tmp_path,
+        _counting_tool(
+            invocations,
+            parameters={
+                "type": "object",
+                "properties": {"action": {"type": "string"}, "value": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        ),
+        [
+            *responses,
+            final("First done"),
+            tool_turn(("next-1", "probe", arguments)),
+            tool_turn(("next-2", "probe", arguments)),
+            final("Second done"),
+        ],
+    )
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "First", session_id="session-one")
+    await loop.send("coder", "Second", session_id="session-one")
+
+    messages = history(runtime)
+    notes = [message for message in messages if message.role == "note"]
+    assert len(notes) == 3
+    assert all('"probe"' in str(note.content) for note in notes)
+    assert all(
+        str(count) in str(note.content) for count, note in zip((3, 5, 8), notes, strict=True)
+    )
+    if not siblings:
+        assert [
+            sum(message.role == "tool" for message in messages[: messages.index(note)])
+            for note in notes
+        ] == [6, 8, 11]
+    assert len(invocations) == 14
+    assert all(result["ok"] for result in tool_results(messages))
+    _assert_requests_keep_pinned_tools(runtime.adapter.requests)
+    # Notes arrive after the complete batch and remain visible on the next request.
+    sent = "\n".join(
+        str(message.get("content"))
+        for message in runtime.adapter.requests[len(responses)]["messages"]
+    )
+    assert all(str(note.content) in sent for note in notes)
 
 
 @pytest.mark.asyncio

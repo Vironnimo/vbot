@@ -193,6 +193,7 @@ class AgenticProgression:
             awaiting_steering = False
             rebuilt = delivered
             if delivered:
+                context.tool_progress.repeated_calls.reset()
                 await rebuild_after_steering(context, target, self._requests)
             else:
                 # A note another writer added while the Model answered (a Secret,

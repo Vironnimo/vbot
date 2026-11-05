@@ -554,6 +554,9 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
     assert len(calls) == 8
+    notes = [message for message in history(runtime, "s1") if message.role == "note"]
+    # Repetition reminders and the existing failure backstop share the Run's state.
+    assert len([note for note in notes if '"probe"' in str(note.content)]) == 3
     assert any(
         message.role == "note" and "Tool calls are disabled" in str(message.content)
         for message in history(runtime, "s1")

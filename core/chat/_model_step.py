@@ -286,6 +286,7 @@ class ModelStepBoundary:
             allow_owned_effects=context.request.temporary_binding is not None,
             activity_writer=partial(self._persist_programmatic_activity, context),
             current_skill_context=lambda: (context.skill_project_id, context.skill_registry),
+            tool_repetition_observer=context.tool_progress.repeated_calls.observe,
         )
 
     async def _persist_programmatic_activity(

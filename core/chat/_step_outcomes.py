@@ -16,7 +16,11 @@ from core.chat.messages import (
 )
 from core.chat.output_files import OutputFileScope, resolve_assistant_file_references
 from core.chat.usage import ContextTarget, RequestContextEstimate, RequestContextUsage
-from core.chat.wire_shaping import _assistant_continuation_dict, _complete_usage_with_estimates
+from core.chat.wire_shaping import (
+    _assistant_continuation_dict,
+    _complete_usage_with_estimates,
+    quote_external_value,
+)
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
@@ -27,12 +31,14 @@ from core.providers.adapter import (
 )
 from core.providers.reasoning import ReasoningReplayPolicy
 from core.sessions import ToolResultFacts
-from core.tools import ToolNotFoundError, called_tool_name
+from core.tools import ToolNotFoundError, called_tool_name, model_tool_name
 from core.utils.errors import ProviderError
 
 MAX_TOOL_ITERATIONS = 1000
 
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
+
+TOOL_REPETITION_THRESHOLDS = (3, 5, 8)
 
 MAX_TOOL_FINALIZATION_VIOLATIONS = 2
 
@@ -51,6 +57,19 @@ TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE = (
 TOOL_FINALIZATION_NOTE = (
     "Tool calls are disabled for the rest of this Run because {reason}. Give your final "
     "answer now from what you already have, and name what is still missing or blocked."
+)
+
+# Reasons for each sentence: chat/agent-facing-text.md.
+TOOL_REPETITION_NOTE = (
+    "You called {tool} with the same arguments {count} times in a row. "
+    "Compare the results before calling it again. If they add no new information, "
+    "try a different approach or different arguments."
+)
+TOOL_REPETITION_ESCALATED_NOTE = (
+    "You called {tool} with the same arguments {count} times in a row. "
+    "Before repeating this call, identify what changed and why another attempt can help. "
+    "Otherwise, choose a different approach or different arguments. "
+    "Finish your answer if the user's request is already fulfilled."
 )
 
 STREAM_RECOVERY_NOTE = (
@@ -205,6 +224,39 @@ class _RegisteredNames:
 
 
 @dataclass
+class _RepeatedToolCalls:
+    """Advise on consecutive identical attempts, including successful and script calls."""
+
+    _last_signature: tuple[str, str] | None = None
+    _consecutive_count: int = 0
+
+    def observe(self, name: str, arguments: JsonObject) -> str | None:
+        signature = (
+            name,
+            json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+        if signature == self._last_signature:
+            self._consecutive_count += 1
+        else:
+            self._last_signature = signature
+            self._consecutive_count = 1
+        if self._consecutive_count not in TOOL_REPETITION_THRESHOLDS:
+            return None
+        template = (
+            TOOL_REPETITION_NOTE
+            if self._consecutive_count == TOOL_REPETITION_THRESHOLDS[0]
+            else TOOL_REPETITION_ESCALATED_NOTE
+        )
+        return template.format(
+            tool=quote_external_value(model_tool_name(name)), count=self._consecutive_count
+        )
+
+    def reset(self) -> None:
+        self._last_signature = None
+        self._consecutive_count = 0
+
+
+@dataclass
 class _FailedToolCallCircuitBreaker:
     """Stop one Run after repeated identical failed Tool Calls make no progress."""
 
@@ -263,6 +315,7 @@ class _ToolProgress:
     """Run-owned Tool budgets, preserved when the Model route changes."""
 
     iteration_count: int = 0
+    repeated_calls: _RepeatedToolCalls = field(default_factory=_RepeatedToolCalls)
     failed_calls: _FailedToolCallCircuitBreaker = field(
         default_factory=_FailedToolCallCircuitBreaker
     )

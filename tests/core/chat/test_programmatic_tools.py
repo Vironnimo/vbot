@@ -121,6 +121,40 @@ async def test_script_dispatch_preserves_authority_payloads_and_hides_intermedia
 
 
 @pytest.mark.asyncio
+async def test_script_repetitions_warn_the_model_without_exposing_intermediates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invocations: list[dict[str, Any]] = []
+
+    def probe(_context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        invocations.append(arguments)
+        return tool_success({"intermediate": "private intermediate body"})
+
+    runtime = _runtime(tmp_path, probe)
+
+    async def worker(_code: str, **kwargs: Any) -> CodeExecutionResult:
+        for _ in range(9):
+            result = await kwargs["invoke"]("probe", {})
+            assert result["ok"]
+        return CodeExecutionResult("completed", 0, "selected\n", "", 9, 0, [])
+
+    monkeypatch.setattr(execute_code, "run_python", worker)
+    await build_chat_loop(runtime).send("coder", "go", session_id="session-one")
+
+    messages = runtime.chat_sessions.get(_ADDRESS).load()
+    notes = [message for message in messages if message.role == "note"]
+    assert len(invocations) == 9
+    assert len(notes) == 3
+    sent = "\n".join(
+        str(message.get("content")) for message in runtime.adapter.requests[-1]["messages"]
+    )
+    assert all(str(note.content) in sent for note in notes)
+    assert all('"probe"' in str(note.content) for note in notes)
+    assert "private intermediate body" not in sent
+    assert "pcall_" not in sent
+
+
+@pytest.mark.asyncio
 async def test_cancelled_program_keeps_completed_children_and_settles_unfinished_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

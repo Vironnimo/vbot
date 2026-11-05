@@ -59,6 +59,7 @@ class ProgrammaticTools(_EmittingToolRegistry):
             removed_tool_names=context.removed_tool_names,
             parent_tool_call_id=parent.tool_call_id,
             assistant_message_ids=self._message_ids,
+            tool_repetition_observer=context.tool_repetition_observer,
         )
         self._config = replace(
             config,
