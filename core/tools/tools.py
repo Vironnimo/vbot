@@ -122,7 +122,7 @@ from core.tools.contracts import (
     compile_tool_contract,
     ignored_fields_note,
 )
-from core.tools.model_names import model_tool_name, reserved_model_name
+from core.tools.model_names import called_tool_name, model_tool_name, reserved_model_name
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools")
@@ -353,6 +353,7 @@ class ToolRegistry:
         extension: str | None = None,
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
+        scheduling_target: Callable[[Any], str | None] | None = None,
         execution_slot_required: bool = True,
         open_input_schema: bool = False,
         unadvertised_parameters: JsonObject | None = None,
@@ -425,6 +426,7 @@ class ToolRegistry:
             readiness_retryable=readiness_retryable,
             extension=extension,
             parallel_safe=parallel_safe,
+            scheduling_target=scheduling_target,
             execution_slot_required=execution_slot_required,
             open_input_schema=open_input_schema,
             unadvertised_parameters=unadvertised_parameters,
@@ -533,14 +535,26 @@ class ToolRegistry:
             self.revision += 1
         self._definition_profiles.pop(name, None)
 
-    def is_parallel_safe(self, name: str) -> bool:
+    def is_parallel_safe(self, name: str, arguments: Any = None) -> bool:
         """Return whether a requested Tool Call may overlap a sibling call.
 
         Unknown Tools fail before invoking a handler, so they are safe to keep
-        in the same parallel group instead of becoming accidental barriers.
+        in the same parallel group instead of becoming accidental barriers. A
+        Tool that runs another Tool (``scheduling_target``) follows that Tool's
+        policy for *arguments*; without one it can name, it stays serial.
         """
         tool = self._tools.get(name)
-        return tool is None or tool.parallel_safe
+        if tool is None:
+            return True
+        if tool.scheduling_target is None or arguments is None:
+            return tool.parallel_safe
+        target_name = tool.scheduling_target(arguments)
+        target = (
+            None
+            if target_name is None
+            else self._tools.get(called_tool_name(target_name, self._tools, registered=self._tools))
+        )
+        return target is not None and target.scheduling_target is None and target.parallel_safe
 
     def requires_execution_slot(self, name: str) -> bool:
         """Keep child-Run coordinators outside the leaf execution semaphore."""

@@ -119,10 +119,10 @@ class _EmittingToolRegistry(ToolRegistry):
         )
 
     @override
-    def is_parallel_safe(self, name: str) -> bool:
+    def is_parallel_safe(self, name: str, arguments: Any = None) -> bool:
         """Delegate the wrapped Tool's execution policy."""
         resolver = getattr(self._registry, "is_parallel_safe", None)
-        return bool(callable(resolver) and resolver(name))
+        return bool(callable(resolver) and resolver(name, arguments))
 
     @override
     def requires_execution_slot(self, name: str) -> bool:
