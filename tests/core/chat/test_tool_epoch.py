@@ -435,6 +435,7 @@ def test_called_tool_names_counts_the_calls_of_the_current_agent_whose_tool_ran(
             programmatic=True,
             parent_tool_call_id="call-pending",
         ),
+        replace(calls("early"), programmatic=True, parent_tool_call_id="call-call_tool"),
         calls("call_tool"),
         replace(calls("proxied"), programmatic=True, parent_tool_call_id="call-call_tool"),
         replace(
@@ -445,5 +446,5 @@ def test_called_tool_names_counts_the_calls_of_the_current_agent_whose_tool_ran(
     ]
 
     assert called_tool_names(messages) == frozenset(
-        {"search", "edit", "pending", "call_tool", "proxied"}
+        {"search", "edit", "pending", "call_tool", "early", "proxied"}
     )

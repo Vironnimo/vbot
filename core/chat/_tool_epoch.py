@@ -791,18 +791,29 @@ def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
     started (:data:`_NOT_RUN_CODES`). A call without a Tool Result counts.
     """
 
+    history = list(messages)
+    start = max(
+        (
+            index + 1
+            for index, message in enumerate(history)
+            if message.role in ("compaction_checkpoint", "agent_takeover")
+        ),
+        default=0,
+    )
+    current = history[start:]
+    # A target's activity can persist before the Assistant turn that holds its proxy call.
+    proxies = {
+        call.id
+        for message in current
+        if message.role == "assistant"
+        for call in message.tool_calls or ()
+        if call.name == CALL_TOOL_NAME
+    }
     called: dict[str, str] = {}
-    proxies: set[str] = set()
-    for message in messages:
+    for message in current:
         if message.programmatic and message.parent_tool_call_id not in proxies:
             continue
-        if message.role in ("compaction_checkpoint", "agent_takeover"):
-            called.clear()
-            proxies.clear()
-        elif message.role == "assistant":
-            proxies.update(
-                call.id for call in message.tool_calls or () if call.name == CALL_TOOL_NAME
-            )
+        if message.role == "assistant":
             called.update(
                 (call.id, call.name) for call in message.tool_calls or () if call.rejection is None
             )
