@@ -183,6 +183,35 @@ describe('ChatTimeline virtualization', () => {
     expect(mountedRow('user-0')).toBeNull();
   });
 
+  it('keeps one expanded row out of the height estimates of unmeasured rows', async () => {
+    const rowCount = 80;
+    const tallHeight = 6000;
+    layout = installFakeLayout({
+      viewportHeight: VIEWPORT_HEIGHT,
+      rowHeight: (element) =>
+        element.dataset.timelineItemId === 'history-run-answer-39'
+          ? tallHeight
+          : 100,
+    });
+    timeline.mount({
+      agentName: 'Alpha',
+      sessionState: sessionWithHistory('session-tall', historyTurns(40)),
+    });
+    await layout.settle();
+
+    // Scrolling moves the window, which adopts new estimates.
+    await scrollInSteps(
+      -440,
+      () => mountedRow('history-run-answer-39') === null,
+    );
+
+    const contentHeight = (rowCount - 1) * 100 + tallHeight;
+    expect(mountedRow('user-0')).toBeNull();
+    expect(
+      Math.abs(layout.maxScrollTop() + VIEWPORT_HEIGHT - contentHeight),
+    ).toBeLessThanOrEqual(1);
+  });
+
   it('invalidates offscreen heights on width changes while preserving the reading anchor', async () => {
     let width = 600;
     layout = installFakeLayout({

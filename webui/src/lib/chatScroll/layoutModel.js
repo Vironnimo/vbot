@@ -1,13 +1,16 @@
 // Layout model of the Chat timeline rows, internal to the scroll controller.
 // It keeps the ordered row ids with one height each: the measured border-box
 // height of a row that was mounted, or an estimate for a row that has not been
-// measured yet (the running average of measured rows of the same kind, or a
-// per-kind default before any measurement). Offsets are prefix sums over
-// those heights, so the unmounted parts of the timeline can be represented
-// by spacers of exactly the height the model assigns them.
+// measured yet (the median of measured rows of the same kind, or a per-kind
+// default before any measurement). Offsets are prefix sums over those heights,
+// so the unmounted parts of the timeline can be represented by spacers of
+// exactly the height the model assigns them. A median, because the rows being
+// estimated are usually folded: one row with an expanded Thinking block must
+// not turn every unmeasured Run into a block of that size, which would inflate
+// the spacers and the scrollbar with them.
 //
-// Estimates follow the running averages only when `refreshEstimates()` runs
-// (the window calls it when it moves). Measuring one row therefore never
+// Estimates follow the medians only when `refreshEstimates()` runs (the
+// window calls it when it moves). Measuring one row therefore never
 // resizes the spacers standing in for other rows, so a streaming row or an
 // image load below the reading position cannot shift the content above it.
 
@@ -41,8 +44,6 @@ export function createLayoutModel() {
   let indexById = new Map();
   // id -> { height, kind }; only ids present in the current list.
   const measured = new Map();
-  // kind -> { sum, count } over `measured`.
-  const kindStats = new Map();
   // kind -> estimate in use for unmeasured rows; see refreshEstimates().
   const estimates = new Map();
   let offsets = new Float64Array(1);
@@ -59,30 +60,10 @@ export function createLayoutModel() {
     measuredWidth = width;
     if (changed) {
       measured.clear();
-      kindStats.clear();
       estimates.clear();
       offsetsDirty = true;
     }
     return changed;
-  }
-
-  function addStat(kind, height) {
-    const stat = kindStats.get(kind) ?? { sum: 0, count: 0 };
-    stat.sum += height;
-    stat.count += 1;
-    kindStats.set(kind, stat);
-  }
-
-  function removeStat(kind, height) {
-    const stat = kindStats.get(kind);
-    if (!stat) {
-      return;
-    }
-    stat.sum -= height;
-    stat.count -= 1;
-    if (stat.count <= 0) {
-      kindStats.delete(kind);
-    }
   }
 
   function estimate(kind) {
@@ -91,14 +72,20 @@ export function createLayoutModel() {
     );
   }
 
-  // Adopts the running averages as estimates; returns whether any estimate
-  // changed by a pixel or more.
+  // Adopts the medians of the measured rows as estimates; returns whether any
+  // estimate changed by a pixel or more.
   function refreshEstimates() {
+    const heightsByKind = new Map();
+    for (const { height, kind } of measured.values()) {
+      if (!heightsByKind.has(kind)) heightsByKind.set(kind, []);
+      heightsByKind.get(kind).push(height);
+    }
     let changed = false;
-    for (const [kind, stat] of kindStats) {
-      const average = stat.sum / stat.count;
-      if (Math.abs(average - estimate(kind)) >= 1) {
-        estimates.set(kind, average);
+    for (const [kind, heights] of heightsByKind) {
+      heights.sort((left, right) => left - right);
+      const median = heights[(heights.length - 1) >> 1];
+      if (Math.abs(median - estimate(kind)) >= 1) {
+        estimates.set(kind, median);
         changed = true;
       }
     }
@@ -146,11 +133,8 @@ export function createLayoutModel() {
     ids = items.map((item) => item.id);
     kinds = items.map(timelineItemKind);
     indexById = new Map(ids.map((id, index) => [id, index]));
-    for (const [id, entry] of measured) {
-      if (!indexById.has(id)) {
-        measured.delete(id);
-        removeStat(entry.kind, entry.height);
-      }
+    for (const id of measured.keys()) {
+      if (!indexById.has(id)) measured.delete(id);
     }
     offsetsDirty = true;
   }
@@ -170,11 +154,7 @@ export function createLayoutModel() {
     ) {
       return false;
     }
-    if (previous) {
-      removeStat(previous.kind, previous.height);
-    }
     measured.set(id, { height, kind });
-    addStat(kind, height);
     offsetsDirty = true;
     return true;
   }
