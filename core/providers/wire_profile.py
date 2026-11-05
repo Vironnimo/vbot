@@ -328,7 +328,6 @@ class RequestRules:
     extra_headers: Mapping[str, str] = field(default_factory=lambda: _EMPTY)
     tool_schema: ToolSchemaProfile = "omit_strict"
     tool_call_ids: ToolCallIdProfile = "none"
-    list_announced_tools: bool = False
     on_demand_tools: bool = True
     fast_mode: bool = False
     prompt_cache: PromptCacheStyle = "none"

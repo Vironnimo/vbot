@@ -85,6 +85,24 @@ describe('ChatTimeline Tools', () => {
     },
   );
 
+  it('shows a proxied call as a plain row of its target', () => {
+    timeline.render(
+      sessionWithTool([
+        toolItem({
+          id: 'proxied-read',
+          name: 'read',
+          arguments: { path: 'notes.md' },
+          programmatic: true,
+          proxied: true,
+          parentToolCallId: 'proxy',
+          result: { ok: true, data: { content: 'Nested contents' } },
+        }),
+      ]),
+    );
+    expect(document.querySelector('.tool-event')).not.toBeNull();
+    expect(document.querySelector('.programmatic-tool')).toBeNull();
+  });
+
   describe('summary line', () => {
     // Each case: Tool name, arguments, started payload, and the texts the
     // summary line `shows` and `hides`; `args` checks the Args detail.

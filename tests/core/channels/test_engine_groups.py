@@ -399,14 +399,13 @@ async def test_member_tool_policy_freezes_at_ingress_and_rechecks_live(
             if mode == "none":
                 assert kwargs["tool_restriction"] == ()
             elif mode == "selected":
-                assert set(kwargs["tool_restriction"]) == {"read", "read_more", "load_tools"}
+                assert set(kwargs["tool_restriction"]) == {"read", "read_more"}
             else:
                 assert "tool_restriction" not in kwargs
         access.member_tools["12345"] = ToolAccess(mode="none")
         for admitted in trigger.await_args_list:
             deny = admitted.kwargs["tool_denial_resolver"]
             assert deny("read") is not None
-            assert deny("load_tools") is not None
         # A grant after admission also cannot turn member work into admin work.
         access.admin_user_ids.add("50")
         deny = trigger.await_args_list[-1].kwargs["tool_denial_resolver"]

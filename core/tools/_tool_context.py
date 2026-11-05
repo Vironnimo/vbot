@@ -37,6 +37,7 @@ from core.tools._tool_display import (
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract, ToolContractError
 from core.tools.model_names import model_tool_name
+from core.tools.tool_loading import TOOL_TRANSPORT_NAMES
 from core.utils.file_status import is_link_status
 from core.utils.paths import file_url_path
 
@@ -676,8 +677,18 @@ class ToolContext:
             and tool_name not in allowed
         ):
             return False
+        return self.tool_denial(tool_name) is None
+
+    def tool_denial(self, tool_name: str) -> str | None:
+        """Return why this Run refuses *tool_name* right now, or ``None``.
+
+        The transport Tools are exempt: they run no Tool themselves, and each
+        target they reach is checked on its own.
+        """
         denial = self.tool_denial_resolver
-        return denial is None or denial(tool_name) is None
+        if denial is None or tool_name in TOOL_TRANSPORT_NAMES:
+            return None
+        return denial(tool_name)
 
     def offers(self, tool_name: str) -> bool:
         """Return whether the Agent was shown the Tool named *tool_name* and may call it.

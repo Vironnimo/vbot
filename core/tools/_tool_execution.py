@@ -261,7 +261,7 @@ class ToolBatch:
     def add(self, tool_call: ToolCall) -> None:
         """Start one call at the next position, after the calls it must follow."""
         index = len(self._tasks)
-        parallel = self._executor._registry.is_parallel_safe(tool_call.name)
+        parallel = self._executor._registry.is_parallel_safe(tool_call.name, tool_call.arguments)
         waits = [self._barrier] if self._barrier is not None else []
         if not parallel:
             waits.extend(self._group)

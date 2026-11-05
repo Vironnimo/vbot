@@ -15,7 +15,7 @@ from core.chat._tool_context import ToolDispatchContext
 from core.chat._tool_registry import _EmittingToolRegistry, _leaving_call
 from core.chat._tool_result_projection import _read_media_outputs
 from core.chat.messages import ChatMessage, JsonObject, ToolCall
-from core.sessions.history import _skill_context_note_content
+from core.sessions.history import _skill_context_note_content, project_tool_context_id
 from core.skills.policy import SkillPackageRef
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
@@ -228,13 +228,16 @@ class ProgrammaticTools(_EmittingToolRegistry):
         await settle_before_cancelling(
             self._context.persist_activity(declaration.id, messages, facts, media)
         )
+        project_note = (
+            self._context.project_id is None and project_tool_context_id(message) is not None
+        )
         if (
-            note is not None
+            (note is not None or project_note)
             and self._parent.tool_name == CALL_TOOL_NAME
             and isinstance(result.get("data"), dict)
         ):
-            # The typed Skill note carries the instructions and expires at
-            # Compaction. Repeating them in an untyped proxy Result would not.
+            # A Skill or Project note carries the instructions; a Skill note also
+            # expires at Compaction. The proxy Result does not repeat them.
             result = {
                 **result,
                 "data": {

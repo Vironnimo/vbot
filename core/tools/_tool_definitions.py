@@ -175,6 +175,8 @@ class Tool:
     # a tool to its owning extension.
     extension: str | None = None
     parallel_safe: bool = True
+    # A Tool that only runs another Tool names it here, so a call schedules like its target.
+    scheduling_target: Callable[[Any], str | None] | None = None
     # Coordinators wait on separately bounded child work and must not hold its slots.
     execution_slot_required: bool = True
     open_input_schema: bool = False

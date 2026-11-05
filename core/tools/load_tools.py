@@ -8,7 +8,8 @@ the prompt epoch (``ToolContext.record_loaded_tools``). Loading changes no
 permission: an On-demand Tool is callable before it is loaded.
 
 The Tool is internal: it is never part of a Tool policy or ``tool.list``, and
-it is offered only while the Agent has a Tool to load.
+it is offered only while the Agent has a Tool to load or the route needs the
+fixed ``call_tool`` transport.
 """
 
 from __future__ import annotations
@@ -96,8 +97,14 @@ _CALL_LOADED = (
     "show them."
 )
 _CALL_LOADED_PROXY = "Call a loaded Tool through call_tool, using its name and arguments."
-_ALREADY_PROXY = "- {name}: already callable through call_tool"
-_ALL_AVAILABLE_PROXY = "Every Tool you can use is already available; call it through call_tool."
+_ALREADY_PROXY = (
+    "- {name}: already callable; call it directly when your Tool list shows it, "
+    "otherwise through call_tool"
+)
+_ALL_AVAILABLE_PROXY = (
+    "Every Tool you can use is already available; call it directly when your Tool list "
+    "shows it, otherwise through call_tool."
+)
 _EMPTY_CALL = "Nothing was loaded: the call named no Tool."
 _NONE_FOUND = "Nothing was loaded: no Tool named {names} can be loaded."
 _ALL_AVAILABLE = "Every Tool you can use is already available; call it directly by name."

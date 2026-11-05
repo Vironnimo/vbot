@@ -148,9 +148,7 @@ class ChannelAccessPolicy:
                 )
             if allowed is None or tool_name in allowed:
                 return None
-            choices = ", ".join(
-                model_tool_name(name) for name in sorted(allowed) if name != "load_tools"
-            )
+            choices = ", ".join(model_tool_name(name) for name in sorted(allowed))
             return "Tool access denied for this group request. " + (
                 f"Allowed by group access: {choices}."
                 if choices

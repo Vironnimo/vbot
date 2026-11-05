@@ -436,15 +436,6 @@ class ProviderAdapter(ABC):
         """
         return self.wire_profile(model_id).replay.fidelity
 
-    def list_announced_tools(self, model_id: str) -> bool:
-        """Return whether Tools announced mid-Session must also join the request's Tool list.
-
-        True for a route that drops calls to Tool names outside the request's
-        ``tools[]``: the chat layer then lists each Tool a System Reminder
-        announces. The wire profile's ``request.list_announced_tools`` decides.
-        """
-        return self.wire_profile(model_id).request.list_announced_tools
-
     def on_demand_tools(self, model_id: str) -> bool:
         """Return whether ``model_id`` can be served On-demand Tools on this route.
 

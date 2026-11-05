@@ -238,7 +238,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
                     "set": {"response": {"reasoning_fields": ["thinking"]}},
                     "connections": {
                         "api-key": {
-                            "request": {"output_limit_cap": 3000, "list_announced_tools": True},
+                            "request": {"output_limit_cap": 3000, "on_demand_tools": False},
                             "media": {"request_max_images": 50},
                             "decision": {"endpoint": "/models/m/decisions"},
                         }
@@ -269,8 +269,8 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.media.request_max_images == 30
     assert profile.request.output_limit_field == "max_tokens"
     assert profile.source_of("request.output_limit_field") == "protocol"
-    assert profile.request.list_announced_tools is True
-    assert profile.source_of("request.list_announced_tools") == "model_connection"
+    assert profile.request.on_demand_tools is False
+    assert profile.source_of("request.on_demand_tools") == "model_connection"
     # A stated output maximum bounds every layer, the Model entry's cap of 3000 included.
     assert profile.request.output_limit_cap == 2500
     assert profile.source_of("request.output_limit_cap") == "observed"

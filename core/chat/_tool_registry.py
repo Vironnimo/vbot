@@ -119,10 +119,10 @@ class _EmittingToolRegistry(ToolRegistry):
         )
 
     @override
-    def is_parallel_safe(self, name: str) -> bool:
+    def is_parallel_safe(self, name: str, arguments: Any = None) -> bool:
         """Delegate the wrapped Tool's execution policy."""
         resolver = getattr(self._registry, "is_parallel_safe", None)
-        return bool(callable(resolver) and resolver(name))
+        return bool(callable(resolver) and resolver(name, arguments))
 
     @override
     def requires_execution_slot(self, name: str) -> bool:
@@ -227,11 +227,7 @@ class _EmittingToolRegistry(ToolRegistry):
                     started_at=started_at,
                     started_perf=started_perf,
                 )
-            denial_message = (
-                self._denial_resolver(context.tool_name)
-                if self._denial_resolver is not None
-                else None
-            )
+            denial_message = context.tool_denial(context.tool_name)
             if denial_message is not None:
                 denied_result = tool_failure("tool_not_allowed", denial_message)
                 return await self._answer_without_running(

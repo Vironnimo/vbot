@@ -565,13 +565,17 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("on_demand", [False, True], ids=["listed-tools", "on-demand-tools"])
-async def test_fallback_lists_every_tool_the_model_may_call_without_new_notes(
-    tmp_path: Path, on_demand: bool
+@pytest.mark.parametrize(
+    ("on_demand", "listed_only"),
+    [(False, True), (True, True), (True, False)],
+    ids=["listed-tools", "on-demand-tools", "native-route"],
+)
+async def test_fallback_sends_the_tools_its_route_can_call_without_new_notes(
+    tmp_path: Path, on_demand: bool, listed_only: bool
 ) -> None:
-    # The fallback route's cache is cold anyway, so it lists every Tool the Model may
-    # call, On-demand Tools included, and a load changes nothing in that list; it
-    # neither re-pins nor re-applies the route gates of its own Model.
+    # A fallback neither re-pins nor re-applies the route gates of its own Model. A route that
+    # calls only listed Tools gets every Tool the Model may call, On-demand Tools included, and
+    # a load changes nothing in that list; a native route keeps the Run's Tool list.
     tools = ToolRegistry()
     tools.register(
         ANALYZE_IMAGE_TOOL_NAME,
@@ -594,6 +598,7 @@ async def test_fallback_lists_every_tool_the_model_may_call_without_new_notes(
     fallback = StubAdapter(
         [{"content": "Recovered", "tool_calls": None}],
         wire_media_types=frozenset({"image/png"}),
+        on_demand_tools=not listed_only,
     )
     runtime = _fallback_runtime(
         tmp_path,
@@ -624,7 +629,9 @@ async def test_fallback_lists_every_tool_the_model_may_call_without_new_notes(
     extra = {"name": "extra", "description": "Extra Tool.", "parameters": {"type": "object"}}
     assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in pinned}
     assert primary.requests[1]["kwargs"]["tools"] == pinned
-    if on_demand:
+    if not listed_only:
+        assert fallback.requests[0]["kwargs"]["tools"] == pinned
+    elif on_demand:
         lazy = {"name": "lazy", "description": "Lazy Tool.", "parameters": {"type": "object"}}
         assert [tool["name"] for tool in pinned] == [ANALYZE_IMAGE_TOOL_NAME, "load_tools"]
         listed = fallback.requests[0]["kwargs"]["tools"]

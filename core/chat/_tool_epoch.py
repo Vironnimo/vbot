@@ -31,7 +31,7 @@ from typing import Any, Literal, cast
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
 from core.tools import definition_change_announced, is_tool_result_envelope, model_tool_name
-from core.tools.on_demand import CALL_TOOL_NAME, LOAD_TOOLS_TOOL_NAME
+from core.tools.on_demand import CALL_TOOL_NAME, LOAD_TOOLS_TOOL_NAME, TOOL_TRANSPORT_NAMES
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("chat")
@@ -53,6 +53,11 @@ _ADDED_UNLISTED = (
 )
 _ADDED_LISTED = (
     "The Tool {name} was enabled for you in this Session and now appears in your Tool list."
+)
+_ADDED_CALL_TOOL = (
+    "The Tool {name} was enabled for you in this Session and now appears in your Tool list. "
+    "Call every Tool your Tool list does not show through {name}; set name to that Tool and "
+    "arguments to its parameter values."
 )
 _ADDED_PROXY = (
     "The Tool {name} was enabled for you in this Session. Call it through call_tool; "
@@ -108,8 +113,7 @@ class ToolChange:
     ``loaded`` records, silently, the definition a ``load_tools`` call returned;
     ``on_demand`` announces a Tool the Agent may now load, by its ``summary``.
     ``listed`` says whether the
-    Tool appears in the request's Tool list: always for a pinned Tool, and for
-    an addition on a route that drops calls to unlisted Tools. ``pinned`` marks a
+    Tool appears in the request's Tool list. ``pinned`` marks a
     Tool of the epoch's pinned list: an addition makes it available again after
     a removal, and a change leaves its pinned definition in the Tool list.
     ``source`` fingerprints the Tool's registered definition so a
@@ -227,7 +231,8 @@ def render_tool_change(change: ToolChange) -> str:
     if change.change == "added" and change.pinned:
         return _AVAILABLE_AGAIN.format(name=name)
     if change.change == "added" and change.listed:
-        return _ADDED_LISTED.format(name=name)
+        listed = _ADDED_CALL_TOOL if change.tool == CALL_TOOL_NAME else _ADDED_LISTED
+        return listed.format(name=name)
     definition = change.definition or {}
     described = _DEFINITION.format(
         description=definition.get("description", ""),
@@ -319,7 +324,8 @@ class ToolEpochPin:
 
         The On-demand Tools stay out of the Tool list, except those in *keep*
         (the Tools the Agent called in the epoch a Compaction ended).
-        ``load_tools`` is listed only while at least one Tool stays out.
+        ``load_tools`` is listed only while at least one Tool stays out or the
+        catalog offers the transport Tools.
         """
 
         left_out = {name for name in catalog.on_demand if name not in keep}
@@ -533,32 +539,27 @@ class ToolEpochView:
             if (definition := self._known[name].definition) is not None
         ]
 
-    def request_tools(self, *, list_announced: bool) -> list[JsonObject]:
-        """Return the request's Tool list: the pin, plus announced additions when listed.
+    def request_tools(self) -> list[JsonObject]:
+        """Return the request's Tool list: the pin, plus additions announced as listed.
 
-        A route that drops calls to Tools outside the request list lists each
-        Tool announced as added or loaded in this epoch, in order of its first
-        announcement, with the definition the Model was last told to use: that
-        of its latest addition, load or change.
+        Each such Tool follows the pin in order of its first announcement, with
+        the definition the Model was last told to use.
         """
 
         tools = [dict(definition) for definition in self.pin.definitions]
-        if not list_announced:
-            return tools
         pinned = set(self.pin.names)
         added = dict.fromkeys(
             change.tool
             for change in self.changes
-            if change.change in ("added", "loaded")
-            and change.tool not in pinned
-            and change.definition is not None
+            if change.change == "added" and change.listed and change.tool not in pinned
         )
         return [
             *tools,
             *(
                 dict(definition)
                 for name in added
-                if (definition := self._known[name].definition) is not None
+                if self._known[name].available
+                and (definition := self._known[name].definition) is not None
             ),
         ]
 
@@ -583,17 +584,14 @@ class ToolEpochView:
                 tools.append(dict(definition))
         return tools
 
-    def plan(
-        self, catalog: LiveToolCatalog, *, unlisted_tool_calls: bool
-    ) -> tuple[ToolChange, ...]:
+    def plan(self, catalog: LiveToolCatalog) -> tuple[ToolChange, ...]:
         """Return the changes that bring the Model's knowledge up to *catalog*.
 
         A Tool the Model may call that is no longer usable is removed; readiness
         alone never removes one, and a route gate never removes a Tool the Model
         already knows. A Tool the Model may not call is added once it is usable,
         ready and passes the route gates: a pinned Tool is available again, any
-        other Tool is announced with its definition, listed in the request when
-        the route (``unlisted_tool_calls`` false) drops calls to unlisted Tools.
+        other Tool is announced with its definition.
         A known Tool whose registered definition changed is announced as
         changed only when a part named in its ``announce_changes`` differs from
         the definition the Model knows; any other change waits for the next
@@ -606,18 +604,25 @@ class ToolEpochView:
         usable as an On-demand Tool is announced by name and summary
         (``on_demand``), for the Model to load, unless the Model already got
         its definition in this epoch: then it is added with its definition
-        again, so a route that lists announced Tools keeps listing it.
+        again.
 
         ``load_tools`` is added only to an epoch that lists or announces an
         On-demand Tool, ahead of the first ``on_demand`` change that needs it;
         once known it is removed only when no usable Tool is on demand.
+
+        ``call_tool`` reaches an epoch whose pin lacks it (a Model change to a
+        listed-only route, a Session older than the proxy) ahead of every other
+        note, and only once a Tool exists that the pin does not list. Both
+        transport Tools then join the request's Tool list.
         """
 
         known = self._known
         pinned = set(self.pin.names)
         names = list(dict.fromkeys([*known, *catalog.offered_by_name]))
+        proxy = CALL_TOOL_NAME in catalog.offered_by_name
         planned: list[ToolChange] = []
         loader: list[ToolChange] = []
+        caller: list[ToolChange] = []
         for name in names:
             current = known.get(name)
             offered = catalog.offered_by_name.get(name)
@@ -627,7 +632,7 @@ class ToolEpochView:
                     planned.append(ToolChange(change="removed", tool=name, epoch=self.pin.epoch))
                 elif current.definition is None:
                     if offered is not None and name not in catalog.on_demand:
-                        planned.append(self._added(name, offered, source, unlisted_tool_calls))
+                        planned.append(self._added(name, offered, source, proxy=proxy))
                 elif offered is not None and (
                     changed := self._changed(
                         name, current, offered, source, catalog, pinned=name in pinned
@@ -637,7 +642,13 @@ class ToolEpochView:
                 continue
             if offered is None:
                 continue
-            additions = loader if name == LOAD_TOOLS_TOOL_NAME else planned
+            additions = (
+                loader
+                if name == LOAD_TOOLS_TOOL_NAME
+                else caller
+                if name == CALL_TOOL_NAME
+                else planned
+            )
             if name in pinned:
                 assert current is not None
                 additions.append(
@@ -664,11 +675,16 @@ class ToolEpochView:
                     )
                 )
                 continue
-            additions.append(self._added(name, offered, source, unlisted_tool_calls))
+            additions.append(self._added(name, offered, source, proxy=proxy))
         announced = [index for index, change in enumerate(planned) if change.change == "on_demand"]
         if loader and (announced or self._lists_on_demand_tools):
             at = announced[0] if announced else len(planned)
             planned[at:at] = loader
+        unlisted = any(
+            change.change in ("added", "on_demand") and not change.pinned for change in planned
+        )
+        if caller and (CALL_TOOL_NAME in known or self.announced_names or unlisted):
+            planned[:0] = caller
         return tuple(planned)
 
     @cached_property
@@ -680,9 +696,13 @@ class ToolEpochView:
         )
 
     def _added(
-        self, name: str, offered: JsonObject, source: str | None, unlisted_tool_calls: bool
+        self, name: str, offered: JsonObject, source: str | None, *, proxy: bool
     ) -> ToolChange:
-        """Return the note announcing *name* with its definition, listed when the route must."""
+        """Return the note announcing *name* with its definition.
+
+        With *proxy* the Model reaches it through ``call_tool``; a transport Tool
+        joins the request's Tool list instead.
+        """
 
         return ToolChange(
             change="added",
@@ -690,8 +710,8 @@ class ToolEpochView:
             epoch=self.pin.epoch,
             source=source,
             definition=_model_definition(offered),
-            listed=not unlisted_tool_calls and CALL_TOOL_NAME not in self.pin.names,
-            proxy=CALL_TOOL_NAME in self.pin.names,
+            listed=proxy and name in TOOL_TRANSPORT_NAMES,
+            proxy=proxy and name not in TOOL_TRANSPORT_NAMES,
         )
 
     def loads(self, catalog: LiveToolCatalog) -> dict[str, ToolChange]:
@@ -740,7 +760,7 @@ class ToolEpochView:
             definition=definition,
             listed=pinned,
             pinned=pinned,
-            proxy=not pinned and CALL_TOOL_NAME in self.pin.names,
+            proxy=not pinned and CALL_TOOL_NAME in catalog.offered_by_name,
         )
 
 
@@ -772,18 +792,29 @@ def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
     started (:data:`_NOT_RUN_CODES`). A call without a Tool Result counts.
     """
 
+    history = list(messages)
+    start = max(
+        (
+            index + 1
+            for index, message in enumerate(history)
+            if message.role in ("compaction_checkpoint", "agent_takeover")
+        ),
+        default=0,
+    )
+    current = history[start:]
+    # A target's activity can persist before the Assistant turn that holds its proxy call.
+    proxies = {
+        call.id
+        for message in current
+        if message.role == "assistant"
+        for call in message.tool_calls or ()
+        if call.name == CALL_TOOL_NAME
+    }
     called: dict[str, str] = {}
-    proxies: set[str] = set()
-    for message in messages:
+    for message in current:
         if message.programmatic and message.parent_tool_call_id not in proxies:
             continue
-        if message.role in ("compaction_checkpoint", "agent_takeover"):
-            called.clear()
-            proxies.clear()
-        elif message.role == "assistant":
-            proxies.update(
-                call.id for call in message.tool_calls or () if call.name == CALL_TOOL_NAME
-            )
+        if message.role == "assistant":
             called.update(
                 (call.id, call.name) for call in message.tool_calls or () if call.rejection is None
             )
