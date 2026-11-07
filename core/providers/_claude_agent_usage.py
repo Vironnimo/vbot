@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any
+from typing import Any, TypeGuard
 
 from core.providers._usage_parsers import _as_number, _epoch_to_iso, clamp_percent
 from core.providers._usage_types import UsageWindow
@@ -28,38 +28,34 @@ class ClaudeAgentUsage:
         self._lock = Lock()
 
     def observe(self, info: Mapping[str, Any]) -> None:
-        window_type = info.get("rate_limit_type") or info.get("rateLimitType")
-        if not isinstance(window_type, str) or window_type not in _WINDOWS:
-            return
-        status = info.get("status")
-        if not isinstance(status, str) or status not in {"allowed", "allowed_warning", "rejected"}:
-            return
-        try:
-            utilization = _as_number(info.get("utilization"))
-        except OverflowError:
-            utilization = None
-        try:
-            reset_value = info.get("resets_at")
-            reset_at = _epoch_to_iso(
-                reset_value if reset_value is not None else info.get("resetsAt")
-            )
-        except OverflowError:
-            reset_at = None
-        if utilization is None or utilization < 0:
-            # A new window with unknown consumption cannot reuse a previous
-            # observation's percentage, even when its label stayed unchanged.
+        unified = info.get("unifiedWindows")
+        raw = info.get("raw")
+        if not isinstance(unified, Mapping) and isinstance(raw, Mapping):
+            unified = raw.get("unifiedWindows")
+        if isinstance(unified, Mapping):
+            # Claude Code reports every active window here; its top-level entry
+            # names only the window that decides the status and has no utilization.
+            windows = {
+                window_type: window
+                for window_type, entry in unified.items()
+                if isinstance(entry, Mapping)
+                and _known(window_type, entry.get("status", info.get("status")))
+                and (window := _window(window_type, entry)) is not None
+            }
             with self._lock:
-                self._windows.pop(window_type, None)
+                self._windows = windows
             return
-        label, duration = _WINDOWS[window_type]
-        window = UsageWindow(
-            label=label,
-            used_percent=clamp_percent(min(utilization, 1.0) * 100),
-            reset_at=reset_at,
-            window_seconds=duration,
-        )
+        window_type = info.get("rate_limit_type") or info.get("rateLimitType")
+        if not _known(window_type, info.get("status")):
+            return
+        window = _window(window_type, info)
         with self._lock:
-            self._windows[window_type] = window
+            if window is None:
+                # A new window with unknown consumption cannot reuse a previous
+                # observation's percentage, even when its label stayed unchanged.
+                self._windows.pop(window_type, None)
+            else:
+                self._windows[window_type] = window
 
     def windows(self) -> tuple[UsageWindow, ...]:
         """Return fresh immutable facts; a reset does not imply measured zero usage."""
@@ -75,3 +71,32 @@ class ClaudeAgentUsage:
     def clear(self) -> None:
         with self._lock:
             self._windows.clear()
+
+
+def _known(window_type: object, status: object) -> TypeGuard[str]:
+    return (
+        isinstance(window_type, str)
+        and window_type in _WINDOWS
+        and status in {"allowed", "allowed_warning", "rejected"}
+    )
+
+
+def _window(window_type: str, entry: Mapping[str, Any]) -> UsageWindow | None:
+    try:
+        utilization = _as_number(entry.get("utilization"))
+    except OverflowError:
+        utilization = None
+    if utilization is None or utilization < 0:
+        return None
+    try:
+        reset_value = entry.get("resets_at")
+        reset_at = _epoch_to_iso(reset_value if reset_value is not None else entry.get("resetsAt"))
+    except OverflowError:
+        reset_at = None
+    label, duration = _WINDOWS[window_type]
+    return UsageWindow(
+        label=label,
+        used_percent=clamp_percent(min(utilization, 1.0) * 100),
+        reset_at=reset_at,
+        window_seconds=duration,
+    )

@@ -831,6 +831,33 @@ async def test_native_claude_usage_is_passive_current_and_expires_without_invent
         now = datetime.fromtimestamp(now.timestamp() + 60, UTC)
         [after_reset] = (await service.report()).providers
         assert [window.used_percent for window in after_reset.windows] == [60.0, 100.0]
+        # Claude Code's real shape: per-window facts under the raw
+        # `unifiedWindows`, a top-level entry without utilization. It is the
+        # complete current set, so windows it no longer lists disappear.
+        reset = int(now.timestamp()) + 600
+        observed.observe(
+            {
+                "status": "allowed",
+                "resets_at": reset,
+                "rate_limit_type": "five_hour",
+                "utilization": None,
+                "raw": {
+                    "status": "allowed",
+                    "rateLimitType": "five_hour",
+                    "unifiedWindows": {
+                        "five_hour": {"utilization": 0.19, "resetsAt": reset, "status": "allowed"},
+                        "seven_day": {"utilization": 0.71, "resetsAt": reset + 60},
+                        "future_window": {"utilization": 0.5, "status": "allowed"},
+                    },
+                },
+            }
+        )
+        [unified] = (await service.report()).providers
+        assert [(window.label, window.used_percent) for window in unified.windows] == [
+            ("5h", 19.0),
+            ("Week", 71.0),
+        ]
+        assert unified.windows[0].reset_at == _iso(reset)
         observed.clear()
         assert (await service.report()).providers == []
         assert transport.calls == []
