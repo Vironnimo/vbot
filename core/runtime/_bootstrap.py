@@ -618,7 +618,9 @@ def bootstrap(runtime: Runtime) -> None:
             skill_pool_names=lambda project_id: frozenset(
                 skill.name for skill in runtime.skills_for(project_id).list_all()
             ),
-            tool_names=lambda: tuple(tool.name for tool in runtime.tools.list_tools()),
+            tool_names=lambda: tuple(
+                tool.name for tool in runtime.tools.list_tools(include_session_scoped=False)
+            ),
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )

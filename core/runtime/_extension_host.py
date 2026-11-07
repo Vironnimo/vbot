@@ -515,11 +515,9 @@ class ExtensionHostFactory:
         for fallback in config.fallback_models or ():
             self.agent_resolver.require_model_configured(fallback)
 
-        ordinary_tools = {
-            tool.name: tool
-            for tool in self.tools.list_tools(include_internal=False)
-            if not tool.session_scoped
-        }
+        catalog = self.tools.list_tools(include_internal=False)
+        ordinary_tools = {tool.name: tool for tool in catalog if not tool.session_scoped}
+        private_selections = {tool.name for tool in catalog if tool.session_scoped}
         # Private capabilities are granted by the owner; profiles may only deny
         # them. The ordinary selection applies as configured, also inside a
         # Project.
@@ -532,6 +530,11 @@ class ExtensionHostFactory:
             config,
             tool_access=replace(
                 config.tool_access,
+                # A broad repository profile materializes the complete catalog.
+                # Selecting a private name does not grant its capability.
+                allowed=tuple(
+                    name for name in config.tool_access.allowed if name not in private_selections
+                ),
                 denied=tuple(
                     name for name in config.tool_access.denied if name not in private_names
                 ),
@@ -558,8 +561,11 @@ class ExtensionHostFactory:
             session_tool_grants=session_tool_grants,
         )
         effective_by_name = {tool.name: tool for tool in available}
+        # Ordinary Tools follow request-time readiness, just like other Agents;
+        # an unrelated unconfigured integration cannot prevent this participant
+        # from starting. The owner's private handoff capabilities must be ready.
         if any(
-            not tool_is_ready(effective_by_name[name]) for name in effective.allowed_tools
+            not tool_is_ready(effective_by_name[name]) for name in effective.session_tool_grants
         ) or set(effective.session_tool_grants) != set(session_tool_grants):
             raise RuntimeError("temporary execution is unavailable")
 

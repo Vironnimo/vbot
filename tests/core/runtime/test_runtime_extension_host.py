@@ -359,6 +359,26 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
         )
         == agent
     )
+    runtime.projects.set_override("repo", "reviewer", "tool_access", {"mode": "all"})
+    path.write_text("---\nname: reviewer\n---\nBroad repository profile", encoding="utf-8")
+    read_tool = runtime.tools.get("read")
+    runtime.tools.replace_owned_tools([read_tool], [replace(read_tool, ready=lambda: False)])
+    broad_config = replace(config, tool_access=ToolAccess(mode="all", denied=("swarm_state",)))
+    broad = await groups.create("broad-profile", "peer", broad_config, project_id="repo")
+    broad_agent = runtime.agent_resolver.resolve_temporary_agent(
+        broad.address, generation_id=broad.generation_id
+    )
+    private_names = {tool.name for tool in runtime.tools.list_tools() if tool.session_scoped}
+    assert not set(broad_agent.tool_access.allowed) & private_names
+    await groups.open_group("broad-profile")
+    assert runtime.extensions is not None
+    capability = runtime.extensions.session_capability(broad, runtime.tools)
+    assert capability is not None
+    assert set(capability.tool_names) == SWARM_PRIVATE_TOOLS - {"swarm_state"}
+    broad_preview = await host.inspect_prompt(broad_config, "repo")
+    visible = {tool["name"] for tool in broad_preview["tools"]}
+    assert "read" not in visible
+    assert not (SWARM_PRIVATE_TOOLS - {"swarm_state"}) - visible
 
 
 @pytest.mark.asyncio
