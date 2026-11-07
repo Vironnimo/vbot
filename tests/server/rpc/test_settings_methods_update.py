@@ -70,6 +70,11 @@ class _SchemaRegistry:
     def records(self) -> list[ExtensionRecord]:
         return list(self._records)
 
+    async def fire_config_change(
+        self, _name: str, _previous: JsonObject, _current: JsonObject
+    ) -> None:
+        pass
+
 
 def _schemed_record() -> ExtensionRecord:
     declarations = ExtensionDeclarations()
@@ -242,6 +247,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "update_result": True,
         "update_available": True,
         "server_stopped": True,
+        "extension_notification": True,
     }
     openrouter = next(item for item in result["providers"]["items"] if item["id"] == "openrouter")
     assert openrouter["routing"] == _OPENROUTER_ROUTING

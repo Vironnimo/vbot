@@ -84,6 +84,7 @@ CANONICAL_BUILTIN_TOOLS = [
 HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services"]
 
 COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
+FACTORY_TOOLS = ["factory_card"]
 
 # Built-in Tools that only a Session grant or a Live call offers; they stay out of the catalog.
 SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "update_goal", "vbot_request"]
@@ -93,6 +94,7 @@ CANONICAL_REGISTERED_TOOLS = sorted(
     + SESSION_GRANTED_BUILTIN_TOOLS
     + HOME_ASSISTANT_TOOLS
     + COMPUTER_USE_TOOLS
+    + FACTORY_TOOLS
 )
 
 # Tools whose description opens with a sentence as short as a summary. Every
@@ -143,7 +145,9 @@ def test_start_registers_each_builtin_tool_once_with_a_result_contract(
     for tool in tools.list_tools():
         if tool.name in hidden_session_tools:
             continue
-        assert tool.result_schema is not None
+        # Public Extension Tools may omit a result schema; built-ins always declare one.
+        if tool.name not in FACTORY_TOOLS:
+            assert tool.result_schema is not None
         assert len(tool.contract.schema_fingerprint) == 64
 
 
@@ -171,7 +175,9 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(
         definition["name"]: definition for definition in shared_runtime.tools.provider_definitions()
     }
 
-    assert sorted(definitions) == [name for name in CANONICAL_BUILTIN_TOOLS if name != "classify"]
+    assert sorted(definitions) == sorted(
+        [name for name in CANONICAL_BUILTIN_TOOLS if name != "classify"] + FACTORY_TOOLS
+    )
     for tool_name, definition in definitions.items():
         tool = shared_runtime.tools.get(tool_name)
         assert definition == {
