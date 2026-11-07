@@ -4,6 +4,7 @@ Placement additions in `references/agents.md` and CLI help:
 
 | Text | Reason |
 |---|---|
+| `vbot-docs` routing row includes Software Factory | Finds the bundled workflow when the user asks for managed coding work instead of Extension authoring. The new usage section's sentence reasons are in `extensions/factory-agent-facing-text.md`. |
 | `agent create\|update --placement chat\|helper\|private chooses where an Identity Agent appears.` | Exposes the same placement mutation as the Agents editor. |
 | `Omit it to create a Chat Agent or keep an existing Agent's placement.` | Distinguishes create's default from update's sparse semantics. |
 | `With private, pass --owner <agent-id> naming a Chat Agent; omit --owner for the other placements.` | Prevents incomplete or contradictory calls. |

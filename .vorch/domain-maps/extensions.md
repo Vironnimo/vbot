@@ -29,7 +29,7 @@ The typed field declarations an Extension registers in code to validate and rend
 - Filesystem name is Extension identity. Cross-root conflicts are first-wins: the first occurrence claims the name; later copies become visible `overridden` records and are never imported or registered. A disabled earlier copy still claims the name, so disabling cannot silently activate a later copy. An individually unreadable candidate or entry point keeps a failed record and its owner identity, protecting its Sessions from removal cleanup and blocking later copies. When a `.py` entry's kind cannot be checked, both possible identities (file stem and directory name) stay reserved until it becomes readable (`test_loader.py`, `test_runtime_extension_reload.py`).
 - Loading is two-phase. `register(api)` only collects declarations into an `ExtensionRecord`; `aload()` runs discovery, imports, synchronous registration and page-path resolution on a bounded loader worker, while async registration and declaration publication stay on the serving Event Loop (`extensions/management.md`). Successful async registrations finish deterministically before loaded records are applied in load order; a registration past its hard 10-second deadline fails only that Extension. Extension code never writes live registry tables directly.
 - Record status is one of `loaded`, `failed`, `disabled`, or `overridden`. Import, manifest (including I/O, malformed JSON, or UTF-8 decoding), or registration failure isolates that Extension; a collision or apply error for one capability stays a non-fatal `capability_errors` diagnostic while the record remains loaded.
-- `API_VERSION` (`core/extensions/_declarations.py`) is the public contract version, currently 23. Bump it when the Extension contract changes in a way third-party Extensions can detect through their manifest `api_version`, and record what the new version adds in `extensions/management.md` -> API versions. An optional directory-form `extension.json` may add display metadata, an `api_version` and `config_documents` validators (`extensions/management.md` -> Offline document validation); a manifest requiring a newer version fails that Extension.
+- `API_VERSION` (`core/extensions/_declarations.py`) is the public contract version, currently 24. Bump it when the Extension contract changes in a way third-party Extensions can detect through their manifest `api_version`, and record what the new version adds in `extensions/management.md` -> API versions. An optional directory-form `extension.json` may add display metadata, an `api_version` and `config_documents` validators (`extensions/management.md` -> Offline document validation); a manifest requiring a newer version fails that Extension.
 
 ## Cross-task contracts
 
@@ -75,6 +75,8 @@ This domain owns the bundled-page paragraphs of the `vbot-docs` Skill's page ref
 
 The Shell Review Decision policy has its sentence reasons in `extensions/shell-review.md` -> Agent-facing text.
 
+Factory participant instructions, continuation notes and Tool texts belong to `resources/extensions/factory/agent_text.py`; their reasons are in `extensions/factory-agent-facing-text.md`.
+
 ## References
 
 Read these only when your task matches - not by default.
@@ -94,4 +96,6 @@ Read these only when your task matches - not by default.
 - Changing the bundled MCP client, transports, Tool opt-ins, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Adding or changing an Extension-owned page or configuration editor -> `webui.md` and `webui/extension-pages.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
+- Changing Factory Cards, Project setups, isolated Worker execution, independent review, acceptance or the Software Factory Board -> `extensions/factory.md`
+- Changing Factory participant instructions, continuations or Tool texts -> `extensions/factory-agent-facing-text.md`
 - Informing the Model about a background event or state change -> `model-communication.md`
