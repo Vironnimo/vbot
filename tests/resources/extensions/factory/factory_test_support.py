@@ -20,10 +20,29 @@ from core.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 from core.tools.contracts import ToolContractError
 from resources.extensions.factory import register
 from resources.extensions.factory._values import SETUP_DEFAULTS
+from resources.extensions.factory._workflows import templates
 from resources.extensions.factory.extension import FactoryExtension
 from resources.extensions.factory.store import FactoryStore
 
 type Json = dict[str, Any]
+
+
+def implement_workflow() -> Json:
+    """The two-stage Workflow the operation contracts run Cards with."""
+    workflow = templates()[0]
+    implement, review = workflow["stages"]
+    implement["lanes"][0].update(source="agent", agent="worker")
+    review["lanes"][0].update(source="agent", agent="reviewer")
+    return workflow
+
+
+def drafts_workflow() -> Json:
+    """Three draft lanes, a merge and a review: a document-only Workflow."""
+    workflow = templates()[2]
+    for stage in workflow["stages"]:
+        for lane in stage["lanes"]:
+            lane.update(source="agent", agent="reviewer" if stage["kind"] == "review" else "worker")
+    return workflow
 
 
 class FakeHost:
@@ -99,7 +118,7 @@ class FakeExecution:
     async def accept(self, card: Json) -> None:
         await self._admit("accept", card, "integrating")
 
-    async def send_back(self, card: Json, comment: str) -> None:
+    async def send_back(self, card: Json, comment: str, stage: str = "") -> None:
         await self._admit("send_back", card, "working", comment)
 
     async def retry(self, card: Json) -> None:
@@ -155,8 +174,8 @@ class FactoryHarness:
             {
                 **SETUP_DEFAULTS,
                 "project_id": project_id,
-                "worker_profile": "worker",
-                "reviewer_profile": "reviewer",
+                "workflows": [implement_workflow()],
+                "default_workflow": "implement",
                 **changes,
             }
         )
@@ -173,10 +192,8 @@ class FactoryHarness:
             "Objective",
             "Acceptance criteria",
             origin="agent" if state == "proposal" else "operator",
-            runtime={
-                "setup": await self.store.get_setup(project_id),
-                "cwd": str(self.directory / project_id),
-            },
+            runtime={"cwd": str(self.directory / project_id)},
+            workflow_id="implement",
         )
         if card["state"] != state or waiting_reason:
             card = await self.store.change(

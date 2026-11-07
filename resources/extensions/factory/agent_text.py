@@ -574,6 +574,11 @@ ERROR_MESSAGES = {
         "The Card's cleanup or archival did not finish. "
         "Inspect its participant Session and retry deletion when ready."
     ),
+    "workflow_upgrade": (
+        "This Card started before Workflows and cannot resume its review or integration. "
+        "Retry starts its changes stage again with a new participant, Send back reworks it "
+        "with your guidance, and Discard removes its worktree."
+    ),
 }
 
 

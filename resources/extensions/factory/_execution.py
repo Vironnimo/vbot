@@ -153,17 +153,19 @@ class FactoryExecution:
             )
         ]
 
-    async def _earlier(self, card: Json, runtime: Json, index: int) -> list[Json]:
-        workflow = runtime["workflow"]
-        history = await self.store.history(card["id"])
-        return self._latest(
-            history["outputs"], workflow, {stage["id"] for stage in workflow["stages"][:index]}
-        )
+    async def _history(self, card: Json, recording: Json | None) -> Json:
+        """The Card's history including the output this transition records with it."""
+        history: Json = await self.store.history(card["id"])
+        if recording is not None:
+            history["outputs"].append(recording)
+        return history
 
-    async def _work_input(self, card: Json, runtime: Json, participant: str) -> str:
+    async def _work_input(
+        self, card: Json, runtime: Json, participant: str, recording: Json | None
+    ) -> str:
         workflow = runtime["workflow"]
         index, lane = self._locate(workflow, participant)
-        history = await self.store.history(card["id"])
+        history = await self._history(card, recording)
         earlier = self._latest(
             history["outputs"], workflow, {stage["id"] for stage in workflow["stages"][:index]}
         )
@@ -195,7 +197,11 @@ class FactoryExecution:
             and not initial
         ):
             initial = True
-            content = await self._work_input(card, runtime, participant) + "\n\n" + content
+            content = (
+                await self._work_input(card, runtime, participant, extra.get("output"))
+                + "\n\n"
+                + content
+            )
         runtime.pop("pending_action", None)
         runtime.pop("question", None)
         runtime.pop("note", None)
@@ -497,11 +503,20 @@ class FactoryExecution:
         index, lane = int(runtime["stage"]), int(runtime["lane"])
         stage = workflow["stages"][index]
         updated = {**card, **(patch or {}), "runtime": runtime}
+        # The output handed in by this transition is saved together with the
+        # queued input, so the next participant's input must include it already.
+        recording = extra.get("output")
         if stage["kind"] == "review":
-            runtime["reviewer_sequence"] = int(runtime.get("reviewer_sequence", 0)) + 1
-            participant = _workflows.review_participant(stage, lane, runtime["reviewer_sequence"])
+            sequences = runtime.setdefault("review_sequences", {})
+            sequences[stage["id"]] = int(sequences.get(stage["id"], 0)) + 1
+            participant = _workflows.review_participant(stage, lane, sequences[stage["id"]])
             runtime["reviewer_nudges"] = 0
-            history = await self.store.history(card["id"])
+            history = await self._history(card, recording)
+            own = [item for item in history["outputs"] if item["stage_id"] == stage["id"]]
+            if lane == 0:
+                # Lanes judge independently: later lanes of this pass see only the
+                # verdicts that existed when the pass began.
+                runtime["review_previous"] = len(own)
             target = {stage["target"]}
             content = agent_text.review_input(
                 updated,
@@ -512,7 +527,7 @@ class FactoryExecution:
                     for item in self._latest(history["outputs"], workflow, target)
                     if item["kind"] == "work"
                 ],
-                previous=[item for item in history["outputs"] if item["stage_id"] == stage["id"]],
+                previous=own[: int(runtime.get("review_previous", len(own)))],
                 integration=runtime.get("review_kind") == "integration_review",
             )
             return await self._queue(
@@ -530,11 +545,17 @@ class FactoryExecution:
         participant = _workflows.work_participant(stage, lane)
         note = runtime.get("lane_note") or {"kind": "refresh", "text": ""}
         if participant in runtime.get("participants", {}):
-            earlier = await self._earlier(card, runtime, index) if note["kind"] == "refresh" else []
+            earlier = []
+            if note["kind"] == "refresh":
+                earlier = self._latest(
+                    (await self._history(card, recording))["outputs"],
+                    workflow,
+                    {item["id"] for item in workflow["stages"][:index]},
+                )
             content = agent_text.note(note["kind"], updated, note["text"], earlier)
             initial = False
         else:
-            content = await self._work_input(updated, runtime, participant)
+            content = await self._work_input(updated, runtime, participant, recording)
             initial = True
         return await self._queue(
             card,
@@ -640,10 +661,8 @@ class FactoryExecution:
             patch["checks"] = output["checks"]
         runtime.update(restarts=0)
         runtime.pop("review_branch_head_sha", None)
-        integration = (
-            card["state"] == "integrating"
-            or runtime.pop("next_review_kind", None) == "integration_review"
-        )
+        routed = runtime.pop("next_review_kind", None) == "integration_review"
+        integration = card["state"] == "integrating" or routed
         if integration:
             saved = await self._integration_review(
                 card, runtime, event="submitted", actor="agent", patch=patch, output=output
@@ -1032,8 +1051,11 @@ class FactoryExecution:
         action = runtime.get("pending_action", {})
         recorded = action.get("comment_recorded", False)
         reason = action.get("waiting_reason") or card["waiting_reason"]
-        runtime.update(rounds={}, restarts=0)
-        runtime.pop("next_review_kind", None)
+        runtime["restarts"] = 0
+        if not runtime.get("workflow"):
+            return await self._requeue(
+                card, runtime, event="sent_back", comment=None if recorded else comment
+            )
         workflow = runtime["workflow"]
         participant = runtime.get("current_participant")
         if reason == "blocked" and not stage and participant and not is_review(participant):
@@ -1049,6 +1071,8 @@ class FactoryExecution:
                 actor="user",
                 comment=None if recorded else comment,
             )
+        runtime["rounds"] = {}
+        runtime.pop("next_review_kind", None)
         index = (
             _workflows.stage_index(workflow, stage)
             if stage
@@ -1066,6 +1090,20 @@ class FactoryExecution:
             comment=None if recorded else comment,
         )
 
+    async def _requeue(
+        self, card: Json, runtime: Json, *, event: str, comment: str | None = None
+    ) -> Json:
+        """Queue a Card that never chose its Workflow, so the scheduler starts it again."""
+        runtime.pop("pending_action", None)
+        runtime.pop("note", None)
+        return await self._change(
+            card,
+            {"state": "queued", "waiting_reason": "", "turns": 0, "runtime": runtime},
+            actor="user",
+            event=event,
+            comment=comment,
+        )
+
     async def retry(self, card: Json) -> Json:
         runtime = self._action(card, "retry")
         acknowledged = await self._acknowledge_pending(card)
@@ -1073,6 +1111,8 @@ class FactoryExecution:
             card = acknowledged
             runtime = self._action(card, "retry")
         runtime["restarts"] = 0
+        if not runtime.get("workflow"):
+            return await self._requeue(card, runtime, event="retried")
         phase = runtime.get("phase", "working")
         pending = runtime.get("pending")
         if pending:
@@ -1116,11 +1156,13 @@ class FactoryExecution:
     @staticmethod
     def _cleanup_participants(runtime: Json) -> list[str]:
         """Existing participants of stages that change the repository, in stage order."""
+        existing = runtime.get("participants", {})
+        # A Card carried over from the role-based Factory keeps its worker's worktree.
+        legacy = ["worker"] if "worker" in existing else []
         workflow = runtime.get("workflow")
         if not workflow:
-            return []
-        existing = runtime.get("participants", {})
-        return [
+            return legacy
+        return legacy + [
             participant
             for stage in workflow["stages"]
             if stage["kind"] == "work" and stage["output"] == "changes"
@@ -1549,17 +1591,43 @@ class FactoryExecution:
         )
 
     async def _upgrade(self, card: Json) -> None:
-        """Requeue a Card that started under the role-based Factory without a Workflow."""
-        await self._change(
-            card,
-            {
-                "state": "queued",
-                "waiting_reason": "",
-                "turns": 0,
-                "runtime": {"cwd": card["runtime"].get("cwd", "")},
-            },
-            event="workflow_upgrade",
-        )
+        """Carry a Card that started under the role-based Factory over to a Workflow.
+
+        A Card that handed nothing in starts over. Any other waits for the user with
+        its worktree kept, because its review or integration cannot resume in a
+        Workflow it never ran.
+        """
+        old = card["runtime"]
+        runtime: Json = {"cwd": old.get("cwd", ""), "participants": old.get("participants", {})}
+        if not card["round"] and card["state"] != "waiting":
+            await self._change(
+                card,
+                {"state": "queued", "waiting_reason": "", "turns": 0, "runtime": runtime},
+                event="workflow_upgrade",
+            )
+            return
+        patch: Json = {"state": "waiting", "waiting_reason": "run_failed", "turns": 0}
+        try:
+            setup = await self.store.get_setup(card["project_id"])
+        except FactoryError:
+            setup = None
+        if setup is not None:
+            workflow = _workflows.choose(setup, None)
+            runtime.update(
+                workflow=workflow,
+                settings={
+                    key: setup[key] for key in ("turn_budget", "base_branch", "integration_check")
+                },
+                passes={},
+                rounds={},
+                restarts=0,
+                stage=_workflows.integrator(workflow) or 0,
+                lane=0,
+                phase="working",
+            )
+            patch["workflow_id"] = workflow["id"]
+        runtime["note"] = agent_text.error_message("workflow_upgrade")
+        await self._change(card, {**patch, "runtime": runtime}, event="workflow_upgrade")
 
     async def reconcile(self) -> None:
         if self._reconciled:
@@ -1581,10 +1649,12 @@ class FactoryExecution:
                         await self._completed(card, "success")
                     else:
                         self._close_later(card)
+                elif not runtime.get("workflow") and (
+                    runtime.get("setup") or card["state"] in ACTIVE_STATES
+                ):
+                    await self._upgrade(card)
                 elif card["state"] in {"proposal", "queued"}:
                     continue
-                elif not runtime.get("workflow"):
-                    await self._upgrade(card)
                 elif card["state"] in ACTIVE_STATES:
                     run_id = runtime.get("current_run")
                     inspected = (
