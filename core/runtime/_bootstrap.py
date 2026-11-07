@@ -286,7 +286,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime,
             data_root=runtime._storage.data_dir,
             claude_usage=lambda: (
-                runtime._provider_runtime.claude_usage_windows()
+                runtime._provider_runtime.current_claude_usage()
                 if runtime._provider_runtime is not None
                 else ()
             ),

@@ -31,6 +31,7 @@ from core.providers._claude_agent_wire import (
 )
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.storage import TemporaryFileLease, TemporaryFileManager
+from core.utils.logging import get_logger
 from core.utils.owner_only import restrict_to_owner
 from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
@@ -40,6 +41,12 @@ CONTEXT_DISCOVERY_SECONDS = 60.0
 SHUTDOWN_SECONDS = 10.0
 MAX_SESSIONS = 16
 CAPACITY_WAIT_SECONDS = 30.0
+#: The usage probe's bound: start, one minimal Model response, and its result.
+USAGE_PROBE_SECONDS = 60.0
+#: Claude Code's moving alias for its smallest Model; it resolves to the current one.
+USAGE_PROBE_MODEL = "haiku"
+
+_LOGGER = get_logger("providers.claude_agent")
 
 
 class ClaudeAgentBusyError(ProviderError):
@@ -411,6 +418,48 @@ class ClaudeAgentSessions:
                 "models": [],
                 "subscription": False,
             }
+
+    async def probe_usage(self) -> None:
+        """Send one minimal request so Claude Code reports its subscription windows.
+
+        Claude Code reports them only beside a Model response, once per process;
+        the native observation callback records them. Usage is optional, so a
+        failure, a busy process budget or a non-subscription login only ends
+        the probe.
+        """
+        epoch = self._epoch
+        try:
+            if self._closed:
+                return
+            sdk = await SDK_POOL.run(load_sdk)
+            path = await SDK_POOL.run(self._executable)
+            if epoch != self._epoch:
+                return
+            await self._make_space(wait=False)
+            if epoch != self._epoch:
+                return
+            client_options = options(
+                sdk,
+                path,
+                model=USAGE_PROBE_MODEL,
+                system="Reply with OK.",
+                controls={"max_tokens": 16, "thinking": {"type": "disabled"}},
+            )
+            native = self._factory(client_options, PendingTools([]), sdk)
+            self._temporary.add(native)
+            try:
+                async with asyncio.timeout(USAGE_PROBE_SECONDS):
+                    info = await native.start()
+                    if info.get("subscription") is not True:
+                        return
+                    await native.send([{"type": "text", "text": "OK"}])
+                    await native.turn_done.wait()
+            finally:
+                await finish_despite_cancel(native.stop())
+                self._temporary.discard(native)
+                self._capacity_changed.set()
+        except Exception as error:
+            _LOGGER.info("Claude usage probe failed (error=%s)", type(error).__name__)
 
     async def stream(
         self,

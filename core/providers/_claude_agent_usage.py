@@ -25,6 +25,7 @@ class ClaudeAgentUsage:
     def __init__(self, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._clock = clock
         self._windows: dict[str, UsageWindow] = {}
+        self._observed_at: datetime | None = None
         self._lock = Lock()
 
     def observe(self, info: Mapping[str, Any]) -> None:
@@ -44,6 +45,7 @@ class ClaudeAgentUsage:
             }
             with self._lock:
                 self._windows = windows
+                self._observed_at = self._now() if windows else None
             return
         window_type = info.get("rate_limit_type") or info.get("rateLimitType")
         if not _known(window_type, info.get("status")):
@@ -56,12 +58,17 @@ class ClaudeAgentUsage:
                 self._windows.pop(window_type, None)
             else:
                 self._windows[window_type] = window
+                self._observed_at = self._now()
+
+    def age_seconds(self) -> float | None:
+        """Seconds since the last measured observation; None when nothing is observed."""
+        with self._lock:
+            observed_at = self._observed_at if self._windows else None
+        return None if observed_at is None else (self._now() - observed_at).total_seconds()
 
     def windows(self) -> tuple[UsageWindow, ...]:
         """Return fresh immutable facts; a reset does not imply measured zero usage."""
-        now = self._clock()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=UTC)
+        now = self._now()
         with self._lock:
             for window_type, window in tuple(self._windows.items()):
                 if window.reset_at is not None and datetime.fromisoformat(window.reset_at) <= now:
@@ -71,6 +78,11 @@ class ClaudeAgentUsage:
     def clear(self) -> None:
         with self._lock:
             self._windows.clear()
+            self._observed_at = None
+
+    def _now(self) -> datetime:
+        now = self._clock()
+        return now.replace(tzinfo=UTC) if now.tzinfo is None else now
 
 
 def _known(window_type: object, status: object) -> TypeGuard[str]:

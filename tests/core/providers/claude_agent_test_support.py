@@ -43,6 +43,8 @@ class FakeNative:
         self.client = self
         self.closed = False
         self.sent: list[Any] = []
+        self.turn_done = asyncio.Event()
+        self.turn_done.set()
         self.result_received = asyncio.Event()
         self.waiter: asyncio.Task[None] | None = None
         self.instances.append(self)

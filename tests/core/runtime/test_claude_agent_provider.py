@@ -39,6 +39,8 @@ class _NativeSessions:
     def __init__(self) -> None:
         self.result: dict[str, Any] = copy.deepcopy(READY)
         self.probes = 0
+        self.usage_probes = 0
+        self.usage: dict[str, Any] | None = None
         self.closed_sessions: list[set[tuple[str, str]]] = []
         self.closed = 0
         self.aborted = 0
@@ -47,6 +49,11 @@ class _NativeSessions:
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
         return copy.deepcopy(self.result)
+
+    async def probe_usage(self) -> None:
+        self.usage_probes += 1
+        if self.usage is not None:
+            self.bindings["observe_usage"](self.usage)
 
     async def close_sessions(self, sessions: set[tuple[str, str]]) -> None:
         self.closed_sessions.append(sessions)
@@ -345,6 +352,37 @@ async def test_native_registries_follow_session_connection_and_runtime_lifetime(
 
     await runtime.aclose()
     assert first.closed == second.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_usage_reports_ask_claude_code_for_missing_or_stale_windows(
+    native_runtime: tuple[Runtime, list[_NativeSessions]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.providers import runtime as provider_runtime
+
+    runtime, registries = native_runtime
+    native = registries[0]
+    owner = runtime._provider_runtime
+    assert owner is not None
+    now = provider_runtime.time.monotonic()
+    monkeypatch.setattr(provider_runtime.time, "monotonic", lambda: now)
+
+    async def report() -> list[float]:
+        windows = owner.current_claude_usage()
+        await asyncio.sleep(0)
+        return [window.used_percent for window in windows]
+
+    # Missing windows start one background probe; a failed one is not retried
+    # on every report.
+    assert await report() == [] and native.usage_probes == 1
+    assert await report() == [] and native.usage_probes == 1
+    now += provider_runtime.CLAUDE_USAGE_REFRESH_SECONDS
+    native.usage = {"status": "allowed", "rate_limit_type": "five_hour", "utilization": 0.25}
+    assert await report() == [] and native.usage_probes == 2
+    # Fresh observations, from a probe or a Run, need no probe.
+    now += provider_runtime.CLAUDE_USAGE_REFRESH_SECONDS
+    assert await report() == [25.0] and native.usage_probes == 2
 
 
 @pytest.mark.asyncio

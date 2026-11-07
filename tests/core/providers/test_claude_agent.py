@@ -208,6 +208,20 @@ async def test_probe_discovers_native_context_capacity_without_model_input(
     await native_registry.aclose()
 
 
+@pytest.mark.asyncio
+async def test_usage_probe_sends_one_minimal_request_without_tools(
+    native_registry: ClaudeAgentSessions,
+) -> None:
+    # Claude Code reports subscription windows only beside a Model response.
+    await native_registry.probe_usage()
+    [native] = FakeNative.instances
+    assert native.options.model == "haiku" and native.options.thinking == {"type": "disabled"}
+    assert native.options.tools == [] and native.options.mcp_servers == {}
+    assert native.options.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "16"
+    assert native.sent == [([{"type": "text", "text": "OK"}], False)] and native.closed
+    await native_registry.aclose()
+
+
 @pytest.mark.parametrize(
     "context_error",
     [
@@ -717,9 +731,9 @@ async def test_api_or_cloud_login_never_sends_a_model_request(
     try:
         with pytest.raises(ProviderAuthError):
             await collect(client, MESSAGES)
-        assert len(FakeNative.instances) == 1
-        native = FakeNative.instances[0]
-        assert native.sent == [] and native.closed
+        await registry.probe_usage()
+        assert len(FakeNative.instances) == 2
+        assert all(native.sent == [] and native.closed for native in FakeNative.instances)
     finally:
         await registry.aclose()
 

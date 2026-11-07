@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import UTC, tzinfo
@@ -62,9 +63,11 @@ from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import get_logger
-from core.utils.workers import settle_before_cancelling
+from core.utils.workers import cancel_and_wait, settle_before_cancelling
 
 _LOGGER = get_logger("providers.runtime")
+#: How old observed Claude subscription windows may get before a report asks for new ones.
+CLAUDE_USAGE_REFRESH_SECONDS = 900.0
 
 
 class ProviderRuntime:
@@ -108,6 +111,8 @@ class ProviderRuntime:
         self._responses_transports = ResponsesTransports()
         self._external_status: dict[str, dict[str, Any]] = {}
         self._claude_usage = ClaudeAgentUsage()
+        self._claude_usage_probe: asyncio.Task[None] | None = None
+        self._claude_usage_probed_at: float | None = None
         self._retired_claude_sessions: set[ClaudeAgentSessions] = set()
         self._claude_configured_path = self._claude_executable_path()
         self._claude_sessions = self._new_claude_sessions()
@@ -145,7 +150,7 @@ class ProviderRuntime:
             self._claude_sessions = self._new_claude_sessions()
             self._external_status.clear()
             self._external_refresh_at.clear()
-            self._claude_usage.clear()
+            self._forget_claude_usage()
             self.retire_http_transports()
             self._wire_observations.close()
             self._wire_observations = self._load_wire_observations(storage)
@@ -180,6 +185,37 @@ class ProviderRuntime:
     def claude_usage_windows(self) -> tuple[UsageWindow, ...]:
         return self._claude_usage.windows()
 
+    def current_claude_usage(self) -> tuple[UsageWindow, ...]:
+        """The observed windows for a usage report.
+
+        When they are missing or older than ``CLAUDE_USAGE_REFRESH_SECONDS``, a
+        background probe asks Claude Code for fresh ones (at most once per that
+        interval); the next report shows its answer.
+        """
+        age = self._claude_usage.age_seconds()
+        if age is None or age >= CLAUDE_USAGE_REFRESH_SECONDS:
+            self._start_claude_usage_probe()
+        return self._claude_usage.windows()
+
+    def _start_claude_usage_probe(self) -> None:
+        if self._catalog_refresh_closed:
+            return
+        if self._claude_usage_probe is not None and not self._claude_usage_probe.done():
+            return
+        now = time.monotonic()
+        probed_at = self._claude_usage_probed_at
+        if probed_at is not None and now - probed_at < CLAUDE_USAGE_REFRESH_SECONDS:
+            return
+        self._claude_usage_probed_at = now
+        self._claude_usage_probe = asyncio.get_running_loop().create_task(
+            self._claude_sessions.probe_usage(), name="claude-agent-usage-probe"
+        )
+
+    def _forget_claude_usage(self) -> None:
+        """A changed native login or executable may report other windows at once."""
+        self._claude_usage.clear()
+        self._claude_usage_probed_at = None
+
     async def apply_claude_configuration(self, configured_path: str) -> None:
         """Retire native processes on the Event Loop after a persisted path change."""
         if configured_path == self._claude_configured_path:
@@ -188,7 +224,7 @@ class ProviderRuntime:
         previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
         self._external_status.clear()
         self._external_refresh_at.clear()
-        self._claude_usage.clear()
+        self._forget_claude_usage()
         await previous.aclose()
 
     def _native_auth_failed(self) -> None:
@@ -294,7 +330,7 @@ class ProviderRuntime:
             previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
             self._external_status.clear()
             self._external_refresh_at.clear()
-            self._claude_usage.clear()
+            self._forget_claude_usage()
             await previous.aclose()
         try:
             await self._responses_transports.close_connection(provider_id, connection_id)
@@ -303,6 +339,8 @@ class ProviderRuntime:
 
     async def aclose_transports(self) -> None:
         """Close every kept-open Provider connection (Runtime shutdown)."""
+        if self._claude_usage_probe is not None:
+            await cancel_and_wait(self._claude_usage_probe)
         try:
             results = await settle_before_cancelling(
                 asyncio.gather(
@@ -327,6 +365,8 @@ class ProviderRuntime:
 
     def abort_transports(self) -> None:
         """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
+        if self._claude_usage_probe is not None:
+            self._claude_usage_probe.cancel()
         self._claude_sessions.abort()
         self._claude_usage.clear()
         for sessions in self._retired_claude_sessions:
