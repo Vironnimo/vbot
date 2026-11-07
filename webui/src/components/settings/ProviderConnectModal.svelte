@@ -5,11 +5,13 @@
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import {
     connectProvider as connectProviderRequest,
     disconnectProvider as disconnectProviderRequest,
     setConnectionEnabled,
     setProviderKey,
+    updateSettings,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { writeClipboardText } from '$lib/clipboard.js';
@@ -22,6 +24,7 @@
     getPublicConnectionId,
     isValidAccountId,
     normalizeAccountId,
+    describeExternalStatus,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -61,6 +64,9 @@
   // would only capture the initial value anyway — the modal is recreated per open).
   let selectedProvider = $state(untrack(() => scopedProvider) ?? null);
   let selectedConnection = $state(initialConnection());
+  let executablePath = $state(
+    untrack(() => scopedProvider?.executable_path ?? ''),
+  );
   let apiKeyValue = $state('');
   let accountValue = $state(untrack(() => scopedAccount) ?? '');
   let saving = $state(false);
@@ -155,7 +161,9 @@
       return t('settings.providers.add.localIntro');
     }
     if (currentStep === 'external') {
-      return t('settings.providers.external.setupHelp');
+      return t('settings.providers.external.setupHelp', {
+        provider: providerName(selectedProvider),
+      });
     }
     return oauthActive
       ? ''
@@ -187,6 +195,7 @@
 
   function chooseProvider(provider) {
     selectedProvider = provider;
+    executablePath = provider.executable_path ?? '';
     errorMessage = '';
     const addable = getAddableConnections(provider);
     if (addable.length === 1) {
@@ -324,6 +333,27 @@
     saving = true;
     errorMessage = '';
     try {
+      if (
+        selectedProvider.id === 'claude-agent' &&
+        executablePath.trim() !== (selectedProvider.executable_path ?? '')
+      ) {
+        await updateSettings({
+          providers: {
+            claude_agent: { executable_path: executablePath.trim() },
+          },
+          base: {
+            providers: {
+              claude_agent: {
+                executable_path: selectedProvider.executable_path ?? '',
+              },
+            },
+          },
+        });
+        selectedProvider = {
+          ...selectedProvider,
+          executable_path: executablePath.trim(),
+        };
+      }
       const result = await callConnectProvider(
         selectedProvider.id,
         getPublicConnectionId(selectedConnection),
@@ -332,8 +362,7 @@
       await onCompleted();
       if (closed) return;
       if (result?.connected !== true) {
-        errorMessage =
-          result?.message || t('settings.providers.external.notReady');
+        errorMessage = describeExternalStatus(selectedProvider, result?.status);
         return;
       }
       onToast({
@@ -460,7 +489,9 @@
 
   function connectionMethodDescription(connection) {
     if (connection.type === 'external') {
-      return t('settings.providers.external.setupHelp');
+      return t('settings.providers.external.setupHelp', {
+        provider: providerName(selectedProvider),
+      });
     }
     if (setupMode) {
       if (connection.type === 'api_key') {
@@ -654,6 +685,28 @@
           {#if !setupMode}{@render accountField(saving)}{/if}
         </form>
       {:else if step === 'external'}
+        {#if selectedProvider.id === 'claude-agent'}
+          <FormField
+            controlId="claude-executable-connect"
+            label={t('settings.providers.claudeAgent.executable')}
+            help={t('settings.providers.claudeAgent.executableHelp')}
+          >
+            {#snippet children(field)}
+              <PathField
+                id={field.controlId}
+                aria-describedby={field.describedBy}
+                mode="file"
+                value={executablePath}
+                onInput={(value) => (executablePath = value)}
+                disabled={saving}
+                ariaLabel={t('settings.providers.claudeAgent.executable')}
+                placeholder={t(
+                  'settings.providers.claudeAgent.executablePlaceholder',
+                )}
+              />
+            {/snippet}
+          </FormField>
+        {/if}
         {#if selectedConnection.setup_command}
           <code class="device-flow-code"
             >{selectedConnection.setup_command}</code

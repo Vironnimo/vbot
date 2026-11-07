@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
     from core.providers.http import ProviderHTTPTransportScope
     from core.providers.token_getter import TokenGetter
+    from core.storage import TemporaryFileManager
 
 __all__ = ["ClaudeAgentAdapter", "ClaudeAgentSessions"]
 
@@ -44,6 +45,7 @@ class ClaudeAgentAdapter(ProviderAdapter):
         connection_mode: str | None = None,
         http_transport: ProviderHTTPTransportScope | None = None,
         sessions: ClaudeAgentSessions | None = None,
+        temporary_files: TemporaryFileManager | None = None,
         connection_id: str | None = None,
     ) -> None:
         super().__init__(model_lookup, debug_recorder)
@@ -51,7 +53,7 @@ class ClaudeAgentAdapter(ProviderAdapter):
         self._config = config
         self._connection_mode = connection_mode
         self._connection_id = connection_id or config.connections[0].id
-        self._sessions = sessions or ClaudeAgentSessions()
+        self._sessions = sessions or ClaudeAgentSessions(temporary_files=temporary_files)
         self._owns_sessions = sessions is None
         self._used: set[Conversation] = set()
 

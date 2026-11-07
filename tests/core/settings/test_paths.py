@@ -89,6 +89,20 @@ def test_atomic_patch_sets_multiple_nested_values() -> None:
     assert build_effective_settings(updated)["web_search"]["provider"] == "searxng"
 
 
+def test_claude_executable_path_is_cataloged_and_resets_to_discovery() -> None:
+    path = "providers.claude_agent.executable_path"
+    assert setting_details({}, path)["value"] == ""
+    updated, changed = apply_settings_patch(
+        {}, parse_patch_operations([{"op": "set", "path": path, "value": "C:/native/claude.exe"}])
+    )
+    assert changed == (path,)
+    assert setting_details(updated, path)["value"] == "C:/native/claude.exe"
+    reset, _ = apply_settings_patch(
+        updated, parse_patch_operations([{"op": "unset", "path": path}])
+    )
+    assert setting_details(reset, path)["value"] == ""
+
+
 def test_speech_recording_retention_defaults_to_ten_and_patches_independently() -> None:
     assert setting_details({}, "debug.speech_recording_limit")["value"] == 10
     updated, changed = apply_settings_patch(

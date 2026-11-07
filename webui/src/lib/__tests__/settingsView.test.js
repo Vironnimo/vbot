@@ -17,6 +17,7 @@ import {
   buildLanguageOptions,
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
+  describeExternalStatus,
   buildSessionTitleSettingsPayload,
   buildSubAgentSettingsPayload,
   buildTranscriptionAudioSettingsPayload,
@@ -866,4 +867,16 @@ describe('channels', () => {
       buildChannelUpdatePayload({ ...form, imap_port: '99999' }, form),
     ).toThrow(/imap_port/u);
   });
+});
+
+it('localizes unconfirmed subscriptions separately from API billing', () => {
+  const provider = { name: 'Synthetic provider' };
+  expect(describeExternalStatus(provider, 'subscription_unconfirmed')).toBe(
+    t('settings.providers.external.status.subscriptionUnconfirmed', {
+      provider: provider.name,
+    }),
+  );
+  expect(describeExternalStatus(provider, 'subscription_unconfirmed')).not.toBe(
+    describeExternalStatus(provider, 'api_billing'),
+  );
 });

@@ -20,6 +20,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/temp"),
     Path("artifacts/temp/atomic"),
     Path("artifacts/temp/commands"),
+    Path("artifacts/temp/providers"),
     Path("artifacts/temp/scratch"),
     Path("artifacts/temp/subagents"),
     Path("artifacts/temp/terminals"),

@@ -125,6 +125,20 @@ def _api_key_connection(credential_key: str, *, mode: str | None = None) -> Conn
 
 
 PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
+    "claude-agent": ProviderConfig(
+        id="claude-agent",
+        name="Claude Agent",
+        adapter="claude_agent",
+        base_url="claude-code://local",
+        connections=[
+            ConnectionConfig(
+                id="subscription",
+                type="external",
+                label="Claude subscription",
+                auth=AuthConfig(header="", prefix=""),
+            )
+        ],
+    ),
     "openai": ProviderConfig(
         id="openai",
         name="OpenAI",
@@ -187,6 +201,7 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
 }
 
 USAGE_CONNECTIONS = {
+    "claude-agent": "claude-agent:subscription",
     "openai": "openai:subscription",
     "github-copilot": "github-copilot:oauth",
     "ollama-cloud": "ollama-cloud:api-key",

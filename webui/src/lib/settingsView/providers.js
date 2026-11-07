@@ -1,5 +1,25 @@
 import { t } from '../i18n.js';
 
+const EXTERNAL_STATUS_KEYS = {
+  ready: 'settings.providers.external.status.ready',
+  logged_out: 'settings.providers.external.status.loggedOut',
+  api_billing: 'settings.providers.external.status.apiBilling',
+  subscription_unconfirmed:
+    'settings.providers.external.status.subscriptionUnconfirmed',
+  incompatible: 'settings.providers.external.status.incompatible',
+  missing: 'settings.providers.external.status.missing',
+  busy: 'settings.providers.external.status.busy',
+  unavailable: 'settings.providers.external.status.unavailable',
+  not_checked: 'settings.providers.external.status.notChecked',
+  disabled: 'settings.providers.external.status.disabled',
+};
+
+export function describeExternalStatus(provider, status) {
+  return t(EXTERNAL_STATUS_KEYS[status] ?? EXTERNAL_STATUS_KEYS.not_checked, {
+    provider: provider?.name ?? provider?.id ?? '',
+  });
+}
+
 export function getProviderItems(settings) {
   return Array.isArray(settings?.providers?.items)
     ? settings.providers.items

@@ -285,6 +285,11 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._provider_usage = ProviderUsageService(
             runtime,
             data_root=runtime._storage.data_dir,
+            claude_usage=lambda: (
+                runtime._provider_runtime.claude_usage_windows()
+                if runtime._provider_runtime is not None
+                else ()
+            ),
         )
         runtime._models = ModelRegistry.load(
             resources_path,

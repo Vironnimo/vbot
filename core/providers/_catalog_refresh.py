@@ -49,6 +49,9 @@ _MODEL_DB_WORKERS = BoundedWorkerPool(name="model-db-refresh", max_workers=1)
 _CATALOG_READ_WORKERS = BoundedWorkerPool(name="catalog-access", max_workers=4)
 # Automatic sweeps make one attempt per Connection, then throttle from completion.
 LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
+EXTERNAL_CATALOG_REFRESH_TTL_SECONDS = 3600.0
+_sleep = asyncio.sleep
+_external_now = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,16 @@ async def refresh_model_database(
     """Refresh one Provider or the whole Model DB, then publish and reload in place."""
     if target not in {"runtime", "system"}:
         raise ConfigError("model refresh target must be 'runtime' or 'system'")
-    async with runtime.model_database_refresh():
+    includes_native = target == "runtime" and any(
+        connection.type == "external"
+        for candidate in runtime._providers.list_ids()
+        if provider_id is None or candidate == provider_id
+        for connection in runtime._providers.get(candidate).connections
+    )
+    native_admission = runtime._external_refresh_lock if includes_native else nullcontext()
+    # Native checks take this lock before Model-DB admission too. A manual
+    # refresh cannot otherwise publish an older probe after a newer check.
+    async with native_admission, runtime.model_database_refresh():
         begin = (
             _runtime_refresh_beginner(runtime)
             if target == "runtime"
@@ -131,7 +143,11 @@ async def maybe_refresh_local_catalogs(runtime: ProviderRuntime, *, force: bool 
             and now - runtime.refresh_at < LOCAL_CATALOG_REFRESH_TTL_SECONDS
         ):
             return
-        targets = await _CATALOG_READ_WORKERS.run(runtime._auto_refresh_targets)
+        targets = [
+            target
+            for target in await _CATALOG_READ_WORKERS.run(runtime._auto_refresh_targets)
+            if target[2].type != "external"
+        ]
         if not targets:
             return
 
@@ -208,6 +224,135 @@ async def maybe_refresh_local_catalogs(runtime: ProviderRuntime, *, force: bool 
         finally:
             # Failed and slow sweeps also throttle from completion.
             runtime.refresh_at = time.monotonic()
+
+
+def start_external_catalog_refresh(runtime: ProviderRuntime) -> asyncio.Task[None] | None:
+    """Start native discovery independently of the inexpensive listing sweep."""
+    if runtime._catalog_refresh_closed:
+        return None
+    task = runtime._external_catalog_task
+    if task is None or task.done():
+        task = asyncio.create_task(
+            _refresh_external_catalogs(runtime), name="external-catalog-refresh"
+        )
+        runtime._external_catalog_task = task
+        runtime._track_catalog_refresh(task)
+    return task
+
+
+async def _refresh_external_catalogs(runtime: ProviderRuntime) -> None:
+    while not runtime._catalog_refresh_closed:
+        targets = [
+            target
+            for target in await _CATALOG_READ_WORKERS.run(runtime._auto_refresh_targets)
+            if target[2].type == "external"
+        ]
+        for provider_id, _provider, connection in targets:
+            try:
+                await refresh_external_connection(runtime, provider_id, connection.id, force=False)
+            except ConfigError:
+                # A configuration change invalidates the pending check; its
+                # new Connection is picked up by explicit connect or the next pass.
+                continue
+            except Exception:
+                runtime._logger.exception("Native Provider catalog refresh failed")
+        now = _external_now()
+        delay = min(
+            (
+                max(
+                    1.0,
+                    runtime._external_refresh_at.get(f"{provider_id}:{connection.id}", now)
+                    + EXTERNAL_CATALOG_REFRESH_TTL_SECONDS
+                    - now,
+                )
+                for provider_id, _provider, connection in targets
+            ),
+            default=EXTERNAL_CATALOG_REFRESH_TTL_SECONDS,
+        )
+        await _sleep(delay)
+
+
+async def refresh_external_connection(
+    runtime: ProviderRuntime, provider_id: str, connection_id: str, *, force: bool = True
+) -> JsonObject:
+    """Probe before taking Model-DB admission, then publish the completed catalog."""
+    if ":" not in connection_id:
+        connection_id = f"{provider_id}:{connection_id}"
+    provider = runtime._providers.get(provider_id)
+    connection, _account = runtime._connection_config(provider, connection_id)
+    if connection.type != "external":
+        raise ConfigError("Connection does not use an external login")
+    if not runtime._credentials.is_usable(provider_id, connection_id):
+        return {"connected": False, "status": "disabled"}
+    key = f"{provider_id}:{connection.id}"
+    async with runtime._external_refresh_lock:
+        if runtime._catalog_refresh_closed:
+            raise ConfigError("Provider catalog refresh is shutting down")
+        previous_check = runtime._external_refresh_at.get(key)
+        if (
+            not force
+            and previous_check is not None
+            and _external_now() - previous_check < EXTERNAL_CATALOG_REFRESH_TTL_SECONDS
+        ):
+            return runtime.external_connection_status(provider_id, connection_id)
+        sessions = runtime._claude_sessions
+        try:
+            # Starting native code and querying every Model can take tens of
+            # seconds. Ollama/LM Studio publication remains available meanwhile.
+            probe = await runtime._probe_external_connection(provider_id, connection)
+            status = runtime.external_connection_status(provider_id, connection_id)
+            if probe.get("status") == "busy":
+                return status
+            if not probe.get("connected"):
+                previous = runtime._connection_reachability.get(key)
+                runtime._connection_reachability[key] = False
+                if previous is True:
+                    _LOGGER.warning(
+                        "Native Provider connection became unavailable "
+                        "(provider=%s connection=%s status=%s)",
+                        provider_id,
+                        connection.id,
+                        status.get("status"),
+                    )
+                return status
+            async with runtime.model_database_refresh():
+                if (
+                    sessions is not runtime._claude_sessions
+                    or runtime._providers.get(provider_id) is not provider
+                ):
+                    raise ConfigError(
+                        "External Connection changed during login check; retry the check"
+                    )
+
+                async def refresh(resources_dir: Path) -> _RefreshOutcome:
+                    result = await _refresh_connection_catalog(
+                        runtime, provider, connection, "", resources_dir, native_probe=probe
+                    )
+                    return _RefreshOutcome(result, frozenset({provider_id}), False)
+
+                await _publish_model_db_refresh(
+                    runtime,
+                    _runtime_refresh_beginner(runtime),
+                    refresh,
+                    notify_changed=True,
+                )
+            # A concurrent Run may reject the login while catalog files are
+            # publishing. Its newer auth evidence must not become ready again.
+            status = runtime.external_connection_status(provider_id, connection_id)
+            if not status.get("connected"):
+                return status
+            previous = runtime._connection_reachability.get(key)
+            runtime._connection_reachability[key] = True
+            if previous is False:
+                _LOGGER.info(
+                    "Native Provider connection recovered (provider=%s connection=%s)",
+                    provider_id,
+                    connection.id,
+                )
+            return status
+        finally:
+            if sessions is runtime._claude_sessions:
+                runtime._external_refresh_at[key] = _external_now()
 
 
 def _runtime_refresh_beginner(runtime: ProviderRuntime) -> Callable[[], ModelDatabaseRefresh]:
@@ -700,10 +845,19 @@ async def _refresh_connection_catalog(
     credential_value: str | TokenGetter,
     resources_dir: Path,
     catalog: ModelsDevCatalog | None = None,
+    *,
+    native_probe: JsonObject | None = None,
 ) -> JsonObject:
     raw_models = None
     if connection.type == "external":
-        probe = await runtime._probe_external_connection(provider.id, connection)
+        probe = native_probe
+        if probe is None:
+            sessions = runtime._claude_sessions
+            try:
+                probe = await runtime._probe_external_connection(provider.id, connection)
+            finally:
+                if sessions is runtime._claude_sessions:
+                    runtime._external_refresh_at[f"{provider.id}:{connection.id}"] = _external_now()
         if probe.get("status") == "busy":
             raise _NativeCatalogBusyError(str(probe.get("message") or "Native Provider is busy"))
         if not probe.get("connected"):

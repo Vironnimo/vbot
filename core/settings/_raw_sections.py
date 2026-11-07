@@ -10,7 +10,7 @@ from core.config_validation import add_error as _error
 from core.config_validation import child_path as _child_path
 from core.config_validation import validate_positive_integer as _validate_positive_integer
 from core.config_validation import warn_unknown_keys as _warn_unknown_keys
-from core.json_documents import strip_unknown_fields, warn_unknown_fields
+from core.json_documents import json_object, strip_unknown_fields, warn_unknown_fields
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -691,6 +691,23 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                     _warn_custom_provider_wire(
                         diagnostics, provider_path, str(provider_id), normalized
                     )
+
+    if "claude_agent" in value:
+        from core.settings._provider_settings import normalize_claude_agent_settings
+
+        warn_unknown_fields(
+            diagnostics,
+            "$.providers.claude_agent",
+            value["claude_agent"],
+            json_object({"executable_path"}),
+            label="Claude Agent field",
+        )
+        try:
+            normalize_claude_agent_settings(
+                strip_unknown_fields(value["claude_agent"], json_object({"executable_path"}))
+            )
+        except StorageError as exc:
+            _error(diagnostics, "$.providers.claude_agent", str(exc))
 
     openrouter = value.get("openrouter")
     if openrouter is None:

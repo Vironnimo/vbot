@@ -175,23 +175,24 @@ def apply_providers_settings(
     settings: dict[str, Any],
     providers: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Replace OpenRouter routing while preserving Connections and Custom Providers."""
+    """Merge Provider configuration while preserving Connections and Custom Providers."""
 
     if not isinstance(providers, Mapping):
         raise StorageError("Provider settings must be a mapping")
-    unsupported_fields = sorted(set(providers) - {"openrouter"})
+    unsupported_fields = sorted(set(providers) - {"openrouter", "claude_agent"})
     if unsupported_fields:
         raise StorageError(
             f"Unsupported public providers settings: {', '.join(unsupported_fields)}"
         )
-    if "openrouter" not in providers:
-        raise StorageError("Provider settings must include openrouter")
+    if not providers:
+        raise StorageError("Provider settings must include a Provider setting")
 
     current = normalize_providers_settings(settings.get("providers"))
     candidate = {
         "connections": current["connections"],
         "custom": current["custom"],
-        "openrouter": providers["openrouter"],
+        "openrouter": providers.get("openrouter", current["openrouter"]),
+        "claude_agent": providers.get("claude_agent", current["claude_agent"]),
     }
     normalized = normalize_providers_settings(candidate)
     settings["providers"] = normalized

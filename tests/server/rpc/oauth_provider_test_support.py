@@ -14,7 +14,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, 
 from core.providers.token_store import TokenStore
 from core.providers.wire_profiles import bundled_wire_profile_files
 from core.secrets import SecretStore
-from core.storage.layout import DataDirectoryLayout
+from core.storage import StorageManager
 from server.events import ServerEventBus
 
 PROVIDER_ID = "github-copilot"
@@ -144,12 +144,10 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
             provider_credentials=_ProviderCredentials(
                 {f"{provider.id}:{connection.id}" for connection in provider.connections}
             ),
-            storage=SimpleNamespace(
-                data_dir=tmp_path,
+            storage=StorageManager(
+                tmp_path,
                 resources_dir=tmp_path / "resources",
-                layout=DataDirectoryLayout(tmp_path),
                 secrets=secrets,
-                load_custom_providers_settings=dict,
             ),
             models=_ModelRegistry(),
             wire_profile_files=bundled_wire_profile_files,

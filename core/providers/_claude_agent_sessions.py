@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import re
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,6 +30,8 @@ from core.providers._claude_agent_wire import (
     record,
 )
 from core.providers.errors import ProviderAuthError, ProviderError
+from core.storage import TemporaryFileLease, TemporaryFileManager
+from core.utils.owner_only import restrict_to_owner
 from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 IDLE_SECONDS = 300.0
@@ -36,13 +39,16 @@ STARTUP_SECONDS = 30.0
 CONTEXT_DISCOVERY_SECONDS = 10.0
 SHUTDOWN_SECONDS = 10.0
 MAX_SESSIONS = 16
+CAPACITY_WAIT_SECONDS = 30.0
 
 
 class ClaudeAgentBusyError(ProviderError):
     """The native process budget is occupied by work that cannot be evicted."""
 
     def __init__(self) -> None:
-        super().__init__("All Claude Agent process slots are busy.", retryable=False)
+        super().__init__(
+            "All Claude Agent process slots are busy. Try again shortly.", retryable=True
+        )
 
 
 @dataclass(frozen=True)
@@ -57,7 +63,22 @@ class Conversation:
 class NativeSession:
     """One SDK client, connected and disconnected inside its single owner task."""
 
-    def __init__(self, client_options: Any, pending: PendingTools, sdk: Any) -> None:
+    def __init__(
+        self,
+        client_options: Any,
+        pending: PendingTools,
+        sdk: Any,
+        *,
+        temporary_files: TemporaryFileManager | None = None,
+        observe_usage: Callable[[JsonObject], None] | None = None,
+    ) -> None:
+        self._options = client_options
+        self._temporary_files = temporary_files
+        self._prompt_file: TemporaryFileLease | None = None
+        self._observe_usage = observe_usage
+        self._process_error = getattr(sdk, "ProcessError", ())
+        self._visible_output = False
+        self._native_failure = False
         self.client = sdk.ClaudeSDKClient(options=client_options)
         self.pending = pending
         self.events: asyncio.Queue[JsonObject | Exception] = asyncio.Queue()
@@ -91,6 +112,8 @@ class NativeSession:
     async def _run(self) -> None:
         failure: Exception | None = None
         try:
+            if self._temporary_files is not None:
+                await SDK_POOL.run(self._prepare_files)
             await self.client.connect()
             initialized = await self.client.get_server_info()
             self.version = str((initialized or {}).get("claude_code_version", ""))
@@ -98,15 +121,39 @@ class NativeSession:
             self.ready.set_result(self.info)
             async for value in self.client.receive_messages():
                 message = record(value)
+                if kind(message) == "assistant" and message.get("error"):
+                    self._native_failure = True
+                if kind(message) == "assistant" and not message.get("error"):
+                    self._visible_output |= bool(message.get("message", message).get("content"))
+                if kind(message) == "stream_event":
+                    event = message.get("event", {})
+                    delta = event.get("delta", {})
+                    self._visible_output |= bool(delta.get("text") or delta.get("thinking"))
+                    if event.get("type") == "content_block_start":
+                        block = event.get("content_block", {})
+                        self._visible_output |= bool(block.get("text") or block.get("thinking"))
+                if (
+                    kind(message) == "rate_limit_event"
+                    and self.info.get("subscription") is True
+                    and self._observe_usage is not None
+                ):
+                    self._observe_usage(message.get("rate_limit_info", {}))
                 if kind(message) == "result":
                     self.turn_done.set()
                 await self.events.put(message)
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception as error:
             # SDK errors can contain request text or credentials; expose only this boundary.
+            # Native failure diagnostics already own recovery, even when the
+            # CLI dies before publishing its terminal Result.
             failure = ProviderError(
-                "Claude Code's local process stopped unexpectedly.", retryable=False
+                "Claude Code's local process stopped unexpectedly.",
+                retryable=(
+                    isinstance(error, self._process_error)
+                    and not self._visible_output
+                    and not self._native_failure
+                ),
             )
         finally:
             self.closed = True
@@ -120,6 +167,12 @@ class NativeSession:
                 failure = failure or ProviderError(
                     "Claude Code's local process could not close cleanly.", retryable=False
                 )
+            try:
+                await SDK_POOL.run(self._cleanup_files)
+            except OSError:
+                failure = failure or ProviderError(
+                    "Claude Code's private request files could not be removed.", retryable=False
+                )
             self.pending.clear()
             self.turn_done.set()
             await self.events.put(
@@ -127,6 +180,29 @@ class NativeSession:
                 or ProviderError("Claude Code's local process has stopped.", retryable=False)
             )
             self._end_notified = True
+
+    def _prepare_files(self) -> None:
+        assert self._temporary_files is not None
+        directory = self._temporary_files.root / "providers" / "claude"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            restrict_to_owner(directory)
+        else:
+            directory.chmod(0o700)
+        self._options.cwd = str(directory)
+        prompt = self._options.system_prompt
+        if isinstance(prompt, str):
+            lease = self._temporary_files.create("providers", ".txt")
+            self._prompt_file = lease
+            restrict_to_owner(lease.path)
+            lease.path.write_text(prompt, encoding="utf-8", newline="\n")
+            self._options.system_prompt = {"type": "file", "path": str(lease.path)}
+
+    def _cleanup_files(self) -> None:
+        lease, self._prompt_file = self._prompt_file, None
+        if lease is not None:
+            lease.finish()
+            lease.path.unlink(missing_ok=True)
 
     async def start(self) -> JsonObject:
         try:
@@ -147,6 +223,8 @@ class NativeSession:
     async def send(self, blocks: list[JsonObject], *, priority: bool = False) -> None:
         if self.closed:
             raise ProviderError("Claude Code's local process is closed.", retryable=False)
+        if not priority:
+            self.begin_step()
         self.turn_done.clear()
 
         async def messages() -> AsyncIterator[JsonObject]:
@@ -160,6 +238,10 @@ class NativeSession:
             yield message
 
         await self.client.query(messages())
+
+    def begin_step(self) -> None:
+        self._visible_output = False
+        self._native_failure = False
 
     async def stop(self) -> None:
         if self._stop_task is None:
@@ -215,13 +297,48 @@ class Entry:
 class ClaudeAgentSessions:
     """Bound native processes across short-lived adapters, isolated by Session generation."""
 
-    def __init__(self, *, native_factory: Callable[..., NativeSession] = NativeSession) -> None:
+    def __init__(
+        self,
+        *,
+        native_factory: Callable[..., NativeSession] = NativeSession,
+        temporary_files: TemporaryFileManager | None = None,
+        executable_path: Callable[[], str | None] | None = None,
+        observe_usage: Callable[[JsonObject], None] | None = None,
+        on_auth_error: Callable[[], None] | None = None,
+    ) -> None:
         self._entries: dict[Conversation, Entry] = {}
         self._temporary: set[NativeSession] = set()
         self._closing: set[asyncio.Task[None]] = set()
-        self._factory = native_factory
+        if native_factory is NativeSession:
+
+            def create(client_options: Any, pending: PendingTools, sdk: Any) -> NativeSession:
+                if temporary_files is None:
+                    raise ProviderError(
+                        "Claude Agent requires a Runtime or an explicit temporary-file manager.",
+                        retryable=False,
+                    )
+                return NativeSession(
+                    client_options,
+                    pending,
+                    sdk,
+                    temporary_files=temporary_files,
+                    observe_usage=observe_usage,
+                )
+
+            self._factory = create
+        else:
+            self._factory = native_factory
+        self._executable_path = executable_path
+        self._on_auth_error = on_auth_error
+        self._admission = asyncio.Lock()
+        self._capacity_changed = asyncio.Event()
         self._epoch = 0
         self._closed = False
+
+    def _executable(self) -> str:
+        if self._executable_path is None:
+            return executable()
+        return executable(self._executable_path())
 
     async def probe(self) -> JsonObject:
         epoch = self._epoch
@@ -229,11 +346,11 @@ class ClaudeAgentSessions:
             if self._closed:
                 raise ProviderError("Claude Agent is closed.", retryable=False)
             sdk = await SDK_POOL.run(load_sdk)
-            path = await SDK_POOL.run(executable)
+            path = await SDK_POOL.run(self._executable)
             if epoch != self._epoch:
                 raise ProviderError("Claude Agent was closed during discovery.", retryable=False)
             pending = PendingTools([])
-            await self._make_space()
+            await self._make_space(wait=False)
             if epoch != self._epoch:
                 raise ProviderError("Claude Agent was closed during discovery.", retryable=False)
             native = self._factory(options(sdk, path), pending, sdk)
@@ -267,6 +384,7 @@ class ClaudeAgentSessions:
             finally:
                 await finish_despite_cancel(native.stop())
                 self._temporary.discard(native)
+                self._capacity_changed.set()
         except ClaudeAgentBusyError:
             return {
                 "connected": False,
@@ -309,21 +427,13 @@ class ClaudeAgentSessions:
         epoch = self._epoch
         entry = self._entries.get(conversation) if conversation is not None else None
         if entry is None:
-            if conversation is not None and len(self._entries) >= MAX_SESSIONS:
-                candidate = next(
-                    (
-                        key
-                        for key, value in self._entries.items()
-                        if not value.active and not value.pending_ids
-                    ),
-                    None,
-                )
-                if candidate is None:
-                    raise ClaudeAgentBusyError()
-                await self._remove(candidate)
             entry = Entry()
             if conversation is not None:
                 self._entries[conversation] = entry
+        elif conversation is not None:
+            # Dict insertion order is the native process's least-recent-use order.
+            self._entries.pop(conversation)
+            self._entries[conversation] = entry
         if entry.idle:
             entry.idle.cancel()
             entry.idle = None
@@ -359,7 +469,7 @@ class ClaudeAgentSessions:
                     )
                 if entry.session is None:
                     sdk = await SDK_POOL.run(load_sdk)
-                    path = await SDK_POOL.run(executable)
+                    path = await SDK_POOL.run(self._executable)
                     if epoch != self._epoch:
                         raise ProviderError(
                             "Claude Agent was closed during startup.", retryable=False
@@ -385,7 +495,7 @@ class ClaudeAgentSessions:
                     self._temporary.add(entry.session)
                     info = await entry.session.start()
                     if info.get("subscription") is not True:
-                        raise ProviderAuthError(SUBSCRIPTION_REQUIRED_MESSAGE)
+                        raise ProviderAuthError(info.get("message", SUBSCRIPTION_REQUIRED_MESSAGE))
                     entry.signature = signature
                     entry.history = []
                     entry.pending_ids = ()
@@ -425,6 +535,7 @@ class ClaudeAgentSessions:
                         raise ProviderError(
                             "Claude Agent was closed during Tool continuation.", retryable=False
                         )
+                    native.begin_step()
                     if remaining:
                         assert content is not None
                         await native.send(content, priority=True)
@@ -481,8 +592,13 @@ class ClaudeAgentSessions:
                         yield delta
                     if kind(native_message) == "result":
                         return
+            except ProviderAuthError:
+                if self._on_auth_error is not None:
+                    self._on_auth_error()
+                raise
             finally:
                 entry.active = False
+                self._capacity_changed.set()
                 if not complete or conversation is None:
                     await finish_despite_cancel(self._stop_entry(entry))
                     if conversation is not None and self._entries.get(conversation) is entry:
@@ -524,20 +640,36 @@ class ClaudeAgentSessions:
 
         entry.idle = asyncio.get_running_loop().call_later(IDLE_SECONDS, expire)
 
-    async def _make_space(self) -> None:
-        if len(self._temporary) < MAX_SESSIONS:
-            return
-        candidate = next(
-            (
-                key
-                for key, entry in self._entries.items()
-                if not entry.active and not entry.pending_ids
-            ),
-            None,
-        )
-        if candidate is None:
+    async def _make_space(self, *, wait: bool = True) -> None:
+        if not wait and self._admission.locked():
             raise ClaudeAgentBusyError()
-        await self._remove(candidate)
+        try:
+            async with asyncio.timeout(CAPACITY_WAIT_SECONDS):
+                async with self._admission:
+                    while True:
+                        if self._closed:
+                            raise ProviderError("Claude Agent is closed.", retryable=False)
+                        if len(self._temporary) < MAX_SESSIONS:
+                            return
+                        candidate = next(
+                            (
+                                key
+                                for key, entry in self._entries.items()
+                                if entry.session is not None
+                                and not entry.active
+                                and (wait or not entry.pending_ids)
+                            ),
+                            None,
+                        )
+                        if candidate is not None:
+                            await self._remove(candidate)
+                            continue
+                        if not wait:
+                            raise ClaudeAgentBusyError()
+                        self._capacity_changed.clear()
+                        await self._capacity_changed.wait()
+        except TimeoutError as error:
+            raise ClaudeAgentBusyError() from error
 
     async def _stop_entry(self, entry: Entry) -> None:
         if entry.idle:
@@ -549,6 +681,7 @@ class ClaudeAgentSessions:
                 await native.stop()
             finally:
                 self._temporary.discard(native)
+                self._capacity_changed.set()
         entry.history = []
         entry.pending_ids = ()
 
@@ -568,6 +701,7 @@ class ClaudeAgentSessions:
     async def aclose(self) -> None:
         self._closed = True
         self._epoch += 1
+        self._capacity_changed.set()
 
         async def close_all() -> None:
             failures: list[BaseException] = []
@@ -581,6 +715,7 @@ class ClaudeAgentSessions:
                     await native.stop()
                 finally:
                     self._temporary.discard(native)
+                    self._capacity_changed.set()
 
             remaining = [close_native(native) for native in list(self._temporary)]
             results = await asyncio.gather(*remaining, *list(self._closing), return_exceptions=True)
@@ -595,6 +730,7 @@ class ClaudeAgentSessions:
     def abort(self) -> None:
         self._closed = True
         self._epoch += 1
+        self._capacity_changed.set()
         for entry in self._entries.values():
             if entry.idle:
                 entry.idle.cancel()

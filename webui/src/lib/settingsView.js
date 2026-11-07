@@ -71,6 +71,7 @@ export {
 } from './settingsView/localModels.js';
 export { describeBackgroundActivity } from './settingsView/activity.js';
 export { describeSecretStoreProblem } from './settingsView/secretStore.js';
+export { describeExternalStatus } from './settingsView/providers.js';
 export {
   CREDENTIAL_SOURCE_ENVIRONMENT,
   CREDENTIAL_STORE_UNAVAILABLE,

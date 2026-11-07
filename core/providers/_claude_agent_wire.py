@@ -17,7 +17,13 @@ from core.providers.adapter import (
     tool_result_text,
 )
 from core.providers.anthropic_compatible import extract_anthropic_usage
-from core.providers.errors import ProviderAuthError, ProviderError, ProviderUsageLimitError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderUsageLimitError,
+    context_overflow_error,
+)
 
 JsonObject = dict[str, Any]
 
@@ -345,6 +351,7 @@ class StreamState:
         if message_kind == "result":
             if (
                 message.get("is_error")
+                or message.get("terminal_reason") == "prompt_too_long"
                 or message.get("subtype") != "success"
                 or (message.get("api_error_status") or 0) >= 400
             ):
@@ -371,6 +378,20 @@ class StreamState:
 
     def raise_error(self, message: JsonObject) -> None:
         status = message.get("api_error_status")
+        if message.get("terminal_reason") == "prompt_too_long":
+            raise ProviderContextOverflowError(
+                "Claude Code rejected input beyond its Context window."
+            )
+        if status in {None, 400, 422} and self.error_code in {None, "invalid_request"}:
+            details = [message.get("result"), *(message.get("errors") or [])]
+            for detail in details:
+                if isinstance(detail, str) and context_overflow_error(
+                    detail, classifier=self.error_code
+                ):
+                    # Do not forward native errors, which can echo request content.
+                    raise ProviderContextOverflowError(
+                        "Claude Code rejected input beyond its Context window."
+                    )
         if self.error_code in {"authentication_failed", "authentication_error"} or status in {
             401,
             403,

@@ -4,7 +4,7 @@ Read this reference only for Provider subscription limits, usage fetchers/parser
 
 ## Boundary
 
-`ProviderUsageService` probes a logged-in Connection's upstream subscription state and owns its normalized automatic observation history. It does not read or aggregate vBot Sessions. `core/statistics/` remains a read-only local aggregation; the WebUI correlates the two independent sources only by time.
+`ProviderUsageService` reports a logged-in Connection's upstream subscription state and owns its normalized automatic observation history. Most fetchers probe the Provider; Claude Agent passively projects native stream observations. It does not read or aggregate vBot Sessions. `core/statistics/` remains a read-only local aggregation; the WebUI correlates the two independent sources only by time.
 
 The Runtime owns one service instance for shared caching and the hourly collector. Live state is exposed by `provider.usage`; persisted observations by `provider.usage_history`; explicit deletion by `provider.usage_history.clear`. The service never participates in Chat execution. Its local `UsageProbeRuntime` Protocol avoids importing concrete Runtime; an injectable transport keeps tests offline.
 
@@ -35,6 +35,8 @@ Fetchers fan out concurrently. Each has a bounded timeout and fails open into it
 
 Successful snapshots cache per exact Connection+Account target for 10 seconds, or longer where a Provider sets a polling floor (`_MIN_CACHE_TTL_SECONDS`: Ollama Cloud 60 seconds); error snapshots for 60 seconds. A per-target async lock coalesces concurrent cache misses so multiple browser windows and the automatic collector do not multiply outbound requests. The service caches normalized snapshots, never raw OAuth tokens.
 
+Claude Agent bypasses that polling cache: reading its Runtime-owned immutable window observations costs no I/O, and a new stream event must appear immediately. `ClaudeAgentUsage` keeps the latest measured utilization for each native window, accepts allowed/warning/rejected events, and drops unknown or malformed utilization instead of inventing zero. A reported reset expires the observation; it does not establish a new window's consumption. Windows update only when a confirmed subscription stream reports them, and closing/rebinding the native Connection clears them. Empty observations produce no snapshot. This source starts no native process and reads no credentials; the ordinary hourly collector persists its meaningful report alongside other Providers.
+
 Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Failure logs identify the base Connection only, never its Account id or token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
 
 OpenAI Usage uses the same `OAuthRequestRecovery` as Chat and discovery, renewing once after an actual HTTP 401 and rebuilding both Authorization and Account routing. Repeated rejection/failed renewal remains an error snapshot within the existing timeout. Copilot Usage cannot use the Copilot bearer recovery: its request uses the original GitHub OAuth extra, while the getter renews only the exchanged Copilot API token. API-key probes have no renewal capability. Coverage: `test_usage.py`.
@@ -43,6 +45,7 @@ The hourly sampler isolates each automatic attempt. An unexpected collection fai
 
 ## Supported Connections
 
+- `claude-agent:subscription`: passive five-hour, weekly, Model-specific weekly and extra-usage windows from SDK `RateLimitInfo`; values update only when a Run streams, and live entitlement/limit delivery remains unverified.
 - `openai:subscription`: ChatGPT usage windows/credits and account-scoped Codex headers; verified endpoint details in `providers/openai.md`.
 - `github-copilot:oauth`: Copilot entitlement/usage using stored GitHub OAuth extra; details in `providers/github-copilot.md`.
 - `ollama-cloud:api-key`: Ollama Cloud session/weekly limits or monthly included credits with exact reset times, plus purchased USD credits, from the documented `/api/balance`; details in `providers/ollama.md`.
@@ -56,6 +59,7 @@ OpenAI, Ollama Cloud and OpenCode Go are live-verified as documented in their ma
 
 - Service lifecycle, cache, Connection selection and fetchers: `core/providers/usage.py`
 - Report shapes and probe contracts: internal `core/providers/_usage_types.py`; Provider response parsing: `_usage_parsers.py`. Existing public imports remain available from `usage.py`.
+- Claude Agent's thread-safe, memory-only observation projection: `_claude_agent_usage.py`; native events and Connection lifecycle are wired by `ProviderRuntime` (`providers/claude-agent.md`).
 - Durable schema, validation, `provider-usage.db` store and deletion: `core/providers/usage_history.py`
 - RPC validation/projection: `server/rpc/provider_usage_methods.py`
 - WebUI polling/presentation: `webui/src/lib/providerUsage.svelte.js` (shared live polling for the Overview limits strip and Limits), `webui/src/components/statistics/LimitsStrip.svelte`, `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`

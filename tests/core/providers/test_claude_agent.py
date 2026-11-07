@@ -15,64 +15,22 @@ from core.providers import _claude_agent_sessions as sessions_module
 from core.providers._claude_agent_sdk import PendingTools, login_info
 from core.providers._claude_agent_sessions import ClaudeAgentSessions
 from core.providers._claude_agent_wire import StreamState, record
-from core.providers.claude_agent import ClaudeAgentAdapter
-from core.providers.errors import ProviderAuthError, ProviderError, ProviderUsageLimitError
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from tests.core.providers.claude_agent_test_support import FakeNative
-
-TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "echo",
-        "description": "Echo the given count",
-        "parameters": {
-            "type": "object",
-            "properties": {"count": {"type": "integer"}},
-            "required": ["count"],
-        },
-    }
-]
-MESSAGES: list[dict[str, Any]] = [
-    {"role": "system", "content": "Synthetic vBot Agent identity"},
-    {"role": "user", "content": "Work"},
-]
-
-
-@pytest.fixture
-def native_registry(monkeypatch: pytest.MonkeyPatch) -> ClaudeAgentSessions:
-    from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
-
-    FakeNative.instances = []
-    monkeypatch.setattr(
-        sessions_module,
-        "load_sdk",
-        lambda: SimpleNamespace(ClaudeAgentOptions=ClaudeAgentOptions, HookMatcher=HookMatcher),
-    )
-    monkeypatch.setattr(sessions_module, "executable", lambda: "C:/synthetic/claude.exe")
-    return ClaudeAgentSessions(native_factory=FakeNative)  # type: ignore[arg-type]
-
-
-def adapter(registry: ClaudeAgentSessions) -> ClaudeAgentAdapter:
-    return ClaudeAgentAdapter(
-        ProviderConfig(
-            id="claude-agent",
-            name="Claude Agent",
-            adapter="claude_agent",
-            base_url="",
-            connections=[
-                ConnectionConfig(
-                    id="subscription",
-                    type="external",
-                    label="Claude Code login",
-                    auth=AuthConfig(header="", prefix=""),
-                )
-            ],
-        ),
-        sessions=registry,
-    )
-
-
-async def collect(client: ClaudeAgentAdapter, messages: list[dict], **kwargs: Any) -> list[dict]:
-    return [part async for part in client.stream(messages, model_id="opus", **kwargs)]
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderUsageLimitError,
+)
+from tests.core.providers.claude_agent_test_support import (
+    MESSAGES,
+    TOOLS,
+    FakeNative,
+    adapter,
+    collect,
+)
+from tests.core.providers.claude_agent_test_support import (
+    native_registry as native_registry,
+)
 
 
 @pytest.mark.asyncio
@@ -249,7 +207,16 @@ async def test_probe_discovers_native_context_capacity_without_model_input(
     await native_registry.aclose()
 
 
-def test_sdk_dataclasses_stream_usage_and_terminal_errors_are_normalized() -> None:
+@pytest.mark.parametrize(
+    "context_error",
+    [
+        {"terminal_reason": "prompt_too_long"},
+        {"api_error_status": 400, "result": "prompt is too long: 250000 tokens > 200000 maximum"},
+    ],
+)
+def test_sdk_dataclasses_stream_usage_and_terminal_errors_are_normalized(
+    context_error: dict[str, Any],
+) -> None:
     state = StreamState({"mcp__vbot__echo": "echo"}, subscription=False)
     message = AssistantMessage(
         content=[TextBlock("Answer"), ToolUseBlock("call", "mcp__vbot__echo", {"count": 2})],
@@ -286,24 +253,48 @@ def test_sdk_dataclasses_stream_usage_and_terminal_errors_are_normalized() -> No
         )
     assert not failure.value.retryable and "secret" not in str(failure.value)
     assert "529" in str(failure.value)
+    with pytest.raises(ProviderContextOverflowError):
+        state.consume(
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                **context_error,
+            }
+        )
 
 
 @pytest.mark.parametrize(
-    "account,expected",
+    "account,expected,status",
     [
-        ({"tokenSource": "oauth", "apiProvider": "firstParty"}, True),
-        ({"subscriptionType": "Claude Team", "apiProvider": "firstParty"}, True),
-        ({"tokenSource": "none", "apiKeySource": "env", "apiProvider": "firstParty"}, False),
-        ({"tokenSource": "cloud", "apiProvider": "bedrock"}, False),
+        ({"tokenSource": "oauth", "apiProvider": "firstParty"}, False, "subscription_unconfirmed"),
+        (
+            {"tokenSource": "oauth", "subscriptionType": "max", "apiProvider": "firstParty"},
+            True,
+            "ready",
+        ),
+        (
+            {"tokenSource": "oauth", "subscriptionType": "", "apiProvider": "firstParty"},
+            False,
+            "subscription_unconfirmed",
+        ),
+        ({"subscriptionType": "Claude Team", "apiProvider": "firstParty"}, True, "ready"),
+        (
+            {"tokenSource": "none", "apiKeySource": "env", "apiProvider": "firstParty"},
+            False,
+            "api_billing",
+        ),
+        ({"tokenSource": "cloud", "apiProvider": "bedrock"}, False, "api_billing"),
     ],
 )
 def test_native_login_status_never_reports_api_keys_as_subscriptions(
-    account: dict, expected: bool
+    account: dict, expected: bool, status: str
 ) -> None:
     result = login_info(
         {"claude_code_version": "2.1.257", "account": {**account, "email": "private"}, "models": []}
     )
     assert result["connected"] and result["subscription"] is expected
+    assert result["status"] == status
     assert "private" not in str(result)
 
 
@@ -327,6 +318,7 @@ def test_context_estimator_reserves_media_instead_of_counting_base64(
 @pytest.mark.asyncio
 async def test_native_client_owns_connect_disconnect_and_cancellation_in_one_task(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
 ) -> None:
     from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
@@ -350,7 +342,11 @@ async def test_native_client_owns_connect_disconnect_and_cancellation_in_one_tas
         async def get_server_info(self) -> dict:
             return {
                 "claude_code_version": "2.1.257",
-                "account": {"tokenSource": "oauth", "apiProvider": "firstParty"},
+                "account": {
+                    "tokenSource": "oauth",
+                    "apiProvider": "firstParty",
+                    "subscriptionType": "pro",
+                },
                 "models": [],
             }
 
@@ -372,7 +368,11 @@ async def test_native_client_owns_connect_disconnect_and_cancellation_in_one_tas
     )
     monkeypatch.setattr(sessions_module, "load_sdk", lambda: sdk)
     monkeypatch.setattr(sessions_module, "executable", lambda: "C:/synthetic/claude.exe")
-    registry = ClaudeAgentSessions(native_factory=NativeSession)
+    from core.storage import TemporaryFileManager
+
+    registry = ClaudeAgentSessions(
+        native_factory=NativeSession, temporary_files=TemporaryFileManager(tmp_path)
+    )
     client = adapter(registry)
     context = client.request_context_kwargs(agent_id="a", session_id="s")
     task = asyncio.create_task(collect(client, MESSAGES, **context))

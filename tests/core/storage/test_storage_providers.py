@@ -63,6 +63,9 @@ def test_routing_and_connection_writes_preserve_each_other(tmp_path: Path) -> No
 
 def test_custom_provider_crud_preserves_other_provider_settings(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
+    storage.update_settings_sections(
+        {"providers": {"claude_agent": {"executable_path": "C:/native/claude.exe"}}}
+    )
     storage.set_provider_connection_enabled("openrouter:api-key", False)
 
     saved = storage.save_custom_provider_settings(
@@ -102,3 +105,6 @@ def test_custom_provider_crud_preserves_other_provider_settings(tmp_path: Path) 
     assert storage.delete_custom_provider_settings("local-ai") is None
     assert storage.load_custom_providers_settings() == {}
     assert storage.load_providers_settings() == {"connections": {"openrouter:api-key": False}}
+    assert storage.load_settings()["providers"]["claude_agent"] == {
+        "executable_path": "C:/native/claude.exe"
+    }

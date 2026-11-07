@@ -102,7 +102,7 @@ _RETIRED_LIBRARIAN_MODEL_WARNING = (
 )
 
 
-PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
+PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter", "claude_agent"})
 
 
 COMPACTION_TRIGGER_FIELDS = frozenset({"type", "threshold", "tokens"})
@@ -185,6 +185,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
             PROVIDERS_FIELDS,
             {
                 "custom": json_map(CUSTOM_PROVIDER_SHAPE),
+                "claude_agent": json_object({"executable_path"}),
                 "openrouter": json_object(
                     OPENROUTER_PROVIDER_FIELDS, {"routing": OPENROUTER_ROUTING_SHAPE}
                 ),

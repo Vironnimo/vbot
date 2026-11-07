@@ -118,6 +118,12 @@
       isExternalConnection(connection) &&
       connection.external_auth?.connected !== true
     ) {
+      if (
+        !connection.external_auth ||
+        connection.external_auth.status === 'not_checked'
+      ) {
+        return 'not_checked';
+      }
       return 'not_usable';
     }
     if (connectionReachability(connection) === false) {
@@ -148,10 +154,18 @@
     if (statuses.includes('not_usable')) {
       return 'not_usable';
     }
+    if (statuses.includes('not_checked')) return 'not_checked';
     return 'disabled';
   }
 
   function statusChip(status) {
+    if (status === 'not_checked') {
+      return {
+        variant: 'neutral',
+        label: t('settings.providers.external.notCheckedChip'),
+        hint: t('settings.providers.external.notCheckedHint'),
+      };
+    }
     if (status === 'connected') {
       return {
         variant: 'success',

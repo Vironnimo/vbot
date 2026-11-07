@@ -7,14 +7,20 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, override
 
+import pytest
 from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock
 from claude_agent_sdk._internal.transport import Transport
 from claude_agent_sdk.types import StreamEvent
 
+from core.providers import _claude_agent_sessions as sessions_module
 from core.providers._claude_agent_sdk import PendingTools
+from core.providers._claude_agent_sessions import ClaudeAgentSessions
 from core.providers._claude_agent_wire import record
+from core.providers.claude_agent import ClaudeAgentAdapter
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
 class FakeNative:
@@ -43,6 +49,9 @@ class FakeNative:
 
     async def start(self) -> dict:
         return self.info
+
+    def begin_step(self) -> None:
+        pass
 
     async def set_model(self, _model: str) -> None:
         pass
@@ -349,3 +358,58 @@ class ClaudeProtocolTransport(Transport):
     @override
     async def end_input(self) -> None:
         pass
+
+
+TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "echo",
+        "description": "Echo the given count",
+        "parameters": {
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+        },
+    }
+]
+MESSAGES: list[dict[str, Any]] = [
+    {"role": "system", "content": "Synthetic vBot Agent identity"},
+    {"role": "user", "content": "Work"},
+]
+
+
+@pytest.fixture
+def native_registry(monkeypatch: pytest.MonkeyPatch) -> ClaudeAgentSessions:
+    from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
+
+    FakeNative.instances = []
+    monkeypatch.setattr(
+        sessions_module,
+        "load_sdk",
+        lambda: SimpleNamespace(ClaudeAgentOptions=ClaudeAgentOptions, HookMatcher=HookMatcher),
+    )
+    monkeypatch.setattr(sessions_module, "executable", lambda: "C:/synthetic/claude.exe")
+    return ClaudeAgentSessions(native_factory=FakeNative)  # type: ignore[arg-type]
+
+
+def adapter(registry: ClaudeAgentSessions) -> ClaudeAgentAdapter:
+    return ClaudeAgentAdapter(
+        ProviderConfig(
+            id="claude-agent",
+            name="Claude Agent",
+            adapter="claude_agent",
+            base_url="",
+            connections=[
+                ConnectionConfig(
+                    id="subscription",
+                    type="external",
+                    label="Claude Code login",
+                    auth=AuthConfig(header="", prefix=""),
+                )
+            ],
+        ),
+        sessions=registry,
+    )
+
+
+async def collect(client: ClaudeAgentAdapter, messages: list[dict], **kwargs: Any) -> list[dict]:
+    return [part async for part in client.stream(messages, model_id="opus", **kwargs)]

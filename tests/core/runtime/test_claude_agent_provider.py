@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.providers import _catalog_refresh
 from core.providers.accounts import ConnectionRef
 from core.runtime import Runtime
 from core.utils.config import Config
@@ -41,6 +42,7 @@ class _NativeSessions:
         self.closed_sessions: list[set[tuple[str, str]]] = []
         self.closed = 0
         self.aborted = 0
+        self.bindings: dict[str, Any] = {}
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -62,8 +64,9 @@ async def native_runtime(
 ) -> AsyncIterator[tuple[Runtime, list[_NativeSessions]]]:
     registries: list[_NativeSessions] = []
 
-    def sessions() -> _NativeSessions:
+    def sessions(**_kwargs: Any) -> _NativeSessions:
         registry = _NativeSessions()
+        registry.bindings = _kwargs
         registries.append(registry)
         return registry
 
@@ -100,7 +103,9 @@ async def test_native_catalog_requires_opt_in_then_publishes_only_to_the_instanc
     assert (await runtime.refresh_external_connection(PROVIDER, CONNECTION))["status"] == "missing"
     assert registry.list_for_provider(PROVIDER) == []
     assert notifications == []
+    before = native.probes
     await runtime.maybe_refresh_local_catalogs(force=True)
+    assert native.probes == before
     assert runtime.connection_reachability(CONNECTION) is False
 
     native.result = {**copy.deepcopy(READY), "subscription": False}
@@ -140,8 +145,10 @@ async def test_native_catalog_requires_opt_in_then_publishes_only_to_the_instanc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("login_status", ["logged_out", "subscription_unconfirmed"])
 async def test_a_failed_native_login_check_keeps_the_last_published_catalog(
     native_runtime: tuple[Runtime, list[_NativeSessions]],
+    login_status: str,
 ) -> None:
     runtime, registries = native_runtime
     runtime.storage.set_provider_connection_enabled(CONNECTION, True)
@@ -151,14 +158,15 @@ async def test_a_failed_native_login_check_keeps_the_last_published_catalog(
     previous = runtime.models.get(PROVIDER, "opus")
 
     registries[0].result = {
-        "connected": False,
-        "status": "logged_out",
+        "connected": login_status == "subscription_unconfirmed",
+        "status": login_status,
+        "subscription": False,
         "message": "Synthetic external login ended",
     }
     status = await runtime.refresh_external_connection(PROVIDER, CONNECTION)
 
     assert status["connected"] is False
-    assert status["status"] == "logged_out"
+    assert status["status"] == login_status
     assert runtime.external_connection_status(PROVIDER, CONNECTION) == status
     assert catalog_path.read_bytes() == before
     assert runtime.models.get(PROVIDER, "opus") == previous
@@ -179,13 +187,95 @@ async def test_busy_native_discovery_preserves_readiness_catalog_and_reachabilit
         "message": "Synthetic busy",
         "subscription": False,
     }
-    await runtime.maybe_refresh_local_catalogs(force=True)
+    await runtime.refresh_external_connection(PROVIDER, CONNECTION)
     status = runtime.external_connection_status(PROVIDER, CONNECTION)
     assert status["status"] == "busy"
     assert status["connected"] is True
     assert status["subscription"] is True
     assert runtime.connection_reachability(CONNECTION) is True
     assert catalog_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_native_background_checks_are_hourly_and_never_part_of_listing_sweeps(
+    native_runtime: tuple[Runtime, list[_NativeSessions]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, registries = native_runtime
+    native = registries[0]
+    runtime.storage.set_provider_connection_enabled(CONNECTION, True)
+    now = [1000.0]
+    sleeps: asyncio.Queue[float] = asyncio.Queue()
+    wake: asyncio.Queue[None] = asyncio.Queue()
+
+    async def controlled_sleep(delay: float) -> None:
+        sleeps.put_nowait(delay)
+        await wake.get()
+
+    monkeypatch.setattr(_catalog_refresh, "_external_now", lambda: now[0])
+    monkeypatch.setattr(_catalog_refresh, "_sleep", controlled_sleep)
+    for _ in range(2):
+        await runtime.maybe_refresh_local_catalogs(force=True)
+    assert native.probes == 0
+
+    task = runtime.start_external_catalog_refresh()
+    assert task is not None
+    assert await sleeps.get() == 3600
+    assert native.probes == 1
+    assert runtime.start_external_catalog_refresh() is task
+    now[0] += 3599
+    wake.put_nowait(None)
+    assert await sleeps.get() == 1
+    assert native.probes == 1
+    now[0] += 1
+    wake.put_nowait(None)
+    assert await sleeps.get() == 3600
+    assert native.probes == 2
+    await runtime.refresh_external_connection(PROVIDER, CONNECTION)
+    assert native.probes == 3
+    await runtime.aclose()
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_native_initialization_does_not_hold_catalog_publication_admission(
+    native_runtime: tuple[Runtime, list[_NativeSessions]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, registries = native_runtime
+    runtime.storage.set_provider_connection_enabled(CONNECTION, True)
+    entered, release = asyncio.Event(), asyncio.Event()
+    probes = 0
+
+    async def blocked_probe() -> dict[str, Any]:
+        nonlocal probes
+        probes += 1
+        entered.set()
+        await release.wait()
+        return copy.deepcopy(READY)
+
+    monkeypatch.setattr(registries[0], "probe", blocked_probe)
+    refresh = asyncio.create_task(runtime.refresh_external_connection(PROVIDER, CONNECTION))
+    manual: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        await entered.wait()
+        started = asyncio.Event()
+
+        async def manual_refresh() -> dict[str, Any]:
+            started.set()
+            return await runtime.refresh_model_database(provider_id=PROVIDER)
+
+        manual = asyncio.create_task(manual_refresh())
+        await started.wait()
+        assert probes == 1
+        async with asyncio.timeout(1), runtime.model_database_refresh():
+            pass
+    finally:
+        release.set()
+        await refresh
+        if manual is not None:
+            await manual
+    assert probes == 2
 
 
 @pytest.mark.asyncio
@@ -212,6 +302,20 @@ async def test_disconnecting_during_a_probe_cannot_restore_native_readiness_or_c
         await refresh
     assert runtime.external_connection_status(PROVIDER, CONNECTION)["connected"] is False
     assert runtime.models.list_for_provider(PROVIDER) == []
+
+    # The superseded check must not throttle discovery on the replacement owner.
+    sleeping = asyncio.Event()
+
+    async def hold_background(_delay: float) -> None:
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(_catalog_refresh, "_sleep", hold_background)
+    runtime.storage.set_provider_connection_enabled(CONNECTION, True)
+    runtime.start_external_catalog_refresh()
+    await sleeping.wait()
+    assert registries[1].probes == 1
+    assert runtime.models.get(PROVIDER, "opus").name == "Subscription Opus"
 
 
 @pytest.mark.asyncio
@@ -241,3 +345,53 @@ async def test_native_registries_follow_session_connection_and_runtime_lifetime(
 
     await runtime.aclose()
     assert first.closed == second.closed == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer", ["sections", "patch"])
+async def test_native_path_changes_apply_on_the_loop_and_retire_stale_usage_callbacks(
+    native_runtime: tuple[Runtime, list[_NativeSessions]],
+    monkeypatch: pytest.MonkeyPatch,
+    writer: str,
+) -> None:
+    from core.settings.paths import parse_patch_operations
+
+    runtime, registries = native_runtime
+    first = registries[0]
+    info = {"status": "allowed", "rate_limit_type": "five_hour", "utilization": 0.25}
+    first.bindings["observe_usage"](info)
+    owner = runtime._provider_runtime
+    assert owner is not None
+    assert owner.claude_usage_windows()[0].used_percent == 25
+    previous = runtime.storage.load_settings()
+    path = "C:/synthetic/new-claude.exe"
+    if writer == "patch":
+        runtime.storage.patch_settings(
+            parse_patch_operations(
+                [{"op": "set", "path": "providers.claude_agent.executable_path", "value": path}]
+            )
+        )
+    else:
+        runtime.storage.update_settings_sections(
+            {"providers": {"claude_agent": {"executable_path": path}}}
+        )
+    # A Settings response reads readiness from a worker after persisting. It
+    # must not cancel Tasks or mutate native process ownership from that thread.
+    await asyncio.to_thread(runtime.external_connection_status, PROVIDER, CONNECTION)
+    assert first.closed == first.aborted == 0 and len(registries) == 1
+    loop = asyncio.get_running_loop()
+    closed = first.aclose
+
+    async def close() -> None:
+        assert asyncio.get_running_loop() is loop
+        await closed()
+
+    monkeypatch.setattr(first, "aclose", close)
+    await runtime.apply_settings_change(previous, runtime.storage.load_settings())
+    assert first.closed == 1 and len(registries) == 2
+    assert owner.claude_usage_windows() == ()
+    first.bindings["observe_usage"]({**info, "utilization": 0.9})
+    assert owner.claude_usage_windows() == ()
+    registries[-1].bindings["observe_usage"]({**info, "utilization": 0.5})
+    assert owner.claude_usage_windows()[0].used_percent == 50
+    assert registries[-1].bindings["executable_path"]() == path

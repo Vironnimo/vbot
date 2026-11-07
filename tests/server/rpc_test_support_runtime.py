@@ -781,6 +781,7 @@ class StubRuntime:
     refresh_model_database = Runtime.refresh_model_database
     provider_discovery_credential = Runtime.provider_discovery_credential
     start_local_catalog_refresh = Runtime.start_local_catalog_refresh
+    start_external_catalog_refresh = Runtime.start_external_catalog_refresh
     start_installation_catalog_restore = Runtime.start_installation_catalog_restore
     shutdown_catalog_refreshes = Runtime.shutdown_catalog_refreshes
 

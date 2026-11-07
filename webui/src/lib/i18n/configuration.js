@@ -901,11 +901,37 @@ export default Object.freeze({
   'settings.providers.notReachableChip': 'Not reachable',
   'settings.providers.connectedHint': 'Enabled and ready to send requests.',
   'settings.providers.external.setupHelp':
-    'Install Claude Code and sign in on the computer running the vBot server, under the same operating-system account. Then check the login here.',
-  'settings.providers.external.installGuide': 'Claude Code installation guide',
+    'Install the program required by {provider} and sign in on the vBot server computer, under the same operating-system account. Then check the login here.',
+  'settings.providers.external.installGuide': 'Installation guide',
   'settings.providers.external.checkLogin': 'Check login and connect',
   'settings.providers.external.notReady':
-    'Claude Code is not ready. Complete setup on the server computer, then check the login again.',
+    '{provider} is not ready. Complete setup on the server computer, then check the login again.',
+  'settings.providers.external.status.ready': '{provider} is ready.',
+  'settings.providers.external.status.loggedOut':
+    'Sign in on the server computer, then check {provider} again.',
+  'settings.providers.external.status.apiBilling':
+    '{provider} is using API or cloud billing. Sign in with a subscription and remove conflicting API or cloud credentials from the server environment.',
+  'settings.providers.external.status.subscriptionUnconfirmed':
+    '{provider} did not confirm a subscription for this login. Sign in with your subscription account on the vBot server and check again.',
+  'settings.providers.external.status.incompatible':
+    'Update the program required by {provider} on the server computer, then check again.',
+  'settings.providers.external.status.missing':
+    'The program required by {provider} was not found. Install it on the server computer or select its executable below.',
+  'settings.providers.external.status.busy':
+    '{provider} has no free process slots. Check again after an active Run finishes.',
+  'settings.providers.external.status.unavailable':
+    '{provider} could not be checked. Check the server installation and login, then try again.',
+  'settings.providers.external.status.notChecked':
+    '{provider} has not been checked yet.',
+  'settings.providers.external.status.disabled':
+    '{provider} is disabled in vBot. Its external login is unchanged.',
+  'settings.providers.external.notCheckedChip': 'Not checked',
+  'settings.providers.external.notCheckedHint':
+    'Enabled; the external login has not been checked yet.',
+  'settings.providers.claudeAgent.executable': 'Claude Code executable',
+  'settings.providers.claudeAgent.executableHelp':
+    'Path on the vBot server. Leave empty to search PATH and ~/.local/bin. VBOT_CLAUDE_PATH overrides this setting. Install the standalone CLI and run claude auth login; vBot does not use Claude Desktop’s private executable.',
+  'settings.providers.claudeAgent.executablePlaceholder': 'Automatic discovery',
   'settings.providers.notReachableChipHint':
     'vBot could not reach this Connection’s server at its last check.',
   'settings.providers.notUsableChipHint':
