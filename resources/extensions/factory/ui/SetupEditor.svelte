@@ -11,32 +11,35 @@
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
-  import WorkflowStage from './WorkflowStage.svelte';
+  import WorkflowDiagram from './WorkflowDiagram.svelte';
+  import WorkflowStep from './WorkflowStep.svelte';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import { failureText } from './presentation.js';
   import {
-    MAX_STAGES,
+    MAX_STEPS,
     MAX_WORKFLOWS,
     SETUP_FIELDS,
     canonicalWorkflows,
     duplicateWorkflow,
     editableWorkflows,
-    laneKey,
-    newStage,
+    moveStep,
+    newStep,
     newWorkflow,
+    removeStep,
     sameExceptNameSpacing,
     setupDefaults,
+    stepKey,
     turnBudgetValid,
     workflowProblem,
-    workStages,
   } from './workflows.js';
 
   let { project, model, setup = null } = $props();
   let deleteOpen = $state(false);
   let removing = $state(null);
   let selectedId = $state('');
-  // Effective Models the server resolved for lane choices not yet saved,
-  // keyed by the lane's choice (`laneChoice`).
+  let selectedStepId = $state('');
+  // Effective Models the server resolved for Agent choices not yet saved,
+  // keyed by the step's choice (`agentChoice`).
   let previewed = $state({});
   let previewError = $state('');
   const projectId = untrack(() => project.id);
@@ -57,8 +60,6 @@
     workflows: canonicalWorkflows(draft.workflows),
     default_workflow: draft.default_workflow,
     turn_budget: Number(draft.turn_budget),
-    base_branch: draft.base_branch.trim(),
-    integration_check: draft.integration_check,
   });
   const editor = createRecordEditor({
     identity: projectId,
@@ -74,8 +75,6 @@
       if (problem) return problem;
       if (!turnBudgetValid(draft.turn_budget))
         return t('factory.invalid.turnBudget');
-      if (!draft.base_branch.trim() || draft.base_branch.trim().startsWith('-'))
-        return t('factory.error.invalidBase');
       return '';
     },
     save: async (values, revision) => {
@@ -104,6 +103,12 @@
       ) ??
       workflows[0],
   );
+  const selectedIndex = $derived.by(() => {
+    const index = selected?.steps.findIndex(
+      (step) => step.id === selectedStepId,
+    );
+    return index >= 0 ? index : 0;
+  });
   const tabs = $derived(
     workflows.map((workflow) => ({
       id: workflow.id,
@@ -129,11 +134,6 @@
       group: t('factory.templates'),
     })),
   ]);
-  const integrationOptions = $derived([
-    { value: 'merged', label: t('factory.checkMerged') },
-    { value: 'reference_only', label: t('factory.checkReference') },
-  ]);
-
   function addWorkflow(choice) {
     if (workflows.length >= MAX_WORKFLOWS) return;
     const template = choice.startsWith('template:')
@@ -144,6 +144,7 @@
     const workflow = newWorkflow(workflows, template);
     editor.draft.workflows.push(workflow);
     selectedId = workflow.id;
+    selectedStepId = '';
   }
 
   function duplicate(workflow) {
@@ -151,6 +152,7 @@
     const copied = duplicateWorkflow(workflows, workflow);
     editor.draft.workflows.push(copied);
     selectedId = copied.id;
+    selectedStepId = '';
   }
 
   function removeWorkflow() {
@@ -163,100 +165,112 @@
     selectedId = editor.draft.workflows[Math.max(0, index - 1)].id;
   }
 
-  function addStage(kind) {
-    if (selected.stages.length < MAX_STAGES)
-      selected.stages.push(newStage(kind, selected.stages));
+  function addStep() {
+    if (selected.steps.length >= MAX_STEPS) return;
+    const step = newStep(selected.steps);
+    selected.steps.push(step);
+    selectedStepId = step.id;
   }
 
-  function moveStage(index, delta) {
-    const stages = $state.snapshot(selected.stages);
-    const [stage] = stages.splice(index, 1);
-    stages.splice(index + delta, 0, stage);
-    selected.stages = stages;
+  function move(index, delta) {
+    selectedStepId = selected.steps[index].id;
+    selected.steps = moveStep($state.snapshot(selected.steps), index, delta);
+  }
+
+  function remove(index) {
+    selected.steps = removeStep($state.snapshot(selected.steps), index);
+    selectedStepId = selected.steps[Math.max(0, index - 1)]?.id ?? '';
   }
 
   // Effective Models: a chosen Model is its own; an Agent's Model comes from
-  // the last save while the lane is unchanged, else from a read-only preview.
-  const laneChoice = (lane) =>
-    JSON.stringify([lane.source, lane.agent, lane.model, lane.effort]);
+  // the last save while the step's choice is unchanged, else from a
+  // read-only preview.
+  const agentChoice = (step) =>
+    JSON.stringify([step.source, step.agent, step.model, step.effort]);
 
-  function savedLane(key) {
-    const [workflowId, stageId, index] = key.split('/');
-    return model.selectedSetup?.workflows
-      ?.find((workflow) => workflow.id === workflowId)
-      ?.stages?.find((stage) => stage.id === stageId)?.lanes?.[Number(index)];
-  }
-
-  function savedModel(workflow, stage, index) {
-    const key = laneKey(workflow, stage, index);
-    const saved = savedLane(key);
+  function savedModel(workflow, step) {
+    const saved = model.selectedSetup?.workflows
+      ?.find((item) => item.id === workflow.id)
+      ?.steps?.find((item) => item.id === step.id);
+    const key = stepKey(workflow, step);
     return saved &&
-      laneChoice(saved) === laneChoice(stage.lanes[index]) &&
+      agentChoice(saved) === agentChoice(step) &&
       Object.hasOwn(model.setupEffectiveModels, key)
       ? model.setupEffectiveModels[key]
       : undefined;
   }
 
-  function resolveModel(workflow, stage, index) {
-    const lane = stage.lanes[index];
-    if (!lane?.agent) return undefined;
-    if (lane.model) return lane.model;
-    return savedModel(workflow, stage, index) ?? previewed[laneChoice(lane)];
+  function resolveModel(workflow, step) {
+    if (!step?.agent) return undefined;
+    if (step.model) return step.model;
+    return savedModel(workflow, step) ?? previewed[agentChoice(step)];
+  }
+
+  function agentLabel(step) {
+    if (!step.agent) return '';
+    const found =
+      step.source === 'team'
+        ? project.agent_profiles?.find((item) => item.id === step.agent)
+        : model.catalog.agents?.find((item) => item.id === step.agent);
+    return found?.name ?? step.agent;
   }
 
   const unresolved = $derived.by(() => {
     const choices = {};
     for (const workflow of workflows)
-      for (const stage of workflow.stages)
-        stage.lanes.forEach((lane, index) => {
-          if (
-            lane.agent &&
-            !lane.model &&
-            savedModel(workflow, stage, index) === undefined &&
-            !Object.hasOwn(previewed, laneChoice(lane))
-          )
-            choices[laneChoice(lane)] = {
-              source: lane.source,
-              agent: lane.agent,
-              model: '',
-              effort: lane.effort,
-            };
-        });
+      for (const step of workflow.steps)
+        if (
+          step.agent &&
+          !step.model &&
+          savedModel(workflow, step) === undefined &&
+          !Object.hasOwn(previewed, agentChoice(step))
+        )
+          choices[agentChoice(step)] = {
+            source: step.source,
+            agent: step.agent,
+            model: '',
+            effort: step.effort,
+          };
     return Object.entries(choices);
   });
   const unresolvedKey = $derived(
     JSON.stringify(unresolved.map(([choice]) => choice)),
   );
 
-  // A preview resolves only the open choices, each in a lane of its own, so
+  // A preview resolves only the open choices, each in a step of its own, so
   // an unfinished draft elsewhere does not keep it from answering.
   $effect(() => {
     void unresolvedKey;
-    const open = untrack(() => unresolved.slice(0, 200));
+    const open = untrack(() => unresolved.slice(0, MAX_WORKFLOWS * MAX_STEPS));
     if (!open.length) return;
-    const stages = [];
-    for (let start = 0; start < open.length; start += 10)
-      stages.push({
-        id: `p${stages.length}`,
-        name: `Preview ${stages.length + 1}`,
-        kind: 'work',
-        output: 'document',
-        instructions: '',
-        approval: false,
-        lanes: open.slice(start, start + 10).map(([, lane]) => lane),
+    const previews = [];
+    for (let start = 0; start < open.length; start += MAX_STEPS)
+      previews.push({
+        id: `preview${previews.length}`,
+        name: `Preview ${previews.length + 1}`,
+        steps: open
+          .slice(start, start + MAX_STEPS)
+          .map(([, choice], position) => ({
+            ...choice,
+            id: `p${position}`,
+            name: `Preview ${position + 1}`,
+            task: 'Preview',
+            after: [],
+          })),
       });
     let cancelled = false;
     const cancel = scheduleAutosave(async () => {
       try {
         const result = await model.call('setup.preview', {
           project_id: projectId,
-          workflows: [{ id: 'preview', name: 'Preview', stages }],
+          workflows: previews,
         });
         if (cancelled) return;
         const found = result.effective_models ?? {};
         const next = { ...previewed };
         open.forEach(([choice], position) => {
-          const key = `preview/p${Math.floor(position / 10)}/${position % 10}`;
+          const chunk = Math.floor(position / MAX_STEPS);
+          const key = `preview${chunk}/p${position % MAX_STEPS}`;
           if (Object.hasOwn(found, key)) next[choice] = found[key];
         });
         previewed = next;
@@ -376,35 +390,35 @@
             />
           </div>
         </div>
-        <h4 class="factory-stages-heading">{t('factory.stages')}</h4>
-        <ol class="factory-stage-list">
-          {#each selected.stages as stage, index (stage.id)}<li>
-              <WorkflowStage
-                workflow={selected}
-                bind:stage={selected.stages[index]}
-                {index}
-                {project}
-                {model}
-                resolve={(item, lane) => resolveModel(selected, item, lane)}
-                onMove={(delta) => moveStage(index, delta)}
-                onRemove={() => selected.stages.splice(index, 1)}
-              />
-            </li>{/each}
-        </ol>
+        <h4 class="factory-steps-heading">{t('factory.steps')}</h4>
+        <p class="factory-help">{t('factory.stepsHelp')}</p>
+        <WorkflowDiagram
+          workflow={selected}
+          {agentLabel}
+          selectedId={selected.steps[selectedIndex]?.id ?? ''}
+          onSelect={(id) => (selectedStepId = id)}
+        />
         <div class="factory-actions">
           <Button
             variant="secondary"
-            disabled={selected.stages.length >= MAX_STAGES}
-            onClick={() => addStage('work')}>{t('factory.addWorkStage')}</Button
-          >
-          <Button
-            variant="secondary"
-            disabled={selected.stages.length >= MAX_STAGES ||
-              !workStages(selected.stages).length}
-            onClick={() => addStage('review')}
-            >{t('factory.addReviewStage')}</Button
+            disabled={selected.steps.length >= MAX_STEPS}
+            onClick={addStep}>{t('factory.addStep')}</Button
           >
         </div>
+        {#if selected.steps[selectedIndex]}
+          {#key `${selected.id}:${selected.steps[selectedIndex].id}`}
+            <WorkflowStep
+              workflow={selected}
+              bind:step={selected.steps[selectedIndex]}
+              index={selectedIndex}
+              {project}
+              {model}
+              resolve={(step) => resolveModel(selected, step)}
+              onMove={(delta) => move(selectedIndex, delta)}
+              onRemove={() => remove(selectedIndex)}
+            />
+          {/key}
+        {/if}
       </div>
     {/if}
   </section>
@@ -429,26 +443,6 @@
         <p id="factory-turn-budget-help" class="factory-help">
           {t('factory.turnBudgetHelp')}
         </p>
-      </div>
-      <div class="factory-field">
-        <label for="factory-base-branch">{t('factory.baseBranch')}</label
-        ><TextField
-          id="factory-base-branch"
-          code
-          value={editor.draft.base_branch}
-          onInput={(value) => (editor.draft.base_branch = value)}
-        />
-      </div>
-      <div class="factory-field">
-        <label id="factory-integration-label" for="factory-integration-check"
-          >{t('factory.integrationCheck')}</label
-        ><Dropdown
-          id="factory-integration-check"
-          ariaLabelledby="factory-integration-label"
-          value={editor.draft.integration_check}
-          options={integrationOptions}
-          onValueChange={(value) => (editor.draft.integration_check = value)}
-        />
       </div>
     </div>
   </section>
@@ -547,16 +541,12 @@
     font-size: 11px;
     margin-right: 8px;
   }
-  .factory-stages-heading {
-    margin: 24px 0 12px;
+  .factory-steps-heading {
+    margin: 24px 0 6px;
     font-size: 13px;
   }
-  .factory-stage-list {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 14px;
-    display: grid;
-    gap: 12px;
+  .factory-workflow > :global(.factory-actions) {
+    margin: 12px 0 16px;
   }
   .factory-editor-footer {
     display: flex;

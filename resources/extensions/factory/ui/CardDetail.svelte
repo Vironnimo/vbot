@@ -16,6 +16,7 @@
   import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import WorkflowDiagram from './WorkflowDiagram.svelte';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import {
     acceptLabel,
@@ -23,11 +24,10 @@
     cardWorkflow,
     editableCard,
     eventLabel,
-    stageKindLabel,
-    stageText,
+    stepStatus,
+    sendBackDefault,
     stateLabel,
     queuedActionLabel,
-    landingStatusLabel,
     waitingLabel,
     originLabel,
     projectName,
@@ -36,12 +36,10 @@
     usageSummary,
     timestamp,
     integer,
-    failureText,
   } from './presentation.js';
 
   let { model, onNavigate } = $props();
   const card = $derived(model.detail.card);
-  const landing = $derived(card.integration_landing);
   const actions = $derived(cardActions(card));
   const usage = $derived(usageSummary(model.detail.usage));
   const participants = $derived(model.detail.participants ?? []);
@@ -52,15 +50,8 @@
   const workflow = $derived(
     card.runtime?.workflow ?? cardWorkflow(card, model.setups),
   );
-  const stages = $derived(workflow?.stages ?? []);
-  const workStages = $derived(stages.filter((stage) => stage.kind === 'work'));
-  // Send back without a choice returns to the work stage the current review
-  // judges, or to the current work stage.
-  const sendBackDefault = $derived.by(() => {
-    const current = stages[card.stage?.index ?? 0];
-    const id = current?.kind === 'review' ? current.target : current?.id;
-    return stages.find((stage) => stage.id === id) ?? workStages[0];
-  });
+  const steps = $derived(workflow?.steps ?? []);
+  const defaultTarget = $derived(sendBackDefault(card, workflow));
   const activeRuns = $derived(
     (model.detail.runs ?? []).filter((run) =>
       ['pending', 'running', 'cancelling'].includes(run.status),
@@ -71,7 +62,7 @@
   let compose = $state('');
   let comment = $state('');
   let commentError = $state('');
-  let sendBackStage = $state('');
+  let sendBackStep = $state('');
   let inspectedId = $state('');
   const inspected = $derived(
     participants.find(
@@ -137,7 +128,7 @@
     compose = kind;
     comment = '';
     commentError = '';
-    sendBackStage = '';
+    sendBackStep = '';
   }
   async function sendComment() {
     if (compose === 'answer' ? !actions.answer : !actions.sendBack) return;
@@ -150,19 +141,11 @@
           ? { text: comment.trim() }
           : {
               comment: comment.trim(),
-              ...(sendBackStage ? { stage: sendBackStage } : {}),
+              ...(sendBackStep ? { step: sendBackStep } : {}),
             },
       )
     )
       compose = '';
-  }
-
-  async function openReference(url) {
-    try {
-      await model.client.openLink(url);
-    } catch (cause) {
-      model.error = failureText(cause);
-    }
   }
 
   function approvalAddress(approval) {
@@ -180,61 +163,24 @@
     );
   }
 
-  function stageStatus(index) {
-    if (card.state === 'done') return 'done';
-    if (!card.stage) return 'pending';
-    if (index < card.stage.index) return 'done';
-    if (card.state === 'discarded') return 'pending';
-    if (index > card.stage.index) return 'pending';
-    return card.state === 'waiting' ? 'waiting' : 'current';
-  }
-
-  function stageStatusLabel(status) {
-    switch (status) {
-      case 'done':
-        return t('factory.stageStatus.done');
-      case 'current':
-        return t('factory.stageStatus.current');
-      case 'waiting':
-        return t('factory.stageStatus.waiting');
-      default:
-        return t('factory.stageStatus.pending');
-    }
-  }
-
-  function outputKindLabel(output) {
-    switch (output.kind) {
-      case 'review':
-        return t('factory.output.review');
-      case 'integration_review':
-        return t('factory.integrationReview');
-      default:
-        return output.result
-          ? t('factory.output.document')
-          : t('factory.output.changes');
-    }
-  }
-
-  // Lane and pass tell outputs of the same stage apart.
   function outputTitle(output) {
-    const lanes =
-      stages.find((stage) => stage.id === output.stage_id)?.lanes?.length ?? 0;
-    const parts = [output.stage_name];
-    if (lanes > 1 || output.lane > 0)
-      parts.push(t('factory.laneNumber', { lane: output.lane + 1 }));
-    if (output.pass > 1)
-      parts.push(t('factory.passNumber', { pass: output.pass }));
-    return parts.join(' · ');
+    const name =
+      output.step_name ||
+      steps.find((step) => step.id === output.step)?.name ||
+      output.step;
+    return output.pass > 1
+      ? `${name} · ${t('factory.passNumber', { pass: output.pass })}`
+      : name;
   }
 
-  // The newest document of each stage stays open; earlier passes fold.
+  // Keep only the latest document from each step expanded.
   const latestDocuments = $derived(
     new Set(
       Object.values(
         Object.fromEntries(
           outputs
             .filter((output) => output.result)
-            .map((output) => [`${output.stage_id}:${output.lane}`, output.id]),
+            .map((output) => [output.step, output.id]),
         ),
       ),
     ),
@@ -288,73 +234,6 @@
       </p>{/if}
   </header>
 
-  {#if landing}
-    <Banner
-      variant="warn"
-      role="status"
-      aria-labelledby="factory-landing-heading"
-      class="factory-landing-notice"
-      data-integration-landing={landing.status}
-    >
-      <div class="factory-landing-content">
-        <h3 id="factory-landing-heading">
-          {landingStatusLabel(landing.status)}
-        </h3>
-        <p class="factory-prose">{t('factory.landing.alreadyLanded')}</p>
-        <p class="factory-prose">{t('factory.landing.noAutomaticRevert')}</p>
-        {#if landing.base_sha && landing.head_sha !== card.head_sha}
-          <p class="factory-help" data-landing-historical>
-            {t('factory.landing.historical')}
-          </p>
-        {/if}
-        {#if landing.landing_sha}
-          <dl class="factory-facts" data-landing-commit>
-            <div>
-              <dt>{t('factory.landing.commit')}</dt>
-              <dd class="factory-mono">
-                {landing.landing_sha}<CopyButton
-                  text={landing.landing_sha}
-                  label={t('factory.landing.copyCommit')}
-                />
-              </dd>
-            </div>
-          </dl>
-        {/if}
-        {#if landing.extra_paths?.length}
-          <div class="factory-landing-paths" data-landing-extra-paths>
-            <h4>
-              {t('factory.landing.extraPaths')}<CopyButton
-                text={landing.extra_paths.join('\n')}
-                label={t('factory.landing.copyExtraPaths')}
-              />
-            </h4>
-            <ul class="factory-mono">
-              {#each landing.extra_paths as path, index (index)}<li>
-                  {path}
-                </li>{/each}
-            </ul>
-          </div>
-        {/if}
-        {#if landing.merge_paths?.length}
-          <div class="factory-landing-paths" data-landing-merge-paths>
-            <h4>
-              {t('factory.landing.mergePaths')}<CopyButton
-                text={landing.merge_paths.join('\n')}
-                label={t('factory.landing.copyMergePaths')}
-              />
-            </h4>
-            <p class="factory-help">{t('factory.landing.mergeHelp')}</p>
-            <ul class="factory-mono">
-              {#each landing.merge_paths as path, index (index)}<li>
-                  {path}
-                </li>{/each}
-            </ul>
-          </div>
-        {/if}
-      </div>
-    </Banner>
-  {/if}
-
   {#if approvals.length}
     <Banner variant="warn" role="status" class="factory-permission-notice">
       <strong>{t('factory.permissionWaiting')}</strong>
@@ -376,7 +255,7 @@
     >
       <h3 id="factory-question">{t('factory.question')}</h3>
       <p class="factory-prose">
-        {card.runtime?.question || card.recommendation}
+        {card.runtime?.question}
       </p>
     </section>
   {:else if card.state === 'waiting' && card.runtime?.note}
@@ -386,18 +265,6 @@
     </section>
   {/if}
 
-  {#if card.recommendation || (card.state === 'waiting' && card.waiting_reason === 'no_agreement')}
-    <section
-      class="factory-section factory-recommendation"
-      aria-labelledby="factory-recommendation-heading"
-      data-recommendation
-    >
-      <h3 id="factory-recommendation-heading">{t('factory.recommendation')}</h3>
-      <p class="factory-prose">
-        {card.recommendation || t('factory.noRecommendation')}
-      </p>
-    </section>
-  {/if}
   <div
     class="factory-actions factory-card-actions"
     aria-label={t('factory.title')}
@@ -453,30 +320,7 @@
       <h3 id="factory-workflow-heading">
         {t('factory.workflowHeading', { name: workflow.name })}
       </h3>
-      <ol class="factory-stage-progress">
-        {#each stages as stage, index (stage.id)}
-          {@const status = stageStatus(index)}
-          <li
-            data-stage-status={status}
-            aria-current={status === 'current' || status === 'waiting'
-              ? 'step'
-              : undefined}
-          >
-            <span class="factory-stage-marker" aria-hidden="true"
-              >{status === 'done' ? '✓' : index + 1}</span
-            >
-            <span class="factory-stage-label"
-              ><strong
-                >{card.stage?.index === index
-                  ? stageText(card.stage)
-                  : stage.name}</strong
-              ><span class="factory-help"
-                >{stageKindLabel(stage)} · {stageStatusLabel(status)}</span
-              ></span
-            >
-          </li>
-        {/each}
-      </ol>
+      <WorkflowDiagram {workflow} status={(step) => stepStatus(card, step)} />
     </section>
   {/if}
 
@@ -534,45 +378,6 @@
           <h3>{t('factory.latestSummary')}</h3>
           <p class="factory-prose">{card.summary}</p>
         </section>{/if}
-      {#if card.checks}<section class="factory-section" data-checks>
-          <h3>{t('factory.checks')}</h3>
-          <p class="factory-prose">{card.checks}</p>
-        </section>{/if}
-      {#if card.branch || card.head_sha || card.integration_reference}
-        <section class="factory-section" data-submission>
-          <h3>{t('factory.submission')}</h3>
-          <dl class="factory-facts">
-            <div>
-              <dt>{t('factory.branch')}</dt>
-              <dd class="factory-mono">{card.branch || '—'}</dd>
-            </div>
-            <div>
-              <dt>{t('factory.base')}</dt>
-              <dd class="factory-mono">{card.base || '—'}</dd>
-            </div>
-            {#if card.base_sha || card.head_sha}<div>
-                <dt>{t('factory.commitRange')}</dt>
-                <dd class="factory-mono">
-                  {card.base_sha}..{card.head_sha}<CopyButton
-                    text={`${card.base_sha}..${card.head_sha}`}
-                  />
-                </dd>
-              </div>{/if}
-            {#if card.integration_reference}<div>
-                <dt>{t('factory.integrationReference')}</dt>
-                <dd>
-                  {#if /^https?:\/\//i.test(card.integration_reference)}<Button
-                      variant="tertiary"
-                      onClick={() => openReference(card.integration_reference)}
-                      >{card.integration_reference} ↗</Button
-                    >{:else}<span class="factory-mono"
-                      >{card.integration_reference}</span
-                    >{/if}
-                </dd>
-              </div>{/if}
-          </dl>
-        </section>
-      {/if}
       {#if outputs.length}
         <section
           class="factory-section"
@@ -583,77 +388,45 @@
             <article
               class="factory-output"
               data-output-kind={output.kind}
-              data-output-stage={output.stage_id}
+              data-output-step={output.step}
             >
               <header>
                 <h4>{outputTitle(output)}</h4>
-                {#if output.kind === 'work'}<span class="factory-subtle"
-                    >{outputKindLabel(output)}</span
-                  >{:else}<span
+                {#if output.kind === 'changes'}<span
                     class="factory-verdict"
-                    data-verdict={output.verdict}
-                    >{outputKindLabel(output)} · {output.verdict === 'approve'
-                      ? t('factory.reviewApproved')
-                      : t('factory.reviewChanges')}</span
+                    data-verdict="changes_requested"
+                    >{t('factory.reviewChanges')}</span
                   >{/if}
               </header>
-              {#if output.kind === 'work'}
-                {#if output.summary}<p class="factory-prose">
-                    {output.summary}
-                  </p>{/if}
-                {#if output.result}
-                  <details
-                    class="factory-document"
-                    open={latestDocuments.has(output.id)}
-                  >
-                    <summary>{t('factory.document')}</summary>
-                    <MarkdownContent
-                      source={output.result}
-                      class="msg-markdown md-document"
-                    />
-                  </details>
-                {/if}
-                {#if output.branch || output.head_sha}
-                  <dl class="factory-facts" data-output-change>
-                    <div>
-                      <dt>{t('factory.branch')}</dt>
-                      <dd class="factory-mono">{output.branch || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt>{t('factory.base')}</dt>
-                      <dd class="factory-mono">{output.base || '—'}</dd>
-                    </div>
-                    {#if output.base_sha || output.head_sha}<div>
-                        <dt>{t('factory.commitRange')}</dt>
-                        <dd class="factory-mono">
-                          {output.base_sha}..{output.head_sha}<CopyButton
-                            text={`${output.base_sha}..${output.head_sha}`}
-                          />
-                        </dd>
-                      </div>{/if}
-                  </dl>
-                {/if}
-                {#if output.checks}<h5>{t('factory.checks')}</h5>
-                  <p class="factory-prose">{output.checks}</p>{/if}
-              {:else}
-                {#if output.recommendation}<p class="factory-prose">
-                    {output.recommendation}
+              {#if output.summary}<p class="factory-prose">
+                  {output.summary}
+                </p>{/if}
+              {#if output.result}
+                <details
+                  class="factory-document"
+                  open={latestDocuments.has(output.id)}
+                >
+                  <summary>{t('factory.document')}</summary>
+                  <MarkdownContent
+                    source={output.result}
+                    class="msg-markdown md-document"
+                  />
+                </details>
+              {/if}
+              {#if output.kind === 'changes'}
+                {#if output.target}<p class="factory-help">
+                    {t('factory.returnedTo', {
+                      step:
+                        steps.find((step) => step.id === output.target)?.name ??
+                        output.target,
+                    })}
                   </p>{/if}
                 <h5>{t('factory.findings')}</h5>
                 <ul class="factory-findings">
                   {#each output.findings ?? [] as finding, index (index)}<li>
-                      {typeof finding === 'string'
-                        ? finding
-                        : (finding.text ??
-                          finding.description ??
-                          JSON.stringify(finding))}
-                    </li>{:else}<li class="factory-help">
-                      {t('factory.noFindings')}
+                      {finding}
                     </li>{/each}
                 </ul>
-                {#if output.head_sha}<p class="factory-help factory-mono">
-                    {output.head_sha}
-                  </p>{/if}
               {/if}
               <time class="factory-help" datetime={output.created_at}
                 >{timestamp(output.created_at)}</time
@@ -792,15 +565,7 @@
     error={model.error}
     onConfirm={confirmAction}
     onCancel={() => (confirm = '')}
-  >
-    {#snippet bodyExtra()}
-      {#if confirm === 'discard' && landing}
-        <Banner variant="warn" role="status" data-landing-discard-warning
-          >{t('factory.landing.discardWarning')}</Banner
-        >
-      {/if}
-    {/snippet}
-  </ConfirmDialog>
+  ></ConfirmDialog>
 {/if}
 {#if compose}
   <Modal
@@ -825,31 +590,31 @@
             onInput={(value) => (comment = value)}
           />
         </div>
-        {#if compose === 'send_back' && workStages.length > 1}<div
+        {#if compose === 'send_back' && steps.length > 1}<div
             class="factory-field"
           >
             <label
-              id="factory-send-back-stage-label"
-              for="factory-send-back-stage">{t('factory.sendBackStage')}</label
+              id="factory-send-back-step-label"
+              for="factory-send-back-step">{t('factory.sendBackStep')}</label
             ><Dropdown
-              id="factory-send-back-stage"
-              ariaLabelledby="factory-send-back-stage-label"
-              value={sendBackStage}
+              id="factory-send-back-step"
+              ariaLabelledby="factory-send-back-step-label"
+              value={sendBackStep}
               options={[
                 {
                   value: '',
                   label: t('factory.sendBackDefault', {
-                    stage: sendBackDefault?.name ?? '',
+                    step: defaultTarget?.name ?? '',
                   }),
                 },
-                ...workStages.map((stage) => ({
-                  value: stage.id,
-                  label: stage.name,
+                ...steps.map((step) => ({
+                  value: step.id,
+                  label: step.name,
                 })),
               ]}
               disabled={Boolean(model.pending)}
               onOpenChange={model.pickerOpen}
-              onValueChange={(value) => (sendBackStage = value)}
+              onValueChange={(value) => (sendBackStep = value)}
             />
           </div>{/if}
         {#if commentError || model.error}<Banner variant="error" role="alert"
@@ -916,16 +681,6 @@
   .factory-state-badge[data-state='waiting'] {
     color: var(--accent);
   }
-  .factory-recommendation {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--surface-1));
-    padding: 24px;
-  }
-  .factory-recommendation :global(.factory-prose) {
-    color: var(--text-hi);
-    font-size: 15px;
-    line-height: 1.8;
-  }
   .factory-decision {
     border-left: 3px solid var(--accent);
   }
@@ -988,12 +743,8 @@
     margin: 16px 0 8px;
     font-size: 12px;
   }
-  .factory-output .factory-document,
-  .factory-output .factory-facts {
+  .factory-output .factory-document {
     margin-top: 12px;
-  }
-  .factory-verdict[data-verdict='approve'] {
-    color: var(--green, var(--accent));
   }
   .factory-verdict[data-verdict='changes_requested'] {
     color: var(--amber);
@@ -1011,58 +762,6 @@
   }
   .factory-document[open] summary {
     margin-bottom: 10px;
-  }
-  .factory-stage-progress {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 22px;
-  }
-  .factory-stage-progress li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    font-size: 12px;
-  }
-  .factory-stage-label {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .factory-stage-label .factory-help {
-    margin: 0;
-    font-size: 11px;
-  }
-  .factory-stage-marker {
-    display: inline-grid;
-    place-items: center;
-    flex-shrink: 0;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-    color: var(--text-med);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-  [data-stage-status='done'] .factory-stage-marker {
-    background: var(--surface-3);
-    color: var(--text-hi);
-  }
-  [data-stage-status='current'] .factory-stage-marker,
-  [data-stage-status='waiting'] .factory-stage-marker {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
-    color: var(--text-hi);
-  }
-  [data-stage-status='pending'] .factory-stage-label strong {
-    color: var(--text-med);
-    font-weight: 500;
   }
   .factory-findings {
     padding-left: 20px;
@@ -1132,38 +831,6 @@
   }
   :global(.factory-permission-notice) {
     margin-bottom: 18px;
-  }
-  :global(.factory-landing-notice) {
-    margin-bottom: 18px;
-  }
-  .factory-landing-content {
-    width: 100%;
-    min-width: 0;
-  }
-  .factory-landing-content h3 {
-    margin: 0 0 10px;
-    font-size: 14px;
-  }
-  .factory-landing-content p + p {
-    margin-top: 8px;
-  }
-  .factory-landing-paths {
-    margin-top: 18px;
-  }
-  .factory-landing-paths h4 {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 6px;
-    font-size: 12px;
-  }
-  .factory-landing-paths ul {
-    max-height: 240px;
-    overflow: auto;
-    margin: 8px 0 0;
-    padding-left: 20px;
-    font-size: 12px;
-    line-height: 1.7;
   }
   @media (max-width: 850px) {
     .factory-detail-grid {

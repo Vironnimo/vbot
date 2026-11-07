@@ -21,7 +21,8 @@ FINAL_STATES = frozenset({"done", "discarded"})
 DATABASE_NAME = "factory"
 # Tables evolve additively: a changed object gets a new name. ``setups`` replaces
 # the role-based ``project_setups`` and ``outputs`` replaces ``reviews``; the
-# ``workflows`` migration copies both into the new tables once.
+# ``workflows`` migration copies both into the new tables once. An output row's
+# ``stage_id``/``stage_name`` hold the step; ``target`` the step it sends back to.
 SCHEMA_SQL = """
 CREATE TABLE setups (
  project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
@@ -53,7 +54,8 @@ CREATE TABLE outputs (
  branch TEXT NOT NULL DEFAULT '', base TEXT NOT NULL DEFAULT '',
  base_sha TEXT NOT NULL DEFAULT '', head_sha TEXT NOT NULL DEFAULT '',
  verdict TEXT NOT NULL DEFAULT '', recommendation TEXT NOT NULL DEFAULT '',
- findings_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+ findings_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL,
+ target TEXT NOT NULL DEFAULT ''
 ) STRICT;
 CREATE INDEX outputs_card ON outputs(card_id, id);
 CREATE TABLE card_events (
@@ -84,7 +86,47 @@ _OUTPUT_FIELDS = (
     "verdict",
     "recommendation",
     "findings_json",
+    "target",
 )
+_OUTPUT_COLUMNS = (
+    "id",
+    *_OUTPUT_FIELDS,
+    "created_at",
+)
+
+
+def _output(row: sqlite3.Row) -> Json:
+    """One recorded output: ``work`` hands in a result, ``changes`` sends work back.
+
+    Rows from the stage model recorded reviews as verdicts; an approval reads as
+    the reviewer's hand-in and requested changes as a send-back.
+    """
+    value = dict(row)
+    kind = value["kind"]
+    result = value["result"]
+    if kind not in {"work", "changes"}:
+        if value["verdict"] == "changes_requested":
+            kind = "changes"
+        else:
+            kind, result = "work", value["recommendation"]
+    return {
+        "id": value["id"],
+        "step": value["stage_id"],
+        "step_name": value["stage_name"],
+        "kind": kind,
+        "pass": value["pass"],
+        "participant_id": value["participant_id"],
+        "summary": value["summary"],
+        "result": result,
+        "checks": value["checks"],
+        "branch": value["branch"],
+        "base": value["base"],
+        "base_sha": value["base_sha"],
+        "head_sha": value["head_sha"],
+        "findings": json.loads(value["findings_json"]),
+        "target": value["target"],
+        "created_at": value["created_at"],
+    }
 
 
 def _migrate_workflows(connection: sqlite3.Connection) -> None:
@@ -126,7 +168,30 @@ def _migrate_workflows(connection: sqlite3.Connection) -> None:
         )
 
 
-MIGRATIONS = (Migration("workflows", apply=_migrate_workflows),)
+def _migrate_steps(connection: sqlite3.Connection) -> None:
+    """Rewrite setups whose Workflows still hold stages as steps (idempotent)."""
+    from ._workflows import from_stages
+
+    rows = connection.execute("SELECT project_id, workflows_json FROM setups").fetchall()
+    for project_id, raw in rows:
+        workflows = json.loads(raw)
+        if not any(isinstance(item, dict) and "stages" in item for item in workflows):
+            continue
+        converted = [
+            from_stages(item) if isinstance(item, dict) and "steps" not in item else item
+            for item in workflows
+        ]
+        connection.execute(
+            "UPDATE setups SET workflows_json = ? WHERE project_id = ?",
+            (_dump(converted), project_id),
+        )
+
+
+# ``steps`` changes the meaning of saved Workflows; older code would misread them.
+MIGRATIONS = (
+    Migration("workflows", apply=_migrate_workflows),
+    Migration("steps", breaks_older=True, apply=_migrate_steps),
+)
 
 _CARD_FIELDS = (
     "id",
@@ -163,8 +228,6 @@ _SETUP_FIELDS = (
     "workflows_json",
     "default_workflow",
     "turn_budget",
-    "base_branch",
-    "integration_check",
     "revision",
     "updated_at",
 )
@@ -174,8 +237,6 @@ _SETUP_KEYS = (
     "workflows",
     "default_workflow",
     "turn_budget",
-    "base_branch",
-    "integration_check",
     "revision",
     "updated_at",
 )
@@ -394,8 +455,7 @@ class FactoryStore:
         if state is not None and state not in STATES:
             raise FactoryError(
                 "invalid_state",
-                "Unknown Card state. Use proposal, queued, working, reviewing, "
-                "waiting, integrating, done or discarded.",
+                "Unknown Card state. Use proposal, queued, working, waiting, done or discarded.",
             )
         clauses: list[str] = []
         parameters: list[str] = []
@@ -459,19 +519,21 @@ class FactoryStore:
                     (card_id, at, actor, comment),
                 )
             if output is not None:
-                values = {
-                    "summary": "",
-                    "result": "",
-                    "checks": "",
-                    "branch": "",
-                    "base": "",
-                    "base_sha": "",
-                    "head_sha": "",
-                    "verdict": "",
-                    "recommendation": "",
-                    **{key: value for key, value in output.items() if key != "findings"},
-                    "findings_json": _dump(output.get("findings", [])),
-                }
+                # Columns of earlier Factory versions stay empty.
+                values = (
+                    dict.fromkeys(_OUTPUT_FIELDS, "")
+                    | {
+                        field: output.get(field, "")
+                        for field in ("kind", "participant_id", "summary", "result", "target")
+                    }
+                    | {
+                        "stage_id": output["step"],
+                        "stage_name": output["step_name"],
+                        "lane": 0,
+                        "pass": output["pass"],
+                        "findings_json": _dump(output.get("findings", [])),
+                    }
+                )
                 connection.execute(
                     f"INSERT INTO outputs (card_id, {', '.join(_OUTPUT_FIELDS)}, created_at) "
                     f"VALUES (?, {', '.join('?' for _ in _OUTPUT_FIELDS)}, ?)",
@@ -493,15 +555,14 @@ class FactoryStore:
                 item = dict(row)
                 item["detail"] = json.loads(item.pop("detail_json"))
                 events.append(item)
-            outputs = []
-            for row in connection.execute(
-                f"SELECT id, {', '.join(_OUTPUT_FIELDS)}, created_at "
-                "FROM outputs WHERE card_id = ? ORDER BY id",
-                (card_id,),
-            ):
-                item = dict(row)
-                item["findings"] = json.loads(item.pop("findings_json"))
-                outputs.append(item)
+            outputs = [
+                _output(row)
+                for row in connection.execute(
+                    f"SELECT {', '.join(_OUTPUT_COLUMNS)} FROM outputs "
+                    "WHERE card_id = ? ORDER BY id",
+                    (card_id,),
+                )
+            ]
             comments = [
                 dict(row)
                 for row in connection.execute(

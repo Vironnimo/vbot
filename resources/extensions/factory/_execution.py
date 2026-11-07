@@ -1,9 +1,9 @@
 """Persisted Factory handoffs over the host's canonical owned execution groups.
 
-A Card runs its Workflow snapshot one participant at a time: the lanes of a stage
-run one after another in the Project directory, so they never share a working
-tree concurrently. A work lane keeps its Session across rework; every review lane
-is a fresh participant.
+A Card runs its Workflow snapshot one step at a time in the Project directory, so
+participants never share a working tree concurrently. A step keeps its Session
+across reruns; a step that can send work back judges with a fresh participant on
+every run.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import hashlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 from core.agents.temporary import TemporaryAgentConfig
 from core.agents.temporary_execution import TemporaryRunInput
@@ -26,17 +25,12 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 from . import _workflows, agent_text
-from ._git import GitRepository
-from ._workflows import is_review
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 type Json = dict[str, Any]
 _LOGGER = get_logger("extensions.factory")
 _PRIVATE = frozenset(agent_text.PRIVATE_TOOLS)
-_WORK_TOOLS = frozenset({"factory_submit_work", "factory_report_blocked"})
-_INTEGRATOR_TOOLS = _WORK_TOOLS | {"factory_report_integration"}
-_REVIEW_TOOLS = frozenset({"factory_submit_review"})
-_EDIT_TOOLS = frozenset({"apply_patch", "edit", "write"})
+_STEP_TOOLS = frozenset({"factory_submit_work", "factory_report_blocked"})
 _RESULT_LIMIT = 100000
 
 
@@ -95,63 +89,43 @@ class FactoryExecution:
     # Workflow positions
 
     @staticmethod
-    def _locate(workflow: Json, participant: str) -> tuple[int, int]:
-        """The stage index and lane of a participant id."""
-        stage_id, lane, *_ = participant.split("-")
-        return _workflows.stage_index(workflow, stage_id), int(lane) - 1
-
-    def _integrator(self, runtime: Json) -> str | None:
+    def _step(runtime: Json, participant: str | None = None) -> Json:
+        """The step of a participant, or the Card's current step."""
         workflow = runtime["workflow"]
-        index = _workflows.integrator(workflow)
-        if index is None:
-            return None
-        return _workflows.work_participant(workflow["stages"][index], 0)
+        step_id = _workflows.step_id(participant) if participant else runtime["step"]
+        return _workflows.step(workflow, step_id)
+
+    @staticmethod
+    def _participant(runtime: Json, step: Json) -> str:
+        """The step's latest participant; a judging step gets a fresh one per run."""
+        return _workflows.participant(step, int(runtime.get("sequences", {}).get(step["id"], 1)))
 
     def _config(self, card: Json, participant: str) -> TemporaryAgentConfig:
         runtime = card["runtime"]
-        workflow = runtime["workflow"]
-        index, lane = self._locate(workflow, participant)
-        stage = workflow["stages"][index]
-        if stage["kind"] == "review":
-            tools = _REVIEW_TOOLS
-        elif index == _workflows.integrator(workflow):
-            tools = _INTEGRATOR_TOOLS
-        else:
-            tools = _WORK_TOOLS
-        denied = set(_PRIVATE) - set(tools)
-        if stage["kind"] == "review" or stage["output"] == "document":
-            denied.update(_EDIT_TOOLS)
-        value = stage["lanes"][lane]
-        name = stage["name"] + (f" {lane + 1}" if len(stage["lanes"]) > 1 else "")
+        step = self._step(runtime, participant)
+        tools = _STEP_TOOLS | ({"factory_request_changes"} if step["returns_to"] else set())
         return TemporaryAgentConfig(
             model="",
-            **_workflows.profile(value),
-            model_override=value["model"] or None,
-            thinking_effort_override=value["effort"] or None,
+            **_workflows.profile(step),
+            model_override=step["model"] or None,
+            thinking_effort_override=step["effort"] or None,
             cwd=Path(runtime["cwd"]),
-            tool_access=ToolAccess(mode="all", denied=tuple(sorted(denied))),
+            tool_access=ToolAccess(mode="all", denied=tuple(sorted(_PRIVATE - tools))),
             allowed_skills=["*"],
             tools={},
-            name=f"Factory {name}",
-            instructions=agent_text.rules(stage),
+            name=f"Factory {step['name']}",
+            instructions=agent_text.rules(runtime["workflow"], step),
         )
 
     @staticmethod
-    def _latest(outputs: list[Json], workflow: Json, stage_ids: set[str]) -> list[Json]:
-        """The newest work result and review verdict of each lane of the given stages."""
-        newest: dict[tuple[str, str, int], Json] = {}
-        for output in outputs:
-            if output["stage_id"] in stage_ids:
-                kind = "work" if output["kind"] == "work" else "review"
-                newest[(output["stage_id"], kind, output["lane"])] = output
-        order = {stage["id"]: index for index, stage in enumerate(workflow["stages"])}
-        lanes = {stage["id"]: len(stage["lanes"]) for stage in workflow["stages"]}
-        return [
-            {**output, "lanes": lanes.get(output["stage_id"], 1)}
-            for _key, output in sorted(
-                newest.items(), key=lambda item: (order[item[0][0]], item[0][1], item[0][2])
-            )
-        ]
+    def _latest(outputs: list[Json], workflow: Json, step_ids: set[str]) -> list[Json]:
+        """The newest hand-in of each given step, in Workflow order."""
+        newest = {
+            output["step"]: output
+            for output in outputs
+            if output["kind"] == "work" and output["step"] in step_ids
+        }
+        return [newest[step["id"]] for step in workflow["steps"] if step["id"] in newest]
 
     async def _history(self, card: Json, recording: Json | None) -> Json:
         """The Card's history including the output this transition records with it."""
@@ -160,24 +134,32 @@ class FactoryExecution:
             history["outputs"].append(recording)
         return history
 
-    async def _work_input(
-        self, card: Json, runtime: Json, participant: str, recording: Json | None
+    async def _step_input(
+        self, card: Json, runtime: Json, step: Json, recording: Json | None, note: Json
     ) -> str:
         workflow = runtime["workflow"]
-        index, lane = self._locate(workflow, participant)
         history = await self._history(card, recording)
         earlier = self._latest(
-            history["outputs"], workflow, {stage["id"] for stage in workflow["stages"][:index]}
+            history["outputs"], workflow, _workflows.ancestors(workflow, step["id"])
         )
-        return agent_text.work_input(
-            {**card, "runtime": runtime}, workflow, index, lane, history["comments"], earlier
+        findings = [
+            item
+            for item in history["outputs"]
+            if item["kind"] == "changes" and item["step"] == step["id"]
+        ]
+        return agent_text.step_input(
+            {**card, "runtime": runtime},
+            step,
+            comments=history["comments"],
+            earlier=earlier,
+            findings=findings,
+            note=note,
         )
 
     async def _queue(
         self,
         card: Json,
         *,
-        phase: str,
         participant: str,
         content: str,
         initial: bool = False,
@@ -192,20 +174,24 @@ class FactoryExecution:
         runtime = runtime if runtime is not None else self._runtime(card)
         if (
             pending is None
-            and not is_review(participant)
             and participant not in runtime.get("participants", {})
             and not initial
+            and runtime.get("workflow", {}).get("steps")
         ):
+            # A participant that never started (its launch failed, or its Card was
+            # carried over from an older Factory) begins with the full step input.
             initial = True
+            step = self._step(runtime, participant)
             content = (
-                await self._work_input(card, runtime, participant, extra.get("output"))
+                await self._step_input(
+                    card, runtime, step, extra.get("output"), {"kind": "", "text": ""}
+                )
                 + "\n\n"
                 + content
             )
         runtime.pop("pending_action", None)
         runtime.pop("question", None)
         runtime.pop("note", None)
-        runtime["phase"] = phase
         runtime["pending"] = (
             pending
             if pending is not None
@@ -221,7 +207,7 @@ class FactoryExecution:
             card,
             {
                 **(patch or {}),
-                "state": phase if phase != "cleanup" else "discarded",
+                "state": "working",
                 "waiting_reason": "",
                 "runtime": runtime,
             },
@@ -262,13 +248,7 @@ class FactoryExecution:
                 if (
                     pending.get("id") != token
                     or self._quiescing
-                    or (
-                        card["state"] not in ACTIVE_STATES
-                        and not (
-                            card["state"] == "discarded"
-                            and card["runtime"].get("phase") == "cleanup"
-                        )
-                    )
+                    or card["state"] not in ACTIVE_STATES
                 ):
                     return
                 pending = dict(pending)
@@ -287,12 +267,7 @@ class FactoryExecution:
                     if (
                         runtime.get("pending", {}).get("id") != token
                         or self._quiescing
-                        or (
-                            card["state"] not in ACTIVE_STATES
-                            and not (
-                                card["state"] == "discarded" and runtime.get("phase") == "cleanup"
-                            )
-                        )
+                        or card["state"] not in ACTIVE_STATES
                     ):
                         return
                     if await self._acknowledge_pending(card) is not None:
@@ -333,20 +308,14 @@ class FactoryExecution:
                     runtime.setdefault("runs", {})[participant] = admission.run_id
                     if (
                         resume_terminal
-                        and not is_review(participant)
-                        and runtime["phase"] in {"working", "integrating"}
                         and admission.existing
                         and admission.status in {"failed", "cancelled", "interrupted"}
                     ):
                         await self._queue(
                             card,
-                            phase=runtime["phase"],
                             participant=participant,
                             content=agent_text.note(
-                                "keep_integrating"
-                                if runtime["phase"] == "integrating"
-                                else "keep_working",
-                                card,
+                                "keep_working", card, step=self._step(runtime, participant)
                             ),
                             runtime=runtime,
                             patch={"turns": 0},
@@ -355,28 +324,19 @@ class FactoryExecution:
                         )
                         return
                     runtime.pop("pending", None)
-                    title = (
-                        pending["kind"] == "initial"
-                        and not is_review(participant)
-                        and not runtime.get("titled")
-                    )
+                    title = pending["kind"] == "initial" and not runtime.get("titled")
                     if title:
                         runtime["titled"] = True
-                    patch: Json = {"runtime": runtime}
-                    if not is_review(participant) and runtime["phase"] != "cleanup":
-                        patch["turns"] = int(card.get("turns", 0)) + 1
                     saved = await self._change(
                         card,
-                        patch,
+                        {"runtime": runtime, "turns": int(card.get("turns", 0)) + 1},
                         event="run_admitted",
                         detail={"participant": participant, "run_id": admission.run_id},
                     )
                     if title:
                         self.service.spawn(self.groups.title_group(group_id, card["title"]))
                     if admission.existing and admission.status != "running":
-                        if runtime["phase"] == "cleanup":
-                            self._close_later(saved)
-                        elif admission.status == "interrupted":
+                        if admission.status == "interrupted":
                             await self._recover(saved)
                         else:
                             await self._completed(
@@ -400,22 +360,11 @@ class FactoryExecution:
                         return
                     raise
                 if card["runtime"].get("pending", {}).get("id") == token and not self._quiescing:
-                    if card["state"] == "discarded":
-                        runtime = self._runtime(card)
-                        runtime.pop("pending", None)
-                        runtime["note"] = agent_text.error_message("cleanup_failed")
-                        await self._change(card, {"runtime": runtime}, event="cleanup_failed")
-                        self._close_later(card)
-                    else:
-                        await self._wait(
-                            card,
-                            "review_failed" if card["state"] == "reviewing" else "run_failed",
-                            "launch_failed",
-                        )
+                    await self._wait(card, "run_failed", "launch_failed")
         finally:
             self._scheduled.discard(token)
 
-    async def _guard(self, context: ToolContext, *, review: bool = False, states: set[str]) -> Json:
+    async def _guard(self, context: ToolContext, *, states: set[str]) -> Json:
         owner = context.execution_owner
         if owner is None or owner.extension != "factory" or context.request_turn_end_hook is None:
             raise self._error("participant_required")
@@ -425,8 +374,8 @@ class FactoryExecution:
             runtime.get("current_run") != context.run_id
             or runtime.get("epoch") != owner.epoch
             or runtime.get("current_participant") != owner.participant_id
-            or is_review(owner.participant_id) != review
             or runtime.get("pending")
+            or not runtime.get("workflow", {}).get("steps")
         ):
             raise self._error("stale_run")
         if card["state"] not in states:
@@ -446,120 +395,99 @@ class FactoryExecution:
         runtime.pop("setup", None)
         runtime.update(
             workflow=workflow,
-            settings={
-                key: setup[key] for key in ("turn_budget", "base_branch", "integration_check")
-            },
+            settings={"turn_budget": setup["turn_budget"]},
+            done=[],
+            approved=[],
+            notes={},
             passes={},
             rounds={},
             restarts=0,
         )
-        return await self._begin_stage(
+        return await self._continue(
             card,
             runtime,
-            0,
             event="started",
+            actor="factory",
             patch={"workflow_id": workflow["id"]},
             detail={"workflow": workflow["name"]},
         )
 
-    async def _begin_stage(
+    async def _continue(
         self,
         card: Json,
         runtime: Json,
-        index: int,
         *,
-        note: str = "refresh",
-        text: str = "",
         event: str,
-        actor: str = "factory",
+        actor: str,
         patch: Json | None = None,
         **extra: Any,
     ) -> Json:
-        stage = runtime["workflow"]["stages"][index]
+        """Start the next step that is not done, or wait for the user."""
+        step = _workflows.next_step(runtime["workflow"], runtime.get("done", []))
+        if step is None:
+            return await self._wait(
+                card, "finished", runtime=runtime, actor=actor, event=event, patch=patch, **extra
+            )
+        runtime["step"] = step["id"]
+        if step["approval"] and step["id"] not in runtime.get("approved", []):
+            return await self._wait(
+                card, "checkpoint", runtime=runtime, actor=actor, event=event, patch=patch, **extra
+            )
         passes = runtime.setdefault("passes", {})
-        passes[stage["id"]] = int(passes.get(stage["id"], 0)) + 1
-        runtime.update(
-            stage=index,
-            lane=0,
-            verdicts=[],
-            review_kind="review",
-            lane_note={"kind": note, "text": text},
-            reviewer_retries=0,
+        passes[step["id"]] = int(passes.get(step["id"], 0)) + 1
+        return await self._run_step(
+            card, runtime, step, event=event, actor=actor, patch=patch, **extra
         )
-        return await self._run_lane(card, runtime, event=event, actor=actor, patch=patch, **extra)
 
-    async def _run_lane(
+    async def _run_step(
         self,
         card: Json,
         runtime: Json,
+        step: Json,
         *,
         event: str,
         actor: str = "factory",
         patch: Json | None = None,
         **extra: Any,
     ) -> Json:
-        """Queue the current lane of the current stage."""
-        workflow = runtime["workflow"]
-        index, lane = int(runtime["stage"]), int(runtime["lane"])
-        stage = workflow["stages"][index]
+        """Queue a run of the step: its Session continues, or a fresh one starts."""
+        runtime["step"] = step["id"]
+        if step["returns_to"]:
+            sequences = runtime.setdefault("sequences", {})
+            sequences[step["id"]] = int(sequences.get(step["id"], 0)) + 1
+        participant = self._participant(runtime, step)
+        note = runtime.setdefault("notes", {}).pop(step["id"], None) or {
+            "kind": "refresh",
+            "text": "",
+        }
         updated = {**card, **(patch or {}), "runtime": runtime}
         # The output handed in by this transition is saved together with the
         # queued input, so the next participant's input must include it already.
         recording = extra.get("output")
-        if stage["kind"] == "review":
-            sequences = runtime.setdefault("review_sequences", {})
-            sequences[stage["id"]] = int(sequences.get(stage["id"], 0)) + 1
-            participant = _workflows.review_participant(stage, lane, sequences[stage["id"]])
-            runtime["reviewer_nudges"] = 0
-            history = await self._history(card, recording)
-            own = [item for item in history["outputs"] if item["stage_id"] == stage["id"]]
-            if lane == 0:
-                # Lanes judge independently: later lanes of this pass see only the
-                # verdicts that existed when the pass began.
-                runtime["review_previous"] = len(own)
-            target = {stage["target"]}
-            content = agent_text.review_input(
-                updated,
-                workflow,
-                index,
-                under_review=[
-                    item
-                    for item in self._latest(history["outputs"], workflow, target)
-                    if item["kind"] == "work"
-                ],
-                previous=own[: int(runtime.get("review_previous", len(own)))],
-                integration=runtime.get("review_kind") == "integration_review",
-            )
-            return await self._queue(
-                card,
-                phase="reviewing",
-                participant=participant,
-                initial=True,
-                content=content,
-                runtime=runtime,
-                patch=patch,
-                event=event,
-                actor=actor,
-                **extra,
-            )
-        participant = _workflows.work_participant(stage, lane)
-        note = runtime.get("lane_note") or {"kind": "refresh", "text": ""}
         if participant in runtime.get("participants", {}):
             earlier = []
             if note["kind"] == "refresh":
+                workflow = runtime["workflow"]
                 earlier = self._latest(
                     (await self._history(card, recording))["outputs"],
                     workflow,
-                    {item["id"] for item in workflow["stages"][:index]},
+                    _workflows.ancestors(workflow, step["id"]),
                 )
-            content = agent_text.note(note["kind"], updated, note["text"], earlier)
+            content = agent_text.note(
+                note["kind"],
+                updated,
+                note["text"],
+                earlier,
+                step=step,
+                source=note.get("source", ""),
+            )
             initial = False
         else:
-            content = await self._work_input(updated, runtime, participant, recording)
+            content = await self._step_input(updated, runtime, step, recording, note)
             initial = True
+        extra["detail"] = {**extra.get("detail", {}), "step": step["id"]}
         return await self._queue(
             card,
-            phase="working",
             participant=participant,
             initial=initial,
             content=content,
@@ -570,112 +498,60 @@ class FactoryExecution:
             **extra,
         )
 
-    async def _after_lane(
-        self, card: Json, runtime: Json, *, event: str, actor: str, patch: Json, **extra: Any
-    ) -> Json:
-        stage = runtime["workflow"]["stages"][runtime["stage"]]
-        if int(runtime["lane"]) + 1 < len(stage["lanes"]):
-            runtime["lane"] = int(runtime["lane"]) + 1
-            return await self._run_lane(
-                card, runtime, event=event, actor=actor, patch=patch, **extra
-            )
-        if stage["approval"]:
-            return await self._wait(
-                card, "checkpoint", runtime=runtime, actor=actor, event=event, patch=patch, **extra
-            )
-        return await self._advance(card, runtime, event=event, actor=actor, patch=patch, **extra)
-
-    async def _advance(
-        self, card: Json, runtime: Json, *, event: str, actor: str, patch: Json | None, **extra: Any
-    ) -> Json:
-        index = int(runtime.get("stage", 0)) + 1
-        if index < len(runtime["workflow"]["stages"]):
-            return await self._begin_stage(
-                card, runtime, index, event=event, actor=actor, patch=patch, **extra
-            )
-        return await self._wait(
-            card, "finished", runtime=runtime, actor=actor, event=event, patch=patch, **extra
-        )
-
-    async def _integration_review(
-        self, card: Json, runtime: Json, *, event: str, actor: str, patch: Json, **extra: Any
-    ) -> Json:
-        index = _workflows.integration_review(runtime["workflow"])
-        runtime.update(review_kind="integration_review", reviewer_retries=0)
-        if index is None:
-            runtime["note"] = agent_text.error_message("integration_unreviewed")
-            runtime["stage"] = _workflows.integrator(runtime["workflow"])
-            return await self._wait(
-                card, "finished", runtime=runtime, actor=actor, event=event, patch=patch, **extra
-            )
-        runtime.update(stage=index, lane=0, verdicts=[])
-        return await self._run_lane(card, runtime, event=event, actor=actor, patch=patch, **extra)
-
-    def _output(self, card: Json, runtime: Json, kind: str) -> Json:
+    @staticmethod
+    def _reset(runtime: Json, target: str, note: Json) -> None:
+        """Make the target step and every step after it run again, the target first."""
         workflow = runtime["workflow"]
+        later = _workflows.dependents(workflow, target)
+        runtime["done"] = [item for item in runtime.get("done", []) if item not in later | {target}]
+        # Steps after the target ask for approval again; the target keeps its own.
+        runtime["approved"] = [item for item in runtime.get("approved", []) if item not in later]
+        runtime.setdefault("notes", {})[target] = note
+        for item in later:
+            runtime["notes"].pop(item, None)
+
+    def _output(self, runtime: Json, kind: str) -> Json:
         participant = runtime["current_participant"]
-        index, lane = self._locate(workflow, participant)
-        stage = workflow["stages"][index]
+        step = self._step(runtime, participant)
         return {
-            "stage_id": stage["id"],
-            "stage_name": stage["name"],
+            "step": step["id"],
+            "step_name": step["name"],
             "kind": kind,
-            "lane": lane,
-            "pass": int(runtime.get("passes", {}).get(stage["id"], 1)),
+            "pass": int(runtime.get("passes", {}).get(step["id"], 1)),
             "participant_id": participant,
         }
 
     async def submit_work(self, context: ToolContext, arguments: Json) -> Json:
-        card = await self._guard(context, states={"working", "integrating"})
+        card = await self._guard(context, states={"working"})
         runtime = self._runtime(card)
-        workflow = runtime["workflow"]
-        index, _lane = self._locate(workflow, runtime["current_participant"])
-        stage = workflow["stages"][index]
+        step = self._step(runtime, runtime["current_participant"])
         summary = self._text(arguments, "summary")
-        output = self._output(card, runtime, "work") | {"summary": summary}
-        patch: Json = {"summary": summary, "recommendation": ""}
-        if stage["output"] == "changes":
-            if not all(
-                isinstance(arguments.get(field), str) and arguments[field].strip()
-                for field in ("branch", "base", "checks")
-            ):
-                raise self._error("missing_changes")
-            branch = self._text(arguments, "branch")
-            base = self._text(arguments, "base")
-            checks = self._text(arguments, "checks")
-            facts = await GitRepository(runtime["cwd"]).submission(branch, base)
-            output.update(facts, checks=checks)
-            patch.update(facts, checks=checks, round=card["round"] + 1)
-        else:
-            result = arguments.get("result")
-            if not isinstance(result, str) or not result.strip():
-                raise self._error("missing_result")
-            if len(result) > _RESULT_LIMIT:
-                raise FactoryError(
-                    "text_too_long",
-                    f"Nothing was changed. result exceeds {_RESULT_LIMIT} characters. "
-                    "Shorten the document and submit it again.",
-                )
-            noted = arguments.get("checks")
-            output.update(result=result, checks=noted if isinstance(noted, str) else "")
-            patch["checks"] = output["checks"]
+        result = arguments.get("result")
+        if result is not None and not isinstance(result, str):
+            raise self._error("missing_text", field="result")
+        if isinstance(result, str) and len(result) > _RESULT_LIMIT:
+            raise FactoryError(
+                "text_too_long",
+                f"Nothing was changed. result exceeds {_RESULT_LIMIT} characters. "
+                "Shorten it and submit again.",
+            )
+        output = self._output(runtime, "work") | {"summary": summary, "result": result or ""}
         runtime.update(restarts=0)
-        runtime.pop("review_branch_head_sha", None)
-        routed = runtime.pop("next_review_kind", None) == "integration_review"
-        integration = card["state"] == "integrating" or routed
-        if integration:
-            saved = await self._integration_review(
-                card, runtime, event="submitted", actor="agent", patch=patch, output=output
-            )
-        else:
-            saved = await self._after_lane(
-                card, runtime, event="submitted", actor="agent", patch=patch, output=output
-            )
+        runtime.setdefault("done", []).append(step["id"])
+        saved = await self._continue(
+            card,
+            runtime,
+            event="submitted",
+            actor="agent",
+            patch={"summary": summary},
+            output=output,
+            detail={"handed_in": step["id"]},
+        )
         context.request_turn_end()
         return agent_text.tool_result("submitted", saved)
 
     async def report_blocked(self, context: ToolContext, arguments: Json) -> Json:
-        card = await self._guard(context, states={"working", "integrating"})
+        card = await self._guard(context, states={"working"})
         question = self._text(arguments, "question")
         runtime = self._runtime(card)
         runtime.update(question=question, restarts=0)
@@ -683,319 +559,65 @@ class FactoryExecution:
         context.request_turn_end()
         return agent_text.tool_result("blocked", saved)
 
-    async def submit_review(self, context: ToolContext, arguments: Json) -> Json:
-        card = await self._guard(context, review=True, states={"reviewing"})
-        verdict = arguments.get("verdict")
-        recommendation = arguments.get("recommendation", "")
-        findings = arguments.get("findings", [])
+    async def request_changes(self, context: ToolContext, arguments: Json) -> Json:
+        card = await self._guard(context, states={"working"})
+        runtime = self._runtime(card)
+        step = self._step(runtime, runtime["current_participant"])
+        findings = arguments.get("findings")
+        if isinstance(findings, str) and findings.strip():
+            findings = [findings]
         if (
-            verdict not in {"approve", "changes_requested"}
-            or not isinstance(recommendation, str)
-            or len(recommendation) > 20000
-            or not isinstance(findings, list)
+            not isinstance(findings, list)
+            or not findings
             or len(findings) > 100
             or any(
                 not isinstance(value, str) or not value.strip() or len(value) > 20000
                 for value in findings
             )
-            or verdict == "approve"
-            and not recommendation.strip()
-            or verdict == "changes_requested"
-            and not findings
         ):
-            raise self._error("invalid_verdict")
-        runtime = self._runtime(card)
+            raise self._error("invalid_findings")
+        if not step["returns_to"]:
+            raise self._error("participant_required")
         runtime.update(restarts=0)
-        workflow = runtime["workflow"]
-        stage = workflow["stages"][runtime["stage"]]
-        kind = runtime.get("review_kind", "review")
-        integration = kind == "integration_review"
-        landing = runtime.get("integration_landing")
-        after_landing = (
-            integration
-            and isinstance(landing, dict)
-            and landing.get("head_sha") == card["head_sha"]
-        )
-        output = self._output(card, runtime, kind) | {
-            "verdict": verdict,
-            "recommendation": recommendation,
-            "findings": findings,
-            "head_sha": card["head_sha"],
-        }
-        verdicts = runtime.setdefault("verdicts", [])
-        verdicts.append(
-            {"verdict": verdict, "recommendation": recommendation, "findings": findings}
-        )
-        recommendations = "\n\n".join(
-            item["recommendation"].strip() for item in verdicts if item["recommendation"].strip()
-        )
-        patch: Json = {"recommendation": recommendation}
-        detail = {"after_landing": after_landing}
-        if after_landing and verdict == "changes_requested":
-            assert isinstance(landing, dict)
-            landing["status"] = "changes_requested"
+        target = step["returns_to"]
+        output = self._output(runtime, "changes") | {"findings": findings, "target": target}
+        detail = {"step": step["id"], "target": target}
+        rounds = runtime.setdefault("rounds", {})
+        if int(rounds.get(step["id"], 0)) >= int(step["rounds"]):
             saved = await self._wait(
                 card,
                 "no_agreement",
                 runtime=runtime,
                 actor="agent",
-                event="reviewed",
-                patch=patch,
+                event="changes_requested",
                 output=output,
                 detail=detail,
             )
-        elif int(runtime["lane"]) + 1 < len(stage["lanes"]):
-            runtime["lane"] = int(runtime["lane"]) + 1
-            saved = await self._run_lane(
+        else:
+            rounds[step["id"]] = int(rounds.get(step["id"], 0)) + 1
+            self._reset(
+                runtime,
+                target,
+                {"kind": "rework", "text": "\n".join(findings), "source": step["name"]},
+            )
+            saved = await self._continue(
                 card,
                 runtime,
-                event="reviewed",
+                event="changes_requested",
                 actor="agent",
-                patch=patch,
                 output=output,
                 detail=detail,
             )
-        else:
-            patch["recommendation"] = recommendations
-            changes = [
-                finding
-                for item in verdicts
-                if item["verdict"] == "changes_requested"
-                for finding in item["findings"]
-            ]
-            if not changes:
-                if after_landing:
-                    assert isinstance(landing, dict)
-                    landing["status"] = "approved"
-                if integration:
-                    saved = await self._wait(
-                        card,
-                        "finished",
-                        runtime=runtime,
-                        actor="agent",
-                        event="reviewed",
-                        patch=patch,
-                        output=output,
-                        detail=detail,
-                    )
-                else:
-                    saved = await self._after_lane(
-                        card, runtime, event="reviewed", actor="agent", patch=patch, output=output
-                    )
-            else:
-                rounds = runtime.setdefault("rounds", {})
-                key = stage["id"] + (":integration" if integration else "")
-                rounds[key] = int(rounds.get(key, 0)) + 1
-                findings_text = "\n".join(changes)
-                if rounds[key] >= int(stage["rounds"]):
-                    saved = await self._wait(
-                        card,
-                        "no_agreement",
-                        runtime=runtime,
-                        actor="agent",
-                        event="reviewed",
-                        patch=patch,
-                        output=output,
-                        detail=detail,
-                    )
-                elif integration:
-                    integrator = self._integrator(runtime)
-                    assert integrator is not None
-                    runtime.update(
-                        next_review_kind="integration_review",
-                        stage=_workflows.integrator(workflow),
-                        lane=0,
-                        reviewer_retries=0,
-                    )
-                    saved = await self._queue(
-                        card,
-                        phase="working",
-                        participant=integrator,
-                        content=agent_text.note("rework", card, findings_text),
-                        runtime=runtime,
-                        patch={**patch, "turns": 0},
-                        event="changes_requested",
-                        actor="agent",
-                        output=output,
-                    )
-                else:
-                    saved = await self._begin_stage(
-                        card,
-                        runtime,
-                        _workflows.stage_index(workflow, stage["target"]),
-                        note="rework",
-                        text=findings_text,
-                        event="changes_requested",
-                        actor="agent",
-                        patch=patch,
-                        output=output,
-                    )
         context.request_turn_end()
-        return agent_text.tool_result("reviewed", saved)
+        return agent_text.tool_result("changes_requested", saved)
 
-    async def report_integration(self, context: ToolContext, arguments: Json) -> Json:
-        card = await self._guard(context, states={"integrating"})
-        outcome = arguments.get("outcome")
-        if outcome not in {"integrated", "needs_changes", "failed"}:
-            raise self._error("invalid_outcome")
-        runtime = self._runtime(card)
-        runtime["restarts"] = 0
-        base_commit = self._text(arguments, "base_commit") if "base_commit" in arguments else None
-        repository = GitRepository(runtime["cwd"])
-        if outcome == "needs_changes":
-            inspection = await repository.integration(
-                card["branch"],
-                card["base"],
-                reviewed_base=card["base_sha"],
-                reviewed_head=card["head_sha"],
-                expected_branch_head=runtime.get("review_branch_head_sha"),
-                accepted_base=runtime.get("integration_base_sha"),
-                base_commit=base_commit,
-            )
-            if inspection["review_required"] and inspection["landed"]:
-                return await self._review_integration(card, runtime, inspection, context)
-            integrator = self._integrator(runtime)
-            assert integrator is not None
-            runtime.update(
-                next_review_kind="integration_review",
-                stage=_workflows.integrator(runtime["workflow"]),
-                lane=0,
-            )
-            saved = await self._queue(
-                card,
-                phase="working",
-                participant=integrator,
-                runtime=runtime,
-                content=agent_text.note("integration_changes", card, arguments.get("note", "")),
-                patch={"turns": 0},
-                event="integration_changes",
-                actor="agent",
-            )
-            result = "integration_changes"
-        elif outcome == "failed":
-            runtime["note"] = self._text(arguments, "note")
-            saved = await self._wait(card, "integration_failed", runtime=runtime, actor="agent")
-            result = "integration_failed"
-        else:
-            reference = arguments.get("reference", "")
-            if not isinstance(reference, str) or len(reference) > 2000:
-                raise self._error("invalid_reference")
-            try:
-                parsed = urlsplit(reference)
-            except ValueError as error:
-                raise self._error("invalid_reference") from error
-            url = (
-                parsed.scheme in {"http", "https"}
-                and bool(parsed.hostname)
-                and not parsed.username
-                and not parsed.password
-            )
-            if parsed.scheme and not url:
-                raise self._error("invalid_reference")
-            reference_only = url or self._check(runtime) == "reference_only"
-            inspection = await repository.integration(
-                card["branch"],
-                card["base"],
-                reviewed_base=card["base_sha"],
-                reviewed_head=card["head_sha"],
-                expected_branch_head=runtime.get("review_branch_head_sha"),
-                accepted_base=runtime.get("integration_base_sha"),
-                base_commit=base_commit,
-                verify_merged=not reference_only,
-                reported_reference=reference,
-            )
-            if inspection["review_required"]:
-                return await self._review_integration(card, runtime, inspection, context)
-            if reference_only or inspection["landed"]:
-                # Project cleanup can legitimately delete the submitted branch.
-                # Inspection still verifies its exact candidate and landing scope.
-                saved = await self._done(card, reference or card["head_sha"], runtime)
-                result = "integrated"
-            else:
-                runtime["note"] = agent_text.error_message(
-                    "integration_not_found"
-                    if inspection["branch_head_sha"]
-                    else "integration_branch_missing"
-                )
-                saved = await self._wait(card, "integration_failed", runtime=runtime, actor="agent")
-                result = "integration_failed"
-        context.request_turn_end()
-        return agent_text.tool_result(result, saved)
-
-    @staticmethod
-    def _check(runtime: Json) -> str:
-        return str(runtime.get("settings", {}).get("integration_check", "merged"))
-
-    async def _review_integration(
-        self, card: Json, runtime: Json, inspection: Json, context: ToolContext
-    ) -> Json:
-        if inspection["landed"]:
-            runtime["integration_landing"] = {
-                key: inspection[key]
-                for key in (
-                    "head_sha",
-                    "base_sha",
-                    "landing_sha",
-                    "branch_head_sha",
-                    "extra_paths",
-                    "merge_paths",
-                )
-            } | {"status": "pending"}
-        detail = {
-            key: inspection[key]
-            for key in ("landed", "landing_sha", "target_sha", "extra_paths", "merge_paths")
-        }
-        if not inspection["base_sha"]:
-            runtime.update(review_kind="integration_review")
-            await self._change(
-                card,
-                {"runtime": runtime},
-                actor="agent",
-                event="integration_base_required",
-                detail=detail,
-            )
-            return agent_text.integration_base_required()
-        runtime["review_branch_head_sha"] = inspection["branch_head_sha"]
-        saved = await self._integration_review(
-            card,
-            runtime,
-            patch={
-                "base_sha": inspection["base_sha"],
-                "head_sha": inspection["head_sha"],
-                "round": card["round"] + 1,
-                "recommendation": "",
-            },
-            event="integration_review",
-            actor="agent",
-            detail=detail,
-        )
-        context.request_turn_end()
-        if saved["state"] == "waiting":
-            return agent_text.tool_result("integration_waiting", saved)
-        return agent_text.tool_result(
-            "post_integration_review" if inspection["landed"] else "integration_review", saved
-        )
-
-    async def _done(
-        self,
-        card: Json,
-        reference: str,
-        runtime: Json,
-        *,
-        actor: str = "agent",
-        event: str = "integrated",
-    ) -> Json:
+    async def _done(self, card: Json, runtime: Json) -> Json:
         runtime.pop("pending_action", None)
         saved = await self._change(
             card,
-            {
-                "state": "done",
-                "waiting_reason": "",
-                "integration_reference": reference,
-                "runtime": runtime,
-            },
-            actor=actor,
-            event=event,
+            {"state": "done", "waiting_reason": "", "runtime": runtime},
+            actor="user",
+            event="accepted",
         )
         self._close_later(saved)
         return saved
@@ -1016,53 +638,41 @@ class FactoryExecution:
         reason = runtime.get("pending_action", {}).get("waiting_reason") or card["waiting_reason"]
         if reason not in {"checkpoint", "finished", "no_agreement"}:
             raise self._error("wrong_state")
-        workflow = runtime["workflow"]
         runtime["restarts"] = 0
-        integration = runtime.get("review_kind") == "integration_review"
-        if (
-            reason != "finished"
-            and not integration
-            and int(runtime.get("stage", 0)) < len(workflow["stages"]) - 1
-        ):
-            # A checkpoint or an exhausted review: the user lets the Workflow go on.
-            runtime["rounds"] = {}
-            return await self._advance(card, runtime, event="accepted", actor="user", patch=None)
-        integrator = self._integrator(runtime)
-        if integrator is None:
-            return await self._done(card, "", runtime, actor="user", event="accepted")
-        if self._check(runtime) == "reference_only":
-            runtime.pop("integration_base_sha", None)
-        else:
-            runtime["integration_base_sha"] = await GitRepository(runtime["cwd"]).base(card["base"])
-        runtime.update(stage=_workflows.integrator(workflow), lane=0)
-        return await self._queue(
-            card,
-            phase="integrating",
-            participant=integrator,
-            content=agent_text.note("integrate", {**card, "runtime": runtime}),
-            runtime=runtime,
-            patch={"turns": 0},
-            event="accepted",
-            actor="user",
-        )
+        if reason == "checkpoint":
+            runtime.setdefault("approved", []).append(runtime["step"])
+        elif reason == "no_agreement":
+            # The user overrules the step that kept sending work back.
+            runtime.setdefault("done", []).append(runtime["step"])
+        runtime["rounds"] = {}
+        if _workflows.next_step(runtime["workflow"], runtime.get("done", [])) is None:
+            return await self._done(card, runtime)
+        return await self._continue(card, runtime, event="accepted", actor="user")
 
-    async def send_back(self, card: Json, comment: str, stage: str = "") -> Json:
+    @staticmethod
+    def _default_target(runtime: Json) -> str:
+        """The step a send-back without a chosen step reworks."""
+        workflow = runtime["workflow"]
+        done = [step for step in workflow["steps"] if step["id"] in runtime.get("done", [])]
+        current = _workflows.step(workflow, runtime["step"]) if runtime.get("step") else None
+        if current is None or current["id"] not in runtime.get("done", []):
+            current = done[-1] if done else workflow["steps"][0]
+        return str(current["returns_to"] or current["id"])
+
+    async def send_back(self, card: Json, comment: str, step: str = "") -> Json:
         runtime = self._action(card, "send_back")
         action = runtime.get("pending_action", {})
         recorded = action.get("comment_recorded", False)
         reason = action.get("waiting_reason") or card["waiting_reason"]
         runtime["restarts"] = 0
-        if not runtime.get("workflow"):
+        if not runtime.get("workflow", {}).get("steps"):
             return await self._requeue(
                 card, runtime, event="sent_back", comment=None if recorded else comment
             )
-        workflow = runtime["workflow"]
         participant = runtime.get("current_participant")
-        if reason == "blocked" and not stage and participant and not is_review(participant):
-            phase = runtime.get("phase", "working")
+        if reason == "blocked" and not step and participant:
             return await self._queue(
                 card,
-                phase=phase if phase in {"working", "integrating"} else "working",
                 participant=participant,
                 content=agent_text.note("answer", card, comment),
                 runtime=runtime,
@@ -1072,22 +682,15 @@ class FactoryExecution:
                 comment=None if recorded else comment,
             )
         runtime["rounds"] = {}
-        runtime.pop("next_review_kind", None)
-        index = (
-            _workflows.stage_index(workflow, stage)
-            if stage
-            else _workflows.send_back_stage(workflow, int(runtime.get("stage", 0)))
-        )
-        return await self._begin_stage(
+        target = step or self._default_target(runtime)
+        self._reset(runtime, target, {"kind": "send_back", "text": comment})
+        return await self._continue(
             card,
             runtime,
-            index,
-            note="send_back",
-            text=comment,
             event="sent_back",
             actor="user",
-            patch={"recommendation": ""},
             comment=None if recorded else comment,
+            detail={"target": target},
         )
 
     async def _requeue(
@@ -1111,15 +714,13 @@ class FactoryExecution:
             card = acknowledged
             runtime = self._action(card, "retry")
         runtime["restarts"] = 0
-        if not runtime.get("workflow"):
+        if not runtime.get("workflow", {}).get("steps"):
             return await self._requeue(card, runtime, event="retried")
-        phase = runtime.get("phase", "working")
         pending = runtime.get("pending")
         if pending:
             pending["retry_terminal"] = True
             return await self._queue(
                 card,
-                phase=phase,
                 participant=pending["participant"],
                 content=pending["content"],
                 initial=pending["kind"] == "initial",
@@ -1129,72 +730,33 @@ class FactoryExecution:
                 event="retried",
                 actor="user",
             )
-        workflow = runtime["workflow"]
-        stage = workflow["stages"][int(runtime.get("stage", 0))]
-        if phase == "reviewing" or stage["kind"] == "review" and phase != "integrating":
-            runtime["reviewer_retries"] = 0
-            return await self._run_lane(card, runtime, event="retried", actor="user")
-        participant = (
-            self._integrator(runtime)
-            if phase == "integrating"
-            else _workflows.work_participant(stage, int(runtime.get("lane", 0)))
-        )
-        assert participant is not None
+        step = self._step(runtime)
+        if step["returns_to"]:
+            # A step that judges earlier work starts over with a fresh participant.
+            return await self._run_step(card, runtime, step, event="retried", actor="user")
         return await self._queue(
             card,
-            phase=phase if phase in {"working", "integrating"} else "working",
-            participant=participant,
-            content=agent_text.note(
-                "keep_integrating" if phase == "integrating" else "keep_working", card
-            ),
+            participant=self._participant(runtime, step),
+            content=agent_text.note("keep_working", card, step=step),
             runtime=runtime,
             patch={"turns": 0},
             event="retried",
             actor="user",
         )
 
-    @staticmethod
-    def _cleanup_participants(runtime: Json) -> list[str]:
-        """Existing participants of stages that change the repository, in stage order."""
-        existing = runtime.get("participants", {})
-        # A Card carried over from the role-based Factory keeps its worker's worktree.
-        legacy = ["worker"] if "worker" in existing else []
-        workflow = runtime.get("workflow")
-        if not workflow:
-            return legacy
-        return legacy + [
-            participant
-            for stage in workflow["stages"]
-            if stage["kind"] == "work" and stage["output"] == "changes"
-            for lane in range(len(stage["lanes"]))
-            if (participant := _workflows.work_participant(stage, lane)) in existing
-        ]
-
     async def discard(self, card: Json) -> Json:
         if card["state"] in FINAL_STATES:
             raise self._error("wrong_state")
         runtime = self._runtime(card)
-        cleanup = self._cleanup_participants(runtime)
-        if cleanup:
-            runtime["cleanup"] = cleanup[1:]
-            return await self._queue(
-                card,
-                phase="cleanup",
-                participant=cleanup[0],
-                content=agent_text.note("discard", card),
-                cancel=True,
-                runtime=runtime,
-                event="discarded",
-                actor="user",
-            )
         runtime.pop("pending", None)
+        runtime.pop("pending_action", None)
         saved = await self._change(
             card,
             {"state": "discarded", "waiting_reason": "", "runtime": runtime},
             actor="user",
             event="discarded",
         )
-        self._close_later(saved)
+        self._close_later(saved, cancel=True)
         return saved
 
     async def delete(self, card: Json) -> Json:
@@ -1235,7 +797,8 @@ class FactoryExecution:
         self._close_later(saved)
         return saved
 
-    def _close_later(self, card: Json, *, delete: bool = False) -> None:
+    def _close_later(self, card: Json, *, delete: bool = False, cancel: bool = False) -> None:
+        """Close the Card's group once its current Run ended, or at once to cancel it."""
         if self._quiescing:
             return
         key = card["id"] + (
@@ -1244,15 +807,15 @@ class FactoryExecution:
         if key in self._closing_groups:
             return
         self._closing_groups.add(key)
-        self.service.spawn(self._close(card["id"], key, delete=delete))
+        self.service.spawn(self._close(card["id"], key, delete=delete, cancel=cancel))
 
-    async def _close(self, card_id: str, key: str, *, delete: bool) -> None:
+    async def _close(self, card_id: str, key: str, *, delete: bool, cancel: bool = False) -> None:
         try:
             async with self.service.lock:
                 card = await self.store.get_card(card_id)
                 group_id = card["group_id"]
                 current_run = card["runtime"].get("current_run")
-            if not delete:
+            if not delete and not cancel:
                 await self._wait_run(group_id, current_run)
             async with self._group_locks.setdefault(card_id, asyncio.Lock()):
                 async with self.service.lock:
@@ -1372,8 +935,7 @@ class FactoryExecution:
                 and pending.get("participant") != owner.participant_id
             ):
                 raise self._error("stale_run")
-            cleanup = card["state"] == "discarded" and runtime.get("phase") == "cleanup"
-            if card["state"] not in ACTIVE_STATES and not cleanup:
+            if card["state"] not in ACTIVE_STATES:
                 raise self._error("wrong_state")
             if (context.agent_id, context.session_id) != (
                 binding.address.agent_id,
@@ -1384,11 +946,7 @@ class FactoryExecution:
                 raise self._error("stale_run")
             if runtime.get("current_run") == context.run_id:
                 return self._prepared_delivery(pending) if pending.get("delivery") else None
-            if (
-                not is_review(owner.participant_id)
-                and not cleanup
-                and card["turns"] >= self._budget(runtime)
-            ):
+            if card["turns"] >= self._budget(runtime):
                 await self._wait(card, "budget_exhausted", "budget_exhausted")
                 raise self._error("budget_exhausted")
             runtime["current_run"] = context.run_id
@@ -1403,10 +961,12 @@ class FactoryExecution:
                     "generation_id": binding.generation_id,
                     "settings_revision": str(card["revision"]),
                 }
-            patch: Json = {"runtime": runtime}
-            if not is_review(owner.participant_id) and not cleanup:
-                patch["turns"] = card["turns"] + 1
-            await self._change(card, patch, event="run_observed", detail={"run_id": context.run_id})
+            await self._change(
+                card,
+                {"runtime": runtime, "turns": card["turns"] + 1},
+                event="run_observed",
+                detail={"run_id": context.run_id},
+            )
             if pending:
                 return self._prepared_delivery(pending)
         return None
@@ -1493,11 +1053,7 @@ class FactoryExecution:
             if (
                 context.run_id != runtime.get("current_run")
                 or context.execution_owner.epoch != runtime.get("epoch")
-                or (
-                    outcome != "success"
-                    and not is_review(runtime.get("current_participant"))
-                    and runtime.get("pending")
-                )
+                or (outcome != "success" and runtime.get("pending"))
             ):
                 await self._pause_failed_handoff(card, context, outcome)
                 return
@@ -1512,57 +1068,20 @@ class FactoryExecution:
 
     async def _completed(self, card: Json, outcome: str) -> None:
         runtime = self._runtime(card)
-        if (
-            card["state"] == "discarded"
-            and runtime.get("phase") == "cleanup"
-            and runtime.get("cleanup")
-            and not runtime.get("deleting")
-        ):
-            participant = runtime["cleanup"].pop(0)
-            await self._queue(
-                card,
-                phase="cleanup",
-                participant=participant,
-                content=agent_text.note("discard", card),
-                runtime=runtime,
-                event="cleanup_continued",
-            )
-            return
         if card["state"] not in ACTIVE_STATES:
-            self._close_later(card, delete=card["runtime"].get("deleting", False))
+            self._close_later(card, delete=runtime.get("deleting", False))
             return
-        if card["state"] == "reviewing":
-            if (
-                outcome == "success"
-                and not runtime.get("reviewer_nudges")
-                and not runtime.get("reviewer_retries")
-            ):
-                runtime["reviewer_nudges"] = 1
-                await self._queue(
-                    card,
-                    phase="reviewing",
-                    participant=runtime["current_participant"],
-                    content=agent_text.note("review_nudge", card),
-                    runtime=runtime,
-                    event="review_nudged",
-                )
-            elif outcome != "cancelled" and not runtime.get("reviewer_retries"):
-                runtime["reviewer_retries"] = 1
-                await self._run_lane(card, runtime, event="review_retried")
-            else:
-                await self._wait(card, "review_failed", "review_failed")
-        elif outcome != "success":
+        if outcome != "success":
             await self._wait(card, "run_failed", "run_failed")
         elif int(card["turns"]) >= self._budget(runtime):
             await self._wait(card, "budget_exhausted", "budget_exhausted")
         else:
-            phase = card["state"]
+            participant = runtime["current_participant"]
             await self._queue(
                 card,
-                phase=phase,
-                participant=runtime["current_participant"],
+                participant=participant,
                 content=agent_text.note(
-                    "keep_integrating" if phase == "integrating" else "keep_working", card
+                    "keep_working", card, step=self._step(runtime, participant)
                 ),
                 runtime=runtime,
                 event="nudged",
@@ -1574,28 +1093,27 @@ class FactoryExecution:
         if runtime["restarts"] >= 2:
             await self._wait(card, "restart", "restart", runtime=runtime)
             return
-        phase = runtime.get("phase", card["state"])
-        if phase not in ACTIVE_STATES:
+        if card["state"] not in ACTIVE_STATES:
             return
         participant = runtime.get("current_participant")
         if not participant:
-            await self._run_lane(card, runtime, event="restarted")
+            await self._run_step(card, runtime, self._step(runtime), event="restarted")
             return
         await self._queue(
             card,
-            phase=phase,
             participant=participant,
-            content=agent_text.note("restart", card),
+            content=agent_text.note("restart", card, step=self._step(runtime, participant)),
             runtime=runtime,
             event="restarted",
         )
 
     async def _upgrade(self, card: Json) -> None:
-        """Carry a Card that started under the role-based Factory over to a Workflow.
+        """Carry a Card that started under an older Factory over to steps.
 
         A Card that handed nothing in starts over. Any other waits for the user with
-        its worktree kept, because its review or integration cannot resume in a
-        Workflow it never ran.
+        its earlier steps done. An older Factory integrated a handed-in branch after
+        acceptance; such a Card waits for approval of its Workflow's last step,
+        which now integrates.
         """
         old = card["runtime"]
         runtime: Json = {"cwd": old.get("cwd", ""), "participants": old.get("participants", {})}
@@ -1606,28 +1124,59 @@ class FactoryExecution:
                 event="workflow_upgrade",
             )
             return
-        patch: Json = {"state": "waiting", "waiting_reason": "run_failed", "turns": 0}
-        try:
-            setup = await self.store.get_setup(card["project_id"])
-        except FactoryError:
-            setup = None
-        if setup is not None:
-            workflow = _workflows.choose(setup, None)
+        patch: Json = {"state": "waiting", "waiting_reason": "finished", "turns": 0}
+        output: Json | None = None
+        workflow: Json | None = None
+        budget = old.get("settings", {}).get("turn_budget")
+        if isinstance(old.get("workflow"), dict) and old["workflow"].get("stages"):
+            workflow = _workflows.from_stages(old["workflow"])
+        else:
+            try:
+                setup = await self.store.get_setup(card["project_id"])
+            except FactoryError:
+                setup = None
+            if setup is not None:
+                workflow = _workflows.choose(setup, None)
+                budget = setup["turn_budget"]
+        if workflow is not None and workflow["steps"]:
+            steps = [step["id"] for step in workflow["steps"]]
+            done = steps[:-1] if card["branch"] else steps
             runtime.update(
                 workflow=workflow,
-                settings={
-                    key: setup[key] for key in ("turn_budget", "base_branch", "integration_check")
-                },
+                settings={"turn_budget": int(budget or 30)},
+                done=done,
+                approved=list(done),
+                notes={},
                 passes={},
                 rounds={},
                 restarts=0,
-                stage=_workflows.integrator(workflow) or 0,
-                lane=0,
-                phase="working",
+                step=steps[-1],
             )
+            if card["branch"]:
+                patch["waiting_reason"] = "checkpoint"
+                # The earlier Factory kept the handed-in branch on the Card; the
+                # Integrate step reads it as the hand-in of the step that made it.
+                makers = [step for step in workflow["steps"][:-1] if not step["returns_to"]]
+                maker = makers[-1] if makers else workflow["steps"][-1]
+                output = {
+                    "step": maker["id"],
+                    "step_name": maker["name"],
+                    "kind": "work",
+                    "pass": 1,
+                    "participant_id": "",
+                    "summary": card["summary"] or "Handed in under an earlier Factory version.",
+                    "result": (
+                        f"Branch {card['branch']} based on {card['base']}, "
+                        f"head commit {card['head_sha']}."
+                    ),
+                }
             patch["workflow_id"] = workflow["id"]
+        else:
+            patch["waiting_reason"] = "run_failed"
         runtime["note"] = agent_text.error_message("workflow_upgrade")
-        await self._change(card, {**patch, "runtime": runtime}, event="workflow_upgrade")
+        await self._change(
+            card, {**patch, "runtime": runtime}, event="workflow_upgrade", output=output
+        )
 
     async def reconcile(self) -> None:
         if self._reconciled:
@@ -1643,14 +1192,18 @@ class FactoryExecution:
                 if runtime.get("deleting"):
                     self._close_later(card, delete=True)
                 elif card["state"] in FINAL_STATES:
-                    if runtime.get("phase") == "cleanup" and runtime.get("pending"):
-                        self._launch_later(card)
-                    elif runtime.get("phase") == "cleanup" and runtime.get("cleanup"):
-                        await self._completed(card, "success")
-                    else:
-                        self._close_later(card)
-                elif not runtime.get("workflow") and (
-                    runtime.get("setup") or card["state"] in ACTIVE_STATES
+                    if runtime.get("pending"):
+                        # A discarded Card no longer runs what an older Factory queued for it.
+                        runtime = self._runtime(card)
+                        runtime.pop("pending")
+                        card = await self._change(
+                            card, {"runtime": runtime}, event="pending_dropped"
+                        )
+                    self._close_later(card, cancel=True)
+                elif not runtime.get("workflow", {}).get("steps") and (
+                    runtime.get("setup")
+                    or runtime.get("workflow")
+                    or card["state"] in ACTIVE_STATES
                 ):
                     await self._upgrade(card)
                 elif card["state"] in {"proposal", "queued"}:
@@ -1678,8 +1231,17 @@ class FactoryExecution:
                             await self._completed(card, "success")
                         else:
                             await self._recover(card)
+                    elif runtime.get("step"):
+                        await self._run_step(
+                            card,
+                            self._runtime(card),
+                            self._step(runtime),
+                            event="recovered_initial",
+                        )
                     else:
-                        await self._run_lane(card, self._runtime(card), event="recovered_initial")
+                        await self._continue(
+                            card, self._runtime(card), event="recovered_initial", actor="factory"
+                        )
         after = ""
         while True:
             page = await self.groups.groups(after=after, limit=100)

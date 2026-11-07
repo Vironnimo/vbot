@@ -13,29 +13,20 @@ SETUP_DEFAULTS: Json = {
     "workflows": [],
     "default_workflow": "",
     "turn_budget": 30,
-    "base_branch": "main",
-    "integration_check": "merged",
 }
-_LANE = {
-    "type": "object",
-    "properties": {
-        "source": {"type": "string", "enum": ["agent", "team"]},
-        "agent": {"type": "string"},
-        "model": {"type": "string"},
-        "effort": {"type": "string"},
-    },
-}
-_STAGE = {
+_STEP = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
         "name": {"type": "string"},
-        "kind": {"type": "string", "enum": ["work", "review"]},
-        "output": {"type": "string", "enum": ["changes", "document"]},
-        "instructions": {"type": "string"},
-        "lanes": {"type": "array", "items": _LANE},
+        "source": {"type": "string", "enum": ["agent", "team"]},
+        "agent": {"type": "string"},
+        "model": {"type": "string"},
+        "effort": {"type": "string"},
+        "task": {"type": "string"},
+        "after": {"type": "array", "items": {"type": "string"}},
         "approval": {"type": "boolean"},
-        "target": {"type": "string"},
+        "returns_to": {"type": "string"},
         "rounds": {"type": "integer", "minimum": 1, "maximum": 20},
     },
 }
@@ -50,14 +41,12 @@ SETUP_PROPERTIES: Json = {
                 "id": {"type": "string"},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
-                "stages": {"type": "array", "items": _STAGE},
+                "steps": {"type": "array", "items": _STEP},
             },
         },
     },
     "default_workflow": {"type": "string"},
-    "base_branch": {"type": "string"},
     "turn_budget": {"type": "integer", "minimum": 1, "maximum": 1000},
-    "integration_check": {"type": "string", "enum": ["merged", "reference_only"]},
     "expected_revision": {"type": "integer", "minimum": 0},
 }
 
@@ -94,7 +83,7 @@ OPERATION_SCHEMAS: dict[str, Json] = {
     "card.move": schema({**_ID, "position": {"type": "number"}}, ("id", "position")),
     "card.accept": schema({**_ID, **_REVISION}, ("id", "expected_revision")),
     "card.send_back": schema(
-        {**_ID, "comment": {"type": "string"}, "stage": {"type": "string"}}, ("id", "comment")
+        {**_ID, "comment": {"type": "string"}, "step": {"type": "string"}}, ("id", "comment")
     ),
     "card.answer": schema({**_ID, "text": {"type": "string"}}, ("id", "text")),
     **{

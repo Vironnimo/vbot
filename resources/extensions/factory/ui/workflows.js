@@ -2,17 +2,22 @@ import { t } from '../../../../webui/src/lib/i18n.js';
 
 // A Project setup's Workflows as the page edits them. The server validates
 // and owns the format (`_workflows.normalize`); this module keeps drafts in
-// that shape, gives new parts ids the server keeps, and names the first
-// problem before an autosave sends a setup the server would refuse.
+// that shape, gives new steps ids the server keeps, keeps references between
+// steps consistent while the user reorders or removes steps, and names the
+// first problem before an autosave sends a setup the server would refuse.
+//
+// A Workflow is a list of steps. A step runs after the steps in `after`
+// (all listed before it), can wait for the user's approval, and with
+// `returns_to` can send an earlier step's result back, at most `rounds` times.
 
 export const MAX_WORKFLOWS = 30;
-export const MAX_STAGES = 20;
-export const MAX_LANES = 10;
+export const MAX_STEPS = 20;
+export const DEFAULT_ROUNDS = 2;
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
 // Ids match the server's `[a-z0-9]{1,24}`, so a saved draft keeps them and
-// lane keys of the preview stay stable while the user edits.
+// the diagram and Model keys stay stable while the user edits.
 export function newId(prefix, taken = []) {
   const used = new Set(taken);
   for (;;) {
@@ -22,59 +27,99 @@ export function newId(prefix, taken = []) {
   }
 }
 
-export const blankLane = () => ({
-  source: 'agent',
-  agent: '',
-  model: '',
-  effort: '',
-});
+// The server's key for a step's effective Model.
+export const stepKey = (workflow, step) => `${workflow.id}/${step.id}`;
 
-export const laneKey = (workflow, stage, index) =>
-  `${workflow.id}/${stage.id}/${index}`;
+// "Workflow / Step", the location the server names in its errors.
+export const stepLabel = (workflow, step) =>
+  t('factory.location.step', { workflow: workflow.name, step: step.name });
 
-// "Workflow / Stage / lane n", the location the server names in its errors.
-export function laneLabel(workflow, stage, index) {
-  const label = t('factory.location.stage', {
-    workflow: workflow.name,
-    stage: stage.name,
-  });
-  return stage.lanes.length > 1
-    ? t('factory.location.lane', { location: label, lane: index + 1 })
-    : label;
-}
+export const stepName = (step, index) =>
+  step.name.trim() || t('factory.stepPosition', { position: index + 1 });
 
-export const workStages = (stages, before = stages.length) =>
-  stages.slice(0, before).filter((stage) => stage.kind === 'work');
-
-// The last stage that changes the repository integrates after acceptance.
-export function integratorIndex(stages) {
-  let found = -1;
-  stages.forEach((stage, index) => {
-    if (stage.kind === 'work' && stage.output === 'changes') found = index;
-  });
+// Every step this step follows, directly or through other steps.
+export function ancestors(steps, stepId) {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const found = new Set();
+  const todo = [...(byId.get(stepId)?.after ?? [])];
+  while (todo.length) {
+    const current = todo.pop();
+    if (found.has(current) || !byId.has(current)) continue;
+    found.add(current);
+    todo.push(...byId.get(current).after);
+  }
   return found;
 }
 
-export const changesRepository = (workflow) =>
-  integratorIndex(workflow?.stages ?? []) >= 0;
+// The steps a step can send work back to: those it follows, in list order.
+export const returnTargets = (steps, index) => {
+  const reachable = ancestors(steps, steps[index]?.id);
+  return steps.slice(0, index).filter((step) => reachable.has(step.id));
+};
 
-export function newStage(kind, stages) {
-  const id = newId(
-    's',
-    stages.map((stage) => stage.id),
-  );
-  const earlier = workStages(stages);
+function uniqueStepName(steps) {
+  const taken = new Set(steps.map((step) => step.name.trim().toLowerCase()));
+  for (let number = steps.length + 1; ; number += 1) {
+    const name = t('factory.stepPosition', { position: number });
+    if (!taken.has(name.toLowerCase())) return name;
+  }
+}
+
+// A new last step that comes after the current last step.
+export function newStep(steps) {
   return {
-    id,
-    name: kind === 'work' ? t('factory.newWorkStage') : t('factory.newReview'),
-    kind,
-    output: 'changes',
-    target: earlier.at(-1)?.id ?? '',
-    rounds: 3,
-    instructions: '',
-    lanes: [blankLane()],
+    id: newId(
+      's',
+      steps.map((step) => step.id),
+    ),
+    name: uniqueStepName(steps),
+    source: 'agent',
+    agent: '',
+    model: '',
+    effort: '',
+    task: '',
+    after: steps.length ? [steps.at(-1).id] : [],
     approval: false,
+    returns_to: '',
+    rounds: DEFAULT_ROUNDS,
   };
+}
+
+// References may point only backwards: `after` to earlier steps and
+// `returns_to` to a step the step follows. Reordering or removing steps
+// drops references that no longer hold.
+export function repairSteps(steps) {
+  steps.forEach((step, index) => {
+    const earlier = new Set(steps.slice(0, index).map((item) => item.id));
+    step.after = step.after.filter((id) => earlier.has(id));
+    if (step.returns_to && !ancestors(steps, step.id).has(step.returns_to))
+      step.returns_to = '';
+  });
+  return steps;
+}
+
+export function moveStep(steps, index, delta) {
+  const moved = copy(steps);
+  const [step] = moved.splice(index, 1);
+  moved.splice(index + delta, 0, step);
+  return repairSteps(moved);
+}
+
+// Steps that came after the removed step now come after its own
+// predecessors, so removing a step in a chain keeps the chain.
+export function removeStep(steps, index) {
+  const removed = steps[index];
+  const rest = copy(steps.filter((_, position) => position !== index));
+  for (const step of rest)
+    if (step.after.includes(removed.id))
+      step.after = [
+        ...new Set(
+          step.after.flatMap((id) =>
+            id === removed.id ? removed.after : [id],
+          ),
+        ),
+      ];
+  return repairSteps(rest);
 }
 
 function uniqueName(name, workflows) {
@@ -88,25 +133,37 @@ function uniqueName(name, workflows) {
   }
 }
 
+function editableStep(step) {
+  return {
+    id: step.id ?? '',
+    name: step.name ?? '',
+    source: step.source === 'team' ? 'team' : 'agent',
+    agent: step.agent ?? '',
+    model: step.model ?? '',
+    effort: step.effort ?? '',
+    task: step.task ?? '',
+    after: [...(step.after ?? [])],
+    approval: Boolean(step.approval),
+    returns_to: step.returns_to ?? '',
+    rounds: step.rounds ?? DEFAULT_ROUNDS,
+  };
+}
+
 // A Workflow to add: a copy of a template or of an existing Workflow, or a
-// blank one with a single work stage. It gets an id and name of its own.
+// blank one with a single step. It gets an id and name of its own.
 export function newWorkflow(workflows, source = null) {
   const ids = workflows.map((workflow) => workflow.id);
   const value = source
     ? copy(source)
-    : {
-        id: '',
-        name: t('factory.newWorkflow'),
-        description: '',
-        stages: [],
-      };
-  if (!value.stages.length) value.stages.push(newStage('work', []));
+    : { id: '', name: t('factory.newWorkflow'), description: '', steps: [] };
+  value.steps = (value.steps ?? []).map(editableStep);
+  if (!value.steps.length) value.steps.push(newStep([]));
   value.id =
     value.id && /^[a-z0-9]{1,24}$/.test(value.id) && !ids.includes(value.id)
       ? value.id
       : newId('w', ids);
   value.name = uniqueName(value.name, workflows);
-  value.stages = value.stages.map(editableStage);
+  value.description = value.description ?? '';
   return value;
 }
 
@@ -118,54 +175,13 @@ export function duplicateWorkflow(workflows, workflow) {
   });
 }
 
-// Every stage in the draft holds the fields of both kinds, so switching the
-// kind back and forth keeps what the user chose; `canonicalWorkflows` sends
-// only those of the current kind.
-function editableStage(stage) {
-  return {
-    output: 'changes',
-    target: '',
-    rounds: 3,
-    instructions: '',
-    approval: false,
-    ...stage,
-    lanes: (stage.lanes?.length ? stage.lanes : [blankLane()]).map((lane) => ({
-      ...blankLane(),
-      ...lane,
-    })),
-  };
-}
-
 export const editableWorkflows = (workflows) =>
   (workflows ?? []).map((workflow) => ({
     id: workflow.id ?? '',
     name: workflow.name ?? '',
     description: workflow.description ?? '',
-    stages: (workflow.stages ?? []).map(editableStage),
+    steps: (workflow.steps ?? []).map(editableStep),
   }));
-
-function canonicalStage(stage) {
-  const value = {
-    id: stage.id,
-    name: stage.name,
-    kind: stage.kind,
-    instructions: stage.instructions ?? '',
-    lanes: stage.lanes.map((lane) => ({
-      source: lane.source === 'team' ? 'team' : 'agent',
-      agent: lane.agent ?? '',
-      model: lane.model ?? '',
-      effort: lane.effort ?? '',
-    })),
-    approval: Boolean(stage.approval),
-  };
-  if (stage.kind === 'work')
-    value.output = stage.output === 'document' ? 'document' : 'changes';
-  else {
-    value.target = stage.target ?? '';
-    value.rounds = Number(stage.rounds);
-  }
-  return value;
-}
 
 // The server's shape of the Workflows, in a fixed key order for comparison.
 export const canonicalWorkflows = (workflows) =>
@@ -173,7 +189,13 @@ export const canonicalWorkflows = (workflows) =>
     id: workflow.id,
     name: workflow.name,
     description: workflow.description ?? '',
-    stages: (workflow.stages ?? []).map(canonicalStage),
+    steps: (workflow.steps ?? []).map((step) => ({
+      ...editableStep(step),
+      rounds:
+        !step.returns_to && !wholeNumber(step.rounds, 20)
+          ? DEFAULT_ROUNDS
+          : Number(step.rounds),
+    })),
   }));
 
 // The server trims names. A save that changed nothing else keeps the draft's
@@ -184,15 +206,12 @@ export function sameExceptNameSpacing(submitted, saved) {
       canonicalWorkflows(workflows).map((workflow) => ({
         ...workflow,
         name: workflow.name.trim(),
-        stages: workflow.stages.map((stage) => ({
-          ...stage,
-          name: stage.name.trim(),
-          lanes: stage.lanes.map((lane) => ({
-            ...lane,
-            agent: lane.agent.trim(),
-            model: lane.model.trim(),
-            effort: lane.effort.trim(),
-          })),
+        steps: workflow.steps.map((step) => ({
+          ...step,
+          name: step.name.trim(),
+          agent: step.agent.trim(),
+          model: step.model.trim(),
+          effort: step.effort.trim(),
         })),
       })),
     );
@@ -206,7 +225,7 @@ const wholeNumber = (value, maximum) =>
   Number(value) <= maximum;
 
 // The first problem the server would refuse, or ''. Agent and Model
-// availability stays with the server, which names the lane.
+// availability stays with the server, which names the step.
 export function workflowProblem(workflows) {
   if (!workflows.length) return t('factory.invalid.noWorkflow');
   const names = new Set();
@@ -216,39 +235,28 @@ export function workflowProblem(workflows) {
     if (names.has(name.toLowerCase()))
       return t('factory.invalid.workflowNameTaken', { name });
     names.add(name.toLowerCase());
-    if (!workflow.stages.length)
-      return t('factory.invalid.noStages', { workflow: name });
-    for (const [position, stage] of workflow.stages.entries()) {
-      if (!stage.name.trim())
-        return t('factory.invalid.stageName', {
+    if (!workflow.steps.length)
+      return t('factory.invalid.noSteps', { workflow: name });
+    const stepNames = new Set();
+    for (const [position, step] of workflow.steps.entries()) {
+      const label = step.name.trim();
+      if (!label)
+        return t('factory.invalid.stepName', {
           workflow: name,
           position: position + 1,
         });
-      const location = t('factory.location.stage', {
+      const location = t('factory.location.step', {
         workflow: name,
-        stage: stage.name.trim(),
+        step: label,
       });
-      if (stage.kind === 'review') {
-        const earlier = workStages(workflow.stages, position);
-        if (!earlier.some((item) => item.id === stage.target))
-          return t('factory.invalid.reviewTarget', { location });
-        if (!wholeNumber(stage.rounds, 20))
-          return t('factory.invalid.rounds', { location });
-      }
-      for (const [index, lane] of stage.lanes.entries())
-        if (!lane.agent)
-          return t('factory.invalid.laneAgent', {
-            location: laneLabel(workflow, stage, index),
-          });
+      if (stepNames.has(label.toLowerCase()))
+        return t('factory.invalid.stepNameTaken', { location });
+      stepNames.add(label.toLowerCase());
+      if (!step.agent) return t('factory.invalid.stepAgent', { location });
+      if (!step.task.trim()) return t('factory.invalid.stepTask', { location });
+      if (step.returns_to && !wholeNumber(step.rounds, 20))
+        return t('factory.invalid.rounds', { location });
     }
-    const integrator = integratorIndex(workflow.stages);
-    if (integrator >= 0 && workflow.stages[integrator].lanes.length !== 1)
-      return t('factory.invalid.integratorLanes', {
-        location: t('factory.location.stage', {
-          workflow: name,
-          stage: workflow.stages[integrator].name.trim(),
-        }),
-      });
   }
   return '';
 }
@@ -261,8 +269,6 @@ export const SETUP_FIELDS = [
   'workflows',
   'default_workflow',
   'turn_budget',
-  'base_branch',
-  'integration_check',
 ];
 
 // A setup draft before the server answered: the first template, as
@@ -275,7 +281,17 @@ export function setupDefaults(projectId, templates = []) {
     workflows: [workflow],
     default_workflow: workflow.id,
     turn_budget: 30,
-    base_branch: 'main',
-    integration_check: 'merged',
   };
+}
+
+// Columns for the flow diagram: a step stands one column right of the
+// furthest step it comes after; steps without `after` start the flow.
+export function stepColumns(steps) {
+  const column = new Map();
+  for (const step of steps)
+    column.set(
+      step.id,
+      Math.max(-1, ...step.after.map((id) => column.get(id) ?? -1)) + 1,
+    );
+  return column;
 }
