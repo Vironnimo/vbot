@@ -30,7 +30,7 @@ from core.model_tasks import artifacts as artifact_module
 from core.model_tasks import image as image_module
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image_profile import ImageWire, build_image_profile
-from core.model_tasks.image_types import ImageGenerationResult
+from core.model_tasks.image_types import GeneratedImage, ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.utils import ids
 from core.utils.workers import BoundedWorkerPool
@@ -102,12 +102,17 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
-        return ImageGenerationResult(images=images, media_type=media_type, model="provider/model")
+        return ImageGenerationResult(
+            images=tuple(
+                GeneratedImage(data, media_type, index) for index, data in enumerate(images)
+            ),
+            model="provider/model",
+        )
 
     monkeypatch.setattr(service, "generate", generate)
 
     output_dir = tmp_path / "workspace" / "image-gen"
-    artifacts = await service.generate_artifacts("a cat", output_dir=output_dir)
+    artifacts = (await service.generate_artifacts("a cat", output_dir=output_dir)).artifacts
 
     assert len(artifacts) == 2
     assert {artifact.file_path.parent for artifact in artifacts} == {output_dir}
@@ -162,7 +167,10 @@ async def test_failed_save_names_the_images_already_saved(
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
-        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+        return ImageGenerationResult(
+            images=(GeneratedImage(b"one", "image/png", 0), GeneratedImage(b"two", "image/png", 1)),
+            model="m",
+        )
 
     monkeypatch.setattr(service, "generate", generate)
     real_write = image_module.write_id_file
@@ -191,7 +199,10 @@ async def test_guarded_batch_reports_earlier_saved_images(
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
-        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+        return ImageGenerationResult(
+            images=(GeneratedImage(b"one", "image/png", 0), GeneratedImage(b"two", "image/png", 1)),
+            model="m",
+        )
 
     checked: list[Path] = []
 
@@ -224,7 +235,10 @@ async def test_artifact_batch_settles_on_cancel_and_waiting_preflight_is_not_bil
 
     async def generate(prompt: str, **_kwargs: Any) -> ImageGenerationResult:
         calls.append(prompt)
-        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+        return ImageGenerationResult(
+            images=(GeneratedImage(b"one", "image/png", 0), GeneratedImage(b"two", "image/png", 1)),
+            model="m",
+        )
 
     def write(directory: Path, prefix: str, suffix: str, payload: bytes) -> Path:
         assert threading.current_thread() is not threading.main_thread()
@@ -269,7 +283,7 @@ async def test_generate_artifacts_never_overwrite_an_existing_file(
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
-        return ImageGenerationResult(images=(b"new",), media_type="image/png", model="m")
+        return ImageGenerationResult(images=(GeneratedImage(b"new", "image/png"),), model="m")
 
     monkeypatch.setattr(service, "generate", generate)
     existing = tmp_path / "img_000000000001.png"
@@ -278,7 +292,7 @@ async def test_generate_artifacts_never_overwrite_an_existing_file(
     values = iter((1, 2))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
 
-    [artifact] = await service.generate_artifacts("a cat", output_dir=tmp_path)
+    [artifact] = (await service.generate_artifacts("a cat", output_dir=tmp_path)).artifacts
 
     assert artifact.id == "img_000000000002"
     assert artifact.file_path.read_bytes() == b"new"
@@ -296,7 +310,7 @@ async def test_guarded_image_collision_checks_each_concrete_destination(
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
         bits = iter((1 << 20, 2 << 20))
         monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(bits))
-        return ImageGenerationResult(images=(b"new",), media_type="image/svg+xml", model="m")
+        return ImageGenerationResult(images=(GeneratedImage(b"new", "image/svg+xml"),), model="m")
 
     checked: list[Path] = []
 
@@ -304,9 +318,9 @@ async def test_guarded_image_collision_checks_each_concrete_destination(
         checked.append(path)
 
     monkeypatch.setattr(service, "generate", generate)
-    [artifact] = await service.generate_artifacts(
-        "a cat", output_dir=tmp_path, before_output_write=guard
-    )
+    [artifact] = (
+        await service.generate_artifacts("a cat", output_dir=tmp_path, before_output_write=guard)
+    ).artifacts
     assert checked[1:] == [existing, artifact.file_path]
     assert artifact.file_path.name == "img_000000000002.svg"
     assert existing.read_bytes() == b"keep"
@@ -426,7 +440,11 @@ class _RecordingImageClient:
         self.options = options
         self.input_images = input_images
         return ImageGenerationResult(
-            images=(b"x",), media_type="image/png", model="m", revised_prompt=self.revised_prompt
+            images=(
+                GeneratedImage(b"x", "image/png", revised_prompt=self.revised_prompt),
+                GeneratedImage(b"y", "image/webp", 1, "a different second image"),
+            ),
+            model="m",
         )
 
 
@@ -546,7 +564,8 @@ async def test_generate_reports_only_a_revision_that_changes_the_prompt(
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
         result = await service.generate("a cat")
 
-    assert result.revised_prompt == reported
+    assert result.images[0].revised_prompt == reported
+    assert result.images[1].revised_prompt == "a different second image"
 
 
 @pytest.mark.asyncio

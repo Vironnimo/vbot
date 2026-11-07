@@ -449,7 +449,7 @@ def make_generate_image_handler(image_service: Any):
 
         await context.revalidate_permissions()
         try:
-            artifacts = await image_service.generate_artifacts(
+            batch = await image_service.generate_artifacts(
                 prompt,
                 output_dir=output_dir,
                 before_output_write=before_output_write,
@@ -474,7 +474,7 @@ def make_generate_image_handler(image_service: Any):
             )
 
         image_payloads: list[JsonObject] = []
-        for artifact in artifacts:
+        for artifact in batch.artifacts:
             context.add_display_media(artifact.file_path, artifact.media_type)
             payload: JsonObject = {
                 "path": model_path(artifact.file_path),
@@ -488,8 +488,19 @@ def make_generate_image_handler(image_service: Any):
                 # The provider rendered its own rewrite of the prompt, which can
                 # change the subject; the Agent needs it to describe the image.
                 payload["revised_prompt"] = artifact.revised_prompt
+            if batch.failures:
+                payload["index"] = artifact.index + 1
             image_payloads.append(payload)
-        return tool_success({"images": image_payloads})
+        result: JsonObject = {"images": image_payloads}
+        if batch.failures:
+            result["failures"] = [
+                {"index": failure.index + 1, "reason": failure.reason} for failure in batch.failures
+            ]
+            result["note"] = (
+                f"Saved {len(batch.artifacts)} of {len(batch.artifacts) + len(batch.failures)} "
+                "returned images. Repeating the call generates new images."
+            )
+        return tool_success(result)
 
     return handler
 

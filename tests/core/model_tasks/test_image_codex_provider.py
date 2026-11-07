@@ -170,6 +170,54 @@ def _data_url(image: ImageInput) -> str:
     return f"data:{image.media_type};base64,{base64.b64encode(image.data).decode('ascii')}"
 
 
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("failed_index", [None, 0, 1])
+async def test_subscription_image_preserves_each_returned_entry(failed_index: int | None) -> None:
+    items = [
+        {
+            "type": "image_generation_call",
+            "status": "completed",
+            "result": base64.b64encode(b"red").decode(),
+            "output_format": "png",
+            "revised_prompt": "red horse",
+        },
+        {
+            "type": "image_generation_call",
+            "status": "completed",
+            "result": base64.b64encode(b"blue").decode(),
+            "output_format": "webp",
+            "revised_prompt": "blue horse",
+        },
+    ]
+    if failed_index is not None:
+        items[failed_index]["result"] = "invalid base64!"
+    route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="".join(
+                _sse_event({"type": "response.output_item.done", "item": item}) for item in items
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    result = await _openai_subscription_image_client("gpt-image-2").generate(
+        "horses", options={"output_format": "jpeg"}
+    )
+
+    assert route.call_count == 1
+    expected = [index for index in range(2) if index != failed_index]
+    assert [image.index for image in result.images] == expected
+    assert [failure.index for failure in result.failures] == (
+        [] if failed_index is None else [failed_index]
+    )
+    for image in result.images:
+        assert image.data == (b"red", b"blue")[image.index]
+        assert image.media_type == ("image/png", "image/webp")[image.index]
+        assert image.revised_prompt == items[image.index]["revised_prompt"]
+
+
 _SOURCES = (
     ImageInput(filename="square.jpg", media_type="image/jpeg", data=b"source-one"),
     ImageInput(filename="style.png", media_type="image/png", data=b"source-two"),
@@ -200,7 +248,7 @@ _SOURCES = (
             },
             "Use the image_generation tool to render "
             "(size 1024x1536, quality low, background opaque): a cat",
-            "image/webp",
+            "image/jpeg",
             id="every-tool-option",
         ),
         # The image tool rejects ``n`` and overrides ``model``, even from extra_options.
@@ -214,7 +262,7 @@ _SOURCES = (
             (),
             {"output_format": "webp", "future_option": "kept"},
             "Use the image_generation tool to render: a cat",
-            "image/webp",
+            "image/jpeg",
             id="n-and-model-never-forwarded",
         ),
         # Without a requested format the final image call names it.
@@ -266,7 +314,11 @@ async def test_subscription_image_asks_a_codex_carrier_to_call_the_image_tool(
         *({"type": "input_image", "image_url": _data_url(image)} for image in input_images),
     ]
     # Progressive previews are ignored; the final call and both usages are kept.
-    assert (result.images, result.media_type, result.model) == (
+    assert (
+        tuple(image.data for image in result.images),
+        result.images[0].media_type,
+        result.model,
+    ) == (
         (b"codex-image",),
         media_type,
         "gpt-image-2",
@@ -280,7 +332,7 @@ async def test_subscription_image_asks_a_codex_carrier_to_call_the_image_tool(
         },
         "response": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
     }
-    assert result.revised_prompt == "a revised image prompt"
+    assert result.images[0].revised_prompt == "a revised image prompt"
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,13 @@ from typing import Any, override
 
 import httpx
 
-from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
+from core.model_tasks.image_types import (
+    GeneratedImage,
+    ImageGenerationFailure,
+    ImageGenerationResult,
+    ImageInput,
+    JsonObject,
+)
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.http import parse_sse_json_data, split_stream_lines
 from core.providers.openai import (
@@ -515,6 +521,47 @@ def _openai_codex_requested_output_format(payload: Mapping[str, Any]) -> Any:
     return tool.get("output_format")
 
 
+def _decode_image_entries(
+    entries: list[Any], *, field: str, requested_output_format: Any
+) -> tuple[tuple[GeneratedImage, ...], tuple[ImageGenerationFailure, ...]]:
+    images: list[GeneratedImage] = []
+    failures: list[ImageGenerationFailure] = []
+    for index, entry in enumerate(entries):
+        encoded = entry.get(field) if isinstance(entry, dict) else None
+        if not isinstance(encoded, str) or not encoded:
+            reason = "No image data was returned."
+            if isinstance(entry, dict) and entry.get("url"):
+                reason = "Only an image URL was returned; inline image data is required."
+            elif isinstance(entry, dict) and entry.get("status") == "failed":
+                reason = "Image generation failed; no image data was returned."
+            failures.append(ImageGenerationFailure(index, reason))
+            continue
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except binascii.Error, ValueError:
+            failures.append(
+                ImageGenerationFailure(index, "The returned image data could not be decoded.")
+            )
+            continue
+        media_type = entry.get("media_type")
+        if not isinstance(media_type, str) or not media_type.strip():
+            media_type = _media_type_from_output_format(
+                entry.get("output_format") or requested_output_format
+            )
+        revised = entry.get("revised_prompt")
+        images.append(
+            GeneratedImage(
+                data=decoded,
+                media_type=media_type,
+                index=index,
+                revised_prompt=revised.strip()
+                if isinstance(revised, str) and revised.strip()
+                else None,
+            )
+        )
+    return tuple(images), tuple(failures)
+
+
 def _parse_unified_image_response(
     payload: JsonObject,
     *,
@@ -536,39 +583,28 @@ def _parse_unified_image_response(
             retryable=True,
         )
 
-    image_bytes_list: list[bytes] = []
-    detected_media_type = ""
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        b64_json = entry.get("b64_json")
-        if not isinstance(b64_json, str) or not b64_json:
-            continue
-        try:
-            image_bytes_list.append(base64.b64decode(b64_json, validate=True))
-        except binascii.Error, ValueError:
-            continue
-        entry_media_type = entry.get("media_type")
-        if not detected_media_type and isinstance(entry_media_type, str):
-            detected_media_type = entry_media_type
-
-    if not image_bytes_list:
+    images, failures = _decode_image_entries(
+        data, field="b64_json", requested_output_format=requested_output_format
+    )
+    if not images:
+        if any(isinstance(entry, dict) and entry.get("url") for entry in data):
+            raise ProviderError(
+                "Image generation returned URLs instead of inline bytes; set "
+                "response_format='b64_json' in the task-model options.",
+                retryable=False,
+            )
         raise ProviderError(
             "Image generation response images could not be decoded",
             retryable=True,
         )
 
-    if not detected_media_type:
-        detected_media_type = _media_type_from_output_format(requested_output_format)
-
     usage = payload.get("usage")
     return ImageGenerationResult(
-        images=tuple(image_bytes_list),
-        media_type=detected_media_type,
+        images=images,
         model=model,
         usage=usage if isinstance(usage, dict) else None,
         raw=payload,
-        revised_prompt=_first_revised_prompt(data),
+        failures=failures,
     )
 
 
@@ -602,19 +638,10 @@ def _parse_openai_codex_image_response(
             if isinstance(response, Mapping):
                 completed_response = response
 
-    image_bytes_list: list[bytes] = []
-    rendered_items: list[JsonObject] = []
-    for item in image_items:
-        result = item.get("result")
-        if not isinstance(result, str) or not result:
-            continue
-        try:
-            image_bytes_list.append(base64.b64decode(result, validate=True))
-        except binascii.Error, ValueError:
-            continue
-        rendered_items.append(item)
-
-    if not image_bytes_list:
+    images, failures = _decode_image_entries(
+        image_items, field="result", requested_output_format=requested_output_format
+    )
+    if not images:
         # The tool reports a refused render only as an item with status
         # "failed" and no reason; the carrier's reply carries the reason. A
         # reply without any image call is the carrier declining by itself.
@@ -633,26 +660,16 @@ def _parse_openai_codex_image_response(
             retryable=True,
         )
 
-    actual_output_format = requested_output_format
-    if is_omittable_option(actual_output_format):
-        actual_output_format = rendered_items[0].get("output_format")
-    revised_prompt = rendered_items[0].get("revised_prompt")
-    if not isinstance(revised_prompt, str) or not revised_prompt.strip():
-        revised_prompt = None
-
     raw: JsonObject = {"image_generation_calls": image_items}
     if completed_response is not None:
         raw["response"] = dict(completed_response)
 
     return ImageGenerationResult(
-        images=tuple(image_bytes_list),
-        media_type=_media_type_from_output_format(actual_output_format),
+        images=images,
         model=model,
         usage=_openai_codex_usage(completed_response),
         raw=raw,
-        revised_prompt=revised_prompt
-        if isinstance(revised_prompt, str) and revised_prompt
-        else None,
+        failures=failures,
     )
 
 
@@ -746,53 +763,24 @@ def _parse_openai_image_response(
             retryable=True,
         )
 
-    image_bytes_list: list[bytes] = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        b64_json = entry.get("b64_json")
-        if isinstance(b64_json, str) and b64_json:
-            try:
-                image_bytes_list.append(base64.b64decode(b64_json, validate=True))
-            except binascii.Error, ValueError:
-                continue
-        elif isinstance(entry.get("url"), str):
-            # URL responses require an extra fetch; we surface a clear
-            # error rather than silently dropping the image so the caller
-            # can switch to ``response_format="b64_json"``.
+    images, failures = _decode_image_entries(
+        data, field="b64_json", requested_output_format=requested_output_format
+    )
+    if not images:
+        if any(isinstance(entry, dict) and entry.get("url") for entry in data):
             raise ProviderError(
-                "OpenAI image returned a URL but the wire layer only "
-                "decodes b64_json; set response_format='b64_json' in the "
-                "task-model options to receive inline bytes.",
+                "Image generation returned URLs instead of inline bytes; set "
+                "response_format='b64_json' in the task-model options.",
                 retryable=False,
             )
-
-    if not image_bytes_list:
         raise ProviderError(
             "Image generation response images could not be decoded",
             retryable=True,
         )
 
-    # gpt-image-1 returns the bytes verbatim; the format is determined by
-    # the request's ``output_format`` (default ``png``). The response
-    # body does not echo the format, so we record the value the caller
-    # asked for. The artifact layer falls back to ``image/png`` when no
-    # format was requested.
     return ImageGenerationResult(
-        images=tuple(image_bytes_list),
-        media_type=_media_type_from_output_format(requested_output_format),
+        images=images,
         model=model,
         raw=payload,
-        revised_prompt=_first_revised_prompt(data),
+        failures=failures,
     )
-
-
-def _first_revised_prompt(entries: list[Any]) -> str | None:
-    """Return the rewritten prompt an images response reports, if any entry has one."""
-
-    for entry in entries:
-        if isinstance(entry, dict):
-            revised = entry.get("revised_prompt")
-            if isinstance(revised, str) and revised.strip():
-                return revised.strip()
-    return None

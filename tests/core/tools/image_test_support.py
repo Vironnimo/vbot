@@ -14,6 +14,7 @@ from typing import Any
 
 from core.model_tasks import ImageUnderstandingRunContext
 from core.model_tasks.image_profile import ImageProfile
+from core.model_tasks.image_types import ImageArtifact, ImageArtifactBatch
 from core.permissions import PermissionBoundary
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
@@ -92,7 +93,7 @@ class ImageService:
         source_paths: tuple[Path, ...] = (),
         usage_context: object = None,
         before_output_write: Any = None,
-    ) -> tuple[object, ...]:
+    ) -> ImageArtifactBatch:
         self.output_dirs.append(output_dir)
         if self.error is not None:
             raise self.error
@@ -102,15 +103,19 @@ class ImageService:
             "source_paths": source_paths,
         }
         file_path = self.image_path or output_dir / "image.png"
-        return (
-            SimpleNamespace(
-                file_path=file_path,
-                media_type="image/png",
-                size_bytes=5,
-                width=1024,
-                height=576,
-                revised_prompt=self.revised_prompt,
-            ),
+        return ImageArtifactBatch(
+            (
+                ImageArtifact(
+                    id="img_test",
+                    filename=file_path.name,
+                    file_path=file_path,
+                    media_type="image/png",
+                    size_bytes=5,
+                    width=1024,
+                    height=576,
+                    revised_prompt=self.revised_prompt,
+                ),
+            )
         )
 
     async def analyze(

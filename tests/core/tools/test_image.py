@@ -3,13 +3,16 @@ they go, source images, and what refused or failed calls say."""
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import httpx
 import pytest
+import respx
 
 from core.model_tasks import (
     ImageConfigurationError,
@@ -19,15 +22,23 @@ from core.model_tasks import (
     ImageRefusedError,
 )
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
+from core.model_tasks.image import ImageService as RealImageService
 from core.model_tasks.image_profile import ImageProfile
 from core.tools.image import (
     GENERATE_IMAGE_TEXT_ONLY_TOOL_DESCRIPTION,
     GENERATE_IMAGE_TOOL_DESCRIPTION,
     GENERATE_IMAGE_TOOL_NAME,
+    register_generate_image_tool,
 )
 from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
 from core.utils.errors import ProviderError
 from core.utils.paths import model_path
+from tests.core.model_tasks.image_providers_test_support import (
+    OPENROUTER_IMAGES_URL,
+    _openai_image_client,
+    _openrouter_image_client,
+)
+from tests.core.model_tasks.image_test_support import _MissingModelTasks
 from tests.core.tools.image_test_support import (
     TEXT_ONLY_PROFILE,
     ImageService,
@@ -152,6 +163,76 @@ async def test_images_go_to_the_callers_directory(
 
     assert result["ok"] is True
     assert service.output_dirs == [(tmp_path / expected).resolve()]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("wire", ["openai", "openrouter"])
+@pytest.mark.parametrize(
+    ("failed_index", "failure_kind"),
+    [(None, ""), (0, "invalid"), (1, "invalid"), (0, "missing"), (1, "url")],
+)
+async def test_provider_batch_preserves_files_failures_and_each_images_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wire: str,
+    failed_index: int | None,
+    failure_kind: str,
+) -> None:
+    payload = [
+        {
+            "b64_json": base64.b64encode(b"<svg/>").decode(),
+            "media_type": "image/svg+xml",
+            "revised_prompt": "a red horse",
+        },
+        {
+            "b64_json": base64.b64encode(b"blue-image").decode(),
+            "media_type": "image/webp",
+            "revised_prompt": "a blue horse",
+        },
+    ]
+    if failed_index is not None:
+        if failure_kind == "invalid":
+            payload[failed_index]["b64_json"] = "not base64!"
+        else:
+            payload[failed_index].pop("b64_json")
+            if failure_kind == "url":
+                payload[failed_index]["url"] = "https://example.com/image.png"
+    endpoint = (
+        OPENROUTER_IMAGES_URL
+        if wire == "openrouter"
+        else "https://api.openai.com/v1/images/generations"
+    )
+    route = respx.post(endpoint).mock(return_value=httpx.Response(200, json={"data": payload}))
+    client = (_openrouter_image_client if wire == "openrouter" else _openai_image_client)("model")
+    service = RealImageService(_MissingModelTasks(), cast(Any, object()))
+
+    async def generated(prompt: str, **_kwargs: Any):
+        return await client.generate(prompt, options={})
+
+    monkeypatch.setattr(service, "generate", generated)
+    registry = ToolRegistry()
+    register_generate_image_tool(registry, service)
+    result = await dispatch_as_executor(
+        registry, make_context(tmp_path, GENERATE_IMAGE_TOOL_NAME), {"prompt": "two horses"}
+    )
+
+    assert result["ok"] is True
+    assert route.call_count == 1
+    data = result["data"]
+    expected = [index for index in range(2) if index != failed_index]
+    assert len(data["images"]) == len(expected)
+    for saved, index in zip(data["images"], expected, strict=True):
+        assert saved["revised_prompt"] == payload[index]["revised_prompt"]
+        assert saved["media_type"] == payload[index]["media_type"]
+        assert Path(saved["path"]).read_bytes() == (b"<svg/>", b"blue-image")[index]
+        assert Path(saved["path"]).suffix == (".svg", ".webp")[index]
+    if failed_index is None:
+        assert "failures" not in data
+    else:
+        assert [failure["index"] for failure in data["failures"]] == [failed_index + 1]
+        assert [saved["index"] for saved in data["images"]] == [index + 1 for index in expected]
+        assert all(failure["reason"] for failure in data["failures"])
 
 
 @pytest.mark.asyncio

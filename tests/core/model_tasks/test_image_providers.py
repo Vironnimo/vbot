@@ -193,7 +193,7 @@ async def test_openrouter_sends_source_images_as_data_url_references() -> None:
             "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(b"src").decode()},
         }
     ]
-    assert result.images == (b"edited",)
+    assert tuple(image.data for image in result.images) == (b"edited",)
 
 
 @pytest.mark.parametrize(
@@ -241,7 +241,10 @@ async def test_openai_edits_source_images_as_multipart(
         assert b'name="' + field + b'"\r\n\r\n' + value in body
     assert file_field in body
     assert all(image.data in body for image in input_images)
-    assert (result.images, result.media_type) == ((b"edited-png",), "image/jpeg")
+    assert (tuple(image.data for image in result.images), result.images[0].media_type) == (
+        (b"edited-png",),
+        "image/jpeg",
+    )
 
 
 @pytest.mark.parametrize(
@@ -334,7 +337,11 @@ async def test_generate_decodes_every_image_with_its_media_type(
 
     result = await _client(wire).generate("a cat", options=options)
 
-    assert (result.images, result.media_type, result.model) == (images, media_type, _model(wire))
+    assert (
+        tuple(image.data for image in result.images),
+        result.images[0].media_type,
+        result.model,
+    ) == (images, media_type, _model(wire))
     assert result.usage == usage
 
 
@@ -409,7 +416,7 @@ async def test_openrouter_retries_the_documented_not_processed_503(
 
     result = await _client("openrouter").generate("a cat", options={})
 
-    assert result.images == (b"img",)
+    assert tuple(image.data for image in result.images) == (b"img",)
     assert route.call_count == 2
 
 
@@ -441,7 +448,7 @@ async def test_custom_openai_compatible_provider_uses_the_standard_wire() -> Non
     result = await client.generate("a cat", options={})
 
     assert route.call_count == 1
-    assert result.images == (b"custom-image",)
+    assert tuple(image.data for image in result.images) == (b"custom-image",)
 
 
 @pytest.mark.asyncio
