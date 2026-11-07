@@ -161,7 +161,7 @@ class FactoryHarness:
         except ToolContractError as error:
             return tool_failure_for_exception("factory_card", error)
 
-    async def operation(self, name: str, **arguments: Any) -> Json:
+    async def operation(self, name: str, /, **arguments: Any) -> Json:
         return await self.api.operations.invoke(name, arguments)
 
     async def settle(self) -> None:

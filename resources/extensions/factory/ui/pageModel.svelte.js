@@ -15,6 +15,9 @@ export function createFactoryPageModel(bridgeClient) {
   let route = $state('');
   let catalog = $state({});
   let templates = $state([]);
+  let library = $state([]);
+  let selectedTemplate = $state(null);
+  let templateDrafts = $state({});
   let cards = $state([]);
   let setups = $state([]);
   let detail = $state(null);
@@ -34,6 +37,8 @@ export function createFactoryPageModel(bridgeClient) {
   let boardRequest = 0;
   let detailRequest = 0;
   let setupRequest = 0;
+  let templateRequest = 0;
+  let libraryRequest = 0;
   let refreshPromise = null;
   let refreshAgain = false;
   let fullRefresh = false;
@@ -46,13 +51,18 @@ export function createFactoryPageModel(bridgeClient) {
       ? 'card'
       : route.startsWith('/setups')
         ? 'setups'
-        : 'board',
+        : route.startsWith('/library')
+          ? 'library'
+          : 'board',
   );
   const cardId = $derived(
     view === 'card' ? decodePart(route.split('/')[2]) : '',
   );
   const setupId = $derived(
     view === 'setups' ? decodePart(route.split('/')[2]) : '',
+  );
+  const templateId = $derived(
+    view === 'library' ? decodePart(route.split('/')[2]) : '',
   );
   const call = (operation, args = {}) => client.operation(operation, args);
 
@@ -96,6 +106,31 @@ export function createFactoryPageModel(bridgeClient) {
   async function loadSetups() {
     const result = await call('setup.list');
     if (!disposed) setups = result.setups ?? [];
+  }
+
+  async function loadLibrary() {
+    const request = ++libraryRequest;
+    const entries = [];
+    let after = '';
+    do {
+      const result = await call('library.list', {
+        include_archived: true,
+        limit: 100,
+        ...(after ? { after } : {}),
+      });
+      entries.push(...(result.templates ?? []));
+      after = result.next_cursor ?? '';
+    } while (after && !disposed && request === libraryRequest);
+    if (!disposed && request === libraryRequest) library = entries;
+  }
+
+  async function loadTemplate() {
+    const id = templateId;
+    if (!id || id === 'new') return;
+    const request = ++templateRequest;
+    const result = await call('library.get', { id });
+    if (!disposed && request === templateRequest && id === templateId)
+      selectedTemplate = result.template;
   }
 
   async function loadDetail() {
@@ -152,7 +187,9 @@ export function createFactoryPageModel(bridgeClient) {
             loadBoard(),
             loadDetail(),
             ...(readSetups ? [loadSetups(), loadSetup()] : []),
-            ...(readCatalog ? [loadCatalog()] : []),
+            ...(readCatalog
+              ? [loadCatalog(), loadLibrary(), loadTemplate()]
+              : []),
           ]);
           if (!disposed) refreshError = '';
         } catch (cause) {
@@ -172,7 +209,8 @@ export function createFactoryPageModel(bridgeClient) {
       next === '' ||
       next === '/' ||
       /^\/card\/[^/]+$/.test(next) ||
-      /^\/setups(?:\/[^/]+)?$/.test(next);
+      /^\/setups(?:\/[^/]+)?$/.test(next) ||
+      /^\/library(?:\/[^/]+)?$/.test(next);
     if (!valid) {
       await client.replaceRoute('');
       next = '';
@@ -181,6 +219,7 @@ export function createFactoryPageModel(bridgeClient) {
     if (route === normalized && connected) return;
     const previousCard = cardId;
     const previousSetup = setupId;
+    const previousTemplate = templateId;
     route = normalized;
     error = '';
     if (cardId !== previousCard) detail = null;
@@ -188,14 +227,19 @@ export function createFactoryPageModel(bridgeClient) {
       selectedSetup = null;
       setupEffectiveModels = {};
     }
+    if (templateId !== previousTemplate) selectedTemplate = null;
     // Projects and Agents change outside the page; setups read them fresh.
-    if (load && normalized.startsWith('/setups'))
+    if (
+      load &&
+      (normalized.startsWith('/setups') || normalized.startsWith('/library'))
+    )
       void loadCatalog().catch(() => {});
-    if (!load || (!cardId && !setupId)) return;
+    if (!load || (!cardId && !setupId && !templateId)) return;
     detailLoading = true;
     try {
       if (cardId) await loadDetail();
       if (setupId) await loadSetup();
+      if (templateId) await loadTemplate();
     } catch (cause) {
       if (!disposed && route === normalized) error = failureText(cause);
     } finally {
@@ -237,6 +281,14 @@ export function createFactoryPageModel(bridgeClient) {
     setups = [
       ...setups.filter((entry) => entry.project_id !== setup.project_id),
       setup,
+    ];
+  }
+
+  function acceptSavedTemplate(template) {
+    if (templateId === template.id) selectedTemplate = template;
+    library = [
+      ...library.filter((entry) => entry.id !== template.id),
+      template,
     ];
   }
 
@@ -313,7 +365,7 @@ export function createFactoryPageModel(bridgeClient) {
     });
     const offInvalidation = client.onInvalidation(({ change } = {}) => {
       void refresh({
-        full: !change,
+        full: !change || change?.resource === 'library',
         setupsChanged: change?.resource === 'setups',
       });
     });
@@ -341,6 +393,15 @@ export function createFactoryPageModel(bridgeClient) {
     pickerOpen,
     acceptSavedCard,
     acceptSavedSetup,
+    acceptSavedTemplate,
+    loadLibrary,
+    getTemplateDraft: (id) => templateDrafts[id],
+    keepTemplateDraft: (id, draft) => {
+      templateDrafts[id] = draft;
+    },
+    clearTemplateDraft: (id) => {
+      delete templateDrafts[id];
+    },
     openSession,
     get route() {
       return route;
@@ -353,6 +414,15 @@ export function createFactoryPageModel(bridgeClient) {
     },
     get setupId() {
       return setupId;
+    },
+    get templateId() {
+      return templateId;
+    },
+    get library() {
+      return library;
+    },
+    get selectedTemplate() {
+      return selectedTemplate;
     },
     get catalog() {
       return catalog;

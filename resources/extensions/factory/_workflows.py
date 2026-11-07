@@ -309,16 +309,23 @@ def normalize(workflows: Any) -> list[Json]:
             raise _refuse(where, "it has no steps. Add a step.")
         if len(steps) > MAX_STEPS:
             raise _refuse(where, f"it has more than {MAX_STEPS} steps.")
-        result.append(
-            {
-                "id": workflow_id,
-                "name": name,
-                "description": _text(
-                    raw.get("description"), where, "description", 2000, required=False
-                ),
-                "steps": _steps(steps, where),
-            }
-        )
+        normalized: Json = {
+            "id": workflow_id,
+            "name": name,
+            "description": _text(
+                raw.get("description"), where, "description", 2000, required=False
+            ),
+            "steps": _steps(steps, where),
+        }
+        if "sources" in raw:
+            from ._library import normalize_sources
+
+            if raw["sources"] and [step.get("id") for step in steps] != [
+                step["id"] for step in normalized["steps"]
+            ]:
+                raise _refuse(where, "linked step ids must be distinct valid identifiers.")
+            normalized["sources"] = normalize_sources(raw["sources"], normalized["steps"])
+        result.append(normalized)
     return result
 
 
@@ -442,13 +449,11 @@ def choose(setup: Json, requested: str | None) -> Json:
     if requested:
         wanted = requested.strip().casefold()
         found = next(
-            (
-                item
-                for item in workflows
-                if item["id"] == requested.strip() or item["name"].casefold() == wanted
-            ),
+            (item for item in workflows if item["id"] == requested.strip()),
             None,
         )
+        if found is None:
+            found = next((item for item in workflows if item["name"].casefold() == wanted), None)
         if found is None:
             names = ", ".join(item["name"] for item in workflows) or "(none)"
             raise FactoryError(

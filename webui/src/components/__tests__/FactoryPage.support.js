@@ -116,6 +116,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
     cards: clone(initialCards),
     setups: [clone(setup)],
     details: {},
+    library: [],
+    libraryVersions: {},
     handlers: {},
   };
   const contexts = new Set();
@@ -130,6 +132,47 @@ export function createBridge(initialCards = [card('fct-a')]) {
     });
   const operation = vi.fn(async (name, args) => {
     if (state.handlers[name]) return state.handlers[name](args);
+    if (name === 'library.list')
+      return { templates: clone(state.library), next_cursor: '' };
+    if (name === 'library.get') {
+      const item = state.library.find((entry) => entry.id === args.id);
+      return {
+        template: clone(
+          args.version
+            ? (state.libraryVersions[`${args.id}:${args.version}`] ?? item)
+            : item,
+        ),
+      };
+    }
+    if (name === 'library.publish') {
+      const previous = state.library.find((entry) => entry.id === args.id);
+      if ((previous?.revision ?? 0) !== args.expected_revision)
+        throw conflict();
+      const version = (previous?.version ?? 0) + 1;
+      const item = {
+        ...clone(args),
+        id: args.id ?? 'flt-new',
+        version,
+        latest_version: version,
+        revision: (previous?.revision ?? 0) + 1,
+        archived: false,
+        versions: [version, ...(previous?.versions ?? [])],
+      };
+      delete item.expected_revision;
+      state.library = [
+        ...state.library.filter((entry) => entry.id !== item.id),
+        item,
+      ];
+      state.libraryVersions[`${item.id}:${version}`] = clone(item);
+      return { template: clone(item) };
+    }
+    if (name === 'library.archive') {
+      const item = state.library.find((entry) => entry.id === args.id);
+      if (item.revision !== args.expected_revision) throw conflict();
+      item.archived = args.archived;
+      item.revision += 1;
+      return { template: clone(item) };
+    }
     const current = state.cards.find((entry) => entry.id === args.id);
     if (name === 'catalog')
       return {

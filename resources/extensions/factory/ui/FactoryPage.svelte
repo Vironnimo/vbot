@@ -2,6 +2,7 @@
   const loadBoard = () => import('./FactoryBoard.svelte');
   const loadDetail = () => import('./CardDetail.svelte');
   const loadSetups = () => import('./FactorySetups.svelte');
+  const loadLibrary = () => import('./FactoryLibrary.svelte');
 </script>
 
 <script>
@@ -53,9 +54,18 @@
     <div class="factory-brand"><h1>{t('factory.title')}</h1></div>
     <nav class="factory-navigation" aria-label={t('factory.title')}>
       <Button
-        variant={model.view !== 'setups' ? 'secondary' : 'tertiary'}
-        aria-current={model.view !== 'setups' ? 'page' : undefined}
+        variant={['board', 'card'].includes(model.view)
+          ? 'secondary'
+          : 'tertiary'}
+        aria-current={['board', 'card'].includes(model.view)
+          ? 'page'
+          : undefined}
         onClick={() => navigate('')}>{t('factory.board')}</Button
+      >
+      <Button
+        variant={model.view === 'library' ? 'secondary' : 'tertiary'}
+        aria-current={model.view === 'library' ? 'page' : undefined}
+        onClick={() => navigate('/library')}>{t('factory.library')}</Button
       >
       <Button
         variant={model.view === 'setups' ? 'secondary' : 'tertiary'}
@@ -104,6 +114,12 @@
       {:else if model.detailLoading}
         <p class="factory-loading" role="status">{t('common.loading')}</p>
       {:else}<p>{t('factory.cardMissing')}</p>{/if}
+    {:else if model.view === 'library'}
+      <LazyContent load={loadLibrary}
+        >{#snippet children(Component)}<div use:routeScroll={model.route}>
+            <Component {model} onNavigate={navigate} />
+          </div>{/snippet}</LazyContent
+      >
     {:else}
       <LazyContent load={loadSetups}
         >{#snippet children(Component)}<div use:routeScroll={model.route}>

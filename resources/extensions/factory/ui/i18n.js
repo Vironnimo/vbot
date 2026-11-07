@@ -2,6 +2,98 @@ export default {
   'factory.title': 'Software Factory',
   'factory.board': 'Board',
   'factory.setups': 'Project setups',
+  'factory.library': 'Library',
+  'factory.library.help':
+    'Reusable steps, step sequences and Workflows for every Project.',
+  'factory.library.new': 'New template',
+  'factory.library.emptyList':
+    'No templates yet. Create one here or save steps from a Project setup.',
+  'factory.library.choose': 'Choose a template',
+  'factory.library.chooseHelp':
+    'Publish reusable work once, then adapt it in each Project.',
+  'factory.library.kindStep': 'Single step',
+  'factory.library.kindSequence': 'Step sequence',
+  'factory.library.kindWorkflow': 'Complete Workflow',
+  'factory.library.kind': 'Template type',
+  'factory.library.name': 'Template name',
+  'factory.library.template': 'Template',
+  'factory.library.nameRequired': 'Enter a name for the template.',
+  'factory.library.singleStepRequired':
+    'A single-step template contains exactly one step.',
+  'factory.library.version': 'Version {version}',
+  'factory.library.publish': 'Publish template',
+  'factory.library.publishVersion': 'Publish new version',
+  'factory.library.publishHelp':
+    'Edits form an unpublished draft, retained while you navigate this page. Publishing creates a version; Projects choose when to adopt it.',
+  'factory.library.agentHelp':
+    'Agents and Models can be left unset here and chosen when the template is used in a Project.',
+  'factory.library.discardDraft': 'Discard draft',
+  'factory.library.newerDraft':
+    'This template changed elsewhere. Your unpublished draft is still here. Reload the latest version before publishing.',
+  'factory.library.reload': 'Reload latest version',
+  'factory.library.archive': 'Archive template',
+  'factory.library.restore': 'Restore template',
+  'factory.library.archived': 'Archived',
+  'factory.library.showArchived': 'Show archived templates',
+  'factory.library.archivedHelp':
+    'This template is archived. Existing uses and versions remain available. Restore it to publish again.',
+  'factory.library.archiveHelp':
+    'Existing Project uses and published versions are kept. Archived templates are hidden when choosing a new template.',
+  'factory.library.history': 'Published versions',
+  'factory.library.selectVersion': 'Choose a version to inspect',
+  'factory.library.saveTemplate': 'Save to Library',
+  'factory.library.destination': 'Publish as',
+  'factory.library.sourceUse': 'Template use to publish from',
+  'factory.library.selectSource':
+    'Choose which use of this template to publish from.',
+  'factory.library.sourceNumber': 'Use {number}',
+  'factory.library.partialReplacement':
+    'Select every remaining step from an existing Library use before saving it as a new template.',
+  'factory.library.replaceLinks':
+    'This selection will use the new template in place of its current Library links.',
+  'factory.library.newVersion': 'Publish a new version',
+  'factory.library.stepsToSave': 'Steps to include',
+  'factory.library.selectSteps': 'Select at least one step.',
+  'factory.library.consecutiveHelp':
+    'Choose consecutive steps. Connections to steps outside the selection stay in the Project.',
+  'factory.library.publishExistingHelp':
+    'This publishes a new shared version. Existing Project uses keep their version until they adopt the update.',
+  'factory.library.publishLinkedHelp':
+    'The selected work is published and connected to its Library template in this Project.',
+  'factory.library.publishedUnlinked':
+    'The template was published, but the Project draft changed meanwhile. Insert the template from the Library to use it, or publish again from the current draft.',
+  'factory.library.insert': 'Insert from Library',
+  'factory.library.position': 'Insert position',
+  'factory.library.atStart': 'At the beginning',
+  'factory.library.atEnd': 'At the end',
+  'factory.library.afterStep': 'After {name}',
+  'factory.library.linkedHelp':
+    'This use stays connected to the published version. Adapt its steps here and review future updates before adopting them.',
+  'factory.library.draftChanged':
+    'The Workflow changed while this preview was open. Close it and try again with the current Workflow.',
+  'factory.library.linkedTemplates': 'Library templates in this Workflow',
+  'factory.library.upToDate': 'Up to date',
+  'factory.library.reviewUpdate': 'Review version {version}',
+  'factory.library.updateTitle': 'Update {name} to version {version}',
+  'factory.library.updateHelp':
+    'Your Project adaptations are kept. Choose which value to keep where both the Project and template changed. Started Cards keep their original Workflow.',
+  'factory.library.applyUpdate': 'Adopt update',
+  'factory.library.conflicts': 'Changes needing your choice',
+  'factory.library.changes': 'Template changes',
+  'factory.library.noChanges': 'No content changes in this version.',
+  'factory.library.localValue': 'This Project',
+  'factory.library.templateValue': 'New template version',
+  'factory.library.baseValue': 'Previously adopted version',
+  'factory.library.chooseResolution': 'Choose a value',
+  'factory.library.keepLocal': 'Keep Project value',
+  'factory.library.useTemplate': 'Use template value',
+  'factory.library.resolveField': 'Resolve {field}',
+  'factory.library.agentSource': 'Agent source',
+  'factory.library.structure': 'Step structure and order',
+  'factory.library.absent': 'Not present',
+  'factory.library.empty': 'Empty',
+  'factory.library.yes': 'Yes',
+  'factory.library.no': 'No',
   'factory.newCard': 'New card',
   'factory.createCard': 'Create card',
   'factory.project': 'Project',

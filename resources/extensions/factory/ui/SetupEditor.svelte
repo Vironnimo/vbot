@@ -13,6 +13,9 @@
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
   import WorkflowStep from './WorkflowStep.svelte';
+  import LibraryInsert from './LibraryInsert.svelte';
+  import PublishTemplate from './PublishTemplate.svelte';
+  import LinkedTemplates from './LinkedTemplates.svelte';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import { failureText } from './presentation.js';
   import {
@@ -38,6 +41,8 @@
   let removing = $state(null);
   let selectedId = $state('');
   let selectedStepId = $state('');
+  let libraryAction = $state('');
+  let libraryError = $state('');
   // Effective Models the server resolved for Agent choices not yet saved,
   // keyed by the step's choice (`agentChoice`).
   let previewed = $state({});
@@ -133,9 +138,39 @@
       secondaryLabel: template.description,
       group: t('factory.templates'),
     })),
+    ...model.library
+      .filter((item) => !item.archived)
+      .map((item) => ({
+        value: `library:${item.id}`,
+        label: item.name,
+        secondaryLabel: t('factory.library.version', {
+          version: item.latest_version ?? item.version,
+        }),
+        group: t('factory.library'),
+      })),
   ]);
-  function addWorkflow(choice) {
+  async function addWorkflow(choice) {
     if (workflows.length >= MAX_WORKFLOWS) return;
+    if (choice.startsWith('library:')) {
+      try {
+        const item = model.library.find(
+          (entry) => entry.id === choice.slice('library:'.length),
+        );
+        const result = await model.call('library.insert', {
+          id: item.id,
+          version: item.latest_version ?? item.version,
+        });
+        if (workflows.length >= MAX_WORKFLOWS) return;
+        const workflow = newWorkflow(workflows, result.workflow);
+        editor.draft.workflows.push(workflow);
+        selectedId = workflow.id;
+        selectedStepId = '';
+        libraryError = '';
+      } catch (cause) {
+        libraryError = failureText(cause);
+      }
+      return;
+    }
     const template = choice.startsWith('template:')
       ? model.templates.find(
           (item) => item.id === choice.slice('template:'.length),
@@ -145,6 +180,15 @@
     editor.draft.workflows.push(workflow);
     selectedId = workflow.id;
     selectedStepId = '';
+  }
+
+  function replaceWorkflow(next, previous) {
+    const index = workflows.findIndex((entry) => entry.id === previous.id);
+    if (index < 0 || !sameExceptNameSpacing([workflows[index]], [previous]))
+      return false;
+    editor.draft.workflows[index] = editableWorkflows([next])[0];
+    libraryError = '';
+    return true;
   }
 
   function duplicate(workflow) {
@@ -390,6 +434,11 @@
             />
           </div>
         </div>
+        <LinkedTemplates
+          {model}
+          workflow={selected}
+          onReplace={replaceWorkflow}
+        />
         <h4 class="factory-steps-heading">{t('factory.steps')}</h4>
         <p class="factory-help">{t('factory.stepsHelp')}</p>
         <WorkflowDiagram
@@ -403,6 +452,16 @@
             variant="secondary"
             disabled={selected.steps.length >= MAX_STEPS}
             onClick={addStep}>{t('factory.addStep')}</Button
+          >
+          <Button
+            variant="secondary"
+            disabled={!model.library.some((item) => !item.archived) ||
+              selected.steps.length >= MAX_STEPS}
+            onClick={() => (libraryAction = 'insert')}
+            >{t('factory.library.insert')}</Button
+          >
+          <Button variant="tertiary" onClick={() => (libraryAction = 'publish')}
+            >{t('factory.library.saveTemplate')}</Button
           >
         </div>
         {#if selected.steps[selectedIndex]}
@@ -423,6 +482,8 @@
     {/if}
   </section>
   {#if previewError}<Banner variant="error" role="alert">{previewError}</Banner
+    >{/if}
+  {#if libraryError}<Banner variant="error" role="alert">{libraryError}</Banner
     >{/if}
 
   <section class="factory-section" aria-labelledby="factory-setup-execution">
@@ -470,6 +531,19 @@
     </div>
   </div>
 </article>
+
+{#if libraryAction === 'insert'}<LibraryInsert
+    {model}
+    workflow={selected}
+    onInsert={replaceWorkflow}
+    onClose={() => (libraryAction = '')}
+  />{/if}
+{#if libraryAction === 'publish'}<PublishTemplate
+    {model}
+    workflow={selected}
+    onLinked={replaceWorkflow}
+    onClose={() => (libraryAction = '')}
+  />{/if}
 
 {#if deleteOpen}
   <ConfirmDialog

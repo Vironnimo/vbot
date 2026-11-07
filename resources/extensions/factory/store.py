@@ -68,6 +68,16 @@ CREATE TABLE comments (
  at TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
+CREATE TABLE library_templates (
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL, revision INTEGER NOT NULL,
+ latest_version INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE library_versions (
+ template_id TEXT NOT NULL REFERENCES library_templates(id), version INTEGER NOT NULL,
+ name TEXT NOT NULL, description TEXT NOT NULL, workflow_json TEXT NOT NULL,
+ created_at TEXT NOT NULL, PRIMARY KEY(template_id, version)
+) STRICT;
 """
 _OUTPUT_FIELDS = (
     "stage_id",
@@ -191,6 +201,8 @@ def _migrate_steps(connection: sqlite3.Connection) -> None:
 MIGRATIONS = (
     Migration("workflows", apply=_migrate_workflows),
     Migration("steps", breaks_older=True, apply=_migrate_steps),
+    # Older Workflow writers would silently drop links to shared templates.
+    Migration("library_links", breaks_older=True),
 )
 
 _CARD_FIELDS = (
@@ -242,6 +254,10 @@ _SETUP_KEYS = (
 )
 _CARD_COLUMNS = ", ".join(_CARD_FIELDS)
 _SETUP_COLUMNS = ", ".join(_SETUP_FIELDS)
+_TEMPLATE_COLUMNS = (
+    "t.id, t.kind, t.revision, t.latest_version, t.archived, t.created_at, t.updated_at, "
+    "v.version, v.name, v.description"
+)
 _MUTABLE_CARD_FIELDS = set(_CARD_FIELDS) - {
     "id",
     "project_id",
@@ -280,6 +296,39 @@ def _setup(row: sqlite3.Row) -> Json:
     return value
 
 
+def _template(row: sqlite3.Row) -> Json:
+    value = dict(row)
+    value["archived"] = bool(value["archived"])
+    if "workflow_json" in value:
+        value["workflow"] = json.loads(value.pop("workflow_json"))
+    return value
+
+
+def _get_template(connection: sqlite3.Connection, template_id: str, version: int | None) -> Json:
+    row = connection.execute(
+        f"SELECT {_TEMPLATE_COLUMNS}, v.workflow_json FROM library_templates t "
+        "JOIN library_versions v ON v.template_id = t.id "
+        "AND v.version = COALESCE(?, t.latest_version) WHERE t.id = ?",
+        (version, template_id),
+    ).fetchone()
+    if row is None:
+        raise FactoryError(
+            "template_not_found",
+            f"Template {template_id!r}"
+            + (f" version {version}" if version is not None else "")
+            + " does not exist. Read library.list or library.get to choose an existing version.",
+        )
+    value = _template(row)
+    value["versions"] = [
+        item[0]
+        for item in connection.execute(
+            "SELECT version FROM library_versions WHERE template_id = ? ORDER BY version DESC",
+            (template_id,),
+        )
+    ]
+    return value
+
+
 def _get(connection: sqlite3.Connection, card_id: str) -> Json:
     row = connection.execute(
         f"SELECT {_CARD_COLUMNS} FROM cards WHERE id = ?", (card_id,)
@@ -305,6 +354,116 @@ class FactoryStore:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    async def list_templates(
+        self, *, include_archived: bool = False, after: str = "", limit: int = 50
+    ) -> Json:
+        def read(connection: sqlite3.Connection) -> Json:
+            rows = connection.execute(
+                f"SELECT {_TEMPLATE_COLUMNS} FROM library_templates t "
+                "JOIN library_versions v ON v.template_id = t.id AND v.version = t.latest_version "
+                "WHERE t.id > ? AND (? OR t.archived = 0) ORDER BY t.id LIMIT ?",
+                (after, int(include_archived), limit + 1),
+            ).fetchall()
+            values = [_template(row) for row in rows[:limit]]
+            return {
+                "templates": values,
+                "next_cursor": values[-1]["id"] if len(rows) > limit else "",
+            }
+
+        return await self.database.read_async(read)
+
+    async def get_template(self, template_id: str, version: int | None = None) -> Json:
+        return await self.database.read_async(
+            lambda connection: _get_template(connection, template_id, version)
+        )
+
+    async def publish_template(self, values: Json, *, expected_revision: int) -> Json:
+        """Append a version without changing any Project's adopted copy."""
+        at = utc_now_timestamp()
+
+        def write(connection: sqlite3.Connection) -> Json:
+            template_id = values.get("id")
+            if template_id:
+                previous = _get_template(connection, template_id, None)
+                if expected_revision != previous["revision"]:
+                    raise FactoryError(
+                        "revision_conflict",
+                        "The template changed elsewhere. Read library.get before publishing.",
+                    )
+                if previous["archived"]:
+                    raise FactoryError(
+                        "template_archived",
+                        "The template is archived. Restore it before publishing another version.",
+                    )
+                if values["kind"] != previous["kind"]:
+                    raise FactoryError(
+                        "template_kind_changed",
+                        "A template keeps its kind. Publish a separate template for another kind.",
+                    )
+                version = previous["latest_version"] + 1
+                connection.execute(
+                    "UPDATE library_templates SET revision = revision + 1, latest_version = ?, "
+                    "updated_at = ? WHERE id = ?",
+                    (version, at, template_id),
+                )
+            else:
+                if expected_revision != 0:
+                    raise FactoryError(
+                        "revision_conflict", "A new template has revision 0. Supply 0 or omit it."
+                    )
+                version = 1
+
+                def claim(candidate: str) -> bool:
+                    cursor = connection.execute(
+                        "INSERT OR IGNORE INTO library_templates "
+                        "(id, kind, revision, latest_version, archived, created_at, updated_at) "
+                        "VALUES (?, ?, 1, 1, 0, ?, ?)",
+                        (candidate, values["kind"], at, at),
+                    )
+                    return cursor.rowcount == 1
+
+                template_id = new_id("ftpl", claim=claim)
+            connection.execute(
+                "INSERT INTO library_versions "
+                "(template_id, version, name, description, workflow_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    template_id,
+                    version,
+                    values["name"],
+                    values["description"],
+                    _dump(values["workflow"]),
+                    at,
+                ),
+            )
+            return _get_template(connection, template_id, None)
+
+        return await self.database.write_async(write)
+
+    async def archive_template(
+        self, template_id: str, *, expected_revision: int, archived: bool = True
+    ) -> Json:
+        """Hide a template from insertion while keeping versions and Project links readable."""
+        at = utc_now_timestamp()
+
+        def write(connection: sqlite3.Connection) -> Json:
+            previous = _get_template(connection, template_id, None)
+            if expected_revision != previous["revision"]:
+                raise FactoryError(
+                    "revision_conflict",
+                    "The template changed elsewhere. Read library.get before "
+                    "archiving or restoring.",
+                )
+            if previous["archived"] != archived:
+                connection.execute(
+                    "UPDATE library_templates SET archived = ?, revision = revision + 1, "
+                    "updated_at = ? WHERE id = ?",
+                    (int(archived), at, template_id),
+                )
+            return _get_template(connection, template_id, None)
+
+        return await self.database.write_async(write)
 
     async def list_setups(self) -> list[Json]:
         return await self.database.read_async(

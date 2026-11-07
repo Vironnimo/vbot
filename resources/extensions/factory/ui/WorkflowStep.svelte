@@ -30,6 +30,7 @@
     resolve,
     onMove,
     onRemove,
+    requireAgent = true,
   } = $props();
   let showAllModels = $state(false);
   const prefix = $derived(`factory-${step.id}`);
@@ -186,7 +187,7 @@
         ariaLabelledby={`${prefix}-agent-label`}
         value={agentValue}
         options={agentOptions}
-        invalid={!step.agent}
+        invalid={requireAgent && !step.agent}
         onOpenChange={model.pickerOpen}
         onValueChange={selectAgent}
       />

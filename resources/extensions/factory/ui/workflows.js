@@ -181,6 +181,7 @@ export const editableWorkflows = (workflows) =>
     name: workflow.name ?? '',
     description: workflow.description ?? '',
     steps: (workflow.steps ?? []).map(editableStep),
+    ...(workflow.sources?.length ? { sources: copy(workflow.sources) } : {}),
   }));
 
 // The server's shape of the Workflows, in a fixed key order for comparison.
@@ -196,6 +197,7 @@ export const canonicalWorkflows = (workflows) =>
           ? DEFAULT_ROUNDS
           : Number(step.rounds),
     })),
+    ...(workflow.sources?.length ? { sources: copy(workflow.sources) } : {}),
   }));
 
 // The server trims names. A save that changed nothing else keeps the draft's
@@ -226,7 +228,7 @@ const wholeNumber = (value, maximum) =>
 
 // The first problem the server would refuse, or ''. Agent and Model
 // availability stays with the server, which names the step.
-export function workflowProblem(workflows) {
+export function workflowProblem(workflows, { requireAgents = true } = {}) {
   if (!workflows.length) return t('factory.invalid.noWorkflow');
   const names = new Set();
   for (const workflow of workflows) {
@@ -252,7 +254,8 @@ export function workflowProblem(workflows) {
       if (stepNames.has(label.toLowerCase()))
         return t('factory.invalid.stepNameTaken', { location });
       stepNames.add(label.toLowerCase());
-      if (!step.agent) return t('factory.invalid.stepAgent', { location });
+      if (requireAgents && !step.agent)
+        return t('factory.invalid.stepAgent', { location });
       if (!step.task.trim()) return t('factory.invalid.stepTask', { location });
       if (step.returns_to && !wholeNumber(step.rounds, 20))
         return t('factory.invalid.rounds', { location });
