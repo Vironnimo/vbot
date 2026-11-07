@@ -32,6 +32,8 @@ Every text addresses the Agent as `you` (`vbot-agent-tools` Skill -> Wording), e
 | `vBot could not analyze it to check it (<error>)` with `Run it again; if this repeats, tell the user.` | The analysis failed (helper timeout or crash, fail closed); the command itself may be fine, and the helper restarts, so one retry is the right next step before involving the user (F5). The only refusal with `retryable` true, since every other refusal repeats for the same call. |
 | `this vBot cannot analyze commands to check them` | A Tool registry without a command checker cannot run a restricted Session's commands; the Agent learns that no rewrite helps (F5). |
 
+| `the Git repository root for <folder> cannot be determined within the folders you can read` with `If this command creates the repository, run git init or git clone in a separate call first, then run the remaining Git commands. Otherwise use a repository whose root you can read.` | Preflight cannot see a repository that an earlier statement will create. An unreadable ancestor is not evidence of a forbidden write to it; name the unresolved root and the executable two-call recovery without weakening the boundary (live Session audit 2026-11-07). |
+
 ## Cron watch refusal (`watch_message`)
 
 `The check did not run: the permission rules refuse <access> <target>, because <reason>. Change the watch to a command these rules allow` (or `an address`), stored as `last_check_error` without a final period (`automation/cron-watch.md`). The user reads it in failure alerts and the Agent in the `cron` Tool's job.
