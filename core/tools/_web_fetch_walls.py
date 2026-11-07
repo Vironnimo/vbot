@@ -12,7 +12,7 @@ exactly that while carrying readable content).
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 WALL_GUIDANCE = "Try another source."
 
@@ -85,6 +85,15 @@ def bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
             return f"Blocked by a login wall at {url}; no readable content. {WALL_GUIDANCE}"
         if _REDDIT_CHALLENGE_MARKER in text.lower():
             return f"Blocked by a bot check at {url}; no readable content. {WALL_GUIDANCE}"
+
+    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"} and (
+        path.rstrip("/") == "/i/flow/login"
+        or (
+            path.rstrip("/") == "/i/jf/onboarding/web"
+            and parse_qs(parsed.query).get("mode") == ["login"]
+        )
+    ):
+        return f"Blocked by a login wall at {url}; no readable content. {WALL_GUIDANCE}"
 
     return None
 

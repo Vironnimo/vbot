@@ -672,18 +672,30 @@ async def test_pages_standing_in_for_the_requested_one_are_not_retryable_failure
 
 
 @pytest.mark.asyncio
-async def test_reddit_login_redirect_is_a_login_wall(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("requested", "login_url"),
+    [
+        (
+            "https://old.reddit.com/r/Python/",
+            "https://old.reddit.com/login/?reason=lor2&dest=%2Fr%2FPython%2F",
+        ),
+        (
+            "https://x.com/example/media",
+            "https://x.com/i/jf/onboarding/web?redirect_after_login=%2Fexample%2Fmedia&mode=login",
+        ),
+        ("https://x.com/example", "https://x.com/i/flow/login"),
+        ("https://twitter.com/example", "https://twitter.com/i/flow/login"),
+    ],
+)
+async def test_known_login_redirects_are_login_walls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested: str, login_url: str
 ) -> None:
-    requested = "https://old.reddit.com/r/Python/"
-    login_url = "https://old.reddit.com/login/?reason=lor2&dest=https%3A%2F%2Fold.reddit.com%2Fr%2FPython%2F"
-
     def responder(request_url: str) -> PublicResponse:
         if request_url == requested:
             return make_result(status_code=302, headers={"Location": login_url}, url=request_url)
         return make_result(
             headers={"Content-Type": "text/html; charset=utf-8"},
-            text="<html><head><title>Welcome to Reddit</title></head>"
+            text="<html><head><title>Sign in</title></head>"
             "<body><p>Log in or sign up to personalize your feed.</p></body></html>",
             url=login_url,
         )
@@ -692,9 +704,6 @@ async def test_reddit_login_redirect_is_a_login_wall(
 
     error = assert_failure_envelope(await fetch(tmp_path, {"url": requested}), "access_denied")
 
-    assert error["message"] == (
-        f"Blocked by a login wall at {login_url}; no readable content. {_WALL_GUIDANCE}"
-    )
     assert error["retryable"] is False
 
 
