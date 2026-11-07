@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -251,11 +252,25 @@ async def test_creation_requires_enabled_setup_and_names_available_projects(
     assert refused.value.code == "project_not_enabled"
 
 
-async def test_management_creation_is_operator_owned(factory: FactoryHarness) -> None:
+@pytest.mark.parametrize(
+    ("requested", "selected"), [(None, "implement"), ("drafts", "drafts"), ("Planning", "drafts")]
+)
+async def test_management_creation_is_operator_owned(
+    factory: FactoryHarness, requested: str | None, selected: str
+) -> None:
+    default, other = implement_workflow(), drafts_workflow()
+    default["name"] = other["id"]
+    other["name"] = "Planning"
+    await factory.setup(workflows=[default, other])
     result = await factory.operation(
-        "card.create", project_id="project", title="Objective", description="Scope"
+        "card.create",
+        project_id="project",
+        title="Objective",
+        description="Scope",
+        **({"workflow": requested} if requested else {}),
     )
     card = result["card"]
+    assert card["workflow_id"] == selected
     assert (card["origin"], card["state"], card["origin_session"], card["origin_run"]) == (
         "operator",
         "queued",
@@ -641,3 +656,168 @@ async def test_user_resume_at_full_wip_is_queued_and_admitted_once(
     history = await factory.store.history(waiting["id"])
     assert [event["event"] for event in history["events"]].count("queued_for_slot") == 1
     assert [item["text"] for item in history["comments"]] == ([comment] if comment else [])
+
+
+async def test_shared_template_adoption_is_explicit_versioned_and_preserves_local_edits(
+    factory: FactoryHarness,
+) -> None:
+    original = implement_workflow()
+    template = (
+        await factory.operation(
+            "library.publish", name="Shared engineering", kind="workflow", workflow=original
+        )
+    )["template"]
+    before = await factory.store.get_setup("project")
+    draft = (await factory.operation("library.insert", id=template["id"]))["workflow"]
+    source_id = draft["sources"][0]["id"]
+    draft["steps"][0].update(task="Project-specific implementation", agent="reviewer")
+    saved = (
+        await factory.operation(
+            "setup.update",
+            project_id="project",
+            expected_revision=before["revision"],
+            workflows=[draft],
+            default_workflow=draft["id"],
+        )
+    )["setup"]
+    assert saved["workflows"][0]["sources"][0]["version"] == 1
+    upstream = deepcopy(original)
+    upstream["steps"][0]["task"] = "Template implementation changed"
+    upstream["steps"][1]["task"] = "Template review changed"
+    second = (
+        await factory.operation(
+            "library.publish",
+            id=template["id"],
+            expected_revision=template["revision"],
+            name=template["name"],
+            kind="workflow",
+            workflow=upstream,
+        )
+    )["template"]
+    preview = await factory.operation("library.preview_update", workflow=draft, source_id=source_id)
+    assert preview["version"] == 2 and len(preview["conflicts"]) == 1
+    assert preview["conflicts"][0]["field"] == "task"
+    with pytest.raises(FactoryError) as unresolved:
+        await factory.operation(
+            "library.apply_update", workflow=draft, source_id=source_id, version=2
+        )
+    assert unresolved.value.code == "update_conflicts"
+    # Another publication must not silently change the version the user previewed.
+    third = deepcopy(upstream)
+    third["steps"][1]["task"] = "Newer template review"
+    await factory.operation(
+        "library.publish",
+        id=template["id"],
+        expected_revision=second["revision"],
+        name=template["name"],
+        kind="workflow",
+        workflow=third,
+    )
+    applied = await factory.operation(
+        "library.apply_update",
+        workflow=draft,
+        source_id=source_id,
+        version=preview["version"],
+        resolutions={preview["conflicts"][0]["id"]: "local"},
+    )
+    assert applied["workflow"]["steps"][0]["task"] == "Project-specific implementation"
+    assert applied["workflow"]["steps"][0]["agent"] == "reviewer"
+    assert applied["workflow"]["steps"][1]["task"] == "Template review changed"
+    assert applied["workflow"]["sources"][0]["version"] == 2
+    assert await factory.store.get_setup("project") == saved
+    with pytest.raises(FactoryError) as stale:
+        await factory.operation(
+            "setup.update",
+            project_id="project",
+            expected_revision=before["revision"],
+            workflows=[applied["workflow"]],
+        )
+    assert stale.value.code == "revision_conflict"
+    updated = (
+        await factory.operation(
+            "setup.update",
+            project_id="project",
+            expected_revision=saved["revision"],
+            workflows=[applied["workflow"]],
+        )
+    )["setup"]
+    assert updated["workflows"][0]["sources"][0]["version"] == 2
+    assert (await factory.operation("library.get", id=template["id"], version=1))["template"][
+        "workflow"
+    ]["steps"] == original["steps"]
+    assert any(resource == "library" for resource, _ids, _revision in factory.host.published)
+
+
+async def test_selected_steps_publish_and_link_without_duplication_and_archive_keeps_history(
+    factory: FactoryHarness,
+) -> None:
+    workflow = implement_workflow()
+    extracted = (
+        await factory.operation("library.extract", workflow=workflow, step_ids=["review"])
+    )["workflow"]
+    assert len(extracted["steps"]) == 1
+    assert extracted["steps"][0]["after"] == []
+    assert extracted["steps"][0]["returns_to"] == ""
+    template = (
+        await factory.operation(
+            "library.publish", name="Shared review", kind="step", workflow=extracted
+        )
+    )["template"]
+    linked = (
+        await factory.operation(
+            "library.link", id=template["id"], workflow=workflow, step_ids=["review"]
+        )
+    )["workflow"]
+    assert linked["steps"] == workflow["steps"]
+    assert linked["sources"][0]["template_id"] == template["id"]
+    republish = (
+        await factory.operation(
+            "library.extract", workflow=linked, source_id=linked["sources"][0]["id"]
+        )
+    )["workflow"]
+    assert republish["steps"] == extracted["steps"]
+    whole_draft = (await factory.operation("library.extract", workflow=linked))["workflow"]
+    whole = (
+        await factory.operation(
+            "library.publish", name="Project process", kind="workflow", workflow=whole_draft
+        )
+    )["template"]
+    untouched = deepcopy(linked)
+    with pytest.raises(FactoryError) as overlap:
+        await factory.operation("library.link", id=whole["id"], workflow=linked)
+    assert overlap.value.code == "source_overlap"
+    replaced = (
+        await factory.operation(
+            "library.link", id=whole["id"], workflow=linked, replace_sources=True
+        )
+    )["workflow"]
+    assert linked == untouched
+    assert replaced["steps"] == linked["steps"]
+    assert [source["template_id"] for source in replaced["sources"]] == [whole["id"]]
+    untouched = deepcopy(replaced)
+    with pytest.raises(FactoryError) as partial:
+        await factory.operation(
+            "library.link",
+            id=template["id"],
+            workflow=replaced,
+            step_ids=["review"],
+            replace_sources=True,
+        )
+    assert partial.value.code == "source_overlap"
+    assert replaced == untouched
+    # Draft operations neither change the Project nor rewrite the previous template.
+    assert (await factory.store.get_setup("project"))["workflows"] == [workflow]
+    assert (await factory.operation("library.get", id=template["id"]))["template"] == template
+    archived = (
+        await factory.operation(
+            "library.archive", id=template["id"], expected_revision=template["revision"]
+        )
+    )["template"]
+    assert archived["archived"]
+    assert [item["id"] for item in (await factory.operation("library.list"))["templates"]] == [
+        whole["id"]
+    ]
+    assert (await factory.operation("library.get", id=template["id"]))["template"]["workflow"]
+    with pytest.raises(FactoryError) as hidden:
+        await factory.operation("library.insert", id=template["id"], workflow=workflow)
+    assert hidden.value.code == "template_archived"

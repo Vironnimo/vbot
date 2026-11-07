@@ -29,6 +29,10 @@ class FactoryManagement:
         self.service = service
 
     async def operation(self, name: str, arguments: Json) -> Json:
+        if name.startswith("library."):
+            from ._library_management import operation
+
+            return await operation(self.service, name, arguments)
         if name in {"catalog", "board.get", "card.get", "setup.list", "setup.get", "setup.preview"}:
             return await self._read(name, arguments)
         async with self.service.lock:

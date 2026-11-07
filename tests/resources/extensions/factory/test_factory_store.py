@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from core.database import open_offline_database
+from core.database import DatabaseFormatError, open_offline_database
 from core.extensions.databases import extension_database_spec
 from resources.extensions.factory._values import SETUP_DEFAULTS
 from resources.extensions.factory._workflows import templates
@@ -92,6 +92,65 @@ async def test_setup_revisions_and_unfinished_card_lifetime(factory_store: Facto
     await store.delete_setup("project")
     await store.delete_card(card["id"])
     assert await store.list_cards() == [] and await store.list_setups() == []
+
+
+async def test_library_versions_survive_archival_and_reject_stale_changes(
+    factory_store: FactoryStore,
+) -> None:
+    store = factory_store
+    values = {
+        "kind": "workflow",
+        "name": "Reusable plan",
+        "description": "Shared",
+        "workflow": templates()[1],
+    }
+    first = await store.publish_template(values, expected_revision=0)
+    changed = {**values, "id": first["id"], "name": "Reviewed plan"}
+    second = await store.publish_template(changed, expected_revision=1)
+    assert second["version"] == 2 and second["versions"] == [2, 1]
+    original = await store.get_template(first["id"], 1)
+    assert (original["name"], original["workflow"]) == (first["name"], first["workflow"])
+    assert original["latest_version"] == 2
+    with pytest.raises(FactoryError) as stale:
+        await store.publish_template(changed, expected_revision=1)
+    assert stale.value.code == "revision_conflict"
+    assert (await store.get_template(first["id"]))["versions"] == [2, 1]
+    with pytest.raises(FactoryError) as changed_kind:
+        await store.publish_template({**changed, "kind": "step"}, expected_revision=2)
+    assert changed_kind.value.code == "template_kind_changed"
+    archived = await store.archive_template(first["id"], expected_revision=2)
+    assert archived["archived"] and archived["version"] == 2 and archived["revision"] == 3
+    assert (await store.list_templates())["templates"] == []
+    listed = (await store.list_templates(include_archived=True))["templates"]
+    assert len(listed) == 1 and listed[0]["id"] == first["id"]
+    assert "workflow" not in listed[0]
+    assert (await store.get_template(first["id"], 1))["workflow"] == first["workflow"]
+    with pytest.raises(FactoryError) as hidden:
+        await store.publish_template(changed, expected_revision=3)
+    assert hidden.value.code == "template_archived"
+    restored = await store.archive_template(first["id"], expected_revision=3, archived=False)
+    assert not restored["archived"] and restored["revision"] == 4
+    assert (
+        await store.archive_template(first["id"], expected_revision=4, archived=False)
+    ) == restored
+    assert (await store.get_template(first["id"]))["versions"] == [2, 1]
+
+
+async def test_library_listing_pages_without_duplicate_or_missing_templates(
+    factory_store: FactoryStore,
+) -> None:
+    expected = []
+    for index in range(3):
+        template = await factory_store.publish_template(
+            {"kind": "workflow", "name": str(index), "description": "", "workflow": templates()[0]},
+            expected_revision=0,
+        )
+        expected.append(template["id"])
+    first = await factory_store.list_templates(limit=2)
+    assert len(first["templates"]) == 2 and first["next_cursor"]
+    second = await factory_store.list_templates(limit=2, after=first["next_cursor"])
+    assert len(second["templates"]) == 1 and not second["next_cursor"]
+    assert [item["id"] for item in first["templates"] + second["templates"]] == sorted(expected)
 
 
 async def test_backlog_moves_are_stable_and_audited(factory_store: FactoryStore) -> None:
@@ -235,3 +294,9 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
         )
     finally:
         database.close()
+    # An older Workflow writer would erase the source links on its next save.
+    older_writer = extension_database_spec(
+        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+    )
+    with pytest.raises(DatabaseFormatError):
+        open_offline_database(older_writer)

@@ -410,6 +410,35 @@ async def reviewed(service):
 
 
 @pytest.mark.asyncio
+async def test_queued_card_keeps_its_selected_workflow_when_setup_changes(service):
+    card = service.store.add()
+    card["workflow_id"] = "plan"
+    service.store.cards[card["id"]]["workflow_id"] = "plan"
+    # A name that happens to match the stored id is not the selected Workflow.
+    service.store.setup["workflows"][0]["name"] = "Plan"
+    paused = await service.execution.start(card)
+    await service.flush()
+    assert (paused["state"], paused["waiting_reason"], paused["workflow_id"]) == (
+        "waiting",
+        "run_failed",
+        "plan",
+    )
+    assert "Restore it and Retry" in paused["runtime"]["note"]
+    assert "workflow" not in paused["runtime"]
+    assert not service.host.temporary_agents.runs
+
+    service.store.setup["workflows"].append(
+        {"id": "plan", "name": "Planning", "description": "", "steps": [step("plan", after=[])]}
+    )
+    queued = await service.execution.retry(paused)
+    await service.execution.start(queued)
+    await service.flush()
+    running = await service.card()
+    assert running["runtime"]["workflow"]["id"] == "plan"
+    assert running["runtime"]["step"] == "plan"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("archive_failure", [False, True])
 async def test_steps_run_until_the_user_accepts_and_deleted_cards_are_archived(
     service, monkeypatch, archive_failure
@@ -420,6 +449,10 @@ async def test_steps_run_until_the_user_accepts_and_deleted_cards_are_archived(
     assert groups.configs["implement"].model_override == "provider/worker"
     assert groups.configs["implement"].identity_profile == "builder"
     assert "factory_request_changes" in groups.configs["implement"].tool_access.denied
+    # Adopting a template version changes the Project setup, never this Card's
+    # running snapshot or the configuration of its not-yet-started participants.
+    service.store.setup["workflows"][0]["steps"][1]["model"] = "updated/reviewer"
+    service.store.setup["workflows"][0]["steps"].append(step("newstep", after=["review"]))
     card = await reviewed(service)
     assert card["state"] == "waiting" and card["waiting_reason"] == "finished"
     assert service.publications[-1] == ("cards", [card["id"]], card["revision"], False)

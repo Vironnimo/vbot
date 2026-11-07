@@ -8,6 +8,8 @@ Software Factory runs work Cards through a Project's Workflows - plans, drafts, 
 
 In Setups, give a registered Project one or more Workflows, starting from templates such as Implement, Plan, Plan from drafts, or Plan, then implement, and pick the default. A Workflow is a list of steps; each step has a name, an Agent (any of your Agents or a member of the Project's Team, with optional Model and thinking effort overrides), a task, and when it starts. Steps run one at a time in list order. A step receives the results of the steps it comes after, and of theirs, and nothing else, so drafts that come after nothing stay independent; a step can also wait for the user's approval before it starts. A step with a send-back target can return that step's result with findings instead of passing it on. The setup also holds the turn budget per participant.
 
+The Library holds shared templates for one step, a sequence of steps, or a complete Workflow. Each publication creates a version; Projects keep the version they adopted and their local adjustments until an update is applied there. An update compares the adopted version, the Project's current work and the chosen newer version, preserving local adjustments and exposing conflicting changes for a choice. Archiving a template hides it from normal Library browsing without removing published versions or existing uses.
+
 - The Factory does no Git. Participants work in isolation, commit, merge and clean up as the Project's instructions describe; the Implement templates end with an Integrate step that waits for the user's approval and lands the reviewed change.
 - A Card runs the Workflow chosen at creation (`factory_card` `workflow`, or the Project's default); running Cards keep the Workflow they started with. Cards the user creates on the page or through management operations queue automatically; `factory_card` queues direct user requests and currently authorized automations, while an Agent's own idea stays a Proposal until the user approves it.
 - A step with a send-back target runs as a fresh participant each time. Its findings return to the target step's Session, and every step after the target runs again. Its rounds limit (default 2) is the number of automatic send-backs; past it, or when a participant is blocked, the Card waits for the user with the result and the reason.
@@ -24,9 +26,17 @@ vbot extensions run factory setup.update --help
 vbot extensions run factory board.get
 vbot extensions run factory card.create --help
 vbot extensions run factory card.get --help
+vbot extensions run factory library.list
+vbot extensions run factory library.publish --help
+vbot extensions run factory library.insert --help
+vbot extensions run factory library.preview_update --help
 ```
 
 Use Card and Project ids from those reads. Deleting a final Card archives its participant Sessions; done and discarded Cards otherwise keep readable Sessions on the Board.
+
+For Library work, use the template id and version from `library.list` or `library.get`. `library.extract` prepares a whole Workflow or selected steps for publication; when revising an existing template, pass its `source_id` to retain the original step identities. `library.publish` creates a template or another version, with the template's current `expected_revision` when updating it. After publishing from a Project, use `library.link` to connect its existing steps to that version without inserting copies. To replace existing links with a newly published template, pass `replace_sources: true`; the selection must cover every surviving step of each overlapping use.
+
+Inserting, linking or updating a Library template returns a Workflow draft; save it through `setup.update` to change the Project. Keep the setup's other Workflows and pass the setup's `expected_revision` from `setup.get`. To adopt an update, pass the Workflow and its source id to `library.preview_update`, choose local or template values for conflicts, then call `library.apply_update` with the exact version previewed and those choices before saving. These operations use the same implementation as the Library page; their `--help` lists the arguments, and `--stdin` accepts a JSON argument object without shell quoting.
 
 ## Swarm
 

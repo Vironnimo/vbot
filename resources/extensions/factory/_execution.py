@@ -386,12 +386,22 @@ class FactoryExecution:
         if card["state"] != "queued" or card["runtime"].get("pending_action"):
             raise self._error("wrong_state")
         setup = await self.store.get_setup(card["project_id"])
-        try:
-            workflow = _workflows.choose(setup, card.get("workflow_id") or None)
-        except FactoryError:
-            # The chosen Workflow was removed from the setup while the Card waited.
-            workflow = _workflows.choose(setup, None)
         runtime = self._runtime(card)
+        requested = card.get("workflow_id")
+        workflow = (
+            next(
+                (deepcopy(item) for item in setup["workflows"] if item["id"] == requested),
+                None,
+            )
+            if requested
+            else _workflows.choose(setup, None)
+        )
+        if workflow is None:
+            runtime["note"] = (
+                f"The selected Workflow ({requested}) is no longer in this Project's setup. "
+                "Restore it and Retry, or discard this Card and create one with another Workflow."
+            )
+            return await self._wait(card, "run_failed", runtime=runtime, event="admission_failed")
         runtime.pop("setup", None)
         runtime.update(
             workflow=workflow,
