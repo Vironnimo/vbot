@@ -89,6 +89,9 @@ def _batch_error(
     lines: list[str],
     stopped: str,
     shot: str | None = None,
+    *,
+    input_started: bool = False,
+    step_started: bool = False,
 ) -> Exception:
     """The error of a batch stopped at action *number*, naming the steps that ran.
 
@@ -98,7 +101,11 @@ def _batch_error(
     action = actions[number - 1]
     ran = (
         "Actions that ran"
-        + ("" if shot else " (take a screenshot to see the current state)")
+        + (
+            ""
+            if shot or isinstance(error, InputInterrupted)
+            else " (take a screenshot to see the current state)"
+        )
         + ":\n"
         + "\n".join(lines)
         if lines
@@ -107,18 +114,30 @@ def _batch_error(
     rest = len(actions) - number
     skipped = f" The remaining {rest} did not run." if rest else ""
     if isinstance(error, InputInterrupted):
+        partial = (
+            f" Action {number} may have sent some input before it stopped."
+            if step_started and action.sends_input
+            else f" No input was sent for action {number}."
+        )
         message = (
             f"{stopped} during action {number} of {len(actions)} ({action.describe()}).{skipped} "
-            f"Held keys and buttons were released. {_STOPPED_ADVICE}\n{ran}"
+            f"Held keys and buttons were released.{partial} {_STOPPED_ADVICE}\n{ran}"
         )
         return TargetError(message, "computer_use_interrupted")
     detail = str(error).rstrip()
     if isinstance(error, TargetError) and error.code in {
         "computer_use_failed",
         "computer_use_unavailable",
+        "invalid_arguments",
     }:
         detail += " Input may have been sent." if action.sends_input else " No input was sent."
     message = f"Action {number} of {len(actions)} ({action.name}) failed: {detail}{skipped}\n{ran}"
     if isinstance(error, CallRefusedError):
-        return CallRefusedError(error.code, message)
-    return TargetError(message, error.code)
+        code = (
+            "screen_changed" if input_started and error.code == "invalid_arguments" else error.code
+        )
+        return CallRefusedError(code, message)
+    code = (
+        "computer_use_failed" if input_started and error.code == "invalid_arguments" else error.code
+    )
+    return TargetError(message, code)

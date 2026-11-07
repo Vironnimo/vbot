@@ -93,10 +93,23 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
     assert computer.target.inputs[-1] == ("click", 150, 100, "left", 1, [])
 
 
-async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Harness) -> None:
+@pytest.mark.parametrize("failure", ["elevated", "native_arguments"])
+async def test_batch_stops_at_the_first_failure_and_names_what_ran(
+    computer: Harness, failure: str
+) -> None:
     await computer.computer(action="screenshot", view="display")
     slack = computer.target.windows_[3]
-    computer.target.windows_[3] = replace(slack, elevated=True)
+    if failure == "elevated":
+        computer.target.windows_[3] = replace(slack, elevated=True)
+    else:
+
+        def refuse_second_click(record: tuple) -> None:
+            if record[0] == "click" and record[1] == 800:
+                raise computer_use.TargetError(
+                    "The point is outside the desktop.", "invalid_arguments"
+                )
+
+        computer.target.on_input = refuse_second_click
     computer.target.inputs.clear()
     actions = [
         CLICK,
@@ -105,9 +118,15 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     ]
     context = computer.context_for("computer_batch")
     result = await computer.call("computer_batch", {"actions": actions}, context)
-    assert result["error"]["code"] == "target_elevated"
+    assert result["error"]["code"] == (
+        "target_elevated" if failure == "elevated" else "computer_use_failed"
+    )
     message = result["error"]["message"]
-    assert message.startswith("Action 2 of 3 (left_click) failed: Slack runs as administrator")
+    assert message.startswith("Action 2 of 3 (left_click) failed:")
+    if failure == "elevated":
+        assert "Slack runs as administrator" in message
+    else:
+        assert "Input may have been sent." in message
     assert "The remaining 1 did not run.\nActions that ran:\n1. left_click at [200, 150]\n" in (
         message
     )
@@ -171,13 +190,15 @@ async def test_batch_keys_follow_an_app_its_own_keys_brought_up(computer: Harnes
     assert [record[0] for record in computer.target.inputs] == ["keys", "type", "keys"]
 
 
-@pytest.mark.parametrize("failure", ["target", "artifact", "unexpected"])
+@pytest.mark.parametrize("failure", ["target", "geometry", "artifact", "unexpected"])
 async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
     computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     await computer.computer(action="screenshot", view="display")
 
     def fail_capture(*args):
+        if failure == "geometry":
+            raise computer_use.TargetError("test-owned-capture-unavailable", "invalid_arguments")
         error = {
             "target": computer_use.TargetError,
             "artifact": OSError,
@@ -193,7 +214,9 @@ async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
     result = await computer.call(
         "computer_batch", {"actions": [CLICK, {"action": "key", "text": "enter"}]}, context
     )
-    assert result["error"]["code"] == "computer_use_failed"
+    assert result["error"]["code"] == (
+        "screen_changed" if failure == "geometry" else "computer_use_failed"
+    )
     assert "test-owned-capture-unavailable" in result["error"]["message"]
     # Each successful action keeps its evidence even though no final image exists.
     assert "1. left_click at [200, 150]" in model_text(result)
@@ -210,7 +233,7 @@ async def test_batch_rechecks_image_geometry_after_earlier_input(computer: Harne
 
     computer.target.on_input = move_window
     result = await computer.call("computer_batch", {"actions": [CLICK, CLICK]})
-    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["code"] == "screen_changed"
     assert "Action 2 of 2" in result["error"]["message"]
     assert "moved, resized or closed" in result["error"]["message"]
     assert "Actions that ran" in result["error"]["message"]
@@ -257,6 +280,8 @@ async def test_double_escape_interrupts_a_batch_between_input_events(computer: H
         "characters)). The remaining 1 did not run."
     )
     assert message.endswith("\n1. left_click at [200, 150]")
+    assert "take a screenshot" not in message.casefold()
+    assert "Action 2 may have sent some input" in message
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
     assert computer.hotkey.armed is None
     assert computer.target.activity == [True, False]  # a stop takes the sign down

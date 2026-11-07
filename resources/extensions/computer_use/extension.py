@@ -782,11 +782,14 @@ class ComputerUseService:
         lines: list[str] = []
         sent = False
         number = 0
+        step_started = False
         try:
             for number, (action, frame) in enumerate(zip(actions, frames, strict=True), start=1):
+                step_started = False
                 if action.sends_input and sent:
                     await self._pause(STEP_SETTLE_SECONDS)
                 self._check_stop()
+                step_started = True
                 lines.append(f"{number}. {await self._step(context, desktop, action, frame)}")
                 lines.extend(f"   {note}" for note in action.notes)
                 sent = sent or action.sends_input
@@ -794,7 +797,14 @@ class ComputerUseService:
             if not isinstance(error, InputInterrupted):
                 await self._screen_after_failure(desktop)
             raise _batch_error(
-                error, actions, number, lines, self._stopped_text(), desktop.failure_screen
+                error,
+                actions,
+                number,
+                lines,
+                self._stopped_text(),
+                desktop.failure_screen,
+                input_started=desktop.input_started,
+                step_started=step_started,
             ) from None
         if sent and actions[-1].name != "screenshot":
             try:
@@ -810,6 +820,8 @@ class ComputerUseService:
                 code = "computer_use_failed"
                 if isinstance(error, CallRefusedError | TargetError):
                     code = error.code
+                    if code == "invalid_arguments":
+                        code = "screen_changed"
                 else:
                     self.api.logger.exception("Computer Use final batch screenshot failed")
                 raise TargetError(
