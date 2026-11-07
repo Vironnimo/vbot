@@ -12,6 +12,7 @@
     boardColumns,
     stateLabel,
     queuedActionLabel,
+    landingStatusLabel,
     waitingLabel,
     originLabel,
     projectName,
@@ -192,6 +193,14 @@
       >{projectName(model.catalog, card.project_id)}</span
     >
     <span class="factory-card-title">{card.title}</span>
+    {#if card.integration_landing}<span
+        class="factory-card-landing-status"
+        data-landing-status={card.integration_landing.status}
+        >{!card.integration_landing.base_sha ||
+        card.integration_landing.head_sha === card.head_sha
+          ? landingStatusLabel(card.integration_landing.status)
+          : t('factory.landing.alreadyLanded')}</span
+      >{/if}
     {#if card.state === 'waiting'}<span class="factory-card-reason"
         >{waitingLabel(card.waiting_reason)}</span
       >{/if}

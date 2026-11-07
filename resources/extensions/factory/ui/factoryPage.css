@@ -149,6 +149,13 @@
   font-size: 12px;
   line-height: 1.45;
 }
+.factory-card-landing-status {
+  border-left: 2px solid var(--amber);
+  padding-left: 8px;
+  color: var(--text-hi);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .factory-card-preview {
   display: -webkit-box;
   -webkit-line-clamp: 3;

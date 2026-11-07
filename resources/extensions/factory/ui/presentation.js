@@ -132,6 +132,19 @@ export function queuedActionLabel(action) {
   }
 }
 
+export function landingStatusLabel(status) {
+  switch (status) {
+    case 'pending':
+      return t('factory.landing.pending');
+    case 'approved':
+      return t('factory.landing.approved');
+    case 'changes_requested':
+      return t('factory.landing.changesRequested');
+    default:
+      return t('factory.landing.alreadyLanded');
+  }
+}
+
 export function originLabel(origin) {
   switch (origin) {
     case 'operator':
@@ -256,7 +269,7 @@ export const setupDefaults = (projectId) => ({
   reviewer_profile: '',
   reviewer_model: '',
   reviewer_effort: '',
-  review_rounds: 2,
+  review_rounds: 3,
   turn_budget: 30,
   base_branch: 'main',
   integration_check: 'merged',

@@ -62,6 +62,26 @@ export default {
   'factory.base': 'Base',
   'factory.commitRange': 'Reviewed commit range',
   'factory.integrationReference': 'Integration reference',
+  'factory.landing.pending': 'Already integrated — review pending',
+  'factory.landing.approved': 'Already integrated — reviewed after landing',
+  'factory.landing.changesRequested':
+    'Already integrated — review requested changes',
+  'factory.landing.alreadyLanded':
+    'An integration from this Card has already landed.',
+  'factory.landing.noAutomaticRevert':
+    'Further review, rework or discarding this Card does not automatically undo code on the base.',
+  'factory.landing.historical':
+    'This notice describes an earlier integration from this Card, not its current submission.',
+  'factory.landing.commit': 'Landing commit',
+  'factory.landing.copyCommit': 'Copy landing commit',
+  'factory.landing.extraPaths': 'Additional changed paths',
+  'factory.landing.copyExtraPaths': 'Copy additional changed paths',
+  'factory.landing.mergePaths': 'Paths changed by merges',
+  'factory.landing.mergeHelp':
+    'Review these merge changes; they do not by themselves show an incorrect conflict resolution.',
+  'factory.landing.copyMergePaths': 'Copy paths changed by merges',
+  'factory.landing.discardWarning':
+    'Discarding this Card does not revert code that has already been integrated into the base.',
   'factory.reviews': 'Review rounds',
   'factory.reviewRound': 'Round {round}',
   'factory.integrationReview': 'Integration review',
@@ -133,7 +153,9 @@ export default {
   'factory.defaultEffort': 'Profile / Provider default',
   'factory.sameModel':
     'Worker and Reviewer use the same Model. A different Reviewer Model provides a more independent judgment.',
-  'factory.reviewRounds': 'Automatic review rounds',
+  'factory.reviewRounds': 'Total review rounds',
+  'factory.reviewRoundsHelp':
+    'Includes the first review. Each additional round allows one automatic rework; integration reviews do not count.',
   'factory.turnBudget': 'Worker turns per phase',
   'factory.baseBranch': 'Default base branch',
   'factory.integrationCheck': 'Integration verification',

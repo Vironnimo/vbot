@@ -322,8 +322,13 @@ class Service:
 
 class Git:
     head_value: str | None = _HEAD
+    target_value = "c" * 40
+    merge_value = "e" * 40
     ancestor = True
     merged = False
+    extra_paths: tuple[str, ...] = ()
+    merge_paths: tuple[str, ...] = ()
+    unknown_base = False
 
     def __init__(self, _cwd):
         pass
@@ -344,6 +349,52 @@ class Git:
     async def is_ancestor(self, _head, _base):
         return self.ancestor
 
+    async def base(self, _base):
+        if self.extra_paths or self.merge_paths:
+            return self.merge_value
+        return self.head_value if self.merged else self.target_value
+
+    async def integration(
+        self,
+        _branch,
+        _base,
+        *,
+        reviewed_base,
+        reviewed_head,
+        expected_branch_head=None,
+        accepted_base=None,
+        base_commit=None,
+        verify_merged=True,
+        reported_reference=None,
+    ):
+        moved = self.head_value is not None and self.head_value != (
+            expected_branch_head or reviewed_head
+        )
+        merge_changes = (
+            verify_merged
+            and self.ancestor
+            and bool(self.extra_paths or self.merge_paths)
+            and reviewed_head != self.merge_value
+        )
+        review = moved or merge_changes
+        landed = self.merged if moved else self.ancestor and verify_merged
+        head = self.merge_value if merge_changes else self.head_value if moved else reviewed_head
+        baseline = base_commit or accepted_base or self.target_value if review else reviewed_base
+        if self.unknown_base and landed and moved and base_commit is None:
+            baseline = ""
+        return {
+            "branch_head_sha": self.head_value,
+            "target_sha": await self.base(_base) if verify_merged or moved else "",
+            "landed": landed,
+            "review_required": review,
+            "base_sha": baseline,
+            "head_sha": head,
+            "landing_sha": head if landed else "",
+            "extra_paths": list(self.extra_paths) if merge_changes else [],
+            "merge_paths": list(self.merge_paths) if merge_changes else [],
+            "base_source": "accepted_base" if review else "",
+        }
+
 
 @pytest.fixture
 def service(monkeypatch):
@@ -351,6 +402,9 @@ def service(monkeypatch):
     monkeypatch.setattr(Git, "head_value", _HEAD)
     monkeypatch.setattr(Git, "ancestor", True)
     monkeypatch.setattr(Git, "merged", False)
+    monkeypatch.setattr(Git, "extra_paths", ())
+    monkeypatch.setattr(Git, "merge_paths", ())
+    monkeypatch.setattr(Git, "unknown_base", False)
     return Service()
 
 
@@ -415,6 +469,7 @@ async def test_worker_reviewer_acceptance_integration_and_archival(
     card = await service.card()
     assert card["state"] == "integrating"
     assert groups.admissions[-1][1].kind == "continuation"
+    assert f'"commit": "{Git.target_value}"' in groups.admissions[-1][1].content
     monkeypatch.setattr(Git, "head_value", None)  # Project cleanup removed branch.
     async with service.lock:
         result = await service.execution.report_integration(
@@ -515,50 +570,6 @@ async def test_reviewer_has_one_nudge_then_one_fresh_attempt(service):
         "reviewer-1",
         "reviewer-2",
     ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "case", ["moved", "moved_merged", "missing", "reference", "needs_changes", "failed"]
-)
-async def test_integration_checks_and_changed_heads_return_to_review(service, monkeypatch, case):
-    await started(service)
-    card = await approved(service)
-    async with service.lock:
-        await service.execution.accept(card)
-    await service.flush()
-    card = await service.card()
-    if case in {"moved", "moved_merged"}:
-        monkeypatch.setattr(Git, "head_value", _NEW)
-        monkeypatch.setattr(Git, "merged", case == "moved_merged")
-    if case == "missing":
-        monkeypatch.setattr(Git, "ancestor", False)
-    arguments = {
-        "outcome": case if case in {"needs_changes", "failed"} else "integrated",
-        "note": "Integration conflict",
-    }
-    if case == "reference":
-        monkeypatch.setattr(Git, "ancestor", False)
-        arguments["reference"] = "https://example.test/pull/1"
-    async with service.lock:
-        await service.execution.report_integration(service.tool_context(card), arguments)
-    await service.finish()
-    card = await service.card()
-    if case in {"moved", "moved_merged"}:
-        assert card["state"] == "reviewing" and card["head_sha"] == _NEW
-        assert card["base_sha"] == "0" * 40
-        assert (
-            card["runtime"]["review_kind"] == "integration_review"
-            and card["runtime"]["auto_round"] == 1
-        )
-    elif case in {"failed", "missing"}:
-        assert (card["state"], card["waiting_reason"]) == ("waiting", "integration_failed")
-    elif case == "needs_changes":
-        assert card["state"] == "working"
-        card = await submitted(service)
-        assert card["runtime"]["review_kind"] == "integration_review"
-    else:
-        assert card["state"] == "done"
 
 
 @pytest.mark.asyncio

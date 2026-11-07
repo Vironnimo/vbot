@@ -19,6 +19,7 @@ STATES = frozenset(
 ACTIVE_STATES = frozenset({"working", "reviewing", "integrating"})
 FINAL_STATES = frozenset({"done", "discarded"})
 DATABASE_NAME = "factory"
+# Generation 1 SQL defaults stay stable; setup creation supplies current defaults explicitly.
 SCHEMA_SQL = """
 CREATE TABLE project_setups (
  project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
@@ -300,6 +301,15 @@ class FactoryStore:
 
     async def get_card(self, card_id: str) -> Json:
         return await self.database.read_async(lambda connection: _get(connection, card_id))
+
+    async def attention_count(self) -> int:
+        return await self.database.read_async(
+            lambda connection: int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM cards WHERE state IN ('waiting', 'proposal')"
+                ).fetchone()[0]
+            )
+        )
 
     async def list_cards(
         self, project_id: str | None = None, state: str | None = None

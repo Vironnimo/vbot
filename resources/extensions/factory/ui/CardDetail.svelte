@@ -20,6 +20,7 @@
     editableCard,
     stateLabel,
     queuedActionLabel,
+    landingStatusLabel,
     waitingLabel,
     originLabel,
     projectName,
@@ -33,6 +34,7 @@
 
   let { model, onNavigate } = $props();
   const card = $derived(model.detail.card);
+  const landing = $derived(card.integration_landing);
   const actions = $derived(cardActions(card));
   const usage = $derived(usageSummary(model.detail.usage));
   const participants = $derived(model.detail.participants ?? []);
@@ -199,6 +201,73 @@
         <span class="factory-mono">{card.origin_run}</span>
       </p>{/if}
   </header>
+
+  {#if landing}
+    <Banner
+      variant="warn"
+      role="status"
+      aria-labelledby="factory-landing-heading"
+      class="factory-landing-notice"
+      data-integration-landing={landing.status}
+    >
+      <div class="factory-landing-content">
+        <h3 id="factory-landing-heading">
+          {landingStatusLabel(landing.status)}
+        </h3>
+        <p class="factory-prose">{t('factory.landing.alreadyLanded')}</p>
+        <p class="factory-prose">{t('factory.landing.noAutomaticRevert')}</p>
+        {#if landing.base_sha && landing.head_sha !== card.head_sha}
+          <p class="factory-help" data-landing-historical>
+            {t('factory.landing.historical')}
+          </p>
+        {/if}
+        {#if landing.landing_sha}
+          <dl class="factory-facts" data-landing-commit>
+            <div>
+              <dt>{t('factory.landing.commit')}</dt>
+              <dd class="factory-mono">
+                {landing.landing_sha}<CopyButton
+                  text={landing.landing_sha}
+                  label={t('factory.landing.copyCommit')}
+                />
+              </dd>
+            </div>
+          </dl>
+        {/if}
+        {#if landing.extra_paths?.length}
+          <div class="factory-landing-paths" data-landing-extra-paths>
+            <h4>
+              {t('factory.landing.extraPaths')}<CopyButton
+                text={landing.extra_paths.join('\n')}
+                label={t('factory.landing.copyExtraPaths')}
+              />
+            </h4>
+            <ul class="factory-mono">
+              {#each landing.extra_paths as path, index (index)}<li>
+                  {path}
+                </li>{/each}
+            </ul>
+          </div>
+        {/if}
+        {#if landing.merge_paths?.length}
+          <div class="factory-landing-paths" data-landing-merge-paths>
+            <h4>
+              {t('factory.landing.mergePaths')}<CopyButton
+                text={landing.merge_paths.join('\n')}
+                label={t('factory.landing.copyMergePaths')}
+              />
+            </h4>
+            <p class="factory-help">{t('factory.landing.mergeHelp')}</p>
+            <ul class="factory-mono">
+              {#each landing.merge_paths as path, index (index)}<li>
+                  {path}
+                </li>{/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
+    </Banner>
+  {/if}
 
   {#if approvals.length}
     <Banner variant="warn" role="status" class="factory-permission-notice">
@@ -560,7 +629,15 @@
     error={model.error}
     onConfirm={confirmAction}
     onCancel={() => (confirm = '')}
-  />
+  >
+    {#snippet bodyExtra()}
+      {#if confirm === 'discard' && landing}
+        <Banner variant="warn" role="status" data-landing-discard-warning
+          >{t('factory.landing.discardWarning')}</Banner
+        >
+      {/if}
+    {/snippet}
+  </ConfirmDialog>
 {/if}
 {#if compose}
   <Modal
@@ -789,6 +866,38 @@
   }
   :global(.factory-permission-notice) {
     margin-bottom: 18px;
+  }
+  :global(.factory-landing-notice) {
+    margin-bottom: 18px;
+  }
+  .factory-landing-content {
+    width: 100%;
+    min-width: 0;
+  }
+  .factory-landing-content h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+  .factory-landing-content p + p {
+    margin-top: 8px;
+  }
+  .factory-landing-paths {
+    margin-top: 18px;
+  }
+  .factory-landing-paths h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px;
+    font-size: 12px;
+  }
+  .factory-landing-paths ul {
+    max-height: 240px;
+    overflow: auto;
+    margin: 8px 0 0;
+    padding-left: 20px;
+    font-size: 12px;
+    line-height: 1.7;
   }
   @media (max-width: 850px) {
     .factory-detail-grid {

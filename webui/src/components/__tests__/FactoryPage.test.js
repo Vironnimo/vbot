@@ -190,6 +190,7 @@ describe('Factory card decisions', () => {
       ],
     };
     await render(bridge, '/card/fct-a');
+    expect(document.querySelector('[data-integration-landing]')).toBeNull();
     expect(
       document.querySelector('[data-recommendation]').textContent,
     ).toContain('test-owned recommendation');
@@ -226,6 +227,114 @@ describe('Factory card decisions', () => {
       'integrating',
     );
   });
+
+  it.each([
+    ['pending', false, false],
+    ['approved', false, false],
+    ['changes_requested', false, false],
+    ['changes_requested', true, false],
+    ['pending', false, true],
+  ])(
+    'keeps a %s landing visible with its evidence and no automatic revert, historical=%s, baseUnknown=%s',
+    async (status, historical, baseUnknown) => {
+      const landing = {
+        head_sha: 'test-owned-captured-head',
+        base_sha: baseUnknown ? '' : 'test-owned-captured-base',
+        landing_sha: 'test-owned-landing-commit',
+        branch_head_sha: null,
+        status,
+        extra_paths: status === 'approved' ? [] : ['src/additional.py'],
+        merge_paths: status === 'changes_requested' ? ['src/merged.py'] : [],
+      };
+      const currentState = baseUnknown
+        ? 'integrating'
+        : historical
+          ? 'working'
+          : status === 'pending'
+            ? 'reviewing'
+            : 'waiting';
+      const { bridge, state, operation } = createBridge([
+        card('fct-a', currentState, {
+          head_sha: baseUnknown
+            ? 'test-owned-previous-reviewed-head'
+            : historical
+              ? 'test-owned-new-submission'
+              : landing.head_sha,
+          waiting_reason: status === 'approved' ? 'approved' : 'no_agreement',
+          integration_landing: landing,
+        }),
+      ]);
+      await render(bridge);
+      const labels = {
+        pending: t('factory.landing.pending'),
+        approved: t('factory.landing.approved'),
+        changes_requested: t('factory.landing.changesRequested'),
+      };
+      const tile = document.querySelector('[data-card-id="fct-a"]');
+      expect(tile.querySelector('[data-landing-status]').textContent).toBe(
+        historical ? t('factory.landing.alreadyLanded') : labels[status],
+      );
+      tile.click();
+      await settle();
+      const notice = document.querySelector('[data-integration-landing]');
+      expect(notice.dataset.integrationLanding).toBe(status);
+      expect(notice.getAttribute('role')).toBe('status');
+      expect(notice.querySelector('h3').textContent).toBe(labels[status]);
+      expect(notice.textContent).toContain(t('factory.landing.alreadyLanded'));
+      expect(notice.textContent).toContain(
+        t('factory.landing.noAutomaticRevert'),
+      );
+      expect(Boolean(notice.querySelector('[data-landing-historical]'))).toBe(
+        historical,
+      );
+      expect(
+        notice.querySelector('[data-landing-commit]').textContent,
+      ).toContain(landing.landing_sha);
+      for (const [attribute, expected] of [
+        ['data-landing-extra-paths', landing.extra_paths],
+        ['data-landing-merge-paths', landing.merge_paths],
+      ]) {
+        expect(
+          [...notice.querySelectorAll(`[${attribute}] li`)].map(
+            (entry) => entry.textContent,
+          ),
+        ).toEqual(expected);
+        expect(Boolean(notice.querySelector(`[${attribute}]`))).toBe(
+          expected.length > 0,
+        );
+      }
+      if (landing.merge_paths.length)
+        expect(
+          notice.querySelector('[data-landing-merge-paths]').textContent,
+        ).toContain(t('factory.landing.mergeHelp'));
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { clipboard: { writeText } });
+      button(t('factory.landing.copyCommit'), notice).click();
+      await tick();
+      expect(writeText).toHaveBeenLastCalledWith(landing.landing_sha);
+      if (landing.extra_paths.length) {
+        button(t('factory.landing.copyExtraPaths'), notice).click();
+        await tick();
+        expect(writeText).toHaveBeenLastCalledWith(
+          landing.extra_paths.join('\n'),
+        );
+      }
+      expect(actionButtons()).toEqual(
+        historical || status === 'pending'
+          ? [t('factory.discard')]
+          : [t('factory.accept'), t('factory.sendBack'), t('factory.discard')],
+      );
+      state.cards[0].revision += 1;
+      bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 2 });
+      await settle();
+      expect(
+        document.querySelector('[data-integration-landing]'),
+      ).not.toBeNull();
+      expect(calls(operation, 'card.accept')).toHaveLength(0);
+      expect(calls(operation, 'card.send_back')).toHaveLength(0);
+      expect(calls(operation, 'card.discard')).toHaveLength(0);
+    },
+  );
 
   it('labels a user continuation waiting for WIP without reopening its reviewed objective', async () => {
     const { bridge, state } = createBridge([
@@ -289,8 +398,40 @@ describe('Factory card decisions', () => {
   );
 
   it('confirms destructive actions in navigation layers, deletes only final cards and repairs their route', async () => {
-    const { bridge, operation, state } = createBridge([card('fct-a', 'done')]);
+    const { bridge, operation, state } = createBridge([
+      card('fct-a', 'waiting', {
+        waiting_reason: 'no_agreement',
+        head_sha: 'test-owned-head',
+        integration_landing: {
+          head_sha: 'test-owned-head',
+          base_sha: 'test-owned-base',
+          landing_sha: 'test-owned-landing',
+          branch_head_sha: null,
+          status: 'changes_requested',
+          extra_paths: [],
+          merge_paths: [],
+        },
+      }),
+    ]);
     await render(bridge, '/card/fct-a');
+    button(t('factory.discard')).click();
+    await tick();
+    expect(
+      document.querySelector('[role="dialog"] [data-landing-discard-warning]')
+        .textContent,
+    ).toBe(t('factory.landing.discardWarning'));
+    bridge.back();
+    await tick();
+    expect(calls(operation, 'card.discard')).toHaveLength(0);
+    button(t('factory.discard')).click();
+    await tick();
+    button(
+      t('factory.discard'),
+      document.querySelector('[role="dialog"]'),
+    ).click();
+    await settle();
+    expect(calls(operation, 'card.discard').at(-1)[1]).toEqual({ id: 'fct-a' });
+    expect(document.querySelector('[data-integration-landing]')).not.toBeNull();
     button(t('factory.delete')).click();
     await tick();
     bridge.back();
@@ -389,6 +530,7 @@ describe('Factory existing-record editors', () => {
   it('uses Team and Model pickers, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
     const { bridge, operation, state } = createBridge();
     await render(bridge, '/setups/project-a');
+    expect(document.getElementById('factory-review-rounds').value).toBe('2');
     await choose('factory-reviewer_model', 'demo/worker');
     await bridge.autosave.flush();
     await tick();
@@ -400,6 +542,7 @@ describe('Factory existing-record editors', () => {
       reviewer_model: 'demo/worker',
       worker_profile: 'builder',
       reviewer_profile: 'critic',
+      review_rounds: 2,
     });
     vi.useFakeTimers();
     const input = document.getElementById('factory-review-rounds');
@@ -438,12 +581,28 @@ describe('Factory existing-record editors', () => {
   it('creates setups explicitly at revision zero and resets the editor after deletion', async () => {
     const { bridge, operation, state } = createBridge();
     state.setups = [];
+    state.handlers['setup.get'] = ({ project_id }) => ({
+      setup: state.setups.find((entry) => entry.project_id === project_id) ?? {
+        project_id,
+        revision: 0,
+      },
+      effective_models: {},
+    });
     await render(bridge, '/setups/project-b');
     expect(button(t('factory.createSetup'))).toBeDefined();
     expect(calls(operation, 'setup.update')).toHaveLength(0);
+    expect(document.getElementById('factory-review-rounds').value).toBe('3');
+    expect(
+      document.getElementById(
+        document
+          .getElementById('factory-review-rounds')
+          .getAttribute('aria-describedby'),
+      ),
+    ).not.toBeNull();
     vi.useFakeTimers();
     await choose('factory-worker_model', t('factory.inheritModel'));
     await choose('factory-reviewer_model', t('factory.inheritModel'));
+    await choose('factory-worker_profile', 'Builder');
     await choose('factory-reviewer_profile', 'Builder');
     await vi.advanceTimersByTimeAsync(800);
     await tick();
@@ -458,6 +617,7 @@ describe('Factory existing-record editors', () => {
     expect(calls(operation, 'setup.update').at(-1)[1]).toMatchObject({
       project_id: 'project-b',
       expected_revision: 0,
+      review_rounds: 3,
     });
     button(t('factory.deleteSetup')).click();
     await tick();

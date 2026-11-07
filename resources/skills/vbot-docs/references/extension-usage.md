@@ -10,11 +10,11 @@ In Setups, select a registered Project's Worker and Reviewer Team profiles, opti
 
 - The Project's instructions decide how the Worker isolates and integrates work; the Factory does not create worktrees or merge code itself.
 - Cards the user creates on the page or through management operations queue automatically; `factory_card` queues direct user requests and currently authorized automations, while an Agent's own idea stays a Proposal until the user approves it.
-- Review changes return to the same Worker Session and a fresh Reviewer checks each submission; exhausted rounds or a blocked participant reach the user with both the result and the reason.
+- Review changes return to the same Worker Session and a fresh Reviewer checks each submission; exhausted rounds or a blocked participant reach the user with both the result and the reason. New Setups default to 3 reviews including the first, so at most two automatic reworks; saved values and running Cards keep their settings. Integration reviews do not consume this limit.
 - Accept asks the Worker to integrate the reviewed commit; Send back supplies a comment, Answer resolves a blocked question, Retry resumes a failed phase, and Discard asks the Worker to clean up its isolated work.
-- Changed commits require another review before integration; `merged` verifies the reviewed commit is on the base, while `reference_only` records an integration reference such as a PR URL.
+- Changed commits, including rebases, require another review before integration; `merged` verifies ancestry and checks the landing merge for additional paths or combined-diff changes, while `reference_only` records an integration reference such as a PR URL. If changed code has already landed, the Card shows that fact and requested changes go directly to the user instead of automatic rework. Send back and Discard do not revert the base.
 - The Extension settings `wip_limit` (default 2) and `max_waiting` (default 0, unlimited) control admission; waiting Cards do not occupy running slots, and accepted work waits in Backlog when all slots are busy.
-- A waiting Card produces a WebUI/tray notification and contributes to the page badge; the Board, not the transient toast, keeps the durable record.
+- Waiting Cards and Proposals produce a WebUI/tray notification and contribute to the page badge; the Board, not the transient toast, keeps the durable record.
 - Permission requests stay in vBot's normal approval UI; open the linked Session from the Card rather than changing Permission Rules or granting the request yourself.
 
 Page actions and scripts share management operations:
