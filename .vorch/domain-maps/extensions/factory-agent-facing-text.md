@@ -50,7 +50,7 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | `Create proposed work and read Software Factory Cards.` | On-demand summary lets an Agent find the capability without loading every private participant Tool. |
 | `project`: `Required for create: a Project id with an enabled Factory setup.` | A path or display name is not Project identity and cannot select an arbitrary execution folder. |
 | `Omit for list to include every Project.` | The omission rule avoids inventing a Project filter. |
-| `title`: `Required for create.` / `description`: `Required for create: the objective and acceptance criteria.` | Conditional required fields cannot go in the root required list shared with list/get; acceptance criteria prevent a vague work hand-in. |
+| `title`: `Required for create.` / `description`: `Required for create: the user's objective and acceptance criteria, without extra requirements.` | Conditional fields cannot be root-required with list/get. In the first real Factory eval, the creator added null/undefined handling absent from the request; the description must preserve the user's scope rather than invent requirements. |
 | `state`: `For list. Omit for every state.` | The enum carries its values; the text supplies only action scope and omission. |
 | `id`: `Required for get: the Card id from create or list.` | Prevents manufacturing a Card identity from the title or a branch. |
 | `Submit your isolated change for independent review and end this turn; this does not authorize integration.` | Submission stops the Worker and explicitly does not grant a merge. |
@@ -64,7 +64,9 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | `Report the accepted change's integration and end this turn.` / `Changed commits go through independent review again.` | Names the post-acceptance result and the changed-head safety boundary. |
 | `reference`: `For integrated: the merge commit or PR URL.` / `Omit for the submitted commit when no other reference exists.` | Supports generic Project integration without requiring a PR or an invented URL. |
 | `note`: `For needs_changes or failed: what prevents the reviewed change from integrating.` / `Omit when nothing needs explaining.` | Supplies recovery evidence only when relevant. |
-| `Card queued; work starts within the WIP limit.` / `Proposal saved; work waits for the user's approval on the Board.` | The create result says whether work was admitted or still needs a human; neither invites polling. |
+| `Card created and queued; work continues independently within the WIP limit.` | The create result confirms admission without pretending the implementation is complete. |
+| `Progress and review results appear on the Board, not in this Session.` | The first real Factory eval followed a queued acknowledgment with status reads and attempted runtime diagnosis. Results belong to the durable Board and attention flow; the creator does not receive the Worker's continuation as a Session reply. |
+| `Proposal saved; work waits for the user's approval on the Board.` | An autonomous idea is recorded, not admitted; the Agent cannot start implementation or treat the human gate as background work to await. |
 | `Submission recorded; an independent Reviewer takes over.` / `This turn ends here.` | Prevents a successfully submitting Worker from continuing implementation or integration. |
 | `Question sent to the user; the Card waits for their answer.` | The Worker can end instead of watching for a response in a loop. |
 | `Review recorded; the Factory handles the next step.` | The Reviewer does not need to wake the Worker or tell the user separately. |

@@ -152,7 +152,10 @@ PUBLIC_PARAMETERS: Json = {
         "title": {"type": "string", "description": "Required for create."},
         "description": {
             "type": "string",
-            "description": "Required for create: the objective and acceptance criteria.",
+            "description": (
+                "Required for create: the user's objective and acceptance criteria, "
+                "without extra requirements."
+            ),
         },
         "state": {
             "type": "string",
@@ -268,7 +271,10 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
 
 def tool_result(kind: str, card: Json | None = None, text: str = "") -> Json:
     messages = {
-        "created": "Card queued; work starts within the WIP limit.",
+        "created": (
+            "Card created and queued; work continues independently within the WIP limit. "
+            "Progress and review results appear on the Board, not in this Session."
+        ),
         "proposal": "Proposal saved; work waits for the user's approval on the Board.",
         "submitted": (
             "Submission recorded; an independent Reviewer takes over. This turn ends here."
