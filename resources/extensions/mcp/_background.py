@@ -245,7 +245,13 @@ class BackgroundCalls:
         if database is None or self._closed:
             return
         rows = await database.read_async(
-            lambda db: [dict(row) for row in db.execute("SELECT * FROM pending_calls")]
+            lambda db: [
+                dict(row)
+                for row in db.execute(
+                    "SELECT receipt_id, connection_id, configuration_hash, arguments_json, "
+                    "received_json, outcome_json, delivered FROM pending_calls"
+                )
+            ]
         )
         self.recovery.deferred_receipts.update(row["receipt_id"] for row in rows)
         for row in rows:
@@ -285,7 +291,8 @@ class BackgroundCalls:
         else:
             native = await self.recovery.database.read_async(
                 lambda db: db.execute(
-                    "SELECT * FROM pending_tasks WHERE receipt_id=?", (receipt,)
+                    "SELECT task_json, outcome_json FROM pending_tasks WHERE receipt_id=?",
+                    (receipt,),
                 ).fetchone()
             )
             if native is not None and native["outcome_json"] is not None:

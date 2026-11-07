@@ -147,7 +147,12 @@ def _migrate_workflows(connection: sqlite3.Connection) -> None:
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     if "project_setups" in tables:
-        cursor = connection.execute("SELECT * FROM project_setups")
+        cursor = connection.execute(
+            "SELECT project_id, enabled, worker_profile, worker_model, worker_effort, "
+            "reviewer_profile, reviewer_model, reviewer_effort, review_rounds, turn_budget, "
+            "base_branch, integration_check, revision, updated_at, worker_source, "
+            "reviewer_source FROM project_setups"
+        )
         columns = [column[0] for column in cursor.description]
         for row in cursor.fetchall():
             values = dict(zip(columns, tuple(row), strict=True))
