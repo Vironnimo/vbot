@@ -51,6 +51,10 @@ class TemporaryAgentConfig:
     # complete Agent-level Policy for automatic and manual Compaction.
     compaction_policy: dict[str, Any] | None = None
     repository_profile: str | None = None
+    # An Identity Agent id: the participant takes that Agent's Model, sampling,
+    # Tool access, Skills, Permission Rules and SOUL.md, bounded by the owner's
+    # selection. Exclusive with ``repository_profile``.
+    identity_profile: str | None = None
     # The owner's Permission Rules for this participant (``None``: full access);
     # with a ``repository_profile`` each part it leaves unset resolves like that
     # Team member's. A mapping is normalized to :class:`PermissionRules`.
@@ -58,7 +62,7 @@ class TemporaryAgentConfig:
     # A boundary the owner imposes on top, in its stored ceiling form
     # (``PermissionBoundary.to_ceiling_dict(source="extension")``).
     permission_ceiling: Mapping[str, Any] | None = None
-    # Explicit owner choices win after repository Profile resolution. The ordinary
+    # Explicit owner choices win after Profile resolution (repository or identity). The ordinary
     # model/effort fields retain their existing fallback semantics.
     model_override: str | None = None
     thinking_effort_override: str | None = None
@@ -66,7 +70,7 @@ class TemporaryAgentConfig:
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
 
-        if not isinstance(self.model, str) or (not self.model and not self.repository_profile):
+        if not isinstance(self.model, str) or (not self.model and not self.has_profile):
             raise ValueError("temporary model must be a non-empty string")
         cwd = Path(self.cwd)
         if not cwd.is_absolute():
@@ -109,14 +113,20 @@ class TemporaryAgentConfig:
             not isinstance(self.repository_profile, str) or not self.repository_profile
         ):
             raise ValueError("repository_profile must name a Team Agent")
+        if self.identity_profile is not None and (
+            not isinstance(self.identity_profile, str) or not self.identity_profile
+        ):
+            raise ValueError("identity_profile must name an Identity Agent")
+        if self.repository_profile is not None and self.identity_profile is not None:
+            raise ValueError("choose either repository_profile or identity_profile")
         if self.model_override is not None and (
             not isinstance(self.model_override, str) or not self.model_override
         ):
             raise ValueError("temporary model_override must be a non-empty string")
-        if self.repository_profile is None and (
+        if not self.has_profile and (
             self.model_override is not None or self.thinking_effort_override is not None
         ):
-            raise ValueError("temporary Profile overrides require repository_profile")
+            raise ValueError("temporary Profile overrides require a Profile")
         if self.thinking_effort_override is not None:
             from core.settings import validate_thinking_effort
 
@@ -146,6 +156,11 @@ class TemporaryAgentConfig:
         object.__setattr__(self, "allowed_skills", list(self.allowed_skills))
         object.__setattr__(self, "tools", deepcopy(self.tools))
         object.__setattr__(self, "fallback_models", list(self.fallback_models or []))
+
+    @property
+    def has_profile(self) -> bool:
+        """Whether a repository or identity Profile resolves this configuration."""
+        return self.repository_profile is not None or self.identity_profile is not None
 
 
 @dataclass(frozen=True)
@@ -220,13 +235,14 @@ class TemporaryAgentRegistry:
         if existing is not None:
             if self._same_request(existing, project_id, request):
                 return existing
-            error_type = ValueError if config.repository_profile is not None else ChatSessionError
+            error_type = ValueError if config.has_profile else ChatSessionError
             raise error_type("temporary participant configuration differs from its snapshot")
-        if config.repository_profile is not None:
+        if config.has_profile:
             if self._prepare_config is None:
-                raise ValueError("repository profile resolution is unavailable")
+                raise ValueError("profile resolution is unavailable")
             config = self._prepare_config(config, project_id)
             binding_config = self._config_values(config)
+            # The stored key predates identity Profiles; it holds either kind's request.
             binding_config["repository_profile_request"] = request
         if project_id is None and self._capture_delegation_bindings is not None:
             bindings = self._capture_delegation_bindings(config.tools)
@@ -288,6 +304,8 @@ class TemporaryAgentRegistry:
             result["fixed_tool_access"] = True
         if config.repository_profile is not None:
             result["repository_profile"] = config.repository_profile
+        if config.identity_profile is not None:
+            result["identity_profile"] = config.identity_profile
         if config.model_override is not None:
             result["model_override"] = config.model_override
         if config.thinking_effort_override is not None:

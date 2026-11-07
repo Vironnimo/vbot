@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,7 @@ from core.projects._resolution_values import (
 from core.projects._runtime_agent import AgentOverrides, AgentResolutionError, RuntimeAgent
 from core.projects._team_resolution import _profile_skill_allowed
 from core.settings import AgentDefaults
+from core.tools.availability import ToolAccess
 
 if TYPE_CHECKING:
     from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
@@ -75,7 +77,9 @@ class TemporaryResolution:
     def prepare_config(
         self, config: TemporaryAgentConfig, project_id: str | None
     ) -> TemporaryAgentConfig:
-        """Resolve a repository Profile within the owner's selection, for a snapshot."""
+        """Resolve a repository or identity Profile within the owner's selection, for a snapshot."""
+        if config.identity_profile is not None:
+            return self._prepare_identity(config, project_id)
         if config.repository_profile is None:
             return config
         if project_id is None:
@@ -171,6 +175,88 @@ class TemporaryResolution:
             ),
         )
 
+    def _prepare_identity(
+        self, config: TemporaryAgentConfig, project_id: str | None
+    ) -> TemporaryAgentConfig:
+        """Snapshot an Identity Agent's configuration, bounded by the owner's selection.
+
+        The participant works like that Agent in the owner's directory and
+        Project: its Model chain, sampling, Tool access, Skills, Permission
+        Rules, Compaction Policy and SOUL.md. Its Workspace, personal Memory and
+        private Skills stay with the Identity Agent.
+        """
+        assert config.identity_profile is not None
+        agent = self._owner._resolve_identity_agent(config.identity_profile)
+        if agent.builtin is not None:
+            raise AgentResolutionError(
+                f"Built-in Agent {agent.id} cannot be a participant; choose another Agent."
+            )
+        if project_id is not None:
+            self._owner._load_project(project_id)
+        model = config.model_override if config.model_override is not None else agent.model
+        self._owner.require_model_configured(model)
+        owner_rules = (
+            config.permission_rules
+            if isinstance(config.permission_rules, PermissionRules)
+            else None
+        )
+        from core.agents.agents import AgentError
+
+        try:
+            soul = self._owner._agents.read_soul(agent.id).content.strip()
+        except AgentError as error:
+            raise AgentResolutionError(
+                f"SOUL.md of Agent {agent.id} is unreadable: {error}"
+            ) from error
+        return replace(
+            config,
+            model=model,
+            model_override=None,
+            thinking_effort_override=None,
+            fallback_models=list(agent.fallback_models),
+            temperature=agent.temperature,
+            top_p=agent.top_p,
+            thinking_effort=(
+                config.thinking_effort_override
+                if config.thinking_effort_override is not None
+                else agent.thinking_effort
+            ),
+            tool_access=_bounded_tool_access(config.tool_access, agent.tool_access),
+            allowed_skills=self._identity_skills(config, agent, project_id),
+            tools={**deepcopy(agent.tools), **deepcopy(config.tools)},
+            # The owner's parts first, then the Agent's own (defaults already baked in).
+            permission_rules=resolve_permission_rules(
+                (owner_rules, agent.permission_rules),
+                AgentDefaults.from_dict(self._owner._global_agent_defaults()),
+            ),
+            compaction_policy=(
+                config.compaction_policy
+                if config.compaction_policy is not None
+                else deepcopy(agent.compaction_policy)
+            ),
+            project_memory_enabled=config.project_memory_enabled and agent.project_memory_enabled,
+            instructions="\n\n".join(part for part in (soul, config.instructions) if part),
+        )
+
+    def _identity_skills(
+        self, config: TemporaryAgentConfig, agent: Any, project_id: str | None
+    ) -> list[str]:
+        excluded = set(agent.excluded_skills)
+        owner_all = "*" in config.allowed_skills
+        agent_all = "*" in agent.allowed_skills
+        if owner_all and agent_all and not excluded:
+            return ["*"]
+        if owner_all and agent_all:
+            pool = self._owner._skill_pool_names(project_id) if project_id is not None else ()
+            return sorted(name for name in pool if name not in excluded)
+        if owner_all:
+            selected = agent.allowed_skills
+        elif agent_all:
+            selected = config.allowed_skills
+        else:
+            selected = [name for name in config.allowed_skills if name in agent.allowed_skills]
+        return [name for name in selected if name not in excluded]
+
     def preview(
         self, config: TemporaryAgentConfig, project_id: str | None = None
     ) -> TemporaryAgent:
@@ -230,3 +316,37 @@ class TemporaryResolution:
         # Project's Team.
         if project_id is not None:
             self._owner._load_project(project_id)
+
+
+def _bounded_tool_access(owner: ToolAccess, agent: ToolAccess) -> ToolAccess:
+    """An Identity Agent's Tool access within its owner's selection.
+
+    Denials of both apply; a participant never gets a Tool its owner or its
+    Agent withholds. Both ``all`` stay ``all`` so later catalog Tools follow.
+    """
+    denied = tuple(sorted(set(owner.denied) | set(agent.denied)))
+    fixed = owner.fixed or agent.fixed or owner.mode == "none"
+    if owner.mode == "none" or agent.mode == "none":
+        return ToolAccess(mode="none", denied=denied, fixed=fixed)
+    granted = tuple(sorted(set(owner.granted) | set(agent.granted)))
+    if owner.mode == "all" and agent.mode == "all":
+        return ToolAccess(
+            mode="all",
+            denied=denied,
+            granted=tuple(name for name in granted if name not in denied),
+            fixed=fixed,
+        )
+    if owner.mode == "all":
+        names = set(agent.allowed)
+    elif agent.mode == "all":
+        names = set(owner.allowed)
+    else:
+        names = set(owner.allowed) & set(agent.allowed)
+    allowed = tuple(sorted(names - set(denied)))
+    return ToolAccess(
+        mode="selected",
+        allowed=allowed,
+        denied=denied,
+        granted=tuple(name for name in granted if name in allowed),
+        fixed=fixed,
+    )

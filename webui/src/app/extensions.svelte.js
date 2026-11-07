@@ -53,6 +53,7 @@ export function createAppExtensions(context) {
     ...extensionPages.map((page) => ({
       id: page.route,
       label: () => page.title,
+      icon: page.icon,
       section: 'main',
     })),
   ]);

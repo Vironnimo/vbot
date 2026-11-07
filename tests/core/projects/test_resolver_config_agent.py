@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -216,6 +217,75 @@ def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(
     assert preview.allowed_skills == resolved.allowed_skills
     assert preview.tools == resolved.tools
     assert preview.prompt_blocks == ["core:working_project"]
+
+
+def test_identity_profile_snapshots_an_agent_bounded_by_the_owner_selection(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    project = _project(projects, repo)
+    agents.create(
+        "reviewer",
+        "Reviewer",
+        model="openai/gpt-5.2",
+        fallback_models=["openai/gpt-mini"],
+        temperature=0.2,
+        thinking_effort="high",
+        tool_access=ToolAccess(mode="selected", allowed=("read", "grep", "bash")),
+        allowed_skills=["*"],
+        excluded_skills=["private"],
+        tools={"bash": {"allowed_env": ["CI"]}},
+    )
+    soul = agents.read_soul("reviewer")
+    agents.write_soul("reviewer", "You review carefully.", expected_revision=soul.revision)
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        project_skill_names={project.project_id: frozenset({"review", "private"})},
+    )
+    config = TemporaryAgentConfig(
+        model="",
+        cwd=repo,
+        tool_access=ToolAccess(mode="all", denied=("bash",)),
+        allowed_skills=["*"],
+        tools={},
+        name="Reviewer",
+        instructions="Review the Factory candidate.",
+        identity_profile="reviewer",
+    )
+
+    prepared = resolver.prepare_temporary_config(config, project.project_id)
+
+    assert (prepared.model, prepared.fallback_models) == ("openai/gpt-5.2", ["openai/gpt-mini"])
+    assert (prepared.temperature, prepared.thinking_effort) == (0.2, "high")
+    # The Agent's selection, narrowed by the owner's denial.
+    assert prepared.tool_access.mode == "selected"
+    assert prepared.tool_access.allowed == ("grep", "read")
+    assert "bash" in prepared.tool_access.denied
+    assert prepared.allowed_skills == ["review"]
+    assert prepared.tools == {"bash": {"allowed_env": ["CI"]}}
+    assert prepared.instructions == "You review carefully.\n\nReview the Factory candidate."
+    assert prepared.identity_profile == "reviewer"
+
+    chosen = resolver.prepare_temporary_config(
+        replace(
+            config,
+            model="openai/gpt-mini",
+            model_override="openai/gpt-mini",
+            thinking_effort_override="low",
+        ),
+        project.project_id,
+    )
+    assert (chosen.model, chosen.thinking_effort) == ("openai/gpt-mini", "low")
+    assert chosen.model_override is chosen.thinking_effort_override is None
+
+    agents.ensure_builtin_agents()
+    with pytest.raises(AgentResolutionError, match="Built-in"):
+        resolver.prepare_temporary_config(
+            replace(config, identity_profile="librarian"), project.project_id
+        )
+    with pytest.raises(ValueError, match="either"):
+        replace(config, repository_profile="reviewer")
 
 
 @pytest.mark.asyncio
