@@ -569,6 +569,16 @@ def _response_fields(response: Any) -> JsonObject:
     }
 
 
+def _state_read_failure(failure: _Failure) -> str:
+    if failure.status is not None:
+        return f"state read failed (HTTP {failure.status}: {failure.detail})"
+    if failure.invalid_json:
+        return "state read returned invalid JSON"
+    if failure.timed_out:
+        return "state read timed out"
+    return "state read failed because of a connection problem"
+
+
 async def _handle_call_service(
     context: ToolContext,
     arguments: JsonObject,
@@ -632,15 +642,29 @@ async def _handle_call_service(
     lines = [entity_line(entry, attributes) for entry in changed]
     observed = list(changed)
     missing: list[str] = []
-    for entity in [entity for entity in entities if entity not in changed_ids][
-        :_TARGET_CHECK_LIMIT
-    ]:
+    unchecked = [entity for entity in entities if entity not in changed_ids]
+    unverified: dict[str, str] = {}
+    for entity in unchecked[:_TARGET_CHECK_LIMIT]:
         current, check_failure = await client.request("GET", f"/api/states/{entity}")
-        if check_failure is not None and check_failure.status == 404:
-            missing.append(entity)
-        elif isinstance(current, dict):
+        if check_failure is not None:
+            if check_failure.status == 404:
+                missing.append(entity)
+            else:
+                unverified[entity] = _state_read_failure(check_failure)
+        elif (
+            isinstance(current, dict)
+            and current.get("entity_id") == entity
+            and isinstance(current.get("state"), str)
+            and current["state"]
+        ):
             observed.append({**current, "entity_id": entity})
             lines.append(f"{entity_line(current, attributes)} [unchanged]")
+        else:
+            unverified[entity] = "state read returned no valid entity state"
+    for entity in unchecked[_TARGET_CHECK_LIMIT:]:
+        unverified[entity] = (
+            f"state not checked: the {_TARGET_CHECK_LIMIT}-target readback limit was reached"
+        )
 
     if missing and not changed and len(missing) == len(entities):
         return await _entity_reference_failure(
@@ -658,16 +682,18 @@ async def _handle_call_service(
             f"Home Assistant has no entity {', '.join(missing)}, so {effect} did nothing for it. "
             f"Find the id with {HA_LIST_ENTITIES_NAME} {listing}."
         )
-    elif not changed:
+    elif not changed and not unverified:
         result["note"] = "No entity state changed."
-    unconfirmed = [
-        entry["entity_id"] for entry in observed if entry.get("state") in ("unavailable", "unknown")
-    ]
+    for entry in observed:
+        if entry.get("state") in ("unavailable", "unknown"):
+            unverified[entry["entity_id"]] = f"state is {entry['state']}"
+    unconfirmed = list(unverified)
     if unconfirmed:
         result["unconfirmed"] = unconfirmed
+        lines.extend(f"{entity}: [unconfirmed: {reason}]" for entity, reason in unverified.items())
         note = (
             f"Home Assistant accepted {effect}, but the requested outcome is not confirmed "
-            f"for {', '.join(unconfirmed)}: their state is unavailable or unknown. "
+            f"for {', '.join(unconfirmed)}. "
             f"Check with {_check_call(domain, unconfirmed)} before reporting success or "
             "repeating the service."
         )
