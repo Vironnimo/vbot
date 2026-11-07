@@ -40,7 +40,7 @@ The recorded source of a Card, deciding whether it starts automatically or waits
 
 ## Persistence and transitions
 
-The host opens `ext.factory.factory`; tables are STRICT, additive, with explicit SELECT/INSERT columns and code-validated states. Cards, reviews, comments and audit events live here; participant history, receipts and usage remain canonical host reads. A Card change, its event and any attached comment/review commit in one database transaction. Revision checks prevent stale operator drafts overwriting a newer record.
+The host opens `ext.factory.factory`; tables are STRICT, additive, with explicit SELECT/INSERT columns and code-validated states. Cards, reviews, comments and audit events live here; participant history, receipts and usage remain canonical host reads. A Card change, its event and any attached comment/review commit in one database transaction. Revision checks prevent stale operator drafts overwriting a newer record. Acceptance requires the displayed Card's `expected_revision`, so a stale action cannot authorize a newer submission.
 
 Origins are host-attributed, never a Tool argument. Operator operations queue; `factory_card` queues current human requests as `user` and currently authorized tasks as `automation`. Sub-Agents, owned participants and other initiative produce `agent` Proposals. `host.review_context` is unsuitable for this decision because it includes old and ancestor requests; API 24's `input_authority` reads the exact live Run instead (`core/runtime/_shell_review_context.py`). Provenance stores the source Session address and Run id.
 
@@ -49,6 +49,8 @@ The lifecycle is `proposal -> queued -> working -> reviewing -> waiting -> integ
 The scheduler uses one in-process lock, selects lowest-position enabled-Project work, and counts `working`, `reviewing` and `integrating` against `wip_limit` (default 2). Waiting does not count. `max_waiting` defaults to 0 (unlimited). Operator resumes also respect WIP: accepted/retried/sent-back Cards queue their intended phase when slots are full. Those Cards expose `queued_action` and cannot edit their already reviewed objective while waiting. Live Extension configuration callbacks rerun admission without polling.
 
 Cards retain their setup and Project-directory snapshot in runtime metadata, along with admitted participant Run ids, phase delivery state and recovery evidence. Editing the setup does not rewrite an already bound participant's immutable configuration. Setup deletion refuses unfinished Cards.
+
+Preparing a continuation never consumes its pending intent: repeated request callbacks return the same delivery, and acknowledgment/startup reconcile its exact canonical Session receipt before clearing it. A newer canonical root Run that fails before its request callback pauses the matching handoff for an operator retry, retaining undelivered guidance; sibling, older, foreign-generation and stale-epoch completions cannot claim it. Cleanup recovery admits a never-admitted intent once through its existing input identity and only closes an already admitted cleanup. Integration reviews pin the captured changed head and the saved review base, even after that head reached the mutable base branch.
 
 ## Execution contracts and verify-first findings
 

@@ -14,15 +14,17 @@ from resources.extensions.factory.store import FactoryError
 _HEAD = "a" * 40
 _BASE = "b" * 40
 _MERGE = "c" * 40
+_MOVED = "d" * 40
 
 
 class Repository(GitRepository):
-    def __init__(self, *, branch=True, base=True, count="2", merge=True):
+    def __init__(self, *, branch=True, base=True, count="2", merge=True, merged=False):
         super().__init__("C:/repo")
         self.branch_exists = branch
         self.base_exists = base
         self.count = count
         self.common = merge
+        self.merged = merged
         self.commands = []
 
     @override
@@ -33,13 +35,14 @@ class Repository(GitRepository):
             return 0, arguments[-1]
         if command == "rev-parse":
             branch = arguments[-1].startswith("refs/heads/")
+            commit = arguments[-1].removesuffix("^{commit}")
             return (
-                (0, _HEAD if branch else _BASE)
+                (0, _HEAD if branch else commit if commit in {_BASE, _MERGE} else _BASE)
                 if (self.branch_exists if branch else self.base_exists)
                 else (128, "")
             )
         if command == "rev-list":
-            return 0, self.count
+            return 0, "0" if self.merged and arguments[-1].startswith(_BASE) else self.count
         return (0, _MERGE) if self.common else (1, "")
 
 
@@ -74,6 +77,62 @@ async def test_submission_resolves_local_branch_base_and_nonempty_exact_range(op
             "--end-of-options",
             "refs/heads/topic^{commit}",
         ) in repository.commands
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "merged",
+        "missing_review_base",
+        "rewritten_head",
+        "diverged_review_base",
+        "invalid_review_base",
+    ],
+)
+async def test_integration_review_pins_captured_head_and_original_review_base_after_merge(case):
+    repository = Repository(
+        base=case != "missing_review_base",
+        merge=case != "rewritten_head",
+        merged=case != "diverged_review_base",
+    )
+    review_base = (
+        "--unsafe"
+        if case == "invalid_review_base"
+        else _BASE
+        if case == "diverged_review_base"
+        else _MERGE
+    )
+    if case == "merged":
+        # The mutable base already contains the moved head, but this review's
+        # original base still names a nonempty exact range.
+        assert await repository.submission(
+            "topic", "main", head_sha=_MOVED, base_sha=review_base
+        ) == {
+            "branch": "topic",
+            "base": "main",
+            "base_sha": _MERGE,
+            "head_sha": _MOVED,
+        }
+        assert ("rev-list", "--count", f"{_MERGE}..{_MOVED}") in repository.commands
+        assert ("merge-base", _MERGE, _MOVED) in repository.commands
+    else:
+        with pytest.raises(FactoryError) as caught:
+            await repository.submission("topic", "main", head_sha=_MOVED, base_sha=review_base)
+        assert (
+            caught.value.code
+            == {
+                "missing_review_base": "missing_base",
+                "rewritten_head": "unrelated_history",
+                "diverged_review_base": "unrelated_history",
+                "invalid_review_base": "git_failed",
+            }[case]
+        )
+    # The snapshot is not silently replaced by a second branch/base lookup.
+    assert not any(
+        command[0] == "rev-parse" and command[-1] in {"refs/heads/topic^{commit}", "main^{commit}"}
+        for command in repository.commands
+    )
 
 
 @pytest.mark.asyncio

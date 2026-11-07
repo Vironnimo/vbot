@@ -13,6 +13,7 @@ from core.agents.temporary import TemporaryAgentConfig
 from core.agents.temporary_execution import TemporaryRunInput
 from core.extensions import PreparedSessionDelivery, SessionRequestContext
 from core.runs import ActiveRunError
+from core.sessions import SessionAddress
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.utils.ids import new_id
@@ -177,7 +178,17 @@ class FactoryExecution:
             async with self.service.lock:
                 card = await self.store.get_card(card_id)
                 pending = card["runtime"].get("pending", {})
-                if pending.get("id") != token or self._quiescing:
+                if (
+                    pending.get("id") != token
+                    or self._quiescing
+                    or (
+                        card["state"] not in ACTIVE_STATES
+                        and not (
+                            card["state"] == "discarded"
+                            and card["runtime"].get("phase") == "cleanup"
+                        )
+                    )
+                ):
                     return
                 pending = dict(pending)
                 group_id = card["group_id"]
@@ -192,7 +203,18 @@ class FactoryExecution:
                 async with self.service.lock:
                     card = await self.store.get_card(card_id)
                     runtime = self._runtime(card)
-                    if runtime.get("pending", {}).get("id") != token or self._quiescing:
+                    if (
+                        runtime.get("pending", {}).get("id") != token
+                        or self._quiescing
+                        or (
+                            card["state"] not in ACTIVE_STATES
+                            and not (
+                                card["state"] == "discarded" and runtime.get("phase") == "cleanup"
+                            )
+                        )
+                    ):
+                        return
+                    if await self._acknowledge_pending(card) is not None:
                         return
                     participant = pending["participant"]
                     participants = runtime.setdefault("participants", {})
@@ -207,6 +229,7 @@ class FactoryExecution:
                             "agent_id": binding.address.agent_id,
                             "session_id": binding.address.session_id,
                             "project_id": binding.address.project_id,
+                            "generation_id": binding.generation_id,
                         }
                     handle = await self.groups.open_group(group_id)
                     admission = await self.groups.start(
@@ -233,7 +256,9 @@ class FactoryExecution:
                     if pending["kind"] == "initial" and participant == "worker":
                         self.service.spawn(self.groups.title_group(group_id, card["title"]))
                     if admission.existing and admission.status != "running":
-                        if admission.status == "interrupted":
+                        if runtime["phase"] == "cleanup":
+                            self._close_later(saved)
+                        elif admission.status == "interrupted":
                             await self._recover(saved)
                         else:
                             await self._completed(
@@ -494,7 +519,9 @@ class FactoryExecution:
             repository = GitRepository(runtime["cwd"])
             head = await repository.head(card["branch"], missing_ok=True)
             if head is not None and head != card["head_sha"]:
-                facts = await repository.submission(card["branch"], card["base"])
+                facts = await repository.submission(
+                    card["branch"], card["base"], head_sha=head, base_sha=card["base_sha"]
+                )
                 runtime.update(review_kind="integration_review", reviewer_retries=0)
                 saved = await self._review(
                     card,
@@ -586,6 +613,19 @@ class FactoryExecution:
         runtime = self._action(card, "retry")
         runtime["restarts"] = 0
         phase = runtime.get("phase", "working")
+        pending = runtime.get("pending")
+        if pending:
+            return await self._queue(
+                card,
+                phase=phase,
+                participant=pending["participant"],
+                content=pending["content"],
+                initial=pending["kind"] == "initial",
+                runtime=runtime,
+                patch={"worker_turns": 0},
+                event="retried",
+                actor="user",
+            )
         if phase == "reviewing":
             runtime["reviewer_retries"] = 0
             return await self._review(card, runtime=runtime, event="retried", actor="user")
@@ -686,6 +726,7 @@ class FactoryExecution:
                     current = await self.store.get_card(card_id)
                     if not delete and (
                         current["runtime"].get("pending")
+                        and current["state"] != "waiting"
                         or current["state"] in ACTIVE_STATES
                         or current["runtime"].get("current_run") != current_run
                     ):
@@ -719,6 +760,65 @@ class FactoryExecution:
         finally:
             self._closing_groups.discard(key)
 
+    @staticmethod
+    def _prepared_delivery(pending: Json) -> PreparedSessionDelivery:
+        content = pending["content"]
+        return PreparedSessionDelivery(
+            pending["id"],
+            hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            (content,),
+            pending["delivery"]["settings_revision"],
+            "factory_continuation",
+        )
+
+    async def _acknowledge_pending(self, card: Json) -> Json | None:
+        pending = card["runtime"].get("pending", {})
+        target = pending.get("delivery")
+        if target is None:
+            return None
+        delivery = self._prepared_delivery(pending)
+        receipt = await self.groups.delivery_receipt(
+            SessionAddress(**target["address"]), target["generation_id"], delivery.delivery_id
+        )
+        if receipt is None:
+            return None
+        if (
+            receipt.receipt_id != delivery.delivery_id
+            or receipt.content_hash != delivery.content_hash
+            or receipt.effect_kind != delivery.effect_kind
+            or receipt.carrier_location.get("kind") != "note"
+            or type(receipt.carrier_location.get("sequence")) is not int
+            or receipt.carrier_location["sequence"] < 0
+        ):
+            raise FactoryError("receipt_conflict", "Factory continuation receipt conflicts")
+        runtime = self._runtime(card)
+        runtime.pop("pending")
+        return await self._change(card, {"runtime": runtime}, event="delivery_acknowledged")
+
+    async def acknowledge_delivery(
+        self, context: SessionRequestContext, delivery: PreparedSessionDelivery
+    ) -> None:
+        async with self.service.lock:
+            card = await self.store.get_card(context.binding.group_id)
+            pending = card["runtime"].get("pending", {})
+            if pending.get("id") != delivery.delivery_id:
+                return
+            target = pending.get("delivery", {})
+            if (
+                target.get("generation_id") != context.binding.generation_id
+                or target.get("address")
+                != {
+                    "project_id": context.binding.address.project_id,
+                    "agent_id": context.agent_id,
+                    "session_id": context.session_id,
+                }
+                or pending.get("participant") != context.binding.participant_id
+                or self._prepared_delivery(pending) != delivery
+            ):
+                raise self._error("stale_run")
+            if await self._acknowledge_pending(card) is None:
+                raise FactoryError("delivery_unacknowledged", "Factory continuation has no receipt")
+
     async def before_request(
         self, context: SessionRequestContext
     ) -> PreparedSessionDelivery | None:
@@ -743,10 +843,12 @@ class FactoryExecution:
             if (context.agent_id, context.session_id) != (
                 binding.address.agent_id,
                 binding.address.session_id,
-            ) or runtime.get("current_run") == context.run_id:
+            ):
                 return None
             if pending and pending.get("kind") != "continuation":
                 raise self._error("stale_run")
+            if runtime.get("current_run") == context.run_id:
+                return self._prepared_delivery(pending) if pending.get("delivery") else None
             if (
                 owner.participant_id == "worker"
                 and not cleanup
@@ -756,21 +858,84 @@ class FactoryExecution:
                 raise self._error("budget_exhausted")
             runtime["current_run"] = context.run_id
             runtime.setdefault("runs", {})[owner.participant_id] = context.run_id
-            runtime.pop("pending", None)
+            if pending and not pending.get("delivery"):
+                pending["delivery"] = {
+                    "address": {
+                        "project_id": binding.address.project_id,
+                        "agent_id": binding.address.agent_id,
+                        "session_id": binding.address.session_id,
+                    },
+                    "generation_id": binding.generation_id,
+                    "settings_revision": str(card["revision"]),
+                }
             patch: Json = {"runtime": runtime}
             if owner.participant_id == "worker":
                 patch["worker_turns"] = card["worker_turns"] + 1
             await self._change(card, patch, event="run_observed", detail={"run_id": context.run_id})
             if pending:
-                content = pending["content"]
-                return PreparedSessionDelivery(
-                    pending["id"],
-                    hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                    (content,),
-                    str(card["revision"]),
-                    "factory_continuation",
-                )
+                return self._prepared_delivery(pending)
         return None
+
+    async def _pause_failed_handoff(
+        self, card: Json, context: SessionRequestContext, outcome: str
+    ) -> None:
+        runtime = self._runtime(card)
+        pending = runtime.get("pending", {})
+        owner, binding = context.execution_owner, context.binding
+        participant = runtime.get("current_participant")
+        address = runtime.get("participants", {}).get(participant, {})
+        if (
+            outcome == "success"
+            or card["state"] not in ACTIVE_STATES
+            or pending.get("kind") != "continuation"
+            or pending.get("participant") != participant
+            or owner is None
+            or (
+                owner.extension,
+                owner.group_id,
+                owner.participant_id,
+                owner.generation_id,
+                owner.epoch,
+            )
+            != (
+                "factory",
+                card["group_id"],
+                participant,
+                binding.generation_id,
+                runtime.get("epoch"),
+            )
+            or binding.group_id != card["group_id"]
+            or binding.participant_id != participant
+            or (context.agent_id, context.session_id)
+            != (binding.address.agent_id, binding.address.session_id)
+            or (address.get("project_id"), address.get("agent_id"), address.get("session_id"))
+            != (binding.address.project_id, binding.address.agent_id, binding.address.session_id)
+            or address.get("generation_id", binding.generation_id) != binding.generation_id
+        ):
+            return
+        records = await self.groups.owned_runs(
+            card["group_id"], [context.run_id, runtime["current_run"]]
+        )
+        inspected, previous = records.get(context.run_id), records.get(runtime["current_run"])
+        if (
+            inspected is None
+            or previous is None
+            or (previous.record.address, previous.record.generation_id)
+            != (binding.address, binding.generation_id)
+            or inspected.record.start_sequence <= previous.record.start_sequence
+            or (inspected.record.owner, inspected.record.address, inspected.record.generation_id)
+            != (owner, binding.address, binding.generation_id)
+        ):
+            return
+        runtime.update(current_run=context.run_id, note=agent_text.error_message("run_failed"))
+        runtime.setdefault("runs", {})[participant] = context.run_id
+        saved = await self._change(
+            card,
+            {"state": "waiting", "waiting_reason": "run_failed", "runtime": runtime},
+            event="run_failed",
+            detail={"run_id": context.run_id},
+        )
+        self._close_later(saved)
 
     async def run_finished(self, context: SessionRequestContext, *, outcome: str) -> None:
         if self._quiescing or context.execution_owner is None:
@@ -788,8 +953,13 @@ class FactoryExecution:
             if context.run_id != runtime.get(
                 "current_run"
             ) or context.execution_owner.epoch != runtime.get("epoch"):
+                await self._pause_failed_handoff(card, context, outcome)
                 return
-            if runtime.get("pending"):
+            card = await self._acknowledge_pending(card) or card
+            runtime = card["runtime"]
+            if card["state"] == "waiting":
+                self._close_later(card)
+            elif runtime.get("pending"):
                 self._launch_later(card)
             else:
                 await self._completed(card, outcome)
@@ -864,11 +1034,15 @@ class FactoryExecution:
             cards = await self.store.list_cards()
             known = {card["group_id"] for card in cards}
             for card in cards:
+                card = await self._acknowledge_pending(card) or card
                 runtime = card["runtime"]
                 if runtime.get("deleting"):
                     self._close_later(card, delete=True)
                 elif card["state"] in FINAL_STATES:
-                    self._close_later(card)
+                    if runtime.get("phase") == "cleanup" and runtime.get("pending"):
+                        self._launch_later(card)
+                    else:
+                        self._close_later(card)
                 elif card["state"] in ACTIVE_STATES:
                     run_id = runtime.get("current_run")
                     inspected = (

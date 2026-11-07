@@ -112,15 +112,28 @@ class GitRepository:
             raise FactoryError("missing_base", error_message("missing_base", value=base))
         return resolved
 
-    async def submission(self, branch: str, base: str) -> dict[str, str]:
-        head = await self.head(branch)
+    async def submission(
+        self, branch: str, base: str, *, head_sha: str | None = None, base_sha: str | None = None
+    ) -> dict[str, str]:
+        if head_sha is not None:
+            if not _SHA.fullmatch(head_sha):
+                raise FactoryError("git_failed", error_message("git_failed"))
+            await self.validate_branch(branch)
+        head = head_sha if head_sha is not None else await self.head(branch)
         assert head is not None
-        base_head = await self.base(base)
+        if base_sha is not None and not _SHA.fullmatch(base_sha):
+            raise FactoryError("git_failed", error_message("git_failed"))
+        base_head = await self.base(base_sha if base_sha is not None else base)
         _, count = await self._run("rev-list", "--count", f"{base_head}..{head}")
         if not count.isdecimal() or int(count) == 0:
             raise FactoryError("no_commits", error_message("no_commits"))
         code, merge_base = await self._run("merge-base", base_head, head, allowed=(0, 1))
-        if code or not _SHA.fullmatch(merge_base):
+        if (
+            code
+            or not _SHA.fullmatch(merge_base)
+            or base_sha is not None
+            and merge_base != base_sha
+        ):
             raise FactoryError("unrelated_history", error_message("unrelated_history"))
         return {"branch": branch, "base": base, "base_sha": merge_base, "head_sha": head}
 
