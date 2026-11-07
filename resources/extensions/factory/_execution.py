@@ -740,6 +740,8 @@ class FactoryExecution:
                         host = self.service.host
                         if host.publish_change is not None:
                             host.publish_change("cards", [card_id], card["revision"] + 1)
+                elif self.service.host.publish_change is not None:
+                    self.service.host.publish_change("cards", [card_id], current["revision"])
         except Exception as error:
             if isinstance(error, FactoryError) and error.code == "card_not_found":
                 return

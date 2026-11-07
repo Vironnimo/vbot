@@ -67,7 +67,7 @@ Preparing a continuation never consumes its pending intent: repeated request cal
 
 ## Attention and page
 
-Entering `waiting` or receiving a Proposal sends an owner-keyed transient notification; waiting Cards set the `board` page badge. The Board is the durable attention record. Generic notification validation, event routing, Settings switches and retirement behavior belong to the host/Accessor maps, not this store.
+Entering `waiting` or receiving a Proposal sends an owner-keyed transient notification; waiting Cards set the `board` page badge. Closing a group invalidates its Card again after the Run ends, so cached status and usage do not remain live without another Card mutation. The Board is the durable attention record. Generic notification validation, event routing, Settings switches and retirement behavior belong to the host/Accessor maps, not this store.
 
 Routes are `''`, `/card/<id>` and `/setups[/<project_id>]`. The page uses shared navigation, controls, autosave and its `factory.*` catalog; owner invalidations refresh data without polling or replacing active drafts. Card detail includes review recommendations/findings, summary/checks, range, event history, usage, participant History/Run streams and normal permission-approval links.
 

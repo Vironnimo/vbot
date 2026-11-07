@@ -266,7 +266,14 @@ class Service:
         self.store = Store()
         self.tasks: list[asyncio.Task[Any]] = []
         self.changes: list[tuple[str, str | None]] = []
-        self.host = SimpleNamespace(temporary_agents=Groups(self), publish_change=lambda *_: None)
+        self.publications: list[tuple[str, list[str], int, bool]] = []
+        groups = Groups(self)
+        self.host = SimpleNamespace(
+            temporary_agents=groups,
+            publish_change=lambda resource, ids, revision: self.publications.append(
+                (resource, ids, revision, groups.open[ids[0]])
+            ),
+        )
         self.execution = FactoryExecution(self)
 
     def spawn(self, coroutine):
@@ -388,6 +395,7 @@ async def test_worker_reviewer_acceptance_integration_and_archival(
     assert "factory_submit_review" in groups.configs["worker"].tool_access.denied
     card = await approved(service)
     assert card["state"] == "waiting" and card["waiting_reason"] == "approved"
+    assert service.publications[-1] == ("cards", [card["id"]], card["revision"], False)
     assert groups.configs["reviewer-1"].model_override == "other/reviewer"
     assert {"apply_patch", "edit", "write", "factory_submit_work", "factory_report_blocked"} <= set(
         groups.configs["reviewer-1"].tool_access.denied
@@ -407,6 +415,7 @@ async def test_worker_reviewer_acceptance_integration_and_archival(
     await service.finish()
     card = await service.card()
     assert card["state"] == "done" and card["integration_reference"] == _HEAD
+    assert service.publications[-1] == ("cards", [card["id"]], card["revision"], False)
     assert set(card["runtime"]["runs"]) == {"worker", "reviewer-1"}
     archive_group = groups.archive_group
     if archive_failure:
