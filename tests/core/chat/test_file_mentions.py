@@ -167,7 +167,7 @@ async def test_directory_of_a_missing_root_lists_as_empty(tmp_path: Path) -> Non
 
 
 def _expand(content: Any, mentions: list[str], root: Path, state: FileReadState) -> Any:
-    return expand_file_mentions(content, mentions, root=root, session_id="s1", file_state=state)
+    return expand_file_mentions(content, mentions, root=root, generation_id="s1", file_state=state)
 
 
 def test_no_mentions_returns_content_unchanged(tmp_path: Path) -> None:

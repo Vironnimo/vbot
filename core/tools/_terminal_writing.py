@@ -27,6 +27,7 @@ from ._terminal_output import TerminalOutput
 from ._terminal_state import (
     TerminalClosedError,
     TerminalInfo,
+    TerminalInputUnconfirmedError,
     TerminalManagerError,
     TerminalProgramNotRunningError,
     TerminalSessionServices,
@@ -111,8 +112,8 @@ class TerminalWriting:
         A key typed after text follows once the program took the text
         (``_await_text_taken``); other input waits until both are written.
         Text the program got is reported even when its key was not sent
-        (``key_unsent``: the program had ended, or the PTY refused the key),
-        so the Agent does not type it again.
+        (``key_unsent`` when the program ended before the write). A failed
+        attempted write reports uncertain effects, preserving confirmed text.
         """
         write_error: BaseException | None = None
         text_sent = 0
@@ -203,6 +204,8 @@ class TerminalWriting:
                     f"{write_error.message} Do not repeat the whole input; inspect status first.",
                 ) from write_error
             raise write_error
+        if isinstance(write_error, TerminalInputUnconfirmedError):
+            raise TerminalInputUnconfirmedError(text_sent) from write_error
         failure = await self._write_failure()
         if text_sent:
             return self._input_result(
@@ -292,8 +295,12 @@ class TerminalWriting:
                     chunk = text() if callable(text) else text
                 try:
                     await asyncio.to_thread(self._adapter.write, chunk)
-                except (EOFError, OSError) as error:
+                except ComputerError as error:
                     return error
+                except EOFError, OSError:
+                    # A PTY write can fail after accepting a prefix. A later
+                    # process exit does not turn that into an unsent write.
+                    return TerminalInputUnconfirmedError()
                 return None
             finally:
                 if input_chunk:
@@ -375,6 +382,8 @@ class TerminalWriting:
             if write_error is None:
                 return
         if isinstance(write_error, ComputerError):
+            raise write_error
+        if isinstance(write_error, TerminalInputUnconfirmedError):
             raise write_error
         raise await self._write_failure() from write_error
 

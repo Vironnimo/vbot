@@ -30,6 +30,7 @@ class _Failure:
     attempts: int = 1
     sent: bool = True  # whether the request may have reached Home Assistant
     invalid_json: bool = False
+    timed_out: bool = False
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
@@ -115,6 +116,7 @@ class HomeAssistantClient:
                         retryable=repeatable,
                         attempts=attempt + 1,
                         sent=sent,
+                        timed_out=isinstance(error, httpx.TimeoutException),
                     )
 
                 if response.status_code >= 400:

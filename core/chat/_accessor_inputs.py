@@ -30,6 +30,7 @@ from core.sessions import (
     WorkingProjectChoice,
 )
 from core.sessions.errors import SessionNotFoundError
+from core.tools.file_state import FileRead
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
 
@@ -106,6 +107,7 @@ class AccessorInputs:
         expected_working_project_id: str | None = None,
         source: SessionAddress | None = None,
         expected_source_generation_id: str | None = None,
+        file_reads: Sequence[FileRead] = (),
     ) -> AccessorChatSubmission:
         await self.restore()
         # Once mutation begins, cancellation waits for both durable acceptance
@@ -135,6 +137,7 @@ class AccessorInputs:
                     expected_working_project_id=expected_working_project_id,
                     source=source,
                     expected_source_generation_id=expected_source_generation_id,
+                    file_reads=file_reads,
                 )
             )
 
@@ -163,6 +166,7 @@ class AccessorInputs:
         expected_working_project_id: str | None,
         source: SessionAddress | None,
         expected_source_generation_id: str | None,
+        file_reads: Sequence[FileRead],
     ) -> AccessorChatSubmission:
         from core.chat.chat import _NewSession, _reject_live_input, _stored_working_project
 
@@ -292,6 +296,8 @@ class AccessorInputs:
                     expected_source_generation_id=expected_source_generation_id,
                     expected_working_project_id=expected_working_project_id,
                 )
+                for path, stamp in file_reads:
+                    deps.file_read_state.record_stamp(session.generation_id, path, stamp)
 
             try:
                 item = await deps.run_manager.enqueue(

@@ -306,13 +306,26 @@ async def test_python_failure_is_not_a_successful_cell(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [False, True])
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 async def test_cancelling_python_stops_descendants_and_drains_tool_calls(
-    tmp_path: Path, stopped: bool
+    tmp_path: Path, stopped: bool, cleanup_failure: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     admitted = asyncio.Event()
     cancelled = asyncio.Event()
     processes: list[psutil.Process] = []
     stop = asyncio.Event()
+    if cleanup_failure:
+        original_worker = _code_process.run_tool_worker
+
+        async def fail_log_close(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+            result = await original_worker(function, *args, **kwargs)
+            if getattr(function, "__name__", "") == "close" and getattr(
+                getattr(function, "__self__", None), "name", None
+            ):
+                raise OSError("Test-owned close failure during cancellation")
+            return result
+
+        monkeypatch.setattr(_code_process, "run_tool_worker", fail_log_close)
 
     async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         processes.extend(psutil.Process(pid) for pid in arguments["pids"])
@@ -335,6 +348,7 @@ tools.hold(pids=[os.getpid(), child.pid])
             environment=os.environ,
             invoke=invoke,
             stop=stop,
+            output_path=tmp_path / "cancelled.log",
         )
     )
     try:
@@ -344,6 +358,7 @@ tools.hold(pids=[os.getpid(), child.pid])
             result = await task
             assert (result.status, result.output.splitlines()) == ("stopped", ["holding"])
             assert result.tool_calls == 1
+            assert bool(result.failure) is cleanup_failure
         else:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -370,12 +385,13 @@ async def test_python_deadline_stops_uncooperative_code(tmp_path: Path) -> None:
         timeout_seconds=0.2,
     )
     assert result.status == "timed_out"
-    assert result.exit_code is None
+    assert result.exit_code is not None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["write", "close"])
 async def test_output_failure_stops_python_and_closes_the_log(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     processes: list[psutil.Process] = []
     original_worker = _code_process.run_tool_worker
@@ -383,30 +399,42 @@ async def test_output_failure_stops_python_and_closes_the_log(
 
     async def fail_log_write(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         nonlocal log_closed
-        if getattr(function, "__name__", "") == "write":
+        name = getattr(function, "__name__", "")
+        if name == "write" and phase == "write":
             raise OSError("Test-owned disk failure")
-        if getattr(function, "__name__", "") == "close":
+        result = await original_worker(function, *args, **kwargs)
+        if name == "close" and getattr(getattr(function, "__self__", None), "name", None):
             log_closed = True
-        return await original_worker(function, *args, **kwargs)
+            if phase == "close":
+                raise OSError("Test-owned disk failure")
+        return result
 
     async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         processes.append(psutil.Process(arguments["pid"]))
         return tool_success({})
 
     monkeypatch.setattr(_code_process, "run_tool_worker", fail_log_write)
-    with pytest.raises(OSError, match="Test-owned disk failure"):
-        await run_python(
-            """import os
+    source = """import os
 from vbot_tools import tools
 tools.remember(pid=os.getpid())
 print('This output cannot be saved')
-while True: pass
-""",
-            cwd=tmp_path,
-            environment=os.environ,
-            invoke=invoke,
-            output_path=tmp_path / "output.txt",
-        )
+"""
+    if phase == "write":
+        source += "while True: pass\n"
+    result = await run_python(
+        source,
+        cwd=tmp_path,
+        environment=os.environ,
+        invoke=invoke,
+        output_path=tmp_path / "output.txt",
+    )
+    assert result.status == "failed"
+    assert result.exit_code is not None
+    if phase == "close":
+        assert result.exit_code == 0
+    assert result.failure is not None and "Test-owned disk failure" in result.failure
+    assert "This output cannot be saved" in result.output
+    assert result.output_path is not None and result.output_path.exists()
     assert log_closed
     assert len(processes) == 1
     await asyncio.to_thread(processes[0].wait, timeout=1)
@@ -414,15 +442,16 @@ while True: pass
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Jobs provide kill-on-close")
+@pytest.mark.parametrize("failure", [OSError, RuntimeError])
 async def test_refused_termination_closes_the_job_before_waiting_for_pipes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[Exception]
 ) -> None:
     original_worker = _code_process.run_tool_worker
     processes: list[psutil.Process] = []
 
     async def refuse_termination(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         if getattr(function, "__name__", "") == "terminate":
-            raise OSError("Test-owned termination refusal")
+            raise failure("Test-owned termination refusal")
         return await original_worker(function, *args, **kwargs)
 
     async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
@@ -430,12 +459,17 @@ async def test_refused_termination_closes_the_job_before_waiting_for_pipes(
         return tool_success({})
 
     monkeypatch.setattr(_code_process, "run_tool_worker", refuse_termination)
-    with pytest.raises(OSError, match="Test-owned termination refusal"):
-        await run_python(
-            "import os\nfrom vbot_tools import tools\ntools.remember(pid=os.getpid())",
-            cwd=tmp_path,
-            environment=os.environ,
-            invoke=invoke,
-        )
+    result = await run_python(
+        "import os\nfrom vbot_tools import tools\nprint('Captured before cleanup')\n"
+        "tools.remember(pid=os.getpid())",
+        cwd=tmp_path,
+        environment=os.environ,
+        invoke=invoke,
+        output_path=tmp_path / "output.txt",
+    )
+    assert result.status == "failed"
+    assert result.failure is not None and "Test-owned termination refusal" in result.failure
+    assert result.output.splitlines() == ["Captured before cleanup"]
+    assert result.output_path is not None and result.output_path.exists()
     assert len(processes) == 1
     await asyncio.to_thread(processes[0].wait, timeout=1)

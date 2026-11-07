@@ -85,7 +85,7 @@ class PinnedContextDependencies(Protocol):
 
 def stamp_prompt_files_read(
     file_state: FileReadState,
-    session_id: str,
+    generation_id: str | None,
     paths: list[FileRead],
 ) -> None:
     """Register auto-injected prompt files as read-before-write for a session.
@@ -103,7 +103,7 @@ def stamp_prompt_files_read(
     if not paths:
         return
     for path, stamp in paths:
-        file_state.record_stamp(session_id, path, stamp)
+        file_state.record_stamp(generation_id, path, stamp)
 
 
 def pinned_skill_catalog(
@@ -230,6 +230,9 @@ def _pinned_epoch_text(
     reused = matching_text(dependencies.sessions.prompt_pin(address, slot))
     if reused is not None:
         return reused
+    generation_id = (
+        dependencies.sessions.get(address).generation_id if read_paths is not None else None
+    )
     text = render()
     # A concurrent first build may have pinned an acceptable value meanwhile;
     # every request of the epoch then uses that one.
@@ -243,6 +246,8 @@ def _pinned_epoch_text(
     if winner is not None and winner != text and read_paths is not None:
         # These reads belong to the discarded render, not the text this request shows.
         read_paths.clear()
+    if read_paths is not None:
+        stamp_prompt_files_read(dependencies.file_read_state, generation_id, read_paths)
     return text if winner is None else winner
 
 
@@ -285,7 +290,6 @@ def pinned_working_project_context(
         attributes={PINNED_PROJECT_ATTRIBUTE: project_context.project_id},
         read_paths=read_paths,
     )
-    stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
 
 
@@ -320,7 +324,6 @@ def pinned_soul_context(
         render,
         read_paths=read_paths,
     )
-    stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
 
 
@@ -398,5 +401,4 @@ def pinned_memory_files(
         },
         read_paths=read_paths,
     )
-    stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text

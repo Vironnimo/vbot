@@ -168,7 +168,7 @@ class ToolResultPersistence:
             permissions=context.permissions,
             tool_available=allowed.__contains__,
             on_read=lambda read: self._dependencies.file_read_state.record_stamp(
-                context.run.session_id, *read
+                context.session.generation_id, *read
             ),
         )
 

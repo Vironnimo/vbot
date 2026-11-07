@@ -366,7 +366,7 @@ def _commit(
         target = pending[path]
         try:
             check_expected()
-            stale = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
+            stale = state.check_stale(context.session_generation_id, path) is StaleReason.MODIFIED
             if target.payload is None:
                 path.unlink()
             else:
@@ -422,13 +422,13 @@ def _commit(
             return completed, _error_data(_PatchError("file_changed", path=path), batch)
         pending[path] = expected[path] = batch.after[path] = batch.observed[path] = actual
         if actual.payload is not None:
-            state.record_change(context.session_id, path, merged=stale or moved_unseen)
+            state.record_change(context.session_generation_id, path, merged=stale or moved_unseen)
     for path in before:
         batch.observed[path] = pending[path]
         if path not in changed and pending[path].payload is not None:
             # A file left as it was shows the Session no more than it had read.
-            unread = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
-            state.record_change(context.session_id, path, merged=unread or moved_unseen)
+            unread = state.check_stale(context.session_generation_id, path) is StaleReason.MODIFIED
+            state.record_change(context.session_generation_id, path, merged=unread or moved_unseen)
     return completed, None
 
 
@@ -443,7 +443,7 @@ def _rename(
     """Move a link itself, or respell a file name, as one directory-entry rename."""
     snapshot = before[source]
     context.record_worked_paths(source, destination)
-    unread = state.check_stale(context.session_id, source) in _UNREAD_CHANGES
+    unread = state.check_stale(context.session_generation_id, source) in _UNREAD_CHANGES
     try:
         _rename_entry(source, destination, before)
     except OSError as error:
@@ -470,7 +470,7 @@ def _rename(
         return completed, _error_data(error, batch)
     batch.after[destination] = batch.observed[destination] = actual
     if actual.payload is not None:
-        state.record_change(context.session_id, destination, merged=unread)
+        state.record_change(context.session_generation_id, destination, merged=unread)
     return completed, None
 
 
@@ -507,7 +507,7 @@ def _guard_failure(
         and (stamp := state.stamp(path)) is not None
         and _snapshot(path) == snapshot
     ):
-        state.record_stamp(context.session_id, path, stamp)
+        state.record_stamp(context.session_generation_id, path, stamp)
         partial = batch.templates.get("partial_change", "change only the parts that need it")
         # A CRLF file shows plain line breaks, as read shows it.
         plain = [plain_line_end(line) for line in lines]
@@ -555,7 +555,7 @@ def _elsewhere(
     if len("".join(old.split())) < _ELSEWHERE_MIN_CHARACTERS:
         return None
     holding: list[str] = []
-    for path in state.recent_files(context.session_id, _ELSEWHERE_FILES + 1):
+    for path in state.recent_files(context.session_generation_id, _ELSEWHERE_FILES + 1):
         if path == source or batch.permissions.check_path(path, "read") is not None:
             continue
         try:
@@ -593,7 +593,7 @@ def _skipped_changes(
         if elsewhere:
             data["message"] += " " + elsewhere
     mismatch = next((data for data in skipped if data["code"] in _MISMATCH_CODES), None)
-    if mismatch and state.check_stale(context.session_id, source) in _UNREAD_CHANGES:
+    if mismatch and state.check_stale(context.session_generation_id, source) in _UNREAD_CHANGES:
         mismatch["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
     return skipped
 
@@ -666,7 +666,7 @@ def _run_step(
                 and pending[source] != before[source]
                 and not _is_empty(before[source].payload)
             ):
-                stale = state.check_stale(context.session_id, source)
+                stale = state.check_stale(context.session_generation_id, source)
                 if stale is not None:
                     error = _guard_failure(context, state, batch, stale, source, before[source])
                     outcome.update(status="failed", error=error)
@@ -678,7 +678,8 @@ def _run_step(
                     raise _PatchError("file_changed", path=path)
             # Moving the file does not show the content a previous change merged over.
             moved_unseen = (
-                moving and state.check_stale(context.session_id, source) in _UNREAD_CHANGES
+                moving
+                and state.check_stale(context.session_generation_id, source) in _UNREAD_CHANGES
             )
             completed, failure = _commit(
                 context, state, batch, before, pending, warnings, moved_unseen=moved_unseen
@@ -726,7 +727,7 @@ def _run_step(
         if (
             isinstance(error, _PatchError)
             and error.code in _MISMATCH_CODES
-            and state.check_stale(context.session_id, source) in _UNREAD_CHANGES
+            and state.check_stale(context.session_generation_id, source) in _UNREAD_CHANGES
         ):
             outcome["error"]["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
     if outcome["status"] == "failed":

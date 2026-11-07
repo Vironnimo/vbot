@@ -71,7 +71,14 @@ async def _harness(data_dir, adapter):
 
 
 async def _submit(
-    loop, input_id, content, *, session_id=None, new_session=False, run_overrides=None
+    loop,
+    input_id,
+    content,
+    *,
+    session_id=None,
+    new_session=False,
+    run_overrides=None,
+    file_reads=(),
 ):
     return await loop.submit_accessor_input(
         "coder",
@@ -81,16 +88,45 @@ async def _submit(
         session_id=session_id,
         new_session=new_session,
         run_overrides=run_overrides,
+        file_reads=file_reads,
         reply_surface=ReplySurface.webui(),
     )
 
 
 @pytest.mark.asyncio
 async def test_retried_new_session_input_reuses_the_session_and_run(tmp_path):
+    from core.chat.file_mentions import expand_file_mentions
+    from core.tools.file_state import StaleReason
+
     adapter = HeldFirstAdapter([{"content": "done"}])
     async with _harness(tmp_path, adapter) as (runtime, loop):
-        first = await _submit(loop, "request", "original", new_session=True)
+        target = tmp_path / "notes.md"
+        target.write_text("sent snapshot", encoding="utf-8")
+        file_reads = []
+        content = expand_file_mentions(
+            "original",
+            ["notes.md"],
+            root=tmp_path,
+            generation_id=None,
+            file_state=runtime.file_read_state,
+            on_read=file_reads.append,
+        )
+        # Admission must keep the snapshot's stamp, not stat newer unseen bytes.
+        target.write_text("changed after the snapshot", encoding="utf-8")
+        first = await _submit(
+            loop,
+            "request",
+            content,
+            new_session=True,
+            file_reads=file_reads,
+        )
         await asyncio.wait_for(adapter.entered.wait(), 3)
+        session = runtime.chat_sessions.get(first.record.address)
+        assert (
+            runtime.file_read_state.check_stale(session.generation_id, target)
+            is StaleReason.MODIFIED
+        )
+        assert runtime.file_read_state.check_stale(session.id, target) is StaleReason.NEVER_READ
         retry = await _submit(loop, "request", "original", new_session=True)
         assert first.run is not None and retry.run is first.run
         assert retry.record.address == first.record.address
@@ -105,7 +141,8 @@ async def test_retried_new_session_input_reuses_the_session_and_run(tmp_path):
         completed = await loop.lookup_accessor_input("request", request_hash="original-request")
         assert completed.record.run_status == "completed"
         history = runtime.chat_sessions.get(first.record.address).load()
-        assert [message.content for message in history if message.role == "user"] == ["original"]
+        assert len([message for message in history if message.role == "user"]) == 1
+        assert "sent snapshot" in str(history)
         assert len(adapter.requests) == 1
 
 

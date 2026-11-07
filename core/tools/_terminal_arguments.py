@@ -287,7 +287,7 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         if key in {"text", "data", "key"}:
             raise ValueError(_not_run(_input_elsewhere_problem(action, normalized)))
         if key in {"command", "args"}:
-            raise ValueError(_not_run(_command_elsewhere_problem(action, normalized)))
+            raise ValueError(_not_run(_command_elsewhere_problem(action)))
         if key in {"columns", "rows"}:
             size = {
                 field: normalized[field] for field in ("columns", "rows") if field in normalized
@@ -468,17 +468,11 @@ def _input_elsewhere_problem(action: str, arguments: dict[str, Any]) -> str:
     return f"{action} sends no input; type with {_call('input', arguments, **fields)}."
 
 
-def _command_elsewhere_problem(action: str, arguments: dict[str, Any]) -> str:
-    command = arguments.get("command")
-    args = arguments.get("args")
-    words = [command] if isinstance(command, str) else []
-    if isinstance(args, list):
-        words.extend(str(word) for word in args)
-    line = " ".join(words)
-    if action == "input" and line:
+def _command_elsewhere_problem(action: str) -> str:
+    if action == "input":
         return (
-            "input types text instead of running a command; to run it in this terminal, send "
-            f"{_call('input', arguments, text=line, key='enter')}."
+            "input takes text, not command and args. Send the complete command line as text, "
+            'with arguments quoted for the shell shown in this terminal, and key "enter".'
         )
     return f"command and args start a new program only with start; {action} leaves them unused."
 

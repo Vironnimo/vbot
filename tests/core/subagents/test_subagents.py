@@ -836,8 +836,17 @@ async def test_send_to_an_idle_subagent_starts_its_next_turn(harness: SubAgentHa
         {"id": "{id}", "content": "more"},
         {"content": "more", "session_id": "{session_id}"},
         {"action": "message", "session_id": "{session_id}", "content": "more"},
+        {"action": "run", "id": "{id}", "session_id": "{session_id}", "content": "more"},
+        {"action": "send", "id": "{id}", "session_id": "{session_id}", "content": "more"},
     ],
-    ids=["continue-word", "implied-by-id", "run-with-session", "session-only"],
+    ids=[
+        "continue-word",
+        "implied-by-id",
+        "run-with-session",
+        "session-only",
+        "run-pair",
+        "send-pair",
+    ],
 )
 async def test_other_spellings_of_send_reach_the_same_subagent(
     harness: SubAgentHarness, arguments: dict[str, str]
@@ -855,7 +864,7 @@ async def test_other_spellings_of_send_reach_the_same_subagent(
     assert await harness.call(incomplete) == await harness.call(
         {"action": "send", "id": data["id"]}
     )
-    if "id" in incomplete:
+    if "id" in incomplete and "session_id" not in incomplete:
         unknown = {**incomplete, "id": "sub_unknown123"}
         assert await harness.call(unknown) == await harness.call(
             {"action": "send", "id": unknown["id"]}

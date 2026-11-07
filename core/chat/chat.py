@@ -65,6 +65,7 @@ from core.sessions import (
     editable_session_message_index,
 )
 from core.sessions.errors import SessionNotFoundError
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -183,6 +184,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        file_reads: Sequence[FileRead] = (),
     ) -> AccessorChatSubmission:
         """Commit normal Accessor input and install it in the shared Run Queue."""
         return await self._accessor_inputs.submit(
@@ -204,6 +206,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             context_note=context_note,
+            file_reads=file_reads,
         )
 
     async def restore_accessor_inputs(self) -> None:

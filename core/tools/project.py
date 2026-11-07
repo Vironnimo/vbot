@@ -207,7 +207,7 @@ def make_project_handler(
                 "\n" + "\n".join(notices) if notices else " See the file notices below."
             )
         for path, stamp in read_paths:
-            file_state.record_stamp(context.session_id, path, stamp)
+            file_state.record_stamp(context.session_generation_id, path, stamp)
         return tool_success(data)
 
     def project_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:

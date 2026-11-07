@@ -229,7 +229,7 @@ async def test_generated_output_is_rechecked_after_provider_returns(
 
     from core.model_tasks.artifacts import OutputWriteError
     from core.model_tasks.image import ImageService
-    from core.model_tasks.image_types import ImageGenerationResult
+    from core.model_tasks.image_types import GeneratedImage, ImageGenerationResult
     from core.model_tasks.music import MusicService
     from core.model_tasks.music_types import MusicGenerationResult
     from core.model_tasks.video import VideoService
@@ -241,7 +241,9 @@ async def test_generated_output_is_rechecked_after_provider_returns(
         "music": MusicService,
     }[kind](cast(Any, object()), cast(Any, object()))
     results = {
-        "image": ImageGenerationResult(images=(b"image",), media_type="image/svg+xml", model="m"),
+        "image": ImageGenerationResult(
+            images=(GeneratedImage(b"image", "image/svg+xml"),), model="m"
+        ),
         "video": VideoGenerationResult(
             data=b"video", media_type="video/webm", model="m", job_id="j"
         ),
@@ -291,7 +293,7 @@ async def test_generated_output_guard_runs_after_worker_admission(
     from core.model_tasks import artifacts as artifact_module
     from core.model_tasks.artifacts import OutputWriteError
     from core.model_tasks.image import ImageService
-    from core.model_tasks.image_types import ImageGenerationResult
+    from core.model_tasks.image_types import GeneratedImage, ImageGenerationResult
     from core.utils.workers import BoundedWorkerPool
 
     pool = BoundedWorkerPool(name="guarded-artifacts-test", max_workers=1)
@@ -308,7 +310,7 @@ async def test_generated_output_guard_runs_after_worker_admission(
         provider_entered.set()
         await release_provider.wait()
         generated.set()
-        return ImageGenerationResult(images=(b"image",), media_type="image/png", model="m")
+        return ImageGenerationResult(images=(GeneratedImage(b"image", "image/png"),), model="m")
 
     def occupy_worker() -> None:
         loop.call_soon_threadsafe(worker_entered.set)

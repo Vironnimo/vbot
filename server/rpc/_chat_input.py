@@ -27,6 +27,7 @@ from core.sessions import (
     WorkingProjectChoice,
 )
 from core.sessions.errors import SessionNotFoundError
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS
 from server.rpc._chat_reads import _CHAT_RPC_WORKERS
@@ -225,6 +226,7 @@ async def _expand_content_file_mentions(
     file_mentions: list[str],
     *,
     new_session_project: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+    file_reads: list[FileRead] | None = None,
 ) -> str | list[ContentBlock]:
     """Snapshot ``@``-mentioned files into the outgoing content, if any.
 
@@ -248,13 +250,18 @@ async def _expand_content_file_mentions(
                 working_project_id=new_session_project,
             )
         )
+        generation_id = None
+        if file_reads is None:
+            session = await runtime.chat_sessions.get_async(address)
+            generation_id = session.generation_id
         return await _CHAT_RPC_WORKERS.run(
             expand_file_mentions,
             content,
             file_mentions,
             root=root,
-            session_id=address.session_id,
+            generation_id=generation_id,
             file_state=runtime.file_read_state,
+            on_read=file_reads.append if file_reads is not None else None,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

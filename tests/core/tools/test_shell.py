@@ -149,6 +149,23 @@ def note(content: str) -> Any:
 _BUILD = "build --all"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [[], ["-Command", "Get-Date"]])
+async def test_explicit_argv_executable_survives_dispatch(
+    shell: Shell, arguments: list[str]
+) -> None:
+    program = "C:/My Tools/pwsh.exe" if sys.platform == "win32" else "/opt/my tools/bash"
+    command = [program, *arguments]
+    invocation = shell.call({"command": command})
+    process = await shell.started()
+    process.exit(0)
+    assert data(await shell.returned(invocation))["exit_code"] == 0
+    expected = ("& " if sys.platform == "win32" else "") + f"'{program}'"
+    if arguments:
+        expected += " -Command Get-Date"
+    assert launched(shell.launcher)[0] == expected
+
+
 @pytest.mark.parametrize(
     ("command", "exits", "exit_code", "failed_programs"),
     [

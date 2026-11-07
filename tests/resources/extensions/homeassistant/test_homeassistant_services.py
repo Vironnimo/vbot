@@ -16,6 +16,7 @@ from tests.resources.extensions.homeassistant.homeassistant_test_support import 
     assert_success_envelope,
     dispatch,
     model_text,
+    no_sleep,
     request_body,
     tools_with_token,
 )
@@ -540,6 +541,82 @@ async def test_call_service_reports_observed_target_state(
         assert "60%" not in data["content"]
     else:
         assert "brightness" not in data["content"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_failure", ["http", "timeout", "json", "state"])
+@pytest.mark.parametrize("changed", [False, True])
+async def test_call_service_preserves_acceptance_when_target_readback_fails(
+    monkeypatch: pytest.MonkeyPatch, read_failure: str, changed: bool
+) -> None:
+    post = respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
+        return_value=httpx.Response(200, json=[_KITCHEN] if changed else [])
+    )
+    if not changed:
+        respx.get(f"{HASS_URL}/api/states/light.kitchen").mock(
+            return_value=httpx.Response(200, json=_KITCHEN)
+        )
+    check = respx.get(f"{HASS_URL}/api/states/light.hall")
+    if read_failure == "http":
+        check.mock(return_value=httpx.Response(503, json={"message": "Unavailable"}))
+    elif read_failure == "timeout":
+        check.mock(side_effect=httpx.ReadTimeout("fixture read timeout"))
+    elif read_failure == "json":
+        check.mock(return_value=httpx.Response(200, text="not JSON"))
+    else:
+        check.mock(return_value=httpx.Response(200, json={"entity_id": "light.hall"}))
+    tools = tools_with_token()
+    no_sleep(monkeypatch)
+
+    data = assert_success_envelope(
+        await dispatch(
+            tools,
+            HA_CALL_SERVICE_NAME,
+            {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen,light.hall"},
+        )
+    )
+
+    assert post.call_count == 1
+    assert check.call_count == (3 if read_failure in {"http", "timeout"} else 1)
+    assert data["service"] == "light.turn_on"
+    assert data["changed"] == int(changed)
+    assert data["unconfirmed"] == ["light.hall"]
+    assert "light.kitchen: on" in data["content"]
+    assert "light.hall:" in data["content"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_call_service_reports_targets_beyond_readback_limit() -> None:
+    targets = [f"light.target_{index}" for index in range(12)]
+    post = respx.post(f"{HASS_URL}/api/services/light/turn_off").mock(
+        return_value=httpx.Response(
+            200, json=[{**_KITCHEN, "entity_id": targets[0], "state": "off"}]
+        )
+    )
+    for entity in targets[1:11]:
+        respx.get(f"{HASS_URL}/api/states/{entity}").mock(
+            return_value=httpx.Response(200, json={**_KITCHEN, "entity_id": entity, "state": "off"})
+        )
+    unchecked = respx.get(f"{HASS_URL}/api/states/{targets[-1]}").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    data = assert_success_envelope(
+        await dispatch(
+            tools_with_token(),
+            HA_CALL_SERVICE_NAME,
+            {"domain": "light", "service": "turn_off", "entity_id": targets},
+        )
+    )
+
+    assert post.call_count == 1
+    assert unchecked.call_count == 0
+    assert len(respx.calls) == 11
+    assert data["changed"] == 1
+    assert data["unconfirmed"] == [targets[-1]]
+    assert all(f"{entity}: off" in data["content"] for entity in targets[:-1])
 
 
 @respx.mock

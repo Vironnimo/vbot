@@ -561,7 +561,7 @@ class ChatCompactionHost:
             )
         if committed is None:
             return False
-        await self._stamp_prompt_files_read(session.id, refresh)
+        await self._stamp_prompt_files_read(session.generation_id, refresh)
         return True
 
     async def commit_automatic_checkpoint(
@@ -611,19 +611,19 @@ class ChatCompactionHost:
             return False
         context.image_budget = request_state.image_budget or RequestImageBudget()
         if refresh is not None:
-            await self._stamp_prompt_files_read(session.id, refresh)
+            await self._stamp_prompt_files_read(session.generation_id, refresh)
             self.apply_prompt_refresh(context, refresh)
         return True
 
     async def _stamp_prompt_files_read(
-        self, session_id: str, refresh: _CompactionPromptRefresh | None
+        self, generation_id: str | None, refresh: _CompactionPromptRefresh | None
     ) -> None:
         if refresh is None or not refresh.prompt_read_paths:
             return
         await self.run_transform(
             stamp_prompt_files_read,
             self._dependencies.file_read_state,
-            session_id,
+            generation_id,
             list(refresh.prompt_read_paths),
         )
 

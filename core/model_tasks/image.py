@@ -30,7 +30,9 @@ from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERST
 from core.model_tasks.image_profile import ImageCallOptionError, ImageProfile
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import (
+    GeneratedImage,
     ImageArtifact,
+    ImageArtifactBatch,
     ImageGenerationResult,
     ImageInput,
     ImageUnderstandingResult,
@@ -662,7 +664,7 @@ class ImageService:
         source_paths: Sequence[str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
         before_output_write: BeforeOutputWrite | None = None,
-    ) -> tuple[ImageArtifact, ...]:
+    ) -> ImageArtifactBatch:
         """Generate images and persist them in the caller-owned output directory.
 
         The directory is created before the request, so an unusable folder
@@ -681,21 +683,22 @@ class ImageService:
             usage_context=usage_context,
         )
         if before_output_write is None:
-            return await persist_artifacts(_write_image_batch, result, directory)
-        extension = _extension_for_media_type(result.media_type)
+            saved = await persist_artifacts(_write_image_batch, result, directory)
+            return ImageArtifactBatch(saved, result.failures)
         artifacts: list[ImageArtifact] = []
-        for index, image_bytes in enumerate(result.images):
+        for image in result.images:
+            extension = _extension_for_media_type(image.media_type)
 
             def write(
-                path: Path, *, data: bytes = image_bytes, item_index: int = index
+                path: Path, *, item: GeneratedImage = image, suffix: str = extension
             ) -> ImageArtifact:
                 return _write_image_artifact(
-                    data,
+                    item.data,
                     output_dir=directory,
-                    extension=extension,
-                    media_type=result.media_type,
-                    index=item_index,
-                    revised_prompt=result.revised_prompt,
+                    extension=suffix,
+                    media_type=item.media_type,
+                    index=item.index,
+                    revised_prompt=item.revised_prompt,
                     file_path=path,
                 )
 
@@ -708,23 +711,22 @@ class ImageService:
                 saved=tuple(item.file_path for item in artifacts),
             )
             artifacts.append(artifact)
-        return tuple(artifacts)
+        return ImageArtifactBatch(tuple(artifacts), result.failures)
 
 
 def _write_image_batch(result: ImageGenerationResult, directory: Path) -> tuple[ImageArtifact, ...]:
     """Publish the ordered batch as one admitted operation, retaining partial saves."""
-    extension = _extension_for_media_type(result.media_type)
     artifacts: list[ImageArtifact] = []
-    for idx, image_bytes in enumerate(result.images):
+    for image in result.images:
         try:
             artifacts.append(
                 _write_image_artifact(
-                    image_bytes,
+                    image.data,
                     output_dir=directory,
-                    extension=extension,
-                    media_type=result.media_type,
-                    index=idx,
-                    revised_prompt=result.revised_prompt,
+                    extension=_extension_for_media_type(image.media_type),
+                    media_type=image.media_type,
+                    index=image.index,
+                    revised_prompt=image.revised_prompt,
                 )
             )
         except OutputWriteError as exc:
@@ -935,12 +937,17 @@ def _without_unchanged_revision(
 ) -> ImageGenerationResult:
     """Keep ``revised_prompt`` only when the provider actually changed the prompt."""
 
-    revised = result.revised_prompt
-    if revised is None:
-        return result
-    if " ".join(revised.split()).casefold() == " ".join(prompt.split()).casefold():
-        return replace(result, revised_prompt=None)
-    return result
+    normalized = " ".join(prompt.split()).casefold()
+    return replace(
+        result,
+        images=tuple(
+            replace(image, revised_prompt=None)
+            if image.revised_prompt is not None
+            and " ".join(image.revised_prompt.split()).casefold() == normalized
+            else image
+            for image in result.images
+        ),
+    )
 
 
 def _write_image_artifact(

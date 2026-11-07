@@ -154,10 +154,13 @@ class _ExecuteCode:
             result = await self._run(context, code, cwd, environment, output_path)
         finally:
             if output_path is not None and not (
-                result is not None and (result.output_truncated or result.stderr_truncated)
+                result is not None
+                and (result.output_truncated or result.stderr_truncated or result.failure)
             ):
-                # Only shortened output names its capture file; drop the others.
-                await run_tool_worker(output_path.unlink, missing_ok=True)
+                # A redundant capture is housekeeping: failure to delete it
+                # must not replace the result, an admission error or cancellation.
+                with contextlib.suppress(OSError):
+                    await run_tool_worker(output_path.unlink, missing_ok=True)
         if result is None:
             return tool_failure(
                 "cancelled_by_user",
@@ -175,10 +178,15 @@ class _ExecuteCode:
             data["tool_failures"] = result.tool_failures
         if result.tool_failure_count:
             data["tool_failure_count"] = result.tool_failure_count
+        if result.failure:
+            data["execution_error"] = result.failure
+            if result.output_path is not None:
+                data["output_file"] = str(result.output_path).replace(os.sep, "/")
+                data["note"] = "Read output_file for the output captured before the failure."
         if result.output_truncated or result.stderr_truncated:
             data["output_truncated"] = result.output_truncated
             data["stderr_truncated"] = result.stderr_truncated
-            data["note"] = (
+            data["note"] = (str(data["note"]) + " " if "note" in data else "") + (
                 "Output was shortened. The program already ran; do not repeat its effects."
             )
             if result.output_path is not None:
@@ -197,7 +205,12 @@ class _ExecuteCode:
             stopped = {
                 "timed_out": "Python reached its 300-second time limit. ",
                 "stopped": "The user stopped this Python execution. ",
-            }.get(result.status, "The Python program failed. ")
+            }.get(
+                result.status,
+                "Python execution did not finish cleanly. "
+                if result.failure
+                else "The Python program failed. ",
+            )
             data["note"] = (
                 stopped + "Earlier Tool calls and Python changes "
                 "remain applied. Inspect their outcomes before repeating any changes."

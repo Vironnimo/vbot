@@ -33,6 +33,7 @@ def make_context(
     context = ToolContext(
         agent_id="agent-1",
         session_id="session-1",
+        session_generation_id="session-1",
         run_id="run-1",
         tool_call_id=tool_call_id,
         tool_name=tool_name,
@@ -51,6 +52,7 @@ def make_execution_config(
     config = ToolExecutionConfig(
         agent_id="agent-1",
         session_id="session-1",
+        session_generation_id="session-1",
         run_id="run-1",
         workspace=Path("workspace"),
         vbot_root=Path("app"),

@@ -47,7 +47,7 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
     agent = _agent(tmp_path, memory_prompt_mode=mode)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
     runtime.system_prompts = _facade_manager(tmp_path)
-    runtime.chat_sessions.create(agent.id, session_id="s1")
+    session = runtime.chat_sessions.create(agent.id, session_id="s1")
     dependencies = build_chat_loop(runtime)._dependencies
     soul = pinned_soul_context(dependencies, agent.id, "s1", agent, None)
     memory = pinned_memory_files(dependencies, agent.id, "s1", agent, None)
@@ -58,7 +58,7 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
         visible.add("USER.md")
     for name in ("SOUL.md", "USER.md", "MEMORY.md"):
         path = (tmp_path / name).resolve()
-        assert runtime.file_read_state.check_stale("s1", path) == (
+        assert runtime.file_read_state.check_stale(session.generation_id, path) == (
             None if name in visible else StaleReason.NEVER_READ
         )
         path.write_text("- CHANGED_SENTINEL_WITH_DIFFERENT_SIZE", encoding="utf-8")
@@ -66,7 +66,7 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
     assert pinned_memory_files(dependencies, agent.id, "s1", agent, None) == memory
     for name in visible:
         assert (
-            runtime.file_read_state.check_stale("s1", (tmp_path / name).resolve())
+            runtime.file_read_state.check_stale(session.generation_id, (tmp_path / name).resolve())
             == StaleReason.MODIFIED
         )
 
@@ -91,13 +91,13 @@ def test_first_prompt_build_uses_the_concurrent_winning_snapshot(
     agent = _agent(tmp_path, memory_prompt_mode="agent")
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
     runtime.system_prompts = _facade_manager(tmp_path)
-    runtime.chat_sessions.create(agent.id, session_id="s1")
+    session = runtime.chat_sessions.create(agent.id, session_id="s1")
     dependencies = build_chat_loop(runtime)._dependencies
     ensure = runtime.chat_sessions.ensure_prompt_pin
 
     if previously_read:
         target.write_text("- ORIGINAL", encoding="utf-8")
-        runtime.file_read_state.record_read("s1", target)
+        runtime.file_read_state.record_read(session.generation_id, target)
     target.write_text("- LATER_SNAPSHOT_UNSEEN", encoding="utf-8")
 
     def first_writer(address, slot, value, matches):
@@ -125,7 +125,7 @@ def test_first_prompt_build_uses_the_concurrent_winning_snapshot(
     monkeypatch.setattr(runtime.chat_sessions, "ensure_prompt_pin", first_writer)
     for _ in range(2):
         assert snapshot() == winner
-        assert runtime.file_read_state.check_stale("s1", target) == (
+        assert runtime.file_read_state.check_stale(session.generation_id, target) == (
             StaleReason.MODIFIED if previously_read else StaleReason.NEVER_READ
         )
 
@@ -340,7 +340,12 @@ async def test_session_scope_selects_body_working_project_skills_and_pins(
     if not working_project:
         assert project_context is None
         assert "Team rules" not in system
-        assert runtime.file_read_state.check_stale("s1", agents_md) is not None
+        assert (
+            runtime.file_read_state.check_stale(
+                runtime.chat_sessions.get(address).generation_id, agents_md
+            )
+            is not None
+        )
         return
     assert isinstance(project_context, ProjectPromptContext)
     assert (project_context.cwd, project_context.auto_load) == (repo, ("AGENTS.md",))
@@ -348,7 +353,12 @@ async def test_session_scope_selects_body_working_project_skills_and_pins(
     assert f"- Project ID: `{PROJECT_ID}`" in system
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
     # Auto-loaded files count as read for this Session only, so the Agent may edit them.
-    assert runtime.file_read_state.check_stale("s1", agents_md) is None
+    assert (
+        runtime.file_read_state.check_stale(
+            runtime.chat_sessions.get(address).generation_id, agents_md
+        )
+        is None
+    )
     assert runtime.file_read_state.check_stale("other", agents_md) is not None
 
 
@@ -573,7 +583,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
             ),
         ],
     )
-    runtime.chat_sessions.create(agent.id, session_id="s1")
+    session = runtime.chat_sessions.create(agent.id, session_id="s1")
     address = session_address(agent.id, "s1")
     runtime.chat_sessions.ensure_prompt_pin(
         address,
@@ -584,7 +594,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     loop = build_chat_loop(runtime)
 
     await loop.send(agent.id, "First", session_id="s1")
-    assert runtime.file_read_state.check_stale("s1", included.resolve()) is None
+    assert runtime.file_read_state.check_stale(session.generation_id, included.resolve()) is None
     original_pin = runtime.chat_sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT)
     assert original_pin is not None
     if partial_inventory:
@@ -601,7 +611,7 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
         loop = build_chat_loop(runtime)
     await loop.send(agent.id, "Unchanged", session_id="s1")
     assert _system_message(adapter, 0) == _system_message(adapter, 1)
-    assert runtime.file_read_state.check_stale("s1", included.resolve()) is None
+    assert runtime.file_read_state.check_stale(session.generation_id, included.resolve()) is None
     adopted = runtime.chat_sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT)
     assert adopted == original_pin
     assert not any(is_prompt_block_change_note(m) for m in history(runtime, "s1", agent.id))
@@ -616,7 +626,10 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
     assert all(system == systems[0] for system in systems)
     assert "ORIGINAL_INCLUDE" in systems[0]
     assert "STATIC_SKILLS:PINNED_SKILL_SENTINEL" in systems[0]
-    assert runtime.file_read_state.check_stale("s1", included.resolve()) == StaleReason.MODIFIED
+    assert (
+        runtime.file_read_state.check_stale(session.generation_id, included.resolve())
+        == StaleReason.MODIFIED
+    )
     assert '<project id="vbot"' not in systems[0] and "`reviewer`" in systems[0]
     assert "- tg-private: telegram" in systems[0]
     assert '<project id="web"' not in systems[0] and "`writer`" not in systems[0]

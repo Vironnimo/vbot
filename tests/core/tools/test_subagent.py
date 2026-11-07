@@ -17,6 +17,7 @@ from core.subagents._constants import (
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
     SUBAGENT_STARTED_NOTE,
 )
+from core.subagents.links import link_session
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME
 from core.tools.subagent import (
     MESSAGE_PARENT_TOOL_DESCRIPTION,
@@ -252,6 +253,74 @@ _RAN_AS_LIST = (
 _RAN_AS_STOP = "This call ran as background_tasks {call}."
 
 
+@pytest.mark.parametrize("action", ["run", "send", "status", "fetch", "read", "cancel"])
+@pytest.mark.parametrize("unknown_id", [False, True], ids=["different-child", "unknown-id"])
+async def test_conflicting_selectors_leave_both_subagents_untouched(
+    harness: SubAgentHarness, action: str, unknown_id: bool
+) -> None:
+    first_gate = harness.loop.hold("first")
+    second_gate = harness.loop.hold("second")
+    first = await harness.spawn("first")
+    second = await harness.spawn("second")
+    before = list(harness.manager.active_runs())
+
+    result = await harness.call(
+        {
+            "action": action,
+            "id": "sub_unknown123" if unknown_id else first["id"],
+            "session_id": second["session_id"],
+            "content": "more work",
+        }
+    )
+
+    assert result["error"]["code"] == "invalid_arguments", result
+    assert harness.manager.active_runs() == before
+    assert all(not run.cancel_requested for run in before)
+    assert [turn.content for turn in harness.loop.turns] == ["first", "second"]
+    for child in (first, second):
+        address = harness.subagent_session(child["id"])
+        assert not harness.manager.list_queued(
+            address.agent_id, address.session_id, project_id=address.project_id
+        )
+    first_gate.set()
+    second_gate.set()
+    await harness.settle()
+
+
+@pytest.mark.parametrize("action", ["run", "send", "status", "cancel"])
+@pytest.mark.parametrize("with_id", [False, True])
+async def test_a_shared_session_id_never_picks_the_first_subagent(
+    harness: SubAgentHarness, action: str, with_id: bool
+) -> None:
+    for index, agent_id in enumerate(("parent", "worker")):
+        child = harness.sessions.create(agent_id, "ses_shared")
+        link_session(
+            harness.sessions,
+            child.address,
+            subagent_id=f"sub_child{index}",
+            parent=harness.parent,
+            run_id="origin",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+    arguments = {"action": action, "session_id": "ses_shared", "content": "more work"}
+    if with_id:
+        arguments["id"] = "sub_child1"
+
+    result = await harness.call(arguments)
+
+    if with_id:
+        assert result["ok"], result
+        assert result["data"]["id"] == "sub_child1"
+        if action in {"run", "send"}:
+            await harness.settle()
+            assert [turn.run.agent_id for turn in harness.loop.turns if turn.run] == ["worker"]
+    else:
+        assert result["error"]["code"] == "invalid_arguments", result
+        assert harness.loop.turns == []
+        assert harness.manager.active_runs() == []
+
+
 @pytest.mark.parametrize(
     ("arguments", "ran", "status"),
     [
@@ -263,6 +332,21 @@ _RAN_AS_STOP = "This call ran as background_tasks {call}."
         ),
         (
             {"action": "check", "id": "{id}"},
+            _RAN_AS_LIST.format(call='{"action": "status", "id": "{id}"}'),
+            "working",
+        ),
+        (
+            {"action": "status", "id": "{id}", "session_id": "{session_id}"},
+            _RAN_AS_LIST.format(call='{"action": "status", "id": "{id}"}'),
+            "working",
+        ),
+        (
+            {"action": "fetch", "id": "{session_id}", "session_id": "{session_id}"},
+            _RAN_AS_LIST.format(call='{"action": "status", "id": "{session_id}"}'),
+            "working",
+        ),
+        (
+            {"action": "status", "id": "{id}", "session_id": "{id}"},
             _RAN_AS_LIST.format(call='{"action": "status", "id": "{id}"}'),
             "working",
         ),
@@ -284,7 +368,16 @@ _RAN_AS_STOP = "This call ran as background_tasks {call}."
             "stopped",
         ),
     ],
-    ids=["list", "list-word", "check", "kill", "cancel-session"],
+    ids=[
+        "list",
+        "list-word",
+        "check",
+        "same-child",
+        "same-session",
+        "same-public-id",
+        "kill",
+        "cancel-session",
+    ],
 )
 async def test_calls_that_list_check_or_stop_run_as_background_tasks(
     harness: SubAgentHarness, arguments: JsonObject, ran: str, status: str | None

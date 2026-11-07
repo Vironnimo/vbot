@@ -64,19 +64,36 @@ async def _call(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "page"),
+    [
+        ({"url": "http://localhost:5173/docs"}, "/docs"),
+        ({"url": "http://localhost:5173/search?q=1#top"}, "/search?q=1#top"),
+        ({"path": "http://localhost:5173/#/dashboard"}, "/#/dashboard"),
+        ({"url": "http://localhost:5173", "path": "docs"}, "/docs"),
+        (
+            {
+                "url": "http://localhost:5173/docs",
+                "address": "localhost:5173/docs",
+                "target_port": "5173",
+                "route": "docs",
+            },
+            "/docs",
+        ),
+    ],
+)
 async def test_open_shows_a_card_and_points_the_agent_at_it(
-    tmp_path: Path,
+    tmp_path: Path, target: dict[str, Any], page: str
 ) -> None:
     tools, portals, _listeners = _setup()
 
-    opened, context = await _call(
-        tools, tmp_path, {"action": "open", "url": "http://localhost:5173/docs", "title": "Docs"}
-    )
-    again, _context = await _call(tools, tmp_path, {"action": "open", "port": 5173, "path": "docs"})
+    opened, context = await _call(tools, tmp_path, {"action": "open", **target, "title": "Docs"})
+    again, _context = await _call(tools, tmp_path, {"action": "open", "port": 5173, "path": page})
     waiting, _context = await _call(tools, tmp_path, {"action": "open", "port": 3000})
     listed, _context = await _call(tools, tmp_path, {"action": "list"})
 
     [first, second] = portals.list(SessionAddress(None, context.agent_id, context.session_id))
+    assert (first.target_port, first.path) == (5173, page)
     assert context.presentation_portal == {"id": first.id, "title": "Docs", "port": 5173}
     assert opened["data"]["content"] == (
         f"Opened portal {first.id} for localhost:5173. The user opens it from the card in the chat."
@@ -107,20 +124,78 @@ async def test_open_shows_a_card_and_points_the_agent_at_it(
             "session_required",
             "Portals belong to a chat Session",
         ),
+        (
+            {"action": "open", "url": "http://localhost:5173/docs", "port": 3000},
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        (
+            {"action": "open", "url": "http://localhost:5173/docs", "path": "/admin"},
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        (
+            {"action": "open", "url": "http://localhost:5173/", "path": "/admin"},
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        (
+            {
+                "action": "open",
+                "url": "http://localhost:5173/docs",
+                "address": "http://localhost:5173/",
+            },
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        (
+            {
+                "action": "open",
+                "url": "http://localhost:5173/",
+                "address": "http://localhost:5173/docs",
+            },
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        (
+            {"action": "open", "url": "http://localhost:5173", "address": "http://localhost:3000"},
+            {},
+            "invalid_arguments",
+            None,
+        ),
+        ({"action": "open", "url": "https://localhost:5173/docs"}, {}, "invalid_arguments", None),
+        ({"action": "open", "path": "https://localhost:5173/docs"}, {}, "invalid_arguments", None),
+        (
+            {"action": "open", "url": "http://user:password@localhost:5173/docs"},
+            {},
+            "invalid_arguments",
+            None,
+        ),
     ],
-    ids=["vbot-port", "no-port", "unknown-id", "no-session"],
 )
 async def test_refused_calls_change_nothing_and_say_why(
-    tmp_path: Path, arguments: dict[str, Any], context: dict[str, Any], code: str, message: str
+    tmp_path: Path,
+    arguments: dict[str, Any],
+    context: dict[str, Any],
+    code: str,
+    message: str | None,
 ) -> None:
-    tools, _portals, listeners = _setup()
+    probed: list[int] = []
+    tools, _portals, listeners = _setup(probed)
 
     result, _context = await _call(tools, tmp_path, arguments, **context)
 
     assert result["error"]["code"] == code
-    assert message in result["error"]["message"]
-    assert result["error"]["message"].startswith("Nothing was")
+    if message is not None:
+        assert message in result["error"]["message"]
+        assert result["error"]["message"].startswith("Nothing was")
     assert listeners.next_port == 41000
+    assert probed == []
 
 
 @pytest.mark.asyncio

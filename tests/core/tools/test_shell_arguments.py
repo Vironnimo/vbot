@@ -158,11 +158,20 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
     [
         # Codex runs every command through a login shell; the script is the command.
         ("linux", ["bash", "-lc", "ls -la | head -5"], "ls -la | head -5"),
-        ("linux", ["/bin/bash", "-c", "echo $HOME"], "echo $HOME"),
+        ("linux", ["/bin/bash", "-c", "echo $HOME"], "/bin/bash -c 'echo $HOME'"),
+        ("linux", ["/opt/my tools/bash"], "'/opt/my tools/bash'"),
+        ("linux", ["./tool;other"], "'./tool;other'"),
         ("linux", ["ls", "-la", "my dir"], "ls -la 'my dir'"),
         ("linux", ["bash", "script.sh"], "bash script.sh"),
         ("win32", ["pwsh", "-NoProfile", "-Command", "Get-Date"], "Get-Date"),
         ("win32", ["pwsh.exe", "-c", "Get-Date | Out-String"], "Get-Date | Out-String"),
+        (
+            "win32",
+            ["C:/Explicit/pwsh.exe", "-Command", "Get-Date"],
+            "C:/Explicit/pwsh.exe -Command Get-Date",
+        ),
+        ("win32", ["C:/My Tools/pwsh.exe"], "& 'C:/My Tools/pwsh.exe'"),
+        ("win32", ["./tool;other"], "& './tool;other'"),
         # Another shell is a program the Agent asked for, not the host shell.
         ("win32", ["bash", "-lc", "ls -la"], "bash -lc 'ls -la'"),
         ("win32", ["powershell", "-Command", "Get-Date"], "powershell -Command Get-Date"),

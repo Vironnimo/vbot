@@ -43,9 +43,11 @@ from core.subagents._constants import (
     PARENT_MESSAGE_SECTION_TEMPLATE,
     SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
+    SUBAGENT_AMBIGUOUS_SESSION_MESSAGE_TEMPLATE,
     SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
     SUBAGENT_CHOOSE_RECIPIENT_TEXT,
+    SUBAGENT_CONFLICTING_SELECTORS_MESSAGE_TEMPLATE,
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
     SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
@@ -121,6 +123,7 @@ from core.subagents.links import (
     SubAgentLink,
     ancestors,
     children,
+    descendants,
     find_link,
     read_link,
 )
@@ -271,6 +274,7 @@ class SubAgentCoordinator:
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``subagent`` call."""
         try:
+            await self.validate_selectors(context, arguments)
             action = arguments.get("action")
             if action is None:
                 implied = _implied_action(
@@ -287,6 +291,44 @@ class SubAgentCoordinator:
             return tool_failure("invalid_arguments", str(error))
         return tool_failure(
             "invalid_arguments", "subagent was not run: action must be one of: run, send."
+        )
+
+    async def validate_selectors(
+        self, context: ToolContext, arguments: JsonObject, *, whole_tree: bool = False
+    ) -> None:
+        """Refuse contradictory public-id and Session selectors before any operation.
+
+        Former status/stop actions use this same check before the Tool forwards
+        them to ``background_tasks``. Authorization stays with the operation.
+        """
+        subagent_id = optional_text(arguments, "id")
+        session_id = optional_text(arguments, "session_id")
+        if not session_id:
+            return
+        sessions = self._runtime.chat_sessions
+        own = await sessions.run_async(
+            descendants if whole_tree else children, sessions, _caller(context), strict=True
+        )
+        matches = [link for link in own if link.id == session_id] if whole_tree else []
+        if not matches:
+            matches = [link for link in own if link.session.session_id == session_id]
+        if not subagent_id:
+            if len(matches) > 1:
+                raise ToolContractError(
+                    SUBAGENT_AMBIGUOUS_SESSION_MESSAGE_TEMPLATE.format(
+                        session_id=quoted(session_id)
+                    )
+                )
+            return
+        targets = [link for link in own if link.id == subagent_id]
+        if not targets and whole_tree:
+            targets = [link for link in own if link.session.session_id == subagent_id]
+        if len(targets) == 1 and targets[0] in matches:
+            return
+        raise ToolContractError(
+            SUBAGENT_CONFLICTING_SELECTORS_MESSAGE_TEMPLATE.format(
+                id=quoted(subagent_id), session_id=quoted(session_id)
+            )
         )
 
     async def message_parent(self, context: ToolContext, arguments: JsonObject) -> JsonObject:

@@ -171,6 +171,7 @@ class _Provider:
     label: str
     credential_key: str | None
     search: Callable[[str, dict[str, Any]], SearchFunction]
+    supports_site_expressions: bool
 
 
 def _keyed(search: _KeyedSearch) -> Callable[[str, dict[str, Any]], SearchFunction]:
@@ -202,7 +203,18 @@ def _duckduckgo(api_key: str, settings: dict[str, Any]) -> SearchFunction:
 # Credential keys come from WEB_SEARCH_CREDENTIALS, which Settings also reads to
 # report whether each key is present.
 _PROVIDERS: dict[str, _Provider] = {
-    provider_id: _Provider(label, WEB_SEARCH_CREDENTIALS.get(provider_id), search)
+    provider_id: _Provider(
+        label,
+        WEB_SEARCH_CREDENTIALS.get(provider_id),
+        search,
+        provider_id
+        in {
+            WEB_SEARCH_PROVIDER_BRAVE,
+            WEB_SEARCH_PROVIDER_SERPER,
+            WEB_SEARCH_PROVIDER_SEARXNG,
+            WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+        },
+    )
     for provider_id, label, search in (
         (WEB_SEARCH_PROVIDER_BRAVE, "Brave Search", _keyed(_search_brave)),
         (WEB_SEARCH_PROVIDER_TAVILY, "Tavily", _keyed(_search_tavily)),
@@ -476,15 +488,19 @@ async def web_search_handler(
     if not query:
         return _invalid('Pass the search words as query, for example {"query": "python asyncio"}.')
 
-    query, domains, exclude, widened, sites_error = WebSearchRequest.resolve_sites(
-        query, arguments.get("domains"), arguments.get("exclude_domains")
-    )
-    if sites_error is not None:
-        return _invalid(sites_error)
-
     settings, settings_error = _resolve_web_search_settings(settings_resolver)
     if settings_error is not None or settings is None:
         return _configuration_failure(settings_error or "they could not be resolved")
+
+    provider = _PROVIDERS[settings["provider"]]
+    query, domains, exclude, widened, sites_error = WebSearchRequest.resolve_sites(
+        query,
+        arguments.get("domains"),
+        arguments.get("exclude_domains"),
+        supports_site_expressions=provider.supports_site_expressions,
+    )
+    if sites_error is not None:
+        return _invalid(sites_error)
 
     count = optional_int(
         arguments.get("count"),
@@ -507,7 +523,6 @@ async def web_search_handler(
     widened_note = _widened_note(widened, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME))
     notes = [note for note in (widened_note, age_note) if note]
 
-    provider = _PROVIDERS[settings["provider"]]
     api_key = ""
     if provider.credential_key is not None:
         api_key = _normalize_text(credential_resolver(provider.credential_key))

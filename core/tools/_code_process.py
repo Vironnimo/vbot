@@ -69,6 +69,8 @@ class CodeExecutionResult:
     log_truncated: bool = False
     # False when Python refused to compile the program, so none of it ran.
     ran: bool = True
+    # A process/output cleanup error, after execution may already have effects.
+    failure: str | None = None
 
 
 @dataclass
@@ -259,19 +261,32 @@ async def run_python(
     program_dir: Path | None = None
     status: ExecutionStatus = "failed"
     exit_code: int | None = None
+    failures: list[str] = []
     server = await asyncio.start_server(bridge.accept, "127.0.0.1", 0, limit=MAX_REQUEST_BYTES + 1)
+
+    def record_failure(stage: str, error: Exception) -> None:
+        message = f"{stage}: {error}"
+        if message not in failures:
+            failures.append(message)
 
     async def capture(stream: asyncio.StreamReader, retained: _Capture) -> None:
         nonlocal log_bytes, log_truncated
-        while chunk := await stream.read(65536):
-            retained.append(chunk)
-            if log is not None:
-                async with log_lock:
-                    kept = chunk[: max(0, MAX_LOG_BYTES - log_bytes)]
-                    log_truncated |= len(kept) < len(chunk)
-                    if kept:
-                        await run_tool_worker(log.write, kept)
-                        log_bytes += len(kept)
+        stage = "Reading Python output failed"
+        try:
+            while chunk := await stream.read(65536):
+                retained.append(chunk)
+                if log is not None:
+                    async with log_lock:
+                        kept = chunk[: max(0, MAX_LOG_BYTES - log_bytes)]
+                        log_truncated |= len(kept) < len(chunk)
+                        if kept:
+                            stage = "Writing the captured output file failed"
+                            await run_tool_worker(log.write, kept)
+                            log_bytes += len(kept)
+                stage = "Reading Python output failed"
+        except Exception as error:
+            record_failure(stage, error)
+            raise
 
     def created(pid: int) -> None:
         nonlocal tree
@@ -313,38 +328,39 @@ async def run_python(
     async def cleanup() -> None:
         server.close()
         bridge.closed = True
-        failure: BaseException | None = None
+        termination_failed = False
         try:
             if tree is not None:
                 try:
                     await run_tool_worker(tree.terminate)
-                except OSError as error:
-                    failure = error
+                except Exception as error:
+                    record_failure("Stopping the Python process tree failed", error)
+                    termination_failed = True
                 # A Windows Job's kill-on-close is also needed when terminate fails.
                 try:
                     await run_tool_worker(tree.close)
-                except OSError as error:
-                    failure = failure or error
+                except Exception as error:
+                    record_failure("Closing the Python process tree failed", error)
+                    termination_failed = True
             await bridge.close()
             await server.wait_closed()
-            if process is not None and (failure is None or sys.platform == "win32"):
+            if process is not None and (not termination_failed or sys.platform == "win32"):
                 try:
                     async with asyncio.timeout(5):
                         await process.wait()
-                except TimeoutError:
-                    failure = failure or OSError(
-                        f"The Python process {process.pid} did not finish closing after its tree "
-                        "was stopped. Its termination could not be confirmed."
-                    )
-            if failure is not None:
+                except Exception as error:
+                    record_failure("Python process termination could not be confirmed", error)
+                    termination_failed = True
+            if termination_failed:
+                failures.append("Remaining output capture may be incomplete.")
                 close_pipes()
             if output_tasks:
                 outcomes = await asyncio.gather(*output_tasks, return_exceptions=True)
                 for outcome in outcomes:
-                    if isinstance(outcome, BaseException):
-                        failure = failure or outcome
-            if failure is not None:
-                raise failure
+                    # Capture failures have recorded their phase. Cancellation
+                    # remains control flow and must not become a Tool result.
+                    if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+                        raise outcome
         finally:
             close_pipes()
             if process is not None and process.returncode is not None:
@@ -356,7 +372,10 @@ async def run_python(
                 output_task.cancel()
             await asyncio.gather(*output_tasks, return_exceptions=True)
             if log is not None:
-                await run_tool_worker(log.close)
+                try:
+                    await run_tool_worker(log.close)
+                except Exception as error:
+                    record_failure("Closing the captured output file failed", error)
             if program_dir is not None:
                 await run_tool_worker(shutil.rmtree, program_dir, ignore_errors=True)
 
@@ -425,8 +444,25 @@ async def run_python(
                     break
     except TimeoutError:
         status = "timed_out"
+    except Exception as error:
+        if process is None:
+            raise
+        if not failures:
+            record_failure("Python execution failed", error)
+        status = "failed"
     finally:
-        await finish_despite_cancel(cleanup())
+        try:
+            await finish_despite_cancel(cleanup())
+        except Exception as error:
+            if process is None:
+                raise
+            record_failure("Python execution cleanup failed", error)
+    if failures and status == "completed":
+        status = "failed"
+    if exit_code is None and process is not None:
+        # Capture can fail before the wait loop observes exit. Cleanup may
+        # still confirm the process's end; retain that fact, including stops.
+        exit_code = process.returncode
     return CodeExecutionResult(
         status=status,
         exit_code=exit_code,
@@ -440,4 +476,5 @@ async def run_python(
         output_path=output_path,
         log_truncated=log_truncated,
         ran=bridge.ran,
+        failure="\n".join(failures) or None,
     )

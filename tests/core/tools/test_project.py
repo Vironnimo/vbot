@@ -42,6 +42,7 @@ def _context(
     return ToolContext(
         agent_id="coder",
         session_id="session-one",
+        session_generation_id="session-one",
         run_id="run-one",
         tool_call_id="call-one",
         tool_name=PROJECT_TOOL_NAME,

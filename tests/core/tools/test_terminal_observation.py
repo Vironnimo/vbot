@@ -390,32 +390,38 @@ async def test_invalid_or_inapplicable_arguments_return_stable_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, OSError, EOFError])
 async def test_a_failure_while_acting_reports_unknown_effects(
     manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure: type[Exception],
 ) -> None:
     terminal_manager, factory = manager
     context = make_context(tmp_path)
     started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
     terminal_id = started["data"]["terminal_id"]
+    adapter = factory.adapters[0]
+    write = adapter.write
 
     def fail(text: str) -> None:
-        raise RuntimeError("console write failed")
+        if failure is not RuntimeError:
+            write(text[:1])
+            adapter.finish(0)
+        raise failure("console write failed")
 
     monkeypatch.setattr(factory.adapters[0], "write", fail)
 
     result = await call(
         terminal_manager,
         context,
-        {"action": "input", "terminal_id": terminal_id, "text": "y", "key": "enter"},
+        {"action": "input", "terminal_id": terminal_id, "text": "yes", "key": "enter"},
     )
 
-    assert result["error"] == {
-        "code": "tool_execution_error",
-        "message": "terminal failed while running: console write failed. It is unknown how much "
-        "of the call took effect. Check the current state before you call terminal again.",
-    }
+    assert result["error"]["code"] == (
+        "tool_execution_error" if failure is RuntimeError else "terminal_input_unconfirmed"
+    )
+    assert adapter.writes == ([] if failure is RuntimeError else ["y"])
 
 
 async def _start_persisted(

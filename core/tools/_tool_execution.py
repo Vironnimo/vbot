@@ -145,6 +145,7 @@ class ToolExecutor:
             context = ToolContext(
                 agent_id=config.agent_id,
                 session_id=config.session_id,
+                session_generation_id=config.session_generation_id,
                 run_id=config.run_id,
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,

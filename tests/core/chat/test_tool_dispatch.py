@@ -109,6 +109,7 @@ async def test_dispatch_builds_the_tool_context_from_the_run(
     )
 
     [(_, context)] = observed
+    assert context.session_generation_id == harness.session.generation_id
     assert context.iteration_number == 3
     assert (context.agent_model, context.agent_thinking_effort) == ("fixture/running", "high")
     assert context.run_kind is (RunKind.SKILL_REFLECTION if project_run else RunKind.USER)

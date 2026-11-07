@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.computers import ComputerError
 from core.providers._tool_result_text import render_tool_result_envelope
 from core.tools import _terminal_results as terminal_results
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
@@ -351,7 +352,7 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     assert adapter.writes[-4:] == ["\x1bOA", "\x1bOH", "\x1b[5~", "\x1b[A"]
 
 
-@pytest.mark.parametrize("cause", ["ended", "refused"])
+@pytest.mark.parametrize("cause", ["ended", "refused", "remote_offline"])
 @pytest.mark.asyncio
 async def test_text_typed_before_a_key_that_was_not_sent_is_reported_as_typed(
     terminal: Terminal,
@@ -369,6 +370,8 @@ async def test_text_typed_before_a_key_that_was_not_sent_is_reported_as_typed(
         if text == "\r":
             if cause == "refused":
                 raise OSError(5, "Input/output error")
+            if cause == "remote_offline":
+                raise ComputerError("computer_offline", "Nothing was sent: computer is offline.")
             raise EOFError("Pty is closed")
         write(text)
         if cause == "ended":
@@ -380,19 +383,16 @@ async def test_text_typed_before_a_key_that_was_not_sent_is_reported_as_typed(
         {"action": "input", "terminal_id": terminal_id, "text": "q", "key": "enter"}
     )
 
-    assert result["ok"] is True, result
     assert adapter.writes == ["q"]
     if cause == "ended":
+        assert result["ok"] is True, result
         assert result["data"]["state"] == "exited"
         assert result["data"]["note"] == (
             'text was typed, but key "enter" was not sent: the program had ended.'
         )
     else:
-        assert result["data"]["state"] == "running"
-        assert result["data"]["note"] == (
-            'text was typed, but the terminal refused key "enter". To press it, call terminal '
-            + json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
-            + "."
+        assert result["error"]["code"] == (
+            "computer_offline" if cause == "remote_offline" else "terminal_input_unconfirmed"
         )
 
 
@@ -632,15 +632,15 @@ async def test_fields_another_action_owns_fail_with_the_call_that_uses_them(
         + json.dumps({"action": "resize", "terminal_id": terminal_id, "columns": 120})
         + ", then repeat the call without columns and rows."
     )
-    commanded = await terminal({"action": "input", "terminal_id": terminal_id, "command": "ls -la"})
-    assert _error(commanded)["message"] == (
-        "terminal was not run: input types text instead of running a command; to run it in "
-        "this terminal, send "
-        + json.dumps(
-            {"action": "input", "terminal_id": terminal_id, "text": "ls -la", "key": "enter"}
-        )
-        + "."
+    commanded = await terminal(
+        {
+            "action": "input",
+            "terminal_id": terminal_id,
+            "command": "python",
+            "args": ["-c", 'print("a b"); print("next")'],
+        }
     )
+    assert _error(commanded)["code"] == "invalid_arguments"
     assert manager[1].adapters[0].writes == []
     assert manager[1].adapters[0].resizes == []
 

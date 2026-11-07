@@ -1,6 +1,6 @@
 """Shared file-mutation coordination for read and the file edit Tools.
 
-Tracks, per session, the ``(mtime, size)`` of every file a session has read, so a
+Tracks, per immutable Session generation, the ``(mtime, size)`` of every file read, so a
 full replacement (``apply_patch`` Add, ``write``) refuses to clobber a file the session
 never read or that changed on disk since it was last read. A text change (Update,
 ``edit``) uses the same state only to report that it merged against newer on-disk
@@ -41,7 +41,7 @@ _LOGGER = get_logger("tools.file_state")
 # active because they protect mutation integrity independently of stale policy.
 FILE_STATE_GUARD_ENABLED = True
 
-# Cap on tracked ``(session, path)`` entries so a long-lived server process does
+# Cap on tracked ``(Session generation, path)`` entries so a long-lived server process does
 # not grow the map without bound; oldest insertions are evicted first. A rarely
 # evicted entry only costs a harmless re-read.
 _MAX_TRACKED_FILES = 8192
@@ -85,7 +85,11 @@ class StaleReason(Enum):
 
 
 class FileReadState:
-    """Process-wide registry of read stamps and per-path mutation locks."""
+    """Read stamps keyed by canonical Session generation, plus per-path mutation locks.
+
+    A generation survives Session moves but is never reused by a new Session.
+    Callers without a canonical generation cannot establish read authority.
+    """
 
     def __init__(self) -> None:
         self._stamps: dict[tuple[str, str], tuple[float, int]] = {}
@@ -95,7 +99,7 @@ class FileReadState:
         self._path_locks: dict[Path, _PathLockEntry] = {}
         self._path_locks_lock = threading.Lock()
 
-    def record_read(self, session_id: str, resolved: Path) -> None:
+    def record_read(self, generation_id: str | None, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
         Called for content a Session received in one step; the file edit Tools
@@ -103,7 +107,7 @@ class FileReadState:
         """
         stamp = self.stamp(resolved)
         if stamp is not None:
-            self.record_stamp(session_id, resolved, stamp)
+            self.record_stamp(generation_id, resolved, stamp)
 
     def stamp(self, resolved: Path) -> tuple[float, int] | None:
         """Capture a file's ``(mtime, size)`` before a reader consumes its bytes.
@@ -117,13 +121,15 @@ class FileReadState:
             return None
         return _stamp(resolved)
 
-    def record_stamp(self, session_id: str, resolved: Path, stamp: tuple[float, int]) -> None:
+    def record_stamp(
+        self, generation_id: str | None, resolved: Path, stamp: tuple[float, int]
+    ) -> None:
         """Record a stamp captured by ``stamp`` for a completed read."""
-        if not FILE_STATE_GUARD_ENABLED:
+        if not FILE_STATE_GUARD_ENABLED or generation_id is None:
             return
-        self._record(session_id, resolved, stamp, unseen=False)
+        self._record(generation_id, resolved, stamp, unseen=False)
 
-    def record_change(self, session_id: str, resolved: Path, *, merged: bool) -> None:
+    def record_change(self, generation_id: str | None, resolved: Path, *, merged: bool) -> None:
         """Stamp a file after a change of the Session wrote it or left it as it was.
 
         The file edit Tools call this in place of ``record_read``: the Session knows
@@ -132,18 +138,22 @@ class FileReadState:
         read; that content stays unseen, as does content left unseen by an
         earlier such change, until the Session reads the file again.
         """
+        if generation_id is None:
+            return
         stamp = self.stamp(resolved)
         if stamp is None:
             return
-        key = (session_id, str(resolved))
+        key = (generation_id, str(resolved))
         with self._stamps_lock:
             unseen = merged or key in self._unseen
-        self._record(session_id, resolved, stamp, unseen=unseen)
+        self._record(generation_id, resolved, stamp, unseen=unseen)
 
     def _record(
-        self, session_id: str, resolved: Path, stamp: tuple[float, int], *, unseen: bool
+        self, generation_id: str | None, resolved: Path, stamp: tuple[float, int], *, unseen: bool
     ) -> None:
-        key = (session_id, str(resolved))
+        if generation_id is None:
+            return
+        key = (generation_id, str(resolved))
         with self._stamps_lock:
             # Re-insert so a re-read counts as most-recently-used for eviction.
             self._stamps.pop(key, None)
@@ -157,19 +167,19 @@ class FileReadState:
                 del self._stamps[oldest]
                 self._unseen.discard(oldest)
 
-    def recent_files(self, session_id: str, limit: int) -> list[Path]:
+    def recent_files(self, generation_id: str | None, limit: int) -> list[Path]:
         """Return up to ``limit`` files the Session read or changed, most recent first."""
         with self._stamps_lock:
             keys = list(self._stamps)
         recent: list[Path] = []
         for owner, path in reversed(keys):
-            if owner == session_id:
+            if owner == generation_id:
                 recent.append(Path(path))
                 if len(recent) == limit:
                     break
         return recent
 
-    def check_stale(self, session_id: str, resolved: Path) -> StaleReason | None:
+    def check_stale(self, generation_id: str | None, resolved: Path) -> StaleReason | None:
         """Return why a mutation on ``resolved`` is stale, or ``None`` if safe.
 
         Only meaningful for a file that exists — the caller skips a non-existent
@@ -181,7 +191,9 @@ class FileReadState:
         """
         if not FILE_STATE_GUARD_ENABLED:
             return None
-        key = (session_id, str(resolved))
+        if generation_id is None:
+            return StaleReason.NEVER_READ
+        key = (generation_id, str(resolved))
         with self._stamps_lock:
             stamp = self._stamps.get(key)
             unseen = key in self._unseen

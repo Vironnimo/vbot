@@ -19,22 +19,36 @@ class ImageInput:
 
 
 @dataclass(frozen=True)
-class ImageGenerationResult:
-    """Normalized image generation result."""
+class GeneratedImage:
+    """One decoded image with its own Provider metadata and zero-based entry index."""
 
-    images: tuple[bytes, ...]
+    data: bytes
     media_type: str
+    index: int = 0
+    revised_prompt: str | None = None
+
+
+@dataclass(frozen=True)
+class ImageGenerationFailure:
+    """An unusable returned image, indexed before any entries were discarded."""
+
+    index: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class ImageGenerationResult:
+    """Normalized image generation result, including unusable returned entries."""
+
+    images: tuple[GeneratedImage, ...]
     model: str
     usage: JsonObject | None = None
     raw: JsonObject | None = None
-    # The prompt the provider actually rendered, when it reports having
-    # rewritten the requested one.
-    revised_prompt: str | None = None
+    failures: tuple[ImageGenerationFailure, ...] = ()
 
     def to_dict(self) -> JsonObject:
         payload: JsonObject = {
             "model": self.model,
-            "media_type": self.media_type,
             "image_count": len(self.images),
         }
         if self.usage is not None:
@@ -89,3 +103,11 @@ class ImageArtifact:
     # Pixel dimensions read from the written file; ``None`` for vector images.
     width: int | None = None
     height: int | None = None
+
+
+@dataclass(frozen=True)
+class ImageArtifactBatch:
+    """Saved files and unusable Provider entries from one generation request."""
+
+    artifacts: tuple[ImageArtifact, ...]
+    failures: tuple[ImageGenerationFailure, ...] = ()

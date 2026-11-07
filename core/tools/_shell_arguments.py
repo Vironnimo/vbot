@@ -20,7 +20,7 @@ import sys
 from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from functools import cache
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any
 
 from core.permissions import PermissionBoundary
@@ -200,8 +200,6 @@ def _command_text(value: Any) -> Any:
         return value
     if not value:
         return None
-    if len(value) == 1:
-        return value[0]
     script = _host_shell_script(value)
     if script is not None:
         return script
@@ -212,7 +210,11 @@ def _command_text(value: Any) -> Any:
 
 def _host_shell_script(argv: list[str]) -> str | None:
     """The script of an argv that only starts the host shell on it, such as bash -lc."""
-    program = PurePath(argv[0].replace("\\", "/")).name.casefold()
+    # Only an unqualified host-shell wrapper is representation. An explicit
+    # path names a particular executable, even when its basename is pwsh/bash.
+    if "/" in argv[0] or "\\" in argv[0]:
+        return None
+    program = argv[0].casefold()
     options = [option.casefold() for option in argv[1:-1]]
     if sys.platform == "win32":
         if program not in {"pwsh", "pwsh.exe"} or not options:

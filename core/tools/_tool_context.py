@@ -233,6 +233,8 @@ class ToolContext:
     # a caller that forgets the boundary fails the type check instead of running
     # with full access; a caller outside any Agent passes ``UNRESTRICTED``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    # Canonical immutable Session generation; no read authority without one.
+    session_generation_id: str | None = None
     approval_hook: ToolApprovalHook | None = field(default=None, repr=False, compare=False)
     approval_refresh_hook: ToolApprovalRefreshHook | None = field(
         default=None, repr=False, compare=False
@@ -1016,6 +1018,8 @@ class ToolExecutionConfig:
     data_root: Path
     # See ``ToolContext.permissions``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    # Canonical immutable Session generation; no read authority without one.
+    session_generation_id: str | None = None
     approval_hook: ToolApprovalHook | None = field(default=None, repr=False, compare=False)
     approval_refresh_hook: ToolApprovalRefreshHook | None = field(
         default=None, repr=False, compare=False

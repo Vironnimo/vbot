@@ -803,7 +803,7 @@ def _matching_lines(
         regex = re.compile(re.escape(pattern), flags)
         note = " (as plain text: it is not a valid regex)"
     context = optional_int(arguments.get("context"), field_name="context", minimum=0) or 0
-    position = parse_read_position(arguments.get("offset"))
+    position = read_position(arguments)
     if position.line < 0:
         raise ValueError(
             "offset counts back from the end, which pattern cannot use; omit offset or "
@@ -826,13 +826,15 @@ def _matching_lines(
         nonlocal last_shown, resume_at, shown_bytes
         if resume_at is not None:
             return
+        character = position.character if number == position.line else 1
+        text = text[character - 1 :]
         if len(text) > _MATCH_LINE_CHARACTERS:
-            continuation = f"{number}:{_MATCH_LINE_CHARACTERS + 1}"
+            continuation = f"{number}:{character + _MATCH_LINE_CHARACTERS}"
             text = (
                 f"{text[:_MATCH_LINE_CHARACTERS]} [line continues; read "
                 f'offset="{continuation}" for the rest]'
             )
-        rendered = f"{_line_gutter(number)}{text}\n"
+        rendered = f"{_line_gutter(number, character)}{text}\n"
         if last_shown and number > last_shown + 1:
             rendered = "--\n" + rendered
         size = len(rendered.encode("utf-8"))

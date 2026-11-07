@@ -172,6 +172,14 @@ class TerminalClosedError(TerminalManagerError):
     """Raised when input or resize targets a closed Terminal Session."""
 
 
+class TerminalInputUnconfirmedError(TerminalManagerError):
+    """An attempted write failed without proving how much the program received."""
+
+    def __init__(self, characters_sent: int = 0) -> None:
+        super().__init__("The terminal input write was not confirmed")
+        self.characters_sent = characters_sent
+
+
 class TerminalCapacityError(TerminalManagerError):
     """Raised when a live Terminal Session capacity limit is reached.
 

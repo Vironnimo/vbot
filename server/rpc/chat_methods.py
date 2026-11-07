@@ -25,6 +25,7 @@ from core.tools.command_manager import (
     CommandReport,
     CommandStopError,
 )
+from core.tools.file_state import FileRead
 from core.tools.show_widget import SHOW_WIDGET_TOOL_NAME, WIDGET_PAYLOAD_TITLE
 from core.utils.ids import new_id
 from server.rpc._chat_input import (
@@ -183,7 +184,10 @@ async def _submit_chat(
         run_options["input_origin"] = input_origin
     if widget_states and (note := await _widget_state_note(state, address, widget_states)):
         run_options["context_note"] = note
-    content = await _expand_content_file_mentions(state, address, content, file_mentions)
+    file_reads: list[FileRead] = []
+    content = await _expand_content_file_mentions(
+        state, address, content, file_mentions, file_reads=file_reads
+    )
 
     if project_id is None:
         await _mark_current_session(state, address)
@@ -193,6 +197,7 @@ async def _submit_chat(
             content,
             input_id=input_id,
             request_hash=request_hash,
+            file_reads=file_reads,
             session_id=address.session_id,
             reply_surface=reply_surface,
             project_id=project_id,
@@ -259,7 +264,8 @@ async def _start_chat_in_new_session(
     Agent's current one, like a message to an existing Session does, unless it
     is an Ephemeral Session.
     """
-    # A file snapshot stamps the Session that read the file, so the id comes first.
+    # The admission binds these send-time snapshots to the new Session generation.
+    file_reads: list[FileRead] = []
     session_id = target.session_id or (new_session_id() if file_mentions else None)
     if file_mentions:
         assert session_id is not None
@@ -269,6 +275,7 @@ async def _start_chat_in_new_session(
             content,
             file_mentions,
             new_session_project=target.working_project_id,
+            file_reads=file_reads,
         )
     chat_loop: ChatLoop = state.chat_loop
     try:
@@ -278,6 +285,7 @@ async def _start_chat_in_new_session(
             input_id=input_id,
             request_hash=request_hash,
             new_session=True,
+            file_reads=file_reads,
             session_id=session_id,
             agent_overrides=target.agent_overrides,
             working_project_id=target.working_project_id,
