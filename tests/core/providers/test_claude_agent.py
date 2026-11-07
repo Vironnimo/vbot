@@ -192,6 +192,21 @@ async def test_history_edits_generations_and_utility_calls_have_isolated_native_
         agent_id="a", session_id="s", session_generation_id="one"
     )
     try:
+        with pytest.raises(ProviderError):
+            await collect(
+                client,
+                MESSAGES
+                + [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "media", "media_type": "image/svg+xml", "base64": "PHN2Zy8+"}
+                        ],
+                    }
+                ],
+                **context,
+            )
+        assert FakeNative.instances == []
         await collect(client, MESSAGES, **context)
         continued = MESSAGES + [
             {"role": "assistant", "content": "Done"},
@@ -270,6 +285,7 @@ def test_sdk_dataclasses_stream_usage_and_terminal_errors_are_normalized() -> No
             }
         )
     assert not failure.value.retryable and "secret" not in str(failure.value)
+    assert "529" in str(failure.value)
 
 
 @pytest.mark.parametrize(
@@ -374,7 +390,17 @@ async def test_native_client_owns_connect_disconnect_and_cancellation_in_one_tas
 async def test_real_sdk_mcp_bridge_preserves_schema_and_parks_tolerant_calls() -> None:
     from claude_agent_sdk._internal.sdk_mcp_bridge import SdkMcpBridge
 
-    pending = PendingTools(TOOLS)
+    names = [
+        "echo",
+        "x" * 53,
+        "x" * 54,
+        "resource_" * 15,
+        "mcp.example/search",
+        # Deliberately occupies the preferred projection of mcp.example/search.
+        "mcp_example_search_adcd5e383bec",
+    ]
+    tools = [{**TOOLS[0], "name": name} for name in names]
+    pending = PendingTools(tools)
     bridge = SdkMcpBridge("vbot", pending.mcp_server()["instance"])
     request: asyncio.Task[Any] | None = None
     try:
@@ -393,34 +419,151 @@ async def test_real_sdk_mcp_bridge_preserves_schema_and_parks_tolerant_calls() -
         await bridge.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
         listed = await bridge.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         assert listed is not None
-        assert listed["result"]["tools"][0]["inputSchema"] == TOOLS[0]["parameters"]
-        await pending.before(
-            {"hook_event_name": "PreToolUse", "tool_use_id": "t1", "tool_name": "mcp__vbot__echo"},
-            None,
-            {},
-        )
-        request = asyncio.create_task(
-            bridge.handle(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 3,
-                    "method": "tools/call",
-                    "params": {"name": "echo", "arguments": {"count": "2"}},
-                }
+        projected = listed["result"]["tools"]
+        assert len({tool["name"] for tool in projected}) == len(tools)
+        for index, tool in enumerate(projected):
+            assert tool["inputSchema"] == TOOLS[0]["parameters"]
+            # Native callbacks share one next-id slot; only vBot dispatches siblings in parallel.
+            assert tool["annotations"]["readOnlyHint"] is False
+            wire_name = "mcp__vbot__" + tool["name"]
+            assert len(wire_name) <= 64
+            assert pending.names[wire_name] == names[index]
+            state = StreamState(pending.names, subscription=True)
+            deltas = state.consume(
+                record(
+                    AssistantMessage(
+                        content=[ToolUseBlock(f"t{index}", wire_name, {"count": "2"})], model="opus"
+                    )
+                )
             )
-        )
-        # Fulfilment comes only from the canonical next request, independent of schema mismatch.
-        pending.resolve({"tool_call_id": "t1", "content": "masked result"})
-        result = await request
-        assert not result["result"].get("isError", False)
-        assert result["result"]["content"][0]["text"] == "masked result"
-        assert pending.waiting == {}
+            assert deltas[-1]["name_delta"] == names[index]
+            future = pending.expect(f"t{index}", names[index])
+            with pytest.raises(ProviderError):
+                await pending.before(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": f"t{index}",
+                        "tool_name": "mcp__vbot__" + projected[(index + 1) % len(tools)]["name"],
+                    },
+                    None,
+                    {},
+                )
+            assert not future.done()
+            await pending.before(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_use_id": f"t{index}",
+                    "tool_name": wire_name,
+                },
+                None,
+                {},
+            )
+            request = asyncio.create_task(
+                bridge.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": index + 3,
+                        "method": "tools/call",
+                        "params": {"name": tool["name"], "arguments": {"count": "2"}},
+                    }
+                )
+            )
+            # Fulfilment comes only from the canonical next request, independent of schema mismatch.
+            release = await pending.prepare_results(
+                [{"tool_call_id": f"t{index}", "content": "masked result"}]
+            )
+            release()
+            result = await request
+            assert not result["result"].get("isError", False)
+            assert result["result"]["content"][0]["text"] == "masked result"
+            assert pending.waiting == {}
     finally:
         if request and not request.done():
             request.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await request
         await bridge.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tool_batches_validate_every_payload_and_owner_before_releasing_any_call() -> None:
+    pending = PendingTools(TOOLS)
+    futures = [pending.expect(call_id, "echo") for call_id in ("t1", "t2")]
+    results = [{"tool_call_id": call_id, "content": "masked result"} for call_id in ("t1", "t2")]
+    invalid = {
+        **results[1],
+        "tool_result_content": [
+            {"type": "media", "media_type": "image/svg+xml", "base64": "PHN2Zy8+"}
+        ],
+    }
+    try:
+        with pytest.raises(ProviderError):
+            await pending.prepare_results([results[0], invalid])
+        assert not any(future.done() for future in futures)
+
+        release = await pending.prepare_results(results)
+        # A native cancellation between preparation and queued input cannot release a partial batch.
+        futures[1].cancel()
+        with pytest.raises(ProviderError):
+            release()
+        assert not futures[0].done()
+
+        pending.clear()
+        replacements = [pending.expect(call_id, "echo") for call_id in ("t1", "t2")]
+        with pytest.raises(ProviderError):
+            release()
+        assert not any(future.done() for future in replacements)
+    finally:
+        pending.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_batch", ["duplicate", "second_media"])
+async def test_invalid_continuation_neither_releases_a_partial_batch_nor_enqueues_a_steer(
+    native_registry: ClaudeAgentSessions,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_batch: str,
+) -> None:
+    monkeypatch.setattr(FakeNative, "tool_count", 2)
+    client = adapter(native_registry)
+    context = client.request_context_kwargs(agent_id="a", session_id="s")
+    try:
+        await collect(client, MESSAGES, tools=TOOLS, **context)
+        native = FakeNative.instances[0]
+        futures = list(native.pending.waiting.values())
+        results: list[dict[str, Any]] = [
+            {"role": "tool", "tool_call_id": call_id, "content": "masked result"}
+            for call_id in ("tool-1", "tool-2")
+        ]
+        invalid: dict[str, Any] = {
+            **results[0 if invalid_batch == "duplicate" else 1],
+            "tool_result_content": [
+                {"type": "media", "media_type": "image/svg+xml", "base64": "PHN2Zy8+"}
+            ],
+        }
+        if invalid_batch == "duplicate":
+            results.insert(0, invalid)
+        else:
+            results[1] = invalid
+        continued = MESSAGES + [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": call_id, "name": "echo", "arguments": {"count": "2"}}
+                    for call_id in ("tool-1", "tool-2")
+                ],
+            },
+            *results,
+            {"role": "user", "content": "New instructions"},
+        ]
+        with pytest.raises(ProviderError):
+            await collect(client, continued, tools=TOOLS, **context)
+        assert all(future.cancelled() for future in futures)
+        assert len(native.sent) == 1 and native.closed
+        assert not native.result_received.is_set()
+    finally:
+        await native_registry.aclose()
 
 
 def test_sync_abort_terminates_only_the_sdk_owned_process() -> None:
@@ -689,3 +832,132 @@ async def test_concurrent_native_stop_and_cancelled_waiter_finish_one_disconnect
         await second
         await native.stop()
     assert disconnected.is_set() and not interrupted.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("num_turns,expected", [(1, (12, 40)), (2, (10, 1))])
+async def test_final_usage_completes_one_model_call_without_recounting_prior_tool_steps(
+    native_registry: ClaudeAgentSessions, num_turns: int, expected: tuple[int, int]
+) -> None:
+    from claude_agent_sdk import ResultMessage
+
+    class FinalUsageNative(FakeNative):
+        @override
+        async def answer(self) -> None:
+            await self.response(
+                "last", [TextBlock("Done")], {"input_tokens": 10, "output_tokens": 1}, "end_turn"
+            )
+            await self.events.put(
+                record(
+                    ResultMessage(
+                        subtype="success",
+                        duration_ms=1,
+                        duration_api_ms=1,
+                        is_error=False,
+                        num_turns=num_turns,
+                        session_id="native",
+                        usage={"input_tokens": 12, "output_tokens": 40},
+                    )
+                )
+            )
+
+    registry = ClaudeAgentSessions(native_factory=FinalUsageNative)  # type: ignore[arg-type]
+    try:
+        parts = await collect(adapter(registry), MESSAGES)
+        assert parts[-1] == {"type": "finish", "reason": "stop"}
+        usage = [part for part in parts if part["type"] == "usage"][-1]
+        assert (usage["input_tokens"], usage["output_tokens"]) == expected
+    finally:
+        await registry.aclose()
+
+
+def test_repeated_reasoning_usage_snapshots_cannot_reduce_measured_consumption() -> None:
+    state = StreamState({}, subscription=True)
+    state.consume(
+        record(
+            AssistantMessage(
+                content=[TextBlock("Done")],
+                model="opus",
+                message_id="last",
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "output_tokens_details": {"thinking_tokens": 8},
+                },
+            )
+        )
+    )
+    state.consume(
+        record(
+            AssistantMessage(
+                content=[],
+                model="opus",
+                message_id="last",
+                usage={"output_tokens_details": {"thinking_tokens": 2}},
+            )
+        )
+    )
+    assert state.usage["output_tokens"] == 20
+    assert state.usage["reasoning_tokens"] == 8
+
+
+@pytest.mark.parametrize("latest_status", ["allowed", "allowed_warning", "rejected"])
+def test_only_the_latest_rejected_usage_window_supplies_a_limit_reset(latest_status: str) -> None:
+    state = StreamState({}, subscription=True)
+    for status in ("rejected", latest_status):
+        state.consume(
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {"status": status, "resets_at": 1_792_800_000},
+            }
+        )
+    # Warnings alone do not end a request, including rejected base allowance
+    # when native extra usage permits it. Only a terminal error classifies it.
+    with pytest.raises(ProviderUsageLimitError) as failure:
+        state.consume(
+            {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429}
+        )
+    reset = failure.value.resets_at
+    assert (reset is not None) is (latest_status == "rejected")
+    if reset is not None:
+        assert reset.timestamp() == 1_792_800_000
+    assert not failure.value.retryable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_name", ["Bash", "mcp__vbot__not_offered"])
+async def test_unoffered_calls_are_denied_natively_and_can_recover_without_vbot_dispatch(
+    native_registry: ClaudeAgentSessions, native_name: str
+) -> None:
+    class RecoveringNative(FakeNative):
+        @override
+        async def send(self, blocks: list[dict], *, priority: bool = False) -> None:
+            denial = await self.pending.before(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_use_id": "unknown",
+                    "tool_name": native_name,
+                },
+                None,
+                None,
+            )
+            assert denial["hookSpecificOutput"]["permissionDecision"] == "deny"
+            await self.response(
+                "guess",
+                [ToolUseBlock("unknown", native_name, {})],
+                {"input_tokens": 10, "output_tokens": 3},
+                "tool_use",
+            )
+            await self.answer()
+
+    registry = ClaudeAgentSessions(native_factory=RecoveringNative)  # type: ignore[arg-type]
+    try:
+        parts = await collect(adapter(registry), MESSAGES)
+        assert parts[-1] == {"type": "finish", "reason": "stop"}
+        assert not any(part["type"] == "tool_call_delta" for part in parts)
+        assert [part["text"] for part in parts if part["type"] == "content_delta"] == ["Done"]
+        usage = [part for part in parts if part["type"] == "usage"][-1]
+        assert usage["input_tokens"] == 12 and usage["output_tokens"] == 7
+        assert not FakeNative.instances[-1].pending.waiting
+    finally:
+        await registry.aclose()

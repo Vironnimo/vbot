@@ -216,7 +216,10 @@ class StreamState:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 counters[key] = max(value, counters.get(key, 0))
             elif key == "output_tokens_details" and isinstance(value, dict):
-                counters[key] = value
+                thinking = value.get("thinking_tokens")
+                if isinstance(thinking, int) and not isinstance(thinking, bool) and thinking >= 0:
+                    saved = counters.setdefault(key, {})
+                    saved["thinking_tokens"] = max(thinking, saved.get("thinking_tokens", 0))
         normalized = extract_anthropic_usage({"usage": counters})
         if normalized is None:
             return None
@@ -241,7 +244,8 @@ class StreamState:
                 "Claude Code emitted an unexpected nested Agent response", retryable=False
             )
         if message_kind == "rate_limit_event":
-            self.rate_limit = message.get("rate_limit_info", {})
+            info = message.get("rate_limit_info", {})
+            self.rate_limit = info if info.get("status") == "rejected" else {}
         if message_kind == "stream_event":
             event = message.get("event", {})
             event_type = event.get("type")
@@ -321,10 +325,9 @@ class StreamState:
                 elif block_type == "tool_use":
                     name = self.names.get(str(block.get("name", "")))
                     if name is None:
-                        raise ProviderError(
-                            "Claude Code called a Tool outside the offered vBot catalog",
-                            retryable=False,
-                        )
+                        # Native Tools are disabled and the MCP/hook boundary denies
+                        # unoffered calls. Let Claude consume that error and recover.
+                        continue
                     call = {
                         "id": block.get("id"),
                         "name": name,
@@ -346,7 +349,9 @@ class StreamState:
                 or (message.get("api_error_status") or 0) >= 400
             ):
                 self.raise_error(message)
-            if not self.usage:
+            if message.get("num_turns") == 1 and len(self._usage_by_message) <= 1:
+                # A one-call result can complete partial streaming counters. A
+                # multi-call result totals the turn and would count prior steps twice.
                 usage = self.update_usage(message.get("usage"))
                 if usage:
                     parts.append(usage)
@@ -381,6 +386,17 @@ class StreamState:
                     timestamp = datetime.fromtimestamp(reset, UTC)
             raise ProviderUsageLimitError(
                 "Claude Code's usage limit is reached.", resets_at=timestamp
+            )
+        if self.error_code == "billing_error":
+            raise ProviderError(
+                "Claude Code could not authorize usage. "
+                "Check your Claude plan and extra-usage settings.",
+                retryable=False,
+            )
+        if isinstance(status, int) and status >= 500:
+            raise ProviderError(
+                f"Anthropic returned HTTP {status} after Claude Code exhausted its retries.",
+                retryable=False,
             )
         raise ProviderError(
             "Claude Code could not complete the request after its own recovery.", retryable=False

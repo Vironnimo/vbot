@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-from typing import Any
+import json
+from collections.abc import AsyncIterator
+from typing import Any, override
 
 from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock
+from claude_agent_sdk._internal.transport import Transport
 from claude_agent_sdk.types import StreamEvent
 
 from core.providers._claude_agent_sdk import PendingTools
@@ -54,7 +57,9 @@ class FakeNative:
                 ToolUseBlock(f"tool-{index + 1}", "mcp__vbot__echo", {"count": "2"})
                 for index in range(self.tool_count)
             ]
-            futures = [self.pending.expect(call.id) for call in calls]
+            futures = [
+                self.pending.expect(call.id, self.pending.names[call.name]) for call in calls
+            ]
             await self.response(
                 "m1",
                 calls,
@@ -146,3 +151,201 @@ class FakeNative:
 
     def abort(self) -> None:
         self.closed = True
+
+
+class ClaudeProtocolTransport(Transport):
+    """A single Claude turn: MCP handshake, one Tool, and its final answer."""
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        self.initialized = asyncio.Event()
+        self.owner: asyncio.Task[Any] | None = None
+        self.closed = False
+        self.hooks: dict[str, Any] = {}
+        self.control: list[str] = []
+        self.tool_result: dict[str, Any] | None = None
+
+    def emit(self, *messages: dict[str, Any]) -> None:
+        for message in messages:
+            self.queue.put_nowait(message)
+
+    def request(self, request_id: str, subtype: str, **payload: Any) -> None:
+        self.emit(
+            {
+                "type": "control_request",
+                "request_id": request_id,
+                "request": {"subtype": subtype, **payload},
+            }
+        )
+
+    def event(self, event: dict[str, Any]) -> None:
+        self.emit({"type": "stream_event", "uuid": "event", "session_id": "native", "event": event})
+
+    def hook(self, event: str, callback: str) -> None:
+        self.request(
+            callback,
+            "hook_callback",
+            callback_id=self.hooks[event][0]["hookCallbackIds"][0],
+            tool_use_id="tool-1",
+            input={
+                "hook_event_name": event,
+                "tool_name": "mcp__vbot__echo",
+                "tool_use_id": "tool-1",
+                "tool_input": {"count": "2"},
+            },
+        )
+
+    @override
+    async def connect(self) -> None:
+        self.owner = asyncio.current_task()
+
+    @override
+    async def write(self, data: str) -> None:
+        message = json.loads(data)
+        if message["type"] == "control_request":
+            assert message["request"]["subtype"] == "initialize"
+            self.control.append("initialize")
+            self.hooks = message["request"]["hooks"]
+            self.emit(
+                {
+                    "type": "control_response",
+                    "response": {
+                        "subtype": "success",
+                        "request_id": message["request_id"],
+                        "response": {
+                            "claude_code_version": "2.1.302",
+                            "account": {"subscriptionType": "Claude Team"},
+                            "models": [{"value": "opus"}],
+                        },
+                    },
+                }
+            )
+            # Python's SDK uses the ordinary MCP handshake. OpenCode's TS
+            # recordings instead park prebuilt manifests during initialization.
+            self.request(
+                "mcp-init",
+                "mcp_message",
+                server_name="vbot",
+                message={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "loopback", "version": "1"},
+                    },
+                },
+            )
+            return
+        if message["type"] == "user":
+            await self.initialized.wait()
+            self.event(
+                {"type": "message_start", "message": {"id": "first", "usage": {"input_tokens": 10}}}
+            )
+            self.emit(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "first",
+                        "model": "opus",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-1",
+                                "name": "mcp__vbot__echo",
+                                "input": {"count": "2"},
+                            }
+                        ],
+                        "usage": {"input_tokens": 10, "output_tokens": 1},
+                    },
+                }
+            )
+            # Real recordings can request PreToolUse before message_stop.
+            self.hook("PreToolUse", "before")
+            self.event(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 3},
+                }
+            )
+            self.event({"type": "message_stop"})
+            return
+        assert message["type"] == "control_response"
+        response = message["response"]
+        assert response["subtype"] == "success", response
+        request_id = response["request_id"]
+        self.control.append(request_id)
+        if request_id == "mcp-init":
+            assert "error" not in response["response"]["mcp_response"]
+            self.request(
+                "mcp-ready",
+                "mcp_message",
+                server_name="vbot",
+                message={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            )
+        elif request_id == "mcp-ready":
+            self.initialized.set()
+        elif request_id == "before":
+            assert response["response"] == {}
+            self.request(
+                "call",
+                "mcp_message",
+                server_name="vbot",
+                message={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "echo",
+                        "arguments": {"count": "2"},
+                        "_meta": {"claudecode/toolUseId": "tool-1", "progressToken": 2},
+                    },
+                },
+            )
+        elif request_id == "call":
+            self.tool_result = response["response"]["mcp_response"]["result"]
+            self.hook("PostToolUse", "after")
+        else:
+            assert request_id == "after"
+            self.emit(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "last",
+                        "model": "opus",
+                        "content": [{"type": "text", "text": "Done"}],
+                        "usage": {"input_tokens": 12, "output_tokens": 4},
+                    },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "num_turns": 2,
+                    "session_id": "native",
+                    "duration_ms": 1,
+                    "duration_api_ms": 1,
+                    "usage": {"input_tokens": 22, "output_tokens": 7},
+                },
+            )
+
+    @override
+    async def read_messages(self) -> AsyncIterator[dict[str, Any]]:
+        while (message := await self.queue.get()) is not None:
+            yield message
+
+    @override
+    async def close(self) -> None:
+        assert asyncio.current_task() is self.owner
+        self.closed = True
+        self.queue.put_nowait(None)
+
+    @override
+    def is_ready(self) -> bool:
+        return not self.closed
+
+    @override
+    async def end_input(self) -> None:
+        pass
