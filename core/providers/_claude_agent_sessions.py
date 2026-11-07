@@ -221,10 +221,13 @@ class ClaudeAgentSessions:
         self._closing: set[asyncio.Task[None]] = set()
         self._factory = native_factory
         self._epoch = 0
+        self._closed = False
 
     async def probe(self) -> JsonObject:
         epoch = self._epoch
         try:
+            if self._closed:
+                raise ProviderError("Claude Agent is closed.", retryable=False)
             sdk = await SDK_POOL.run(load_sdk)
             path = await SDK_POOL.run(executable)
             if epoch != self._epoch:
@@ -301,6 +304,8 @@ class ClaudeAgentSessions:
         tools: list[JsonObject],
         controls: JsonObject,
     ) -> AsyncGenerator[JsonObject]:
+        if self._closed:
+            raise ProviderError("Claude Agent is closed.", retryable=False)
         epoch = self._epoch
         entry = self._entries.get(conversation) if conversation is not None else None
         if entry is None:
@@ -331,6 +336,8 @@ class ClaudeAgentSessions:
                 signature = await SDK_POOL.run(
                     json.dumps, [model, system, tools, controls], ensure_ascii=False, sort_keys=True
                 )
+                if epoch != self._epoch:
+                    raise ProviderError("Claude Agent was closed during startup.", retryable=False)
                 matching = (
                     len(entry.history) <= len(current)
                     and entry.history == current[: len(entry.history)]
@@ -429,21 +436,25 @@ class ClaudeAgentSessions:
                                 retryable=False,
                             )
                     deltas = state.consume(native_message)
+                    if state.calls and state.message_stopped:
+                        # AssistantMessages are content blocks, not API-message boundaries.
+                        # Settle every sibling Call and final Usage before yielding finish.
+                        if deltas[-1]["reason"] == "tool_calls":
+                            for call in state.calls:
+                                native.pending.expect(str(call["id"]))
+                            entry.pending_ids = tuple(str(call["id"]) for call in state.calls)
+                            entry.history = current + [state.assistant()]
+                            parked = True
+                            complete = True
+                        for delta in deltas:
+                            yield delta
+                        return
                     if kind(native_message) == "result":
                         # Consumers can close at finish: publish settled state before yielding it.
                         entry.history = current + [state.assistant()]
                         complete = True
                     for delta in deltas:
                         yield delta
-                    if state.calls:
-                        for call in state.calls:
-                            native.pending.expect(str(call["id"]))
-                        entry.pending_ids = tuple(str(call["id"]) for call in state.calls)
-                        entry.history = current + [state.assistant()]
-                        parked = True
-                        complete = True
-                        yield {"type": "finish", "reason": "tool_calls"}
-                        return
                     if kind(native_message) == "result":
                         return
             finally:
@@ -531,6 +542,7 @@ class ClaudeAgentSessions:
                 await self._remove(key)
 
     async def aclose(self) -> None:
+        self._closed = True
         self._epoch += 1
 
         async def close_all() -> None:
@@ -557,6 +569,7 @@ class ClaudeAgentSessions:
         await settle_before_cancelling(close_all())
 
     def abort(self) -> None:
+        self._closed = True
         self._epoch += 1
         for entry in self._entries.values():
             if entry.idle:

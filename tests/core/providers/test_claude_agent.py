@@ -76,9 +76,13 @@ async def collect(client: ClaudeAgentAdapter, messages: list[dict], **kwargs: An
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_count", [1, 2])
 async def test_tool_calls_wait_for_the_next_masked_request_and_keep_vbot_prompt(
     native_registry: ClaudeAgentSessions,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_count: int,
 ) -> None:
+    monkeypatch.setattr(FakeNative, "tool_count", tool_count)
     client = adapter(native_registry)
     context = client.request_context_kwargs(
         agent_id="agent", session_id="session", session_generation_id="one"
@@ -88,7 +92,10 @@ async def test_tool_calls_wait_for_the_next_masked_request_and_keep_vbot_prompt(
         first = await collect(client, MESSAGES, tools=TOOLS, **context)
         native = FakeNative.instances[0]
         assert first[-1] == {"type": "finish", "reason": "tool_calls"}
-        assert first[-2]["arguments_delta"] == '{"count": "2"}'
+        calls = [part for part in first if part["type"] == "tool_call_delta"]
+        assert len(calls) == tool_count
+        assert all(call["arguments_delta"] == '{"count": "2"}' for call in calls)
+        assert [part for part in first if part["type"] == "usage"][-1]["output_tokens"] == 3
         assert not native.result_received.is_set()
         assert native.options.system_prompt == MESSAGES[0]["content"]
         assert native.options.tools == [] and native.options.setting_sources == []
@@ -98,9 +105,15 @@ async def test_tool_calls_wait_for_the_next_masked_request_and_keep_vbot_prompt(
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "tool-1", "name": "echo", "arguments": {"count": "2"}}],
+                "tool_calls": [
+                    {"id": f"tool-{index + 1}", "name": "echo", "arguments": {"count": "2"}}
+                    for index in range(tool_count)
+                ],
             },
-            {"role": "tool", "tool_call_id": "tool-1", "content": "masked result"},
+            *[
+                {"role": "tool", "tool_call_id": f"tool-{index + 1}", "content": "masked result"}
+                for index in range(tool_count)
+            ],
         ]
         second = await collect(client, second_messages, tools=TOOLS, **context)
         assert native.result_received.is_set()
@@ -115,6 +128,59 @@ async def test_tool_calls_wait_for_the_next_masked_request_and_keep_vbot_prompt(
     finally:
         await native_registry.aclose()
     assert all(native.closed for native in FakeNative.instances)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_reason,message_stop,expected",
+    [
+        ("max_tokens", True, "output_truncated"),
+        ("model_context_window_exceeded", True, "output_truncated"),
+        (None, True, "unknown"),
+        (None, False, None),
+    ],
+)
+async def test_cut_tool_messages_close_native_state_instead_of_parking_a_successful_batch(
+    native_registry: ClaudeAgentSessions,
+    stop_reason: str | None,
+    message_stop: bool,
+    expected: str | None,
+) -> None:
+    cut_reason, has_message_stop = stop_reason, message_stop
+
+    class CutNative(FakeNative):
+        @override
+        async def response(
+            self,
+            message_id: str,
+            blocks: list[Any],
+            usage: dict[str, int],
+            stop_reason: str | None,
+            *,
+            message_stop: bool = True,
+        ) -> None:
+            await super().response(
+                message_id, blocks, usage, cut_reason, message_stop=has_message_stop
+            )
+            if not has_message_stop:
+                await self.events.put({"type": "result", "subtype": "success", "is_error": False})
+
+    registry = ClaudeAgentSessions(native_factory=CutNative)  # type: ignore[arg-type]
+    client = adapter(registry)
+    context = client.request_context_kwargs(agent_id="a", session_id="s")
+    try:
+        if expected is None:
+            with pytest.raises(ProviderError) as failure:
+                await collect(client, MESSAGES, tools=TOOLS, **context)
+            assert not failure.value.retryable
+        else:
+            parts = await collect(client, MESSAGES, tools=TOOLS, **context)
+            assert parts[-1] == {"type": "finish", "reason": expected}
+            assert sum(part["type"] == "finish" for part in parts) == 1
+        assert FakeNative.instances[-1].closed
+        assert not FakeNative.instances[-1].result_received.is_set()
+    finally:
+        await registry.aclose()
 
 
 @pytest.mark.asyncio
@@ -432,6 +498,11 @@ async def test_shutdown_during_capacity_eviction_starts_no_native_process(
         if closing:
             await closing
         assert len(FakeNative.instances) == 1 and native.closed
+        # A Run can still hold this Adapter after Runtime replaces its owner.
+        with pytest.raises(ProviderError):
+            await collect(client, MESSAGES, **first)
+        assert not (await native_registry.probe())["connected"]
+        assert len(FakeNative.instances) == 1
     finally:
         release.set()
         if not request.done():

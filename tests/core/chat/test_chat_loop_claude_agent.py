@@ -22,8 +22,9 @@ from tests.core.providers.claude_agent_test_support import FakeNative
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_count", [1, 2])
 async def test_native_tool_calls_use_vbot_normalization_masking_and_stream_accounting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool_count: int
 ) -> None:
     raw_result = "synthetic-private-value"
     masker = SecretMasker({raw_result: "masked result"})
@@ -53,6 +54,7 @@ async def test_native_tool_calls_use_vbot_normalization_masking_and_stream_accou
         echo,
     )
     FakeNative.instances = []
+    monkeypatch.setattr(FakeNative, "tool_count", tool_count)
     monkeypatch.setattr(
         sessions_module,
         "load_sdk",
@@ -95,7 +97,7 @@ async def test_native_tool_calls_use_vbot_normalization_masking_and_stream_accou
         assert answer.content == "Done"
         # Native Claude supplied a string against an integer schema. The
         # canonical dispatch owner recognizes its meaning and executes once.
-        assert dispatched == [{"count": 2}]
+        assert dispatched == [{"count": 2}] * tool_count
         assert len(FakeNative.instances) == 1
         native = FakeNative.instances[0]
         assert native.result_received.is_set()
@@ -105,11 +107,17 @@ async def test_native_tool_calls_use_vbot_normalization_masking_and_stream_accou
         assert len(native.sent) == 1
 
         messages = history(runtime)
-        [result] = [message for message in messages if message.role == "tool"]
-        assert result.tool_call_id == "tool-1"
-        assert json.loads(cast(str, result.content)) == tool_success({"output": "masked result"})
+        results = [message for message in messages if message.role == "tool"]
+        assert [result.tool_call_id for result in results] == [
+            f"tool-{index + 1}" for index in range(tool_count)
+        ]
+        for result in results:
+            assert json.loads(cast(str, result.content)) == tool_success(
+                {"output": "masked result"}
+            )
         assert raw_result not in str([message.to_dict() for message in messages])
         assistants = [message for message in messages if message.role == "assistant"]
+        assert len(assistants[0].tool_calls or []) == tool_count
         usages = []
         for message in assistants:
             assert message.usage is not None
@@ -119,8 +127,8 @@ async def test_native_tool_calls_use_vbot_normalization_masking_and_stream_accou
 
         run = last_run(runtime)
         events = await runtime.timelines.events(run)
-        assert sum(event.type == "tool_call_started" for event in events) == 1
-        assert sum(event.type == TOOL_CALL_RESULT_EVENT for event in events) == 1
+        assert sum(event.type == "tool_call_started" for event in events) == tool_count
+        assert sum(event.type == TOOL_CALL_RESULT_EVENT for event in events) == tool_count
         assert sum(event.type == MODEL_STEP_USAGE_EVENT for event in events) == 2
         assert events[-1].type == "run_completed"
     finally:
