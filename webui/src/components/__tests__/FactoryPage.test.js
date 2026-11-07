@@ -218,7 +218,10 @@ describe('Factory card decisions', () => {
     });
     button(t('factory.accept')).click();
     await settle();
-    expect(calls(operation, 'card.accept').at(-1)[1]).toEqual({ id: 'fct-a' });
+    expect(calls(operation, 'card.accept').at(-1)[1]).toEqual({
+      id: 'fct-a',
+      expected_revision: 1,
+    });
     expect(document.querySelector('[data-state]').dataset.state).toBe(
       'integrating',
     );

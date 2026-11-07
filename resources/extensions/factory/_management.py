@@ -305,6 +305,12 @@ class FactoryManagement:
         elif name in {"card.accept", "card.send_back", "card.answer", "card.retry"}:
             require_state(card, {"waiting"})
             action = name.removeprefix("card.")
+            if action == "accept" and arguments.get("expected_revision") != card["revision"]:
+                raise FactoryError(
+                    "revision_conflict",
+                    "The Card changed since you viewed it. Refresh it, review the latest "
+                    "submission and recommendation, then accept that version.",
+                )
             if action == "accept" and card["waiting_reason"] not in {"approved", "no_agreement"}:
                 raise FactoryError(
                     "not_reviewed",

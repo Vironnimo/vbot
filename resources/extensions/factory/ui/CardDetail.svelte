@@ -257,7 +257,8 @@
         variant="primary"
         loading={model.pending === 'card.accept'}
         disabled={Boolean(model.pending)}
-        onClick={() => act('card.accept')}>{t('factory.accept')}</Button
+        onClick={() => act('card.accept', { expected_revision: card.revision })}
+        >{t('factory.accept')}</Button
       >{/if}
     {#if actions.answer}<Button
         variant="primary"

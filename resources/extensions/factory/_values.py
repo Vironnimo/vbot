@@ -68,13 +68,13 @@ OPERATION_SCHEMAS: dict[str, Json] = {
         ("id",),
     ),
     "card.move": schema({**_ID, "position": {"type": "number"}}, ("id", "position")),
+    "card.accept": schema({**_ID, **_REVISION}, ("id", "expected_revision")),
     "card.send_back": schema({**_ID, "comment": {"type": "string"}}, ("id", "comment")),
     "card.answer": schema({**_ID, "text": {"type": "string"}}, ("id", "text")),
     **{
         f"card.{action}": schema(_ID, ("id",))
         for action in (
             "approve_proposal",
-            "accept",
             "discard",
             "delete",
             "retry",

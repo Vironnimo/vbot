@@ -333,6 +333,7 @@ async def test_setup_deletion_requires_all_project_cards_final(factory: FactoryH
         ("update", "working", "", {"title": "Changed"}, "invalid_state"),
         ("approve_proposal", "queued", "", {}, "invalid_state"),
         ("accept", "waiting", "blocked", {}, "not_reviewed"),
+        ("accept", "waiting", "approved", {"expected_revision": 1}, "revision_conflict"),
         ("answer", "waiting", "approved", {"text": "Answer"}, "not_blocked"),
         ("retry", "waiting", "approved", {}, "not_retryable"),
     ],
@@ -346,6 +347,10 @@ async def test_card_action_guards_refuse_before_effects(
     code: str,
 ) -> None:
     card = await factory.card(state, waiting_reason=reason)
+    arguments = {
+        **({"expected_revision": card["revision"]} if action == "accept" else {}),
+        **arguments,
+    }
     history = await factory.store.history(card["id"])
     with pytest.raises(FactoryError) as refused:
         await factory.operation(f"card.{action}", id=card["id"], **arguments)
@@ -474,6 +479,8 @@ async def test_user_resume_at_full_wip_is_queued_and_admitted_once(
     factory.config["wip_limit"] = 1
     running = await factory.card("working")
     waiting = await factory.card("waiting", waiting_reason=reason)
+    if action == "accept":
+        arguments = {**arguments, "expected_revision": waiting["revision"]}
     result = await factory.operation(f"card.{action}", id=waiting["id"], **arguments)
     assert result["card"]["state"] == "queued"
     assert result["card"]["queued_action"] == execution_action
