@@ -346,6 +346,17 @@ class ClaudeAgentSessions:
                     entry.session.closed or entry.signature != signature or not matching
                 ):
                     await self._stop_entry(entry)
+                missing = messages_without_system(messages)[len(entry.history) :]
+                content = None
+                if not entry.pending_ids:
+                    if not missing:
+                        raise ProviderError(
+                            "Claude Agent received no new conversation input.", retryable=False
+                        )
+                    # Invalid attachments must not launch a process or alter native state.
+                    content = await SDK_POOL.run(
+                        prompt_content, missing, checkpoint=not entry.history
+                    )
                 if entry.session is None:
                     sdk = await SDK_POOL.run(load_sdk)
                     path = await SDK_POOL.run(executable)
@@ -378,15 +389,21 @@ class ClaudeAgentSessions:
                     entry.signature = signature
                     entry.history = []
                     entry.pending_ids = ()
+                if epoch != self._epoch:
+                    raise ProviderError("Claude Agent was closed during startup.", retryable=False)
                 native = entry.session
-                missing = messages_without_system(messages)[len(entry.history) :]
                 if entry.pending_ids:
                     results = {}
                     end = 0
                     for message in missing:
                         if message.get("role") != "tool":
                             break
-                        results[str(message.get("tool_call_id"))] = message
+                        call_id = str(message.get("tool_call_id"))
+                        if call_id in results:
+                            raise ProviderError(
+                                "Claude Agent received duplicate Tool Results.", retryable=False
+                            )
+                        results[call_id] = message
                         end += 1
                     if set(results) != set(entry.pending_ids):
                         # Never release a partial or mismatched batch into the native loop.
@@ -396,23 +413,30 @@ class ClaudeAgentSessions:
                             retryable=False,
                         )
                     remaining = missing[end:]
-                    if remaining:
-                        await native.send(
-                            await SDK_POOL.run(prompt_content, remaining, checkpoint=True),
-                            priority=True,
+                    content = (
+                        await SDK_POOL.run(prompt_content, remaining, checkpoint=True)
+                        if remaining
+                        else None
+                    )
+                    release_results = await native.pending.prepare_results(
+                        [results[call_id] for call_id in entry.pending_ids]
+                    )
+                    if epoch != self._epoch:
+                        raise ProviderError(
+                            "Claude Agent was closed during Tool continuation.", retryable=False
                         )
-                    for call_id in entry.pending_ids:
-                        native.pending.resolve(results[call_id])
+                    if remaining:
+                        assert content is not None
+                        await native.send(content, priority=True)
+                    if epoch != self._epoch:
+                        raise ProviderError(
+                            "Claude Agent was closed during Tool continuation.", retryable=False
+                        )
+                    release_results()
                     entry.pending_ids = ()
                 else:
-                    if not missing:
-                        await self._stop_entry(entry)
-                        raise ProviderError(
-                            "Claude Agent received no new conversation input.", retryable=False
-                        )
-                    await native.send(
-                        await SDK_POOL.run(prompt_content, missing, checkpoint=not entry.history)
-                    )
+                    assert content is not None
+                    await native.send(content)
                 state = StreamState(
                     native.pending.names, subscription=bool(native.info.get("subscription"))
                 )
@@ -441,7 +465,7 @@ class ClaudeAgentSessions:
                         # Settle every sibling Call and final Usage before yielding finish.
                         if deltas[-1]["reason"] == "tool_calls":
                             for call in state.calls:
-                                native.pending.expect(str(call["id"]))
+                                native.pending.expect(str(call["id"]), call["name"])
                             entry.pending_ids = tuple(str(call["id"]) for call in state.calls)
                             entry.history = current + [state.assistant()]
                             parked = True

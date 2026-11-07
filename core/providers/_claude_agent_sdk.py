@@ -10,7 +10,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.providers._claude_agent_wire import JsonObject, tool_result
@@ -18,6 +18,8 @@ from core.providers.errors import ProviderAuthError, ProviderError
 from core.utils.workers import BoundedWorkerPool
 
 MINIMUM_VERSION = (2, 1, 248)
+MCP_PREFIX = "mcp__vbot__"
+MCP_NAME_LIMIT = 64 - len(MCP_PREFIX)
 SDK_POOL = BoundedWorkerPool(name="claude-agent-sdk", max_workers=2)
 SUBSCRIPTION_REQUIRED_MESSAGE = (
     "Claude Code is using API or cloud billing. Sign in with a Claude subscription "
@@ -121,21 +123,43 @@ class PendingTools:
         self.names: dict[str, str] = {}
         self.short_names: dict[str, str] = {}
         self.tools = tools
-        for index, definition in enumerate(tools):
+        reserved = {
+            definition["name"]
+            for definition in tools
+            if re.fullmatch(rf"[A-Za-z0-9_-]{{1,{MCP_NAME_LIMIT}}}", definition["name"])
+        }
+        used: set[str] = set()
+        for definition in tools:
             name = definition["name"]
-            short = (
-                name
-                if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-                else f"tool_{index}_{hashlib.sha256(name.encode()).hexdigest()[:12]}"
-            )
-            self.names[f"mcp__vbot__{short}"] = name
+            short = name
+            if name not in reserved:
+                stem = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+                digest = hashlib.sha256(name.encode()).hexdigest()[:12]
+                collision = 0
+                while True:
+                    suffix = f"_{digest}" + (f"_{collision}" if collision else "")
+                    short = stem[: MCP_NAME_LIMIT - len(suffix)] + suffix
+                    if short not in reserved and short not in used:
+                        break
+                    collision += 1
+            used.add(short)
+            self.names[MCP_PREFIX + short] = name
             self.short_names[name] = short
         self.waiting: dict[str, asyncio.Future[tuple[JsonObject, list[JsonObject] | None]]] = {}
         self.replacements: dict[str, list[JsonObject]] = {}
         self.call_names: dict[str, str] = {}
         self.next_id: str | None = None
 
-    def expect(self, call_id: str) -> asyncio.Future[tuple[JsonObject, list[JsonObject] | None]]:
+    def expect(
+        self, call_id: str, name: str
+    ) -> asyncio.Future[tuple[JsonObject, list[JsonObject] | None]]:
+        if name not in self.short_names or (
+            call_id in self.call_names and self.call_names[call_id] != name
+        ):
+            raise ProviderError(
+                "Claude Code emitted mismatched vBot Tool identities", retryable=False
+            )
+        self.call_names[call_id] = name
         if call_id not in self.waiting:
             self.waiting[call_id] = asyncio.get_running_loop().create_future()
         return self.waiting[call_id]
@@ -150,9 +174,9 @@ class PendingTools:
                         "permissionDecision": "deny",
                     }
                 }
-            self.next_id = event["tool_use_id"]
-            self.call_names[self.next_id] = name
-            self.expect(self.next_id)
+            call_id = event["tool_use_id"]
+            self.expect(call_id, self.names[name])
+            self.next_id = call_id
         return {}
 
     async def after(self, event: Any, _call_id: Any, _context: Any) -> JsonObject:
@@ -194,11 +218,11 @@ class PendingTools:
             call_id, self.next_id = self.next_id, None
             if (
                 not call_id
-                or f"mcp__vbot__{params.name}" not in self.names
-                or self.call_names.get(call_id) != f"mcp__vbot__{params.name}"
+                or MCP_PREFIX + params.name not in self.names
+                or self.call_names.get(call_id) != self.names[MCP_PREFIX + params.name]
             ):
                 raise ProviderError("Claude Code called an uncorrelated vBot Tool", retryable=False)
-            result, replacement = await self.expect(call_id)
+            result, replacement = await self.expect(call_id, self.names[MCP_PREFIX + params.name])
             self.waiting.pop(call_id, None)
             self.call_names.pop(call_id, None)
             if replacement:
@@ -211,14 +235,37 @@ class PendingTools:
             "instance": Server("vbot", on_list_tools=list_tools, on_call_tool=call_tool),
         }
 
-    def resolve(self, message: Mapping[str, Any]) -> None:
-        call_id = message.get("tool_call_id")
-        future = self.waiting.get(str(call_id))
-        if future is None or future.done():
-            raise ProviderError(
-                "Claude Agent has no waiting Tool Call for this result", retryable=False
-            )
-        future.set_result(tool_result(message))
+    async def prepare_results(self, messages: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
+        """Validate every Result before a queued Steer or any native handler is released."""
+        prepared = []
+        seen: set[str] = set()
+        for message in messages:
+            call_id = str(message.get("tool_call_id"))
+            future = self.waiting.get(call_id)
+            if future is None or future.done() or call_id in seen:
+                raise ProviderError(
+                    "Claude Agent has no waiting Tool Call for this result", retryable=False
+                )
+            seen.add(call_id)
+            prepared.append((call_id, self.call_names[call_id], future))
+        # Keep Future ownership on the Event Loop; only pure payload shaping
+        # (including potentially large JSON/media results) runs on a worker.
+        results = await SDK_POOL.run(lambda: [tool_result(message) for message in messages])
+
+        def release() -> None:
+            if any(
+                future.done()
+                or self.waiting.get(call_id) is not future
+                or self.call_names.get(call_id) != name
+                for call_id, name, future in prepared
+            ):
+                raise ProviderError(
+                    "Claude Agent's Tool batch is no longer waiting", retryable=False
+                )
+            for (_call_id, _name, future), result in zip(prepared, results, strict=True):
+                future.set_result(result)
+
+        return release
 
     def clear(self) -> None:
         for future in self.waiting.values():
