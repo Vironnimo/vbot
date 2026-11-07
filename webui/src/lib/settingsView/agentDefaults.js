@@ -5,7 +5,7 @@ import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
 
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 2,
-  max_active_subagents: 8,
+  max_active_subagents: 10,
   max_active_subagents_total: 50,
 });
 

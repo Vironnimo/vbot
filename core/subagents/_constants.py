@@ -1,7 +1,7 @@
 """Sub-Agent policy defaults, event names and Agent-facing wording."""
 
 DEFAULT_MAX_SUBAGENT_DEPTH = 2
-DEFAULT_MAX_ACTIVE_SUBAGENTS = 8
+DEFAULT_MAX_ACTIVE_SUBAGENTS = 10
 DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL = 50
 SUBAGENT_SESSION_STARTED_EVENT = "subagent_session_started"
 SUBAGENT_STATUS_CHANGED_EVENT = "subagent_status_changed"

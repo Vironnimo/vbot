@@ -108,7 +108,7 @@ class AgenticProgression:
         compaction_runs: CompactionRunCoordinator,
         compaction_service: CompactionService | None,
         *,
-        max_tool_iterations: int,
+        max_tool_iterations: int | None,
     ) -> None:
         self._dependencies = dependencies
         self._requests = requests
@@ -474,12 +474,12 @@ class AgenticProgression:
             # that start while it streams report the turn they belong to.
             assistant_message_id = _new_message_id()
             tool_round: ToolRound | None = None
-            if (
-                context.tool_progress.finalization_reason is None
-                and context.tool_progress.iteration_count
-                < effective_tool_iteration_limit(
-                    self._max_tool_iterations, context.request.max_tool_iterations
-                )
+            tool_iteration_limit = effective_tool_iteration_limit(
+                self._max_tool_iterations, context.request.max_tool_iterations
+            )
+            if context.tool_progress.finalization_reason is None and (
+                tool_iteration_limit is None
+                or context.tool_progress.iteration_count < tool_iteration_limit
             ):
                 # Only a turn whose Tool Calls may run starts them early; the
                 # others are refused once the response is complete.
@@ -769,12 +769,10 @@ class AgenticProgression:
                 finalization_violation = context.tool_progress.finalization_reason is not None
                 end_after_tools = False
                 finalization_request_reason: str | None = None
-                tool_iteration_limit = effective_tool_iteration_limit(
-                    self._max_tool_iterations, context.request.max_tool_iterations
-                )
                 tool_limit_reached = (
                     not finalization_violation
                     and terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
+                    and tool_iteration_limit is not None
                     and context.tool_progress.iteration_count >= tool_iteration_limit
                 )
 

@@ -534,7 +534,7 @@ def test_public_document_hides_flat_storage_keys() -> None:
     assert effective["skills"] == {"directories": ["~/skills"]}
     assert effective["subagents"] == {
         "max_subagent_depth": 2,
-        "max_active_subagents": 8,
+        "max_active_subagents": 10,
         "max_active_subagents_total": 50,
     }
     assert "server_port" not in effective

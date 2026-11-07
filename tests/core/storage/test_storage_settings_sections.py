@@ -64,7 +64,7 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
     (
         StorageManager.load_subagent_settings,
         {"max_subagent_depth": "deep"},
-        {"max_subagent_depth": 2, "max_active_subagents": 8, "max_active_subagents_total": 50},
+        {"max_subagent_depth": 2, "max_active_subagents": 10, "max_active_subagents_total": 50},
     ),
     (StorageManager.load_skill_directory_settings, {"skill_directories": "~/skills"}, []),
     (

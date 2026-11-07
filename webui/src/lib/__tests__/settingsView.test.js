@@ -540,7 +540,7 @@ describe('agent defaults, sub-agents and session titles', () => {
   it('normalizes sub-agent limits to positive integers', () => {
     expect(normalizeSubAgentSettings({})).toEqual({
       max_subagent_depth: 2,
-      max_active_subagents: 8,
+      max_active_subagents: 10,
       max_active_subagents_total: 50,
     });
     expect(
@@ -553,7 +553,7 @@ describe('agent defaults, sub-agents and session titles', () => {
       }),
     ).toEqual({
       max_subagent_depth: 6,
-      max_active_subagents: 8,
+      max_active_subagents: 10,
       max_active_subagents_total: 50,
     });
     expect(

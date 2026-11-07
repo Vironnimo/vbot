@@ -75,12 +75,10 @@ def _add_usage(total: dict[str, Any], usage: Any) -> None:
             total[key] = total.get(key, 0) + value
 
 
-def _tool_iteration_limit(scope: str) -> int:
-    from core.chat import MAX_TOOL_ITERATIONS
-
+def _tool_iteration_limit(scope: str) -> int | None:
     if scope == "learn":
         return LEARN_TOOL_ITERATION_LIMIT
-    return MAX_TOOL_ITERATIONS
+    return None
 
 
 def _sampling_kwargs(prepared: PreparedAttempt) -> dict[str, Any]:
@@ -126,7 +124,7 @@ class _ToolBudget:
     but calls fail unrun. The second round of calls after that ends the Run.
     """
 
-    def __init__(self, limit: int, registry: Any) -> None:
+    def __init__(self, limit: int | None, registry: Any) -> None:
         from core.chat._step_outcomes import _FailedToolCallCircuitBreaker
 
         self.limit = limit
@@ -154,7 +152,7 @@ class _ToolBudget:
                 TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE,
                 retryable=False,
             )
-        if self.iterations >= self.limit:
+        if self.limit is not None and self.iterations >= self.limit:
             self._limit_reached = True
             return tool_failure(
                 TOOL_ITERATION_LIMIT_FAILURE_CODE,

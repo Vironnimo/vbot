@@ -62,7 +62,7 @@ DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 104_857_600
 
 SUBAGENT_SETTING_DEFAULTS = {
     "max_subagent_depth": 2,
-    "max_active_subagents": 8,
+    "max_active_subagents": 10,
     "max_active_subagents_total": 50,
 }
 

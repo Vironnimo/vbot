@@ -15,7 +15,6 @@ from core.chat._queued_input import QueuedChatInput as _QueuedRunExecutor
 from core.chat._request_builder import RequestBuilder
 from core.chat._run_execution import RunExecution
 from core.chat._run_state import _RunRequest
-from core.chat._step_outcomes import MAX_TOOL_ITERATIONS
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.compaction_host import ChatCompactionHost
@@ -116,14 +115,13 @@ class ChatLoop:
         self,
         dependencies: ChatLoopDependencies,
         *,
-        max_tool_iterations: int = MAX_TOOL_ITERATIONS,
+        max_tool_iterations: int | None = None,
         attachment_resolver: ContentBlockResolver | None = None,
         compaction_service: CompactionService | None = None,
         reflection_service: ReflectionNotifier | None = None,
         session_title_service: SessionTitleNotifier | None = None,
     ) -> None:
-        if max_tool_iterations < 0:
-            raise ChatError("max tool iterations must not be negative")
+        _validate_run_tool_iteration_limit(max_tool_iterations)
         self._dependencies = dependencies
         self._max_tool_iterations = max_tool_iterations
         self._attachment_resolver = attachment_resolver
@@ -369,7 +367,7 @@ class ChatLoop:
         ``max_tool_iterations`` narrows the loop's dispatched Tool-iteration
         limit for this run only (it never raises it); reaching it fails further
         Tool Calls with ``tool_iteration_limit`` and asks for the final answer.
-        ``None`` keeps the loop's limit.
+        ``None`` keeps the loop's limit, which is unlimited by default.
 
         ``source_session_id`` attributes a review Run executing in a fork to the
         Session it examines; it is accessor-only provenance on the Run.

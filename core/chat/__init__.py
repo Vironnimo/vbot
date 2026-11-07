@@ -23,9 +23,6 @@ if TYPE_CHECKING:
         ChatLoopDependencies,
         RequestState,
     )
-    from core.chat._step_outcomes import (
-        MAX_TOOL_ITERATIONS,
-    )
     from core.chat.chat import (
         ChatLoop,
     )
@@ -120,7 +117,6 @@ _EXPORT_MODULES = {
     "INPUT_ORIGIN_LIVE_VOICE": "core.chat.messages",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.messages",
     "InputOrigin": "core.chat.messages",
-    "MAX_TOOL_ITERATIONS": "core.chat._step_outcomes",
     "MessageSender": "core.chat.messages",
     "ReplySurface": "core.chat.messages",
     "PreparedCommand": "core.chat.commands",
@@ -177,7 +173,6 @@ __all__ = [
     "INPUT_ORIGIN_LIVE_VOICE",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION",
     "InputOrigin",
-    "MAX_TOOL_ITERATIONS",
     "MessageSender",
     "ReplySurface",
     "PreparedCommand",

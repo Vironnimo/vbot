@@ -14,8 +14,8 @@ from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
-    TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
     _FailedToolCallCircuitBreaker,
+    tool_iteration_limit,
     tool_result_facts,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
@@ -480,12 +480,12 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("loop_limit", "run_limit"),
-    [(1000, 1), (1, 5)],
-    ids=["narrows-the-loop-limit", "never-raises-the-loop-limit"],
+    ("loop_limit", "run_limit", "dispatched"),
+    [(None, None, 2), (None, 1, 1), (1000, 1, 1), (1, 5, 1)],
+    ids=["uncapped-default", "explicit-run-limit", "narrows-loop-limit", "keeps-loop-limit"],
 )
-async def test_run_tool_iteration_limit_narrows_the_loop_limit(
-    tmp_path: Path, loop_limit: int, run_limit: int
+async def test_tool_round_limits_are_optional_and_narrow_explicit_caps(
+    tmp_path: Path, loop_limit: int | None, run_limit: int | None, dispatched: int
 ) -> None:
     invocations: list[JsonObject] = []
     runtime = tool_runtime(
@@ -494,18 +494,32 @@ async def test_run_tool_iteration_limit_narrows_the_loop_limit(
         [tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
     )
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = build_chat_loop(runtime, max_tool_iterations=loop_limit)
+    loop = build_chat_loop(
+        runtime, **({} if loop_limit is None else {"max_tool_iterations": loop_limit})
+    )
 
     run = await loop.start_run(
         "coder", "Probe twice", session_id="session-one", max_tool_iterations=run_limit
     )
     await run.wait()
 
-    # One dispatched iteration; the second call gets the ordinary limit failure.
-    assert len(invocations) == 1
-    rejected = tool_results(history(runtime))[1]["error"]
-    assert rejected["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
-    assert rejected["message"] == TOOL_ITERATION_LIMIT_FAILURE_MESSAGE.format(limit=1)
+    assert len(invocations) == dispatched
+    results = tool_results(history(runtime))
+    if dispatched == 2:
+        assert all(result["ok"] for result in results)
+    else:
+        assert results[1]["error"]["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
+
+
+@pytest.mark.parametrize(
+    ("loop_limit", "run_limit", "expected"),
+    [(None, None, None), (None, 2000, 2000), (2000, None, 2000), (2000, 1500, 1500)],
+)
+def test_tool_round_policy_has_no_implicit_ceiling(
+    loop_limit: int | None, run_limit: int | None, expected: int | None
+) -> None:
+    # Exercise the policy directly rather than persisting thousands of Tool turns.
+    assert tool_iteration_limit(loop_limit, run_limit) == expected
 
 
 def _tool_message(call: ToolCall, result: JsonObject) -> ChatMessage:

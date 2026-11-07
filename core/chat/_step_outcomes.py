@@ -34,8 +34,6 @@ from core.sessions import ToolResultFacts
 from core.tools import ToolNotFoundError, called_tool_name, model_tool_name
 from core.utils.errors import ProviderError
 
-MAX_TOOL_ITERATIONS = 1000
-
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
 
 TOOL_REPETITION_THRESHOLDS = (3, 5, 8)
@@ -486,6 +484,8 @@ def _usage_token_count(usage: Any, key: str) -> int:
     return value
 
 
-def tool_iteration_limit(maximum: int, run_limit: int | None) -> int:
-    """Narrow the loop's Tool iteration ceiling by an admitted Run limit."""
+def tool_iteration_limit(maximum: int | None, run_limit: int | None) -> int | None:
+    """Combine explicit Tool-round limits; ``None`` leaves the Run uncapped."""
+    if maximum is None:
+        return run_limit
     return maximum if run_limit is None else min(maximum, run_limit)
