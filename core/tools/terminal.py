@@ -52,6 +52,7 @@ from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
     TerminalInfo,
+    TerminalInputUnconfirmedError,
     TerminalLaunchError,
     TerminalManager,
     TerminalManagerError,
@@ -263,6 +264,20 @@ async def _handle_terminal(
         return tool_failure(
             "terminal_not_owned",
             _not_owned_message(terminal_manager, str(terminal_id), action),
+            retryable=False,
+        )
+    except TerminalInputUnconfirmedError as error:
+        prior = (
+            f"The preceding {error.characters_sent} characters were sent. "
+            if error.characters_sent
+            else ""
+        )
+        subject = "following key" if error.characters_sent else "input"
+        return tool_failure(
+            "terminal_input_unconfirmed",
+            prior + f"The terminal did not confirm the {subject} write; some input may have "
+            "been sent. Inspect its current state with terminal "
+            f"{_call('status', str(terminal_id))} before repeating input.",
             retryable=False,
         )
     except TerminalClosedError:
