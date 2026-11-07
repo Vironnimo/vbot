@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
-from core.chat import ChatMessage
+from core.chat import ChatMessage, ChatSessionError
 from core.chat.messages import MessageSender, ToolCall
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
@@ -859,10 +859,12 @@ async def test_result_payloads_load_for_their_owner_through_the_calling_session(
         await stale.load_result_payload(call("source"), "res_one")
 
 
+@pytest.mark.parametrize("mode", ["capture", "restart", "retained-origin", "user-stopped"])
 @pytest.mark.asyncio
 async def test_deferred_tool_outcomes_follow_only_the_original_session_generation(
-    runtime: Runtime, tmp_path: Path
+    runtime: Runtime, tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    deferred = mode != "capture"
     runtime.tools.register(
         "mcp_recovery",
         "test-owned-tool",
@@ -873,6 +875,7 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     host = _owner_host(runtime, "mcp")
     other = _owner_host(runtime, "swarm")
     session = runtime.chat_sessions.create("main", "recovery-origin")
+    session = await runtime.chat_sessions.get_async(session.address)
     # A restored call keeps the Session's inherited ceiling.
     private = tmp_path / "private"
     ceiling = PermissionBoundary.build(
@@ -911,6 +914,40 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     assert receipt is not None
     assert await host.capture_tool_call(context) == receipt
     assert await host.capture_tool_call(replace(context, run_id="wrong-run")) is None
+    submitted: list[dict[str, Any]] = []
+    if deferred:
+        assert host.defer_tool_call is not None
+        origin = None
+        with monkeypatch.context() as patch:
+            if mode in ("retained-origin", "user-stopped"):
+                origin = Run(
+                    run_id=context.run_id,
+                    agent_id=context.agent_id,
+                    session_id=context.session_id,
+                    expected_session_generation_id=session.generation_id,
+                )
+                patch.setattr(runtime.chat_run_manager, "get", lambda _run_id: origin)
+            assert await host.defer_tool_call(context) == receipt
+        # The origin has left Run-manager retention before completion. A user
+        # Stop after detaching still suppresses a wake through the held origin.
+        if mode == "user-stopped":
+            assert origin is not None
+            origin.cancel_reason = "user"
+        submit = runtime.trigger_service.submit_completion
+
+        def submit_without_model(address: SessionAddress, **kwargs: Any) -> Any:
+            submitted.append(dict(kwargs))
+            # Test the host's wake/settings wiring without starting a Model;
+            # the ordinary completion coordinator owns admission coverage.
+            kwargs["wake"] = False
+            return submit(address, **kwargs)
+
+        monkeypatch.setattr(runtime.trigger_service, "submit_completion", submit_without_model)
+        running.append(
+            ChatMessage.tool(
+                tool_call_id="recovery-call", name="mcp_recovery", content='{"status":"running"}'
+            )
+        )
     assert other.restore_tool_call is not None
     assert await other.restore_tool_call(receipt) is None
     complete_run(
@@ -930,17 +967,130 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     moved = await runtime.chat_sessions.move(
         session.address, SessionAddress(None, "main", "recovery-moved")
     )
+    moved = await runtime.chat_sessions.get_async(moved.address)
     restored = await host.restore_tool_call(receipt)
     assert restored is not None and restored.session_id == moved.id
     assert restored.permissions.check_path(private / "notes.txt", "read") is not None
+    if deferred:
+        prepare = runtime.chat_sessions.prepare_tool_outcome_async
+        prepares = 0
+
+        async def fail_acknowledgement(*args: Any, **kwargs: Any) -> Any:
+            nonlocal prepares
+            prepares += 1
+            if prepares == 2:
+                raise OSError("acknowledgement interrupted")
+            return await prepare(*args, **kwargs)
+
+        monkeypatch.setattr(
+            runtime.chat_sessions, "prepare_tool_outcome_async", fail_acknowledgement
+        )
+        with pytest.raises(OSError, match="acknowledgement interrupted"):
+            await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
     assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
     assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
-    assert [message.content for message in moved.load() if message.role == "note"] == [
-        "recovered-outcome-sentinel"
-    ]
+    notes = [message.content for message in moved.load() if message.role == "note"]
+    assert len(notes) == 1
+    note = notes[0]
+    assert isinstance(note, str) and "recovered-outcome-sentinel" in note
+    with pytest.raises(ChatSessionError, match="conflicts"):
+        await host.deliver_tool_outcome(receipt, "different-outcome")
+    if deferred:
+        # The completion Note is authoritative even if the process died before
+        # the delivery acknowledgement reached the receipt (normal recovery).
+        assert receipt in note
+        assert await host.restore_tool_call(receipt) is not None
+        assert len(submitted) == 1
+        assert submitted[0]["wake"] == (mode == "retained-origin")
+        assert submitted[0]["expected_session_generation_id"] == moved.generation_id
+        source = submitted[0]["continuation_source"]
+        if mode == "restart":
+            assert source is None
+        else:
+            assert source is not None and source.session_id == moved.id
     assert not [message for message in fork.load() if message.role == "note"]
     runtime.chat_sessions.delete(moved.address)
     replacement = runtime.chat_sessions.create("main", moved.id)
     assert await host.restore_tool_call(receipt) is None
     assert not await host.deliver_tool_outcome(receipt, "wrong-generation-sentinel")
     assert replacement.load() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["move", "replace"])
+async def test_restored_tool_context_revalidates_its_generation_after_resolution(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    runtime.tools.register(
+        "mcp_restore_race",
+        "test-owned-tool",
+        {"type": "object"},
+        lambda context, args: {},
+        extension="mcp",
+    )
+    host = _owner_host(runtime, "mcp")
+    session = runtime.chat_sessions.create("main", "restore-race")
+    running = session.start_run("restore-race-run")
+    running.append(
+        ChatMessage.assistant(
+            model="fixture/model",
+            content="",
+            tool_calls=[ToolCall(id="restore-race-call", name="mcp_restore_race", arguments={})],
+        )
+    )
+    context = ToolContext(
+        agent_id="main",
+        session_id=session.id,
+        run_id="restore-race-run",
+        tool_call_id="restore-race-call",
+        tool_name="mcp_restore_race",
+        tool_call_index=0,
+        workspace=tmp_path,
+        data_root=tmp_path,
+        vbot_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
+    )
+    assert host.defer_tool_call is not None and host.restore_tool_call is not None
+    receipt = await host.defer_tool_call(context)
+    assert receipt is not None
+    complete_run(
+        running,
+        ChatMessage.run_summary(
+            run_id="restore-race-run",
+            status="completed",
+            timing={
+                "started_at": "2026-11-07T10:00:00Z",
+                "completed_at": "2026-11-07T10:01:00Z",
+                "duration_ms": 60000,
+            },
+            iteration_count=1,
+        ),
+    )
+    factory = runtime._host_operations()
+    resolve = factory._host.resolve_tool_agent_async
+    assert resolve is not None
+    changed = False
+
+    async def change_before_resolving(context: ToolContext) -> Any:
+        nonlocal changed
+        if not changed:
+            changed = True
+            if mutation == "move":
+                await runtime.chat_sessions.move(
+                    session.address, SessionAddress(None, "main", "restore-moved")
+                )
+            else:
+                runtime.chat_sessions.delete(session.address)
+                runtime.chat_sessions.create("main", session.id)
+        return await resolve(context)
+
+    monkeypatch.setattr(
+        factory, "_host", replace(factory._host, resolve_tool_agent_async=change_before_resolving)
+    )
+    restored = await host.restore_tool_call(receipt)
+    if mutation == "move":
+        assert restored is not None
+        assert restored.session_id == "restore-moved"
+        assert restored.run_id == "restore-race-run"
+    else:
+        assert restored is None

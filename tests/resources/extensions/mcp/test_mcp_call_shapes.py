@@ -195,7 +195,7 @@ async def test_read_field_list_may_be_comma_separated(context_service, host):
         ),
         (
             {"action": "explode"},
-            'action must be one of search, describe, call, read. Start with {"action":"search"}',
+            '{"action":"search"}',
         ),
         ({"action": "read"}, "read was not run: result_id is missing"),
         ({"action": "describe"}, "targets is missing. Name the tools to describe"),
@@ -217,6 +217,23 @@ async def test_unclear_calls_refuse_with_the_corrected_call(
         await dispatch(registry, host, _with_target(arguments, target))
 
     assert expected.replace(TARGET, target) in str(refusal.value)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared", [False, True])
+async def test_a_timeout_correction_requires_a_declared_target_argument(
+    context_service, host, declared
+):
+    service, registry, runner, calls = context_service
+    if declared:
+        runner.catalog["tools"][0]["inputSchema"]["properties"]["timeout"] = {"type": "number"}
+        service._publish(runner, runner.catalog)
+    arguments = {"action": "call", "target": "inspect", "arguments": {"value": "x"}, "timeout": 300}
+    with pytest.raises(ToolContractError) as refusal:
+        await dispatch(registry, host, arguments)
+    # A recovery example must never propose a parameter that the server does not accept.
+    assert ('"timeout":300' in str(refusal.value)) == declared
     assert calls == []
 
 

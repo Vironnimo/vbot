@@ -200,6 +200,7 @@ class Runtime(RuntimeServiceGraph):
                 resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
                 commands=self.command_manager,
+                triggers=self.trigger_service,
                 portals=self._portals,
                 scratch_areas=self.scratch_areas,
                 get_change_publisher=lambda: self._extension_change_publisher,

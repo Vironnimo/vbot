@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.agents import AgentStore, normalize_agent_tools
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
@@ -41,7 +41,13 @@ from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
 from core.providers.providers import ProviderRegistry
-from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner, RunNotFoundError
+from core.runs import (
+    ChatRunManager,
+    Run,
+    RunAdmissionBlockedError,
+    RunExecutionOwner,
+    RunNotFoundError,
+)
 from core.runtime._shell_review_context import current_input_authority, shell_review_context
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
@@ -71,6 +77,9 @@ from core.tools.tools import ToolContext, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.ids import is_safe_id
 from core.utils.timestamps import utc_now_timestamp
+
+if TYPE_CHECKING:
+    from core.automation.automation import TriggerService
 
 
 def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
@@ -161,6 +170,7 @@ class ExtensionHostFactory:
         resources: Sequence[ExecutionResources],
         terminals: TerminalManager,
         commands: CommandManager,
+        triggers: TriggerService,
         portals: PortalRegistry | None,
         scratch_areas: ScratchAreas,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
@@ -194,6 +204,8 @@ class ExtensionHostFactory:
         self._resources = resources
         self._terminals = terminals
         self._commands = commands
+        self._triggers = triggers
+        self._deferred_runs: dict[tuple[Any, str], Run] = {}
         self._portals = portals
         self._scratch_areas = scratch_areas
         self._get_change_publisher = get_change_publisher
@@ -216,8 +228,14 @@ class ExtensionHostFactory:
         return replace(
             self._host,
             for_owner=self._extension_owner_host,
-            release_owner=self.databases.release,
+            release_owner=self._release_owner,
         )
+
+    async def _release_owner(self, identity: Any) -> None:
+        for key in tuple(self._deferred_runs):
+            if key[0] == identity:
+                self._deferred_runs.pop(key)
+        await self.databases.release(identity)
 
     def _extension_owner_host(self, identity: Any) -> ExtensionHost:
         if self._extensions is None:
@@ -278,6 +296,9 @@ class ExtensionHostFactory:
             state_dir=state_dir,
             open_database=self.databases.opener(identity),
             capture_tool_call=lambda context: self._capture_tool_call(identity, context),
+            defer_tool_call=lambda context: self._capture_tool_call(
+                identity, context, deferred=True
+            ),
             restore_tool_call=lambda receipt: self._restore_tool_call(identity, receipt),
             deliver_tool_outcome=lambda receipt, text: self._deliver_tool_outcome(
                 identity, receipt, text
@@ -674,7 +695,9 @@ class ExtensionHostFactory:
         if revision is not None:
             self._publish_extension_change(identity, PAGE_BADGES_RESOURCE, (page_id,), revision)
 
-    async def _capture_tool_call(self, identity: Any, context: ToolContext) -> str | None:
+    async def _capture_tool_call(
+        self, identity: Any, context: ToolContext, *, deferred: bool = False
+    ) -> str | None:
         self._require_registration(identity)
         if self.tools.get(context.tool_name).extension != identity.name:
             raise ValueError("Extension does not own this Tool")
@@ -685,8 +708,16 @@ class ExtensionHostFactory:
             tool_call_id=context.tool_call_id,
             tool_name=context.tool_name,
             execution_owner=asdict(context.execution_owner) if context.execution_owner else None,
+            deferred=deferred,
         )
         self._require_registration(identity)
+        if deferred and receipt is not None:
+            # Keep the origin independently of the Run manager's bounded history.
+            # It also retains cancellation and temporary continuation settings.
+            with suppress(RunNotFoundError):
+                self._deferred_runs.setdefault(
+                    (identity, receipt), self.chat_run_manager.get(context.run_id)
+                )
         return receipt
 
     async def _pending_approvals(
@@ -726,8 +757,31 @@ class ExtensionHostFactory:
         record = await self.chat_sessions.resolve_tool_receipt_async(
             receipt, owner_name=identity.name
         )
-        if record is None:
-            return None
+        while record is not None:
+            context = None
+            error = None
+            try:
+                context = await self._restored_tool_context(record)
+            except Exception as failure:
+                # A move or Agent rename can invalidate an intermediate lookup.
+                # Only retry it when the canonical invocation actually moved.
+                error = failure
+            current = await self.chat_sessions.resolve_tool_receipt_async(
+                receipt, owner_name=identity.name
+            )
+            self._require_registration(identity)
+            if current == record:
+                if error is not None:
+                    raise error
+                return context
+            # A missing original ends restoration; a move of the same generation
+            # rebuilds its Agent, cwd and Permission Boundary at the new address.
+            record = current
+        self._deferred_runs.pop((identity, receipt), None)
+        return None
+
+    async def _restored_tool_context(self, record: dict[str, Any]) -> ToolContext:
+        """Resolve a receipt snapshot; the caller revalidates it after this async work."""
         context = ToolContext(
             agent_id=record["agent_id"],
             session_id=record["session_id"],
@@ -767,7 +821,6 @@ class ExtensionHostFactory:
             ceiling,
             address,
         )
-        self._require_registration(identity)
         return replace(
             context,
             workspace=Path(agent.workspace),
@@ -779,9 +832,64 @@ class ExtensionHostFactory:
 
     async def _deliver_tool_outcome(self, identity: Any, receipt: str, content: str) -> bool:
         self._require_registration(identity)
-        return await self.chat_sessions.deliver_tool_outcome_async(
+        record = await self.chat_sessions.resolve_tool_receipt_async(
+            receipt, owner_name=identity.name
+        )
+        if record is None:
+            self._deferred_runs.pop((identity, receipt), None)
+            return False
+        if not record["deferred"]:
+            return await self.chat_sessions.deliver_tool_outcome_async(
+                receipt, content, owner_name=identity.name
+            )
+        outcome = await self.chat_sessions.prepare_tool_outcome_async(
             receipt, content, owner_name=identity.name
         )
+        if outcome is None:
+            return False
+        if outcome["delivered"]:
+            self._deferred_runs.pop((identity, receipt), None)
+            return True
+        self._require_registration(identity)
+        # A restart cannot revive an old execution epoch. Its receipt still
+        # permits the outcome Note in the same live generation, as for recovery
+        # of a captured call, but never a replay or an owned continuation.
+        origin = self._deferred_runs.get((identity, receipt))
+        wake = origin is not None and origin.cancel_reason != "user"
+        owner = (
+            RunExecutionOwner(**outcome["execution_owner"]) if outcome["execution_owner"] else None
+        )
+        if origin is None:
+            owner = None
+        source = origin.capture_continuation_source() if origin else None
+        if source is not None:
+            # Receipt lookup already followed the same generation through a
+            # move; preserve its continuation settings at that current address.
+            source = replace(
+                source,
+                project_id=outcome["project_id"],
+                agent_id=outcome["agent_id"],
+                session_id=outcome["session_id"],
+            )
+        await self._triggers.submit_completion(
+            SessionAddress(outcome["project_id"], outcome["agent_id"], outcome["session_id"]),
+            notice_id=f"extension:{identity.name}/task:{receipt}",
+            origin_run_id=outcome["run_id"],
+            body=outcome["content"],
+            execution_owner=owner,
+            wake=wake,
+            continuation_source=source,
+            expected_session_generation_id=outcome["generation_id"],
+        )
+        # Records the durable acknowledgement; a crash before this write is
+        # recovered by the canonical Note check in prepare_tool_outcome.
+        completed = await self.chat_sessions.prepare_tool_outcome_async(
+            receipt, content, owner_name=identity.name
+        )
+        delivered = completed is not None and completed["delivered"]
+        if delivered:
+            self._deferred_runs.pop((identity, receipt), None)
+        return delivered
 
     async def _extension_catalog(self, identity: Any) -> dict[str, Any]:
         if self._extensions is None or not self._extensions.is_registration_current(identity):

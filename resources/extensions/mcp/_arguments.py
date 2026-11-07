@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 from core.tools.call_syntax import normalize_call_arguments
@@ -29,8 +29,9 @@ APPLICABLE = {
     "describe": ("targets",),
     "call": ("target", "arguments"),
     "read": ("result_id", "pointer", "offset", "limit", "fields"),
+    "cancel": ("result_id",),
 }
-_REQUIRED = {"describe": "targets", "call": "target", "read": "result_id"}
+_REQUIRED = {"describe": "targets", "call": "target", "read": "result_id", "cancel": "result_id"}
 # A corrected call longer than this is described in words rather than repeated.
 _CORRECTED_CHARACTERS = 1500
 
@@ -50,7 +51,7 @@ def _is_count(value: Any) -> bool:
 
 
 def _is_result_id(value: Any) -> bool:
-    return isinstance(value, str) and value.strip().startswith("res_")
+    return isinstance(value, str) and value.strip().startswith(("res_", "etr_"))
 
 
 def _is_target(value: Any) -> bool:
@@ -186,8 +187,15 @@ def _is_empty(value: Any) -> bool:
 class _Browse:
     """Normalize one connection Tool's call before contract validation."""
 
-    def __init__(self, tool: str) -> None:
+    def __init__(
+        self,
+        tool: str,
+        target_fields: Callable[[str], Collection[str]] | None = None,
+        wait_seconds: Callable[[], float] | None = None,
+    ) -> None:
         self.tool = tool
+        self.target_fields = target_fields
+        self.wait_seconds = wait_seconds
         self.contract = compile_tool_contract(
             name=tool, input_schema=MCP_PARAMETERS, require_closed_input=False
         )
@@ -309,6 +317,30 @@ class _Browse:
         names = ", ".join(unknown)
         verb = "is not a field" if len(unknown) == 1 else "are not fields"
         if action == "call":
+            target = arguments.get("target")
+            fields = (
+                self.target_fields(target)
+                if self.target_fields is not None and isinstance(target, str)
+                else ()
+            )
+            if not set(unknown) <= set(fields):
+                reason = f"{names} {verb} of {self.tool}."
+                if "timeout" in unknown and "timeout" not in fields:
+                    wait = (
+                        f" The connection is configured to wait {self.wait_seconds():g} seconds."
+                        if self.wait_seconds is not None
+                        else ""
+                    )
+                    reason += (
+                        " timeout does not change this connection's wait and is not a declared "
+                        f"argument of the selected target.{wait}"
+                    )
+                if isinstance(target, str):
+                    reason += (
+                        f" Check the target's arguments with {_call(describe_call(target))}; "
+                        "do not move unsupported fields into arguments."
+                    )
+                return reason
             moved = {key: arguments[key] for key in unknown}
             inner = arguments.get("arguments", {})
             if isinstance(inner, dict) and not set(moved) & set(inner):
@@ -381,9 +413,13 @@ class _Browse:
         )
 
 
-def browse_normalizer(tool: str) -> Callable[[Any], Any]:
+def browse_normalizer(
+    tool: str,
+    target_fields: Callable[[str], Collection[str]] | None = None,
+    wait_seconds: Callable[[], float] | None = None,
+) -> Callable[[Any], Any]:
     """Return the ``argument_normalizer`` of the connection Tool named *tool*."""
-    return _Browse(tool)
+    return _Browse(tool, target_fields, wait_seconds)
 
 
 def connection_display(normalizer: Callable[[Any], Any]) -> ToolDisplay:

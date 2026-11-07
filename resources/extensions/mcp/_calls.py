@@ -68,6 +68,8 @@ class _Call:
     owner: asyncio.Task[None] | None
     # The known Tool contract before waiting for a connection or queue slot.
     input_schema: dict[str, Any] | None = None
+    canonical_context: ToolContext | None = None
+    retained: bool = False
     task: asyncio.Task[None] | None = None
     # A read that may run again: it failed transiently or lost its connection.
     retry: bool = False
