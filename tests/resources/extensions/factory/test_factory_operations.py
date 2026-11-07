@@ -363,13 +363,13 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
     assert created["setup"]["workflows"] == workflows
     assert created["setup"]["default_workflow"] == "drafts"
     assert set(created["effective_models"]) == {
-        "implement/implement/0",
-        "implement/review/0",
-        "drafts/drafts/0",
-        "drafts/drafts/1",
-        "drafts/drafts/2",
-        "drafts/merge/0",
-        "drafts/review/0",
+        "implement/implement",
+        "implement/review",
+        "drafts/draft1",
+        "drafts/draft2",
+        "drafts/draft3",
+        "drafts/merge",
+        "drafts/review",
     }
     updated = await factory.operation(
         "setup.update", project_id="other", base_branch="release", expected_revision=1
@@ -388,21 +388,16 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
     assert before == [("setups", ["other"], 1), ("setups", ["other"], 2)]
 
 
-def _changed(stage: int, **lane: Any) -> list[Json]:
+def _changed(step: int, **fields: Any) -> list[Json]:
     workflow = implement_workflow()
-    workflow["stages"][stage]["lanes"][0].update(lane)
-    return [workflow]
-
-
-def _two_integrators() -> list[Json]:
-    workflow = implement_workflow()
-    workflow["stages"][0]["lanes"].append(dict(workflow["stages"][0]["lanes"][0]))
+    workflow["steps"][step].update(fields)
     return [workflow]
 
 
 def _review_first() -> list[Json]:
+    """Review listed before the step it reviews."""
     workflow = implement_workflow()
-    workflow["stages"].reverse()
+    workflow["steps"].reverse()
     return [workflow]
 
 
@@ -414,7 +409,7 @@ def _review_first() -> list[Json]:
         ({"workflows": _changed(1, source="team", agent="missing")}, "profile_not_found"),
         ({"workflows": _changed(0, agent="")}, "profile_not_found"),
         ({"workflows": _changed(0, model="missing")}, "model_not_found"),
-        ({"workflows": _two_integrators()}, "invalid_workflow"),
+        ({"workflows": _changed(1, after=[])}, "invalid_workflow"),
         ({"workflows": _review_first()}, "invalid_workflow"),
         ({"base_branch": "--all"}, "invalid_base"),
     ],
@@ -424,7 +419,7 @@ def _review_first() -> list[Json]:
         "team",
         "unchosen",
         "model",
-        "integrators",
+        "returns-to-unrelated",
         "review-first",
         "base",
     ],
@@ -440,7 +435,7 @@ async def test_setup_refuses_unavailable_execution_configuration_without_writes(
     assert factory.host.published == []
 
 
-async def test_setup_reports_a_lane_whose_agent_has_no_usable_model(
+async def test_setup_reports_a_step_whose_agent_has_no_usable_model(
     factory: FactoryHarness,
 ) -> None:
     async def inspect(config, project_id):
@@ -452,8 +447,8 @@ async def test_setup_reports_a_lane_whose_agent_has_no_usable_model(
     choices = {"project_id": "project", "workflows": [implement_workflow()]}
     preview = await factory.operation("setup.preview", **choices)
     assert preview["effective_models"] == {
-        "implement/implement/0": "",
-        "implement/review/0": "test/reviewer",
+        "implement/implement": "",
+        "implement/review": "test/reviewer",
     }
     with pytest.raises(FactoryError) as refused:
         await factory.operation("setup.update", **choices)
@@ -462,8 +457,8 @@ async def test_setup_reports_a_lane_whose_agent_has_no_usable_model(
     fixed = _changed(0, model="test/worker")
     saved = await factory.operation("setup.update", project_id="project", workflows=fixed)
     assert saved["effective_models"] == {
-        "implement/implement/0": "test/worker",
-        "implement/review/0": "test/reviewer",
+        "implement/implement": "test/worker",
+        "implement/review": "test/reviewer",
     }
 
 
@@ -489,7 +484,7 @@ async def test_setup_deletion_requires_all_project_cards_final(factory: FactoryH
         ("accept", "waiting", "finished", {"expected_revision": 1}, "revision_conflict"),
         ("answer", "waiting", "finished", {"text": "Answer"}, "not_blocked"),
         ("retry", "waiting", "checkpoint", {}, "not_retryable"),
-        ("send_back", "waiting", "finished", {"comment": "No", "stage": "review"}, "invalid_stage"),
+        ("send_back", "waiting", "finished", {"comment": "No", "step": "deploy"}, "invalid_step"),
     ],
 )
 async def test_card_action_guards_refuse_before_effects(
@@ -645,7 +640,7 @@ async def test_user_resume_at_full_wip_is_queued_and_admitted_once(
         "action": execution_action,
         "comment": comment,
         "comment_recorded": bool(comment),
-        "stage": "",
+        "step": "",
         "waiting_reason": reason,
     }
     history_before = await factory.store.history(waiting["id"])

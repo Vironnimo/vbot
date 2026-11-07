@@ -7,7 +7,7 @@ import pytest
 from .test_factory_execution import (
     _NEW,
     Git,
-    approved,
+    reviewed,
     started,
     submitted,
 )
@@ -36,7 +36,7 @@ from .test_factory_execution import (
 )
 async def test_integration_checks_and_changed_heads_return_to_review(service, monkeypatch, case):
     await started(service)
-    card = await approved(service)
+    card = await reviewed(service)
     if case == "reference_only_without_target":
         service.store.cards[card["id"]]["runtime"]["settings"]["integration_check"] = (
             "reference_only"
@@ -84,11 +84,11 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
     await service.finish()
     card = await service.card()
     if case in {"moved", "moved_merged", "landed_needs_changes"} or case.startswith("merge_"):
-        assert card["state"] == "reviewing"
+        assert card["state"] == "working"
         assert card["head_sha"] == (Git.merge_value if case.startswith("merge_") else _NEW)
         assert card["base_sha"] == Git.target_value
-        assert card["runtime"]["review_kind"] == "integration_review"
-        assert card["runtime"]["current_participant"] == "review-1-r2"
+        assert card["runtime"]["integration_review"] is True
+        assert card["runtime"]["current_participant"] == "review-r2"
         assert ("integration_landing" in card["runtime"]) is (case != "moved")
         if case != "moved":
             landing = card["runtime"]["integration_landing"]
@@ -111,7 +111,8 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
             await service.execution.send_back(await service.card(), "Yes")
         await service.flush()
         card = await submitted(service)
-        assert card["runtime"]["review_kind"] == "integration_review"
+        assert card["runtime"]["integration_review"] is True
+        assert card["runtime"]["current_participant"] == "review-r2"
     else:
         assert card["state"] == "done"
     await service.execution.quiesce()
@@ -120,12 +121,12 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["rebase", "merge"])
-@pytest.mark.parametrize("verdict", ["approve", "changes_requested"])
+@pytest.mark.parametrize("verdict", ["submit", "changes_requested"])
 async def test_already_landed_review_waits_for_user_instead_of_automatic_rework(
     service, monkeypatch, source, verdict
 ):
     await started(service)
-    card = await approved(service)
+    card = await reviewed(service)
     async with service.lock:
         await service.execution.accept(card)
     await service.flush()
@@ -142,22 +143,22 @@ async def test_already_landed_review_waits_for_user_instead_of_automatic_rework(
     await service.finish()
     card = await service.card()
     admissions = len(service.host.temporary_agents.admissions)
-    assert card["runtime"]["current_participant"] == "review-1-r2"
+    assert card["runtime"]["current_participant"] == "review-r2"
     async with service.lock:
-        await service.execution.submit_review(
-            service.tool_context(card),
-            {
-                "verdict": verdict,
-                "recommendation": "Post-integration judgment",
-                "findings": [] if verdict == "approve" else ["Integration finding"],
-            },
-        )
+        if verdict == "submit":
+            await service.execution.submit_work(
+                service.tool_context(card), {"summary": "Post-integration judgment"}
+            )
+        else:
+            await service.execution.request_changes(
+                service.tool_context(card), {"findings": ["Integration finding"]}
+            )
     await service.finish()
     card = await service.card()
     assert card["state"] == "waiting"
-    assert card["waiting_reason"] == ("finished" if verdict == "approve" else "no_agreement")
+    assert card["waiting_reason"] == ("finished" if verdict == "submit" else "no_agreement")
     assert card["runtime"]["integration_landing"]["status"] == (
-        "approved" if verdict == "approve" else "changes_requested"
+        "approved" if verdict == "submit" else "changes_requested"
     )
     assert len(service.host.temporary_agents.admissions) == admissions
     # Even an override of rejected landed work is a fresh, explicit user action.
@@ -179,7 +180,7 @@ async def test_unknown_landed_base_is_visible_and_can_be_supplied_without_losing
     service, monkeypatch
 ):
     await started(service)
-    card = await approved(service)
+    card = await reviewed(service)
     async with service.lock:
         await service.execution.accept(card)
     await service.flush()
@@ -203,7 +204,8 @@ async def test_unknown_landed_base_is_visible_and_can_be_supplied_without_losing
     assert result["ok"]
     await service.finish()
     card = await service.card()
-    assert card["state"] == "reviewing" and card["head_sha"] == _NEW
+    assert card["state"] == "working" and card["head_sha"] == _NEW
+    assert card["runtime"]["current_participant"] == "review-r2"
     assert card["base_sha"] == Git.target_value
     await service.execution.quiesce()
     await service.flush()
@@ -214,7 +216,7 @@ async def test_historical_landing_does_not_turn_new_isolated_rework_into_post_la
     service, monkeypatch
 ):
     await started(service)
-    card = await approved(service)
+    card = await reviewed(service)
     async with service.lock:
         await service.execution.accept(card)
     await service.flush()
@@ -228,9 +230,7 @@ async def test_historical_landing_does_not_turn_new_isolated_rework_into_post_la
     await service.finish()
     card = await service.card()
     async with service.lock:
-        await service.execution.submit_review(
-            service.tool_context(card), {"verdict": "changes_requested", "findings": ["Fix"]}
-        )
+        await service.execution.request_changes(service.tool_context(card), {"findings": ["Fix"]})
     await service.finish()
     async with service.lock:
         await service.execution.send_back(await service.card(), "Repair in isolation")
@@ -241,9 +241,8 @@ async def test_historical_landing_does_not_turn_new_isolated_rework_into_post_la
     assert "review_branch_head_sha" not in card["runtime"]
     assert card["runtime"]["integration_landing"]["head_sha"] != card["head_sha"]
     async with service.lock:
-        await service.execution.submit_review(
-            service.tool_context(card),
-            {"verdict": "changes_requested", "findings": ["Another fix"]},
+        await service.execution.request_changes(
+            service.tool_context(card), {"findings": ["Another fix"]}
         )
     await service.finish()
     assert (await service.card())["state"] == "working"

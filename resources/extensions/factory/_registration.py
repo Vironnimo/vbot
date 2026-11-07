@@ -30,7 +30,7 @@ def register(api: ExtensionAPI) -> None:
                 "key": "wip_limit",
                 "type": "number",
                 "label": "WIP limit",
-                "description": "Maximum Cards working, reviewing or integrating at once.",
+                "description": "Maximum Cards working or integrating at once.",
                 "default": 2,
             },
             {

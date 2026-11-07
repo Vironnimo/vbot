@@ -1,11 +1,11 @@
-"""Factory Workflows: validated definitions, starter templates and stage navigation.
+"""Factory Workflows: validated definitions, starter templates and step navigation.
 
-A Workflow is an ordered list of Stages. A ``work`` Stage hands in either a
-``document`` (read-only on the repository) or ``changes`` (commits on a local
-branch, verified with Git). A ``review`` Stage judges an earlier work Stage and
-can return it for rework. Every Stage has one or more Lanes: independent
-participants, each with its own Agent, Model and effort, that run one after
-another in the Project directory without seeing each other's work.
+A Workflow is a list of steps. Each step names the Agent that does it, its task
+and when it starts: with the Card, after the steps listed in ``after``, and with
+``approval`` only once the user approves. A step with ``returns_to`` can send
+an earlier step's work back for rework, at most ``rounds`` times before the user
+decides. Steps run one at a time in list order, which ``after`` keeps
+consistent: a step can only follow steps listed before it.
 """
 
 from __future__ import annotations
@@ -19,14 +19,37 @@ from .store import FactoryError
 
 type Json = dict[str, Any]
 
-STAGE_KINDS = ("work", "review")
-OUTPUTS = ("changes", "document")
 SOURCES = ("agent", "team")
 MAX_WORKFLOWS = 30
-MAX_STAGES = 20
-MAX_LANES = 10
+MAX_STEPS = 20
+DEFAULT_ROUNDS = 2
 _ID = re.compile(r"[a-z0-9]{1,24}")
-_REVIEW_PARTICIPANT = re.compile(r"[a-z0-9]{1,24}-\d+-r\d+")
+
+IMPLEMENT_TASK = (
+    "Implement the Card's objective in the repository, run the checks the Project "
+    "prescribes and hand in the branch with the finished change."
+)
+REVIEW_TASK = (
+    "Review the result of the step before you without changing files or branches. Judge "
+    "whether it achieves the Card's objective and whether the approach is sound, correct "
+    "and simple; review repository changes against the Project conventions. Hand in your "
+    "assessment and what you would add or change as result, or request changes with "
+    "concrete findings."
+)
+PLAN_TASK = (
+    "Write an implementation plan for the Card: the approach, the parts it changes, the "
+    "risks and how to verify the result. Investigate as needed, but do not change files or "
+    "branches. Hand in the complete plan as result."
+)
+MERGE_TASK = (
+    "Combine the draft plans into one plan. Keep the strongest approach, take the good "
+    "ideas of the others and resolve their contradictions. Hand in the complete plan as "
+    "result."
+)
+_DOCUMENT_TASK = (
+    "Do the work the Card asks for without changing files or branches and hand in the "
+    "complete document as result."
+)
 
 
 def _new_id(prefix: str) -> str:
@@ -34,81 +57,64 @@ def _new_id(prefix: str) -> str:
     return prefix + "".join(secrets.choice(alphabet) for _ in range(7))
 
 
-def _lane(agent: str = "", source: str = "agent") -> Json:
-    return {"source": source, "agent": agent, "model": "", "effort": ""}
-
-
-def _work(stage_id: str, name: str, output: str, instructions: str = "", lanes: int = 1) -> Json:
+def _step(
+    step_id: str,
+    name: str,
+    task: str,
+    after: list[str],
+    *,
+    returns_to: str = "",
+    approval: bool = False,
+    agent: Json | None = None,
+    rounds: int = DEFAULT_ROUNDS,
+) -> Json:
+    chosen = agent or {}
     return {
-        "id": stage_id,
+        "id": step_id,
         "name": name,
-        "kind": "work",
-        "output": output,
-        "instructions": instructions,
-        "lanes": [_lane() for _ in range(lanes)],
-        "approval": False,
-    }
-
-
-def _review(stage_id: str, name: str, target: str, rounds: int = 3) -> Json:
-    return {
-        "id": stage_id,
-        "name": name,
-        "kind": "review",
-        "target": target,
+        "source": chosen.get("source") or "agent",
+        "agent": chosen.get("agent") or "",
+        "model": chosen.get("model") or "",
+        "effort": chosen.get("effort") or "",
+        "task": task,
+        "after": after,
+        "approval": approval,
+        "returns_to": returns_to,
         "rounds": rounds,
-        "instructions": "",
-        "lanes": [_lane()],
-        "approval": False,
     }
-
-
-_PLAN = (
-    "Write an implementation plan for the Card: the approach, the parts it changes, "
-    "the risks and how to verify the result."
-)
-_MERGE = (
-    "Combine the draft plans into one plan. Keep the strongest approach, take the good "
-    "ideas of the others and resolve their contradictions."
-)
 
 
 def templates() -> list[Json]:
     """Starter Workflows with no Agents chosen; the page copies one into a setup."""
-    plan_then_implement = [
-        _work("plan", "Plan", "document", _PLAN),
-        _review("planreview", "Plan review", "plan", 2),
-        _work("implement", "Implement", "changes"),
-        _review("review", "Review", "implement"),
-    ]
-    plan_then_implement[1]["approval"] = True
     return [
         {
             "id": "implement",
             "name": "Implement",
             "description": "Implement the Card, then an independent review.",
-            "stages": [
-                _work("implement", "Implement", "changes"),
-                _review("review", "Review", "implement"),
+            "steps": [
+                _step("implement", "Implement", IMPLEMENT_TASK, []),
+                _step("review", "Review", REVIEW_TASK, ["implement"], returns_to="implement"),
             ],
         },
         {
             "id": "plan",
             "name": "Plan",
             "description": "Write a plan, then an independent review of the plan.",
-            "stages": [
-                _work("plan", "Plan", "document", _PLAN),
-                _review("review", "Review", "plan", 2),
+            "steps": [
+                _step("plan", "Plan", PLAN_TASK, []),
+                _step("review", "Review", REVIEW_TASK, ["plan"], returns_to="plan"),
             ],
         },
         {
             "id": "drafts",
             "name": "Plan from drafts",
             "description": "Three independent draft plans, merged into one, then reviewed.",
-            "stages": [
-                _work("drafts", "Draft plans", "document", _PLAN, lanes=3),
-                _work("merge", "Merge plans", "document", _MERGE),
-                _review("review", "Review", "merge", 2),
+            "steps": [
+                _step("draft1", "Draft 1", PLAN_TASK, []),
+                _step("draft2", "Draft 2", PLAN_TASK, []),
+                _step("draft3", "Draft 3", PLAN_TASK, []),
+                _step("merge", "Merge plans", MERGE_TASK, ["draft1", "draft2", "draft3"]),
+                _step("review", "Review", REVIEW_TASK, ["merge"], returns_to="merge"),
             ],
         },
         {
@@ -117,7 +123,12 @@ def templates() -> list[Json]:
             "description": (
                 "A reviewed plan waits for your approval, then implementation and review."
             ),
-            "stages": plan_then_implement,
+            "steps": [
+                _step("plan", "Plan", PLAN_TASK, []),
+                _step("planreview", "Plan review", REVIEW_TASK, ["plan"], returns_to="plan"),
+                _step("implement", "Implement", IMPLEMENT_TASK, ["planreview"], approval=True),
+                _step("review", "Review", REVIEW_TASK, ["implement"], returns_to="implement"),
+            ],
         },
     ]
 
@@ -125,7 +136,7 @@ def templates() -> list[Json]:
 def legacy_workflow(row: Json) -> Json:
     """The Workflow equivalent of a setup saved with one Worker and one Reviewer."""
 
-    def lane(role: str) -> Json:
+    def agent(role: str) -> Json:
         return {
             "source": row.get(f"{role}_source") or "team",
             "agent": row.get(f"{role}_profile") or "",
@@ -133,15 +144,84 @@ def legacy_workflow(row: Json) -> Json:
             "effort": row.get(f"{role}_effort") or "",
         }
 
-    implement = _work("implement", "Implement", "changes")
-    implement["lanes"] = [lane("worker")]
-    review = _review("review", "Review", "implement", int(row.get("review_rounds") or 3))
-    review["lanes"] = [lane("reviewer")]
+    rounds = max(1, int(row.get("review_rounds") or 3) - 1)
     return {
         "id": "implement",
         "name": "Implement",
         "description": "Implement the Card, then an independent review.",
-        "stages": [implement, review],
+        "steps": [
+            _step("implement", "Implement", IMPLEMENT_TASK, [], agent=agent("worker")),
+            _step(
+                "review",
+                "Review",
+                REVIEW_TASK,
+                ["implement"],
+                returns_to="implement",
+                agent=agent("reviewer"),
+                rounds=rounds,
+            ),
+        ],
+    }
+
+
+def from_stages(workflow: Json) -> Json:
+    """Convert a Workflow saved as stages with lanes into steps.
+
+    Every lane becomes a step after all lanes of the previous stage. A review
+    returns to its target's first lane, a stage's approval gate moves to the
+    steps after it, and review rounds become send-backs (the last round used to
+    end in the user's decision).
+    """
+    steps: list[Json] = []
+    previous: list[str] = []
+    first_lane: dict[str, str] = {}
+    names: set[str] = set()
+    gate = False
+    for stage in workflow.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        lanes = [lane for lane in stage.get("lanes") or [] if isinstance(lane, dict)] or [{}]
+        stage_id = str(stage.get("id") or _new_id("s"))[:22]
+        name = str(stage.get("name") or "Step")
+        instructions = str(stage.get("instructions") or "").strip()
+        review = stage.get("kind") == "review"
+        if instructions:
+            task = instructions
+        elif review:
+            task = REVIEW_TASK
+        elif stage.get("output") == "document":
+            task = _DOCUMENT_TASK
+        else:
+            task = IMPLEMENT_TASK
+        ids = []
+        for index, lane in enumerate(lanes, 1):
+            step_id = stage_id if len(lanes) == 1 else f"{stage_id}{index}"
+            label = name if len(lanes) == 1 else f"{name} {index}"
+            while label.casefold() in names:
+                label += " 2"
+            names.add(label.casefold())
+            step = _step(
+                step_id,
+                label,
+                task,
+                list(previous),
+                approval=gate,
+                agent=lane,
+            )
+            if review:
+                step["returns_to"] = first_lane.get(str(stage.get("target") or ""), "")
+                rounds = stage.get("rounds", 3)
+                step["rounds"] = max(1, min(20, int(rounds) - 1 if isinstance(rounds, int) else 2))
+            ids.append(step_id)
+            steps.append(step)
+        first_lane[str(stage.get("id") or "")] = ids[0]
+        previous = ids
+        gate = stage.get("approval") is True
+    return {
+        "id": workflow.get("id", ""),
+        "name": workflow.get("name", ""),
+        "description": workflow.get("description", ""),
+        "steps": steps,
     }
 
 
@@ -178,6 +258,8 @@ def normalize(workflows: Any) -> list[Json]:
     for position, raw in enumerate(workflows, 1):
         if not isinstance(raw, dict):
             raise _refuse(f"Workflow {position}", "it must be an object.")
+        if "steps" not in raw and "stages" in raw:
+            raw = {**raw, **from_stages(raw)}
         name = _text(raw.get("name"), f"Workflow {position}", "name", 80, required=True)
         where = f"Workflow {name!r}"
         if name.casefold() in names:
@@ -189,12 +271,11 @@ def normalize(workflows: Any) -> list[Json]:
         while workflow_id in workflow_ids:
             workflow_id = _new_id("w")
         workflow_ids.add(workflow_id)
-        stages = raw.get("stages")
-        if not isinstance(stages, list) or not stages:
-            raise _refuse(where, "it has no stages. Add a work stage.")
-        if len(stages) > MAX_STAGES:
-            raise _refuse(where, f"it has more than {MAX_STAGES} stages.")
-        normalized_stages = _stages(stages, where)
+        steps = raw.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise _refuse(where, "it has no steps. Add a step.")
+        if len(steps) > MAX_STEPS:
+            raise _refuse(where, f"it has more than {MAX_STEPS} steps.")
         result.append(
             {
                 "id": workflow_id,
@@ -202,117 +283,124 @@ def normalize(workflows: Any) -> list[Json]:
                 "description": _text(
                     raw.get("description"), where, "description", 2000, required=False
                 ),
-                "stages": normalized_stages,
+                "steps": _steps(steps, where),
             }
         )
     return result
 
 
-def _stages(stages: list[Any], where: str) -> list[Json]:
+def _steps(steps: list[Any], where: str) -> list[Json]:
     result: list[Json] = []
-    ids: dict[str, Json] = {}
-    for position, raw in enumerate(stages, 1):
+    # References may use a step's id or its name; both resolve to the final id.
+    known: dict[str, str] = {}
+    names: set[str] = set()
+    for position, raw in enumerate(steps, 1):
         if not isinstance(raw, dict):
-            raise _refuse(f"{where}, stage {position}", "it must be an object.")
-        name = _text(raw.get("name"), f"{where}, stage {position}", "name", 80, required=True)
-        here = f"{where}, stage {name!r}"
-        kind = raw.get("kind")
-        if kind not in STAGE_KINDS:
-            raise _refuse(here, "kind must be work or review.")
-        stage_id = raw.get("id")
-        if not isinstance(stage_id, str) or not _ID.fullmatch(stage_id) or stage_id in ids:
-            stage_id = _new_id("s")
-            while stage_id in ids:
-                stage_id = _new_id("s")
-        lanes = raw.get("lanes")
-        if not isinstance(lanes, list) or not lanes:
-            raise _refuse(here, "it has no Agent. Add at least one lane.")
-        if len(lanes) > MAX_LANES:
-            raise _refuse(here, f"it has more than {MAX_LANES} lanes.")
-        stage: Json = {
-            "id": stage_id,
-            "name": name,
-            "kind": kind,
-            "instructions": _text(
-                raw.get("instructions"), here, "instructions", 20000, required=False
-            ),
-            "lanes": [
-                _lane_value(lane, f"{here}, lane {index}") for index, lane in enumerate(lanes, 1)
-            ],
-            "approval": raw.get("approval") is True,
-        }
-        if kind == "work":
-            output = raw.get("output", "changes")
-            if output not in OUTPUTS:
-                raise _refuse(here, "output must be changes or document.")
-            stage["output"] = output
+            raise _refuse(f"{where}, step {position}", "it must be an object.")
+        name = _text(raw.get("name"), f"{where}, step {position}", "name", 80, required=True)
+        here = f"{where}, step {name!r}"
+        if name.casefold() in names:
+            raise _refuse(here, "another step has the same name. Rename one.")
+        step_id = raw.get("id")
+        taken = {item["id"] for item in result}
+        if not isinstance(step_id, str) or not _ID.fullmatch(step_id) or step_id in taken:
+            step_id = _new_id("s")
+            while step_id in taken:
+                step_id = _new_id("s")
+        source = raw.get("source") or "agent"
+        if source not in SOURCES:
+            raise _refuse(here, "source must be agent or team.")
+
+        after_value = raw.get("after")
+        if after_value is None:
+            after = [result[-1]["id"]] if result else []
+        elif isinstance(after_value, list):
+            after = []
+            for item in after_value:
+                resolved = _resolve(known, item, "after", here)
+                if resolved not in after:
+                    after.append(resolved)
         else:
-            target = raw.get("target")
-            earlier = [item for item in result if item["kind"] == "work"]
-            if not earlier:
-                raise _refuse(here, "a review needs an earlier work stage to review.")
-            chosen = next((item for item in earlier if target in {item["id"], item["name"]}), None)
-            if chosen is None:
-                if target not in (None, ""):
-                    raise _refuse(here, "it reviews a stage that is not an earlier work stage.")
-                chosen = earlier[-1]
-            rounds = raw.get("rounds", 3)
-            if isinstance(rounds, float) and rounds.is_integer():
-                rounds = int(rounds)
-            if not isinstance(rounds, int) or isinstance(rounds, bool) or not 1 <= rounds <= 20:
-                raise _refuse(here, "rounds must be a whole number from 1 to 20.")
-            stage.update(target=chosen["id"], rounds=rounds)
-        ids[stage_id] = stage
-        result.append(stage)
-    changes = [
-        stage for stage in result if stage["kind"] == "work" and stage["output"] == "changes"
-    ]
-    if changes and len(changes[-1]["lanes"]) != 1:
+            raise _refuse(here, "after must be a list of earlier steps.")
+        returns_to = ""
+        if raw.get("returns_to") not in (None, ""):
+            returns_to = _resolve(known, raw["returns_to"], "returns_to", here)
+            if returns_to not in _closure(result, after):
+                raise _refuse(
+                    here,
+                    "it can only send work back to a step it comes after, directly or through "
+                    "other steps. Add that step to after, or choose another one.",
+                )
+        rounds = raw.get("rounds", DEFAULT_ROUNDS)
+        if isinstance(rounds, float) and rounds.is_integer():
+            rounds = int(rounds)
+        if not isinstance(rounds, int) or isinstance(rounds, bool) or not 1 <= rounds <= 20:
+            raise _refuse(here, "rounds must be a whole number from 1 to 20.")
+        step = {
+            "id": step_id,
+            "name": name,
+            "source": source,
+            "agent": _text(raw.get("agent"), here, "agent", 200, required=False).strip(),
+            "model": _text(raw.get("model"), here, "model", 300, required=False).strip(),
+            "effort": _text(raw.get("effort"), here, "effort", 40, required=False).strip(),
+            "task": _text(raw.get("task"), here, "task", 20000, required=True),
+            "after": after,
+            "approval": raw.get("approval") is True,
+            "returns_to": returns_to,
+            "rounds": rounds,
+        }
+        result.append(step)
+        names.add(name.casefold())
+        known[step_id] = step_id
+        known.setdefault(name.casefold(), step_id)
+        if isinstance(raw.get("id"), str) and raw["id"].strip():
+            known.setdefault(raw["id"].strip(), step_id)
+    return result
+
+
+def _resolve(known: dict[str, str], value: Any, field: str, here: str) -> str:
+    reference = value.strip() if isinstance(value, str) else ""
+    found = known.get(reference) or known.get(reference.casefold())
+    if found is None:
         raise _refuse(
-            f"{where}, stage {changes[-1]['name']!r}",
-            "the last stage that changes the repository integrates the result after "
-            "your acceptance, so it needs exactly one lane. Add a single-lane stage "
-            "after it that combines the lanes.",
+            here,
+            f"{field} names {value!r}, which is not a step before it. "
+            "A step can only follow or return to steps listed above it.",
         )
-    return result
+    return found
 
 
-def _lane_value(raw: Any, where: str) -> Json:
-    if not isinstance(raw, dict):
-        raise _refuse(where, "it must be an object.")
-    source = raw.get("source", "agent")
-    if source not in SOURCES:
-        raise _refuse(where, "source must be agent or team.")
-    return {
-        "source": source,
-        "agent": _text(raw.get("agent"), where, "agent", 200, required=False).strip(),
-        "model": _text(raw.get("model"), where, "model", 300, required=False).strip(),
-        "effort": _text(raw.get("effort"), where, "effort", 40, required=False).strip(),
-    }
+def _closure(steps: list[Json], start: list[str]) -> set[str]:
+    by_id = {step["id"]: step for step in steps}
+    found: set[str] = set()
+    todo = list(start)
+    while todo:
+        current = todo.pop()
+        if current in found or current not in by_id:
+            continue
+        found.add(current)
+        todo.extend(by_id[current]["after"])
+    return found
 
 
-def lanes(workflows: list[Json]) -> list[tuple[str, Json, Json, int, Json]]:
-    """Every lane with its location: (label, workflow, stage, index, lane)."""
-    result = []
-    for workflow in workflows:
-        for stage in workflow["stages"]:
-            for index, lane in enumerate(stage["lanes"]):
-                label = f"{workflow['name']} / {stage['name']}"
-                if len(stage["lanes"]) > 1:
-                    label += f" / lane {index + 1}"
-                result.append((label, workflow, stage, index, lane))
-    return result
+def steps(workflows: list[Json]) -> list[tuple[str, Json, Json]]:
+    """Every step with its location: (label, workflow, step)."""
+    return [
+        (f"{workflow['name']} / {step['name']}", workflow, step)
+        for workflow in workflows
+        for step in workflow["steps"]
+    ]
 
 
-def lane_key(workflow: Json, stage: Json, index: int) -> str:
-    return f"{workflow['id']}/{stage['id']}/{index}"
+def model_key(workflow: Json, step: Json) -> str:
+    return f"{workflow['id']}/{step['id']}"
 
 
-def profile(lane: Json) -> Json:
-    """The ``TemporaryAgentConfig`` Profile fields of a lane's chosen Agent."""
-    if lane.get("source", "agent") == "agent":
-        return {"identity_profile": lane["agent"]}
-    return {"repository_profile": lane["agent"]}
+def profile(step: Json) -> Json:
+    """The ``TemporaryAgentConfig`` Profile fields of a step's chosen Agent."""
+    if step.get("source", "agent") == "agent":
+        return {"identity_profile": step["agent"]}
+    return {"repository_profile": step["agent"]}
 
 
 def choose(setup: Json, requested: str | None) -> Json:
@@ -348,52 +436,46 @@ def choose(setup: Json, requested: str | None) -> Json:
     return deepcopy(found)
 
 
-# Stage navigation over a Card's Workflow snapshot.
+# Navigation over a Card's Workflow snapshot.
 
 
-def work_participant(stage: Json, lane: int) -> str:
-    return f"{stage['id']}-{lane + 1}"
+def step(workflow: Json, step_id: str) -> Json:
+    return next(item for item in workflow["steps"] if item["id"] == step_id)
 
 
-def review_participant(stage: Json, lane: int, sequence: int) -> str:
-    return f"{stage['id']}-{lane + 1}-r{sequence}"
+def position(workflow: Json, step_id: str) -> int:
+    return next(index for index, item in enumerate(workflow["steps"]) if item["id"] == step_id)
 
 
-def is_review(participant: str | None) -> bool:
-    return bool(participant) and _REVIEW_PARTICIPANT.fullmatch(str(participant)) is not None
+def ancestors(workflow: Json, step_id: str) -> set[str]:
+    """Every step this step follows, directly or through other steps."""
+    return _closure(workflow["steps"], step(workflow, step_id)["after"])
 
 
-def stage_index(workflow: Json, stage_id: str) -> int:
-    return next(index for index, stage in enumerate(workflow["stages"]) if stage["id"] == stage_id)
+def dependents(workflow: Json, step_id: str) -> set[str]:
+    """Every step that follows this step, directly or through other steps."""
+    return {item["id"] for item in workflow["steps"] if step_id in ancestors(workflow, item["id"])}
 
 
-def integrator(workflow: Json) -> int | None:
-    """Index of the last stage that changes the repository; its lane integrates."""
+def next_step(workflow: Json, done: list[str]) -> Json | None:
+    """The first step not done; every step it follows is listed before it, hence done."""
+    return next((item for item in workflow["steps"] if item["id"] not in done), None)
+
+
+def participant(step: Json, sequence: int) -> str:
+    """A step's participant: one Session for its whole Card, or a fresh one per run
+    for a step that judges earlier work."""
+    return f"{step['id']}-r{sequence}" if step["returns_to"] else step["id"]
+
+
+def step_id(participant_id: str) -> str:
+    return participant_id.split("-")[0]
+
+
+def integration_reviewer(workflow: Json, integrator: str) -> Json | None:
+    """The last step that judges work and follows the integrating step."""
     found = None
-    for index, stage in enumerate(workflow["stages"]):
-        if stage["kind"] == "work" and stage["output"] == "changes":
-            found = index
+    for item in workflow["steps"]:
+        if item["returns_to"] and integrator in ancestors(workflow, item["id"]):
+            found = item
     return found
-
-
-def integration_review(workflow: Json) -> int | None:
-    """Index of the last review stage that reviews the integrating stage."""
-    index = integrator(workflow)
-    if index is None:
-        return None
-    target = workflow["stages"][index]["id"]
-    found = None
-    for position, stage in enumerate(workflow["stages"]):
-        if stage["kind"] == "review" and stage["target"] == target:
-            found = position
-    return found
-
-
-def send_back_stage(workflow: Json, position: int) -> int:
-    """The work stage a user's send-back returns to from the stage at ``position``."""
-    stages = workflow["stages"]
-    position = min(max(position, 0), len(stages) - 1)
-    stage = stages[position]
-    if stage["kind"] == "review":
-        return stage_index(workflow, stage["target"])
-    return position

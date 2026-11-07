@@ -28,20 +28,19 @@ type Json = dict[str, Any]
 
 
 def implement_workflow() -> Json:
-    """The two-stage Workflow the operation contracts run Cards with."""
+    """Implement, then Review: the Workflow the operation contracts run Cards with."""
     workflow = templates()[0]
-    implement, review = workflow["stages"]
-    implement["lanes"][0].update(source="agent", agent="worker")
-    review["lanes"][0].update(source="agent", agent="reviewer")
+    implement, review = workflow["steps"]
+    implement.update(source="agent", agent="worker")
+    review.update(source="agent", agent="reviewer")
     return workflow
 
 
 def drafts_workflow() -> Json:
-    """Three draft lanes, a merge and a review: a document-only Workflow."""
+    """Three independent drafts, a merge and a review: a document-only Workflow."""
     workflow = templates()[2]
-    for stage in workflow["stages"]:
-        for lane in stage["lanes"]:
-            lane.update(source="agent", agent="reviewer" if stage["kind"] == "review" else "worker")
+    for step in workflow["steps"]:
+        step.update(source="agent", agent="reviewer" if step["returns_to"] else "worker")
     return workflow
 
 
@@ -118,7 +117,7 @@ class FakeExecution:
     async def accept(self, card: Json) -> None:
         await self._admit("accept", card, "integrating")
 
-    async def send_back(self, card: Json, comment: str, stage: str = "") -> None:
+    async def send_back(self, card: Json, comment: str, step: str = "") -> None:
         await self._admit("send_back", card, "working", comment)
 
     async def retry(self, card: Json) -> None:

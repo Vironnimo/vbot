@@ -28,39 +28,38 @@ type Json = dict[str, Any]
 _LOGGER = get_logger("extensions.factory")
 
 
-def _current_stage(runtime: Json) -> tuple[int, Json] | None:
-    """The position and stage of a started Card's Workflow snapshot."""
+def _current_step(runtime: Json) -> Json | None:
+    """The current step of a started Card's Workflow snapshot."""
     workflow = runtime.get("workflow")
-    if not isinstance(workflow, dict) or not workflow.get("stages"):
+    if not isinstance(workflow, dict) or not workflow.get("steps"):
         return None
-    stages = workflow["stages"]
-    position = min(int(runtime.get("stage", 0)), len(stages) - 1)
-    return position, stages[position]
+    steps = workflow["steps"]
+    current = runtime.get("step")
+    found: Json = next((item for item in steps if item["id"] == current), steps[0])
+    return found
 
 
 def projection(card: Json) -> Json:
     """Decode provenance once; no transcript or private configuration on the Board."""
     value = {key: item for key, item in card.items() if key != "runtime"}
     runtime = card.get("runtime", {})
-    if current := _current_stage(runtime):
-        position, stage = current
+    if current := _current_step(runtime):
         workflow = runtime["workflow"]
-        stages = workflow["stages"]
         value["workflow"] = {
             "id": workflow["id"],
             "name": workflow["name"],
-            "stages": [
-                {"id": item["id"], "name": item["name"], "kind": item["kind"]} for item in stages
+            "steps": [
+                {
+                    key: item[key]
+                    for key in ("id", "name", "after", "approval", "returns_to", "rounds")
+                }
+                for item in workflow["steps"]
             ],
         }
-        value["stage"] = {
-            "index": position,
-            "id": stage["id"],
-            "name": stage["name"],
-            "kind": stage["kind"],
-            "lane": int(runtime.get("lane", 0)),
-            "lanes": len(stage["lanes"]),
-        }
+        value["step"] = {"id": current["id"], "name": current["name"]}
+        value["done_steps"] = [
+            item["id"] for item in workflow["steps"] if item["id"] in runtime.get("done", [])
+        ]
     if pending := runtime.get("pending_action"):
         value["queued_action"] = pending["action"]
     landing = runtime.get("integration_landing")
@@ -184,7 +183,9 @@ class FactoryExtension:
                         await self.execution.accept(card)
                     elif action == "send_back":
                         await self.execution.send_back(
-                            card, pending.get("comment", ""), pending.get("stage", "")
+                            card,
+                            pending.get("comment", ""),
+                            pending.get("step") or pending.get("stage", ""),
                         )
                     elif action == "retry":
                         await self.execution.retry(card)
@@ -365,9 +366,9 @@ class FactoryExtension:
                                 )
                             }
                             | (
-                                {"stage": current[1]["name"]}
+                                {"step": current["name"]}
                                 if card["state"] not in FINAL_STATES
-                                and (current := _current_stage(card["runtime"]))
+                                and (current := _current_step(card["runtime"]))
                                 else {}
                             )
                             for card in cards
@@ -389,7 +390,7 @@ class FactoryExtension:
             handlers = {
                 "factory_submit_work": self.execution.submit_work,
                 "factory_report_blocked": self.execution.report_blocked,
-                "factory_submit_review": self.execution.submit_review,
+                "factory_request_changes": self.execution.request_changes,
                 "factory_report_integration": self.execution.report_integration,
             }
             async with self.lock:

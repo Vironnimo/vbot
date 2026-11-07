@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -42,25 +43,25 @@ async def test_card_transition_output_and_comment_commit_together(
         card["id"],
         {"state": "waiting", "waiting_reason": "finished", "runtime": {"unknown": 7}},
         actor="agent",
-        event="reviewed",
+        event="changes_requested",
         comment="A comment",
         output={
-            "stage_id": "review",
-            "stage_name": "Review",
-            "kind": "review",
-            "lane": 0,
+            "step": "review",
+            "step_name": "Review",
+            "kind": "changes",
             "pass": 1,
-            "participant_id": "review-1-r1",
-            "verdict": "approve",
+            "participant_id": "review-r1",
             "findings": ["A note"],
+            "target": "implement",
         },
         expected_revision=1,
     )
     history = await store.history(card["id"])
     assert saved["revision"] == 2 and saved["runtime"] == {"unknown": 7}
     assert history["comments"][0]["text"] == "A comment"
-    assert history["outputs"][0]["verdict"] == "approve"
-    assert history["outputs"][0]["findings"] == ["A note"]
+    output = history["outputs"][0]
+    assert (output["step"], output["kind"], output["target"]) == ("review", "changes", "implement")
+    assert output["findings"] == ["A note"]
     assert history["events"][-1]["detail"] == {"previous_state": "queued", "state": "waiting"}
     with pytest.raises(FactoryError) as conflict:
         await store.change(
@@ -128,7 +129,38 @@ CREATE TABLE reviews (
 """
 
 
-async def test_role_based_setups_and_reviews_migrate_into_workflows(tmp_path: Path) -> None:
+def _stage_workflow() -> dict[str, object]:
+    """A Workflow as the stage-based Factory saved it."""
+    lane = {"source": "agent", "agent": "coder", "model": "", "effort": ""}
+    return {
+        "id": "staged",
+        "name": "Staged",
+        "description": "",
+        "stages": [
+            {
+                "id": "implement",
+                "name": "Implement",
+                "kind": "work",
+                "output": "changes",
+                "approval": False,
+                "instructions": "",
+                "lanes": [lane],
+            },
+            {
+                "id": "review",
+                "name": "Review",
+                "kind": "review",
+                "target": "implement",
+                "rounds": 3,
+                "approval": False,
+                "instructions": "",
+                "lanes": [{**lane, "agent": "critic"}],
+            },
+        ],
+    }
+
+
+async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_path: Path) -> None:
     old = extension_database_spec(tmp_path, "factory", DATABASE_NAME, _ROLE_SCHEMA + SCHEMA_SQL)
     database = open_offline_database(old)
     card = await FactoryStore(database).create_card("project", "Objective", "Scope", origin="user")
@@ -144,6 +176,13 @@ async def test_role_based_setups_and_reviews_migrate_into_workflows(tmp_path: Pa
             "INSERT INTO reviews VALUES (?, 1, 'review', 'reviewer-1', 'approve', "
             "'Accept it.', '[]', 'abc', '2026-01-01T00:00:00Z')",
             (card["id"],),
+        )
+        connection.execute(
+            "INSERT INTO setups (project_id, enabled, workflows_json, default_workflow, "
+            "turn_budget, base_branch, integration_check, revision, updated_at) "
+            "VALUES ('staged', 1, ?, 'staged', 30, 'main', 'merged', 1, "
+            "'2026-01-01T00:00:00Z')",
+            (json.dumps([_stage_workflow()]),),
         )
 
     database.write(seed)
@@ -161,16 +200,31 @@ async def test_role_based_setups_and_reviews_migrate_into_workflows(tmp_path: Pa
             12,
             3,
         )
-        implement, review = workflow["stages"]
-        assert implement["lanes"] == [
-            {"source": "team", "agent": "coder", "model": "test/worker", "effort": ""}
-        ]
-        assert review["lanes"][0]["source"] == "agent" and review["lanes"][0]["agent"] == "critic"
-        assert (review["target"], review["rounds"]) == (implement["id"], 4)
-        with database.read() as connection:
-            row = connection.execute(
-                "SELECT participant_id, verdict, head_sha FROM outputs"
-            ).fetchone()
-        assert tuple(row) == ("reviewer-1", "approve", "abc")
+        implement, review = workflow["steps"]
+        assert (implement["source"], implement["agent"], implement["model"]) == (
+            "team",
+            "coder",
+            "test/worker",
+        )
+        assert (review["source"], review["agent"]) == ("agent", "critic")
+        # Four review passes allowed three send-backs.
+        assert (review["returns_to"], review["rounds"]) == (implement["id"], 3)
+        output = (await store.history(card["id"]))["outputs"][0]
+        assert (output["participant_id"], output["kind"], output["result"]) == (
+            "reviewer-1",
+            "work",
+            "Accept it.",
+        )
+        implement, review = (await store.get_setup("staged"))["workflows"][0]["steps"]
+        assert (implement["id"], implement["agent"], implement["returns_to"]) == (
+            "implement",
+            "coder",
+            "",
+        )
+        assert (review["after"], review["returns_to"], review["rounds"]) == (
+            ["implement"],
+            "implement",
+            2,
+        )
     finally:
         database.close()

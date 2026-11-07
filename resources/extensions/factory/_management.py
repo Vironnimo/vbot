@@ -198,7 +198,7 @@ class FactoryManagement:
             "team": {item["id"] for item in project.get("agent_profiles", [])},
         }
         models = {item["id"] for item in catalog["models"]}
-        for label, _workflow, _stage, _index, lane in _workflows.lanes(values["workflows"]):
+        for label, _workflow, lane in _workflows.steps(values["workflows"]):
             if lane["agent"] not in choices[lane["source"]]:
                 raise FactoryError(
                     "profile_not_found",
@@ -240,17 +240,17 @@ class FactoryManagement:
         return {"setup": saved, "effective_models": effective}
 
     async def _effective_models(self, values: Json) -> Json:
-        """Each lane's Model by ``workflow/stage/lane``; empty marks a lane that has none."""
+        """Each step's Model by ``workflow/step``; empty marks a step that has none."""
         return (await self._resolve_models(values))[0]
 
     async def _resolve_models(self, values: Json) -> tuple[Json, dict[str, str]]:
         host = self.service.host
         assert host is not None
-        lanes = _workflows.lanes(values.get("workflows") or [])
+        lanes = _workflows.steps(values.get("workflows") or [])
         if host.inspect_prompt is None or host.catalog is None:
             return {
-                _workflows.lane_key(workflow, stage, index): lane["model"]
-                for _label, workflow, stage, index, lane in lanes
+                _workflows.model_key(workflow, lane): lane["model"]
+                for _label, workflow, lane in lanes
             }, {}
         catalog = await host.catalog()
         project = next(
@@ -261,7 +261,7 @@ class FactoryManagement:
         result: Json = {}
         problems: dict[str, str] = {}
         resolved: dict[tuple[str, str, str, str], tuple[str, str]] = {}
-        for label, workflow, stage, index, lane in lanes:
+        for label, workflow, lane in lanes:
             if not lane["agent"]:
                 continue
             key = (lane["source"], lane["agent"], lane["model"], lane["effort"])
@@ -282,10 +282,10 @@ class FactoryManagement:
                     resolved[key] = (preview["model"], "")
                 except ValueError as error:
                     # Resolution refuses an Agent without a usable Model; reading
-                    # or previewing a setup still answers for the other lanes.
+                    # or previewing a setup still answers for the other steps.
                     resolved[key] = ("", str(error).rstrip("."))
             model, problem = resolved[key]
-            result[_workflows.lane_key(workflow, stage, index)] = model
+            result[_workflows.model_key(workflow, lane)] = model
             if problem:
                 problems.setdefault(label, problem)
         return result, problems
@@ -367,7 +367,7 @@ class FactoryManagement:
                 raise FactoryError(
                     "not_acceptable",
                     "This Card has nothing to accept. "
-                    "Answer its question, send it back or retry the failed stage.",
+                    "Answer its question, send it back or retry the failed step.",
                 )
             if action == "answer" and card["waiting_reason"] != "blocked":
                 raise FactoryError(
@@ -391,15 +391,24 @@ class FactoryManagement:
                 if action in {"send_back", "answer"}
                 else ""
             )
-            stage = arguments.get("stage") or ""
-            if action == "send_back" and stage:
+            step = arguments.get("step") or arguments.get("stage") or ""
+            if action == "send_back" and step:
                 workflow = card["runtime"].get("workflow") or {}
-                work = [item["id"] for item in workflow.get("stages", []) if item["kind"] == "work"]
-                if stage not in work:
+                steps = {item["id"]: item["name"] for item in workflow.get("steps", [])}
+                if step not in steps:
+                    step = next(
+                        (
+                            key
+                            for key, value in steps.items()
+                            if value.casefold() == step.casefold()
+                        ),
+                        step,
+                    )
+                if step not in steps:
                     raise FactoryError(
-                        "invalid_stage",
-                        "Send the Card back to one of its work stages: "
-                        + (", ".join(work) or "(none)")
+                        "invalid_step",
+                        "Send the Card back to one of its steps: "
+                        + (", ".join(steps.values()) or "(none)")
                         + ".",
                     )
             action = "send_back" if action == "answer" else action
@@ -411,7 +420,7 @@ class FactoryManagement:
                     "pending_action": {
                         "action": action,
                         "comment": comment,
-                        "stage": stage,
+                        "step": step,
                         "comment_recorded": bool(comment),
                         "waiting_reason": card["waiting_reason"],
                     },
@@ -428,7 +437,7 @@ class FactoryManagement:
                 if action == "accept":
                     await service.execution.accept(card)
                 elif action == "send_back":
-                    await service.execution.send_back(card, comment, stage)
+                    await service.execution.send_back(card, comment, step)
                 else:
                     await service.execution.retry(card)
                 return {"card": self._projection(await store.get_card(card["id"]))}
