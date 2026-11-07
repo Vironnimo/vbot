@@ -45,6 +45,7 @@ def _copilot_device_flow_provider() -> SimpleNamespace:
                 label="Sign in with GitHub",
                 auth=SimpleNamespace(credential_key=""),
                 oauth=SimpleNamespace(flow="device"),
+                auto_refresh=False,
             )
         ],
     )

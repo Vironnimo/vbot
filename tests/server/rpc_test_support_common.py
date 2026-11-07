@@ -632,6 +632,7 @@ class StubProviders:
                         type="api_key",
                         label="API Key",
                         auth=SimpleNamespace(credential_key="ANTHROPIC_API_KEY"),
+                        auto_refresh=False,
                     )
                 ],
             ),
@@ -650,12 +651,14 @@ class StubProviders:
                         type="oauth",
                         label="OAuth",
                         auth=SimpleNamespace(credential_key="OPENAI_OAUTH_TOKEN"),
+                        auto_refresh=False,
                     ),
                     SimpleNamespace(
                         id="api-key",
                         type="api_key",
                         label="API Key",
                         auth=SimpleNamespace(credential_key="OPENAI_API_KEY"),
+                        auto_refresh=False,
                     ),
                 ],
             ),
@@ -673,6 +676,7 @@ class StubProviders:
                         type="api_key",
                         label="API Key",
                         auth=SimpleNamespace(credential_key="OLLAMA_API_KEY"),
+                        auto_refresh=False,
                     )
                 ],
             ),
@@ -822,6 +826,7 @@ def openrouter_provider() -> SimpleNamespace:
                 type="api_key",
                 label="API Key",
                 auth=SimpleNamespace(credential_key="OPENROUTER_API_KEY"),
+                auto_refresh=False,
             )
         ],
     )
@@ -835,12 +840,14 @@ def openrouter_provider_with_secondary_connection() -> SimpleNamespace:
             type="oauth",
             label="OAuth",
             auth=SimpleNamespace(credential_key="OPENROUTER_OAUTH_TOKEN"),
+            auto_refresh=False,
         ),
         SimpleNamespace(
             id="api-key",
             type="api_key",
             label="API Key",
             auth=SimpleNamespace(credential_key="OPENROUTER_API_KEY"),
+            auto_refresh=False,
         ),
     ]
     return provider
