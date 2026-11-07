@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import { t } from '$lib/i18n.js';
+  import { formatAgentAddress } from '$lib/agentAddress.js';
   import { createExtensionRunStream } from '$lib/extensionRunStream.js';
   import { noteExtensionPageInvalidation } from '$lib/clientMetrics.js';
   import Banner from './ui/Banner.svelte';
@@ -33,6 +34,7 @@
     'history.children',
     'history.tool_call',
     'link.open',
+    'session.open',
     'media.open',
     'route.push',
     'route.replace',
@@ -53,6 +55,7 @@
     timezone = 'UTC',
     subscribeInvalidations = null,
     onToast = () => {},
+    onOpenSession = () => {},
   } = $props();
   // The page's route spells its navigation place (`/swarms/<id>`), or is ''
   // at the page's start. Back/Forward and the main navigation change the
@@ -673,6 +676,28 @@
         const place = placeFromRoute(data.params.route);
         if (data.method === 'route.push') navigation.navigate(place);
         else navigation.replace(place);
+        result = {};
+      } else if (data.method === 'session.open') {
+        const address = data.params.address;
+        const safeId = (value) =>
+          typeof value === 'string' &&
+          value.length > 0 &&
+          value.length <= 256 &&
+          !/[\s/\\@?#\p{C}]/u.test(value);
+        if (
+          !isPlainObject(address) ||
+          Object.keys(address).some(
+            (key) => !['agent_id', 'project_id', 'session_id'].includes(key),
+          ) ||
+          !safeId(address.agent_id) ||
+          !safeId(address.session_id) ||
+          (address.project_id != null && !safeId(address.project_id))
+        )
+          throw new Error(t('extensions.page.invalidLink'));
+        onOpenSession({
+          agentId: formatAgentAddress(address.agent_id, address.project_id),
+          sessionId: address.session_id,
+        });
         result = {};
       } else if (
         data.method === 'toast' &&

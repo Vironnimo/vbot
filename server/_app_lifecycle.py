@@ -23,6 +23,7 @@ from server.clients import ClientRegistry
 from server.events import (
     ACTIVITY_STATUS_EVENT,
     CRON_FAILURE_ALERT_EVENT,
+    EXTENSION_NOTIFICATION_EVENT,
     RESOURCE_KIND_APPLICATION,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
@@ -74,6 +75,9 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
+    runtime.set_extension_notification_publisher(
+        lambda notification: app.state.event_bus.publish(EXTENSION_NOTIFICATION_EVENT, notification)
+    )
     runtime.set_extension_change_publisher(
         lambda owner, resource, ids, revision: publish_resource_changed(
             app.state,

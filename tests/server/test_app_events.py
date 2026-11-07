@@ -161,6 +161,18 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         model_events = publishes(lambda: runtime.model_catalog_changed_callbacks[0]())
         index_status = IndexStatus(semantic_enabled=True, state="indexing", waiting=4)
         index_events = publishes(lambda: runtime.recall.listeners[0](index_status))
+        notification = {
+            "extension": "factory",
+            "page_id": "board",
+            "route": "/card/one",
+            "title": "Fixture title",
+            "body": "Fixture body",
+            "key": "one",
+            "at": "fixture-time",
+        }
+        notification_publisher = runtime._extension_notification_publisher
+        assert notification_publisher is not None
+        notification_events = publishes(lambda: notification_publisher(notification))
 
     # Runs started outside RPC reach /ws too, and invalidate their exact Session.
     assert [event_type for event_type, _payload in run_events] == [
@@ -223,6 +235,7 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     assert computer_capability_events == []
     assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]
+    assert notification_events == [("extension_notification", notification)]
     # App shutdown releases the bridges.
     assert terminal_manager.changed_callbacks == []
     assert runtime.computers._listeners == []

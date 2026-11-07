@@ -85,6 +85,92 @@ describe('App', () => {
     return subscribeServerEventsMock.mock.calls[0][0];
   }
 
+  it('replaces keyed Extension toasts, opens their detail route and refreshes navigation badges', async () => {
+    let badge = 3;
+    const route = 'extension:fixture:main';
+    const pageButton = () =>
+      Array.from(
+        document.querySelectorAll(
+          'nav.app-shell__navigation .app-shell__nav-item',
+        ),
+      ).find((button) => button.textContent.includes('Fixture page'));
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'extensions.pages': () => ({
+            pages: [
+              {
+                extension: 'fixture',
+                page: 'main',
+                title: 'Fixture page',
+                icon: 'workflow',
+                route,
+                entry_url: '/api/files/fixture',
+                epoch: 'epoch-a',
+                badge,
+              },
+            ],
+          }),
+        },
+      }),
+    );
+    const connection = mountApp();
+    connection.onEvent({ type: 'connection_ready', active_runs: [] });
+    await waitForCondition(() =>
+      expect(pageButton()?.textContent).toContain('3'),
+    );
+    const payload = {
+      extension: 'fixture',
+      page_id: 'main',
+      route: '/card/card one',
+      title: 'Old card',
+      body: 'Review required',
+      key: 'one',
+    };
+    connection.onEvent({ type: 'extension_notification', payload });
+    connection.onEvent({
+      type: 'extension_notification',
+      payload: { ...payload, title: 'Latest card' },
+    });
+    flushSync();
+    expect(document.querySelectorAll('.toast')).toHaveLength(1);
+    expect(document.querySelector('.toast').textContent).toContain(
+      'Latest card',
+    );
+    expect(document.querySelector('.toast').textContent).not.toContain(
+      'Old card',
+    );
+    buttonWithText('.toast button', t('extensions.page.open')).click();
+    await waitForCondition(() =>
+      expect(window.location.hash).toBe(`#${route}/card/card%20one`),
+    );
+    expect(document.querySelectorAll('.toast')).toHaveLength(0);
+    const frame = document.querySelector('iframe');
+    badge = 125;
+    connection.onEvent({
+      type: 'resource_changed',
+      payload: {
+        kind: 'extensions',
+        scope: {
+          owner: 'fixture',
+          resource: 'page_badges',
+          ids: ['main'],
+          revision: 1,
+        },
+      },
+    });
+    await waitForCondition(() =>
+      expect(pageButton()?.textContent).toContain('99+'),
+    );
+    expect(document.querySelector('iframe')).toBe(frame);
+    expect(pageButton().getAttribute('aria-label')).toContain('125');
+    badge = 0;
+    connection.onEvent({ type: 'connection_ready', active_runs: [] });
+    await waitForCondition(() =>
+      expect(pageButton()?.textContent).not.toContain('99+'),
+    );
+  });
+
   it('gives every navigation view its own icon', async () => {
     mountApp();
     await waitForCondition(() =>

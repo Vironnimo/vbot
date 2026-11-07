@@ -75,6 +75,10 @@ class Actions(TrayActions):
         self._call(f"open_session:{agent}:{session}")
 
     @override
+    def open_extension_page(self, extension: str, page_id: str, route: str) -> None:
+        self._call(f"open_extension_page:{extension}:{page_id}:{route}")
+
+    @override
     def start_update(self) -> None:
         self._call("start_update")
 
@@ -386,6 +390,17 @@ def test_clicked_toast_opens_its_session_or_the_status_window():
     assert actions.calls == ["open_session:coder:s1"]
     controller.activate_toast(Toast("server", "server_stopped", "vBot server stopped", ""))
     assert view.status_shown == 1
+    controller.activate_toast(
+        Toast(
+            "extension:factory:one",
+            "extension_notification",
+            "Card",
+            "",
+            extension_page=("factory", "board", "/card/one"),
+        )
+    )
+    _run_queued(controller)
+    assert actions.calls[-1] == "open_extension_page:factory:board:/card/one"
 
 
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():

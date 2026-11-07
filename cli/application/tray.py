@@ -127,6 +127,8 @@ class TrayActions(Protocol):
 
     def open_session(self, agent: str, session: str) -> None: ...
 
+    def open_extension_page(self, extension: str, page_id: str, route: str) -> None: ...
+
     def start_update(self) -> None: ...
 
     def check_for_updates(self) -> None: ...
@@ -426,6 +428,10 @@ class TrayController:
     def activate_toast(self, toast: Toast) -> None:
         """Open what a clicked toast refers to."""
 
+        if toast.extension_page is not None:
+            target = toast.extension_page
+            self._queue("open_extension_page", lambda: self._actions.open_extension_page(*target))
+            return
         if toast.session is None:
             self.invoke("show_status")
             return

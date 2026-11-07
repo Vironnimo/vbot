@@ -454,6 +454,42 @@ def _lifecycle_source(
     )
 
 
+@pytest.mark.asyncio
+async def test_config_change_callbacks_are_detached_fail_open_and_registration_bound(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    write_extension(
+        root,
+        "observer",
+        """
+events = []
+def register(api):
+    def first(previous, current):
+        events.append((previous['nested']['value'], current['nested']['value']))
+        previous['nested']['value'] = 'mutated'
+    def failing(previous, current):
+        raise RuntimeError('fixture failure')
+    async def last(previous, current):
+        events.append((previous['nested']['value'], current['nested']['value']))
+    api.on_config_change(first)
+    api.on_config_change(failing)
+    api.on_config_change(last)
+""",
+    )
+    registry = ExtensionRegistry.load(root)
+    previous = {"nested": {"value": "before"}}
+    current = {"nested": {"value": "after"}}
+    await registry.fire_config_change("observer", previous, current)
+    events = sys.modules["vbot_ext.observer"].events
+    assert events == [("before", "after"), ("before", "after")]
+    assert previous == {"nested": {"value": "before"}}
+    await registry.fire_config_change("observer", current, current)
+    registry.retire_registration()
+    await registry.fire_config_change("observer", previous, current)
+    assert len(events) == 2
+
+
 @pytest.mark.parametrize("failure", ["RuntimeError", "asyncio.CancelledError"])
 def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str

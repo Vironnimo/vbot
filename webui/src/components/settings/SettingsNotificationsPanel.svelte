@@ -41,6 +41,10 @@
       key: 'server_stopped',
       label: () => t('settings.notifications.serverStopped'),
     },
+    {
+      key: 'extension_notification',
+      label: () => t('settings.notifications.extensions'),
+    },
   ]);
 
   function getNotificationSettings(rawSettings) {

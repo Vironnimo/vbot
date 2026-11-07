@@ -45,6 +45,7 @@ from cli.server_management import (
     ServerState,
     classify_server,
 )
+from core.extensions.notifications import page_link
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import process_started
@@ -317,8 +318,9 @@ class ApplicationFacade:
         if refusal is not None:
             raise ApplicationError(refusal)
         params = {"name": device_name("Browser", _host())}
-        if page:
-            params["next"] = page
+        landing, separator, fragment = page.partition("#")
+        if landing:
+            params["next"] = landing
         result = rpc_call(target, "auth.login_ticket", params)
         if not result.ok:
             if result.failure is not None and result.failure.code == "auth_disabled":
@@ -327,7 +329,20 @@ class ApplicationFacade:
         path = result.data.get("path")
         if not isinstance(path, str) or not _TICKET_PATH.fullmatch(path):
             raise ApplicationError("Could not sign the browser in: the server sent no sign-in link")
-        return f"{access.public_url}{path}"
+        # A 303 Location without a fragment inherits the link's fragment. Keep
+        # it on the browser URL, outside the ticket's path-only next contract.
+        return f"{access.public_url}{path}" + (f"#{fragment}" if separator else "")
+
+    def open_extension_page(self, extension: str, page_id: str, route: str) -> None:
+        """Open a validated WebUI page, never an Extension-supplied URL."""
+        page = page_link(extension, page_id, route)
+        if self._install.owns_server:
+            webbrowser.open(self._browser_url(page))
+            return
+        target = self._monitor_target()
+        if target is None:
+            raise ApplicationError("The Desktop has no server to open this page on")
+        webbrowser.open(f"{target.url}{page}")
 
     def start_update(self) -> None:
         with self._recording("Could not start an update"):

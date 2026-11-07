@@ -164,6 +164,9 @@
     },
     // A startup link to an Extension page resolves once its route is known.
     onPagesLoaded: () => navigator.resolvePendingStart(),
+    showToast: desktop.showToast,
+    dismissToast: desktop.dismissAppToast,
+    openPage: (view, place) => navigator.navigate(view, place),
   });
 
   const visibleNavigationItems = $derived(extensions.allNavigationItems);
@@ -494,6 +497,7 @@
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
+    onExtensionNotification: extensions.notify,
     onPortalsChanged: invalidatePortals,
     onCheckWebuiBuild: checkWebuiBuild,
     onSpeechEvent: speechAudio.handleServerEvent,
@@ -589,7 +593,7 @@
 
 <AppShell
   items={visibleNavigationItems}
-  indicators={navigationIndicators}
+  indicators={{ ...navigationIndicators, ...extensions.pageIndicators }}
   {activeViewId}
   onSelectView={openView}
   connectionStatus={connectionState.status}
@@ -688,6 +692,8 @@
               subscribeInvalidations={extensions.subscribeInvalidations}
               onToast={(message, variant) =>
                 desktop.showToast({ title: message, variant })}
+              onOpenSession={(address) =>
+                chatNavigation.openSessionLink(address)}
             />
           {/snippet}
         </LazyContent>

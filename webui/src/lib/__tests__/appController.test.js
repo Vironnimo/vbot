@@ -71,7 +71,8 @@ afterEach(() => {
 
 describe('App controller', () => {
   it('uses the hello approval snapshot and ignores older replay across reconnects', async () => {
-    const { controller, state } = setup();
+    const onExtensionChange = vi.fn();
+    const { controller, state } = setup({ onExtensionChange });
     const request = { id: 'one' };
     await controller.handleServerEvent({
       type: 'connection_ready',
@@ -82,11 +83,18 @@ describe('App controller', () => {
       payload: { revision: 2, requests: [request] },
     });
     expect(state.permissionApprovals.requests).toEqual([]);
+    expect(onExtensionChange).not.toHaveBeenCalled();
     await controller.handleServerEvent({
       type: 'permissions_approvals',
       payload: { revision: 4, requests: [request] },
     });
     expect(state.permissionApprovals.requests).toEqual([request]);
+    expect(onExtensionChange).toHaveBeenCalledExactlyOnceWith({
+      owner: null,
+      resource: 'permissions_approvals',
+      ids: [],
+      revision: 4,
+    });
     await controller.handleServerEvent({
       type: 'connection_ready',
       permissions_approvals: { revision: 0, requests: [] },

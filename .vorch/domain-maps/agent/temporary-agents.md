@@ -44,3 +44,6 @@ predate the key are identical and resolve to `None` (`test_temporary.py`).
 ## Repository profiles
 
 A temporary configuration can name `repository_profile`, a Team Agent id in its selected Project. Projects resolves the neutral Profile against the owner's selection, then Agents persists its resolved configuration and original creation request. Model/scalars, instructions and the resolved Tool policy stay immutable in the binding. Replayed creation returns that snapshot after repository edits. Swarm formations expose the selection (`extensions/swarm.md`); no Agent kind is added.
+
+Optional owner `model_override` and `thinking_effort_override` choices win after Profile resolution without changing Tool or Permission Rules. They are retained only in the original creation request; the binding stores their resolved values, preserving older requests when the fields are absent.
+An empty fallback `model` is accepted only with `repository_profile`: the existing Team Model chain must then resolve a usable Model, or an explicit `model_override` must supply it. Saved resolved bindings always contain a usable, nonempty Model.

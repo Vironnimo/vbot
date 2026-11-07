@@ -6,10 +6,11 @@ import copy
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from jsonschema import Draft202012Validator
 
+from core.extensions.notifications import Notify
 from core.extensions.oauth_redirects import OAuthRedirects
 from core.permissions import PermissionBoundary
 from core.tools.availability import activation_sources
@@ -26,6 +27,14 @@ if TYPE_CHECKING:
 # the added or removed request ids. Accessors read ``extensions.requests``
 # again on exactly these changes instead of polling it.
 PENDING_INPUTS_RESOURCE = "pending_inputs"
+
+
+class ExtensionOperationError(ValueError):
+    """An expected management refusal with an Extension-owned accessor code."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -77,6 +86,13 @@ class ExtensionHost:
     # The owner-bound implementation records Usage and rejects retired hosts.
     decide: Callable[[ToolContext | None, JsonObject], Awaitable[JsonObject]] | None = None
     review_context: Callable[[ToolContext], Awaitable[JsonObject]] | None = None
+    # API v24: transient user attention and registration-local navigation badges.
+    notify: Notify | None = None
+    set_page_badge: Callable[[str, int], None] | None = None
+    pending_approvals: Callable[[str, Sequence[str]], Awaitable[JsonObject]] | None = None
+    input_authority: (
+        Callable[[ToolContext], Awaitable[Literal["user", "authorized_task", "none"]]] | None
+    ) = None
 
 
 @dataclass(frozen=True)

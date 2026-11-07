@@ -10,15 +10,21 @@ export function createToastState() {
   return { toasts: [] };
 }
 
-export function addToast(state, { title, message, variant }) {
-  const id = `toast-${nextToastId}`;
-  state.toasts.push({
+export function addToast(state, { title, message, variant, key, actions }) {
+  const existing =
+    key == null ? null : state.toasts.find((toast) => toast.key === key);
+  const id = existing?.id ?? `toast-${nextToastId++}`;
+  const toast = {
     id,
     title,
     message,
     variant: normalizeVariant(variant),
-  });
-  nextToastId += 1;
+    ...(key == null ? {} : { key }),
+    ...(actions?.length ? { actions } : {}),
+  };
+  if (existing)
+    state.toasts = state.toasts.map((item) => (item.id === id ? toast : item));
+  else state.toasts.push(toast);
   return id;
 }
 

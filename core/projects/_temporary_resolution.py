@@ -10,6 +10,8 @@ from core.projects._resolution_context import _RESOLUTION_WORKERS, _require_temp
 from core.projects._resolution_values import (
     _override_permission_rules,
     _project_agent_tool_access,
+    _resolve_sampling,
+    _resolve_thinking_effort,
     resolve_permission_rules,
 )
 from core.projects._runtime_agent import AgentOverrides, AgentResolutionError, RuntimeAgent
@@ -104,10 +106,11 @@ class TemporaryResolution:
         skills = [name for name in selected_skills if _profile_skill_allowed(profile, name)]
         profile = self._owner._team_resolution._preload_profile(project_id, profile, skills)
         overrides = project.overrides.get(profile.agent_id, {})
+        defaults = AgentDefaults.from_dict(self._owner._global_agent_defaults())
         override_model = overrides.get("model")
         if override_model and self._owner.is_model_configured(override_model):
             model = override_model
-        elif profile.model in {"", "inherit"}:
+        elif profile.model in {"", "inherit"} and config.model:
             model = config.model
         else:
             try:
@@ -117,6 +120,7 @@ class TemporaryResolution:
             except AgentResolutionError:
                 # The participant's own Model stands in for an unusable wish.
                 model = config.model
+        model = config.model_override if config.model_override is not None else model
         self._owner.require_model_configured(model)
         owner_rules = (
             config.permission_rules
@@ -126,6 +130,8 @@ class TemporaryResolution:
         return replace(
             config,
             model=model,
+            model_override=None,
+            thinking_effort_override=None,
             tool_access=access,
             allowed_skills=skills,
             # The owner's parts first, then the Team member's resolution.
@@ -137,16 +143,31 @@ class TemporaryResolution:
             instructions="\n\n".join(part for part in (profile.body, config.instructions) if part),
             temperature=overrides.get(
                 "temperature",
-                profile.temperature if profile.temperature is not None else config.temperature,
+                _resolve_sampling("temperature", profile, project, defaults)
+                if not config.model
+                else profile.temperature
+                if profile.temperature is not None
+                else config.temperature,
             ),
             top_p=overrides.get(
-                "top_p", profile.top_p if profile.top_p is not None else config.top_p
+                "top_p",
+                _resolve_sampling("top_p", profile, project, defaults)
+                if not config.model
+                else profile.top_p
+                if profile.top_p is not None
+                else config.top_p,
             ),
-            thinking_effort=overrides.get(
-                "thinking_effort",
-                profile.thinking_effort
-                if profile.thinking_effort is not None
-                else config.thinking_effort,
+            thinking_effort=(
+                config.thinking_effort_override
+                if config.thinking_effort_override is not None
+                else overrides.get(
+                    "thinking_effort",
+                    _resolve_thinking_effort(profile, project, defaults)
+                    if not config.model
+                    else profile.thinking_effort
+                    if profile.thinking_effort is not None
+                    else config.thinking_effort,
+                )
             ),
         )
 

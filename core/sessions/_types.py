@@ -504,6 +504,7 @@ class SessionConversationMessage:
     run_kind: str | None = None
     schedule_id: str | None = None
     input_source_id: str | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,7 @@ const ALL_ON = Object.freeze({
   update_result: true,
   update_available: true,
   server_stopped: true,
+  extension_notification: true,
 });
 
 describe('SettingsNotificationsPanel', () => {
@@ -71,6 +72,7 @@ describe('SettingsNotificationsPanel', () => {
       ['Update finished', 'true'],
       ['New version available', 'true'],
       ['Server stopped', 'true'],
+      ['Extension notifications', 'true'],
     ]);
 
     toggles[1].click();

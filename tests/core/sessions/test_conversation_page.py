@@ -6,6 +6,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.messages import MessageSender
+from core.runs import Run
 from core.sessions.errors import SessionNotFoundError
 from core.subagents.links import link_session
 
@@ -73,9 +74,14 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
         tool_call_id="parent-call",
         tool_call_index=0,
     )
-    fork.append_many([ChatMessage.user("Delegated task")], subagent_reply_target="parent")
+    run = Run(run_id="provenance-run", agent_id=fork.address.agent_id, session_id=fork.id)
+    await manager.start_run(run)
+    fork.for_run(run.id).append_many(
+        [ChatMessage.user("Delegated task")], subagent_reply_target="parent"
+    )
     provenance = manager.conversation_page(fork.address, expected_generation_id=generation)
     assert provenance.messages[-1].subagent_reply_target == "parent"
+    assert provenance.messages[-1].run_id == run.id
 
 
 def test_conversation_page_refuses_recreated_generation(manager):

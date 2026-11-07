@@ -124,6 +124,7 @@ NOTIFICATION_FIELDS = (
     "update_result",
     "update_available",
     "server_stopped",
+    "extension_notification",
 )
 
 

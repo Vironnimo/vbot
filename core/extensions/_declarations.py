@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 23
+API_VERSION = 24
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -322,6 +322,9 @@ class ExtensionDeclarations:
     hooks: dict[str, list[HookHandler]] = field(default_factory=lambda: defaultdict(list))
     startup: list[LifecycleHandler] = field(default_factory=list)
     shutdown: list[LifecycleHandler] = field(default_factory=list)
+    config_change: list[Callable[[dict[str, Any], dict[str, Any]], Any]] = field(
+        default_factory=list
+    )
     tools: list[ToolDeclaration] = field(default_factory=list)
     tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
     commands: list[CommandDeclaration] = field(default_factory=list)

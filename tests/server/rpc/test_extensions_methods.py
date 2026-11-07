@@ -32,6 +32,7 @@ from core.extensions.extensions import (
     ToolDeclaration,
 )
 from core.extensions.interactions import InteractionHandlerDeclaration
+from core.extensions.operations import ExtensionOperationError
 from core.extensions.settings_schema import parse_settings_fields
 from core.runs import ChatRunManager, Run, RunExecutionOwner
 from core.sessions import SessionAddress
@@ -602,11 +603,17 @@ async def test_extension_page_operation_rechecks_registration_after_await() -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["expired", "domain", "unexpected", "cancelled"])
+@pytest.mark.parametrize(
+    "kind", ["expired", "domain", "operation", "untyped", "unexpected", "cancelled"]
+)
 async def test_extension_operation_error_boundary(kind: str) -> None:
+    untyped = ValueError("ordinary-invalid-arguments")
+    untyped.code = "must-not-escape"  # type: ignore[attr-defined]
     errors: dict[str, BaseException] = {
         "expired": SessionCapabilityExpiredError("test-owned-expiry"),
         "domain": ConfigError("test-owned-domain"),
+        "operation": ExtensionOperationError("revision_conflict", "Card changed; read it again"),
+        "untyped": untyped,
         "unexpected": RuntimeError("test-owned-bug"),
         "cancelled": asyncio.CancelledError(),
     }
@@ -623,9 +630,17 @@ async def test_extension_operation_error_boundary(kind: str) -> None:
             await call(state, "extensions.operation", name="test", operation="run")
         return
     response = await rpc_error(state, "extensions.operation", name="test", operation="run")
-    assert response["code"] == (
-        "session_capability_expired" if kind == "expired" else "domain_error"
+    assert (
+        response["code"]
+        == {
+            "expired": "session_capability_expired",
+            "domain": "domain_error",
+            "operation": "revision_conflict",
+            "untyped": "invalid_request",
+        }[kind]
     )
+    if kind == "operation":
+        assert response["message"] == str(error)
 
 
 # ---------------------------------------------------------------------------

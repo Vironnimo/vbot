@@ -258,6 +258,7 @@ async def test_owner_prompt_inspection_uses_selected_blocks_and_private_tool_den
         _participant(tmp_path),
         name="Preview",
         instructions="preview-body-sentinel",
+        thinking_effort="low",
         prompt_blocks=["core:agent_body"],
     )
 
@@ -268,6 +269,8 @@ async def test_owner_prompt_inspection_uses_selected_blocks_and_private_tool_den
     preview = await host.inspect_prompt(config, None)
 
     assert preview["text"] == "preview-body-sentinel"
+    assert preview["model"] == config.model
+    assert preview["thinking_effort"] == "low"
     assert {tool["name"] for tool in preview["tools"]} == SWARM_PRIVATE_TOOLS
     blocks = {block["id"]: block for block in preview["blocks"]}
     assert blocks["core:runtime"]["enabled"] is False
@@ -303,6 +306,7 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
     from resources.extensions.swarm._extension_values import _participant_config
 
     _accept_every_model(runtime, monkeypatch)
+    (tmp_path / "AGENTS.md").write_text("project-agents-sentinel", encoding="utf-8")
     path = tmp_path / ".claude" / "agents" / "reviewer.md"
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -329,6 +333,10 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
     config = _participant_config(
         profile, {"ordinal": 1, "model": "fixture/model", "display_name": "Reviewer"}, tmp_path
     )
+    assert host.inspect_prompt is not None
+    preview = await host.inspect_prompt(replace(config, prompt_blocks=None), "repo")
+    assert "project-agents-sentinel" in preview["text"]
+    assert "repository-review-sentinel" in preview["text"]
     groups = host.temporary_agents
     binding = await groups.create("repository-profile", "peer", config, project_id="repo")
     agent = runtime.agent_resolver.resolve_temporary_agent(

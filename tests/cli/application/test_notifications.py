@@ -77,6 +77,79 @@ def _read(run_id: str = "run_1") -> dict[str, Any]:
     return {"type": "resource_changed", "payload": {"kind": "sessions", "scope": scope}}
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_extension_notifications_replace_only_the_same_owner_key_and_open_the_page(enabled: bool):
+    async def scenario() -> None:
+        sink = _Sink()
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_finished = asyncio.Event()
+        reads = 0
+
+        async def rpc(_method: str, _params: dict[str, Any]) -> dict[str, Any]:
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                first_started.set()
+                await release_first.wait()
+            elif reads == 2:
+                second_finished.set()
+            return {"settings": {"notifications": {"extension_notification": enabled}}}
+
+        notifier = Notifier(sink, rpc, owns_server=True, update_active=lambda: False)
+        payload = {
+            "extension": "factory",
+            "page_id": "board",
+            "route": "/card/one",
+            "title": "old",
+            "body": "b" * 2000,
+            "key": "one",
+            "at": "fixture",
+        }
+        notifier.event_received({"type": "extension_notification", "payload": payload})
+        await first_started.wait()
+        notifier.event_received(
+            {"type": "extension_notification", "payload": {**payload, "title": "latest"}}
+        )
+        await second_finished.wait()
+        assert [toast.title for toast in sink.shown] == (["latest"] if enabled else [])
+        release_first.set()
+        await _settle()
+        if not enabled:
+            assert sink.shown == []
+            return
+        assert len(sink.shown) == 1
+        assert sink.shown[0] == Toast(
+            "extension:factory:one",
+            "extension_notification",
+            "latest",
+            "b" * 255,
+            extension_page=("factory", "board", "/card/one"),
+        )
+        notifier.event_received(
+            {"type": "extension_notification", "payload": {**payload, "extension": "another"}}
+        )
+        await _settle()
+        assert [toast.key for toast in sink.shown] == [
+            "extension:factory:one",
+            "extension:another:one",
+        ]
+        assert sink.dismissed == ["extension:factory:one", "extension:another:one"]
+        notifier.event_received(
+            {"type": "extension_notification", "payload": {**payload, "route": "//external"}}
+        )
+        await _settle()
+        assert len(sink.shown) == 2
+        for _ in range(2):
+            notifier.event_received(
+                {"type": "extension_notification", "payload": {**payload, "key": None}}
+            )
+        await _settle()
+        assert len(sink.shown) == len({toast.key for toast in sink.shown}) == 4
+
+    asyncio.run(scenario())
+
+
 _SPAN = "2026-10-21T10:00:00.000000Z"
 _NEXT_SPAN = "2026-10-21T11:00:00.000000Z"
 

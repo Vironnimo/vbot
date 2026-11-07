@@ -79,6 +79,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "transcription_binding_changes": 0,
     "embedding_binding_changes": 0,
     "retention_changes": 0,
+    "config_changes": [],
     "commands_changed": False,
     "skills_changed": False,
     "agents_changed": False,
@@ -153,12 +154,12 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"extension_reloads": 1, "commands_changed": True, "skills_changed": True},
             id="enable-and-disable-with-skills-and-recall",
         ),
-        # Extension config applies live through the Extension's config reader.
+        # Live config readers see the write, and idle owners receive a callback.
         pytest.param(
             _extensions("one"),
             _extensions("one", config={"two": {"url": "http://y"}}),
             (),
-            {},
+            {"config_changes": [("two", {}, {"url": "http://y"})]},
             id="config-only",
         ),
         # Raw Settings accept null as the default empty disabled set.
@@ -237,6 +238,7 @@ def test_settings_changes_refresh_only_their_live_services(
     shared_runtime = Mock(spec=Runtime)
     shared_runtime._startup_id = "settings-fixture"
     shared_runtime._started = True
+    shared_runtime.extensions.fire_config_change = AsyncMock()
     extension_reload = AsyncMock()
     disabled_change = AsyncMock()
     skills_reload = AsyncMock()
@@ -277,6 +279,9 @@ def test_settings_changes_refresh_only_their_live_services(
         "transcription_binding_changes": transcription_change.call_count,
         "embedding_binding_changes": binding_change.call_count,
         "retention_changes": retention_change.call_count,
+        "config_changes": [
+            call.args for call in shared_runtime.extensions.fire_config_change.await_args_list
+        ],
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
         "agents_changed": effects.agents_changed,

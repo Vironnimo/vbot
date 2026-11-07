@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
+from core.automation.cron import CronJobNotFoundError
+from core.runs import Run, RunKind, RunStatus
 from core.secrets.agent_secrets import SecretMasker
 from core.sessions import ChatSessionManager, SessionAddress
 from core.subagents.links import read_link
@@ -13,6 +15,86 @@ from core.tools.tools import ToolContext
 _MESSAGE_LIMIT = 32
 _TEXT_BUDGET = 64000
 _ANCESTOR_LIMIT = 64
+
+
+async def current_input_authority(
+    sessions: ChatSessionManager,
+    context: ToolContext,
+    *,
+    run: Run | None,
+    cron: Any = None,
+    masker: SecretMasker | None = None,
+) -> Literal["user", "authorized_task", "none"]:
+    """Classify this Run's latest input, never older or ancestral authority.
+
+    Unlike shell review evidence, this read is an ingress classification, not a
+    judgment that conversation text authorizes some particular side effect.
+    """
+    address = SessionAddress(context.project_id, context.agent_id, context.session_id)
+    if (
+        run is None
+        or run.id != context.run_id
+        or (run.project_id, run.agent_id, run.session_id)
+        != (address.project_id, address.agent_id, address.session_id)
+        or run.status != RunStatus.RUNNING
+        or run.cancel_requested
+        or context.subagent_session
+        or context.execution_owner is not None
+        or run.execution_owner is not None
+    ):
+        return "none"
+    session = await sessions.get_async(address)
+    generation = session.generation_id
+    if generation is None or run.expected_session_generation_id not in (None, generation):
+        return "none"
+    page = await sessions.run_async(
+        sessions.conversation_page,
+        address,
+        expected_generation_id=generation,
+        limit=1,
+        max_text_chars=20_000,
+    )
+    latest = page.latest_user
+    if latest is None or latest.run_id != run.id or latest.truncated:
+        return "none"
+    if latest.sender_kind == "session" or latest.subagent_reply_target == "parent":
+        return "none"
+    # Task inputs run as USER too. Their accepted receipt takes precedence over
+    # direct_user_input, which deliberately also covers those ordinary Runs.
+    if latest.input_source_id is not None:
+        if not run.accessor_input_id:
+            return "none"
+        receipt = await sessions.lookup_accessor_input_async(run.accessor_input_id)
+        return (
+            "authorized_task"
+            if receipt is not None
+            and receipt.live
+            and receipt.address == address
+            and receipt.generation_id == generation
+            and receipt.run_id == run.id
+            and receipt.state == "started"
+            and receipt.input_id.partition(":")[0] == latest.input_source_id
+            else "none"
+        )
+    if context.direct_user_input:
+        if latest.sender_id is not None and latest.sender_role != "admin":
+            return "none"
+        return "user"
+    if run.run_kind != RunKind.CRON or not run.schedule_id or cron is None:
+        return "none"
+    try:
+        job = cron.get_job(run.schedule_id)
+    except CronJobNotFoundError:
+        return "none"
+    prompt = masker.mask(job.prompt) if masker is not None else job.prompt
+    return (
+        "authorized_task"
+        if job.operator_approved
+        and job.agent_id == context.agent_id
+        and job.project_id == context.project_id
+        and prompt == latest.text
+        else "none"
+    )
 
 
 def shell_review_context(

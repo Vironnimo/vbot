@@ -6,6 +6,7 @@ from typing import Any
 
 from core.chat import latest_session_context_usage
 from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, SettingsFieldDeclaration
+from core.extensions.operations import ExtensionOperationError
 from core.runs import Run
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -338,6 +339,8 @@ async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
         if page is not None:
             _validate_page_context(state.runtime, registry, name, page)
         return result
+    except ExtensionOperationError as error:
+        raise RpcError(error.code, str(error)) from error
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
     except Exception as error:
@@ -728,6 +731,7 @@ def _page_projection(registry: Any, delivery: Any) -> list[JsonObject]:
                 "route": f"extension:{identity.name}:{declaration.page_id}",
                 "entry_url": page["url"],
                 "epoch": identity.epoch,
+                "badge": registry.page_badge(identity, declaration.page_id),
             }
         )
     return pages
