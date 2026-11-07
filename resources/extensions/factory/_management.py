@@ -219,10 +219,6 @@ class FactoryManagement:
                     raise FactoryError(
                         "invalid_effort", f"{label}: {str(error).rstrip('.')}."
                     ) from error
-        if not values["base_branch"].strip() or values["base_branch"].startswith("-"):
-            raise FactoryError(
-                "invalid_base", "Use a non-empty base branch name that does not begin with '-'."
-            )
         effective, problems = await self._resolve_models(values)
         if problems:
             label, problem = next(iter(problems.items()))
@@ -343,9 +339,7 @@ class FactoryManagement:
                     "proposal",
                     "queued",
                     "working",
-                    "reviewing",
                     "waiting",
-                    "integrating",
                 },
             )
             result = await service.execution.discard(card)
@@ -360,8 +354,8 @@ class FactoryManagement:
             if action == "accept" and arguments.get("expected_revision") != card["revision"]:
                 raise FactoryError(
                     "revision_conflict",
-                    "The Card changed since you viewed it. Refresh it, review the latest "
-                    "submission and recommendation, then accept that version.",
+                    "The Card changed since you viewed it. Refresh it, review its latest "
+                    "results, then accept that version.",
                 )
             if action == "accept" and card["waiting_reason"] not in ACCEPTABLE:
                 raise FactoryError(
@@ -376,9 +370,7 @@ class FactoryManagement:
                 )
             if action == "retry" and card["waiting_reason"] not in {
                 "run_failed",
-                "review_failed",
                 "restart",
-                "integration_failed",
                 "budget_exhausted",
             }:
                 raise FactoryError(

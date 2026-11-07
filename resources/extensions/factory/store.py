@@ -228,8 +228,6 @@ _SETUP_FIELDS = (
     "workflows_json",
     "default_workflow",
     "turn_budget",
-    "base_branch",
-    "integration_check",
     "revision",
     "updated_at",
 )
@@ -239,8 +237,6 @@ _SETUP_KEYS = (
     "workflows",
     "default_workflow",
     "turn_budget",
-    "base_branch",
-    "integration_check",
     "revision",
     "updated_at",
 )
@@ -459,8 +455,7 @@ class FactoryStore:
         if state is not None and state not in STATES:
             raise FactoryError(
                 "invalid_state",
-                "Unknown Card state. Use proposal, queued, working, reviewing, "
-                "waiting, integrating, done or discarded.",
+                "Unknown Card state. Use proposal, queued, working, waiting, done or discarded.",
             )
         clauses: list[str] = []
         parameters: list[str] = []
@@ -524,29 +519,21 @@ class FactoryStore:
                     (card_id, at, actor, comment),
                 )
             if output is not None:
-                values = {
-                    field: output.get(field, "")
-                    for field in (
-                        "kind",
-                        "participant_id",
-                        "summary",
-                        "result",
-                        "checks",
-                        "branch",
-                        "base",
-                        "base_sha",
-                        "head_sha",
-                        "target",
-                    )
-                } | {
-                    "stage_id": output["step"],
-                    "stage_name": output["step_name"],
-                    "lane": 0,
-                    "pass": output["pass"],
-                    "verdict": "",
-                    "recommendation": "",
-                    "findings_json": _dump(output.get("findings", [])),
-                }
+                # Columns of earlier Factory versions stay empty.
+                values = (
+                    dict.fromkeys(_OUTPUT_FIELDS, "")
+                    | {
+                        field: output.get(field, "")
+                        for field in ("kind", "participant_id", "summary", "result", "target")
+                    }
+                    | {
+                        "stage_id": output["step"],
+                        "stage_name": output["step_name"],
+                        "lane": 0,
+                        "pass": output["pass"],
+                        "findings_json": _dump(output.get("findings", [])),
+                    }
+                )
                 connection.execute(
                     f"INSERT INTO outputs (card_id, {', '.join(_OUTPUT_FIELDS)}, created_at) "
                     f"VALUES (?, {', '.join('?' for _ in _OUTPUT_FIELDS)}, ?)",

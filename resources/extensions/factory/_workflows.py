@@ -27,7 +27,12 @@ _ID = re.compile(r"[a-z0-9]{1,24}")
 
 IMPLEMENT_TASK = (
     "Implement the Card's objective in the repository, run the checks the Project "
-    "prescribes and hand in the branch with the finished change."
+    "prescribes and commit the finished change."
+)
+INTEGRATE_TASK = (
+    "Integrate the reviewed change into the base branch as the Project instructions "
+    "describe, then clean up the worktree and branch it leaves behind. Name what landed "
+    "in your summary."
 )
 REVIEW_TASK = (
     "Review the result of the step before you without changing files or branches. Judge "
@@ -90,10 +95,13 @@ def templates() -> list[Json]:
         {
             "id": "implement",
             "name": "Implement",
-            "description": "Implement the Card, then an independent review.",
+            "description": (
+                "Implement the Card and review it; it is integrated after your approval."
+            ),
             "steps": [
                 _step("implement", "Implement", IMPLEMENT_TASK, []),
                 _step("review", "Review", REVIEW_TASK, ["implement"], returns_to="implement"),
+                _step("integrate", "Integrate", INTEGRATE_TASK, ["review"], approval=True),
             ],
         },
         {
@@ -121,13 +129,15 @@ def templates() -> list[Json]:
             "id": "planimpl",
             "name": "Plan, then implement",
             "description": (
-                "A reviewed plan waits for your approval, then implementation and review."
+                "A reviewed plan waits for your approval, then implementation and review; "
+                "the change is integrated after your approval."
             ),
             "steps": [
                 _step("plan", "Plan", PLAN_TASK, []),
                 _step("planreview", "Plan review", REVIEW_TASK, ["plan"], returns_to="plan"),
                 _step("implement", "Implement", IMPLEMENT_TASK, ["planreview"], approval=True),
                 _step("review", "Review", REVIEW_TASK, ["implement"], returns_to="implement"),
+                _step("integrate", "Integrate", INTEGRATE_TASK, ["review"], approval=True),
             ],
         },
     ]
@@ -148,7 +158,7 @@ def legacy_workflow(row: Json) -> Json:
     return {
         "id": "implement",
         "name": "Implement",
-        "description": "Implement the Card, then an independent review.",
+        "description": "Implement the Card and review it; it is integrated after your approval.",
         "steps": [
             _step("implement", "Implement", IMPLEMENT_TASK, [], agent=agent("worker")),
             _step(
@@ -160,6 +170,14 @@ def legacy_workflow(row: Json) -> Json:
                 agent=agent("reviewer"),
                 rounds=rounds,
             ),
+            _step(
+                "integrate",
+                "Integrate",
+                INTEGRATE_TASK,
+                ["review"],
+                approval=True,
+                agent=agent("worker"),
+            ),
         ],
     }
 
@@ -170,13 +188,16 @@ def from_stages(workflow: Json) -> Json:
     Every lane becomes a step after all lanes of the previous stage. A review
     returns to its target's first lane, a stage's approval gate moves to the
     steps after it, and review rounds become send-backs (the last round used to
-    end in the user's decision).
+    end in the user's decision). A Workflow that changed the repository used to
+    integrate after the user accepted; it ends in an Integrate step that waits
+    for approval, done by the Agent of the last changes stage.
     """
     steps: list[Json] = []
     previous: list[str] = []
     first_lane: dict[str, str] = {}
     names: set[str] = set()
     gate = False
+    integrator: Json | None = None
     for stage in workflow.get("stages") or []:
         if not isinstance(stage, dict):
             continue
@@ -193,6 +214,8 @@ def from_stages(workflow: Json) -> Json:
             task = _DOCUMENT_TASK
         else:
             task = IMPLEMENT_TASK
+        if not review and stage.get("output") != "document":
+            integrator = lanes[0]
         ids = []
         for index, lane in enumerate(lanes, 1):
             step_id = stage_id if len(lanes) == 1 else f"{stage_id}{index}"
@@ -217,6 +240,16 @@ def from_stages(workflow: Json) -> Json:
         first_lane[str(stage.get("id") or "")] = ids[0]
         previous = ids
         gate = stage.get("approval") is True
+    if integrator is not None and steps:
+        step_id = "integrate"
+        while step_id in {step["id"] for step in steps}:
+            step_id = _new_id("s")
+        label = "Integrate"
+        while label.casefold() in names:
+            label += " 2"
+        steps.append(
+            _step(step_id, label, INTEGRATE_TASK, list(previous), approval=True, agent=integrator)
+        )
     return {
         "id": workflow.get("id", ""),
         "name": workflow.get("name", ""),
@@ -470,12 +503,3 @@ def participant(step: Json, sequence: int) -> str:
 
 def step_id(participant_id: str) -> str:
     return participant_id.split("-")[0]
-
-
-def integration_reviewer(workflow: Json, integrator: str) -> Json | None:
-    """The last step that judges work and follows the integrating step."""
-    found = None
-    for item in workflow["steps"]:
-        if item["returns_to"] and integrator in ancestors(workflow, item["id"]):
-            found = item
-    return found

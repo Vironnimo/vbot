@@ -13,8 +13,6 @@ SETUP_DEFAULTS: Json = {
     "workflows": [],
     "default_workflow": "",
     "turn_budget": 30,
-    "base_branch": "main",
-    "integration_check": "merged",
 }
 _STEP = {
     "type": "object",
@@ -48,9 +46,7 @@ SETUP_PROPERTIES: Json = {
         },
     },
     "default_workflow": {"type": "string"},
-    "base_branch": {"type": "string"},
     "turn_budget": {"type": "integer", "minimum": 1, "maximum": 1000},
-    "integration_check": {"type": "string", "enum": ["merged", "reference_only"]},
     "expected_revision": {"type": "integer", "minimum": 0},
 }
 

@@ -39,9 +39,26 @@ def _current_step(runtime: Json) -> Json | None:
     return found
 
 
+# Columns an earlier Factory filled from Git; the Agents now report such facts
+# in their summaries.
+_HIDDEN_FIELDS = frozenset(
+    {
+        "runtime",
+        "round",
+        "branch",
+        "base",
+        "base_sha",
+        "head_sha",
+        "checks",
+        "recommendation",
+        "integration_reference",
+    }
+)
+
+
 def projection(card: Json) -> Json:
     """Decode provenance once; no transcript or private configuration on the Board."""
-    value = {key: item for key, item in card.items() if key != "runtime"}
+    value = {key: item for key, item in card.items() if key not in _HIDDEN_FIELDS}
     runtime = card.get("runtime", {})
     if current := _current_step(runtime):
         workflow = runtime["workflow"]
@@ -62,25 +79,6 @@ def projection(card: Json) -> Json:
         ]
     if pending := runtime.get("pending_action"):
         value["queued_action"] = pending["action"]
-    landing = runtime.get("integration_landing")
-    if isinstance(landing, dict) and landing.get("status") in (
-        "pending",
-        "approved",
-        "changes_requested",
-    ):
-        value["integration_landing"] = {
-            **{
-                field: landing[field] if isinstance(landing.get(field), str) else None
-                for field in ("head_sha", "base_sha", "landing_sha", "branch_head_sha")
-            },
-            "status": landing["status"],
-            **{
-                field: [item for item in landing[field] if isinstance(item, str)]
-                if isinstance(landing.get(field), list)
-                else []
-                for field in ("extra_paths", "merge_paths")
-            },
-        }
     raw = card.get("origin_session", "")
     if raw:
         try:
@@ -249,9 +247,9 @@ class FactoryExtension:
                     (
                         value.strip()
                         for value in (
-                            card.get("recommendation"),
                             card["runtime"].get("question"),
                             card["runtime"].get("note"),
+                            card.get("summary"),
                         )
                         if isinstance(value, str) and value.strip()
                     ),
@@ -391,7 +389,6 @@ class FactoryExtension:
                 "factory_submit_work": self.execution.submit_work,
                 "factory_report_blocked": self.execution.report_blocked,
                 "factory_request_changes": self.execution.request_changes,
-                "factory_report_integration": self.execution.report_integration,
             }
             async with self.lock:
                 self.records()

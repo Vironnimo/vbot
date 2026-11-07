@@ -21,18 +21,13 @@ from core.extensions import (
 from core.extensions.extensions import ExtensionDeclarations
 from core.runs import ActiveRunError, RunExecutionOwner
 from core.sessions import DeliveryReceipt, SessionAddress
-from resources.extensions.factory import _execution
 from resources.extensions.factory._execution import FactoryExecution
 from resources.extensions.factory._registration import register
 from resources.extensions.factory.store import FactoryError
 
 type Json = dict[str, Any]
 _HEAD = "a" * 40
-_NEW = "b" * 40
-_OUTPUT_DEFAULTS: Json = dict.fromkeys(
-    ("summary", "result", "checks", "branch", "base", "base_sha", "head_sha", "target"),
-    "",
-) | {"findings": []}
+_OUTPUT_DEFAULTS: Json = dict.fromkeys(("summary", "result", "target"), "") | {"findings": []}
 
 
 def step(
@@ -99,8 +94,6 @@ class Store:
             "workflows": [implement_workflow()],
             "default_workflow": "implement",
             "turn_budget": 2,
-            "base_branch": "main",
-            "integration_check": "merged",
         }
 
     def add(self, card_id: str = "fct_card") -> Json:
@@ -383,91 +376,8 @@ class Service:
         await self.flush()
 
 
-class Git:
-    head_value: str | None = _HEAD
-    target_value = "c" * 40
-    merge_value = "e" * 40
-    ancestor = True
-    merged = False
-    extra_paths: tuple[str, ...] = ()
-    merge_paths: tuple[str, ...] = ()
-    unknown_base = False
-
-    def __init__(self, _cwd):
-        pass
-
-    async def submission(self, branch, base, *, head_sha=None, base_sha=None):
-        if self.merged and base_sha is None:
-            raise FactoryError("no_commits", "Head is already on the mutable base")
-        return {
-            "branch": branch,
-            "base": base,
-            "base_sha": base_sha or "0" * 40,
-            "head_sha": head_sha or self.head_value or _HEAD,
-        }
-
-    async def head(self, _branch, **_kwargs):
-        return self.head_value
-
-    async def is_ancestor(self, _head, _base):
-        return self.ancestor
-
-    async def base(self, _base):
-        if self.extra_paths or self.merge_paths:
-            return self.merge_value
-        return self.head_value if self.merged else self.target_value
-
-    async def integration(
-        self,
-        _branch,
-        _base,
-        *,
-        reviewed_base,
-        reviewed_head,
-        expected_branch_head=None,
-        accepted_base=None,
-        base_commit=None,
-        verify_merged=True,
-        reported_reference=None,
-    ):
-        moved = self.head_value is not None and self.head_value != (
-            expected_branch_head or reviewed_head
-        )
-        merge_changes = (
-            verify_merged
-            and self.ancestor
-            and bool(self.extra_paths or self.merge_paths)
-            and reviewed_head != self.merge_value
-        )
-        review = moved or merge_changes
-        landed = self.merged if moved else self.ancestor and verify_merged
-        head = self.merge_value if merge_changes else self.head_value if moved else reviewed_head
-        baseline = base_commit or accepted_base or self.target_value if review else reviewed_base
-        if self.unknown_base and landed and moved and base_commit is None:
-            baseline = ""
-        return {
-            "branch_head_sha": self.head_value,
-            "target_sha": await self.base(_base) if verify_merged or moved else "",
-            "landed": landed,
-            "review_required": review,
-            "base_sha": baseline,
-            "head_sha": head,
-            "landing_sha": head if landed else "",
-            "extra_paths": list(self.extra_paths) if merge_changes else [],
-            "merge_paths": list(self.merge_paths) if merge_changes else [],
-            "base_source": "accepted_base" if review else "",
-        }
-
-
 @pytest.fixture
-def service(monkeypatch, tmp_path):
-    monkeypatch.setattr(_execution, "GitRepository", Git)
-    monkeypatch.setattr(Git, "head_value", _HEAD)
-    monkeypatch.setattr(Git, "ancestor", True)
-    monkeypatch.setattr(Git, "merged", False)
-    monkeypatch.setattr(Git, "extra_paths", ())
-    monkeypatch.setattr(Git, "merge_paths", ())
-    monkeypatch.setattr(Git, "unknown_base", False)
+def service(tmp_path):
     return Service(tmp_path)
 
 
@@ -482,13 +392,7 @@ async def submitted(service):
     card = await service.card()
     async with service.lock:
         result = await service.execution.submit_work(
-            service.tool_context(card),
-            {
-                "branch": "topic",
-                "base": "main",
-                "summary": "Implementation",
-                "checks": "Checked",
-            },
+            service.tool_context(card), {"summary": "Implementation on branch topic"}
         )
     assert result["ok"]
     await service.finish()
@@ -507,7 +411,7 @@ async def reviewed(service):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("archive_failure", [False, True])
-async def test_worker_reviewer_acceptance_integration_and_archival(
+async def test_steps_run_until_the_user_accepts_and_deleted_cards_are_archived(
     service, monkeypatch, archive_failure
 ):
     card = await started(service)
@@ -524,22 +428,12 @@ async def test_worker_reviewer_acceptance_integration_and_archival(
     assert not {"edit", "factory_request_changes", "factory_submit_work"} & set(
         groups.configs["review-r1"].tool_access.denied
     )
+    admissions = len(groups.admissions)
     async with service.lock:
         await service.execution.accept(card)
     await service.flush()
     card = await service.card()
-    assert card["state"] == "integrating"
-    assert groups.admissions[-1][1].kind == "continuation"
-    assert f'"commit": "{Git.target_value}"' in groups.admissions[-1][1].content
-    monkeypatch.setattr(Git, "head_value", None)  # Project cleanup removed branch.
-    async with service.lock:
-        result = await service.execution.report_integration(
-            service.tool_context(card), {"outcome": "integrated"}
-        )
-    assert result["ok"]
-    await service.finish()
-    card = await service.card()
-    assert card["state"] == "done" and card["integration_reference"] == _HEAD
+    assert card["state"] == "done" and len(groups.admissions) == admissions
     assert service.publications[-1] == ("cards", [card["id"]], card["revision"], False)
     assert set(card["runtime"]["runs"]) == {"implement", "review-r1"}
     archive_group = groups.archive_group
@@ -568,7 +462,7 @@ async def test_change_requests_use_fresh_participants_and_exhaust_rounds(service
     stale_context = None
     for round_number in (1, 2):
         card = await submitted(service)
-        assert card["round"] == round_number
+        assert card["runtime"]["current_participant"] == f"review-r{round_number}"
         current_context = service.tool_context(card)
         if stale_context is not None:
             async with service.lock:
@@ -644,15 +538,7 @@ async def test_terminal_tool_handoff_waits_until_old_run_is_published(service):
     groups = service.host.temporary_agents
     worker = groups.runs[card["runtime"]["current_run"]]
     async with service.lock:
-        await service.execution.submit_work(
-            service.tool_context(card),
-            {
-                "branch": "topic",
-                "base": "main",
-                "summary": "Ready",
-                "checks": "Passed",
-            },
-        )
+        await service.execution.submit_work(service.tool_context(card), {"summary": "Ready"})
     await worker.wait_entered.wait()
     assert "review-r1" not in groups.configs
     await service.finish()
@@ -660,18 +546,18 @@ async def test_terminal_tool_handoff_waits_until_old_run_is_published(service):
 
 
 @pytest.mark.asyncio
-async def test_discard_cancels_review_and_gives_worker_one_cleanup_turn(service):
+async def test_discard_cancels_the_running_step_without_another_turn(service):
     await started(service)
     card = await submitted(service)
+    count = len(service.host.temporary_agents.admissions)
     async with service.lock:
         await service.execution.discard(card)
     await service.flush()
     card = await service.card()
-    assert card["state"] == "discarded" and card["runtime"]["current_participant"] == "implement"
-    count = len(service.host.temporary_agents.admissions)
+    assert card["state"] == "discarded" and "pending" not in card["runtime"]
+    assert not service.host.temporary_agents.open[card["group_id"]]
     await service.finish()
     assert len(service.host.temporary_agents.admissions) == count
-    assert not service.host.temporary_agents.open[card["group_id"]]
 
 
 @pytest.mark.asyncio
@@ -712,20 +598,19 @@ async def test_wip_queued_operator_actions_are_admitted_without_duplicate_commen
     await service.flush()
     card = await service.card()
     assert "pending_action" not in card["runtime"]
-    assert card["state"] in {"working", "integrating"}
+    # Accepting the finished Workflow completes the Card; the others run a step again.
+    assert card["state"] == ("done" if action == "accept" else "working")
     assert not (await service.store.history(card["id"]))["comments"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "case", ["foreign", "role", "epoch", "state", "missing_summary", "missing_checks"]
-)
+@pytest.mark.parametrize("case", ["foreign", "role", "epoch", "state", "missing_summary"])
 async def test_private_tools_refuse_wrong_participants_states_and_incomplete_submissions(
     service, case
 ):
     card = await started(service)
     context = service.tool_context(card)
-    arguments = {"branch": "topic", "base": "main", "summary": "Ready", "checks": "Passed"}
+    arguments = {"summary": "Ready"}
     handler = service.execution.submit_work
     if case in {"foreign", "epoch"}:
         context.execution_owner = replace(
@@ -740,8 +625,6 @@ async def test_private_tools_refuse_wrong_participants_states_and_incomplete_sub
         card = await service.store.change(
             card["id"], {"state": "waiting"}, actor="factory", event="paused"
         )
-    elif case == "missing_checks":
-        arguments.pop("checks")
     else:
         arguments.pop("summary")
     revision = card["revision"]
@@ -1036,46 +919,6 @@ async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_b
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "boundary", ["before_admission", "admitted_before_save", "admitted_after_save"]
-)
-async def test_restart_delivers_never_admitted_cleanup_once_and_only_closes_admitted_cleanup(
-    service, monkeypatch, boundary
-):
-    card = await started(service)
-    groups = service.host.temporary_agents
-    groups.runs[card["runtime"]["current_run"]].finish("interrupted")
-    monkeypatch.setattr(service.execution, "_launch_later", lambda _card: None)
-    async with service.lock:
-        await service.execution.discard(card)
-    pending = (await service.card())["runtime"]["pending"]
-    if boundary == "admitted_before_save":
-        handle = await groups.open_group(card["group_id"])
-        admitted = await groups.start(
-            handle,
-            "implement",
-            TemporaryRunInput(pending["kind"], pending["content"], pending["id"]),
-        )
-        groups.runs[admitted.run_id].finish("interrupted")
-    elif boundary == "admitted_after_save":
-        await service.execution._launch(card["id"], pending["id"])
-        groups.runs[(await service.card())["runtime"]["current_run"]].finish("interrupted")
-    groups.recovered = True
-    service.execution = FactoryExecution(service)
-    await service.execution.reconcile()
-    await service.flush()
-    assert len(groups.admissions) == 2
-    assert "pending" not in (await service.card())["runtime"]
-    if boundary == "before_admission":
-        await service.finish()
-    assert not groups.open[card["group_id"]]
-    service.execution = FactoryExecution(service)
-    await service.execution.reconcile()
-    await service.flush()
-    assert len(groups.admissions) == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
     "case", ["error", "sibling", "participant", "epoch", "generation", "unowned", "older"]
 )
 @pytest.mark.parametrize("boundary", ["before_request", "before_receipt", "committed"])
@@ -1232,7 +1075,7 @@ async def test_parallel_steps_feed_later_steps_and_rework_reruns_what_follows(se
         await service.execution.accept(card)
     await service.flush()
     card = await service.card()
-    assert card["state"] == "done" and card["integration_reference"] == ""
+    assert card["state"] == "done"
     outputs = (await service.store.history(card["id"]))["outputs"]
     assert [(item["step"], item["kind"], item["pass"]) for item in outputs] == [
         ("draft1", "work", 1),
@@ -1326,12 +1169,15 @@ def stage_workflow() -> Json:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["fresh", "submitted", "stages", "unstarted"])
-async def test_cards_from_earlier_factory_versions_restart_or_wait_with_their_worktree_kept(
-    service, case
-):
-    """Role- and stage-based Cards and Cards whose start failed never lose their worktree."""
+@pytest.mark.parametrize("case", ["fresh", "submitted", "stages", "unstarted", "discarded"])
+async def test_cards_from_earlier_factory_versions_restart_or_wait_for_the_user(service, case):
+    """Role- and stage-based Cards keep their results; a handed-in branch waits for
+    approval of the Integrate step, and a discarded Card runs nothing more."""
     groups = service.host.temporary_agents
+    # Setups migrated from earlier versions end in an Integrate step.
+    service.store.setup["workflows"][0]["steps"].append(
+        step("integrate", after=["review"], approval=True)
+    )
     card = service.store.add()
     runtime: Json = {"cwd": card["runtime"]["cwd"]}
     patch: Json = {"state": "waiting", "waiting_reason": "run_failed"}
@@ -1346,24 +1192,36 @@ async def test_cards_from_earlier_factory_versions_restart_or_wait_with_their_wo
             runtime["workflow"] = stage_workflow()
         else:
             runtime["setup"] = {"review_rounds": 2}
-        patch = (
-            {"state": "working"}
-            if case == "fresh"
-            else {"state": "waiting", "waiting_reason": "finished", "round": 1}
+        patch = {
+            "fresh": {"state": "working"},
+            "discarded": {"state": "discarded"},
+        }.get(case, {"state": "waiting", "waiting_reason": "finished", "round": 1})
+    if case == "discarded":
+        # An older Factory queued a cleanup turn for the discarded Card.
+        runtime.update(
+            phase="cleanup",
+            pending={
+                "id": "fci_cleanup",
+                "participant": "worker",
+                "kind": "continuation",
+                "content": "Remove your worktree.",
+                "cancel_previous": True,
+            },
         )
     card = await service.store.change(
         card["id"], {**patch, "runtime": runtime}, actor="factory", event="legacy"
     )
     service.execution = FactoryExecution(service)
     await service.execution.reconcile()
+    await service.flush()
     card = await service.card()
+    if case == "discarded":
+        assert card["state"] == "discarded" and "pending" not in card["runtime"]
+        assert not groups.admissions and not groups.open.get(card["group_id"])
+        return
     if case == "fresh":
         assert card["state"] == "queued"
-        assert card["runtime"] == {
-            "cwd": runtime["cwd"],
-            "participants": runtime["participants"],
-            "legacy_cleanup": ["worker"],
-        }
+        assert card["runtime"] == {"cwd": runtime["cwd"], "participants": runtime["participants"]}
         return
     if case == "unstarted":
         assert card["state"] == "waiting"
@@ -1371,10 +1229,10 @@ async def test_cards_from_earlier_factory_versions_restart_or_wait_with_their_wo
             await service.execution.retry(card)
         assert (await service.card())["state"] == "queued"
         return
-    assert (card["state"], card["waiting_reason"]) == ("waiting", "finished")
+    assert (card["state"], card["waiting_reason"]) == ("waiting", "checkpoint")
     steps = card["runtime"]["workflow"]["steps"]
-    assert [item["id"] for item in steps] == ["implement", "review"]
-    assert card["runtime"]["note"]
+    assert [item["id"] for item in steps] == ["implement", "review", "integrate"]
+    assert card["runtime"]["step"] == "integrate" and card["runtime"]["note"]
     if case == "stages":
         async with service.lock:
             await service.execution.send_back(card, "Rework the error handling")
@@ -1387,11 +1245,11 @@ async def test_cards_from_earlier_factory_versions_restart_or_wait_with_their_wo
         await service.execution.accept(card)
     await service.flush()
     participant, integrate = groups.admissions[-1]
-    assert (await service.card())["state"] == "integrating"
-    assert participant == "implement" and integrate.kind == "initial"
-    assert f"The user accepted commit {_HEAD}" in integrate.content
+    assert (await service.card())["state"] == "working"
+    assert participant == "integrate" and integrate.kind == "initial"
+    assert f"Branch topic based on main, head commit {_HEAD}" in integrate.content
     async with service.lock:
         await service.execution.discard(await service.card())
     await service.flush()
-    assert groups.admissions[-1][0] == "worker"
+    assert len(groups.admissions) == 1
     assert (await service.card())["state"] == "discarded"

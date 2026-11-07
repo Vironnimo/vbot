@@ -200,7 +200,13 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
             12,
             3,
         )
-        implement, review = workflow["steps"]
+        implement, review, integrate = workflow["steps"]
+        # Integration after acceptance became a step that waits for approval.
+        assert (integrate["after"], integrate["approval"], integrate["agent"]) == (
+            [review["id"]],
+            True,
+            "coder",
+        )
         assert (implement["source"], implement["agent"], implement["model"]) == (
             "team",
             "coder",
@@ -215,7 +221,8 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
             "work",
             "Accept it.",
         )
-        implement, review = (await store.get_setup("staged"))["workflows"][0]["steps"]
+        implement, review, integrate = (await store.get_setup("staged"))["workflows"][0]["steps"]
+        assert (integrate["after"], integrate["approval"]) == (["review"], True)
         assert (implement["id"], implement["agent"], implement["returns_to"]) == (
             "implement",
             "coder",

@@ -30,9 +30,10 @@ type Json = dict[str, Any]
 def implement_workflow() -> Json:
     """Implement, then Review: the Workflow the operation contracts run Cards with."""
     workflow = templates()[0]
-    implement, review = workflow["steps"]
+    implement, review, integrate = workflow["steps"]
     implement.update(source="agent", agent="worker")
     review.update(source="agent", agent="reviewer")
+    integrate.update(source="agent", agent="worker")
     return workflow
 
 
@@ -115,7 +116,7 @@ class FakeExecution:
         await self._admit("start", card, "working")
 
     async def accept(self, card: Json) -> None:
-        await self._admit("accept", card, "integrating")
+        await self._admit("accept", card, "working")
 
     async def send_back(self, card: Json, comment: str, step: str = "") -> None:
         await self._admit("send_back", card, "working", comment)

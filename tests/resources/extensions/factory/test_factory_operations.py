@@ -146,7 +146,7 @@ async def test_public_failure_after_persistence_reports_an_unconfirmed_outcome(
 @pytest.mark.parametrize(
     ("state", "reason", "content_field"),
     [
-        ("waiting", "approved", "recommendation"),
+        ("waiting", "finished", "summary"),
         ("waiting", "blocked", "question"),
         ("waiting", "run_failed", "note"),
         ("waiting", "no_agreement", None),
@@ -161,7 +161,7 @@ async def test_attention_renders_a_plain_summary_without_rewriting_card_content(
     title = "Objective\nwith a second line"
     content = "\n\nTest-owned summary.\nFurther detail."
     patch: dict[str, Any] = {"title": title}
-    if content_field == "recommendation":
+    if content_field == "summary":
         patch[content_field] = content
     elif content_field is not None:
         patch["runtime"] = {**card["runtime"], content_field: content}
@@ -171,7 +171,7 @@ async def test_attention_renders_a_plain_summary_without_rewriting_card_content(
         actor="reviewer",
         event="reviewed",
     )
-    await factory.service.changed(card, {**card, "state": "reviewing"})
+    await factory.service.changed(card, {**card, "state": "working"})
     notice = factory.host.notifications[0]
     assert title.replace("\n", " ") in notice["title"]
     if content_field is not None:
@@ -190,7 +190,7 @@ async def test_board_badge_counts_waiting_cards_and_proposals_until_resolved(
 ) -> None:
     proposal = await factory.card("proposal")
     waiting = await factory.card("waiting", waiting_reason="approved")
-    for state in ("queued", "working", "reviewing", "integrating", "done", "discarded"):
+    for state in ("queued", "working", "done", "discarded"):
         await factory.card(state)
     await factory.service.changed(proposal)
     assert factory.host.badges[-1] == ("board", 2)
@@ -222,40 +222,8 @@ async def test_public_reads_filter_cards_without_exposing_execution_runtime(
     detail = await factory.call({"action": "get", "id": proposal["id"]})
     assert detail["ok"] is True
     assert "runtime" not in detail["data"]["card"]
-    assert "integration_landing" not in detail["data"]["card"]
-    landing: dict[str, Any] = {
-        "head_sha": "captured-head",
-        "base_sha": "captured-base",
-        "landing_sha": "landing-commit",
-        "branch_head_sha": None,
-        "status": "changes_requested",
-        "extra_paths": ["src/additional.py"],
-        "merge_paths": ["src/merged.py"],
-    }
-    stored_landing = {
-        **landing,
-        "private_config": {"not_for_the_board": True},
-        "extra_paths": [*landing["extra_paths"], {"not_a_path": "private"}],
-    }
-    saved = await factory.store.change(
-        proposal["id"],
-        {
-            "head_sha": "newer-submission-head",
-            "runtime": {**proposal["runtime"], "integration_landing": stored_landing},
-        },
-        actor="factory",
-        event="test_historical_landing",
-    )
-    projected = await factory.call({"action": "get", "id": proposal["id"]})
-    assert projected["ok"] is True
-    assert "runtime" not in projected["data"]["card"]
-    assert projected["data"]["card"]["integration_landing"] == landing
-    board = await factory.operation("board.get", project_id="project")
-    on_board = next(card for card in board["cards"] if card["id"] == proposal["id"])
-    assert on_board["integration_landing"] == landing
-    assert "runtime" not in on_board
-    assert (await factory.store.get_card(proposal["id"])) == saved
-    assert saved["runtime"]["integration_landing"] == stored_landing
+    # Columns an earlier Factory filled from Git stay off the Board.
+    assert not {"branch", "head_sha", "recommendation"} & set(detail["data"]["card"])
     invalid = await factory.call({"action": "list", "state": "unknown"})
     assert invalid["ok"] is False and invalid["error"]["code"] == "invalid_arguments"
 
@@ -302,7 +270,7 @@ async def test_management_creation_is_operator_owned(factory: FactoryHarness) ->
 async def test_card_detail_retains_completed_run_status_beside_live_work(
     factory: FactoryHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    card = await factory.card("integrating")
+    card = await factory.card("working")
     await factory.store.change(
         card["id"],
         {"runtime": {**card["runtime"], "runs": {"worker": "live", "reviewer-1": "ended"}}},
@@ -365,6 +333,7 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
     assert set(created["effective_models"]) == {
         "implement/implement",
         "implement/review",
+        "implement/integrate",
         "drafts/draft1",
         "drafts/draft2",
         "drafts/draft3",
@@ -372,10 +341,10 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
         "drafts/review",
     }
     updated = await factory.operation(
-        "setup.update", project_id="other", base_branch="release", expected_revision=1
+        "setup.update", project_id="other", turn_budget=12, expected_revision=1
     )
     assert updated["setup"]["revision"] == 2
-    assert updated["setup"]["base_branch"] == "release"
+    assert updated["setup"]["turn_budget"] == 12
     assert updated["setup"]["workflows"] == workflows
     before = list(factory.host.published)
     with pytest.raises(FactoryError) as conflict:
@@ -411,7 +380,6 @@ def _review_first() -> list[Json]:
         ({"workflows": _changed(0, model="missing")}, "model_not_found"),
         ({"workflows": _changed(1, after=[])}, "invalid_workflow"),
         ({"workflows": _review_first()}, "invalid_workflow"),
-        ({"base_branch": "--all"}, "invalid_base"),
     ],
     ids=[
         "project",
@@ -421,7 +389,6 @@ def _review_first() -> list[Json]:
         "model",
         "returns-to-unrelated",
         "review-first",
-        "base",
     ],
 )
 async def test_setup_refuses_unavailable_execution_configuration_without_writes(
@@ -449,16 +416,20 @@ async def test_setup_reports_a_step_whose_agent_has_no_usable_model(
     assert preview["effective_models"] == {
         "implement/implement": "",
         "implement/review": "test/reviewer",
+        "implement/integrate": "",
     }
     with pytest.raises(FactoryError) as refused:
         await factory.operation("setup.update", **choices)
     assert refused.value.code == "model_unresolved"
     assert "Implement / Implement" in str(refused.value)
-    fixed = _changed(0, model="test/worker")
-    saved = await factory.operation("setup.update", project_id="project", workflows=fixed)
+    fixed = implement_workflow()
+    for index in (0, 2):
+        fixed["steps"][index]["model"] = "test/worker"
+    saved = await factory.operation("setup.update", project_id="project", workflows=[fixed])
     assert saved["effective_models"] == {
         "implement/implement": "test/worker",
         "implement/review": "test/reviewer",
+        "implement/integrate": "test/worker",
     }
 
 
@@ -516,7 +487,7 @@ async def test_scheduler_respects_order_enabled_setups_and_all_wip_states(
     await factory.setup("disabled", enabled=False)
     disabled = await factory.card(project_id="disabled")
     proposal = await factory.card("proposal")
-    active = [await factory.card(state) for state in ("working", "reviewing", "integrating")]
+    active = [await factory.card("working") for _ in range(3)]
     await factory.card("waiting", waiting_reason="approved")
     first, second, moved = [await factory.card() for _ in range(3)]
     await factory.store.move_card(moved["id"], first["position"])
@@ -603,7 +574,7 @@ async def test_live_wip_config_change_releases_capacity_without_reload(
 @pytest.mark.parametrize(
     ("action", "reason", "arguments", "execution_action", "state", "comment"),
     [
-        ("accept", "finished", {}, "accept", "integrating", ""),
+        ("accept", "finished", {}, "accept", "working", ""),
         (
             "send_back",
             "finished",
