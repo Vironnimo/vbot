@@ -8,55 +8,58 @@ from .store import FactoryError
 
 type Json = dict[str, Any]
 
-PROFILE_SOURCES = ("agent", "team")
 SETUP_DEFAULTS: Json = {
     "enabled": True,
-    "worker_source": "agent",
-    "worker_profile": "",
-    "worker_model": "",
-    "worker_effort": "",
-    "reviewer_source": "agent",
-    "reviewer_profile": "",
-    "reviewer_model": "",
-    "reviewer_effort": "",
-    "review_rounds": 3,
+    "workflows": [],
+    "default_workflow": "",
     "turn_budget": 30,
     "base_branch": "main",
     "integration_check": "merged",
 }
+_LANE = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "enum": ["agent", "team"]},
+        "agent": {"type": "string"},
+        "model": {"type": "string"},
+        "effort": {"type": "string"},
+    },
+}
+_STAGE = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["work", "review"]},
+        "output": {"type": "string", "enum": ["changes", "document"]},
+        "instructions": {"type": "string"},
+        "lanes": {"type": "array", "items": _LANE},
+        "approval": {"type": "boolean"},
+        "target": {"type": "string"},
+        "rounds": {"type": "integer", "minimum": 1, "maximum": 20},
+    },
+}
 SETUP_PROPERTIES: Json = {
     "project_id": {"type": "string", "minLength": 1},
     "enabled": {"type": "boolean"},
-    "worker_source": {"type": "string", "enum": list(PROFILE_SOURCES)},
-    "reviewer_source": {"type": "string", "enum": list(PROFILE_SOURCES)},
-    **{
-        field: {"type": "string"}
-        for field in (
-            "worker_profile",
-            "worker_model",
-            "worker_effort",
-            "reviewer_profile",
-            "reviewer_model",
-            "reviewer_effort",
-            "base_branch",
-        )
+    "workflows": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "stages": {"type": "array", "items": _STAGE},
+            },
+        },
     },
-    "review_rounds": {"type": "integer", "minimum": 1, "maximum": 20},
+    "default_workflow": {"type": "string"},
+    "base_branch": {"type": "string"},
     "turn_budget": {"type": "integer", "minimum": 1, "maximum": 1000},
     "integration_check": {"type": "string", "enum": ["merged", "reference_only"]},
     "expected_revision": {"type": "integer", "minimum": 0},
 }
-
-
-def participant_profile(setup: Json, role: str) -> Json:
-    """The ``TemporaryAgentConfig`` Profile fields of one role's chosen Agent.
-
-    Card snapshots saved before ``*_source`` existed name a Team Agent.
-    """
-    profile = setup[f"{role}_profile"]
-    if setup.get(f"{role}_source", "team") == "agent":
-        return {"identity_profile": profile}
-    return {"repository_profile": profile}
 
 
 def schema(properties: Json, required: tuple[str, ...] = ()) -> Json:
@@ -76,7 +79,12 @@ OPERATION_SCHEMAS: dict[str, Json] = {
     "board.get": schema(_PROJECT),
     "card.get": schema(_ID, ("id",)),
     "card.create": schema(
-        {**_PROJECT, "title": {"type": "string"}, "description": {"type": "string"}},
+        {
+            **_PROJECT,
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "workflow": {"type": "string"},
+        },
         ("project_id", "title", "description"),
     ),
     "card.update": schema(
@@ -85,7 +93,9 @@ OPERATION_SCHEMAS: dict[str, Json] = {
     ),
     "card.move": schema({**_ID, "position": {"type": "number"}}, ("id", "position")),
     "card.accept": schema({**_ID, **_REVISION}, ("id", "expected_revision")),
-    "card.send_back": schema({**_ID, "comment": {"type": "string"}}, ("id", "comment")),
+    "card.send_back": schema(
+        {**_ID, "comment": {"type": "string"}, "stage": {"type": "string"}}, ("id", "comment")
+    ),
     "card.answer": schema({**_ID, "text": {"type": "string"}}, ("id", "text")),
     **{
         f"card.{action}": schema(_ID, ("id",))

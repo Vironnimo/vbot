@@ -14,6 +14,7 @@ export function createFactoryPageModel(bridgeClient) {
   const client = bridgeClient ?? createExtensionPageClient();
   let route = $state('');
   let catalog = $state({});
+  let templates = $state([]);
   let cards = $state([]);
   let setups = $state([]);
   let detail = $state(null);
@@ -74,6 +75,7 @@ export function createFactoryPageModel(bridgeClient) {
   async function loadCatalog() {
     const result = await call('catalog');
     if (disposed) return;
+    templates = result.templates ?? [];
     if (pickers) heldCatalog = result.catalog ?? {};
     else catalog = result.catalog ?? {};
   }
@@ -354,6 +356,9 @@ export function createFactoryPageModel(bridgeClient) {
     },
     get catalog() {
       return catalog;
+    },
+    get templates() {
+      return templates;
     },
     get cards() {
       return cards;

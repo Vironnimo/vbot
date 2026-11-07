@@ -1,5 +1,6 @@
 import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
 import { formatDateTimeInApplicationZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
+import { changesRepository } from './workflows.js';
 
 export const copy = (value) => JSON.parse(JSON.stringify(value));
 export function failureText(cause) {
@@ -10,12 +11,22 @@ export function failureText(cause) {
       return t('factory.error.projectDisabled');
     case 'project_not_found':
       return t('factory.error.projectMissing');
+    // Setup validation names the Workflow, stage and lane at fault; only the
+    // server knows which Agents and Models are available to it.
+    case 'invalid_workflow':
+      return cause?.message || t('factory.error.invalidWorkflow');
     case 'profile_not_found':
-      return t('factory.error.profileMissing');
+      return cause?.message || t('factory.error.profileMissing');
     case 'model_not_found':
-      return t('factory.error.modelMissing');
+      return cause?.message || t('factory.error.modelMissing');
     case 'model_unresolved':
-      return t('factory.error.modelUnresolved');
+      return cause?.message || t('factory.error.modelUnresolved');
+    case 'invalid_effort':
+      return cause?.message || t('factory.error.invalidEffort');
+    case 'workflow_not_found':
+      return t('factory.error.workflowMissing');
+    case 'invalid_stage':
+      return t('factory.error.invalidStage');
     case 'setup_not_found':
       return t('factory.error.setupMissing');
     case 'setup_in_use':
@@ -32,8 +43,8 @@ export function failureText(cause) {
       return t('factory.error.phaseQueued');
     case 'invalid_state':
       return t('factory.error.stateChanged');
-    case 'not_reviewed':
-      return t('factory.error.notReviewed');
+    case 'not_acceptable':
+      return t('factory.error.notAcceptable');
     case 'not_blocked':
       return t('factory.error.notBlocked');
     case 'not_retryable':
@@ -100,8 +111,10 @@ export function stateLabel(state) {
 
 export function waitingLabel(reason) {
   switch (reason) {
-    case 'approved':
-      return t('factory.reason.approved');
+    case 'checkpoint':
+      return t('factory.reason.checkpoint');
+    case 'finished':
+      return t('factory.reason.finished');
     case 'no_agreement':
       return t('factory.reason.noAgreement');
     case 'blocked':
@@ -118,6 +131,23 @@ export function waitingLabel(reason) {
       return t('factory.reason.restart');
     default:
       return reason ?? '';
+  }
+}
+
+export const ACCEPTABLE_REASONS = ['checkpoint', 'finished', 'no_agreement'];
+
+// What accepting does depends on why the Card waits and whether its
+// Workflow changes the repository.
+export function acceptLabel(card) {
+  switch (card?.waiting_reason) {
+    case 'checkpoint':
+      return t('factory.acceptCheckpoint');
+    case 'no_agreement':
+      return t('factory.acceptAnyway');
+    default:
+      return changesRepository(card?.runtime?.workflow)
+        ? t('factory.acceptIntegrate')
+        : t('factory.acceptDone');
   }
 }
 
@@ -162,12 +192,132 @@ export function originLabel(origin) {
   }
 }
 
-export function participantName(participant) {
-  if (participant.display_name) return participant.display_name;
-  const id = participantId(participant);
-  return id === 'worker'
-    ? t('factory.worker')
-    : t('factory.reviewer', { round: id?.replace('reviewer-', '') ?? '' });
+export const participantName = (participant) =>
+  participant.display_name || participantId(participant) || '';
+
+export function stageKindLabel(stage) {
+  if (stage?.kind === 'review') return t('factory.kind.review');
+  return stage?.output === 'document'
+    ? t('factory.kind.document')
+    : stage?.output === 'changes'
+      ? t('factory.kind.changes')
+      : t('factory.kind.work');
+}
+
+// The stage a started Card is in, with its lane when the stage has several.
+export function stageText(stage) {
+  if (!stage) return '';
+  return stage.lanes > 1
+    ? t('factory.stageLane', {
+        stage: stage.name,
+        lane: stage.lane + 1,
+        lanes: stage.lanes,
+      })
+    : stage.name;
+}
+
+// A Card's Workflow: its snapshot once started, else the setup's Workflow
+// it will start with.
+export function cardWorkflow(card, setups) {
+  if (card?.workflow) return card.workflow;
+  const setup = setups?.find((entry) => entry.project_id === card?.project_id);
+  const workflows = setup?.workflows ?? [];
+  return (
+    workflows.find((workflow) => workflow.id === card?.workflow_id) ??
+    workflows.find((workflow) => workflow.id === setup?.default_workflow) ??
+    null
+  );
+}
+
+export function eventLabel(event) {
+  switch (event) {
+    case 'created':
+      return t('factory.event.created');
+    case 'updated':
+      return t('factory.event.updated');
+    case 'moved':
+      return t('factory.event.moved');
+    case 'proposal_approved':
+      return t('factory.event.proposalApproved');
+    case 'queued_for_slot':
+      return t('factory.event.queuedForSlot');
+    case 'started':
+      return t('factory.event.started');
+    case 'run_admitted':
+      return t('factory.event.runAdmitted');
+    case 'run_observed':
+      return t('factory.event.runObserved');
+    case 'delivery_acknowledged':
+      return t('factory.event.deliveryAcknowledged');
+    case 'submitted':
+      return t('factory.event.submitted');
+    case 'reviewed':
+      return t('factory.event.reviewed');
+    case 'changes_requested':
+      return t('factory.event.changesRequested');
+    case 'checkpoint':
+      return t('factory.event.checkpoint');
+    case 'finished':
+      return t('factory.event.finished');
+    case 'no_agreement':
+      return t('factory.event.noAgreement');
+    case 'blocked':
+      return t('factory.event.blocked');
+    case 'accepted':
+      return t('factory.event.accepted');
+    case 'answered':
+      return t('factory.event.answered');
+    case 'sent_back':
+      return t('factory.event.sentBack');
+    case 'retried':
+      return t('factory.event.retried');
+    case 'retry_consumed':
+      return t('factory.event.retryConsumed');
+    case 'retry_reconciled':
+      return t('factory.event.retryReconciled');
+    case 'nudged':
+      return t('factory.event.nudged');
+    case 'review_nudged':
+      return t('factory.event.reviewNudged');
+    case 'review_retried':
+      return t('factory.event.reviewRetried');
+    case 'restarted':
+      return t('factory.event.restarted');
+    case 'restart':
+      return t('factory.event.restart');
+    case 'recovered_initial':
+      return t('factory.event.recoveredInitial');
+    case 'run_failed':
+      return t('factory.event.runFailed');
+    case 'admission_failed':
+      return t('factory.event.admissionFailed');
+    case 'review_failed':
+      return t('factory.event.reviewFailed');
+    case 'budget_exhausted':
+      return t('factory.event.budgetExhausted');
+    case 'integration_review':
+      return t('factory.event.integrationReview');
+    case 'integration_changes':
+      return t('factory.event.integrationChanges');
+    case 'integration_base_required':
+      return t('factory.event.integrationBaseRequired');
+    case 'integration_failed':
+      return t('factory.event.integrationFailed');
+    case 'integrated':
+      return t('factory.event.integrated');
+    case 'discarded':
+      return t('factory.event.discarded');
+    case 'deletion_requested':
+      return t('factory.event.deletionRequested');
+    case 'cleanup_continued':
+      return t('factory.event.cleanupContinued');
+    case 'cleanup_failed':
+      return t('factory.event.cleanupFailed');
+    case 'workflow_upgrade':
+      return t('factory.event.workflowUpgrade');
+    default:
+      return (event ?? '').replaceAll('_', ' ');
+  }
 }
 
 export function boardColumns(cards, showDiscarded = false) {
@@ -202,8 +352,7 @@ export function cardActions(card) {
   const waiting = card?.state === 'waiting';
   return {
     approve: card?.state === 'proposal',
-    accept:
-      waiting && ['approved', 'no_agreement'].includes(card.waiting_reason),
+    accept: waiting && ACCEPTABLE_REASONS.includes(card.waiting_reason),
     answer: waiting && card.waiting_reason === 'blocked',
     retry:
       waiting &&
@@ -261,20 +410,3 @@ export function usageSummary(usage = {}) {
       : t('factory.costUnavailable'),
   };
 }
-
-export const setupDefaults = (projectId) => ({
-  project_id: projectId,
-  enabled: true,
-  worker_source: 'agent',
-  worker_profile: '',
-  worker_model: '',
-  worker_effort: '',
-  reviewer_source: 'agent',
-  reviewer_profile: '',
-  reviewer_model: '',
-  reviewer_effort: '',
-  review_rounds: 3,
-  turn_budget: 30,
-  base_branch: 'main',
-  integration_check: 'merged',
-});

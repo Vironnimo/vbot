@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from core.extensions.databases import Database
+from core.extensions.databases import Database, Migration
 from core.extensions.operations import ExtensionOperationError
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
@@ -19,41 +19,43 @@ STATES = frozenset(
 ACTIVE_STATES = frozenset({"working", "reviewing", "integrating"})
 FINAL_STATES = frozenset({"done", "discarded"})
 DATABASE_NAME = "factory"
-# Generation 1 SQL defaults stay stable; setup creation supplies current defaults explicitly.
-# A role's ``*_source`` says what its ``*_profile`` names: ``agent`` an Identity Agent,
-# ``team`` a Team Agent of the Project (setups saved before the column).
+# Tables evolve additively: a changed object gets a new name. ``setups`` replaces
+# the role-based ``project_setups`` and ``outputs`` replaces ``reviews``; the
+# ``workflows`` migration copies both into the new tables once.
 SCHEMA_SQL = """
-CREATE TABLE project_setups (
+CREATE TABLE setups (
  project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
- worker_profile TEXT NOT NULL, worker_model TEXT NOT NULL DEFAULT '',
- worker_effort TEXT NOT NULL DEFAULT '', reviewer_profile TEXT NOT NULL,
- reviewer_model TEXT NOT NULL DEFAULT '', reviewer_effort TEXT NOT NULL DEFAULT '',
- review_rounds INTEGER NOT NULL DEFAULT 2, turn_budget INTEGER NOT NULL DEFAULT 30,
- base_branch TEXT NOT NULL DEFAULT 'main', integration_check TEXT NOT NULL DEFAULT 'merged',
- revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
- worker_source TEXT NOT NULL DEFAULT 'team', reviewer_source TEXT NOT NULL DEFAULT 'team'
+ workflows_json TEXT NOT NULL DEFAULT '[]', default_workflow TEXT NOT NULL DEFAULT '',
+ turn_budget INTEGER NOT NULL DEFAULT 30, base_branch TEXT NOT NULL DEFAULT 'main',
+ integration_check TEXT NOT NULL DEFAULT 'merged',
+ revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
 ) STRICT;
 CREATE TABLE cards (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
  description TEXT NOT NULL, origin TEXT NOT NULL, origin_session TEXT NOT NULL DEFAULT '',
  origin_run TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, waiting_reason TEXT NOT NULL DEFAULT '',
- position REAL NOT NULL, round INTEGER NOT NULL DEFAULT 0, worker_turns INTEGER NOT NULL DEFAULT 0,
+ position REAL NOT NULL, round INTEGER NOT NULL DEFAULT 0,
  branch TEXT NOT NULL DEFAULT '', base TEXT NOT NULL DEFAULT '', base_sha TEXT NOT NULL DEFAULT '',
  head_sha TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
  checks TEXT NOT NULL DEFAULT '',
  recommendation TEXT NOT NULL DEFAULT '', integration_reference TEXT NOT NULL DEFAULT '',
  group_id TEXT NOT NULL UNIQUE, runtime_json TEXT NOT NULL DEFAULT '{}',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- finished_at TEXT
+ finished_at TEXT, workflow_id TEXT NOT NULL DEFAULT '', turns INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX cards_state_position ON cards(state, position, id);
 CREATE INDEX cards_project_state ON cards(project_id, state);
-CREATE TABLE reviews (
- card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE, round INTEGER NOT NULL,
- kind TEXT NOT NULL, participant_id TEXT NOT NULL, verdict TEXT NOT NULL,
- recommendation TEXT NOT NULL, findings_json TEXT NOT NULL, reviewed_head_sha TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(card_id, round, participant_id)
+CREATE TABLE outputs (
+ id INTEGER PRIMARY KEY, card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+ stage_id TEXT NOT NULL, stage_name TEXT NOT NULL, kind TEXT NOT NULL, lane INTEGER NOT NULL,
+ pass INTEGER NOT NULL, participant_id TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+ result TEXT NOT NULL DEFAULT '', checks TEXT NOT NULL DEFAULT '',
+ branch TEXT NOT NULL DEFAULT '', base TEXT NOT NULL DEFAULT '',
+ base_sha TEXT NOT NULL DEFAULT '', head_sha TEXT NOT NULL DEFAULT '',
+ verdict TEXT NOT NULL DEFAULT '', recommendation TEXT NOT NULL DEFAULT '',
+ findings_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
 ) STRICT;
+CREATE INDEX outputs_card ON outputs(card_id, id);
 CREATE TABLE card_events (
  id INTEGER PRIMARY KEY, card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
  at TEXT NOT NULL, actor TEXT NOT NULL, event TEXT NOT NULL, detail_json TEXT NOT NULL
@@ -65,6 +67,66 @@ CREATE TABLE comments (
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
 """
+_OUTPUT_FIELDS = (
+    "stage_id",
+    "stage_name",
+    "kind",
+    "lane",
+    "pass",
+    "participant_id",
+    "summary",
+    "result",
+    "checks",
+    "branch",
+    "base",
+    "base_sha",
+    "head_sha",
+    "verdict",
+    "recommendation",
+    "findings_json",
+)
+
+
+def _migrate_workflows(connection: sqlite3.Connection) -> None:
+    """Copy role-based setups and reviews into Workflows and outputs (idempotent)."""
+    from ._workflows import legacy_workflow
+
+    tables = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if "project_setups" in tables:
+        cursor = connection.execute("SELECT * FROM project_setups")
+        columns = [column[0] for column in cursor.description]
+        for row in cursor.fetchall():
+            values = dict(zip(columns, tuple(row), strict=True))
+            workflow = legacy_workflow(values)
+            connection.execute(
+                "INSERT OR IGNORE INTO setups (project_id, enabled, workflows_json, "
+                "default_workflow, turn_budget, base_branch, integration_check, revision, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    values["project_id"],
+                    values["enabled"],
+                    _dump([workflow]),
+                    workflow["id"],
+                    values["turn_budget"],
+                    values["base_branch"],
+                    values["integration_check"],
+                    values["revision"],
+                    values["updated_at"],
+                ),
+            )
+    if "reviews" in tables and not connection.execute("SELECT 1 FROM outputs LIMIT 1").fetchone():
+        connection.execute(
+            "INSERT INTO outputs (card_id, stage_id, stage_name, kind, lane, pass, "
+            "participant_id, verdict, recommendation, findings_json, head_sha, created_at) "
+            "SELECT card_id, 'review', 'Review', kind, 0, round, participant_id, verdict, "
+            "recommendation, findings_json, reviewed_head_sha, created_at FROM reviews "
+            "WHERE card_id IN (SELECT id FROM cards) ORDER BY created_at"
+        )
+
+
+MIGRATIONS = (Migration("workflows", apply=_migrate_workflows),)
 
 _CARD_FIELDS = (
     "id",
@@ -78,7 +140,7 @@ _CARD_FIELDS = (
     "waiting_reason",
     "position",
     "round",
-    "worker_turns",
+    "turns",
     "branch",
     "base",
     "base_sha",
@@ -93,19 +155,24 @@ _CARD_FIELDS = (
     "created_at",
     "updated_at",
     "finished_at",
+    "workflow_id",
 )
 _SETUP_FIELDS = (
     "project_id",
     "enabled",
-    "worker_source",
-    "worker_profile",
-    "worker_model",
-    "worker_effort",
-    "reviewer_source",
-    "reviewer_profile",
-    "reviewer_model",
-    "reviewer_effort",
-    "review_rounds",
+    "workflows_json",
+    "default_workflow",
+    "turn_budget",
+    "base_branch",
+    "integration_check",
+    "revision",
+    "updated_at",
+)
+_SETUP_KEYS = (
+    "project_id",
+    "enabled",
+    "workflows",
+    "default_workflow",
     "turn_budget",
     "base_branch",
     "integration_check",
@@ -148,6 +215,7 @@ def _card(row: sqlite3.Row) -> Json:
 def _setup(row: sqlite3.Row) -> Json:
     value = dict(row)
     value["enabled"] = bool(value["enabled"])
+    value["workflows"] = json.loads(value.pop("workflows_json"))
     return value
 
 
@@ -182,7 +250,7 @@ class FactoryStore:
             lambda connection: [
                 _setup(row)
                 for row in connection.execute(
-                    f"SELECT {_SETUP_COLUMNS} FROM project_setups ORDER BY project_id"
+                    f"SELECT {_SETUP_COLUMNS} FROM setups ORDER BY project_id"
                 )
             ]
         )
@@ -190,7 +258,7 @@ class FactoryStore:
     async def get_setup(self, project_id: str) -> Json:
         def read(connection: sqlite3.Connection) -> Json:
             row = connection.execute(
-                f"SELECT {_SETUP_COLUMNS} FROM project_setups WHERE project_id = ?", (project_id,)
+                f"SELECT {_SETUP_COLUMNS} FROM setups WHERE project_id = ?", (project_id,)
             ).fetchone()
             if row is None:
                 raise FactoryError(
@@ -206,7 +274,7 @@ class FactoryStore:
 
         def write(connection: sqlite3.Connection) -> Json:
             previous = connection.execute(
-                f"SELECT {_SETUP_COLUMNS} FROM project_setups WHERE project_id = ?",
+                f"SELECT {_SETUP_COLUMNS} FROM setups WHERE project_id = ?",
                 (values["project_id"],),
             ).fetchone()
             revision = int(previous["revision"]) if previous is not None else 0
@@ -217,17 +285,19 @@ class FactoryStore:
                 )
             saved = {**values, "revision": revision + 1, "updated_at": at}
             saved["enabled"] = int(saved["enabled"])
+            saved["workflows_json"] = _dump(saved.pop("workflows"))
             assignments = ", ".join(
                 f"{name} = excluded.{name}" for name in _SETUP_FIELDS if name != "project_id"
             )
             connection.execute(
-                f"INSERT INTO project_setups ({_SETUP_COLUMNS}) "
+                f"INSERT INTO setups ({_SETUP_COLUMNS}) "
                 f"VALUES ({', '.join('?' for _ in _SETUP_FIELDS)}) "
                 f"ON CONFLICT(project_id) DO UPDATE SET {assignments}",
                 tuple(saved[name] for name in _SETUP_FIELDS),
             )
             saved["enabled"] = bool(saved["enabled"])
-            return saved
+            saved["workflows"] = json.loads(saved.pop("workflows_json"))
+            return {name: saved[name] for name in (*_SETUP_KEYS,)}
 
         return await self.database.write_async(write)
 
@@ -244,7 +314,7 @@ class FactoryStore:
                     "This Project has unfinished Cards. "
                     "Finish or discard them before deleting its setup.",
                 )
-            connection.execute("DELETE FROM project_setups WHERE project_id = ?", (project_id,))
+            connection.execute("DELETE FROM setups WHERE project_id = ?", (project_id,))
 
         await self.database.write_async(write)
 
@@ -258,6 +328,7 @@ class FactoryStore:
         origin_session: str = "",
         origin_run: str = "",
         runtime: Json | None = None,
+        workflow_id: str = "",
     ) -> Json:
         if origin not in {"operator", "user", "automation", "agent"}:
             raise ValueError("invalid card origin")
@@ -271,8 +342,8 @@ class FactoryStore:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO cards "
                     "(id, project_id, title, description, origin, origin_session, "
-                    "origin_run, state, position, group_id, runtime_json, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "origin_run, state, position, group_id, runtime_json, created_at, updated_at, "
+                    "workflow_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         card_id,
                         project_id,
@@ -287,6 +358,7 @@ class FactoryStore:
                         _dump(runtime or {}),
                         at,
                         at,
+                        workflow_id,
                     ),
                 )
                 return cursor.rowcount == 1
@@ -351,7 +423,7 @@ class FactoryStore:
         event: str,
         detail: Json | None = None,
         comment: str | None = None,
-        review: Json | None = None,
+        output: Json | None = None,
         expected_revision: int | None = None,
     ) -> Json:
         if set(patch) - (_MUTABLE_CARD_FIELDS | {"runtime"}):
@@ -386,23 +458,24 @@ class FactoryStore:
                     "INSERT INTO comments (card_id, at, author, text) VALUES (?, ?, ?, ?)",
                     (card_id, at, actor, comment),
                 )
-            if review is not None:
+            if output is not None:
+                values = {
+                    "summary": "",
+                    "result": "",
+                    "checks": "",
+                    "branch": "",
+                    "base": "",
+                    "base_sha": "",
+                    "head_sha": "",
+                    "verdict": "",
+                    "recommendation": "",
+                    **{key: value for key, value in output.items() if key != "findings"},
+                    "findings_json": _dump(output.get("findings", [])),
+                }
                 connection.execute(
-                    "INSERT INTO reviews "
-                    "(card_id, round, kind, participant_id, verdict, recommendation, "
-                    "findings_json, reviewed_head_sha, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        card_id,
-                        review["round"],
-                        review.get("kind", "review"),
-                        review["participant_id"],
-                        review["verdict"],
-                        review.get("recommendation", ""),
-                        _dump(review.get("findings", [])),
-                        review.get("reviewed_head_sha", previous["head_sha"]),
-                        at,
-                    ),
+                    f"INSERT INTO outputs (card_id, {', '.join(_OUTPUT_FIELDS)}, created_at) "
+                    f"VALUES (?, {', '.join('?' for _ in _OUTPUT_FIELDS)}, ?)",
+                    (card_id, *(values[name] for name in _OUTPUT_FIELDS), at),
                 )
             return _get(connection, card_id)
 
@@ -420,16 +493,15 @@ class FactoryStore:
                 item = dict(row)
                 item["detail"] = json.loads(item.pop("detail_json"))
                 events.append(item)
-            reviews = []
+            outputs = []
             for row in connection.execute(
-                "SELECT round, kind, participant_id, verdict, recommendation, "
-                "findings_json, reviewed_head_sha, "
-                "created_at FROM reviews WHERE card_id = ? ORDER BY round, created_at",
+                f"SELECT id, {', '.join(_OUTPUT_FIELDS)}, created_at "
+                "FROM outputs WHERE card_id = ? ORDER BY id",
                 (card_id,),
             ):
                 item = dict(row)
                 item["findings"] = json.loads(item.pop("findings_json"))
-                reviews.append(item)
+                outputs.append(item)
             comments = [
                 dict(row)
                 for row in connection.execute(
@@ -437,7 +509,7 @@ class FactoryStore:
                     (card_id,),
                 )
             ]
-            return {"events": events, "reviews": reviews, "comments": comments}
+            return {"events": events, "outputs": outputs, "comments": comments}
 
         return await self.database.read_async(read)
 

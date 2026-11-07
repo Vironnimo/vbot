@@ -10,11 +10,66 @@ import {
   choose,
   calls,
   actionButtons,
+  setup,
+  templates,
   t,
   tick,
   flushSync,
 } from './FactoryPage.support.js';
 import { assistantRun, outputItem } from './timelineItems.support.js';
+
+const implementWorkflow = setup.workflows[0];
+const lane = { source: 'team', agent: 'builder', model: '', effort: '' };
+const stage = (id, name, kind, extra) => ({
+  id,
+  name,
+  kind,
+  instructions: '',
+  lanes: [lane],
+  approval: false,
+  ...extra,
+});
+const planImplement = {
+  id: 'planimpl',
+  name: 'Plan, then implement',
+  description: '',
+  stages: [
+    stage('plan', 'Plan', 'work', { output: 'document' }),
+    stage('planreview', 'Plan review', 'review', {
+      target: 'plan',
+      rounds: 2,
+    }),
+    stage('implement', 'Implement', 'work', { output: 'changes' }),
+    stage('review', 'Review', 'review', { target: 'implement', rounds: 2 }),
+  ],
+};
+const output = (id, stageId, name, kind, extra = {}) => ({
+  id,
+  stage_id: stageId,
+  stage_name: name,
+  kind,
+  lane: 0,
+  pass: 1,
+  participant_id: `${stageId}-1`,
+  summary: '',
+  result: '',
+  checks: '',
+  branch: '',
+  base: '',
+  base_sha: '',
+  head_sha: '',
+  verdict: '',
+  recommendation: '',
+  findings: [],
+  created_at: '2026-11-07T09:00:00Z',
+  ...extra,
+});
+const editorText = () =>
+  document.querySelector('.factory-setup-editor').textContent;
+const stageIds = () =>
+  [...document.querySelectorAll('#factory-workflow-panel [data-stage-id]')].map(
+    (node) => node.dataset.stageId,
+  );
 
 describe('Factory Board', () => {
   it('groups every state, hides empty Proposals and keeps discarded cards behind their filter', async () => {
@@ -29,7 +84,25 @@ describe('Factory Board', () => {
       'discarded',
     ];
     const { bridge, state } = createBridge(
-      states.map((value, index) => card(value, value, { position: index + 1 })),
+      states.map((value, index) =>
+        card(value, value, {
+          position: index + 1,
+          ...(value === 'working'
+            ? {
+                workflow_id: 'drafts',
+                workflow: { id: 'drafts', name: 'Plan from drafts' },
+                stage: {
+                  index: 0,
+                  id: 'drafts',
+                  name: 'Draft plans',
+                  kind: 'work',
+                  lane: 1,
+                  lanes: 3,
+                },
+              }
+            : {}),
+        }),
+      ),
     );
     await render(bridge);
     const ids = (column) =>
@@ -44,6 +117,14 @@ describe('Factory Board', () => {
     expect(ids('review')).toEqual(['reviewing']);
     expect(ids('waiting')).toEqual(['waiting']);
     expect(ids('done')).toEqual(['done']);
+    const stageOf = (id) =>
+      document.querySelector(`[data-card-id="${id}"] [data-card-stage]`)
+        .textContent;
+    expect(stageOf('working')).toContain('Plan from drafts');
+    expect(stageOf('working')).toContain(
+      t('factory.stageLane', { stage: 'Draft plans', lane: 2, lanes: 3 }),
+    );
+    expect(stageOf('queued')).toBe('Implement');
     expect(document.querySelector('.factory-wip').textContent).toBe(
       t('factory.running', { running: 3, limit: 2 }),
     );
@@ -88,12 +169,16 @@ describe('Factory Board', () => {
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     fill('factory-create-title', 'Operator card');
     fill('factory-create-description', 'test-owned objective');
+    expect(
+      document.getElementById('factory-create-workflow').textContent,
+    ).toContain(t('factory.defaultWorkflowTab', { name: 'Implement' }));
     button(t('factory.createCard')).click();
     await settle();
     expect(calls(operation, 'card.create').at(-1)[1]).toEqual({
       project_id: 'project-a',
       title: 'Operator card',
       description: 'test-owned objective',
+      workflow: 'implement',
     });
     expect(bridge.pushRoute).toHaveBeenLastCalledWith('/card/fct-new');
     expect(document.querySelector('.factory-detail')).not.toBeNull();
@@ -111,8 +196,15 @@ describe('Factory card decisions', () => {
     ['working', '', ['discard']],
     ['reviewing', '', ['discard']],
     ['integrating', '', ['discard']],
-    ['waiting', 'approved', ['accept', 'sendBack', 'discard']],
-    ['waiting', 'no_agreement', ['accept', 'sendBack', 'discard']],
+    ['waiting', 'checkpoint', ['acceptCheckpoint', 'sendBack', 'discard']],
+    ['waiting', 'finished', ['acceptIntegrate', 'sendBack', 'discard']],
+    [
+      'waiting',
+      'finished',
+      ['acceptDone', 'sendBack', 'discard'],
+      templates[0],
+    ],
+    ['waiting', 'no_agreement', ['acceptAnyway', 'sendBack', 'discard']],
     ['waiting', 'blocked', ['answer', 'discard']],
     ['waiting', 'run_failed', ['retry', 'sendBack', 'discard']],
     ['waiting', 'review_failed', ['retry', 'sendBack', 'discard']],
@@ -123,15 +215,18 @@ describe('Factory card decisions', () => {
     ['discarded', '', ['delete']],
   ])(
     'offers only state-appropriate actions for %s / %s',
-    async (state, reason, expected) => {
+    async (state, reason, expected, workflow = implementWorkflow) => {
       const { bridge } = createBridge([
-        card('fct-a', state, { waiting_reason: reason }),
+        card('fct-a', state, { waiting_reason: reason, runtime: { workflow } }),
       ]);
       await render(bridge, '/card/fct-a');
       const labels = {
         approveProposal: t('factory.approveProposal'),
         discard: t('factory.discard'),
-        accept: t('factory.accept'),
+        acceptCheckpoint: t('factory.acceptCheckpoint'),
+        acceptIntegrate: t('factory.acceptIntegrate'),
+        acceptDone: t('factory.acceptDone'),
+        acceptAnyway: t('factory.acceptAnyway'),
         sendBack: t('factory.sendBack'),
         answer: t('factory.answer'),
         retry: t('factory.retry'),
@@ -141,7 +236,7 @@ describe('Factory card decisions', () => {
     },
   );
 
-  it('foregrounds the Reviewer recommendation and keeps evidence, provenance, cost and permissions reachable', async () => {
+  it('foregrounds the review recommendation and keeps evidence, provenance, cost and permissions reachable', async () => {
     const origin = {
       project_id: 'project-a',
       agent_id: 'builder',
@@ -155,7 +250,8 @@ describe('Factory card decisions', () => {
     };
     const { bridge, state, operation } = createBridge([
       card('fct-a', 'waiting', {
-        waiting_reason: 'approved',
+        waiting_reason: 'finished',
+        runtime: { workflow: implementWorkflow },
         recommendation: 'test-owned recommendation',
         summary: 'test-owned summary',
         checks: 'test-owned checks',
@@ -170,20 +266,18 @@ describe('Factory card decisions', () => {
     ]);
     state.details['fct-a'] = {
       approvals: [permission],
-      reviews: [
-        {
-          round: 1,
-          kind: 'review',
+      outputs: [
+        output(1, 'review', 'Review', 'review', {
           verdict: 'approve',
           findings: ['test-owned finding'],
-          reviewed_head_sha: 'head456',
-        },
+          head_sha: 'head456',
+        }),
       ],
       events: [
         {
           id: 1,
-          event: 'review_submitted',
-          actor: 'reviewer',
+          event: 'reviewed',
+          actor: 'review-1',
           at: '2026-11-07T09:00:00Z',
           detail: { state: 'waiting', previous_state: 'reviewing' },
         },
@@ -200,9 +294,15 @@ describe('Factory card decisions', () => {
     expect(document.querySelector('[data-submission]').textContent).toContain(
       'base123..head456',
     );
+    const review = document.querySelector('[data-output-stage="review"]');
+    expect(review.textContent).toContain('test-owned finding');
+    expect(review.querySelector('[data-verdict]').textContent).toContain(
+      t('factory.reviewApproved'),
+    );
     expect(
-      document.querySelector('[data-review-round="1"]').textContent,
-    ).toContain('test-owned finding');
+      document.querySelector('[aria-labelledby="factory-timeline-heading"]')
+        .textContent,
+    ).toContain(t('factory.event.reviewed'));
     expect(document.querySelector('[data-usage] dd').textContent).toBe('150');
     expect(document.querySelector('.factory-cost').textContent).not.toBe(
       t('factory.costUnavailable'),
@@ -217,7 +317,7 @@ describe('Factory card decisions', () => {
       agent_id: 'owned-worker',
       session_id: 'ses-worker',
     });
-    button(t('factory.accept')).click();
+    button(t('factory.acceptIntegrate')).click();
     await settle();
     expect(calls(operation, 'card.accept').at(-1)[1]).toEqual({
       id: 'fct-a',
@@ -260,7 +360,8 @@ describe('Factory card decisions', () => {
             : historical
               ? 'test-owned-new-submission'
               : landing.head_sha,
-          waiting_reason: status === 'approved' ? 'approved' : 'no_agreement',
+          waiting_reason: status === 'approved' ? 'finished' : 'no_agreement',
+          runtime: { workflow: implementWorkflow },
           integration_landing: landing,
         }),
       ]);
@@ -322,7 +423,13 @@ describe('Factory card decisions', () => {
       expect(actionButtons()).toEqual(
         historical || status === 'pending'
           ? [t('factory.discard')]
-          : [t('factory.accept'), t('factory.sendBack'), t('factory.discard')],
+          : [
+              status === 'approved'
+                ? t('factory.acceptIntegrate')
+                : t('factory.acceptAnyway'),
+              t('factory.sendBack'),
+              t('factory.discard'),
+            ],
       );
       state.cards[0].revision += 1;
       bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 2 });
@@ -363,14 +470,17 @@ describe('Factory card decisions', () => {
 
   it.each([
     ['blocked', 'answer', 'text'],
-    ['approved', 'sendBack', 'comment'],
+    ['finished', 'sendBack', 'comment'],
   ])(
     'submits a %s response without replacing its draft on invalidation',
     async (reason, action, field) => {
       const { bridge, operation } = createBridge([
         card('fct-a', 'waiting', {
           waiting_reason: reason,
-          runtime: { question: 'test-owned question' },
+          runtime: {
+            question: 'test-owned question',
+            workflow: implementWorkflow,
+          },
         }),
       ]);
       await render(bridge, '/card/fct-a');
@@ -396,6 +506,98 @@ describe('Factory card decisions', () => {
       expect(document.querySelector('[role="dialog"]')).toBeNull();
     },
   );
+
+  it('shows Workflow progress and every stage result, and sends back to a chosen work stage', async () => {
+    const { bridge, state, operation } = createBridge([
+      card('fct-a', 'waiting', {
+        waiting_reason: 'no_agreement',
+        workflow_id: 'planimpl',
+        runtime: { workflow: planImplement },
+        stage: {
+          index: 3,
+          id: 'review',
+          name: 'Review',
+          kind: 'review',
+          lane: 0,
+          lanes: 1,
+        },
+      }),
+    ]);
+    state.details['fct-a'] = {
+      outputs: [
+        output(1, 'plan', 'Plan', 'work', {
+          summary: 'test-owned plan summary',
+          result: '# test-owned plan\n\nFirst step',
+        }),
+        output(2, 'planreview', 'Plan review', 'review', {
+          verdict: 'approve',
+        }),
+        output(3, 'implement', 'Implement', 'work', {
+          branch: 'feature',
+          base: 'main',
+          base_sha: 'base1',
+          head_sha: 'head2',
+          checks: 'test-owned checks',
+        }),
+        output(4, 'review', 'Review', 'review', {
+          verdict: 'changes_requested',
+          recommendation: 'test-owned recommendation',
+          findings: ['test-owned finding'],
+          head_sha: 'head2',
+        }),
+      ],
+    };
+    await render(bridge, '/card/fct-a');
+    expect(
+      [
+        ...document.querySelectorAll(
+          '[data-workflow-progress="planimpl"] [data-stage-status]',
+        ),
+      ].map((node) => node.dataset.stageStatus),
+    ).toEqual(['done', 'done', 'done', 'waiting']);
+    const result = (id) =>
+      document.querySelector(`[data-output-stage="${id}"]`);
+    expect(result('plan').dataset.outputKind).toBe('work');
+    expect(result('plan').textContent).toContain('test-owned plan summary');
+    expect(
+      result('plan').querySelector('.factory-document h1').textContent,
+    ).toBe('test-owned plan');
+    expect(
+      result('implement').querySelector('[data-output-change]').textContent,
+    ).toContain('base1..head2');
+    expect(result('implement').textContent).toContain('test-owned checks');
+    expect(result('planreview').textContent).toContain(
+      t('factory.reviewApproved'),
+    );
+    expect(result('planreview').textContent).toContain(t('factory.noFindings'));
+    expect(
+      result('review').querySelector('[data-verdict]').dataset.verdict,
+    ).toBe('changes_requested');
+    expect(result('review').textContent).toContain(t('factory.reviewChanges'));
+    expect(result('review').textContent).toContain('test-owned finding');
+    expect(actionButtons()).toEqual([
+      t('factory.acceptAnyway'),
+      t('factory.sendBack'),
+      t('factory.discard'),
+    ]);
+    button(t('factory.sendBack')).click();
+    await tick();
+    expect(
+      document.getElementById('factory-send-back-stage').textContent,
+    ).toContain(t('factory.sendBackDefault', { stage: 'Implement' }));
+    fill('factory-response', 'test-owned rework');
+    await choose('factory-send-back-stage', 'Plan');
+    button(
+      t('factory.sendBack'),
+      document.querySelector('[role="dialog"]'),
+    ).click();
+    await settle();
+    expect(calls(operation, 'card.send_back').at(-1)[1]).toEqual({
+      id: 'fct-a',
+      comment: 'test-owned rework',
+      stage: 'plan',
+    });
+  });
 
   it('confirms destructive actions in navigation layers, deletes only final cards and repairs their route', async () => {
     const { bridge, operation, state } = createBridge([
@@ -527,22 +729,39 @@ describe('Factory existing-record editors', () => {
     );
   });
 
-  it('uses Agent and Model pickers, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
+  it('saves lane Model choices, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
     const { bridge, operation, state } = createBridge();
     await render(bridge, '/setups/project-a');
     expect(document.getElementById('factory-review-rounds').value).toBe('2');
-    await choose('factory-reviewer_model', 'demo/worker');
+    expect(editorText()).not.toContain(t('factory.sameModel'));
+    await choose('factory-review-0-model', 'demo/worker');
     await bridge.autosave.flush();
     await tick();
-    expect(
-      document.querySelector('.factory-setup-editor').textContent,
-    ).toContain(t('factory.sameModel'));
+    expect(editorText()).toContain(t('factory.sameModel'));
     expect(calls(operation, 'setup.update').at(-1)[1]).toMatchObject({
       expected_revision: 1,
-      reviewer_model: 'demo/worker',
-      worker_profile: 'builder',
-      reviewer_profile: 'critic',
-      review_rounds: 2,
+      default_workflow: 'implement',
+      workflows: [
+        {
+          id: 'implement',
+          stages: [
+            { id: 'implement', lanes: [{ agent: 'builder' }] },
+            {
+              id: 'review',
+              target: 'implement',
+              rounds: 2,
+              lanes: [
+                {
+                  source: 'team',
+                  agent: 'critic',
+                  model: 'demo/worker',
+                  effort: '',
+                },
+              ],
+            },
+          ],
+        },
+      ],
     });
     vi.useFakeTimers();
     const input = document.getElementById('factory-review-rounds');
@@ -555,6 +774,9 @@ describe('Factory existing-record editors', () => {
     await Promise.resolve();
     flushSync();
     expect(calls(operation, 'setup.update')).toHaveLength(2);
+    expect(
+      calls(operation, 'setup.update').at(-1)[1].workflows[0].stages[1].rounds,
+    ).toBe(3);
     state.handlers['setup.update'] = () =>
       Promise.reject(new Error('test-owned write failure'));
     fill('factory-base-branch', 'release');
@@ -578,7 +800,165 @@ describe('Factory existing-record editors', () => {
     expect(calls(operation, 'setup.update')).toHaveLength(writes);
   });
 
-  it('creates setups explicitly at revision zero from any Agent, names unusable choices and resets the editor after deletion', async () => {
+  it('edits stages and lanes, refuses what the server would refuse and keeps the saved Workflow', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge, '/setups/project-a');
+    const location = (stageName) =>
+      t('factory.location.stage', { workflow: 'Implement', stage: stageName });
+    const stageNode = (id) =>
+      document.querySelector(`#factory-workflow-panel [data-stage-id="${id}"]`);
+    expect(stageIds()).toEqual(['implement', 'review']);
+    button(t('factory.addLane'), stageNode('implement')).click();
+    await tick();
+    await choose('factory-implement-1-agent', 'Critic');
+    expect(await bridge.autosave.flush()).toBe(false);
+    await tick();
+    expect(editorText()).toContain(
+      t('factory.invalid.integratorLanes', { location: location('Implement') }),
+    );
+    button(t('factory.removeLane', { lane: 2, stage: 'Implement' })).click();
+    await tick();
+    document.getElementById('factory-implement-approval').click();
+    button(t('factory.addLane'), stageNode('review')).click();
+    await tick();
+    await choose('factory-review-1-agent', 'Planner');
+    button(t('factory.addWorkStage')).click();
+    await tick();
+    const added = stageIds()[2];
+    button(
+      t('factory.moveStageUp', { stage: t('factory.newWorkStage') }),
+    ).click();
+    await tick();
+    expect(stageIds()).toEqual(['implement', added, 'review']);
+    expect(await bridge.autosave.flush()).toBe(false);
+    await tick();
+    expect(editorText()).toContain(
+      t('factory.invalid.laneAgent', {
+        location: location(t('factory.newWorkStage')),
+      }),
+    );
+    fill(`factory-${added}-name`, 'Notes');
+    await choose(`factory-${added}-0-agent`, 'Builder');
+    await choose(`factory-${added}-output`, t('factory.output.document'));
+    await choose('factory-review-target', 'Notes');
+    expect(await bridge.autosave.flush()).toBe(true);
+    const [implement, review] = implementWorkflow.stages;
+    expect(
+      calls(operation, 'setup.update').at(-1)[1].workflows[0].stages,
+    ).toEqual([
+      { ...implement, approval: true },
+      {
+        id: added,
+        name: 'Notes',
+        kind: 'work',
+        instructions: '',
+        lanes: [{ source: 'team', agent: 'builder', model: '', effort: '' }],
+        approval: false,
+        output: 'document',
+      },
+      {
+        ...review,
+        target: added,
+        lanes: [
+          ...review.lanes,
+          { source: 'agent', agent: 'planner', model: '', effort: '' },
+        ],
+      },
+    ]);
+    bridge.invalidate({ resource: 'setups', ids: ['project-a'], revision: 2 });
+    await settle();
+    expect(stageIds()).toEqual(['implement', added, 'review']);
+    expect(
+      document.getElementById('factory-review-target').textContent.trim(),
+    ).toBe('Notes');
+    expect(
+      document
+        .getElementById('factory-implement-approval')
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    button(t('factory.removeStage', { stage: 'Notes' })).click();
+    await tick();
+    expect(await bridge.autosave.flush()).toBe(false);
+    await tick();
+    expect(editorText()).toContain(
+      t('factory.invalid.reviewTarget', { location: location('Review') }),
+    );
+  });
+
+  it('adds Workflows from templates, previews unsaved lanes and duplicates, renames, defaults and deletes Workflows', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge, '/setups/project-a');
+    vi.useFakeTimers();
+    const panel = () => document.getElementById('factory-workflow-panel');
+    await choose('factory-add-workflow', 'Plan');
+    expect(panel().dataset.workflowId).toBe('plan');
+    expect(document.getElementById('factory-plan-instructions').value).toBe(
+      'test-owned plan instructions',
+    );
+    expect(await bridge.autosave.flush()).toBe(false);
+    await tick();
+    expect(editorText()).toContain(
+      t('factory.invalid.laneAgent', {
+        location: t('factory.location.stage', {
+          workflow: 'Plan',
+          stage: 'Plan',
+        }),
+      }),
+    );
+    await choose('factory-plan-0-agent', 'Drafter');
+    await vi.advanceTimersByTimeAsync(800);
+    await tick();
+    flushSync();
+    expect(editorText()).toContain(t('factory.modelUnresolved'));
+    await choose('factory-plan-0-agent', 'Planner');
+    await vi.advanceTimersByTimeAsync(800);
+    await tick();
+    flushSync();
+    expect(calls(operation, 'setup.preview')).toHaveLength(2);
+    expect(editorText()).not.toContain(t('factory.modelUnresolved'));
+    expect(
+      document
+        .querySelector('[data-stage-id="plan"] [data-effective-model]')
+        .textContent.trim(),
+    ).toBe(t('factory.effectiveModel', { model: 'demo/worker' }));
+    await choose('factory-review-0-agent', 'Critic');
+    fill('factory-workflow-name', 'Plan only');
+    button(t('factory.makeDefault')).click();
+    await tick();
+    button(t('factory.duplicateWorkflow')).click();
+    await tick();
+    expect(panel().dataset.workflowId).not.toBe('plan');
+    expect(document.getElementById('factory-workflow-name').value).toBe(
+      t('factory.copyName', { name: 'Plan only' }),
+    );
+    button(t('factory.deleteWorkflow')).click();
+    await tick();
+    button(
+      t('factory.deleteWorkflow'),
+      document.querySelector('[role="dialog"]'),
+    ).click();
+    await tick();
+    expect(panel().dataset.workflowId).toBe('plan');
+    expect(await bridge.autosave.flush()).toBe(true);
+    const payload = calls(operation, 'setup.update').at(-1)[1];
+    expect(payload.default_workflow).toBe('plan');
+    expect(payload.workflows.map(({ id, name }) => [id, name])).toEqual([
+      ['implement', 'Implement'],
+      ['plan', 'Plan only'],
+    ]);
+    expect(payload.workflows[1].stages).toEqual([
+      {
+        ...templates[0].stages[0],
+        lanes: [{ source: 'agent', agent: 'planner', model: '', effort: '' }],
+      },
+      {
+        ...templates[0].stages[1],
+        lanes: [{ source: 'team', agent: 'critic', model: '', effort: '' }],
+      },
+    ]);
+  });
+
+  it('creates setups explicitly at revision zero from the first template and resets the editor after deletion', async () => {
     const { bridge, operation, state } = createBridge();
     state.setups = [];
     state.handlers['setup.get'] = ({ project_id }) => ({
@@ -591,7 +971,9 @@ describe('Factory existing-record editors', () => {
     await render(bridge, '/setups/project-b');
     expect(button(t('factory.createSetup'))).toBeDefined();
     expect(calls(operation, 'setup.update')).toHaveLength(0);
-    expect(document.getElementById('factory-review-rounds').value).toBe('3');
+    expect(
+      document.getElementById('factory-workflow-panel').dataset.workflowId,
+    ).toBe('plan');
     expect(
       document.getElementById(
         document
@@ -601,31 +983,16 @@ describe('Factory existing-record editors', () => {
     ).not.toBeNull();
     button(t('factory.createSetup')).click();
     await settle();
-    expect(
-      document.querySelector('.factory-setup-editor').textContent,
-    ).toContain(t('factory.invalid.agent', { role: t('factory.worker') }));
-    expect(calls(operation, 'setup.update')).toHaveLength(0);
-    vi.useFakeTimers();
-    await choose('factory-worker_model', t('factory.inheritModel'));
-    await choose('factory-reviewer_model', t('factory.inheritModel'));
-    await choose('factory-worker_profile', 'Drafter');
-    await choose('factory-reviewer_profile', 'Builder');
-    await vi.advanceTimersByTimeAsync(800);
-    await tick();
-    flushSync();
-    expect(
-      document.querySelector('.factory-setup-editor').textContent,
-    ).toContain(t('factory.modelUnresolved'));
-    await choose('factory-worker_profile', 'Planner');
-    await vi.advanceTimersByTimeAsync(800);
-    await tick();
-    flushSync();
-    expect(calls(operation, 'setup.preview')).toHaveLength(2);
-    const editorText = document.querySelector(
-      '.factory-setup-editor',
-    ).textContent;
-    expect(editorText).toContain(t('factory.sameModel'));
-    expect(editorText).not.toContain(t('factory.modelUnresolved'));
+    expect(editorText()).toContain(
+      t('factory.invalid.laneAgent', {
+        location: t('factory.location.stage', {
+          workflow: 'Plan',
+          stage: 'Plan',
+        }),
+      }),
+    );
+    await choose('factory-plan-0-agent', 'Planner');
+    await choose('factory-review-0-agent', 'Critic');
     expect(calls(operation, 'setup.update')).toHaveLength(0);
     button(t('factory.createSetup')).click();
     await settle();
@@ -633,11 +1000,16 @@ describe('Factory existing-record editors', () => {
       project_id: 'project-b',
       expected_revision: 0,
       enabled: true,
-      worker_source: 'agent',
-      worker_profile: 'planner',
-      reviewer_source: 'team',
-      reviewer_profile: 'builder',
-      review_rounds: 3,
+      default_workflow: 'plan',
+      workflows: [
+        {
+          id: 'plan',
+          stages: [
+            { lanes: [{ source: 'agent', agent: 'planner' }] },
+            { lanes: [{ source: 'team', agent: 'critic' }] },
+          ],
+        },
+      ],
     });
     button(t('factory.deleteSetup')).click();
     await tick();
@@ -659,25 +1031,30 @@ describe('Factory owned Session activity', () => {
     state.details['fct-a'] = {
       participants: [
         {
-          participant_id: 'worker',
+          participant_id: 'implement-1',
           address: {
             project_id: 'project-a',
             agent_id: 'owned-worker',
             session_id: 'ses-worker',
           },
+          display_name: 'Factory Implement',
           model: 'demo/worker',
           run_active: true,
           lifecycle_run_id: 'run-worker',
         },
       ],
       runs: [
-        { run_id: 'run-worker', participant_id: 'worker', status: 'running' },
+        {
+          run_id: 'run-worker',
+          participant_id: 'implement-1',
+          status: 'running',
+        },
       ],
     };
     await render(bridge, '/card/fct-a');
     button(t('factory.openSession')).click();
     await settle();
-    expect(bridge.readHistory).toHaveBeenCalledWith('fct-a', 'worker', {
+    expect(bridge.readHistory).toHaveBeenCalledWith('fct-a', 'implement-1', {
       limit: 100,
       child_limit: 100,
     });

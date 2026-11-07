@@ -38,7 +38,9 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
     await started(service)
     card = await approved(service)
     if case == "reference_only_without_target":
-        service.store.cards[card["id"]]["runtime"]["setup"]["integration_check"] = "reference_only"
+        service.store.cards[card["id"]]["runtime"]["settings"]["integration_check"] = (
+            "reference_only"
+        )
         card = await service.card()
 
         async def unavailable_target(*_args):
@@ -86,7 +88,7 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
         assert card["head_sha"] == (Git.merge_value if case.startswith("merge_") else _NEW)
         assert card["base_sha"] == Git.target_value
         assert card["runtime"]["review_kind"] == "integration_review"
-        assert card["runtime"]["auto_round"] == 1
+        assert card["runtime"]["current_participant"] == "review-1-r2"
         assert ("integration_landing" in card["runtime"]) is (case != "moved")
         if case != "moved":
             landing = card["runtime"]["integration_landing"]
@@ -99,6 +101,15 @@ async def test_integration_checks_and_changed_heads_return_to_review(service, mo
         assert (card["state"], card["waiting_reason"]) == ("waiting", "integration_failed")
     elif case == "needs_changes":
         assert card["state"] == "working"
+        # Answering a question during the rework keeps it headed for integration review.
+        async with service.lock:
+            await service.execution.report_blocked(
+                service.tool_context(card), {"question": "Keep the old API?"}
+            )
+        await service.finish()
+        async with service.lock:
+            await service.execution.send_back(await service.card(), "Yes")
+        await service.flush()
         card = await submitted(service)
         assert card["runtime"]["review_kind"] == "integration_review"
     else:
@@ -131,8 +142,7 @@ async def test_already_landed_review_waits_for_user_instead_of_automatic_rework(
     await service.finish()
     card = await service.card()
     admissions = len(service.host.temporary_agents.admissions)
-    assert card["runtime"]["current_participant"] == "reviewer-2"
-    assert card["runtime"]["auto_round"] == 1
+    assert card["runtime"]["current_participant"] == "review-1-r2"
     async with service.lock:
         await service.execution.submit_review(
             service.tool_context(card),
@@ -145,7 +155,7 @@ async def test_already_landed_review_waits_for_user_instead_of_automatic_rework(
     await service.finish()
     card = await service.card()
     assert card["state"] == "waiting"
-    assert card["waiting_reason"] == ("approved" if verdict == "approve" else "no_agreement")
+    assert card["waiting_reason"] == ("finished" if verdict == "approve" else "no_agreement")
     assert card["runtime"]["integration_landing"]["status"] == (
         "approved" if verdict == "approve" else "changes_requested"
     )

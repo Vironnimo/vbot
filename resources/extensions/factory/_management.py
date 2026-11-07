@@ -12,13 +12,15 @@ from core.settings.agent_defaults import normalize_agent_default_value
 from core.tools.availability import ToolAccess
 from core.utils.logging import get_logger
 
-from ._values import SETUP_DEFAULTS, participant_profile, require_state, text
+from . import _workflows
+from ._values import SETUP_DEFAULTS, require_state, text
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 if TYPE_CHECKING:
     from .extension import FactoryExtension
 
 type Json = dict[str, Any]
+ACCEPTABLE = frozenset({"checkpoint", "finished", "no_agreement"})
 _LOGGER = get_logger("extensions.factory")
 
 
@@ -49,7 +51,10 @@ class FactoryManagement:
         store = service.records()
         if name == "catalog":
             assert service.host is not None and service.host.catalog is not None
-            return {"catalog": await service.host.catalog()}
+            return {
+                "catalog": await service.host.catalog(),
+                "templates": _workflows.templates(),
+            }
         if name == "board.get":
             all_cards = await store.list_cards()
             project_id = arguments.get("project_id")
@@ -70,6 +75,10 @@ class FactoryManagement:
             return {"setups": await store.list_setups()}
         if name == "setup.preview":
             values = {**SETUP_DEFAULTS, **arguments}
+            try:
+                values["workflows"] = _workflows.normalize(values["workflows"])
+            except FactoryError:
+                return {"effective_models": {}}
             return {"effective_models": await self._effective_models(values)}
         if name == "setup.get":
             project_id = text(arguments, "project_id")
@@ -78,7 +87,14 @@ class FactoryManagement:
             except FactoryError as error:
                 if error.code != "setup_not_found":
                     raise
-                setup = {"project_id": project_id, **SETUP_DEFAULTS, "revision": 0}
+                starter = _workflows.templates()[0]
+                setup = {
+                    "project_id": project_id,
+                    **SETUP_DEFAULTS,
+                    "workflows": [starter],
+                    "default_workflow": starter["id"],
+                    "revision": 0,
+                }
             return {"setup": setup, "effective_models": await self._effective_models(setup)}
         card = await store.get_card(text(arguments, "id"))
         return await self._detail(card)
@@ -174,40 +190,46 @@ class FactoryManagement:
                 "project_not_found",
                 "The Project does not exist. Choose a Project from the catalog.",
             )
+        values["workflows"] = _workflows.normalize(values["workflows"])
+        if values["default_workflow"] not in {item["id"] for item in values["workflows"]}:
+            values["default_workflow"] = values["workflows"][0]["id"]
         choices = {
             "agent": {item["id"] for item in catalog.get("agents", [])},
             "team": {item["id"] for item in project.get("agent_profiles", [])},
         }
         models = {item["id"] for item in catalog["models"]}
-        for role in ("worker", "reviewer"):
-            if values[f"{role}_profile"] not in choices[values[f"{role}_source"]]:
+        for label, _workflow, _stage, _index, lane in _workflows.lanes(values["workflows"]):
+            if lane["agent"] not in choices[lane["source"]]:
                 raise FactoryError(
                     "profile_not_found",
-                    f"The {role} Agent is unavailable. Choose an Agent or a member "
-                    "of the Project's Team for each role.",
+                    f"{label}: choose an available Agent or a member of the Project's Team.",
                 )
-            model = values[f"{role}_model"]
-            if model and model.partition("::")[0] not in models:
+            if lane["model"] and lane["model"].partition("::")[0] not in models:
                 raise FactoryError(
                     "model_not_found",
-                    f"The {role} Model is unavailable. Choose a Model from the catalog "
+                    f"{label}: the Model is unavailable. Choose a Model from the catalog "
                     "or clear it to use the Agent's Model.",
                 )
-            if values[f"{role}_effort"]:
-                values[f"{role}_effort"] = normalize_agent_default_value(
-                    "thinking_effort", values[f"{role}_effort"]
-                )
+            if lane["effort"]:
+                try:
+                    lane["effort"] = normalize_agent_default_value(
+                        "thinking_effort", lane["effort"]
+                    )
+                except ValueError as error:
+                    raise FactoryError(
+                        "invalid_effort", f"{label}: {str(error).rstrip('.')}."
+                    ) from error
         if not values["base_branch"].strip() or values["base_branch"].startswith("-"):
             raise FactoryError(
                 "invalid_base", "Use a non-empty base branch name that does not begin with '-'."
             )
         effective, problems = await self._resolve_models(values)
         if problems:
-            role, problem = next(iter(problems.items()))
+            label, problem = next(iter(problems.items()))
             raise FactoryError(
                 "model_unresolved",
-                f"The {role} cannot run with this setup: {problem}. Choose a Model for the "
-                f"{role}, or give its Agent a usable Model.",
+                f"{label} cannot run with this setup: {problem}. Choose a Model for it, "
+                "or give its Agent a usable Model.",
             )
         saved = await store.save_setup(values, expected_revision=arguments.get("expected_revision"))
         self._setup_changed(project_id, saved["revision"])
@@ -218,14 +240,18 @@ class FactoryManagement:
         return {"setup": saved, "effective_models": effective}
 
     async def _effective_models(self, values: Json) -> Json:
-        """Each chosen role's Model; an empty string marks a role that cannot resolve one."""
+        """Each lane's Model by ``workflow/stage/lane``; empty marks a lane that has none."""
         return (await self._resolve_models(values))[0]
 
     async def _resolve_models(self, values: Json) -> tuple[Json, dict[str, str]]:
         host = self.service.host
         assert host is not None
+        lanes = _workflows.lanes(values.get("workflows") or [])
         if host.inspect_prompt is None or host.catalog is None:
-            return {role: values.get(f"{role}_model", "") for role in ("worker", "reviewer")}, {}
+            return {
+                _workflows.lane_key(workflow, stage, index): lane["model"]
+                for _label, workflow, stage, index, lane in lanes
+            }, {}
         catalog = await host.catalog()
         project = next(
             (item for item in catalog["projects"] if item["id"] == values["project_id"]), None
@@ -234,29 +260,34 @@ class FactoryManagement:
             return {}, {}
         result: Json = {}
         problems: dict[str, str] = {}
-        for role in ("worker", "reviewer"):
-            if not values.get(f"{role}_profile"):
+        resolved: dict[tuple[str, str, str, str], tuple[str, str]] = {}
+        for label, workflow, stage, index, lane in lanes:
+            if not lane["agent"]:
                 continue
-            config = TemporaryAgentConfig(
-                model="",
-                cwd=Path(project["cwd"]),
-                tool_access=ToolAccess(mode="none"),
-                allowed_skills=[],
-                tools={},
-                name=f"Factory {role} preview",
-                **participant_profile(values, role),
-                model_override=values.get(f"{role}_model") or None,
-                thinking_effort_override=values.get(f"{role}_effort") or None,
-            )
-            try:
-                preview = await host.inspect_prompt(config, values["project_id"])
-            except ValueError as error:
-                # Resolution refuses an Agent without a usable Model; reading
-                # or previewing a setup still answers for the other role.
-                result[role] = ""
-                problems[role] = str(error).rstrip(".")
-                continue
-            result[role] = preview["model"]
+            key = (lane["source"], lane["agent"], lane["model"], lane["effort"])
+            if key not in resolved:
+                config = TemporaryAgentConfig(
+                    model="",
+                    cwd=Path(project["cwd"]),
+                    tool_access=ToolAccess(mode="none"),
+                    allowed_skills=[],
+                    tools={},
+                    name="Factory preview",
+                    **_workflows.profile(lane),
+                    model_override=lane["model"] or None,
+                    thinking_effort_override=lane["effort"] or None,
+                )
+                try:
+                    preview = await host.inspect_prompt(config, values["project_id"])
+                    resolved[key] = (preview["model"], "")
+                except ValueError as error:
+                    # Resolution refuses an Agent without a usable Model; reading
+                    # or previewing a setup still answers for the other lanes.
+                    resolved[key] = ("", str(error).rstrip("."))
+            model, problem = resolved[key]
+            result[_workflows.lane_key(workflow, stage, index)] = model
+            if problem:
+                problems.setdefault(label, problem)
         return result, problems
 
     def _setup_changed(self, project_id: str, revision: int) -> None:
@@ -332,11 +363,11 @@ class FactoryManagement:
                     "The Card changed since you viewed it. Refresh it, review the latest "
                     "submission and recommendation, then accept that version.",
                 )
-            if action == "accept" and card["waiting_reason"] not in {"approved", "no_agreement"}:
+            if action == "accept" and card["waiting_reason"] not in ACCEPTABLE:
                 raise FactoryError(
-                    "not_reviewed",
-                    "This Card needs a submitted review before acceptance. "
-                    "Answer its question, send it back or retry the failed phase.",
+                    "not_acceptable",
+                    "This Card has nothing to accept. "
+                    "Answer its question, send it back or retry the failed stage.",
                 )
             if action == "answer" and card["waiting_reason"] != "blocked":
                 raise FactoryError(
@@ -360,6 +391,17 @@ class FactoryManagement:
                 if action in {"send_back", "answer"}
                 else ""
             )
+            stage = arguments.get("stage") or ""
+            if action == "send_back" and stage:
+                workflow = card["runtime"].get("workflow") or {}
+                work = [item["id"] for item in workflow.get("stages", []) if item["kind"] == "work"]
+                if stage not in work:
+                    raise FactoryError(
+                        "invalid_stage",
+                        "Send the Card back to one of its work stages: "
+                        + (", ".join(work) or "(none)")
+                        + ".",
+                    )
             action = "send_back" if action == "answer" else action
             cards = await store.list_cards()
             limit, _ = service.limits()
@@ -369,6 +411,7 @@ class FactoryManagement:
                     "pending_action": {
                         "action": action,
                         "comment": comment,
+                        "stage": stage,
                         "comment_recorded": bool(comment),
                         "waiting_reason": card["waiting_reason"],
                     },
@@ -385,7 +428,7 @@ class FactoryManagement:
                 if action == "accept":
                     await service.execution.accept(card)
                 elif action == "send_back":
-                    await service.execution.send_back(card, comment)
+                    await service.execution.send_back(card, comment, stage)
                 else:
                     await service.execution.retry(card)
                 return {"card": self._projection(await store.get_card(card["id"]))}

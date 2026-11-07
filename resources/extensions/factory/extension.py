@@ -12,18 +12,55 @@ from core.extensions.operations import ExtensionHost
 from core.tools import ToolContext, tool_success
 from core.utils.logging import get_logger
 
-from . import agent_text
+from . import _workflows, agent_text
 from ._values import text
-from .store import ACTIVE_STATES, DATABASE_NAME, SCHEMA_SQL, FactoryError, FactoryStore
+from .store import (
+    ACTIVE_STATES,
+    DATABASE_NAME,
+    FINAL_STATES,
+    MIGRATIONS,
+    SCHEMA_SQL,
+    FactoryError,
+    FactoryStore,
+)
 
 type Json = dict[str, Any]
 _LOGGER = get_logger("extensions.factory")
+
+
+def _current_stage(runtime: Json) -> tuple[int, Json] | None:
+    """The position and stage of a started Card's Workflow snapshot."""
+    workflow = runtime.get("workflow")
+    if not isinstance(workflow, dict) or not workflow.get("stages"):
+        return None
+    stages = workflow["stages"]
+    position = min(int(runtime.get("stage", 0)), len(stages) - 1)
+    return position, stages[position]
 
 
 def projection(card: Json) -> Json:
     """Decode provenance once; no transcript or private configuration on the Board."""
     value = {key: item for key, item in card.items() if key != "runtime"}
     runtime = card.get("runtime", {})
+    if current := _current_stage(runtime):
+        position, stage = current
+        workflow = runtime["workflow"]
+        stages = workflow["stages"]
+        value["workflow"] = {
+            "id": workflow["id"],
+            "name": workflow["name"],
+            "stages": [
+                {"id": item["id"], "name": item["name"], "kind": item["kind"]} for item in stages
+            ],
+        }
+        value["stage"] = {
+            "index": position,
+            "id": stage["id"],
+            "name": stage["name"],
+            "kind": stage["kind"],
+            "lane": int(runtime.get("lane", 0)),
+            "lanes": len(stage["lanes"]),
+        }
     if pending := runtime.get("pending_action"):
         value["queued_action"] = pending["action"]
     landing = runtime.get("integration_landing")
@@ -88,7 +125,7 @@ class FactoryExtension:
             raise RuntimeError("Factory requires the owner-bound Extension host")
         self._closing = False
         self.host = host
-        self.store = FactoryStore(await host.open_database(DATABASE_NAME, SCHEMA_SQL))
+        self.store = FactoryStore(await host.open_database(DATABASE_NAME, SCHEMA_SQL, MIGRATIONS))
         self._states = {card["id"]: card["state"] for card in await self.store.list_cards()}
         await self.execution.reconcile()
         await self._badge()
@@ -146,7 +183,9 @@ class FactoryExtension:
                     if action == "accept":
                         await self.execution.accept(card)
                     elif action == "send_back":
-                        await self.execution.send_back(card, pending.get("comment", ""))
+                        await self.execution.send_back(
+                            card, pending.get("comment", ""), pending.get("stage", "")
+                        )
                     elif action == "retry":
                         await self.execution.retry(card)
                     else:
@@ -256,6 +295,10 @@ class FactoryExtension:
                 "The Project is unavailable. Choose an existing Project in Setups.",
             )
         setup = next(item for item in setups if item["project_id"] == project_id)
+        requested = arguments.get("workflow")
+        workflow = _workflows.choose(
+            setup, requested if isinstance(requested, str) and requested.strip() else None
+        )
         address = (
             json.dumps(
                 {
@@ -274,10 +317,11 @@ class FactoryExtension:
             origin=origin,
             origin_session=address,
             origin_run=context.run_id or "" if context is not None else "",
-            runtime={"setup": setup, "cwd": project["cwd"]},
+            runtime={"cwd": project["cwd"]},
+            workflow_id=workflow["id"],
         )
         await self.changed(card, actor="user" if origin != "agent" else "factory")
-        return card
+        return {**card, "workflow_name": workflow["name"]}
 
     async def public_tool(self, context: ToolContext, arguments: Json) -> Json:
         try:
@@ -320,6 +364,12 @@ class FactoryExtension:
                                     "origin",
                                 )
                             }
+                            | (
+                                {"stage": current[1]["name"]}
+                                if card["state"] not in FINAL_STATES
+                                and (current := _current_stage(card["runtime"]))
+                                else {}
+                            )
                             for card in cards
                         ]
                     }
