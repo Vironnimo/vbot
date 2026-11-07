@@ -904,8 +904,6 @@ export default Object.freeze({
     'Install the program required by {provider} and sign in on the vBot server computer, under the same operating-system account. Then check the login here.',
   'settings.providers.external.installGuide': 'Installation guide',
   'settings.providers.external.checkLogin': 'Check login and connect',
-  'settings.providers.external.notReady':
-    '{provider} is not ready. Complete setup on the server computer, then check the login again.',
   'settings.providers.external.status.ready': '{provider} is ready.',
   'settings.providers.external.status.loggedOut':
     'Sign in on the server computer, then check {provider} again.',
