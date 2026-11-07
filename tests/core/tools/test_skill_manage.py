@@ -653,6 +653,11 @@ _MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load
             id="create-with-two-descriptions",
         ),
         pytest.param(
+            {"action": "change", "content": _skill_md(), "description": "Something else."},
+            "description differs from the description in the front matter; give it once.",
+            id="change-with-two-descriptions",
+        ),
+        pytest.param(
             {"action": "create", "name": "new", "content": _skill_md(name="other")},
             "The front matter names 'other' but name is 'new'; use the same name in both.",
             id="create-with-two-names",
@@ -710,9 +715,15 @@ _MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load
             id="write-file-with-old-string",
         ),
         pytest.param(
-            {"action": "patch", "description": "New.", "old_string": "a", "new_string": "b"},
-            "description is used only by create and edit. To change an existing Skill's "
-            "description, patch its description line in SKILL.md.",
+            {
+                "action": "patch",
+                "description": "New.",
+                "old_string": "# Demo",
+                "new_string": "# New",
+            },
+            "Nothing changed. description differs from the description SKILL.md "
+            "would have after this patch. Omit description, or make it match the "
+            "patched document.",
             id="patch-description",
         ),
         pytest.param(
@@ -1133,7 +1144,7 @@ def test_foreign_skill_names_report_their_scope_instead_of_not_found(
     assert not harness.invalidated
 
 
-@pytest.mark.parametrize("action", ["edit", "create-file"])
+@pytest.mark.parametrize("action", ["edit", "create-file", "unchanged-patch", "description"])
 def test_unknown_name_keeps_plain_not_found(tmp_path: Path, action: str) -> None:
     harness = _Harness(tmp_path, scopes={"foreign": "bundled"})
 
@@ -1144,6 +1155,19 @@ def test_unknown_name_keeps_plain_not_found(tmp_path: Path, action: str) -> None
     }
     if action == "create-file":
         arguments.update(action="create", file_path="references/notes.md", content="Notes.")
+    elif action == "unchanged-patch":
+        arguments = {
+            "action": "patch",
+            "name": "no-such-skill",
+            "old_string": "x",
+            "new_string": "x",
+        }
+    elif action == "description":
+        arguments = {
+            "action": "change",
+            "name": "no-such-skill",
+            "description": "Use when testing.",
+        }
     result = harness.run(arguments)
 
     assert result == tool_failure(
@@ -1689,15 +1713,24 @@ def test_patch_matches_a_long_front_matter_line_as_the_agent_wrote_it(tmp_path: 
     assert f"{line} Not for PRs." in harness.document().read_text(encoding="utf-8").split("\n")
 
 
-def test_patch_that_changes_nothing_says_so(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('Say "hello" to users.', "Say “hello” to users."),
+        ("Say “hello” to users.", "Say “hello” to users."),
+        ('Say "hello" to users.', 'Say "hello" to users.'),
+    ],
+    ids=["already-current", "identical", "identical-folded-copy"],
+)
+def test_patch_that_changes_nothing_says_so(tmp_path: Path, old: str, new: str) -> None:
     harness, skill_file = _patch_harness(tmp_path, body="Say “hello” to users.\n")
 
     result = harness.run(
         {
             "action": "patch",
             "name": "demo",
-            "old_string": 'Say "hello" to users.',
-            "new_string": "Say “hello” to users.",
+            "old_string": old,
+            "new_string": new,
         }
     )
 
@@ -1823,12 +1856,13 @@ def test_patch_refuses_a_copy_resembling_several_places(tmp_path: Path) -> None:
     assert skill_file.read_bytes() == before
 
 
-def test_patch_miss_names_the_closest_text_and_the_read_call(tmp_path: Path) -> None:
+@pytest.mark.parametrize("new", ["x", "1. Run pytest."])
+def test_patch_miss_names_the_closest_text_and_the_read_call(tmp_path: Path, new: str) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     before = skill_file.read_bytes()
 
     result = harness.run(
-        {"action": "patch", "name": "demo", "old_string": "1. Run pytest.", "new_string": "x"}
+        {"action": "patch", "name": "demo", "old_string": "1. Run pytest.", "new_string": new}
     )
 
     assert result == tool_failure(
@@ -1857,8 +1891,13 @@ _ROLLBACK = "Rollback with make rollback.\n"
         ({"references/notes.md": _ROLLBACK, "scripts/notes.sh": _ROLLBACK}, None, None),
     ],
 )
+@pytest.mark.parametrize("unchanged", [False, True])
 def test_patch_text_missing_from_skill_md_reaches_only_the_one_support_file_holding_it(
-    tmp_path: Path, files: dict[str, str], file_path: str | None, patched: str | None
+    tmp_path: Path,
+    files: dict[str, str],
+    file_path: str | None,
+    patched: str | None,
+    unchanged: bool,
 ) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     for path, content in files.items():
@@ -1871,7 +1910,9 @@ def test_patch_text_missing_from_skill_md_reaches_only_the_one_support_file_hold
             "action": "patch",
             "name": "demo",
             "old_string": "Rollback with make rollback.",
-            "new_string": "Rollback with make undo.",
+            "new_string": "Rollback with make rollback."
+            if unchanged
+            else "Rollback with make undo.",
             **({} if file_path is None else {"file_path": file_path}),
         }
     )
@@ -1879,11 +1920,12 @@ def test_patch_text_missing_from_skill_md_reaches_only_the_one_support_file_hold
     changed = [path for path in paths if (skill_file.parent / path).read_bytes() != before[path]]
     if patched is not None:
         assert result["ok"] is True
-        assert changed == [patched]
+        assert changed == ([] if unchanged else [patched])
         # The result names the file it patched, and that SKILL.md did not hold the text.
         note = result["data"]["content"].split("\n")[-1]
         assert note.startswith("Note: ") and "SKILL.md" in note and patched in note
-        assert "Rollback with make undo." in (skill_file.parent / patched).read_text("utf-8")
+        expected = "Rollback with make rollback." if unchanged else "Rollback with make undo."
+        assert expected in (skill_file.parent / patched).read_text("utf-8")
     else:
         assert result["error"]["code"] == "text_not_found"
         assert changed == []
@@ -1926,6 +1968,7 @@ def test_ambiguous_patch_changes_nothing_until_replace_all(tmp_path: Path) -> No
         {"file_content": "", "replace_all": False, "file_path": ""},
         {"content": ""},
         {"content": "- Never deploy after 4 pm."},
+        {"description": "Use when demoing."},
     ],
 )
 def test_patch_ignores_empty_placeholders_and_identical_duplicates(
@@ -1964,3 +2007,65 @@ def test_edit_with_old_string_and_a_fragment_patches_only_that_text(tmp_path: Pa
         "Note: edit with old_string changed only that text, as patch does."
     }
     assert _body(skill_file) == _PATCH_BODY.replace("on Fridays", "on holidays")
+
+
+@pytest.mark.parametrize("action", ["edit", "change"])
+@pytest.mark.parametrize("description", ["Use when demoing.", "Use when checking releases."])
+def test_description_only_edit_preserves_the_skill(
+    tmp_path: Path, action: str, description: str
+) -> None:
+    harness = _Harness(tmp_path)
+    document = _skill_md(body=_PATCH_BODY).replace(
+        "description: Use when demoing.\n",
+        "description: Use when demoing.\nlicense: MIT\nmetadata:\n  extra: retained\n",
+    )
+    assert harness.create(content=document)["ok"] is True
+    skill_file = harness.document()
+    harness.run(
+        {
+            "action": "write_file",
+            "name": "demo",
+            "file_path": "references/notes.md",
+            "content": "Keep this.\n",
+        }
+    )
+    before = skill_file.read_bytes()
+    revisions = harness.authoring.recorded_revisions(harness.home("main"))
+
+    result = harness.run({"action": action, "name": "demo", "description": description})
+
+    assert result["ok"] is True
+    assert skill_file.read_bytes() == before.replace(b"Use when demoing.", description.encode())
+    assert (skill_file.parent / "references" / "notes.md").read_text() == "Keep this.\n"
+    if description == "Use when demoing.":
+        assert harness.authoring.recorded_revisions(harness.home("main")) == revisions
+        assert "nothing changed" in result["data"]["content"]
+
+
+@pytest.mark.parametrize("support", [False, True])
+@pytest.mark.parametrize("consistent", [False, True])
+def test_patch_redundant_description_matches_the_resulting_skill(
+    tmp_path: Path, support: bool, consistent: bool
+) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    path = "references/notes.md" if support else "SKILL.md"
+    if support:
+        harness.run({"action": "write_file", "name": "demo", "file_path": path, "content": "old\n"})
+    before = (skill_file.parent / path).read_bytes()
+    description = "Use when demoing." if support else "Use when testing."
+    result = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "file_path": path,
+            "old_string": "old" if support else "description: Use when demoing.",
+            "new_string": "new" if support else "description: Use when testing.",
+            "description": description if consistent else "Use when doing something else.",
+        }
+    )
+    assert result["ok"] is consistent
+    if consistent:
+        assert ("new" if support else "Use when testing.") in (skill_file.parent / path).read_text()
+    else:
+        assert result["error"]["code"] == "invalid_arguments"
+        assert (skill_file.parent / path).read_bytes() == before

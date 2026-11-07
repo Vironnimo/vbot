@@ -113,7 +113,7 @@ _FIELD_ALIASES = {
     "skill": "name",
     "skill_name": "name",
 }
-_ACTION_SYNONYMS = {"strreplace": "patch", "deletefile": "remove_file"}
+_ACTION_SYNONYMS = {"strreplace": "patch", "deletefile": "remove_file", "change": "edit"}
 # The fields that carry an action's text; other harnesses send all of them, empty
 # ones as placeholders.
 _TEXT_FIELDS = ("content", "new_string", "file_content")
@@ -188,11 +188,11 @@ def _read_call(arguments: JsonObject) -> _Call:
         call.notes.append("category is not used; Skills have no categories.")
     if call.file_path is not None:
         call.file_path = _package_path(call.file_path, call.name)
-    if call.description is not None and call.action not in ("create", "edit"):
+    if call.description is not None and call.action not in ("create", "edit", "patch"):
         raise _RefusalError(
             "invalid_arguments",
-            "description is used only by create and edit. To change an existing Skill's "
-            "description, patch its description line in SKILL.md.",
+            "description is used by create, edit and patch; nothing changed. To change an "
+            "existing Skill's description, use edit with name and description.",
         )
     return _ACTION_READERS[call.action](call)
 
@@ -221,6 +221,9 @@ def _read_create(call: _Call) -> _Call:
 def _read_edit(call: _Call) -> _Call:
     _refuse_support_file(call, "write_file")
     if call.content is None:
+        if call.description is not None and call.old_string is None:
+            call.file_path = SKILL_FILENAME
+            return call
         raise _RefusalError("invalid_arguments", _document_needed(call.name, "edit needs content"))
     if call.old_string is not None:
         if _has_front_matter(call.content):
@@ -263,10 +266,6 @@ def _read_patch(call: _Call) -> _Call:
         raise _RefusalError(
             "invalid_arguments",
             "patch needs new_string, the replacement text (empty to delete old_string).",
-        )
-    if call.old_string == call.new_string:
-        raise _RefusalError(
-            "invalid_arguments", "old_string and new_string are identical; nothing to change."
         )
     # An omitted file_path patches SKILL.md, or the one support file holding the text.
     return call

@@ -133,15 +133,29 @@ def test_edit_replaces_the_document(service: SkillAuthoringService, root: Path, 
     assert (change.change, change.before) == ("updated", before)
 
 
-def test_rewrite_applies_an_edit_of_the_lf_text(service: SkillAuthoringService, root: Path) -> None:
+@pytest.mark.parametrize("replacement", ["new line", "old line"])
+def test_rewrite_applies_an_edit_of_the_lf_text(
+    service: SkillAuthoringService, root: Path, replacement: str
+) -> None:
     service.create(root, "demo", skill_document(body="# Demo\nold line"), writer=AGENT)
+    skill_file = root / "demo" / "SKILL.md"
+    before = skill_file.read_bytes()
+    before_mtime = skill_file.stat().st_mtime_ns
+    revisions = service.recorded_revisions(root)
 
     result = service.rewrite(
-        root, "demo", "SKILL.md", _replace("old line", "new line"), writer=AGENT
+        root, "demo", "SKILL.md", _replace("old line", replacement), writer=HUMAN_WRITER
     )
 
     assert result.operation == "rewrite"
-    assert "new line" in (root / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    assert replacement in skill_file.read_text(encoding="utf-8")
+    if replacement == "old line":
+        assert skill_file.read_bytes() == before
+        assert skill_file.stat().st_mtime_ns == before_mtime
+        assert result.revision is None
+        assert service.recorded_revisions(root) == revisions
+    else:
+        assert read_front_matter(skill_file)["metadata"]["vbot"]["author"] == "human"
 
 
 def _refuse(_text: str) -> str:

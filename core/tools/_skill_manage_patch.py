@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from core.skills.authoring import (
@@ -13,13 +14,14 @@ from core.skills.authoring import (
     SkillWriter,
     SkillWriteResult,
 )
+from core.skills.skill_validator import parse_skill_front_matter, split_skill_document
 from core.skills.skills import (
     RESOURCE_DIRECTORIES,
     SKILL_FILENAME,
     find_skill_package_dir,
 )
 from core.tools._edit_locations import _new_text_line
-from core.tools._skill_manage_calls import _Call, _read_hint, _RefusalError
+from core.tools._skill_manage_calls import _assemble, _Call, _read_hint, _RefusalError
 from core.tools.copy_match import copy_warnings, replace_copied
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
@@ -68,6 +70,8 @@ def _apply(
         result = authoring.create(target_root, name, call.content or "", writer=writer)
         return result, f"Created Skill '{name}'."
     if call.action == "edit":
+        if call.content is None and call.description is not None:
+            return _edit_description(authoring, target_root, call, writer)
         result = authoring.edit(target_root, name, call.content or "", writer=writer)
         return result, f"Replaced SKILL.md of Skill '{name}'."
     if call.action == "patch":
@@ -104,6 +108,42 @@ def _apply(
     return result, SKILL_MANAGE_DELETED.format(name=name)
 
 
+def _edit_description(
+    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
+) -> tuple[SkillWriteResult, str]:
+    changed = False
+
+    def edit(current: str) -> str:
+        nonlocal changed
+        front, body, diagnostics = split_skill_document(current)
+        fields, parse_diagnostics = parse_skill_front_matter(front)
+        if diagnostics or parse_diagnostics or not isinstance(fields, dict):
+            raise _RefusalError(
+                "invalid_arguments",
+                "Nothing changed. SKILL.md has invalid front matter; read it and use edit "
+                "with the complete corrected document.",
+            )
+        if str(fields.get("name", "")).strip() != call.name:
+            raise _RefusalError(
+                "invalid_arguments",
+                "Nothing changed. The name in SKILL.md differs from name; read the Skill "
+                "and use its declared name.",
+            )
+        wanted = (call.description or "").strip()
+        if fields.get("description") == wanted:
+            return current
+        changed = True
+        return _assemble(dict(fields), wanted, body)
+
+    result = authoring.rewrite(target_root, call.name, SKILL_FILENAME, edit, writer=writer)
+    message = (
+        f"Updated description of Skill '{call.name}'."
+        if changed
+        else f"Skill '{call.name}' already has that description; nothing changed."
+    )
+    return result, message
+
+
 def _patch(
     authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
 ) -> tuple[SkillWriteResult, str]:
@@ -128,7 +168,7 @@ def _patch(
             patched = _patch_file(authoring, target_root, call, writer, holder)
             call.notes.append(
                 f"old_string was not in SKILL.md but in {holder}, the only file of the Skill "
-                "that holds it, so that file was patched."
+                "that holds it, so this call used that file."
             )
             return patched
         hint = f'The text is in {holder}; to patch it there, add "file_path": "{holder}".'
@@ -147,6 +187,22 @@ def _patch_file(
 
     def edit(current: str) -> str:
         replacement, notes = _replace(current, call, file_path)
+        if call.description is not None:
+            document = (
+                replacement.new_content
+                if file_path == SKILL_FILENAME
+                else authoring.read_text(target_root, call.name, SKILL_FILENAME)
+            )
+            front, _, _ = split_skill_document(document)
+            fields, _ = parse_skill_front_matter(front)
+            declared = fields.get("description") if isinstance(fields, dict) else None
+            if not isinstance(declared, str) or declared.strip() != call.description.strip():
+                raise _RefusalError(
+                    "invalid_arguments",
+                    "Nothing changed. description differs from the description SKILL.md "
+                    "would have after this patch. Omit description, or make it match the "
+                    "patched document.",
+                )
         found.append(replacement)
         unchanged.append(replacement.new_content == current)
         call.notes.extend(notes)
@@ -181,7 +237,7 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
                     "old_string and new_string arrived with an extra level of JSON escaping "
                     '(such as \\n or \\"); they were applied unescaped.'
                 )
-    if found is None and not call.replace_all:
+    if found is None and not call.replace_all and old != new:
         # Old text copied with errors; not when new text shows the edit already made,
         # which only whole lines do (_new_text_line).
         present = new.strip() and new != old and _new_text_line(current, new) is not None
@@ -207,6 +263,8 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
             "surrounding text so it matches once, or set replace_all to true to change every "
             "occurrence.",
         )
+    if old == new:
+        return replace(found, new_content=current, after_spans=found.before_spans), notes
     if found.strategy != "exact":
         adjusted = _matching_typography(current, found, old, new)
         if adjusted != new:
