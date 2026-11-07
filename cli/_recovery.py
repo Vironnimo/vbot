@@ -155,7 +155,10 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
             "A resource with this identifier already exists. Inspect it before "
             "choosing another id or updating the existing resource."
         )
-    if code in {"project_not_found", "project_already_exists", "project_in_use", "project_busy"}:
+    if area == "config" and args.command in {"get", "describe"} and code == "invalid_request":
+        # A rejected path also fails describe; discover valid paths without that filter.
+        inspection = ["config", "list"]
+    elif code in {"project_not_found", "project_already_exists", "project_in_use", "project_busy"}:
         inspection = ["project", "list"]
     elif code in {"channel_not_found", "channel_already_exists"}:
         inspection = ["channel", "list"]

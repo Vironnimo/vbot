@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from cli import _output, main
-from cli._recovery import recovery_guidance
+from cli._recovery import format_command, recovery_guidance
 from cli._server_target import CommandResult, RpcFailure, ServerInstance
 from cli.parser import build_parser, parse_args
 
@@ -350,8 +350,21 @@ def test_agent_not_found_names_identity_and_team_lists_without_parsing_the_addre
 
 
 @pytest.mark.parametrize("mode", ["auto", "plain", "human"])
+@pytest.mark.parametrize(
+    "tokens,error_code,inspection",
+    [
+        (["project", "show", "absent"], "project_not_found", ("project", "list")),
+        (["config", "get", "notifications"], "invalid_request", ("config", "list")),
+        (["config", "describe", "notifications"], "invalid_request", ("config", "list")),
+        (
+            ["config", "set", "debug.enabled", "not-a-boolean"],
+            "invalid_request",
+            ("config", "describe", "debug.enabled"),
+        ),
+    ],
+)
 def test_real_rpc_error_keeps_stdout_and_adds_recovery_in_every_mode(
-    tmp_path, monkeypatch, capsys, mode
+    tmp_path, monkeypatch, capsys, mode, tokens, error_code, inspection
 ):
     requests = []
 
@@ -359,19 +372,28 @@ def test_real_rpc_error_keeps_stdout_and_adds_recovery_in_every_mode(
         requests.append(kwargs["json"])
         return httpx.Response(
             200,
-            json={"ok": False, "error": {"code": "project_not_found", "message": "test sentinel"}},
+            json={"ok": False, "error": {"code": error_code, "message": "test sentinel"}},
         )
 
     monkeypatch.setattr(httpx, "post", post)
-    code = main.run(
-        ["project", "show", "absent", "--output", mode], resolve=lambda **kw: instance(tmp_path)
-    )
+    code = main.run([*tokens, "--output", mode], resolve=lambda **kw: instance(tmp_path))
     out, err = capsys.readouterr()
     assert code == 1
-    assert out == "project_not_found: test sentinel\n"
+    assert out == f"{error_code}: test sentinel\n"
     assert len(requests) == 1
-    assert "vbot project list" in err  # Public command path.
-    assert "9123" in err
+    command = format_command(
+        (
+            "vbot",
+            *inspection,
+            "--host",
+            "192.0.2.8",
+            "--port",
+            "9123",
+            "--data-dir",
+            str(tmp_path),
+        )
+    )
+    assert f"Next: {command}\n" in err
 
 
 def test_saved_key_then_failed_refresh_preserves_failure_and_never_resends_secret(
