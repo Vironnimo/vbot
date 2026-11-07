@@ -23,6 +23,12 @@ REVIEWER_RULES = (
     "Your recommendation tells the user whether to accept and what you would add or change."
 )
 
+_INTEGRATION_REVIEW_GATE = (
+    "If integration needs code changes or would rewrite a reviewed commit, including by rebase, "
+    "call factory_report_integration with outcome needs_changes before updating the base. "
+    "A changed commit SHA needs review even when its patch is unchanged."
+)
+
 
 def _data(label: str, value: Any) -> str:
     # Delimit untrusted Card/review text once; it cannot impersonate a continuation.
@@ -94,9 +100,8 @@ def note(kind: str, card: Json, text: str = "") -> str:
             "decision or information, call factory_report_blocked."
         ),
         "keep_integrating": (
-            "Continue the accepted integration, then call factory_report_integration. If it "
-            "changes the reviewed commits, including by rebase, report needs_changes before "
-            "landing them and resubmit for review."
+            f"{_INTEGRATION_REVIEW_GATE} Otherwise continue the accepted integration, "
+            "then call factory_report_integration."
         ),
         "review_nudge": (
             "Finish the independent review with factory_submit_review; an ordinary answer does "
@@ -128,11 +133,9 @@ def note(kind: str, card: Json, text: str = "") -> str:
             "factory_submit_work. The changed result needs independent review before integration."
         ),
         "integrate": (
-            f"The user accepted. Integrate the reviewed commit {card.get('head_sha', '')} of "
-            f"{card.get('branch', '')} according to the Project instructions, "
-            "then clean up as they say, "
-            "then call factory_report_integration. If integration changes the reviewed commits, "
-            "including by rebase, report needs_changes before landing them and resubmit for review."
+            f"The user accepted commit {card.get('head_sha', '')} of {card.get('branch', '')}. "
+            f"{_INTEGRATION_REVIEW_GATE} Otherwise integrate the reviewed commit according to the "
+            "Project instructions, then clean up as they say, then call factory_report_integration."
         ),
     }
     content = notes[kind]
