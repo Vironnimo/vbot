@@ -313,6 +313,9 @@ class ConnectionProtocol:
                 await client.call_tool(
                     arguments["name"],
                     arguments.get("arguments", {}),
+                    read_timeout_seconds=float("inf")
+                    if call is not None and call.retained
+                    else None,
                     progress_callback=self._progress,
                     meta=self._request_meta(),
                 )
@@ -474,7 +477,7 @@ class ConnectionProtocol:
                 call.server_task = run
                 if self._runner._recovery is not None:
                     await self._runner._recovery.remember(
-                        self._runner, call.context, call.arguments, run
+                        self._runner, call.canonical_context or call.context, call.arguments, run
                     )
                     run.checkpoint = lambda: self._runner._recovery.checkpoint(run)
             driving = True
@@ -514,8 +517,13 @@ class ConnectionProtocol:
         # use it; ``_tasks`` drives tasks through public SDK requests. Keep this one
         # compatibility seam covered by the real stdio task test.
         session = self._client().session
+        call = _CURRENT_CALL.get()
         options: CallOptions = {
-            "timeout": self._runner.config["timeout"],
+            "timeout": (
+                float("inf")
+                if method == "tools/call" and call is not None and call.retained
+                else self._runner.config["timeout"]
+            ),
             "on_progress": self._progress,
         }
         session._stamp({"method": method, "params": arguments}, options)

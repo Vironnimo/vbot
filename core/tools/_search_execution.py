@@ -64,14 +64,17 @@ _FILE_TYPE_FILTERS = ("--type=", "--type-not=")
 class Scope:
     """One ripgrep invocation: its working directory and the roots it searches.
 
-    Roots inside the Agent's working directory share one scope there, so
+    Plain roots inside the Agent's working directory share one scope there, so
     ripgrep anchors globs that contain a slash at that directory, as in a
-    shell. A root outside it gets its own scope at that root.
+    shell. A root outside it gets its own scope at that root. Wildcard roots
+    keep their selecting globs in separate scopes.
     """
 
     cwd: Path
     paths: list[str]
     prefixes: list[str] = field(default_factory=list)
+    # A glob written as a root selects only this run, never the other roots.
+    globs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -96,7 +99,7 @@ class SearchRefusedError(RuntimeError):
     """ripgrep refused the query; the message says how to correct it."""
 
 
-def skips_caches(query: SearchQuery) -> bool:
+def skips_caches(query: SearchQuery, root_globs: Sequence[str] = ()) -> bool:
     """Whether the query skips ``__pycache__`` directories, as it does by default.
 
     ``-u`` and ``--no-ignore`` include them, and so does a selecting glob that
@@ -105,7 +108,7 @@ def skips_caches(query: SearchQuery) -> bool:
     """
     if any(argument in {"--unrestricted", "--no-ignore"} for argument in query.rg_args):
         return False
-    selecting = [glob for glob in query.globs if not glob.startswith("!")]
+    selecting = [glob for glob in [*root_globs, *query.globs] if not glob.startswith("!")]
     selecting += [arg for arg in query.rg_args if arg.startswith("--iglob=") and "=!" not in arg]
     return not any(name in glob.casefold() for glob in selecting for name in _CACHE_NAMES)
 
@@ -140,7 +143,15 @@ def _base_arguments(query: SearchQuery, scope: Scope, *, globs: bool = True) -> 
     return [
         *DEFAULT_ARGUMENTS,
         *query.rg_args,
-        *(rg_globs(query.globs, scope.prefixes, skip_caches=skips_caches(query)) if globs else []),
+        *(
+            rg_globs(
+                [*scope.globs, *query.globs],
+                scope.prefixes,
+                skip_caches=skips_caches(query, scope.globs),
+            )
+            if globs
+            else []
+        ),
     ]
 
 
@@ -711,7 +722,7 @@ class SearchExecution:
         """
         if directories:
             excluding = [glob for glob in query.globs if glob.startswith("!")]
-            skip_caches = skips_caches(query)
+            skip_caches = skips_caches(query, scope.globs)
             selection = [
                 *DEFAULT_ARGUMENTS,
                 *query.rg_args,

@@ -36,6 +36,8 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v24: owner-bound transient notifications and page badges, current-input authority and owned pending-approval reads, effective Model/effort in prompt inspection (`extensions/host.md`), live config-change callbacks (below), and optional Session navigation from pages (`webui/extension-pages.md`).
 - v25: page icons the WebUI draws (`register_page(..., icon=...)` accepts only `PAGE_ICONS` in `core/extensions/_declarations.py`; each needs a branch in `AppShell.svelte`), `identity_profile` participants (`agent/temporary-agents.md` -> Identity profiles) and the roster `agents` in the owner catalog (`extensions/host.md`).
 
+- v26: `host.defer_tool_call(context)` retains original-call ownership after a pending Tool Result. Final outcomes use ordinary background completion delivery, with generation fencing and idempotent recovery (`extensions/host.md`).
+
 API 24 also preserves actionable management-refusal codes through `ExtensionOperationError(code, message)` (`core/extensions/operations.py`). `extensions.operation` maps this explicit type to the same RPC code/message; ordinary `ValueError`, even with an unrelated `.code` attribute, remains `invalid_request`. Extensions retain ownership of their domain codes and recovery choices (`test_extensions_methods.py::test_extension_operation_error_boundary`).
 
 ## Offline document validation

@@ -488,6 +488,66 @@ def _http_answer(status: int | None) -> type[httpx2.AsyncClient]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retained", [False, True])
+async def test_retained_http_call_has_no_response_deadline(host, monkeypatch, retained):
+    from resources.extensions.mcp._calls import _CURRENT_CALL
+    from resources.extensions.mcp._invocation import RETAIN_CALL
+
+    seen = []
+
+    def answer(request):
+        if request.method != "POST":
+            return httpx2.Response(405)
+        message = json.loads(request.content)
+        method = message["method"]
+        if "id" not in message:
+            return httpx2.Response(202)
+        result = None
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock", "version": "1"},
+            }
+        elif method == "tools/list":
+            result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+        elif method == "tools/call":
+            current = _CURRENT_CALL.get()
+            seen.append((request.extensions["timeout"], current.retained if current else None))
+            result = {"content": [{"type": "text", "text": "http-result"}]}
+        body = {"jsonrpc": "2.0", "id": message["id"]}
+        if result is None:
+            body["error"] = {"code": -32601, "message": "unsupported"}
+        else:
+            body["result"] = result
+        return httpx2.Response(200, json=body)
+
+    class Observed(mcp_transport._ObservedHTTPClient):
+        def __init__(self, observer, **options):
+            super().__init__(observer, **{**options, "transport": httpx2.MockTransport(answer)})
+
+    monkeypatch.setattr(mcp_transport, "_ObservedHTTPClient", Observed)
+    runner = ConnectionRunner(
+        validate_connection({"id": "example", "transport": "http", "url": "https://mcp.test/mcp"}),
+        host,
+        InputRequests(),
+        lambda *args: None,
+    )
+    token = RETAIN_CALL.set(retained)
+    try:
+        result = await runner.invoke("tools/call", {"name": "echo"}, context(host))
+        assert result["content"][0]["text"] == "http-result"
+    finally:
+        RETAIN_CALL.reset(token)
+        await runner.close()
+    timeout, received_context = seen[0]
+    assert received_context is retained
+    assert timeout["read"] == (None if retained else 120)
+    assert timeout["connect"] == 15
+    assert timeout["write"] == 120
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("case", "expected"),
     [

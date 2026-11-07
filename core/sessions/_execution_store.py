@@ -469,6 +469,7 @@ class SessionExecutionStore:
         tool_call_id: str,
         tool_name: str,
         execution_owner: JsonObject | None,
+        deferred: bool = False,
     ) -> str | None:
         return self._store._execute_write(
             lambda connection: _store_extension_results.capture_tool_receipt(
@@ -479,6 +480,7 @@ class SessionExecutionStore:
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 execution_owner=execution_owner,
+                deferred=deferred,
             )
         )
 
@@ -495,4 +497,13 @@ class SessionExecutionStore:
                 connection, receipt_id, content, owner_name=owner_name
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
+        )
+
+    def prepare_tool_outcome(
+        self, receipt_id: str, content: str, *, owner_name: str
+    ) -> JsonObject | None:
+        return self._store._execute_write(
+            lambda connection: _store_extension_results.prepare_tool_outcome(
+                connection, receipt_id, content, owner_name=owner_name
+            )
         )

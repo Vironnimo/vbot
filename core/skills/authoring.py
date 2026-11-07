@@ -278,6 +278,13 @@ class SkillAuthoringService:
             current = _read_text_file(target, normalized)
             file_ending = _detect_line_ending(current)
             updated = _normalize_newlines(edit(_normalize_newlines(current)))
+            if updated == _normalize_newlines(current):
+                return SkillWriteResult(
+                    name=skill_name,
+                    operation="rewrite",
+                    path=target,
+                    changes=(SkillFileChange(normalized, "updated", updated, updated),),
+                )
             warnings: list[str] = []
             if normalized == SKILL_FILENAME:
                 updated, validation = self._prepare_document(

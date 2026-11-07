@@ -31,6 +31,7 @@ from ._calls import SubscriptionEndedError as SubscriptionEndedError
 from ._calls import ToolChangedError as ToolChangedError
 from ._calls import UnsupportedOperationError as UnsupportedOperationError
 from ._events import ConnectionEvents
+from ._invocation import CANONICAL_CONTEXT, RETAIN_CALL
 from ._protocol import TASK_OPERATIONS as TASK_OPERATIONS
 from ._protocol import ConnectionProtocol
 from ._protocol import operation_schema as operation_schema
@@ -126,6 +127,7 @@ class ConnectionRunner:
         self._queue: asyncio.Queue[_Call] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
         self._task: asyncio.Task[None] | None = None
         self._calls: set[_Call] = set()
+        self._preserved_calls: set[tuple[str, str]] = set()
         self._ready = asyncio.Event()
         self._closing = False
         # Why the current connection was lost, once it was; and the task it ended.
@@ -188,6 +190,24 @@ class ConnectionRunner:
     def _finished(task: asyncio.Task[None]) -> None:
         if not task.cancelled():
             task.exception()
+
+    def preserve_task(self, context: ToolContext) -> None:
+        """Keep an already issued native Task handle when the Extension shuts down."""
+        self._preserved_calls.add((context.session_id, context.tool_call_id))
+        for call in self._calls:
+            if (
+                call.context is not None
+                and (call.context.session_id, call.context.tool_call_id)
+                == (context.session_id, context.tool_call_id)
+                and call.server_task is not None
+            ):
+                call.server_task.kept = True
+
+    def _preserved(self, call: _Call) -> bool:
+        return (
+            call.context is not None
+            and (call.context.session_id, call.context.tool_call_id) in self._preserved_calls
+        )
 
     async def close(self) -> None:
         self._closing = True
@@ -353,7 +373,8 @@ class ConnectionRunner:
             try:
                 call = await self._submit(lost.operation, lost.arguments, lost.context, run)
             except asyncio.CancelledError:
-                self._forget_kept(run)
+                if not self._preserved(lost):
+                    self._forget_kept(run)
                 raise
             except InvocationNotSentError:
                 # No connection came back.
@@ -361,7 +382,7 @@ class ConnectionRunner:
             try:
                 return await call.result
             except asyncio.CancelledError:
-                if run.kept:
+                if run.kept and not self._preserved(lost):
                     # Cancelled before the call resumed the task.
                     self._forget_kept(run)
                 raise
@@ -421,6 +442,8 @@ class ConnectionRunner:
             delivered=not self._tracks_delivery,
             owner=owner,
             input_schema=schema,
+            canonical_context=CANONICAL_CONTEXT.get() or context,
+            retained=RETAIN_CALL.get(),
             server_task=resumed,
             resuming=resumed is not None,
         )

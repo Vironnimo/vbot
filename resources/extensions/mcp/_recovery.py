@@ -31,6 +31,15 @@ CREATE TABLE pending_tasks(
     outcome_json TEXT CHECK(outcome_json IS NULL OR json_valid(outcome_json)),
     delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
 ) STRICT;
+CREATE TABLE pending_calls(
+    receipt_id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    configuration_hash TEXT NOT NULL,
+    arguments_json TEXT NOT NULL CHECK(json_valid(arguments_json)),
+    received_json TEXT CHECK(received_json IS NULL OR json_valid(received_json)),
+    outcome_json TEXT CHECK(outcome_json IS NULL OR json_valid(outcome_json)),
+    delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
+) STRICT;
 """
 _sleep = asyncio.sleep
 _RETRY_SECONDS = 30.0
@@ -58,6 +67,7 @@ class TaskRecovery:
         # Calls captured in this process retain their ordinary delivery owner,
         # including reconnects and the gap before canonical result persistence.
         self._live_receipts: set[str] = set()
+        self.deferred_receipts: set[str] = set()
         self._retired: weakref.WeakSet[ConnectionRunner] = weakref.WeakSet()
         self._capturing = asyncio.Lock()
         self._closed = False
@@ -133,7 +143,7 @@ class TaskRecovery:
         self._live_receipts.discard(receipt)
 
     def _acknowledge(self, receipt: str) -> None:
-        if not self._closed:
+        if not self._closed and receipt not in self.deferred_receipts:
             task = asyncio.create_task(self.forget(receipt), name="mcp-task-acknowledge")
             self._acknowledgments.add(task)
             task.add_done_callback(self._acknowledgments.discard)
@@ -162,7 +172,11 @@ class TaskRecovery:
             if self._closed:
                 return
             receipt = row["receipt_id"]
-            if receipt in self._workers or receipt in self._live_receipts:
+            if (
+                receipt in self._workers
+                or receipt in self._live_receipts
+                or receipt in self.deferred_receipts
+            ):
                 continue
             if row["delivered"]:
                 if (

@@ -398,25 +398,51 @@ async def test_git_reads_and_changes_what_its_paths_or_work_tree_reach(
     assert (refusal.reason if refusal else None) == reason
 
 
+@pytest.mark.parametrize("ancestor_repository", [True, False])
+@pytest.mark.parametrize("line", ["git reset --hard", "git init; git checkout -b task"])
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
 @pytest.mark.asyncio
-async def test_a_work_tree_change_above_the_readable_folders_is_refused(
-    real_analyzer: CommandAnalyzer, tmp_path: Path
+async def test_an_unresolved_work_tree_root_explains_the_preflight_limit(
+    real_analyzer: CommandAnalyzer,
+    tmp_path: Path,
+    ancestor_repository: bool,
+    line: str,
+    shell: str,
 ) -> None:
-    (tmp_path / ".git").mkdir()
+    if ancestor_repository:
+        (tmp_path / ".git").mkdir()
     work = tmp_path / "work"
     work.mkdir()
     checker = CommandChecker(lambda: real_analyzer)
 
     refusal = await checker.check_line(
         boundary(work, {"read": "work_area", "write": "work_area"}),
-        "git reset --hard",
-        shell="bash",
+        line,
+        shell=shell,  # type: ignore[arg-type]
         cwd=work,
         env={},
         home=tmp_path,
     )
 
-    # The work tree contains the protected data directory; that hard refusal
-    # takes precedence over the missing base grant.
-    assert refusal is not None and refusal.reason == "protected_location"
-    assert refusal.target == tmp_path.as_posix()
+    # No command ran. An unreadable ancestor is not evidence that Git would
+    # change it; the same preflight cannot see a repository created later.
+    assert refusal is not None and refusal.reason == "unanalyzable"
+    assert refusal.target == line
+    assert refusal.detail is not None and work.as_posix() in refusal.detail
+    assert refusal.hint is not None and "separate call" in refusal.hint
+    assert not refusal.retryable
+
+    # Once the requested repository exists, the remaining command is checked
+    # against its actual root and succeeds inside the permitted folder.
+    (work / ".git").mkdir()
+    assert (
+        await checker.check_line(
+            boundary(work, {"read": "work_area", "write": "work_area"}),
+            "git checkout -b task",
+            shell=shell,  # type: ignore[arg-type]
+            cwd=work,
+            env={},
+            home=tmp_path,
+        )
+        is None
+    )

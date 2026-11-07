@@ -285,8 +285,29 @@ class CommandChecker:
             add(boundary.check_host(canonical_host(host), "connect", by_program=True))
         for access in plan.paths:
             kind: PathAccess = access.kind
+            path = access.path
+            if access.work_tree:
+                path, resolved = _work_tree_top(boundary, path)
+                if not resolved:
+                    add(
+                        boundary.refusal(
+                            "command",
+                            _shown(text),
+                            "unanalyzable",
+                            detail=(
+                                f"the Git repository root for {access.path.as_posix()} cannot "
+                                "be determined within the folders you can read"
+                            ),
+                            hint=(
+                                "If this command creates the repository, run git init or git clone "
+                                "in a separate call first, then run the remaining Git commands. "
+                                "Otherwise use a repository whose root you can read."
+                            ),
+                        )
+                    )
+                    continue
             refused = boundary.check_path(
-                _work_tree_top(boundary, access.path) if access.work_tree else access.path,
+                path,
                 kind,
                 subtree=access.subtree,
                 glob=access.glob,
@@ -359,7 +380,7 @@ class CommandChecker:
 
     @staticmethod
     def command_path(boundary: PermissionBoundary, access: PlannedPathAccess) -> Path:
-        return _work_tree_top(boundary, access.path) if access.work_tree else access.path
+        return _work_tree_top(boundary, access.path)[0] if access.work_tree else access.path
 
     async def check_line_all(
         self,
@@ -523,14 +544,14 @@ class CommandChecker:
         return path_key(split_lexical(str(path), windows=windows).text, windows=windows)
 
 
-def _work_tree_top(boundary: PermissionBoundary, folder: Path) -> Path:
-    """The top folder of the git repository a command works in at *folder*.
+def _work_tree_top(boundary: PermissionBoundary, folder: Path) -> tuple[Path, bool]:
+    """The repository's top folder and whether its lookup completed.
 
     The nearest folder at or above *folder* that holds ``.git`` (a folder, or a
     file in a linked worktree or submodule); *folder* itself when there is none.
     The search looks only where the boundary lets the Agent read: it ends at a
-    folder it may not look into, which then counts as the top, so a whole-tree
-    change above what the Agent may read is refused, not silently narrowed.
+    folder it may not look into. That is an unresolved repository, not evidence
+    that the command changes that ancestor; the check refuses it as unanalyzable.
     """
     current = folder
     while True:
@@ -538,11 +559,11 @@ def _work_tree_top(boundary: PermissionBoundary, folder: Path) -> Path:
         if boundary.check_path(current, "read") is not None or (
             boundary.check_path(marker, "read") is not None
         ):
-            return current
+            return current, False
         if os.path.lexists(marker):
-            return current
+            return current, True
         if current.parent == current:
-            return folder
+            return folder, True
         current = current.parent
 
 

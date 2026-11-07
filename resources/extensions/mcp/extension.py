@@ -18,7 +18,7 @@ import asyncio
 import copy
 import importlib
 import json
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from http import HTTPStatus
@@ -39,6 +39,7 @@ from core.tools.tools import (
 from core.utils.workers import settle_before_cancelling
 
 from ._arguments import browse_normalizer, connection_display
+from ._background import BackgroundCalls
 from ._catalog import CatalogSummaries, catalog_summary
 from ._connectors import ConnectorCatalog, load_connectors
 from ._definitions import (
@@ -58,11 +59,13 @@ from ._definitions import (
 )
 from ._discovery import (
     DescribeOutcome,
+    arguments_schema,
     catalog_entries,
     describe_page,
     describe_payload,
     entry_operation,
     invalid_target_arguments,
+    lookup,
     names_denied_tool,
     noted,
     remote_tool_name,
@@ -71,6 +74,7 @@ from ._discovery import (
     target_arguments,
     unsupported_operation,
 )
+from ._invocation import CANONICAL_CONTEXT
 from ._management import (
     CONNECTIONS_RESOURCE,
     JOBS_RESOURCE,
@@ -151,6 +155,7 @@ class MCPService:
         self._close_task: asyncio.Task[None] | None = None
         self._startup_error: str | None = None
         self.recovery: TaskRecovery | None = None
+        self.background: BackgroundCalls | None = None
 
     async def start(self, host: ExtensionHost) -> None:
         if host.state_dir is None:
@@ -177,12 +182,14 @@ class MCPService:
         await self.catalogs.open(host)
         self.recovery = TaskRecovery(host, self.api.logger)
         await self.recovery.open()
+        self.background = BackgroundCalls(self.recovery, self._finish_background)
         if self.connections:
             await _load_protocol_client()
         for config in self.connections.values():
             self._runner(config)
             if config["enabled"]:
                 self._runner(config).start()
+        await self.background.resume(self.runners)
         await self.recovery.resume(self.runners)
 
     async def close(self) -> None:
@@ -195,6 +202,8 @@ class MCPService:
         if self._changes:
             await asyncio.gather(*self._changes, return_exceptions=True)
         self._closed = True
+        if self.background is not None:
+            await self.background.close()
         if self.recovery is not None:
             await self.recovery.close()
         await self.jobs.close()
@@ -305,7 +314,18 @@ class MCPService:
         follower_hint = (
             MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else unavailable
         )
-        normalizer = browse_normalizer(parent)
+
+        def target_fields(target: str) -> tuple[str, ...]:
+            entries, _fingerprint = lookup(catalog_entries(runner.id, runner.catalog, None), target)
+            return (
+                tuple(declared_parameters(arguments_schema(entries[0]))[0])
+                if len(entries) == 1
+                else ()
+            )
+
+        normalizer = browse_normalizer(
+            parent, target_fields, lambda: float(runner.config["timeout"])
+        )
         declarations = [
             {
                 "name": parent,
@@ -463,6 +483,24 @@ class MCPService:
         action = arguments["action"]
         if action == "read":
             return await self._read(runner, context, arguments, allowed)
+        if action == "cancel":
+            document = (
+                await self.background.load_result(arguments["result_id"], context, runner.id)
+                if self.background is not None
+                else None
+            )
+            if document is None:
+                return tool_failure(
+                    "invalid_arguments",
+                    "No background call with this result_id is available in this Session.",
+                )
+            if (
+                document["source"]
+                and remote_tool_name(runner.id, document["source"]) not in allowed
+            ):
+                return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
+            assert self.background is not None
+            return await self.background.cancel(arguments["result_id"])
         if not runner.catalog or runner.state != "connected":
             try:
                 await runner.invoke("catalog", {})
@@ -561,10 +599,14 @@ class MCPService:
         assert self.content is not None
         try:
             document = (
-                await self.recovery.load_result(arguments["result_id"], context, runner.id)
-                if self.recovery is not None
+                await self.background.load_result(arguments["result_id"], context, runner.id)
+                if self.background is not None
                 else None
             )
+            if document is None and self.recovery is not None:
+                document = await self.recovery.load_result(
+                    arguments["result_id"], context, runner.id
+                )
             if document is None:
                 document = await self.content.load_result(
                     arguments["result_id"], context, runner.id
@@ -640,15 +682,19 @@ class MCPService:
             registry = self.api.operations.tool_registry
             if registry is None:
                 raise RuntimeError("MCP Tools are not bound")
-            return await registry.dispatch(
-                replace(
-                    context,
-                    tool_name=remote_tool_name(runner.id, entry["name"]),
-                    input_contract=None,
-                ),
-                inputs,
-                allowed,
-            )
+            token = CANONICAL_CONTEXT.set(context)
+            try:
+                return await registry.dispatch(
+                    replace(
+                        context,
+                        tool_name=remote_tool_name(runner.id, entry["name"]),
+                        input_contract=None,
+                    ),
+                    inputs,
+                    allowed,
+                )
+            finally:
+                CANONICAL_CONTEXT.reset(token)
         if entry["kind"] == "resource":
             inputs = {"uri": entry["definition"]["uri"]}
         elif entry["kind"] == "prompt":
@@ -664,6 +710,42 @@ class MCPService:
         *,
         source: str | None = None,
     ) -> dict[str, Any]:
+        if operation == "tools/call" and self.background is not None:
+            return await self.background.invoke(runner, context, arguments)
+        return await self._complete_call(
+            runner,
+            context,
+            operation,
+            arguments,
+            runner.invoke(operation, arguments, context),
+            source=source,
+        )
+
+    async def _finish_background(
+        self,
+        runner: ConnectionRunner | str,
+        context: ToolContext,
+        arguments: dict[str, Any],
+        invocation: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if isinstance(runner, str):
+            return await self._present(
+                runner, context, await invocation, source=arguments.get("name")
+            )
+        return await self._complete_call(
+            runner, context, "tools/call", arguments, invocation, source=arguments.get("name")
+        )
+
+    async def _complete_call(
+        self,
+        runner: ConnectionRunner,
+        context: ToolContext,
+        operation: str,
+        arguments: dict[str, Any],
+        invocation: Awaitable[dict[str, Any]],
+        *,
+        source: str | None = None,
+    ) -> dict[str, Any]:
         from ._tasks import TaskEndedError
         from .client import (
             READ_OPERATIONS,
@@ -675,7 +757,7 @@ class MCPService:
         )
 
         try:
-            payload = await runner.invoke(operation, arguments, context)
+            payload = await invocation
         except UnsupportedOperationError:
             return unsupported_operation(operation)
         except ToolChangedError:
@@ -755,17 +837,18 @@ class MCPService:
 
     async def _present(
         self,
-        runner: ConnectionRunner,
+        runner: ConnectionRunner | str,
         context: ToolContext,
         payload: dict[str, Any],
         *,
         source: str | None = None,
     ) -> dict[str, Any]:
+        connection = runner if isinstance(runner, str) else runner.id
         if self.content is None:
             raise RuntimeError("MCP content store was not initialized")
         if payload.get("isError"):
             text, artifacts = await self.content.error_report(
-                payload, context, runner.id, source=source
+                payload, context, connection, source=source
             )
             return tool_failure(
                 "mcp_tool_error",
@@ -774,7 +857,7 @@ class MCPService:
                 ),
                 artifacts=artifacts,
             )
-        result, artifacts = await self.content.present(payload, context, runner.id, source=source)
+        result, artifacts = await self.content.present(payload, context, connection, source=source)
         return tool_success(result, artifacts=artifacts)
 
     async def _save(
@@ -969,6 +1052,8 @@ class MCPService:
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)
+        if self.background is not None:
+            await self.background.stop_connection(identifier)
         if self.recovery is not None:
             await self.recovery.stop_connection(identifier, runner=runner)
         try:

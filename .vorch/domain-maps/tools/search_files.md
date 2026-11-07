@@ -116,7 +116,7 @@ Modes:
   `glob` or `path` narrow it.
 - A pattern beside `--files` or `--dirs` filters the listed names, with a
   `note` (`name_patterns`, `_match_listed_names`): `--files` matches each file's
-  name and shown path, as the name fallback below does; `--dirs` matches
+  name and shown path; `--dirs` matches
   directory names. ripgrep matches them (`match_names`): the names go
   NUL-separated through `--null-data` with the query's matching flags (`-i`,
   `-S`, `-F`, `-w`, `-x`, `-v`, `-P`, `--engine`, ...), so the `pattern`
@@ -156,21 +156,14 @@ Modes:
   mixed purposes, such as reading one file named in `path` or dumping a tree,
   so no single reinterpretation fits them.
 - Any other pattern stays a content search, because lines can contain a file
-  name too (an import of `app.py`). When a content, files or count search finds
-  no match, the handler lists the searched files (same paths, globs and flags)
-  and matches their names and shown paths against the patterns
-  (`_names_matching`, ripgrep with the query's matching flags). When some match,
-  the call answers as a file listing of them (`Found 1 file, newest first.`,
-  paged like a listing) with the `note` `No file contents match pattern, so the
-  files whose names match it were listed.` An incomplete search (timeout,
-  stopped Run) keeps its empty result. This replaced a hint shown only for
-  regexes ending in a file extension (`\.py$`): DeepSeek V4.1 Flash sent
-  `pattern: "app.py"` with `output: files` to find a file in 6 of 6 eval runs
-  and got only `No matches`; a note naming the matching files did not change
-  its next call either (agent-eval 2026-10-10). Coverage:
-  `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
-- When no name matches either, a phrase a line break hid gets its note (Wrapped
-  phrases, below); otherwise a single pattern (without `-v`) gets one of three
+  name too (an import of `app.py`). An empty content, files-with-matches or count
+  result stays empty even when file names or their parent directories match.
+  The November 2026 Session audit found count calls answered with image names
+  and source searches answered with files merely inside a matching directory.
+  Explicit name listings (`--files`, `--dirs`, or no pattern) remain available.
+  Coverage: `test_a_content_search_without_matches_does_not_return_matching_file_names`.
+- A phrase a line break hid gets its note (Wrapped phrases, below).
+  Otherwise, when no name matches either, a single pattern (without `-v`) gets one of three
   notes (`_note_no_match`):
   - **Literal text.** A regex holding an operator with which it can miss its own
     text (`?+()[]{}^$\`; `.`, `*` and `|` cannot) is counted once more with
@@ -303,9 +296,14 @@ Roots (`_resolve_roots`):
 - Relative roots start at the cwd; absolute roots are allowed.
 - If a missing root is a brace or comma list whose parts all exist, each part is
   searched, with a note.
-- If a missing root contains glob characters and no other glob is set, the call
+- If a missing root contains glob characters and no selecting global glob is set, the call
   searches the root's fixed directory with the rest as an anchored glob, with a
-  note.
+  note. That selection belongs only to this root: multiple roots form a union,
+  and a wildcard root never filters another requested directory. Each wildcard
+  root runs in its own scope; entries are deduplicated across scopes. With
+  multiple scopes involving wildcard roots, the unmatched-file total is omitted
+  because native counts cannot identify duplicates. The November 2026 audit
+  found a wildcard root narrowing a second, broader root to one file.
 - A missing root that starts with `!`, such as `"!vendor/**"` in `args`, is
   applied as an excluding glob, with a note; when no other root remains, the
   working directory is searched. An existing path starting with `!` stays a
@@ -400,8 +398,9 @@ glob syntax and `--dirs` listings (which match directories already) stay as
 sent. Swarm Agents passed directories as `glob` and got `No files found.`
 (Sessions, 2026-10).
 
-Scopes (`_scopes`): roots inside the cwd share one run at the cwd, and each
+Scopes (`_scopes`): plain roots inside the cwd share one run at the cwd, and each
 outside root gets its own run, so labels stay cwd-relative or absolute.
+Wildcard roots keep their selecting globs in separate runs.
 
 A content search runs in two phases:
 
@@ -734,7 +733,8 @@ blank placeholders, so no sentence has to warn about them.
 | `pattern "..." is a file name glob, so matching files were listed.` | Names the interpretation as a filename filter. Also applies when file-list output repeats the same glob in both pattern and glob; four audit calls in October 2026 otherwise returned accidental content matches or misleading empty results. Explicit content flags retain their meaning. |
 | `Search file contents with a regular expression, or find files and directories by name.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). "find ... by name" matches how Agents phrase the task: with "list files and directories", 6 of 12 directory-name trials went to the shell first, with "find ... by name" 2 of 12 (first-use probe, 2026-10). |
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
-| pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`; a content search that finds nothing lists the files whose names match (first-use probe, 2026-10; agent-eval 2026-10-10). |
+| pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`. Empty content searches retain their result kind: the former name fallback substituted file names for requested counts and content in November 2026 Sessions. |
+| Empty content result: `No matches` (with a searched-file total when known). | A matching file name or parent directory is not a content match. Removing `No file contents match pattern, so the files whose names match it were listed.` preserves content, files-with-matches and count semantics (F3, F4; November 2026 Session audit). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
 | glob: `Case-insensitive name filters such as *.py; a leading ! excludes.` | Without "Case-insensitive", Agents asked to ignore extension case wrote `*.[pP][yY]`, `--iglob`, several globs or a shell command (first-use probe, 2026-10). Exclusion is the one other glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |
 | output: `files lists matching files; count counts matching lines per file, every match with "--count-matches" in args. Omit for matching lines.` | Names the shapes in Agent terms (F2). Agents asked for occurrences per file did not find `--count-matches` (first-use probe, 2026-10). Agents sent `output: "content"` in 1769 calls (Sessions, 2026-09). |

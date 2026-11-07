@@ -10,6 +10,7 @@ import json
 import sqlite3
 from typing import Any
 
+from core.chat.errors import ChatSessionError
 from core.sessions import _store_external_notes, _store_values
 from core.sessions._types import SessionAddress
 from core.utils.ids import new_id
@@ -24,6 +25,7 @@ def capture_tool_receipt(
     tool_call_id: str,
     tool_name: str,
     execution_owner: dict[str, Any] | None,
+    deferred: bool = False,
 ) -> str | None:
     state = _store_values._find_live(connection, address)
     if state is None:
@@ -43,14 +45,19 @@ def capture_tool_receipt(
         (owner_name, row["call_key"]),
     ).fetchone()
     if existing is not None:
+        if deferred:
+            connection.execute(
+                "UPDATE extension_tool_receipts SET deferred=1 WHERE receipt_id=?",
+                (existing["receipt_id"],),
+            )
         return str(existing["receipt_id"])
 
     def claim(receipt: str) -> bool:
         return (
             connection.execute(
                 "INSERT OR IGNORE INTO extension_tool_receipts(receipt_id, owner_name, call_key, "
-                "execution_owner_json) VALUES(?,?,?,?)",
-                (receipt, owner_name, row["call_key"], json.dumps(execution_owner)),
+                "execution_owner_json, deferred) VALUES(?,?,?,?,?)",
+                (receipt, owner_name, row["call_key"], json.dumps(execution_owner), deferred),
             ).rowcount
             == 1
         )
@@ -63,14 +70,14 @@ def resolve_tool_receipt(
 ) -> dict[str, Any] | None:
     row = connection.execute(
         "SELECT s.project_id,s.agent_id,s.session_id,s.generation_id,r.run_id,r.status,"
-        "c.call_id,c.name,c.result_entry_key,t.execution_owner_json "
+        "c.call_id,c.name,c.result_entry_key,t.execution_owner_json,t.deferred "
         "FROM extension_tool_receipts t JOIN tool_calls c ON c.call_key=t.call_key "
         "JOIN entries e ON e.entry_key=c.entry_key JOIN runs r ON r.run_key=e.run_key "
         "JOIN sessions s ON s.session_key=e.session_key WHERE t.receipt_id=? AND t.owner_name=? "
         "AND s.state='live' AND e.superseded_at_seq IS NULL AND r.inherited=0",
         (receipt_id, owner_name),
     ).fetchone()
-    if row is None or row["result_entry_key"] is not None:
+    if row is None or (row["result_entry_key"] is not None and not row["deferred"]):
         return None
     return {
         "project_id": row["project_id"] or None,
@@ -81,6 +88,7 @@ def resolve_tool_receipt(
         "tool_call_id": row["call_id"],
         "tool_name": row["name"],
         "execution_owner": json.loads(row["execution_owner_json"]),
+        "deferred": bool(row["deferred"]),
     }
 
 
@@ -99,3 +107,46 @@ def deliver_tool_outcome(
         generation_id=context["generation_id"],
     )
     return True
+
+
+def prepare_tool_outcome(
+    connection: sqlite3.Connection, receipt_id: str, content: str, *, owner_name: str
+) -> dict[str, Any] | None:
+    """Bind one background outcome before handing it to completion delivery.
+
+    The receipt marker survives completion coalescing and secret masking. Like
+    shell recovery, checking canonical Notes closes the crash window between the
+    history commit and the producer's acknowledgement. The captured content
+    rejects a conflicting retry before the completion coordinator can coalesce it.
+    """
+    context = resolve_tool_receipt(connection, receipt_id, owner_name=owner_name)
+    if context is None or not context["deferred"]:
+        return None
+    row = connection.execute(
+        "SELECT outcome_content,outcome_delivered FROM extension_tool_receipts "
+        "WHERE receipt_id=? AND owner_name=?",
+        (receipt_id, owner_name),
+    ).fetchone()
+    if row["outcome_content"] is not None and row["outcome_content"] != content:
+        raise ChatSessionError("Tool outcome conflicts with its prior content")
+    marker = f"Background Tool result {receipt_id}:"
+    delivered = (
+        bool(row["outcome_delivered"])
+        or connection.execute(
+            "SELECT 1 FROM extension_tool_receipts t "
+            "JOIN tool_calls c ON c.call_key=t.call_key "
+            "JOIN entries origin ON origin.entry_key=c.entry_key "
+            "JOIN entries e ON e.session_key=origin.session_key "
+            "JOIN entry_text body ON body.entry_key=e.entry_key "
+            "WHERE t.receipt_id=? AND e.role='note' AND e.seq>origin.seq "
+            "AND instr(body.content,?)>0 LIMIT 1",
+            (receipt_id, marker),
+        ).fetchone()
+        is not None
+    )
+    connection.execute(
+        "UPDATE extension_tool_receipts SET outcome_content=?,outcome_delivered=? "
+        "WHERE receipt_id=?",
+        (content, delivered, receipt_id),
+    )
+    return context | {"content": f"{marker}\n{content}", "delivered": delivered}

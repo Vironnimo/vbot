@@ -485,19 +485,32 @@ async def test_call_service_names_candidates_instead_of_acting_on_a_name(
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize("requested", [{}, {"brightness_pct": 60}])
-async def test_call_service_without_change_reports_the_current_state(
-    requested: dict[str, Any],
+@pytest.mark.parametrize(
+    ("requested", "state", "service", "changed"),
+    [
+        ({}, "on", "turn_on", False),
+        ({"brightness_pct": 60}, "on", "turn_on", False),
+        ({}, "off", "turn_off", False),
+        ({}, "unavailable", "turn_off", False),
+        ({}, "unknown", "turn_off", False),
+        ({}, "unavailable", "turn_off", True),
+    ],
+)
+async def test_call_service_reports_observed_target_state(
+    requested: dict[str, Any], state: str, service: str, changed: bool
 ) -> None:
-    respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
-        return_value=httpx.Response(200, json=[])
+    current = {
+        **_KITCHEN,
+        "state": state,
+        "attributes": {**_KITCHEN["attributes"], "brightness": 128},
+    }
+    respx.post(f"{HASS_URL}/api/services/light/{service}").mock(
+        return_value=httpx.Response(200, json=[current] if changed else [])
     )
-    respx.get(f"{HASS_URL}/api/states/light.kitchen").mock(
-        return_value=httpx.Response(
-            200,
-            json={**_KITCHEN, "attributes": {**_KITCHEN["attributes"], "brightness": 128}},
+    if not changed:
+        respx.get(f"{HASS_URL}/api/states/light.kitchen").mock(
+            return_value=httpx.Response(200, json=current)
         )
-    )
     tools = tools_with_token()
 
     result = await dispatch(
@@ -505,18 +518,22 @@ async def test_call_service_without_change_reports_the_current_state(
         HA_CALL_SERVICE_NAME,
         {
             "domain": "light",
-            "service": "turn_on",
+            "service": service,
             "entity_id": "light.kitchen",
             "data": requested,
         },
     )
 
     data = assert_success_envelope(result)
-    assert len(respx.calls) == 2
-    assert data["service"] == "light.turn_on"
-    assert data["changed"] == 0
-    assert "light.kitchen: on" in data["content"]
-    assert "[unchanged]" in data["content"]
+    assert len(respx.calls) == (1 if changed else 2)
+    assert data["service"] == f"light.{service}"
+    assert data["changed"] == int(changed)
+    assert f"light.kitchen: {state}" in data["content"]
+    assert ("[unchanged]" in data["content"]) is not changed
+    if state in {"unavailable", "unknown"}:
+        assert data["unconfirmed"] == ["light.kitchen"]
+    else:
+        assert "unconfirmed" not in data
     if requested:
         assert "brightness=128" in data["content"]
         assert "50.2%" in data["content"]

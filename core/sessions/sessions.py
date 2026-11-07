@@ -585,6 +585,7 @@ class ChatSessionManager:
         tool_call_id: str,
         tool_name: str,
         execution_owner: JsonObject | None,
+        deferred: bool = False,
     ) -> str | None:
         """Bind deferred Extension work to its original admitted invocation."""
         return await self.run_async(
@@ -595,6 +596,7 @@ class ChatSessionManager:
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             execution_owner=execution_owner,
+            deferred=deferred,
         )
 
     async def resolve_tool_receipt_async(
@@ -619,6 +621,17 @@ class ChatSessionManager:
         """Persist a late Extension outcome once, without rerunning the invocation."""
         return await self.run_async(
             self._store.execution.deliver_tool_outcome,
+            receipt_id,
+            content,
+            owner_name=owner_name,
+        )
+
+    async def prepare_tool_outcome_async(
+        self, receipt_id: str, content: str, *, owner_name: str
+    ) -> JsonObject | None:
+        """Reserve a background outcome and check whether its Note already landed."""
+        return await self.run_async(
+            self._store.execution.prepare_tool_outcome,
             receipt_id,
             content,
             owner_name=owner_name,

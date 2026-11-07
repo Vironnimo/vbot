@@ -78,9 +78,10 @@ MCP_PARAMETERS: dict[str, Any] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["search", "describe", "call", "read"],
+            "enum": ["search", "describe", "call", "read", "cancel"],
             "description": (
-                "Search available items, describe targets, call one, or read a saved result."
+                "Search items, describe targets, call one, read a result, "
+                "or cancel a background call."
             ),
         },
         "query": {
@@ -120,7 +121,9 @@ MCP_PARAMETERS: dict[str, Any] = {
         },
         "result_id": {
             "type": "string",
-            "description": "result_id of a long or saved result. Required for read.",
+            "description": (
+                "result_id of a saved result or background call. Required for read or cancel."
+            ),
         },
         "pointer": {
             "type": "string",

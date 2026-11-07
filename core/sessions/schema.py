@@ -780,6 +780,9 @@ CREATE TABLE extension_tool_receipts (
   owner_name TEXT NOT NULL,
   call_key INTEGER NOT NULL REFERENCES tool_calls (call_key) ON DELETE CASCADE,
   execution_owner_json TEXT NOT NULL CHECK (json_valid(execution_owner_json)),
+  deferred INTEGER NOT NULL DEFAULT 0,
+  outcome_content TEXT,
+  outcome_delivered INTEGER NOT NULL DEFAULT 0,
   UNIQUE (owner_name, call_key)
 ) STRICT;
 

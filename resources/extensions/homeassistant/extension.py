@@ -630,6 +630,7 @@ async def _handle_call_service(
     changed_ids = {entry["entity_id"] for entry in changed}
     attributes = tuple(key for key in data if isinstance(key, str))
     lines = [entity_line(entry, attributes) for entry in changed]
+    observed = list(changed)
     missing: list[str] = []
     for entity in [entity for entity in entities if entity not in changed_ids][
         :_TARGET_CHECK_LIMIT
@@ -638,6 +639,7 @@ async def _handle_call_service(
         if check_failure is not None and check_failure.status == 404:
             missing.append(entity)
         elif isinstance(current, dict):
+            observed.append({**current, "entity_id": entity})
             lines.append(f"{entity_line(current, attributes)} [unchanged]")
 
     if missing and not changed and len(missing) == len(entities):
@@ -658,6 +660,18 @@ async def _handle_call_service(
         )
     elif not changed:
         result["note"] = "No entity state changed."
+    unconfirmed = [
+        entry["entity_id"] for entry in observed if entry.get("state") in ("unavailable", "unknown")
+    ]
+    if unconfirmed:
+        result["unconfirmed"] = unconfirmed
+        note = (
+            f"Home Assistant accepted {effect}, but the requested outcome is not confirmed "
+            f"for {', '.join(unconfirmed)}: their state is unavailable or unknown. "
+            f"Check with {_check_call(domain, unconfirmed)} before reporting success or "
+            "repeating the service."
+        )
+        result["note"] = f"{result['note']} {note}" if missing else note
     result.update(_response_fields(response))
     if lines:
         result["content"] = "\n".join(lines)

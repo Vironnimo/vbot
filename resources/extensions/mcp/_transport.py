@@ -48,6 +48,9 @@ class _ObservedHTTPClient(httpx2.AsyncClient):
 
     @override
     async def send(self, request: httpx2.Request, **kwargs: Any) -> httpx2.Response:
+        call = _CURRENT_CALL.get()
+        if call is not None and call.retained and call.operation == "tools/call":
+            request.extensions["timeout"] = {**request.extensions.get("timeout", {}), "read": None}
         try:
             response = await super().send(request, **kwargs)
         except Exception as error:
@@ -308,6 +311,8 @@ class ConnectionTransport:
                 url,
                 headers=headers,
                 timeout=self._runner.config["timeout"],
+                # The shared response stream can carry retained calls for arbitrarily long.
+                sse_read_timeout=float("inf"),
                 auth=auth,
                 httpx_client_factory=sse_http_client,
             )

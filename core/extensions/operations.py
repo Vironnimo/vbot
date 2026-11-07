@@ -76,6 +76,8 @@ class ExtensionHost:
     capture_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
     restore_tool_call: Callable[[str], Awaitable[ToolContext | None]] | None = None
     deliver_tool_outcome: Callable[[str, str], Awaitable[bool]] | None = None
+    # API v26: continue an invocation after returning a pending Tool Result.
+    defer_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
     # API v18: the Permission Boundary a new Session of the addressed Agent
     # (project id, Agent id) works under, for a Tool call an Extension makes as
     # that Agent outside any Session (MCP management ``invoke``).
