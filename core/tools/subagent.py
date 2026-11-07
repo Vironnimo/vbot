@@ -18,7 +18,7 @@ from core.tools._subagent_arguments import (
 )
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME, TOOL_ACTIVATION_SESSION_GRANT
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME, background_tasks_detail_blocks
-from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import SUBAGENT_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
@@ -177,6 +177,10 @@ def register_subagent_tools(
         call = _background_tasks_call(arguments)
         if call is None:
             return await coordinator.spawn(context, arguments)
+        try:
+            await coordinator.validate_selectors(context, arguments, whole_tree=True)
+        except ToolContractError as error:
+            return tool_failure("invalid_arguments", str(error))
         return await _run_as_background_tasks(registry, context, arguments, call)
 
     registry.register(

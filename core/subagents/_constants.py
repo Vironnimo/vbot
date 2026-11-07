@@ -114,6 +114,14 @@ SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE = (
     "No Session {session_id} exists and that value reads as a stand-in, so this task started "
     "a new Sub-Agent."
 )
+SUBAGENT_AMBIGUOUS_SESSION_MESSAGE_TEMPLATE = (
+    "Nothing was run. session_id {session_id} matches more than one of your Sub-Agents. "
+    "Repeat the call with only the intended Sub-Agent's id."
+)
+SUBAGENT_CONFLICTING_SELECTORS_MESSAGE_TEMPLATE = (
+    "Nothing was run. id {id} and session_id {session_id} do not identify the same reachable "
+    "Sub-Agent. Repeat the call with only the selector for the intended Sub-Agent."
+)
 SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE = (
     "subagent was not run: Session {session_id} is not one of your Sub-Agents. {yours}To "
     'start a new Sub-Agent, repeat this call without "session_id".'

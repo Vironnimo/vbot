@@ -6,6 +6,10 @@ Review labels such as "Review B12" name the reviews of 2026-10-12: `tools/shell/
 
 | Text | Reason |
 |---|---|
+| `Nothing was run. id ... and session_id ... do not identify the same reachable Sub-Agent.` | A successful cancel or send formerly used id while silently dropping a contradictory Session target (F3). Refusal precedes both ordinary dispatch and the forwarded background_tasks operation. |
+| `Repeat the call with only the selector for the intended Sub-Agent.` | Gives recovery without choosing which of the two targets the caller intended (F5). |
+| `Nothing was run. session_id ... matches more than one of your Sub-Agents.` | Sessions of different Agents can share an id; a Session-only lookup cannot choose the first linked child (F3). |
+| `Repeat the call with only the intended Sub-Agent's id.` | The public Sub-Agent id resolves the ambiguity without requiring a different Session id or new work (F5). |
 | Role block: `You are a Sub-Agent: another Agent, your Parent Agent, delegated work to you ...` | Without it a Sub-Agent takes the brief as the user's request and addresses the user. |
 | Role block: `vBot sends your final answers to your Parent Agent unless the user writes in this Session. ...` | Parent-directed final answers are forwarded; a Sub-Agent that ends a turn while work still runs must say so instead of presenting a result. |
 | Role block: `When you find that the task cannot be done as briefed, ... do not switch to a different task on your own. ...` | A Sub-Agent that silently substitutes another approach or scope hands the Parent a result it integrates unknowingly. A question via `message_parent` cannot be awaited within the turn, so a Sub-Agent blocked on the decision ends its turn with the finding instead; one that can continue asks and continues. |
