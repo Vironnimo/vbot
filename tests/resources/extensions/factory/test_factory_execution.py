@@ -166,6 +166,11 @@ class Groups:
             if input.kind == "initial"
             else f"continuation:{binding.generation_id}:{input.request_id}"
         )
+        receipt_key = (binding.address, binding.generation_id, input_id)
+        digest = hashlib.sha256(input.content.encode()).hexdigest()
+        receipt = self.receipts.get(receipt_key)
+        if receipt is not None and receipt.content_hash != digest:
+            raise FactoryError("receipt_conflict", "Input identity has different content")
         previous = self.inputs.get((binding.address, input_id))
         if previous is not None:
             return SimpleNamespace(run_id=previous.id, status=previous.status.value, existing=True)
@@ -174,6 +179,17 @@ class Groups:
             for run in self.runs.values()
         ):
             raise ActiveRunError("Session is busy")
+        if receipt is None:
+            self.receipts[receipt_key] = DeliveryReceipt(
+                input_id,
+                digest,
+                input.kind,
+                {
+                    "kind": "user" if input.kind == "initial" else "note",
+                    "sequence": len(self.carriers),
+                },
+            )
+            self.carriers.append((input_id, input.content))
         owner = RunExecutionOwner(
             "factory", handle.group_id, participant, binding.generation_id, handle.epoch
         )
@@ -181,13 +197,6 @@ class Groups:
         run.start_sequence = len(self.runs) + 1
         self.runs[run.id] = run
         self.inputs[(binding.address, input_id)] = run
-        self.receipts[(binding.address, binding.generation_id, input_id)] = DeliveryReceipt(
-            input_id,
-            hashlib.sha256(input.content.encode()).hexdigest(),
-            input.kind,
-            {"kind": "user" if input.kind == "initial" else "note", "sequence": len(self.carriers)},
-        )
-        self.carriers.append((input_id, input.content))
         self.admissions.append((participant, input))
         return SimpleNamespace(run_id=run.id, status="running", existing=False)
 
@@ -684,6 +693,127 @@ async def test_blocked_worker_waits_for_user_and_answer_continues_same_session(s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["preflight", "carrier", "admission"])
+async def test_failed_admission_retries_original_guidance_without_replaying_canonical_input(
+    service, monkeypatch, boundary
+):
+    card = await started(service)
+    groups = service.host.temporary_agents
+    async with service.lock:
+        await service.execution.report_blocked(
+            service.tool_context(card), {"question": "Which behavior?"}
+        )
+    await service.finish()
+    start = groups.start
+
+    async def unavailable(handle, participant, input):
+        if boundary == "carrier":
+            binding = groups.bindings[(handle.group_id, participant)]
+            input_id = f"continuation:{binding.generation_id}:{input.request_id}"
+            groups.receipts[(binding.address, binding.generation_id, input_id)] = DeliveryReceipt(
+                input_id,
+                hashlib.sha256(input.content.encode()).hexdigest(),
+                input.kind,
+                {"kind": "note", "sequence": len(groups.carriers)},
+            )
+            groups.carriers.append((input_id, input.content))
+        elif boundary == "admission":
+            admitted = await start(handle, participant, input)
+            groups.runs[admitted.run_id].finish("failed")
+        raise FactoryError("launch_failed", "Admission failed at a controlled boundary")
+
+    monkeypatch.setattr(groups, "start", unavailable)
+    async with service.lock:
+        queued = await service.execution.send_back(await service.card(), "unique-sendback-guidance")
+    pending = queued["runtime"]["pending"]
+    await service.flush()
+    paused = await service.card()
+    assert (paused["state"], paused["waiting_reason"]) == ("waiting", "run_failed")
+    assert paused["runtime"]["pending"] == pending
+    assert len(groups.admissions) == (2 if boundary == "admission" else 1)
+    assert not groups.open[card["group_id"]]
+    monkeypatch.setattr(groups, "start", start)
+    async with service.lock:
+        retried = await service.execution.retry(paused)
+    assert retried["runtime"]["pending"]["id"] == pending["id"]
+    await service.flush()
+    card = await service.card()
+    admissions = 3 if boundary == "admission" else 2
+    assert len(groups.admissions) == admissions
+    assert "pending" not in card["runtime"]
+    assert groups.admissions[1][1].request_id == pending["id"]
+    assert groups.admissions[1][1].content == pending["content"]
+    assert sum("unique-sendback-guidance" in content for _, content in groups.carriers) == 1
+    if boundary == "admission":
+        assert groups.admissions[-1][1].request_id != pending["id"]
+        assert "unique-sendback-guidance" not in groups.admissions[-1][1].content
+    assert card["state"] == "working" and card["worker_turns"] == 1
+    await service.finish("error")
+    assert (await service.card())["waiting_reason"] == "run_failed"
+    assert len(groups.admissions) == admissions
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_admission", [False, True])
+async def test_retry_authorization_does_not_survive_crash_at_canonical_admission(
+    service, monkeypatch, prior_admission
+):
+    card = await started(service)
+    groups = service.host.temporary_agents
+    async with service.lock:
+        await service.execution.report_blocked(
+            service.tool_context(card), {"question": "Which behavior?"}
+        )
+    await service.finish()
+    start = groups.start
+
+    async def unavailable(handle, participant, input):
+        if prior_admission:
+            admitted = await start(handle, participant, input)
+            groups.runs[admitted.run_id].finish("failed")
+        raise FactoryError("launch_failed", "Admission unavailable")
+
+    monkeypatch.setattr(groups, "start", unavailable)
+    async with service.lock:
+        queued = await service.execution.send_back(await service.card(), "unique-sendback-guidance")
+    pending = queued["runtime"]["pending"]
+    await service.flush()
+
+    async def crash(handle, participant, input):
+        admitted = await start(handle, participant, input)
+        groups.runs[admitted.run_id].finish("failed")
+        # Simulate loss after the canonical check but before Factory saved it.
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(groups, "start", crash)
+    async with service.lock:
+        await service.execution.retry(await service.card())
+    with pytest.raises(asyncio.CancelledError):
+        await service.flush()
+    assert (await service.card())["runtime"]["pending"]["id"] == pending["id"]
+    assert len(groups.admissions) == 2
+    monkeypatch.setattr(groups, "start", start)
+    groups.recovered = True
+    service.execution = FactoryExecution(service)
+    await service.execution.reconcile()
+    await service.flush()
+    card = await service.card()
+    assert (card["state"], card["waiting_reason"]) == ("waiting", "run_failed")
+    assert len(groups.admissions) == 2
+    assert sum("unique-sendback-guidance" in content for _, content in groups.carriers) == 1
+    async with service.lock:
+        await service.execution.retry(card)
+    await service.flush()
+    assert (await service.card())["state"] == "working"
+    assert len(groups.admissions) == 3
+    assert "unique-sendback-guidance" not in groups.admissions[-1][1].content
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
 async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_pending_note(
     service,
 ):
@@ -770,33 +900,48 @@ async def automatic_handoff(service):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("receipt", ["missing", "committed", "conflicting"])
-async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_on_restart(
-    service, receipt
+@pytest.mark.parametrize("recovery", ["restart", "retry"])
+async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_before_recovery(
+    service, receipt, recovery
 ):
     context, pending = await automatic_handoff(service)
     groups = service.host.temporary_agents
     delivery = await service.execution.before_request(context)
     assert delivery is not None and "unique-sendback-guidance" in delivery.entries[0]
+    if recovery == "retry":
+        await service.execution.run_finished(context, outcome="error")
+        groups.runs[context.run_id].finish("failed")
+        await service.flush()
+        assert (await service.card())["runtime"]["pending"]["id"] == pending["id"]
     if receipt == "missing":
         with pytest.raises(OSError):
             await groups.append_delivery(context, delivery, fail=True)
-        assert await service.execution.before_request(context) == delivery
+        if recovery == "restart":
+            assert await service.execution.before_request(context) == delivery
     else:
         await groups.append_delivery(context, delivery)
         if receipt == "conflicting":
             key = (context.binding.address, context.binding.generation_id, delivery.delivery_id)
             groups.receipts[key] = replace(groups.receipts[key], content_hash="wrong")
-    groups.runs[context.run_id].finish("interrupted")
-    groups.recovered = True
-    service.execution = FactoryExecution(service)
+
+    async def recover():
+        if recovery == "restart":
+            groups.runs[context.run_id].finish("interrupted")
+            groups.recovered = True
+            service.execution = FactoryExecution(service)
+            await service.execution.reconcile()
+        else:
+            async with service.lock:
+                await service.execution.retry(await service.card())
+
     if receipt == "conflicting":
         with pytest.raises(FactoryError) as conflict:
-            await service.execution.reconcile()
+            await recover()
         assert conflict.value.code == "receipt_conflict"
         assert (await service.card())["runtime"]["pending"]["id"] == pending["id"]
         assert len(groups.admissions) == 2
     else:
-        await service.execution.reconcile()
+        await recover()
         await service.flush()
         latest = groups.admissions[-1][1]
         assert ("unique-sendback-guidance" in latest.content) is (receipt == "missing")
@@ -849,11 +994,20 @@ async def test_restart_delivers_never_admitted_cleanup_once_and_only_closes_admi
 @pytest.mark.parametrize(
     "case", ["error", "sibling", "participant", "epoch", "generation", "unowned", "older"]
 )
-async def test_root_failure_before_request_pauses_exact_handoff_without_replaying_it(
-    service, monkeypatch, case
+@pytest.mark.parametrize("boundary", ["before_request", "before_receipt", "committed"])
+async def test_root_failure_pauses_exact_handoff_without_replaying_it(
+    service, monkeypatch, case, boundary
 ):
     context, pending = await automatic_handoff(service)
     groups = service.host.temporary_agents
+    if boundary != "before_request":
+        delivery = await service.execution.before_request(context)
+        assert delivery is not None
+        if boundary == "before_receipt":
+            with pytest.raises(OSError):
+                await groups.append_delivery(context, delivery, fail=True)
+        else:
+            await groups.append_delivery(context, delivery)
     before = await service.card()
     original = context
     if case == "sibling":
@@ -881,7 +1035,10 @@ async def test_root_failure_before_request_pauses_exact_handoff_without_replayin
     await service.flush()
     card = await service.card()
     assert len(groups.admissions) == 2
-    assert card["runtime"]["pending"]["id"] == pending["id"]
+    if case == "error" and boundary == "committed":
+        assert "pending" not in card["runtime"]
+    else:
+        assert card["runtime"]["pending"]["id"] == pending["id"]
     if case == "error":
         assert (card["state"], card["waiting_reason"]) == ("waiting", "run_failed")
         assert card["runtime"]["current_run"] == original.run_id
@@ -893,7 +1050,11 @@ async def test_root_failure_before_request_pauses_exact_handoff_without_replayin
             await service.execution.retry(await service.card())
         await service.flush()
         assert len(groups.admissions) == 3
-        assert "unique-sendback-guidance" in groups.admissions[-1][1].content
+        assert ("unique-sendback-guidance" in groups.admissions[-1][1].content) is (
+            boundary != "committed"
+        )
+        assert (groups.admissions[-1][1].request_id == pending["id"]) is (boundary != "committed")
+        assert sum("unique-sendback-guidance" in content for _, content in groups.carriers) == 1
     else:
         assert card == before
     await service.execution.quiesce()

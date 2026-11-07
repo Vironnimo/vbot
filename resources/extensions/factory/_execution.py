@@ -114,11 +114,13 @@ class FactoryExecution:
         event: str,
         actor: str = "factory",
         runtime: Json | None = None,
+        pending: Json | None = None,
         **extra: Any,
     ) -> Json:
         runtime = runtime if runtime is not None else self._runtime(card)
         if (
-            participant == "worker"
+            pending is None
+            and participant == "worker"
             and "worker" not in runtime.get("participants", {})
             and not initial
         ):
@@ -129,13 +131,17 @@ class FactoryExecution:
         runtime.pop("question", None)
         runtime.pop("note", None)
         runtime["phase"] = phase
-        runtime["pending"] = {
-            "id": new_id("fci"),
-            "participant": participant,
-            "kind": "initial" if initial else "continuation",
-            "content": content,
-            "cancel_previous": cancel,
-        }
+        runtime["pending"] = (
+            pending
+            if pending is not None
+            else {
+                "id": new_id("fci"),
+                "participant": participant,
+                "kind": "initial" if initial else "continuation",
+                "content": content,
+                "cancel_previous": cancel,
+            }
+        )
         saved = await self._change(
             card,
             {
@@ -232,6 +238,13 @@ class FactoryExecution:
                             "generation_id": binding.generation_id,
                         }
                     handle = await self.groups.open_group(group_id)
+                    # Consume this Retry before start: a crash must not authorize
+                    # another attempt for a newly admitted Run.
+                    resume_terminal = runtime["pending"].pop("retry_terminal", False) is True
+                    if resume_terminal:
+                        card = await self._change(
+                            card, {"runtime": runtime}, event="retry_consumed"
+                        )
                     admission = await self.groups.start(
                         handle,
                         participant,
@@ -242,8 +255,31 @@ class FactoryExecution:
                         current_participant=participant,
                         epoch=handle.epoch,
                     )
-                    runtime.pop("pending", None)
                     runtime.setdefault("runs", {})[participant] = admission.run_id
+                    if (
+                        resume_terminal
+                        and participant == "worker"
+                        and runtime["phase"] in {"working", "integrating"}
+                        and admission.existing
+                        and admission.status in {"failed", "cancelled", "interrupted"}
+                    ):
+                        await self._queue(
+                            card,
+                            phase=runtime["phase"],
+                            participant=participant,
+                            content=agent_text.note(
+                                "keep_integrating"
+                                if runtime["phase"] == "integrating"
+                                else "keep_working",
+                                card,
+                            ),
+                            runtime=runtime,
+                            patch={"worker_turns": 0},
+                            event="retry_reconciled",
+                            detail={"run_id": admission.run_id},
+                        )
+                        return
+                    runtime.pop("pending", None)
                     patch: Json = {"runtime": runtime}
                     if participant == "worker" and runtime["phase"] != "cleanup":
                         patch["worker_turns"] = int(card.get("worker_turns", 0)) + 1
@@ -611,10 +647,15 @@ class FactoryExecution:
 
     async def retry(self, card: Json) -> Json:
         runtime = self._action(card, "retry")
+        acknowledged = await self._acknowledge_pending(card)
+        if acknowledged is not None:
+            card = acknowledged
+            runtime = self._action(card, "retry")
         runtime["restarts"] = 0
         phase = runtime.get("phase", "working")
         pending = runtime.get("pending")
         if pending:
+            pending["retry_terminal"] = True
             return await self._queue(
                 card,
                 phase=phase,
@@ -622,6 +663,7 @@ class FactoryExecution:
                 content=pending["content"],
                 initial=pending["kind"] == "initial",
                 runtime=runtime,
+                pending=pending,
                 patch={"worker_turns": 0},
                 event="retried",
                 actor="user",
@@ -690,7 +732,6 @@ class FactoryExecution:
         actor: str = "factory",
     ) -> Json:
         runtime = runtime if runtime is not None else self._runtime(card)
-        runtime.pop("pending", None)
         if message is not None:
             runtime["note"] = agent_text.error_message(message)
         saved = await self._change(
@@ -924,11 +965,16 @@ class FactoryExecution:
             or previous is None
             or (previous.record.address, previous.record.generation_id)
             != (binding.address, binding.generation_id)
-            or inspected.record.start_sequence <= previous.record.start_sequence
+            or (
+                context.run_id != runtime["current_run"]
+                and inspected.record.start_sequence <= previous.record.start_sequence
+            )
             or (inspected.record.owner, inspected.record.address, inspected.record.generation_id)
             != (owner, binding.address, binding.generation_id)
         ):
             return
+        card = await self._acknowledge_pending(card) or card
+        runtime = self._runtime(card)
         runtime.update(current_run=context.run_id, note=agent_text.error_message("run_failed"))
         runtime.setdefault("runs", {})[participant] = context.run_id
         saved = await self._change(
@@ -952,9 +998,15 @@ class FactoryExecution:
                     return
                 raise
             runtime = card["runtime"]
-            if context.run_id != runtime.get(
-                "current_run"
-            ) or context.execution_owner.epoch != runtime.get("epoch"):
+            if (
+                context.run_id != runtime.get("current_run")
+                or context.execution_owner.epoch != runtime.get("epoch")
+                or (
+                    outcome != "success"
+                    and runtime.get("current_participant") == "worker"
+                    and runtime.get("pending")
+                )
+            ):
                 await self._pause_failed_handoff(card, context, outcome)
                 return
             card = await self._acknowledge_pending(card) or card
