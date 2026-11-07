@@ -142,6 +142,7 @@ async def test_submission_starts_the_run_for_the_addressed_agent(
             "session_id": "s1",
             "reply_surface": ReplySurface.tui() if surface == "tui" else WEBUI,
             "project_id": project_id,
+            "file_reads": [],
         }
     ]
     result = response["result"]
@@ -208,6 +209,7 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
             "input_origin": "speech_transcription",
             "reply_surface": WEBUI,
             "project_id": None,
+            "file_reads": [],
         }
     ]
 
@@ -217,6 +219,7 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
     ("method", "params", "named_field"),
     [
         ("chat.send", {"session_id": "s1", "dry_run": True}, "dry_run"),
+        ("chat.send", {"session_id": "s1", "file_reads": []}, "file_reads"),
         ("chat.stream", {"session_id": "s1", "reply_surface": "channel"}, "reply_surface"),
         ("chat.stream", {"session_id": "s1", "reply_surface": None}, "reply_surface"),
         ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
@@ -296,7 +299,7 @@ async def test_send_snapshots_mentioned_files_into_the_content(
 ) -> None:
     # An @-mentioned file is snapshotted before the loop sees the content: the
     # string message becomes blocks (original text first, then the snapshot),
-    # and the file is stamped as read for the Session.
+    # and its captured stamp is passed to canonical input admission.
     workspace = tmp_path / "ws"
     workspace.mkdir()
     (workspace / "notes.md").write_text("snapshot body", encoding="utf-8")
@@ -326,7 +329,10 @@ async def test_send_snapshots_mentioned_files_into_the_content(
     assert isinstance(content[1], FileMentionBlock)
     assert content[1].status == "inlined"
     assert content[1].text == "snapshot body"
-    assert file_state.check_stale("s1", (workspace / "notes.md").resolve()) is None
+    target = (workspace / "notes.md").resolve()
+    assert loop.start_calls[0]["file_reads"] == [(target, file_state.stamp(target))]
+    # A public address alone never acquires read authority before admission.
+    assert file_state.check_stale("s1", target) is not None
 
 
 @pytest.mark.asyncio
@@ -395,6 +401,7 @@ async def test_busy_session_queues_the_message_and_signals_the_queue(
         {
             "agent_id": "builder",
             "content": "Queued",
+            "file_reads": [],
             "session_id": "s1",
             **expected_origin,
             "reply_surface": ReplySurface.tui() if surface == "tui" else WEBUI,

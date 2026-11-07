@@ -16,7 +16,8 @@ from typing import Any
 import pytest
 
 from core.permissions import PermissionDenied
-from core.sessions import SessionAddress
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.tools import ToolContext
 from core.tools import _file_changes as file_changes_module
 from core.tools import file_state as file_state_module
 from core.tools._patch_report import edit_outcome
@@ -145,6 +146,64 @@ async def test_full_replacement_needs_a_current_read_by_this_session(
     replaced = await call(tmp_path, arguments, tools=tools)
     assert text(replaced) == "Replaced the content of file.txt (1 line)."
     assert path.read_bytes() == b"new" + ending
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_format_data_directory")
+async def test_full_replacement_read_authority_follows_the_canonical_session_generation(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        owner = sessions.create("alice", session_id="main")
+        other_agent = sessions.create("bob", session_id="main")
+        other_project = sessions.create("alice", session_id="main", project_id="project")
+        path = tmp_path / "shared.txt"
+        tools = registry(read=True)
+
+        def caller(session: ChatSession, tool: str) -> ToolContext:
+            return replace(
+                context(tmp_path),
+                agent_id=session.address.agent_id,
+                session_id=session.id,
+                project_id=session.address.project_id,
+                session_generation_id=session.generation_id,
+                tool_name=tool,
+            )
+
+        path.write_text("original", encoding="utf-8")
+        assert (await tools.dispatch(caller(owner, "read"), {"path": "shared.txt"}))["ok"]
+        for foreign in (other_agent, other_project):
+            denied = await tools.dispatch(
+                caller(foreign, "write"), {"path": "shared.txt", "content": "changed"}
+            )
+            assert denied["error"]["code"] == "file_not_read"
+            assert path.read_text() == "original"
+        missing_generation = replace(caller(owner, "write"), session_generation_id=None)
+        assert (
+            await tools.dispatch(missing_generation, {"path": "shared.txt", "content": "changed"})
+        )["error"]["code"] == "file_not_read"
+        # The guard's returned excerpt must not mint authority without a generation.
+        assert (
+            await tools.dispatch(missing_generation, {"path": "shared.txt", "content": "changed"})
+        )["error"]["code"] == "file_not_read"
+        moved = await sessions.move(owner.address, SessionAddress(None, "alice", "moved"))
+        moved = sessions.get(moved.address)
+        assert moved.generation_id == owner.generation_id
+        assert (
+            await tools.dispatch(caller(moved, "write"), {"path": "shared.txt", "content": "moved"})
+        )["ok"]
+        sessions.delete(moved.address)
+        recreated = sessions.create("alice", session_id="moved")
+        assert recreated.generation_id != moved.generation_id
+        assert (
+            await tools.dispatch(
+                caller(recreated, "write"), {"path": "shared.txt", "content": "replacement"}
+            )
+        )["error"]["code"] == "file_not_read"
+        assert path.read_text() == "moved"
+    finally:
+        sessions.close()
 
 
 @pytest.mark.parametrize("payload", [b"line\n" * 401, b"\xff\x00\x01 binary"])

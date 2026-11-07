@@ -386,4 +386,10 @@ async def test_tool_batch_in_a_subfolder_shows_its_folder_instructions_once(
     stored = runtime.chat_sessions.get(session_address("coder", "s1")).load()
     assert sum(message.role == "note" for message in stored) == 2
     # A shown file counts as read for the read-before-write guard.
-    assert runtime.file_read_state.check_stale("s1", (repo / "app" / "AGENTS.md").resolve()) is None
+    assert (
+        runtime.file_read_state.check_stale(
+            runtime.chat_sessions.get(session_address("coder", "s1")).generation_id,
+            (repo / "app" / "AGENTS.md").resolve(),
+        )
+        is None
+    )

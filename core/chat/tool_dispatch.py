@@ -152,6 +152,7 @@ class ToolRound:
         config = ToolExecutionConfig(
             agent_id=run.agent_id,
             session_id=run.session_id,
+            session_generation_id=session.generation_id,
             run_id=run.id,
             workspace=workspace,
             vbot_root=context.vbot_root,

@@ -79,6 +79,7 @@ def make_context(
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
+        session_generation_id="session-1",
         run_id="run-1",
         tool_call_id="call-1",
         tool_name=tool_name,

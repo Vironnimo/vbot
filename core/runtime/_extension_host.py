@@ -785,6 +785,7 @@ class ExtensionHostFactory:
         context = ToolContext(
             agent_id=record["agent_id"],
             session_id=record["session_id"],
+            session_generation_id=record["generation_id"],
             project_id=record["project_id"],
             run_id=record["run_id"],
             tool_call_id=record["tool_call_id"],

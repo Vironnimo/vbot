@@ -31,6 +31,7 @@ def context(
     return ToolContext(
         agent_id="agent-test",
         session_id="session-test",
+        session_generation_id="session-test",
         run_id="run-test",
         tool_call_id="call-test",
         tool_name="apply_patch",
@@ -84,6 +85,7 @@ async def call(
         ToolExecutionConfig(
             agent_id="agent-test",
             session_id="session-test",
+            session_generation_id="session-test",
             run_id="run-test",
             workspace=root,
             data_root=root / "data",

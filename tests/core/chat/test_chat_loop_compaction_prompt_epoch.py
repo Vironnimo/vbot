@@ -672,5 +672,5 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         assert "NEW_RULES_SENTINEL" in project_pin["text"]
         assert project_pin["working_project_id"] == project_id
         assert "NEW_RULES_SENTINEL" in rebuilt.messages[0]["content"]
-        assert runtime.file_read_state.check_stale(session.id, rules.resolve()) is None
+        assert runtime.file_read_state.check_stale(session.generation_id, rules.resolve()) is None
         assert context.working_project_context == project_pin["text"]

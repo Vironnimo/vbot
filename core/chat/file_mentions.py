@@ -34,11 +34,11 @@ from core.utils.search_binary import require_binary
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from core.runtime.interfaces import RuntimeServices
     from core.sessions import WorkingProjectChoice
-    from core.tools.file_state import FileReadState
+    from core.tools.file_state import FileRead, FileReadState
     from core.utils.directory_listing import DirectoryListing
 
 _LOGGER = get_logger("chat.file_mentions")
@@ -232,8 +232,9 @@ def expand_file_mentions(
     mentions: Sequence[str],
     *,
     root: Path,
-    session_id: str,
+    generation_id: str | None,
     file_state: FileReadState,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> str | list[ContentBlock]:
     """Append one send-time snapshot block per mentioned file.
 
@@ -252,7 +253,13 @@ def expand_file_mentions(
     )
     for mention in unique_mentions:
         blocks.append(
-            _snapshot_mention(mention, root=root, session_id=session_id, file_state=file_state)
+            _snapshot_mention(
+                mention,
+                root=root,
+                generation_id=generation_id,
+                file_state=file_state,
+                on_read=on_read,
+            )
         )
     return blocks
 
@@ -286,7 +293,12 @@ def file_mention_request_text(block: Mapping[str, Any]) -> str:
 
 
 def _snapshot_mention(
-    mention: str, *, root: Path, session_id: str, file_state: FileReadState
+    mention: str,
+    *,
+    root: Path,
+    generation_id: str | None,
+    file_state: FileReadState,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> FileMentionBlock:
     resolved = _resolve_mention_path(root, mention)
     try:
@@ -305,7 +317,9 @@ def _snapshot_mention(
         return _degraded(mention, "not_text", len(raw))
 
     if stamp is not None:
-        file_state.record_stamp(session_id, resolved, stamp)
+        file_state.record_stamp(generation_id, resolved, stamp)
+        if on_read is not None:
+            on_read((resolved, stamp))
     return FileMentionBlock(
         type="file_mention",
         path=mention,

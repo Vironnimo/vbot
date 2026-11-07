@@ -251,7 +251,7 @@ def make_read_handler(
         if isinstance(result, _PreparedAudio):
             return replace(result, stamp=stamp)
         if result.get("ok") is True and stamp is not None:
-            file_state.record_stamp(context.session_id, resolved, stamp)
+            file_state.record_stamp(context.session_generation_id, resolved, stamp)
         return result
 
     def read_resolved(
@@ -400,7 +400,9 @@ def make_read_handler(
                 prepared.media_type,
             )
             if result.get("ok") is True and prepared.stamp is not None:
-                file_state.record_stamp(context.session_id, prepared.resolved, prepared.stamp)
+                file_state.record_stamp(
+                    context.session_generation_id, prepared.resolved, prepared.stamp
+                )
             return result
         return prepared
 

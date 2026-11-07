@@ -235,7 +235,7 @@ class RequestBuilder:
         await _CHAT_TRANSFORM_WORKERS.run(
             stamp_prompt_files_read,
             self._dependencies.file_read_state,
-            context.session.id,
+            context.session.generation_id,
             read_paths,
         )
         return note
@@ -603,7 +603,7 @@ class RequestBuilder:
         await _CHAT_TRANSFORM_WORKERS.run(
             stamp_prompt_files_read,
             self._dependencies.file_read_state,
-            session.id,
+            session.generation_id,
             prompt_read_paths,
         )
         prepared_messages = await _CHAT_TRANSFORM_WORKERS.run(

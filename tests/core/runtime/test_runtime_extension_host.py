@@ -970,6 +970,7 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     moved = await runtime.chat_sessions.get_async(moved.address)
     restored = await host.restore_tool_call(receipt)
     assert restored is not None and restored.session_id == moved.id
+    assert restored.session_generation_id == session.generation_id == moved.generation_id
     assert restored.permissions.check_path(private / "notes.txt", "read") is not None
     if deferred:
         prepare = runtime.chat_sessions.prepare_tool_outcome_async
