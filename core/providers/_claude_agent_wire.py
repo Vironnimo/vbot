@@ -10,6 +10,7 @@ from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from core.providers._messages_stream import messages_terminal_outcome
 from core.providers.adapter import (
     canonical_tool_result_is_error,
     tool_result_content_blocks,
@@ -200,6 +201,8 @@ class StreamState:
         self.calls: list[JsonObject] = []
         self.streamed: set[str] = set()
         self.message_id = ""
+        self.message_stopped = False
+        self.stop_reason: str | None = None
         self.usage: JsonObject = {}
         self._usage_by_message: dict[str, JsonObject] = {}
         self.error_code: str | None = None
@@ -243,6 +246,8 @@ class StreamState:
             event = message.get("event", {})
             event_type = event.get("type")
             if event_type == "message_start":
+                self.message_stopped = False
+                self.stop_reason = None
                 self.message_id = event.get("message", {}).get("id", "")
                 self.streamed.add(self.message_id)
                 usage = self.update_usage(event.get("message", {}).get("usage"))
@@ -259,9 +264,21 @@ class StreamState:
                     self.reasoning += text
                     parts.append({"type": "reasoning_delta", "text": text})
             if event_type == "message_delta":
+                self.stop_reason = event.get("delta", {}).get("stop_reason")
                 usage = self.update_usage(event.get("usage"))
                 if usage:
                     parts.append(usage)
+            if event_type == "message_stop":
+                self.message_stopped = True
+                if self.calls:
+                    parts.append(
+                        {
+                            "type": "finish",
+                            "reason": messages_terminal_outcome(
+                                self.stop_reason, has_tool_calls=True
+                            ),
+                        }
+                    )
             if event_type == "content_block_start":
                 block = event.get("content_block", {})
                 if block.get("type") == "text" and block.get("text"):
@@ -277,6 +294,8 @@ class StreamState:
                 self.error_code = message["error"]
                 return parts
             raw = message.get("message", message)
+            if raw.get("stop_reason") is not None:
+                self.stop_reason = raw["stop_reason"]
             message_id = raw.get("id") or raw.get("message_id") or ""
             if message_id:
                 self.message_id = message_id
@@ -331,9 +350,15 @@ class StreamState:
                 usage = self.update_usage(message.get("usage"))
                 if usage:
                     parts.append(usage)
+            if self.calls:
+                # Older native versions can omit message_stop on a cut stream.
+                raise ProviderError(
+                    "Claude Code ended before completing its Tool-call message.", retryable=False
+                )
+            stop_reason = message.get("stop_reason") or self.stop_reason
             reason = (
-                "output_truncated"
-                if message.get("stop_reason") in {"max_tokens", "model_context_window_exceeded"}
+                messages_terminal_outcome(stop_reason, has_tool_calls=False)
+                if stop_reason is not None
                 else "stop"
             )
             parts.append({"type": "finish", "reason": reason})
