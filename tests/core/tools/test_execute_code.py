@@ -53,9 +53,10 @@ def completed(output: str = "selected\n") -> CodeExecutionResult:
         'print("Grüße")\n',
     ],
 )
+@pytest.mark.parametrize("delete_fails", [False, True])
 @pytest.mark.asyncio
 async def test_python_source_reaches_worker_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: Any
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: Any, delete_fails: bool
 ) -> None:
     calls: list[str] = []
 
@@ -68,6 +69,15 @@ async def test_python_source_reaches_worker_unchanged(
 
     log = tmp_path / "code.log"
     log.touch()
+    if delete_fails:
+        original_worker = execute_code.run_tool_worker
+
+        async def fail_delete(function: Any, *args: Any, **kwargs: Any) -> Any:
+            if getattr(function, "__name__", "") == "unlink":
+                raise OSError("Test-owned deletion failure")
+            return await original_worker(function, *args, **kwargs)
+
+        monkeypatch.setattr(execute_code, "run_tool_worker", fail_delete)
     monkeypatch.setattr(execute_code, "run_python", worker)
     monkeypatch.setattr(execute_code, "_output_path", lambda _scratch: log)
     result = await dispatch_as_executor(
@@ -78,7 +88,7 @@ async def test_python_source_reaches_worker_unchanged(
     )
     assert result == tool_success({"status": "completed", "output": "selected\n"})
     assert calls == ['print("Grüße")\n']
-    assert not log.exists()  # Only shortened output names (and keeps) its capture file.
+    assert log.exists() is delete_fails
 
 
 @pytest.mark.parametrize(
@@ -170,23 +180,36 @@ async def test_python_launch_uses_existing_command_rules_and_confined_environmen
 
 
 @pytest.mark.parametrize(
-    ("ran", "note_parts"),
+    ("outcome", "note_parts"),
     [
-        (True, ["300-second", "remain applied", "incomplete"]),
-        (False, ["Nothing was run", "compile"]),
+        ("timed_out", ["300-second", "remain applied", "incomplete"]),
+        ("compile", ["Nothing was run", "compile"]),
+        ("cleanup", []),
     ],
 )
 @pytest.mark.asyncio
 async def test_partial_execution_and_shortened_output_are_actionable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ran: bool, note_parts: list[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, note_parts: list[str]
 ) -> None:
     log = tmp_path / "output.log"
     log.touch()
 
     async def worker(*args: Any, **kwargs: Any) -> CodeExecutionResult:
-        if not ran:
+        if outcome == "compile":
             return CodeExecutionResult(
                 "failed", 1, "", "SyntaxError: '(' was never closed", 0, 0, [], ran=False
+            )
+        if outcome == "cleanup":
+            return CodeExecutionResult(
+                "failed",
+                0,
+                "selected",
+                "retained stderr",
+                4,
+                0,
+                [],
+                output_path=log,
+                failure="Test-owned cleanup failure",
             )
         return CodeExecutionResult(
             "timed_out",
@@ -214,12 +237,21 @@ async def test_partial_execution_and_shortened_output_are_actionable(
     data = result["data"]
     for part in note_parts:
         assert part in data["note"]
-    if ran:
+    if outcome == "timed_out":
         assert data["status"] == "timed_out"
         assert data["tool_calls"] == 4
         assert data["tool_failure_count"] == 2
         assert data["output_truncated"] is True
         assert data["log_truncated"] is True
+        assert data["output_file"] == log.as_posix()
+        assert log.exists()
+    elif outcome == "cleanup":
+        assert data["status"] == "failed"
+        assert data["exit_code"] == 0
+        assert data["output"] == "selected"
+        assert data["stderr"] == "retained stderr"
+        assert data["tool_calls"] == 4
+        assert data["execution_error"] == "Test-owned cleanup failure"
         assert data["output_file"] == log.as_posix()
         assert log.exists()
     else:
