@@ -397,6 +397,73 @@ describe('SettingsProvidersPanel', () => {
     expect(onRefreshProviderSettingsMock).toHaveBeenCalled();
   });
 
+  it('connects an external program login without exposing API key or OAuth controls', async () => {
+    const connection = {
+      id: 'claude-agent:subscription',
+      type: 'external',
+      label: 'Claude Code login',
+      added: false,
+      configured: false,
+      enabled: false,
+      usable: false,
+      accounts: [],
+      setup_command: 'claude auth login',
+      setup_url: 'https://example.test/setup',
+      external_auth: { connected: false, status: 'missing' },
+    };
+    rpcMock.mockImplementation((method) =>
+      Promise.resolve(
+        method === 'provider.connect'
+          ? { connected: true, status: 'connected' }
+          : {},
+      ),
+    );
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          providers: {
+            items: [
+              {
+                id: 'claude-agent',
+                name: 'Claude Agent',
+                connections: [connection],
+              },
+            ],
+          },
+        },
+        visible: true,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
+      },
+    });
+    flushSync();
+    [...document.querySelectorAll('button')]
+      .filter((button) => button.textContent.trim() === 'Add provider')
+      .at(-1)
+      .click();
+    flushSync();
+    [...document.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('Claude Agent'))
+      .click();
+    flushSync();
+    expect(document.body.textContent).toContain('claude auth login');
+    expect(
+      document.querySelector('a[href="https://example.test/setup"]'),
+    ).toBeTruthy();
+    expect(document.querySelector('#provider-api-key')).toBeNull();
+    expect(document.querySelector('#provider-account-name')).toBeNull();
+    findButton('Check login and connect').click();
+    await waitForCondition(
+      () => onRefreshProviderSettingsMock.mock.calls.length > 0,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
+      provider_id: 'claude-agent',
+      connection_id: 'claude-agent:subscription',
+      account: 'default',
+    });
+    expect(document.querySelector('.provider-connect-modal')).toBeNull();
+  });
+
   it('adds a fresh keyless local provider through Add provider', async () => {
     const onToast = vi.fn();
     rpcMock.mockImplementation((method) => {

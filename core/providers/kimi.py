@@ -8,7 +8,7 @@ normalization of the listing flags and video parts."""
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, override
+from typing import Any, Literal, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -27,10 +27,12 @@ class KimiAdapter(OpenAICompatibleAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         """Give Coding Plan requests the stable cache key required for good quota use."""
 
-        del project_id
+        del project_id, session_generation_id, request_kind
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
 

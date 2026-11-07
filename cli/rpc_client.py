@@ -30,6 +30,10 @@ ATTACHMENT_UPLOAD_PATH = "/api/upload"
 _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     {
         "model.refresh_db",
+        "provider.connect",
+        "provider.disconnect",
+        "provider.connection_status",
+        "connection.set_enabled",
         "performance.recording_stop",
         "performance.heap",
         "data_store.snapshot_create",

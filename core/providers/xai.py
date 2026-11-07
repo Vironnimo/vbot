@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import aclosing
-from typing import Any, ClassVar, override
+from typing import Any, ClassVar, Literal, override
 
 import httpx
 
@@ -63,10 +63,12 @@ class XAIAdapter(OpenAIAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         """Route cache-compatible Session prefixes to the same xAI cache shard."""
 
-        del project_id
+        del project_id, session_generation_id, request_kind
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
 

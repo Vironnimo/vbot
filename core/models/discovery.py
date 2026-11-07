@@ -8,7 +8,7 @@ provider model file.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,6 +49,7 @@ from core.models.models_dev import (
 )
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.adapter import ProviderAdapter
+from core.providers.adapter_types import discovery_adapter_type
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
@@ -103,6 +104,7 @@ async def refresh_models(
     credential_connection: ConnectionConfig | None = None,
     models_dev_catalog: ModelsDevCatalog | None = None,
     wire_files: Mapping[str, WireProfileFile] | None = None,
+    raw_models: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Fetch, normalize, project, write, and invalidate one provider catalog.
 
@@ -125,22 +127,34 @@ async def refresh_models(
             written (the join is enrichment, not a dependency). Fetching the
             catalog ONCE per refresh is the caller's job (the RPC refresh path
             and the regen script) so it is not re-fetched per provider.
+        raw_models: Optional primary catalog already fetched by a native Provider.
+            It replaces the primary HTTP request while preserving normalization,
+            admission, Connection merging, and projection persistence.
         wire_files: The wire profile data whose admission decides which Models
             are written; the bundled files when ``None``. A Runtime passes its
             own, so a Custom Provider's Settings ``wire`` block applies.
     """
 
-    _require_discovery_target(provider_config, credential_connection)
+    if raw_models is None:
+        _require_discovery_target(provider_config, credential_connection)
 
     raw_filter = raw_filter or PassthroughRawFilter()
     model_filter = model_filter or PassthroughModelFilter()
 
     fetched_at = datetime.now(UTC).isoformat()
     try:
-        request = await build_discovery_request(provider_config, credential_connection)
-        adapter_class = request.adapter_class
-        base_url = request.base_url
-        url = request.url
+        request = (
+            await build_discovery_request(provider_config, credential_connection)
+            if raw_models is None
+            else None
+        )
+        adapter_class: Any = (
+            request.adapter_class if request else discovery_adapter_type(provider_config.adapter)
+        )
+        if adapter_class is None:
+            raise ValueError("Provider has no catalog normalizer")
+        base_url = request.base_url if request else provider_config.base_url
+        url = request.url if request else ""
         token_getter = (
             StaticTokenGetter(credential_value)
             if isinstance(credential_value, str)
@@ -148,7 +162,7 @@ async def refresh_models(
         )
 
         async def build_headers() -> dict[str, str]:
-            return request.headers(await token_getter())
+            return request.headers(await token_getter()) if request else {}
 
         connection = credential_connection or next(iter(provider_config.connections), None)
 
@@ -159,15 +173,19 @@ async def refresh_models(
                 else None
             )
 
-        raw_models = await _fetch_raw_models(
-            url, build_headers, auth_recovery=request_auth_recovery()
+        raw_models = (
+            await _fetch_raw_models(
+                request.url, build_headers, auth_recovery=request_auth_recovery()
+            )
+            if request
+            else list(raw_models or [])
         )
 
         # Some providers (e.g. OpenRouter) require supplementary API calls
         # with different query parameters to discover dedicated task models
         # (STT, TTS, image/audio/video generation) excluded from the default
         # model listing.
-        supplementary_params = _get_supplementary_params(adapter_class)
+        supplementary_params = _get_supplementary_params(adapter_class) if request else []
         if supplementary_params:
             seen_ids = {m.get("id") for m in raw_models if isinstance(m.get("id"), str)}
             for params in supplementary_params:

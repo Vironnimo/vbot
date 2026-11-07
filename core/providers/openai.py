@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, override
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -334,6 +334,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         """Separate Codex transport continuation from prompt-cache routing.
 
@@ -345,7 +347,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``previous_response_id`` continuation on both Connections; the Platform
         ignores the affinity id.
         """
-        del project_id
+        del project_id, session_generation_id, request_kind
         conversation_id = responses_conversation_id(agent_id, session_id)
         return {
             CONVERSATION_ID_KWARG: conversation_id,

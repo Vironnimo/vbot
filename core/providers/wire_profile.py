@@ -73,7 +73,9 @@ from core.providers.reasoning import (
 )
 from core.utils.errors import ProviderError
 
-Protocol = Literal["chat_completions", "messages", "responses", "gemini", "ollama_chat"]
+Protocol = Literal[
+    "chat_completions", "messages", "responses", "gemini", "ollama_chat", "claude_agent"
+]
 """Wire protocol families vBot implements.
 
 - ``chat_completions``: OpenAI-compatible ``/chat/completions``.
@@ -81,6 +83,7 @@ Protocol = Literal["chat_completions", "messages", "responses", "gemini", "ollam
 - ``responses``: OpenAI-compatible ``/responses`` (stateless item replay).
 - ``gemini``: Google ``generateContent`` / ``streamGenerateContent``.
 - ``ollama_chat``: Ollama native ``/api/chat``.
+- ``claude_agent``: the local Claude Code binary through the Claude Agent SDK.
 """
 
 PROTOCOLS: tuple[Protocol, ...] = (
@@ -89,6 +92,7 @@ PROTOCOLS: tuple[Protocol, ...] = (
     "responses",
     "gemini",
     "ollama_chat",
+    "claude_agent",
 )
 
 type DecisionProtocol = Literal["none", "system_one", "openai_decisions"]
@@ -99,6 +103,7 @@ DECISION_OPTION_NAMES: tuple[str, ...] = ("provider_options", "keep_alive", "pro
 
 ReasoningDialect = Literal[
     "none",
+    "claude_agent",
     "reasoning_effort",
     "openrouter_reasoning",
     "nous_reasoning",
@@ -114,6 +119,7 @@ ReasoningDialect = Literal[
 """How a reasoning decision is spelled on the wire (rendered by the protocol codec).
 
 - ``none``: the wire takes no reasoning control; nothing is sent.
+- ``claude_agent``: SDK `effort` and `thinking` options for native Claude Code.
 - ``reasoning_effort``: top-level ``reasoning_effort: <level>``; off is the
   ``none`` level.
 - ``openrouter_reasoning``: ``reasoning: {effort}`` (``{enabled: true}`` for a
@@ -142,6 +148,7 @@ ReasoningDialect = Literal[
 
 REASONING_DIALECTS: tuple[ReasoningDialect, ...] = (
     "none",
+    "claude_agent",
     "reasoning_effort",
     "openrouter_reasoning",
     "nous_reasoning",

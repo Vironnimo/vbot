@@ -110,7 +110,10 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("adapter_kind", [*ADAPTER_TYPES, "anthropic_compatible"])
+@pytest.mark.parametrize(
+    "adapter_kind",
+    [*[name for name in ADAPTER_TYPES if name != "claude_agent"], "anthropic_compatible"],
+)
 @pytest.mark.asyncio
 async def test_adapters_borrow_runtime_http_and_keep_client_state_per_adapter(
     adapter_kind: str,

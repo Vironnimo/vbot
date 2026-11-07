@@ -493,6 +493,31 @@ def _describe_anthropic_thinking(wire: ReasoningWire, intent: ReasoningIntent) -
     return intent
 
 
+# -- claude_agent -------------------------------------------------------------
+
+
+def _render_claude_agent(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del wire, output_allowance
+    if intent.kind == REASONING_INTENT_OFF:
+        payload["thinking"] = {"type": "disabled"}
+    elif intent.kind in _ACTIVE_KINDS:
+        payload["thinking"] = {"type": "adaptive", "display": "summarized"}
+        if intent.kind == REASONING_INTENT_EFFORT:
+            payload["effort"] = intent.effort_level
+
+
+def _describe_claude_agent(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire
+    if intent.kind == REASONING_INTENT_BUDGET:
+        return ReasoningIntent(REASONING_INTENT_ON)
+    return intent
+
+
 # -- ollama_think -----------------------------------------------------------------
 # Ollama's native ``think``: a level string for Models with a level ladder,
 # otherwise a Boolean. Off is ``false``; an active decision without a level
@@ -538,6 +563,12 @@ def _describe_ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> Reas
 
 _DIALECTS: dict[str, _Dialect] = {
     "none": _Dialect(_render_nothing, _describe_nothing),
+    "claude_agent": _Dialect(
+        _render_claude_agent,
+        _describe_claude_agent,
+        ("thinking", "effort"),
+        ReasoningCarriers(effort=("effort",), off_switch=_THINKING_SWITCH, off_value="disabled"),
+    ),
     "reasoning_effort": _Dialect(
         _render_reasoning_effort,
         _describe_reasoning_effort,

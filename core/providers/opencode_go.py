@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
 import httpx
 
@@ -300,9 +300,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         """Pin every wire request to one opaque prompt-cache lineage."""
 
+        del session_generation_id, request_kind
         if prompt_cache_affinity_id is not None:
             routing_id = prompt_cache_affinity_id
         else:

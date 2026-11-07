@@ -227,3 +227,35 @@ The bundled `vbot-docs/references/projects-sessions.md` teaches minimal Project 
 | `skill delete` and `memory remove` take no `--yes`; the result ends with `Undo: vbot skill restore <archive-id> --scope <scope>` / `Undo: find the revision with vbot memory history <agent>, then vbot memory revert <agent> <revision>` | Both are reversible (Skill archive, Memory history), so a confirmation call only costs a round trip; the Undo line gives the way back instead. `--yes` stays on the irreversible commands (`skill purge`, `skill file remove`, archive purge, snapshot restore). |
 | Example Skill name `web-research` in `skill` help examples | `librarian` is the built-in Librarian Agent; using it as a Skill name in every example suggested a name collision and invited copying it. |
 | Exit code 2 for every refusal the CLI reaches before it sends or saves anything (missing `--yes`, conflicting or missing flags, unreadable stdin or content files, local-only and Run-only commands, an unknown provider or extension operation) | A refusal that exited 1 read as a failed operation, so the recovery hint told the Agent to inspect state that was never touched, and the Agent could not tell "fix the call and retry" from "check what happened". Exit 2 plus no recovery hint is the signal that nothing changed. A failure after a request left (server errors, lookups that miss on an existing target, partial results) keeps exit 1. |
+
+
+## External Provider login
+
+| Text | Reason |
+|---|---|
+| CLI help: `Connect a provider through OAuth or its program's own login` | The existing connect command now reaches the external Claude login check; describing every login as a device flow makes Agents wait for a code that does not exist. |
+| CLI help: `Disconnect a provider in vBot; external program logins are unchanged` | Disabling vBot does not authorize or perform global Claude logout, and makes no claim that the program was already signed in. |
+| CLI help: `Check provider login and device-flow state` and `Check the login and device-flow state of a Provider` | Names both external status checks and OAuth flow state at their existing help entry points. |
+| CLI argument help: `Provider id of the login connection, or that Connection's id` | Includes externally managed login targets without suggesting that API-key Connections support connect. |
+| `Provider '<id>' has no login Connection.` | Names the refused capability instead of falsely saying external logins are OAuth. |
+| `enabled <connection>` followed by `external login: <status>` | A failed external check still enrolls the Connection; the command must report that saved effect separately from login readiness. |
+| `Server setup (same operating-system account as vBot): <command>` | On a remote accessor, authenticating its own computer or a different OS account cannot authenticate the server's Claude process. |
+| `Installation guide: <url>` | Gives the supported installation instructions when the external program is missing. |
+| `Complete Claude Code login on the server computer` | A missing external login needs the user's Claude authentication rather than OAuth polling or an API-key write. |
+| Provider detail statuses `External login connected` and `External login not ready` | Enrollment alone does not establish that the external program can authenticate. |
+| `references/providers.md`: omitted connection selects `the Provider's only login Connection (OAuth or externally managed)`; `API-key Connections are excluded.` | Keeps default target selection aligned with the CLI filter after adding external authentication. |
+| `The claude-agent Provider uses the user's installed Claude Code program and its own login.` | Directs subscription requests to the external Provider instead of the API-key Anthropic route. |
+| `The user installs Claude Code and runs claude auth login on the computer running the vBot server, under the server process's operating-system account.` | Authentication happens in Anthropic's program under the account that runs inference; vBot never collects the credentials. |
+| `connect enables the Connection and checks the program's login; its output gives server setup instructions when the program or login is missing.` | Makes the action and recovery result clear without adding a separate preflight call. |
+| `The enabled Connection stays enrolled after a failed check.` | Prevents an Agent from treating a failed native check as a rolled-back enrollment. |
+| `After the user completes setup, repeat connect to check again and discover Models.` | Gives the retry action after native authentication without indefinite status polling. |
+| `Copy the selected Model id from model list into the Agent's Model setting.` | Preserves exact SDK-discovered model ids and routes the Agent through the intended Provider. |
+| `This Connection has one default Account; named Accounts and API-key mutation are unavailable.` | Credentials remain external; a new vBot Account or key cannot change Claude's login. |
+| `vbot provider disconnect claude-agent disables this Connection in vBot and leaves Claude Code's login unchanged.` | Distinguishes vBot enrollment from the user's global Claude credentials, including when Claude was never signed in. |
+| CLI connection help: `Choose a login Connection when more than one exists.` and `Omit to select the Provider's only login Connection.` | OAuth and external logins share exact target selection; neither an API key nor an arbitrary first Connection is selected. |
+| CLI account help: `Named credential slot.` and `Omit for default; external program logins use default only.` | Prevents a named vBot Account from being mistaken for selection of another Claude login. |
+| Skill routing row: `Provider keys, logins and limits` | Includes Claude subscription setup through an installed program, which is not vBot-managed OAuth. |
+| `disabled <connection> in vBot; the external login is unchanged` | Reports the actual local disable effect without implying a global Claude logout or claiming that a login already exists. |
+| `This Connection accepts Claude subscription billing; a detected API-key or cloud-billed login is refused before inference.` | A successful Claude Code authentication can select separately paid API or cloud billing; this Connection refuses it instead of silently charging a different route. |
+| `If status reports api_billing, the user signs in with a Claude subscription and removes conflicting API or cloud credentials from the vBot server environment, then repeats connect.` | Gives the recovery for the detected billing mode without collecting credentials or changing the user's environment automatically. |
+| `For intentional direct API use, select the existing anthropic Provider and configure its API-key Connection.` | Keeps intentional paid API use available through its explicit Provider instead of bypassing the subscription-only Connection's billing check. |

@@ -121,6 +121,7 @@ def _resolve_request_context_kwargs(
     adapter: Any,
     run: Run,
     prompt_cache_affinity_id: str,
+    session_generation_id: str | None,
 ) -> dict[str, Any]:
     """Resolve per-request conversation-context kwargs for one request build."""
     return dict(
@@ -129,6 +130,8 @@ def _resolve_request_context_kwargs(
             session_id=run.session_id,
             project_id=run.project_id,
             prompt_cache_affinity_id=prompt_cache_affinity_id,
+            session_generation_id=session_generation_id,
+            request_kind="chat",
         )
     )
 
@@ -201,7 +204,9 @@ class WireRequestRunner:
             SessionAddress(run.project_id, run.agent_id, run.session_id), "fast_mode"
         )
         request_context = {
-            **_resolve_request_context_kwargs(adapter, run, prompt_cache_affinity_id),
+            **_resolve_request_context_kwargs(
+                adapter, run, prompt_cache_affinity_id, session_generation_id
+            ),
             **effort_kwargs,
             **adapter.fast_mode_kwargs(model_id, enabled=fast_mode is True),
         }

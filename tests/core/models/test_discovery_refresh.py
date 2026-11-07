@@ -64,7 +64,8 @@ class _RejectIds:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_refresh_writes_only_a_pure_projection(tmp_path: Path) -> None:
+@pytest.mark.parametrize("catalog_source", ["http", "native"])
+async def test_refresh_writes_only_a_pure_projection(tmp_path: Path, catalog_source: str) -> None:
     """The projection keeps only accepted Models and no override; no raw
     response dump is written. Overrides apply when the registry loads."""
 
@@ -83,23 +84,32 @@ async def test_refresh_writes_only_a_pure_projection(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    raw_models: list[dict[str, Any]] = [
+        {"id": "model-a", "name": "Model A", "future_field": "value"},
+        {"id": "model-b", "name": "Model B"},
+        {"id": "raw-filtered", "name": "Raw Filtered"},
+        {"id": "model-filtered", "name": "Model Filtered"},
+    ]
     payload = {
-        "data": [
-            {"id": "model-a", "name": "Model A", "future_field": "value"},
-            {"id": "model-b", "name": "Model B"},
-            {"id": "raw-filtered", "name": "Raw Filtered"},
-            {"id": "model-filtered", "name": "Model Filtered"},
-        ],
+        "data": raw_models,
         "extra_key": "preserved",
     }
-    route = respx.get(SIMPLE_MODELS_URL).mock(return_value=httpx.Response(200, json=payload))
+    native = catalog_source == "native"
+    route = (
+        respx.get(SIMPLE_MODELS_URL).mock(return_value=httpx.Response(200, json=payload))
+        if not native
+        else None
+    )
 
     result = await refresh_models(
-        simple_compatible_config(extra_headers={"X-Title": "vBot"}),
+        simple_compatible_config(
+            extra_headers={"X-Title": "vBot"}, models_endpoint=None if native else "/models"
+        ),
         API_KEY,
         resources_dir,
         raw_filter=_RejectIds("raw-filtered"),
         model_filter=_RejectIds("model-filtered"),
+        raw_models=raw_models if native else None,
     )
 
     projection = read_models_file(resources_dir, "simple.json")
@@ -120,8 +130,13 @@ async def test_refresh_writes_only_a_pure_projection(tmp_path: Path) -> None:
     registry = ModelRegistry.load(resources_dir)
     assert registry.get("simple", "model-a").name == "Corrected Model A"
     assert registry.get("simple", "override-only").name == "Override Only"
-    headers = route.calls.last.request.headers
-    assert (headers["Authorization"], headers["X-Title"]) == (f"Bearer {API_KEY}", "vBot")
+    if route is not None:
+        headers = route.calls.last.request.headers
+        assert (headers["Authorization"], headers["X-Title"]) == (f"Bearer {API_KEY}", "vBot")
+    else:
+        # A native catalog needs no HTTP endpoint and still uses the complete
+        # filtering, projection, override separation and registry publication.
+        assert respx.calls.call_count == 0
 
 
 _STUB_MODELS = {

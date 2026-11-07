@@ -1105,9 +1105,15 @@ async def test_extension_sampling_records_usage_before_returning(
                 raise ProviderError("stream dropped", retryable=True)
             yield {"type": "finish", "reason": "stop"}
 
+        request_contexts: list[dict[str, Any]] = []
+
+        def request_context_kwargs(**kwargs: Any) -> dict[str, Any]:
+            request_contexts.append(kwargs)
+            return {}
+
         adapter = SimpleNamespace(
             stream=stream,
-            request_context_kwargs=lambda **kwargs: {},
+            request_context_kwargs=request_context_kwargs,
             aclose=AsyncMock(),
         )
         monkeypatch.setattr(runtime, "get_adapter", lambda _: adapter)
@@ -1148,5 +1154,17 @@ async def test_extension_sampling_records_usage_before_returning(
             assert record.owner_name == "fixture"
         assert len(read_ledger(recorder)[1]) == 3
         assert adapter.aclose.await_count == 3
+        assert (
+            request_contexts
+            == [
+                {
+                    "agent_id": "agent",
+                    "session_id": "session",
+                    "project_id": None,
+                    "request_kind": "utility",
+                }
+            ]
+            * 3
+        )
     finally:
         await runtime.aclose()

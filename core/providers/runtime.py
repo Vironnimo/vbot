@@ -14,11 +14,13 @@ from zoneinfo import ZoneInfo
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.models import Model, ModelRegistry
 from core.providers import _catalog_refresh
+from core.providers._claude_agent_sdk import SUBSCRIPTION_REQUIRED_MESSAGE
 from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
 from core.providers.adapter_types import ADAPTER_TYPES
+from core.providers.claude_agent import ClaudeAgentAdapter, ClaudeAgentSessions
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.http import ProviderHTTPTransports, ProviderHTTPTransportScope
@@ -98,6 +100,8 @@ class ProviderRuntime:
         self._loaded_context_windows: dict[str, int] = {}
         self._loaded_context_lock = threading.Lock()
         self._responses_transports = ResponsesTransports()
+        self._claude_sessions = ClaudeAgentSessions()
+        self._external_status: dict[str, dict[str, Any]] = {}
         self._http_transports = ProviderHTTPTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
@@ -124,6 +128,9 @@ class ProviderRuntime:
         self._credentials = credentials
         self._token_store = token_store
         if storage.data_dir != self._storage.data_dir:
+            self._claude_sessions.abort()
+            self._claude_sessions = ClaudeAgentSessions()
+            self._external_status.clear()
             self.retire_http_transports()
             self._wire_observations.close()
             self._wire_observations = self._load_wire_observations(storage)
@@ -197,9 +204,11 @@ class ProviderRuntime:
 
     async def close_session_transports(self, sessions: Iterable[tuple[str, str]]) -> None:
         """Close the Provider connections kept open for these ``(agent_id, session_id)``."""
+        sessions = tuple(sessions)
         await self._responses_transports.close_conversations(
             {responses_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
         )
+        await self._claude_sessions.close_sessions(set(sessions))
 
     async def close_connection_transports(
         self, provider_id: str, connection_id: str | None = None
@@ -209,6 +218,10 @@ class ProviderRuntime:
         ``connection_id`` is local (``subscription``); without it, every
         Connection of the Provider closes.
         """
+        if provider_id == "claude-agent":
+            previous, self._claude_sessions = self._claude_sessions, ClaudeAgentSessions()
+            await previous.aclose()
+            self._external_status.clear()
         try:
             await self._responses_transports.close_connection(provider_id, connection_id)
         finally:
@@ -217,12 +230,19 @@ class ProviderRuntime:
     async def aclose_transports(self) -> None:
         """Close every kept-open Provider connection (Runtime shutdown)."""
         try:
+            await self._claude_sessions.aclose()
+        finally:
+            await self._aclose_http_transports()
+
+    async def _aclose_http_transports(self) -> None:
+        try:
             await self._responses_transports.aclose()
         finally:
             await self._http_transports.aclose()
 
     def abort_transports(self) -> None:
         """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
+        self._claude_sessions.abort()
         try:
             self._responses_transports.abort()
         finally:
@@ -249,6 +269,10 @@ class ProviderRuntime:
     def _http_account_id(
         self, provider_id: str, config: ConnectionConfig, account_id: str | None
     ) -> str:
+        if config.type == "external":
+            return self._credentials.resolve_account_id(
+                provider_id, config.id, account_id=account_id
+            )
         if account_id is not None:
             return account_id
         if config.type != "none":
@@ -276,6 +300,9 @@ class ProviderRuntime:
             )
 
         extra_kwargs: dict[str, Any] = {"http_transport": http_transport}
+        if adapter_class is ClaudeAgentAdapter:
+            extra_kwargs["sessions"] = self._claude_sessions
+            extra_kwargs["connection_id"] = connection_config.id
         if adapter_class in (OllamaAdapter, LMStudioAdapter):
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
         if adapter_class is LMStudioAdapter:
@@ -408,11 +435,91 @@ class ProviderRuntime:
                     self._catalog_refresh_tasks.discard(task)
 
     async def refresh_model_database(
-        self, *, provider_id: str | None = None, target: str = "runtime"
+        self,
+        *,
+        provider_id: str | None = None,
+        target: str = "runtime",
+        notify_changed: bool = False,
     ) -> dict[str, Any]:
         return await _catalog_refresh.refresh_model_database(
-            self, provider_id=provider_id, target=target
+            self, provider_id=provider_id, target=target, notify_changed=notify_changed
         )
+
+    def external_connection_status(self, provider_id: str, connection_id: str) -> dict[str, Any]:
+        """Read the last native login check without starting a program."""
+        if ":" not in connection_id:
+            connection_id = f"{provider_id}:{connection_id}"
+        config, _ = self._connection_config(self._providers.get(provider_id), connection_id)
+        if config.type != "external":
+            raise ConfigError("Connection does not use an external login")
+        return dict(
+            self._external_status.get(
+                f"{provider_id}:{config.id}",
+                {"connected": False, "status": "not_checked"},
+            )
+        )
+
+    async def _probe_external_connection(
+        self, provider_id: str, connection: ConnectionConfig
+    ) -> dict[str, Any]:
+        provider = self._providers.get(provider_id)
+        if provider.adapter != "claude_agent" or connection.type != "external":
+            raise ConfigError("Provider does not support an external login")
+        sessions = self._claude_sessions
+        result = await sessions.probe()
+        if sessions is not self._claude_sessions or not self._credentials.is_usable(
+            provider_id, f"{provider_id}:{connection.id}"
+        ):
+            raise ConfigError("External Connection changed during login check; retry the check")
+        if result.get("status") == "busy":
+            previous = self._external_status.get(f"{provider_id}:{connection.id}", {})
+            result["connected"] = previous.get("connected", False)
+            if "subscription" in previous:
+                result["subscription"] = previous["subscription"]
+        elif result.get("connected") and result.get("subscription") is not True:
+            result = {
+                **result,
+                "connected": False,
+                "status": "api_billing",
+                "message": SUBSCRIPTION_REQUIRED_MESSAGE,
+            }
+        self._external_status[f"{provider_id}:{connection.id}"] = {
+            key: result[key]
+            for key in ("connected", "status", "message", "subscription")
+            if key in result
+        }
+        return result
+
+    async def refresh_external_connection(
+        self, provider_id: str, connection_id: str
+    ) -> dict[str, Any]:
+        """Check the user's native login and publish its installation catalog."""
+        if ":" not in connection_id:
+            connection_id = f"{provider_id}:{connection_id}"
+        config, _ = self._connection_config(self._providers.get(provider_id), connection_id)
+        if config.type != "external":
+            raise ConfigError("Connection does not use an external login")
+        if not self._credentials.is_usable(provider_id, connection_id):
+            return {"connected": False, "status": "disabled"}
+        try:
+            await self.refresh_model_database(provider_id=provider_id, notify_changed=True)
+        except ConfigError:
+            status = self.external_connection_status(provider_id, connection_id)
+            if status.get("status") in {"not_checked", "ready"}:
+                raise
+            return status
+        status = self.external_connection_status(provider_id, connection_id)
+        if status.get("connected"):
+            key = f"{provider_id}:{config.id}"
+            previous = self._connection_reachability.get(key)
+            self._connection_reachability[key] = True
+            if previous is False:
+                _LOGGER.info(
+                    "Native Provider connection recovered (provider=%s connection=%s)",
+                    provider_id,
+                    config.id,
+                )
+        return status
 
     def discovery_credential(
         self, provider_id: str, connection_id: str, connection: ConnectionConfig
@@ -509,7 +616,11 @@ class ProviderRuntime:
             for connection in provider.connections:
                 if not connection.auto_refresh:
                     continue
-                if not (connection.models_endpoint or provider.models_endpoint):
+                if not (
+                    connection.models_endpoint
+                    or provider.models_endpoint
+                    or connection.type == "external"
+                ):
                     continue
                 if not self._credentials.is_usable(
                     provider_id,
@@ -606,7 +717,7 @@ class ProviderRuntime:
         account_id: str | None,
     ) -> TokenGetter:
         provider_id = connection.provider_id
-        if connection_config.type == "none":
+        if connection_config.type in {"none", "external"}:
             return StaticTokenGetter("")
         resolved_connection_id = (
             f"{provider_id}:{connection_config.id}:{account_id}"

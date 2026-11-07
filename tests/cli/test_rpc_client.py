@@ -70,6 +70,10 @@ def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxie
     ("method", "params"),
     [
         ("model.refresh_db", {}),
+        ("provider.connect", {"provider_id": "claude-agent"}),
+        ("provider.disconnect", {"provider_id": "claude-agent"}),
+        ("provider.connection_status", {"provider_id": "claude-agent"}),
+        ("connection.set_enabled", {"connection_id": "claude-agent:subscription", "enabled": True}),
         ("data_store.snapshot_create", {}),
         ("data_store.status", {"verify_search": True}),
     ],

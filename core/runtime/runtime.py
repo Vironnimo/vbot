@@ -1143,6 +1143,18 @@ class Runtime(RuntimeServiceGraph):
             provider_id, connection_id, connection
         )
 
+    def external_connection_status(self, provider_id: str, connection_id: str) -> dict[str, Any]:
+        """Read the cached native-program login status."""
+        return self._provider_operations().external_connection_status(provider_id, connection_id)
+
+    async def refresh_external_connection(
+        self, provider_id: str, connection_id: str
+    ) -> dict[str, Any]:
+        """Check the external login and refresh its available Models."""
+        return await self._provider_operations().refresh_external_connection(
+            provider_id, connection_id
+        )
+
     def start_local_catalog_refresh(self) -> asyncio.Task[None]:
         """Start a local sweep that Runtime shutdown cancels and drains."""
         return self._provider_operations().start_local_catalog_refresh()

@@ -116,6 +116,13 @@ _EVERY_OPTIONAL_FIELD = {
         # Keyless Connections need no auth block; an empty one parses leniently.
         {"id": "local", "type": "none", "label": "Local", "auto_refresh": True},
         {"id": "lan", "type": "none", "label": "LAN", "auth": {}},
+        {
+            "id": "program",
+            "type": "external",
+            "label": "Program login",
+            "setup_command": "program auth login",
+            "setup_url": "https://example.test/setup",
+        },
     ],
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
     "extra_headers": {"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
@@ -178,6 +185,14 @@ _KEYLESS_AUTH = AuthConfig(header="", prefix="", credential_key="")
                         auto_refresh=True,
                     ),
                     ConnectionConfig(id="lan", type="none", label="LAN", auth=_KEYLESS_AUTH),
+                    ConnectionConfig(
+                        id="program",
+                        type="external",
+                        label="Program login",
+                        auth=_KEYLESS_AUTH,
+                        setup_command="program auth login",
+                        setup_url="https://example.test/setup",
+                    ),
                 ],
                 defaults={"max_tokens": 4096, "temperature": 0.7},
                 extra_headers={"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
@@ -332,6 +347,27 @@ def test_auth_config_carries_only_credential_centric_fields() -> None:
             [_provider(connections=[_connection(type="bearer")])],
             ConfigError,
             id="unknown-connection-type",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(type="external")])],
+            ConfigError,
+            id="external-credentials-forbidden",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(setup_command="program auth login")])],
+            ConfigError,
+            id="program-setup-requires-external-connection",
+        ),
+        pytest.param(
+            [
+                _provider(
+                    connections=[
+                        _connection(type="external", auth={}, setup_url="javascript:alert(1)")
+                    ]
+                )
+            ],
+            ConfigError,
+            id="program-setup-requires-web-url",
         ),
         pytest.param(
             [_provider(connections=[_connection(auth=_DROP)])],

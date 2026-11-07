@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
@@ -37,6 +38,7 @@ ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
     "opencode_zen": OpenCodeZenAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
+    "claude_agent": ClaudeAgentAdapter,
     "ollama": OllamaAdapter,
     "ollama_cloud": OllamaCloudAdapter,
     "lmstudio": LMStudioAdapter,

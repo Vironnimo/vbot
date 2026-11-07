@@ -69,6 +69,7 @@ async def sample_extension(
                 agent_id=context.agent_id,
                 session_id=context.session_id,
                 project_id=context.project_id,
+                request_kind="utility",
             ),
         )
         usage = normalized.get("usage")

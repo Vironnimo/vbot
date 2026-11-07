@@ -15,6 +15,24 @@ from core.providers.wire_profile import PROTOCOLS
 _IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 _RAW_DEFAULTS: dict[str, dict[str, Any]] = {
+    "claude_agent": {
+        "request": {
+            "output_limit_field": "max_output_tokens",
+            "tool_schema": "omit_strict",
+            "tool_call_ids": "none",
+            "parameters": {
+                "temperature": {"mode": "drop"},
+                "top_p": {"mode": "drop"},
+                "top_k": {"mode": "drop"},
+            },
+        },
+        "reasoning": {
+            "dialect": "claude_agent",
+            "floor": ["low", "medium", "high", "xhigh", "max"],
+        },
+        "replay": {"scope": "none", "fidelity": "meta_only"},
+        "media": {"types": [*_IMAGE_TYPES, "application/pdf"]},
+    },
     "chat_completions": {
         "request": {
             "output_limit_field": "max_tokens",

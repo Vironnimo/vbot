@@ -527,20 +527,22 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         command_parser.add_argument(
             "provider",
             metavar="<provider-id>",
-            help="Provider id of the OAuth connection, or that Connection's id",
+            help="Provider id of the login connection, or that Connection's id",
         )
         command_parser.add_argument(
             "--connection",
             metavar="<provider:connection-id>",
             help=(
-                "Choose an OAuth Connection when more than one exists; "
-                "otherwise selected automatically"
+                "Choose a login Connection when more than one exists. "
+                "Omit to select the Provider's only login Connection."
             ),
         )
         command_parser.add_argument(
             "--account",
             metavar="<account-id>",
-            help="Named credential slot on the connection (default: default)",
+            help=(
+                "Named credential slot. Omit for default; external program logins use default only."
+            ),
         )
 
 

@@ -142,7 +142,7 @@ export function connectionSupportsAddAccount(connection) {
 }
 
 function isConnectionConfigured(connection) {
-  if (connection?.type === 'none') {
+  if (connection?.type === 'none' || connection?.type === 'external') {
     return connection?.added === true;
   }
   return (
@@ -212,7 +212,7 @@ function isConnectionAddable(connection) {
     return true;
   }
 
-  if (connection?.type === 'none') {
+  if (connection?.type === 'none' || connection?.type === 'external') {
     return true;
   }
 
@@ -243,6 +243,10 @@ export function isOAuthConnection(connection) {
 // key/account management actions.
 export function isKeylessConnection(connection) {
   return connection?.type === 'none';
+}
+
+export function isExternalConnection(connection) {
+  return connection?.type === 'external';
 }
 
 export function isOAuthDeviceFlowConnection(connection) {

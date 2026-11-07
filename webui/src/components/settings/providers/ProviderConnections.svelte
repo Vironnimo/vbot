@@ -6,6 +6,7 @@
     getConnectionAccounts,
     isConnectionEnabled,
     isKeylessConnection,
+    isExternalConnection,
     isSharedOpenCodeConnection,
     describeSharedOpenCodeKey,
     accountDisplayName,
@@ -113,7 +114,29 @@
         </div>
       </div>
 
-      {#if isConnectionEnabled(connection) && !isKeylessConnection(connection)}
+      {#if isExternalConnection(connection)}
+        <p class="s-row-desc">{t('settings.providers.external.setupHelp')}</p>
+        {#if connection.setup_command}<code>{connection.setup_command}</code
+          >{/if}
+        {#if connection.external_auth?.message}
+          <p class="s-row-desc">{connection.external_auth.message}</p>
+        {/if}
+        {#if connection.setup_url}
+          <a href={connection.setup_url} target="_blank" rel="noreferrer"
+            >{t('settings.providers.external.installGuide')}</a
+          >
+        {/if}
+        {#if isConnectionEnabled(connection)}
+          <Button
+            variant="tertiary"
+            disabled={connectionToggleBusy}
+            onClick={() => setConnectionEnabled(provider, connection, true)}
+          >
+            {t('settings.providers.external.checkLogin')}
+          </Button>
+        {/if}
+      {/if}
+      {#if isConnectionEnabled(connection) && !isKeylessConnection(connection) && !isExternalConnection(connection)}
         {#if getConnectionAccounts(connection).length > 0}
           <ul class="s-connection-accounts">
             {#each getConnectionAccounts(connection) as account (account.id)}

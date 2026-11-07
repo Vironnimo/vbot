@@ -96,7 +96,9 @@
           ? 'api-key'
           : selectedConnection.type === 'none'
             ? 'keyless'
-            : 'oauth',
+            : selectedConnection.type === 'external'
+              ? 'external'
+              : 'oauth',
   );
   let methodOptions = $derived(
     selectedProvider ? getAddableConnections(selectedProvider) : [],
@@ -152,6 +154,9 @@
     if (currentStep === 'keyless') {
       return t('settings.providers.add.localIntro');
     }
+    if (currentStep === 'external') {
+      return t('settings.providers.external.setupHelp');
+    }
     return oauthActive
       ? ''
       : t('settings.providers.add.oauthIntro', {
@@ -169,6 +174,7 @@
     if (
       currentStep === 'api-key' ||
       currentStep === 'keyless' ||
+      currentStep === 'external' ||
       currentStep === 'oauth'
     ) {
       if (scopedConnection) {
@@ -313,6 +319,37 @@
     }
   }
 
+  async function connectExternalProvider() {
+    if (saving) return;
+    saving = true;
+    errorMessage = '';
+    try {
+      const result = await callConnectProvider(
+        selectedProvider.id,
+        getPublicConnectionId(selectedConnection),
+        DEFAULT_ACCOUNT_ID,
+      );
+      await onCompleted();
+      if (closed) return;
+      if (result?.connected !== true) {
+        errorMessage =
+          result?.message || t('settings.providers.external.notReady');
+        return;
+      }
+      onToast({
+        title: t('settings.providers.device_flow.success_toast', {
+          provider: providerName(selectedProvider),
+        }),
+        variant: 'success',
+      });
+      finishClose();
+    } catch (error) {
+      if (!closed) errorMessage = error.message;
+    } finally {
+      saving = false;
+    }
+  }
+
   async function cancelOAuthFlow() {
     try {
       await callDisconnectProvider(
@@ -422,6 +459,9 @@
   }
 
   function connectionMethodDescription(connection) {
+    if (connection.type === 'external') {
+      return t('settings.providers.external.setupHelp');
+    }
     if (setupMode) {
       if (connection.type === 'api_key') {
         return t('onboarding.connect.apiKeyDescription');
@@ -613,6 +653,22 @@
           </FormField>
           {#if !setupMode}{@render accountField(saving)}{/if}
         </form>
+      {:else if step === 'external'}
+        {#if selectedConnection.setup_command}
+          <code class="device-flow-code"
+            >{selectedConnection.setup_command}</code
+          >
+        {/if}
+        {#if selectedConnection.setup_url}
+          <a
+            class="device-flow-link"
+            href={selectedConnection.setup_url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t('settings.providers.external.installGuide')}
+          </a>
+        {/if}
       {:else if step === 'oauth'}
         {#if oauthActive && oauthData}
           <p class="device-flow-instructions">
@@ -692,6 +748,16 @@
     {:else if step === 'keyless'}
       <Button variant="primary" disabled={saving} onClick={addKeylessProvider}>
         {saving ? t('common.saving') : t('settings.providers.add.localSubmit')}
+      </Button>
+    {:else if step === 'external'}
+      <Button
+        variant="primary"
+        disabled={saving}
+        onClick={connectExternalProvider}
+      >
+        {saving
+          ? t('common.loading')
+          : t('settings.providers.external.checkLogin')}
       </Button>
     {:else if step === 'oauth' && !oauthActive}
       <Button

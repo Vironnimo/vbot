@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.utils.errors import ConfigError, ProviderError
 from core.utils.workers import BoundedWorkerPool
@@ -230,7 +231,7 @@ class AuthConfig:
     credential_key: str = ""
 
 
-VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth", "none"})
+VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth", "none", "external"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
 STANDARD_DEVICE_FLOW = "oauth2"
 OPENAI_CODEX_DEVICE_FLOW = "openai_codex"
@@ -299,11 +300,11 @@ class ConnectionConfig:
 
     Attributes:
         id: Local connection identifier within the provider config.
-        type: Connection kind. Supported values are ``"api_key"``, ``"oauth"``,
-            and ``"none"`` (a keyless endpoint, e.g. a local server).
+        type: Connection kind: ``api_key``, ``oauth``, ``none`` (keyless), or
+            ``external`` (the installed program owns its authentication).
         label: Human-readable display label.
         auth: Authentication configuration for this connection. Empty for
-            ``"none"`` connections, which need no credential.
+            ``none`` and ``external`` connections, which store no credential.
         base_url: Optional provider base URL override for this connection.
         mode: Optional wire-variant selector freely interpreted by the
             provider adapter (e.g. ``"codex_responses"``). Per-connection;
@@ -331,6 +332,9 @@ class ConnectionConfig:
     models_endpoint: str | None = None
     auto_refresh: bool = False
     catalog_requires_credentials: bool = True
+    # Guidance only: vBot never executes a setup command or collects its login.
+    setup_command: str | None = None
+    setup_url: str | None = None
 
 
 def connection_default_enabled(connection: ConnectionConfig) -> bool:
@@ -345,7 +349,7 @@ def connection_default_enabled(connection: ConnectionConfig) -> bool:
     ``providers.connections`` and win over this default.
     """
 
-    return connection.type != "none"
+    return connection.type not in {"none", "external"}
 
 
 # ---------------------------------------------------------------------------
@@ -911,6 +915,32 @@ class ProviderRegistry:
                     f"got {type(catalog_requires_credentials).__name__}"
                 )
 
+            setup: dict[str, str | None] = {}
+            for setup_field in ("setup_command", "setup_url"):
+                value = connection_data.get(setup_field)
+                if value is not None and (
+                    connection_type != "external" or not isinstance(value, str) or not value.strip()
+                ):
+                    raise ConfigError(
+                        f"Provider '{provider_id}' connection '{local_id}' {setup_field} "
+                        "must be a non-empty string on an external connection"
+                    )
+                setup[setup_field] = value
+            if setup["setup_url"] is not None:
+                try:
+                    setup_url = urlsplit(setup["setup_url"])
+                    valid_setup_url = setup_url.scheme in {"http", "https"} and bool(
+                        setup_url.hostname
+                    )
+                except ValueError:
+                    valid_setup_url = False
+                if not valid_setup_url:
+                    raise ConfigError(
+                        "External connection setup_url must be an absolute HTTP(S) URL"
+                    )
+            if connection_type == "external" and oauth is not None:
+                raise ConfigError("External connections cannot store OAuth configuration")
+
             connections.append(
                 ConnectionConfig(
                     id=local_id,
@@ -923,6 +953,8 @@ class ProviderRegistry:
                     models_endpoint=models_endpoint,
                     auto_refresh=auto_refresh,
                     catalog_requires_credentials=catalog_requires_credentials,
+                    setup_command=setup["setup_command"],
+                    setup_url=setup["setup_url"],
                 )
             )
 
@@ -938,7 +970,7 @@ class ProviderRegistry:
         auth_data = connection_data.get("auth")
         if auth_data is None:
             # Keyless connections need no auth block; every other type does.
-            if connection_type == "none":
+            if connection_type in {"none", "external"}:
                 return AuthConfig(header="", prefix="", credential_key="")
             raise ConfigError(
                 f"Provider '{provider_id}' connection '{local_id}' is missing required field 'auth'"
@@ -950,6 +982,10 @@ class ProviderRegistry:
                 f"Provider '{provider_id}' connection '{local_id}' api_key auth "
                 "requires 'credential_key'"
             )
+        if connection_type == "external":
+            if auth_data:
+                raise ConfigError("External connections cannot store authentication configuration")
+            return AuthConfig(header="", prefix="", credential_key="")
         if connection_type == "none":
             return AuthConfig(
                 header=auth_data.get("header", ""),

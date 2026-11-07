@@ -438,6 +438,7 @@ class CompactionService:
         *,
         session_address: SessionAddress,
         prompt_cache_affinity_id: str,
+        session_generation_id: str | None = None,
         summary_adapter: Any,
         summary_model_id: str,
         storage: Any,
@@ -509,6 +510,8 @@ class CompactionService:
                         session_id=session_address.session_id,
                         project_id=session_address.project_id,
                         prompt_cache_affinity_id=prompt_cache_affinity_id,
+                        session_generation_id=session_generation_id,
+                        request_kind="compaction",
                     )
                 )
                 model_messages, model_tools = await COMPACTION_WORKERS.run(

@@ -868,6 +868,12 @@ async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
     ]
     assert (source_context["session_id"], fork_context["session_id"]) == ("session-one", fork.id)
     assert source_context["prompt_cache_affinity_id"] == fork_context["prompt_cache_affinity_id"]
+    source = runtime.chat_sessions.get(SESSION)
+    assert source_context["session_generation_id"] == source.generation_id
+    fork_generation = runtime.chat_sessions.get(fork.address).generation_id
+    assert fork_context["session_generation_id"] == fork_generation
+    assert source_context["session_generation_id"] != fork_context["session_generation_id"]
+    assert source_context["request_kind"] == fork_context["request_kind"] == "chat"
 
 
 @pytest.mark.asyncio

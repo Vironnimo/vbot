@@ -181,8 +181,10 @@ def _connection_response(runtime: Any, provider_id: str, connection: Any) -> Jso
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = _connection_reachability(runtime, connection_id)
-    if getattr(connection, "type", "") == "none":
+    if getattr(connection, "type", "") in {"none", "external"}:
         response["added"] = _connection_is_added(runtime, provider_id, connection_id)
+    if getattr(connection, "type", "") == "external":
+        response.update(_external_connection_fields(runtime, provider_id, connection))
     return response
 
 
@@ -199,8 +201,10 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = _connection_reachability(runtime, connection_id)
-    if getattr(connection, "type", "") == "none":
+    if getattr(connection, "type", "") in {"none", "external"}:
         response["added"] = _connection_is_added(runtime, provider_id, connection_id)
+    if getattr(connection, "type", "") == "external":
+        response.update(_external_connection_fields(runtime, provider_id, connection))
     if getattr(connection, "type", "") == "api_key":
         response["credential_key"] = connection.auth.credential_key
     if getattr(connection, "type", "") == "oauth":
@@ -209,3 +213,11 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
             oauth_config is not None and getattr(oauth_config, "flow", "") == "device"
         )
     return response
+
+
+def _external_connection_fields(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
+    return {
+        "setup_command": connection.setup_command,
+        "setup_url": connection.setup_url,
+        "external_auth": runtime.external_connection_status(provider_id, connection.id),
+    }

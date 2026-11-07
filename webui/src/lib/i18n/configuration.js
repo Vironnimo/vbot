@@ -900,6 +900,12 @@ export default Object.freeze({
   'settings.providers.disabledChip': 'Disabled',
   'settings.providers.notReachableChip': 'Not reachable',
   'settings.providers.connectedHint': 'Enabled and ready to send requests.',
+  'settings.providers.external.setupHelp':
+    'Install Claude Code and sign in on the computer running the vBot server, under the same operating-system account. Then check the login here.',
+  'settings.providers.external.installGuide': 'Claude Code installation guide',
+  'settings.providers.external.checkLogin': 'Check login and connect',
+  'settings.providers.external.notReady':
+    'Claude Code is not ready. Complete setup on the server computer, then check the login again.',
   'settings.providers.notReachableChipHint':
     'vBot could not reach this Connection’s server at its last check.',
   'settings.providers.notUsableChipHint':

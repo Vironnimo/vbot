@@ -731,6 +731,8 @@ class ProviderAdapter(ABC):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> JsonObject:
         """Return extra per-request kwargs derived from the conversation identity.
 
@@ -742,8 +744,15 @@ class ProviderAdapter(ABC):
         either identity onto their own wire without the chat layer knowing any
         provider specifics. The ABC default adds nothing, so no unrelated wire
         receives an unknown field.
+
+        ``session_generation_id`` distinguishes a recreated Session at the same
+        public address. ``request_kind`` separates its primary chat from
+        Compaction and disposable utility requests, which may run concurrently
+        without advancing its native Provider conversation. These are local
+        lifecycle inputs; an Adapter emits only its own private context kwargs.
         """
         del agent_id, session_id, project_id, prompt_cache_affinity_id
+        del session_generation_id, request_kind
         return {}
 
     def _request_headers_from_kwargs(

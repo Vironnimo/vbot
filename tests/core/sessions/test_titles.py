@@ -340,6 +340,10 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
                 "agent_id": "coder",
                 "session_id": "session-one",
                 "project_id": None,
+                "session_generation_id": manager.get(
+                    _address("coder", "session-one")
+                ).generation_id,
+                "request_kind": "utility",
             }
             return {"routing_sentinel": "title-session"}
 

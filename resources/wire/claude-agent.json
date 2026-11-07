@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "_comment": "Claude Code via its public Agent SDK. Native state stays inside the Provider; canonical history reconstruction omits Reasoning. Live subscription inference remains unverified.",
+  "defaults": {
+    "protocol": "claude_agent"
+  }
+}
