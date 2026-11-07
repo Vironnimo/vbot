@@ -14,6 +14,7 @@ import stat
 import zipfile
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +34,7 @@ from core.access.config import AccessConfig
 from core.utils.atomic import atomic_write_text
 from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name
+from core.utils.timestamps import parse_timestamp
 
 if TYPE_CHECKING:
     import httpx
@@ -200,7 +202,7 @@ def _require_selected_release(release: dict[str, Any], version: str) -> None:
 def _require_matching_identity(release: dict[str, Any], identity: dict[str, Any]) -> None:
     if any(
         release.get(name) != identity.get(name)
-        for name in ("version_id", "version", "revision", "channel")
+        for name in ("version_id", "version", "revision", "channel", "committed_at")
     ):
         raise ApplicationError("The signed package does not match its release identity.")
 
@@ -532,8 +534,9 @@ def _not_newer(offered: dict[str, Any], active: dict[str, Any]) -> bool:
     Versions order by their numeric release part. A version's main builds start
     with the commit that bumps the version for its release, so a release build
     of the version a main build carries is the earlier build (the very same
-    build has the same version id and never gets here). Versions that do not
-    parse are not ordered.
+    build has the same version id and never gets here). Builds of one version
+    order by their recorded commit time. Versions that do not parse are not
+    ordered.
     """
     offered_numbers = _release_numbers(offered)
     active_numbers = _release_numbers(active)
@@ -541,7 +544,26 @@ def _not_newer(offered: dict[str, Any], active: dict[str, Any]) -> bool:
         return False
     if offered_numbers != active_numbers:
         return offered_numbers < active_numbers
-    return offered.get("channel") == "release" and active.get("channel") == "main"
+    if offered.get("channel") == "release" and active.get("channel") == "main":
+        return True
+    # Builds of one version, such as main builds or a local build of unpushed
+    # commits, order by commit time. A build without it predates that record,
+    # so it is not newer than an active build carrying it.
+    active_time = _commit_time(active)
+    if active_time is None:
+        return False
+    if "committed_at" not in offered:
+        return True
+    offered_time = _commit_time(offered)
+    return offered_time is not None and offered_time <= active_time
+
+
+def _commit_time(manifest: dict[str, Any]) -> datetime | None:
+    value = manifest.get("committed_at")
+    try:
+        return parse_timestamp(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _older_release_message(

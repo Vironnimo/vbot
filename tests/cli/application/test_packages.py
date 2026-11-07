@@ -633,6 +633,8 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
 
 
 _MAIN_REVISION = "a" * 40
+_EARLIER = "2026-11-07T17:00:00.000000Z"
+_LATER = "2026-11-07T18:00:00.000000Z"
 
 
 @pytest.mark.parametrize(
@@ -649,22 +651,40 @@ _MAIN_REVISION = "a" * 40
         pytest.param("main", ("0.4.25", "main"), "0.4.25", False, id="next-main-build"),
         pytest.param("release", ("1.0", "release"), "1.0.1", False, id="padded-version"),
         pytest.param("release", ("unknown", "main"), "0.4.24", False, id="unordered-version"),
+        # Builds of one version order by commit time: a local build of unpushed
+        # commits is newer than the channel's main build until the next push.
+        pytest.param(
+            "main", ("0.4.25", "main", _LATER), ("0.4.25", _EARLIER), True, id="older-commit"
+        ),
+        pytest.param(
+            "main", ("0.4.25", "main", _LATER), ("0.4.25", None), True, id="predates-commit-times"
+        ),
+        pytest.param(
+            "main", ("0.4.25", "main", _EARLIER), ("0.4.25", _LATER), False, id="later-commit"
+        ),
+        pytest.param(
+            "main", ("0.4.25", "main", _LATER), ("0.4.25", "late"), False, id="unordered-commit"
+        ),
     ],
 )
 def test_download_refuses_a_channel_version_not_newer_than_the_active_one(
     tmp_path: Path,
     channel: str,
-    active: tuple[str, str],
-    offered: str,
+    active: tuple[str, ...],
+    offered: str | tuple[str, str | None],
     refused: bool,
 ) -> None:
     respx = pytest.importorskip("respx")
-    active_version, active_channel = active
-    install = _active_install(
-        tmp_path,
-        channel,
-        {"version": active_version, "revision": _MAIN_REVISION, "channel": active_channel},
-    )
+    active_version, active_channel, *active_time = active
+    offered, offered_time = (offered, None) if isinstance(offered, str) else offered
+    active_manifest = {
+        "version": active_version,
+        "revision": _MAIN_REVISION,
+        "channel": active_channel,
+    }
+    if active_time:
+        active_manifest["committed_at"] = active_time[0]
+    install = _active_install(tmp_path, channel, active_manifest)
     archive = package_name("server")
     identity_base, package_base = {
         "release": (f"{_DOWNLOADS}/latest/download", f"{_DOWNLOADS}/download/v{offered}"),
@@ -677,6 +697,8 @@ def test_download_refuses_a_channel_version_not_newer_than_the_active_one(
         "revision": "b" * 40,
         "channel": channel,
     }
+    if offered_time is not None:
+        identity["committed_at"] = offered_time
     with respx.mock(assert_all_called=False) as router:
         router.get(f"{identity_base}/{RELEASE_IDENTITY_ASSET}").respond(json=identity)
         package = router.get(f"{package_base}/{archive}").respond(content=b"zip")

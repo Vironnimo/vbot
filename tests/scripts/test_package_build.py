@@ -164,6 +164,7 @@ def test_manifest_declares_only_the_packaged_sources_contracts(
             platform=current_platform(),
             shape=shape,
             channel="main",
+            committed_at="2026-11-07T19:00:00+01:00",
         )
 
     absent = protocol is None or (
@@ -182,6 +183,8 @@ def test_manifest_declares_only_the_packaged_sources_contracts(
             assert manifest[field] == protocol
         package_build.write_release_identity(tmp_path, manifest)
         identity = json.loads((tmp_path / package_build.RELEASE_IDENTITY_NAME).read_text())
+        # Updates order builds of one version by this canonical commit time.
+        assert manifest["committed_at"] == identity["committed_at"] == "2026-11-07T18:00:00.000000Z"
         if contract == "version-switch-protocol" and not absent:
             assert identity[field] == protocol
         else:

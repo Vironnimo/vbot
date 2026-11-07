@@ -26,6 +26,7 @@ from scripts.package_build import (
     INVENTORY_NAME,
     PYTHON_VERSION,
     BuildError,
+    commit_time,
     compile_bytecode,
     remove_bytecode_caches,
     sign_archive,
@@ -287,6 +288,7 @@ def build(args: argparse.Namespace) -> Path:
         platform=PLATFORM,
         shape=args.shape,
         channel=args.channel,
+        committed_at=args.committed_at or commit_time(source, args.revision),
     )
     artifacts = output / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -318,6 +320,10 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--shape", required=True, choices=SHAPES)
     value.add_argument("--version", required=True)
     value.add_argument("--revision", required=True)
+    value.add_argument(
+        "--committed-at",
+        help="The revision's commit time (ISO 8601); read from --source's Git history by default",
+    )
     value.add_argument("--release-mode", action="store_true")
     value.add_argument("--channel", choices=CHANNELS, default="release")
     value.add_argument("--signing-key-env", default="VBOT_RELEASE_SIGNING_KEY")

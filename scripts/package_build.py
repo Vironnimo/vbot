@@ -28,6 +28,7 @@ if __package__ in {None, ""}:
 
 from cli.application.payload import PayloadError
 from core.utils.processes import subprocess_creation_flags
+from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
 
 BuildError = PayloadError
 
@@ -103,6 +104,20 @@ def verify_release_source(source: Path, revision: str) -> None:
     )
     if status.returncode or status.stdout.strip():
         raise BuildError("release mode requires clean tracked application sources")
+
+
+def commit_time(source: Path, revision: str) -> str | None:
+    """The revision's committer time as canonical UTC, or None without its Git history.
+
+    Main builds share their release version; updates order them by this time.
+    """
+    result = _git(source, "show", "-s", "--format=%cI", revision)
+    if result.returncode:
+        return None
+    try:
+        return format_canonical_timestamp(parse_timestamp(result.stdout.strip()))
+    except ValueError:
+        return None
 
 
 def _git(source: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -221,6 +236,7 @@ def write_manifest(
     platform: str,
     shape: str,
     channel: str,
+    committed_at: str | None = None,
 ) -> dict[str, Any]:
     if channel not in CHANNELS:
         raise BuildError(f"unknown update channel: {channel}")
@@ -235,6 +251,8 @@ def write_manifest(
         "channel": channel,
         "files": file_hashes(version_root),
     }
+    if committed_at is not None:
+        manifest["committed_at"] = format_canonical_timestamp(parse_timestamp(committed_at))
     # --source can name an older checkout than the running builder. Only the
     # staged source's declarations prove its authentication and switching contracts.
     with (version_root / "app" / "pyproject.toml").open("rb") as stream:
@@ -271,8 +289,9 @@ def write_release_identity(artifacts: Path, manifest: dict[str, Any]) -> None:
         "schema_version": 1,
         **{name: manifest[name] for name in ("version_id", "version", "revision", "channel")},
     }
-    if "version_switch_protocol" in manifest:
-        identity["version_switch_protocol"] = manifest["version_switch_protocol"]
+    for name in ("committed_at", "version_switch_protocol"):
+        if name in manifest:
+            identity[name] = manifest[name]
     (artifacts / RELEASE_IDENTITY_NAME).write_text(
         json.dumps(identity, indent=2) + "\n", encoding="utf-8"
     )

@@ -182,6 +182,9 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
             version,
             "--revision",
             revision,
+            # The exported source has no Git history to read it from.
+            "--committed-at",
+            _git("show", "-s", "--format=%cI", revision).strip(),
             "--channel",
             "main",
             "--runtime-cache",
