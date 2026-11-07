@@ -9,6 +9,8 @@
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
   import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
+  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
+  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
@@ -16,8 +18,13 @@
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import {
+    acceptLabel,
     cardActions,
+    cardWorkflow,
     editableCard,
+    eventLabel,
+    stageKindLabel,
+    stageText,
     stateLabel,
     queuedActionLabel,
     landingStatusLabel,
@@ -39,7 +46,21 @@
   const usage = $derived(usageSummary(model.detail.usage));
   const participants = $derived(model.detail.participants ?? []);
   const approvals = $derived(model.detail.approvals ?? []);
-  const reviews = $derived(model.detail.reviews ?? []);
+  const outputs = $derived(model.detail.outputs ?? []);
+  // The started Card's own Workflow snapshot (with outputs and targets), else
+  // the setup's Workflow it will start with.
+  const workflow = $derived(
+    card.runtime?.workflow ?? cardWorkflow(card, model.setups),
+  );
+  const stages = $derived(workflow?.stages ?? []);
+  const workStages = $derived(stages.filter((stage) => stage.kind === 'work'));
+  // Send back without a choice returns to the work stage the current review
+  // judges, or to the current work stage.
+  const sendBackDefault = $derived.by(() => {
+    const current = stages[card.stage?.index ?? 0];
+    const id = current?.kind === 'review' ? current.target : current?.id;
+    return stages.find((stage) => stage.id === id) ?? workStages[0];
+  });
   const activeRuns = $derived(
     (model.detail.runs ?? []).filter((run) =>
       ['pending', 'running', 'cancelling'].includes(run.status),
@@ -50,6 +71,7 @@
   let compose = $state('');
   let comment = $state('');
   let commentError = $state('');
+  let sendBackStage = $state('');
   let inspectedId = $state('');
   const inspected = $derived(
     participants.find(
@@ -115,6 +137,7 @@
     compose = kind;
     comment = '';
     commentError = '';
+    sendBackStage = '';
   }
   async function sendComment() {
     if (compose === 'answer' ? !actions.answer : !actions.sendBack) return;
@@ -125,7 +148,10 @@
         `card.${compose}`,
         compose === 'answer'
           ? { text: comment.trim() }
-          : { comment: comment.trim() },
+          : {
+              comment: comment.trim(),
+              ...(sendBackStage ? { stage: sendBackStage } : {}),
+            },
       )
     )
       compose = '';
@@ -153,6 +179,66 @@
           )?.address)
     );
   }
+
+  function stageStatus(index) {
+    if (card.state === 'done') return 'done';
+    if (!card.stage) return 'pending';
+    if (index < card.stage.index) return 'done';
+    if (card.state === 'discarded') return 'pending';
+    if (index > card.stage.index) return 'pending';
+    return card.state === 'waiting' ? 'waiting' : 'current';
+  }
+
+  function stageStatusLabel(status) {
+    switch (status) {
+      case 'done':
+        return t('factory.stageStatus.done');
+      case 'current':
+        return t('factory.stageStatus.current');
+      case 'waiting':
+        return t('factory.stageStatus.waiting');
+      default:
+        return t('factory.stageStatus.pending');
+    }
+  }
+
+  function outputKindLabel(output) {
+    switch (output.kind) {
+      case 'review':
+        return t('factory.output.review');
+      case 'integration_review':
+        return t('factory.integrationReview');
+      default:
+        return output.result
+          ? t('factory.output.document')
+          : t('factory.output.changes');
+    }
+  }
+
+  // Lane and pass tell outputs of the same stage apart.
+  function outputTitle(output) {
+    const lanes =
+      stages.find((stage) => stage.id === output.stage_id)?.lanes?.length ?? 0;
+    const parts = [output.stage_name];
+    if (lanes > 1 || output.lane > 0)
+      parts.push(t('factory.laneNumber', { lane: output.lane + 1 }));
+    if (output.pass > 1)
+      parts.push(t('factory.passNumber', { pass: output.pass }));
+    return parts.join(' · ');
+  }
+
+  // The newest document of each stage stays open; earlier passes fold.
+  const latestDocuments = $derived(
+    new Set(
+      Object.values(
+        Object.fromEntries(
+          outputs
+            .filter((output) => output.result)
+            .map((output) => [`${output.stage_id}:${output.lane}`, output.id]),
+        ),
+      ),
+    ),
+  );
 
   function eventText(event) {
     return (
@@ -293,14 +379,14 @@
         {card.runtime?.question || card.recommendation}
       </p>
     </section>
-  {:else if card.state === 'waiting' && card.waiting_reason !== 'approved' && card.runtime?.note}
+  {:else if card.state === 'waiting' && card.runtime?.note}
     <section class="factory-section factory-decision">
       <h3>{t('factory.waitingNote')}</h3>
       <p class="factory-prose">{card.runtime.note}</p>
     </section>
   {/if}
 
-  {#if card.recommendation || card.waiting_reason === 'approved'}
+  {#if card.recommendation || (card.state === 'waiting' && card.waiting_reason === 'no_agreement')}
     <section
       class="factory-section factory-recommendation"
       aria-labelledby="factory-recommendation-heading"
@@ -327,7 +413,7 @@
         loading={model.pending === 'card.accept'}
         disabled={Boolean(model.pending)}
         onClick={() => act('card.accept', { expected_revision: card.revision })}
-        >{t('factory.accept')}</Button
+        >{acceptLabel(card)}</Button
       >{/if}
     {#if actions.answer}<Button
         variant="primary"
@@ -357,6 +443,42 @@
         onClick={() => (confirm = 'delete')}>{t('factory.delete')}</Button
       >{/if}
   </div>
+
+  {#if workflow}
+    <section
+      class="factory-section factory-workflow-progress"
+      aria-labelledby="factory-workflow-heading"
+      data-workflow-progress={workflow.id}
+    >
+      <h3 id="factory-workflow-heading">
+        {t('factory.workflowHeading', { name: workflow.name })}
+      </h3>
+      <ol class="factory-stage-progress">
+        {#each stages as stage, index (stage.id)}
+          {@const status = stageStatus(index)}
+          <li
+            data-stage-status={status}
+            aria-current={status === 'current' || status === 'waiting'
+              ? 'step'
+              : undefined}
+          >
+            <span class="factory-stage-marker" aria-hidden="true"
+              >{status === 'done' ? '✓' : index + 1}</span
+            >
+            <span class="factory-stage-label"
+              ><strong
+                >{card.stage?.index === index
+                  ? stageText(card.stage)
+                  : stage.name}</strong
+              ><span class="factory-help"
+                >{stageKindLabel(stage)} · {stageStatusLabel(status)}</span
+              ></span
+            >
+          </li>
+        {/each}
+      </ol>
+    </section>
+  {/if}
 
   <div class="factory-detail-grid">
     <div class="factory-detail-main">
@@ -409,7 +531,7 @@
         {:else}<p class="factory-prose">{card.description}</p>{/if}
       </section>
       {#if card.summary}<section class="factory-section">
-          <h3>{t('factory.workerSummary')}</h3>
+          <h3>{t('factory.latestSummary')}</h3>
           <p class="factory-prose">{card.summary}</p>
         </section>{/if}
       {#if card.checks}<section class="factory-section" data-checks>
@@ -451,49 +573,90 @@
           </dl>
         </section>
       {/if}
-      {#if reviews.length}
+      {#if outputs.length}
         <section
           class="factory-section"
-          aria-labelledby="factory-reviews-heading"
+          aria-labelledby="factory-outputs-heading"
         >
-          <h3 id="factory-reviews-heading">{t('factory.reviews')}</h3>
-          {#each reviews as review, index (`${review.round}:${review.kind}:${index}`)}
-            <article class="factory-review" data-review-round={review.round}>
+          <h3 id="factory-outputs-heading">{t('factory.outputs')}</h3>
+          {#each outputs as output (output.id)}
+            <article
+              class="factory-output"
+              data-output-kind={output.kind}
+              data-output-stage={output.stage_id}
+            >
               <header>
-                <h4>
-                  {t('factory.reviewRound', {
-                    round: review.round,
-                  })}{#if review.kind === 'integration_review'}
-                    · {t('factory.integrationReview')}{/if}
-                </h4>
-                <span
-                  >{review.verdict === 'approve'
-                    ? t('factory.reviewApproved')
-                    : t('factory.reviewChanges')}</span
-                >
+                <h4>{outputTitle(output)}</h4>
+                {#if output.kind === 'work'}<span class="factory-subtle"
+                    >{outputKindLabel(output)}</span
+                  >{:else}<span
+                    class="factory-verdict"
+                    data-verdict={output.verdict}
+                    >{outputKindLabel(output)} · {output.verdict === 'approve'
+                      ? t('factory.reviewApproved')
+                      : t('factory.reviewChanges')}</span
+                  >{/if}
               </header>
-              {#if review.recommendation}<p class="factory-prose">
-                  {review.recommendation}
-                </p>{/if}
-              <h5>{t('factory.findings')}</h5>
-              <ul class="factory-findings">
-                {#each review.findings ?? [] as finding, index (index)}<li>
-                    {typeof finding === 'string'
-                      ? finding
-                      : (finding.text ??
-                        finding.description ??
-                        JSON.stringify(finding))}
-                  </li>{:else}<li class="factory-help">
-                    {t('factory.noFindings')}
-                  </li>{/each}
-              </ul>
-              {#if review.reviewed_head_sha}<p
-                  class="factory-help factory-mono"
-                >
-                  {review.reviewed_head_sha}
-                </p>{/if}
-              <time class="factory-help" datetime={review.created_at}
-                >{timestamp(review.created_at)}</time
+              {#if output.kind === 'work'}
+                {#if output.summary}<p class="factory-prose">
+                    {output.summary}
+                  </p>{/if}
+                {#if output.result}
+                  <details
+                    class="factory-document"
+                    open={latestDocuments.has(output.id)}
+                  >
+                    <summary>{t('factory.document')}</summary>
+                    <MarkdownContent
+                      source={output.result}
+                      class="msg-markdown md-document"
+                    />
+                  </details>
+                {/if}
+                {#if output.branch || output.head_sha}
+                  <dl class="factory-facts" data-output-change>
+                    <div>
+                      <dt>{t('factory.branch')}</dt>
+                      <dd class="factory-mono">{output.branch || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>{t('factory.base')}</dt>
+                      <dd class="factory-mono">{output.base || '—'}</dd>
+                    </div>
+                    {#if output.base_sha || output.head_sha}<div>
+                        <dt>{t('factory.commitRange')}</dt>
+                        <dd class="factory-mono">
+                          {output.base_sha}..{output.head_sha}<CopyButton
+                            text={`${output.base_sha}..${output.head_sha}`}
+                          />
+                        </dd>
+                      </div>{/if}
+                  </dl>
+                {/if}
+                {#if output.checks}<h5>{t('factory.checks')}</h5>
+                  <p class="factory-prose">{output.checks}</p>{/if}
+              {:else}
+                {#if output.recommendation}<p class="factory-prose">
+                    {output.recommendation}
+                  </p>{/if}
+                <h5>{t('factory.findings')}</h5>
+                <ul class="factory-findings">
+                  {#each output.findings ?? [] as finding, index (index)}<li>
+                      {typeof finding === 'string'
+                        ? finding
+                        : (finding.text ??
+                          finding.description ??
+                          JSON.stringify(finding))}
+                    </li>{:else}<li class="factory-help">
+                      {t('factory.noFindings')}
+                    </li>{/each}
+                </ul>
+                {#if output.head_sha}<p class="factory-help factory-mono">
+                    {output.head_sha}
+                  </p>{/if}
+              {/if}
+              <time class="factory-help" datetime={output.created_at}
+                >{timestamp(output.created_at)}</time
               >
             </article>
           {/each}
@@ -597,7 +760,7 @@
       {#each model.detail.events ?? [] as event (event.id)}<li>
           <time datetime={event.at}>{timestamp(event.at)}</time>
           <div>
-            <strong>{event.event.replaceAll('_', ' ')}</strong><span
+            <strong>{eventLabel(event.event)}</strong><span
               class="factory-help"
             >
               · {event.actor}</span
@@ -662,6 +825,33 @@
             onInput={(value) => (comment = value)}
           />
         </div>
+        {#if compose === 'send_back' && workStages.length > 1}<div
+            class="factory-field"
+          >
+            <label
+              id="factory-send-back-stage-label"
+              for="factory-send-back-stage">{t('factory.sendBackStage')}</label
+            ><Dropdown
+              id="factory-send-back-stage"
+              ariaLabelledby="factory-send-back-stage-label"
+              value={sendBackStage}
+              options={[
+                {
+                  value: '',
+                  label: t('factory.sendBackDefault', {
+                    stage: sendBackDefault?.name ?? '',
+                  }),
+                },
+                ...workStages.map((stage) => ({
+                  value: stage.id,
+                  label: stage.name,
+                })),
+              ]}
+              disabled={Boolean(model.pending)}
+              onOpenChange={model.pickerOpen}
+              onValueChange={(value) => (sendBackStage = value)}
+            />
+          </div>{/if}
         {#if commentError || model.error}<Banner variant="error" role="alert"
             >{commentError || model.error}</Banner
           >{/if}
@@ -777,12 +967,12 @@
     font-weight: 550;
     font-variant-numeric: tabular-nums;
   }
-  .factory-review + .factory-review {
+  .factory-output + .factory-output {
     border-top: 1px solid var(--border);
     margin-top: 20px;
     padding-top: 16px;
   }
-  .factory-review header {
+  .factory-output header {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
@@ -790,13 +980,89 @@
     font-size: 12px;
     margin-bottom: 14px;
   }
-  .factory-review h4 {
+  .factory-output h4 {
     margin: 0;
     font-size: 13px;
   }
-  .factory-review h5 {
+  .factory-output h5 {
     margin: 16px 0 8px;
     font-size: 12px;
+  }
+  .factory-output .factory-document,
+  .factory-output .factory-facts {
+    margin-top: 12px;
+  }
+  .factory-verdict[data-verdict='approve'] {
+    color: var(--green, var(--accent));
+  }
+  .factory-verdict[data-verdict='changes_requested'] {
+    color: var(--amber);
+  }
+  .factory-document {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    padding: 10px 14px;
+  }
+  .factory-document summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 550;
+  }
+  .factory-document[open] summary {
+    margin-bottom: 10px;
+  }
+  .factory-stage-progress {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+  }
+  .factory-stage-progress li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    font-size: 12px;
+  }
+  .factory-stage-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .factory-stage-label .factory-help {
+    margin: 0;
+    font-size: 11px;
+  }
+  .factory-stage-marker {
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    color: var(--text-med);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  [data-stage-status='done'] .factory-stage-marker {
+    background: var(--surface-3);
+    color: var(--text-hi);
+  }
+  [data-stage-status='current'] .factory-stage-marker,
+  [data-stage-status='waiting'] .factory-stage-marker {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+    color: var(--text-hi);
+  }
+  [data-stage-status='pending'] .factory-stage-label strong {
+    color: var(--text-med);
+    font-weight: 500;
   }
   .factory-findings {
     padding-left: 20px;

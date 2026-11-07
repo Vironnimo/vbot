@@ -17,11 +17,14 @@
     waitingLabel,
     originLabel,
     projectName,
+    cardWorkflow,
+    stageText,
   } from './presentation.js';
 
   let { model, onNavigate } = $props();
   let createOpen = $state(false);
   let projectId = $state('');
+  let workflowId = $state('');
   let title = $state('');
   let description = $state('');
   let createError = $state('');
@@ -45,11 +48,37 @@
   const createOptions = $derived(
     enabled.map((project) => ({ value: project.id, label: project.name })),
   );
+  const createSetup = $derived(
+    model.setups.find((setup) => setup.project_id === projectId),
+  );
+  const workflowOptions = $derived(
+    (createSetup?.workflows ?? []).map((workflow) => ({
+      value: workflow.id,
+      label:
+        workflow.id === createSetup.default_workflow
+          ? t('factory.defaultWorkflowTab', { name: workflow.name })
+          : workflow.name,
+      secondaryLabel: workflow.description,
+    })),
+  );
+
+  // Each Project starts with its default Workflow preselected.
+  function chooseProject(id) {
+    projectId = id;
+    workflowId =
+      model.setups.find((setup) => setup.project_id === id)?.default_workflow ??
+      '';
+  }
 
   function newCard() {
-    projectId ||= enabled.some((project) => project.id === model.projectFilter)
-      ? model.projectFilter
-      : (enabled[0]?.id ?? '');
+    if (!projectId)
+      chooseProject(
+        enabled.some((project) => project.id === model.projectFilter)
+          ? model.projectFilter
+          : (enabled[0]?.id ?? ''),
+      );
+    else if (!workflowOptions.some((option) => option.value === workflowId))
+      chooseProject(projectId);
     createError = '';
     createOpen = true;
   }
@@ -67,6 +96,7 @@
       project_id: projectId,
       title: title.trim(),
       description: description.trim(),
+      ...(workflowId ? { workflow: workflowId } : {}),
     });
     if (!result) return;
     createOpen = false;
@@ -195,6 +225,7 @@
 </div>
 
 {#snippet cardTile(card)}
+  {@const workflow = cardWorkflow(card, model.setups)}
   <button
     class="factory-card"
     data-card-id={card.id}
@@ -204,6 +235,11 @@
       >{projectName(model.catalog, card.project_id)}</span
     >
     <span class="factory-card-title">{card.title}</span>
+    {#if workflow}<span class="factory-card-stage" data-card-stage
+        ><span>{workflow.name}</span>{#if card.stage}<span aria-hidden="true"
+            >·</span
+          ><span>{stageText(card.stage)}</span>{/if}</span
+      >{/if}
     {#if card.integration_landing}<span
         class="factory-card-landing-status"
         data-landing-status={card.integration_landing.status}
@@ -257,9 +293,23 @@
             ariaLabel={t('factory.project')}
             disabled={Boolean(model.pending)}
             onOpenChange={model.pickerOpen}
-            onValueChange={(value) => (projectId = value)}
+            onValueChange={chooseProject}
           />
         </div>
+        {#if workflowOptions.length}<div class="factory-field">
+            <label
+              id="factory-create-workflow-label"
+              for="factory-create-workflow">{t('factory.workflow')}</label
+            ><Dropdown
+              id="factory-create-workflow"
+              ariaLabelledby="factory-create-workflow-label"
+              value={workflowId}
+              options={workflowOptions}
+              disabled={Boolean(model.pending)}
+              onOpenChange={model.pickerOpen}
+              onValueChange={(value) => (workflowId = value)}
+            />
+          </div>{/if}
         <div class="factory-field">
           <label for="factory-create-title">{t('factory.cardTitle')}</label
           ><TextField
