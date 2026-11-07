@@ -60,6 +60,8 @@
     draftScope = 0,
     initialSessionFilters = null,
     onSessionFiltersChange,
+    initialSessionListOpen = false,
+    onSessionListOpenChange = () => {},
     onDisplayedSession = () => {},
     // Reports this Chat's Main menu indicator: `{count, tone, label}` while
     // Agents hold unread results, otherwise null.
@@ -364,7 +366,7 @@
     },
   });
 
-  let showSessionDrawer = $state(false);
+  let showSessionDrawer = $state(untrack(() => initialSessionListOpen));
   let activityPanelOpen = $state(false);
   let activityRunningCount = $state(0);
   // Counts the Sessions this area's drafts created; each one refreshes the
@@ -758,7 +760,10 @@
     onSelectAgent={handleSelectPickerAgent}
     sessionListOpen={showSessionDrawer}
     sessionListDisabled={!target.activeAgent}
-    onToggleSessionList={() => (showSessionDrawer = !showSessionDrawer)}
+    onToggleSessionList={() => {
+      showSessionDrawer = !showSessionDrawer;
+      onSessionListOpenChange(showSessionDrawer);
+    }}
     {newSessionDisabled}
     onNewSession={navigation.handleNewSession}
     {otherArea}

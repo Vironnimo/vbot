@@ -231,7 +231,7 @@ describe('ChatWorkspace', () => {
     },
   );
 
-  it('restores all Session filters independently after a fresh workspace mount', async () => {
+  it('restores Session list visibility and filters per area after a fresh workspace mount', async () => {
     const switches = () => [
       ...document.querySelectorAll(
         '.session-drawer__filter-menu [role="switch"]',
@@ -283,7 +283,10 @@ describe('ChatWorkspace', () => {
     action(0, 'Session list');
     action(0, 'Split view');
     await waitForCondition(() => button(pane(1), 'Session list'));
-    openFilters(1);
+    // The second list was left open, the first one closed.
+    expect(pane(0).querySelector('.session-drawer')).toBeNull();
+    pane(1).querySelector('.session-drawer__filter-trigger').click();
+    flushSync();
     expect(
       switches().map((toggle) => toggle.getAttribute('aria-checked')),
     ).toEqual(Array(5).fill('false'));

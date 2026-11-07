@@ -7,7 +7,9 @@
   import { tooltip } from '$lib/tooltip.js';
   import {
     loadSessionListFilters,
+    loadSessionListOpen,
     saveSessionListFilters,
+    saveSessionListOpen,
   } from '$lib/sessionListView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
@@ -40,6 +42,7 @@
   let sessions = $state([null, null]);
   let firstSessionFilters = $state(loadSessionListFilters(0));
   const secondSessionFilters = loadSessionListFilters(1);
+  const sessionListsOpen = paneIds.map(loadSessionListOpen);
   let sameSession = $derived(
     Boolean(sessions[0]?.sessionId) &&
       sessions[0]?.agentId === sessions[1]?.agentId &&
@@ -725,6 +728,9 @@
                 firstSessionFilters = filters;
                 saveSessionListFilters(0, filters);
               }}
+              initialSessionListOpen={sessionListsOpen[index]}
+              onSessionListOpenChange={(open) =>
+                saveSessionListOpen(index, open)}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
           {:else if secondChatCreated}
@@ -747,6 +753,9 @@
                 firstSessionFilters}
               onSessionFiltersChange={(filters) =>
                 saveSessionListFilters(1, filters)}
+              initialSessionListOpen={sessionListsOpen[index]}
+              onSessionListOpenChange={(open) =>
+                saveSessionListOpen(index, open)}
               sharedSelectedAgentId={secondAgent}
               selectedProjectId={secondProject}
               sharedSelectedProjectAgentId={secondProjectAgent}

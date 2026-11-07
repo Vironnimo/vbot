@@ -66,6 +66,26 @@ export function saveSessionListFilters(area, filters) {
   }
 }
 
+// Whether an area's Session list is open; closed unless stored open.
+export function loadSessionListOpen(area) {
+  try {
+    return localStorage.getItem(`vbot.chat.sessionListOpen.${area}`) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveSessionListOpen(area, open) {
+  try {
+    localStorage.setItem(
+      `vbot.chat.sessionListOpen.${area}`,
+      String(open === true),
+    );
+  } catch {
+    // Storage is optional; the toggle keeps working in memory.
+  }
+}
+
 export function createSessionListState() {
   return {
     sessions: [],

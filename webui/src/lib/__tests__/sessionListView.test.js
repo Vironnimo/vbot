@@ -8,11 +8,13 @@ import {
   createSessionListState,
   isSessionHiddenByDefault,
   loadSessionListFilters,
+  loadSessionListOpen,
   overlayLiveSessionActivity,
   selectSession,
   sessionDisplayName,
   sessionParentReference,
   saveSessionListFilters,
+  saveSessionListOpen,
   visibleSessionsForSelection,
 } from '../sessionListView.js';
 import { sessionActivityFromSnapshot } from '../sessionActivity.js';
@@ -80,6 +82,8 @@ describe('Session filter storage', () => {
     expect(() =>
       saveSessionListFilters(0, createSessionListFilters()),
     ).not.toThrow();
+    expect(loadSessionListOpen(0)).toBe(false);
+    expect(() => saveSessionListOpen(0, true)).not.toThrow();
   });
 });
 
