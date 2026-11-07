@@ -11,6 +11,7 @@ import {
   calls,
   actionButtons,
   setup,
+  step,
   templates,
   t,
   tick,
@@ -19,57 +20,39 @@ import {
 import { assistantRun, outputItem } from './timelineItems.support.js';
 
 const implementWorkflow = setup.workflows[0];
-const lane = { source: 'team', agent: 'builder', model: '', effort: '' };
-const stage = (id, name, kind, extra) => ({
-  id,
-  name,
-  kind,
-  instructions: '',
-  lanes: [lane],
-  approval: false,
-  ...extra,
-});
 const planImplement = {
   id: 'planimpl',
   name: 'Plan, then implement',
   description: '',
-  stages: [
-    stage('plan', 'Plan', 'work', { output: 'document' }),
-    stage('planreview', 'Plan review', 'review', {
-      target: 'plan',
-      rounds: 2,
-    }),
-    stage('implement', 'Implement', 'work', { output: 'changes' }),
-    stage('review', 'Review', 'review', { target: 'implement', rounds: 2 }),
+  steps: [
+    step('plan', 'Plan'),
+    step('planreview', 'Plan review', { after: ['plan'], returns_to: 'plan' }),
+    step('implement', 'Implement', { after: ['planreview'] }),
+    step('review', 'Review', { after: ['implement'], returns_to: 'implement' }),
   ],
 };
-const output = (id, stageId, name, kind, extra = {}) => ({
+const output = (id, stepId, name, kind, extra = {}) => ({
   id,
-  stage_id: stageId,
-  stage_name: name,
+  step: stepId,
+  step_name: name,
   kind,
-  lane: 0,
   pass: 1,
-  participant_id: `${stageId}-1`,
-  summary: '',
-  result: '',
-  checks: '',
-  branch: '',
-  base: '',
-  base_sha: '',
-  head_sha: '',
-  verdict: '',
-  recommendation: '',
-  findings: [],
+  participant_id: stepId,
   created_at: '2026-11-07T09:00:00Z',
   ...extra,
 });
 const editorText = () =>
   document.querySelector('.factory-setup-editor').textContent;
-const stageIds = () =>
-  [...document.querySelectorAll('#factory-workflow-panel [data-stage-id]')].map(
-    (node) => node.dataset.stageId,
+const stepIds = () =>
+  [...document.querySelectorAll('.factory-diagram [data-step-id]')].map(
+    (node) => node.dataset.stepId,
   );
+async function selectStep(id) {
+  document
+    .querySelector(`.factory-diagram [data-step-id="${id}"] button`)
+    .click();
+  await tick();
+}
 
 describe('Factory Board', () => {
   it('groups every state, hides empty Proposals and keeps discarded cards behind their filter', async () => {
@@ -77,8 +60,6 @@ describe('Factory Board', () => {
       'proposal',
       'queued',
       'working',
-      'integrating',
-      'reviewing',
       'waiting',
       'done',
       'discarded',
@@ -91,13 +72,9 @@ describe('Factory Board', () => {
             ? {
                 workflow_id: 'drafts',
                 workflow: { id: 'drafts', name: 'Plan from drafts' },
-                stage: {
-                  index: 0,
+                step: {
                   id: 'drafts',
                   name: 'Draft plans',
-                  kind: 'work',
-                  lane: 1,
-                  lanes: 3,
                 },
               }
             : {}),
@@ -113,20 +90,17 @@ describe('Factory Board', () => {
       ].map((node) => node.dataset.cardId);
     expect(ids('proposals')).toEqual(['proposal']);
     expect(ids('backlog')).toEqual(['queued']);
-    expect(ids('progress')).toEqual(['working', 'integrating']);
-    expect(ids('review')).toEqual(['reviewing']);
+    expect(ids('progress')).toEqual(['working']);
     expect(ids('waiting')).toEqual(['waiting']);
     expect(ids('done')).toEqual(['done']);
-    const stageOf = (id) =>
-      document.querySelector(`[data-card-id="${id}"] [data-card-stage]`)
+    const stepOf = (id) =>
+      document.querySelector(`[data-card-id="${id}"] [data-card-step]`)
         .textContent;
-    expect(stageOf('working')).toContain('Plan from drafts');
-    expect(stageOf('working')).toContain(
-      t('factory.stageLane', { stage: 'Draft plans', lane: 2, lanes: 3 }),
-    );
-    expect(stageOf('queued')).toBe('Implement');
+    expect(stepOf('working')).toContain('Plan from drafts');
+    expect(stepOf('working')).toContain('Draft plans');
+    expect(stepOf('queued')).toBe('Implement');
     expect(document.querySelector('.factory-wip').textContent).toBe(
-      t('factory.running', { running: 3, limit: 2 }),
+      t('factory.running', { running: 1, limit: 2 }),
     );
     button(t('factory.showDiscarded')).click();
     await tick();
@@ -194,10 +168,7 @@ describe('Factory card decisions', () => {
     ['proposal', '', ['approveProposal', 'discard']],
     ['queued', '', ['discard']],
     ['working', '', ['discard']],
-    ['reviewing', '', ['discard']],
-    ['integrating', '', ['discard']],
     ['waiting', 'checkpoint', ['acceptCheckpoint', 'sendBack', 'discard']],
-    ['waiting', 'finished', ['acceptIntegrate', 'sendBack', 'discard']],
     [
       'waiting',
       'finished',
@@ -207,24 +178,25 @@ describe('Factory card decisions', () => {
     ['waiting', 'no_agreement', ['acceptAnyway', 'sendBack', 'discard']],
     ['waiting', 'blocked', ['answer', 'discard']],
     ['waiting', 'run_failed', ['retry', 'sendBack', 'discard']],
-    ['waiting', 'review_failed', ['retry', 'sendBack', 'discard']],
     ['waiting', 'restart', ['retry', 'sendBack', 'discard']],
     ['waiting', 'budget_exhausted', ['retry', 'sendBack', 'discard']],
-    ['waiting', 'integration_failed', ['retry', 'sendBack', 'discard']],
     ['done', '', ['delete']],
     ['discarded', '', ['delete']],
   ])(
     'offers only state-appropriate actions for %s / %s',
     async (state, reason, expected, workflow = implementWorkflow) => {
       const { bridge } = createBridge([
-        card('fct-a', state, { waiting_reason: reason, runtime: { workflow } }),
+        card('fct-a', state, {
+          waiting_reason: reason,
+          runtime: { workflow },
+          step: { id: 'integrate', name: 'Integrate' },
+        }),
       ]);
       await render(bridge, '/card/fct-a');
       const labels = {
         approveProposal: t('factory.approveProposal'),
         discard: t('factory.discard'),
-        acceptCheckpoint: t('factory.acceptCheckpoint'),
-        acceptIntegrate: t('factory.acceptIntegrate'),
+        acceptCheckpoint: t('factory.acceptCheckpoint', { step: 'Integrate' }),
         acceptDone: t('factory.acceptDone'),
         acceptAnyway: t('factory.acceptAnyway'),
         sendBack: t('factory.sendBack'),
@@ -236,7 +208,7 @@ describe('Factory card decisions', () => {
     },
   );
 
-  it('foregrounds the review recommendation and keeps evidence, provenance, cost and permissions reachable', async () => {
+  it('keeps step results, provenance, cost and permissions reachable and approves only the displayed revision', async () => {
     const origin = {
       project_id: 'project-a',
       agent_id: 'builder',
@@ -250,15 +222,11 @@ describe('Factory card decisions', () => {
     };
     const { bridge, state, operation } = createBridge([
       card('fct-a', 'waiting', {
-        waiting_reason: 'finished',
+        waiting_reason: 'checkpoint',
         runtime: { workflow: implementWorkflow },
-        recommendation: 'test-owned recommendation',
+        step: { id: 'integrate', name: 'Integrate' },
+        done_steps: ['implement', 'review'],
         summary: 'test-owned summary',
-        checks: 'test-owned checks',
-        branch: 'feature',
-        base: 'main',
-        base_sha: 'base123',
-        head_sha: 'head456',
         origin: 'user',
         origin_session: origin,
         origin_run: 'run-source',
@@ -267,46 +235,35 @@ describe('Factory card decisions', () => {
     state.details['fct-a'] = {
       approvals: [permission],
       outputs: [
-        output(1, 'review', 'Review', 'review', {
-          verdict: 'approve',
-          findings: ['test-owned finding'],
-          head_sha: 'head456',
+        output(1, 'review', 'Review', 'work', {
+          summary: 'test-owned review result',
         }),
       ],
       events: [
         {
           id: 1,
-          event: 'reviewed',
-          actor: 'review-1',
+          event: 'submitted',
+          actor: 'review',
           at: '2026-11-07T09:00:00Z',
-          detail: { state: 'waiting', previous_state: 'reviewing' },
+          detail: { state: 'waiting', previous_state: 'working' },
         },
       ],
     };
     await render(bridge, '/card/fct-a');
-    expect(document.querySelector('[data-integration-landing]')).toBeNull();
     expect(
-      document.querySelector('[data-recommendation]').textContent,
-    ).toContain('test-owned recommendation');
-    expect(document.querySelector('[data-checks]').textContent).toContain(
-      'test-owned checks',
-    );
-    expect(document.querySelector('[data-submission]').textContent).toContain(
-      'base123..head456',
-    );
-    const review = document.querySelector('[data-output-stage="review"]');
-    expect(review.textContent).toContain('test-owned finding');
-    expect(review.querySelector('[data-verdict]').textContent).toContain(
-      t('factory.reviewApproved'),
-    );
+      document.querySelector('[data-output-step="review"]').textContent,
+    ).toContain('test-owned review result');
     expect(
       document.querySelector('[aria-labelledby="factory-timeline-heading"]')
         .textContent,
-    ).toContain(t('factory.event.reviewed'));
+    ).toContain(t('factory.event.submitted'));
     expect(document.querySelector('[data-usage] dd').textContent).toBe('150');
     expect(document.querySelector('.factory-cost').textContent).not.toBe(
       t('factory.costUnavailable'),
     );
+    expect(
+      document.querySelector('[data-step-id="integrate"]').dataset.stepStatus,
+    ).toBe('waiting');
     button(t('factory.provenance')).click();
     await tick();
     expect(bridge.openSession).toHaveBeenLastCalledWith(origin);
@@ -317,131 +274,16 @@ describe('Factory card decisions', () => {
       agent_id: 'owned-worker',
       session_id: 'ses-worker',
     });
-    button(t('factory.acceptIntegrate')).click();
+    button(t('factory.acceptCheckpoint', { step: 'Integrate' })).click();
     await settle();
     expect(calls(operation, 'card.accept').at(-1)[1]).toEqual({
       id: 'fct-a',
       expected_revision: 1,
     });
     expect(document.querySelector('[data-state]').dataset.state).toBe(
-      'integrating',
+      'working',
     );
   });
-
-  it.each([
-    ['pending', false, false],
-    ['approved', false, false],
-    ['changes_requested', false, false],
-    ['changes_requested', true, false],
-    ['pending', false, true],
-  ])(
-    'keeps a %s landing visible with its evidence and no automatic revert, historical=%s, baseUnknown=%s',
-    async (status, historical, baseUnknown) => {
-      const landing = {
-        head_sha: 'test-owned-captured-head',
-        base_sha: baseUnknown ? '' : 'test-owned-captured-base',
-        landing_sha: 'test-owned-landing-commit',
-        branch_head_sha: null,
-        status,
-        extra_paths: status === 'approved' ? [] : ['src/additional.py'],
-        merge_paths: status === 'changes_requested' ? ['src/merged.py'] : [],
-      };
-      const currentState = baseUnknown
-        ? 'integrating'
-        : historical
-          ? 'working'
-          : status === 'pending'
-            ? 'reviewing'
-            : 'waiting';
-      const { bridge, state, operation } = createBridge([
-        card('fct-a', currentState, {
-          head_sha: baseUnknown
-            ? 'test-owned-previous-reviewed-head'
-            : historical
-              ? 'test-owned-new-submission'
-              : landing.head_sha,
-          waiting_reason: status === 'approved' ? 'finished' : 'no_agreement',
-          runtime: { workflow: implementWorkflow },
-          integration_landing: landing,
-        }),
-      ]);
-      await render(bridge);
-      const labels = {
-        pending: t('factory.landing.pending'),
-        approved: t('factory.landing.approved'),
-        changes_requested: t('factory.landing.changesRequested'),
-      };
-      const tile = document.querySelector('[data-card-id="fct-a"]');
-      expect(tile.querySelector('[data-landing-status]').textContent).toBe(
-        historical ? t('factory.landing.alreadyLanded') : labels[status],
-      );
-      tile.click();
-      await settle();
-      const notice = document.querySelector('[data-integration-landing]');
-      expect(notice.dataset.integrationLanding).toBe(status);
-      expect(notice.getAttribute('role')).toBe('status');
-      expect(notice.querySelector('h3').textContent).toBe(labels[status]);
-      expect(notice.textContent).toContain(t('factory.landing.alreadyLanded'));
-      expect(notice.textContent).toContain(
-        t('factory.landing.noAutomaticRevert'),
-      );
-      expect(Boolean(notice.querySelector('[data-landing-historical]'))).toBe(
-        historical,
-      );
-      expect(
-        notice.querySelector('[data-landing-commit]').textContent,
-      ).toContain(landing.landing_sha);
-      for (const [attribute, expected] of [
-        ['data-landing-extra-paths', landing.extra_paths],
-        ['data-landing-merge-paths', landing.merge_paths],
-      ]) {
-        expect(
-          [...notice.querySelectorAll(`[${attribute}] li`)].map(
-            (entry) => entry.textContent,
-          ),
-        ).toEqual(expected);
-        expect(Boolean(notice.querySelector(`[${attribute}]`))).toBe(
-          expected.length > 0,
-        );
-      }
-      if (landing.merge_paths.length)
-        expect(
-          notice.querySelector('[data-landing-merge-paths]').textContent,
-        ).toContain(t('factory.landing.mergeHelp'));
-      const writeText = vi.fn().mockResolvedValue(undefined);
-      vi.stubGlobal('navigator', { clipboard: { writeText } });
-      button(t('factory.landing.copyCommit'), notice).click();
-      await tick();
-      expect(writeText).toHaveBeenLastCalledWith(landing.landing_sha);
-      if (landing.extra_paths.length) {
-        button(t('factory.landing.copyExtraPaths'), notice).click();
-        await tick();
-        expect(writeText).toHaveBeenLastCalledWith(
-          landing.extra_paths.join('\n'),
-        );
-      }
-      expect(actionButtons()).toEqual(
-        historical || status === 'pending'
-          ? [t('factory.discard')]
-          : [
-              status === 'approved'
-                ? t('factory.acceptIntegrate')
-                : t('factory.acceptAnyway'),
-              t('factory.sendBack'),
-              t('factory.discard'),
-            ],
-      );
-      state.cards[0].revision += 1;
-      bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 2 });
-      await settle();
-      expect(
-        document.querySelector('[data-integration-landing]'),
-      ).not.toBeNull();
-      expect(calls(operation, 'card.accept')).toHaveLength(0);
-      expect(calls(operation, 'card.send_back')).toHaveLength(0);
-      expect(calls(operation, 'card.discard')).toHaveLength(0);
-    },
-  );
 
   it('labels a user continuation waiting for WIP without reopening its reviewed objective', async () => {
     const { bridge, state } = createBridge([
@@ -507,86 +349,64 @@ describe('Factory card decisions', () => {
     },
   );
 
-  it('shows Workflow progress and every stage result, and sends back to a chosen work stage', async () => {
+  it('shows dependency progress and every result, and sends back to any chosen step', async () => {
     const { bridge, state, operation } = createBridge([
       card('fct-a', 'waiting', {
         waiting_reason: 'no_agreement',
         workflow_id: 'planimpl',
         runtime: { workflow: planImplement },
-        stage: {
-          index: 3,
-          id: 'review',
-          name: 'Review',
-          kind: 'review',
-          lane: 0,
-          lanes: 1,
-        },
+        step: { id: 'review', name: 'Review' },
+        done_steps: ['plan', 'planreview', 'implement'],
       }),
     ]);
     state.details['fct-a'] = {
       outputs: [
-        output(1, 'plan', 'Plan', 'work', {
+        output(1, 'plan', 'Plan', 'work', { result: '# test-owned old plan' }),
+        output(2, 'plan', 'Plan', 'work', {
+          pass: 2,
           summary: 'test-owned plan summary',
-          result: '# test-owned plan\n\nFirst step',
+          result: '# test-owned plan',
         }),
-        output(2, 'planreview', 'Plan review', 'review', {
-          verdict: 'approve',
+        output(3, 'planreview', 'Plan review', 'work', {
+          summary: 'test-owned plan approved',
         }),
-        output(3, 'implement', 'Implement', 'work', {
-          branch: 'feature',
-          base: 'main',
-          base_sha: 'base1',
-          head_sha: 'head2',
-          checks: 'test-owned checks',
+        output(4, 'implement', 'Implement', 'work', {
+          summary: 'test-owned changes and checks',
         }),
-        output(4, 'review', 'Review', 'review', {
-          verdict: 'changes_requested',
-          recommendation: 'test-owned recommendation',
+        output(5, 'review', 'Review', 'changes', {
           findings: ['test-owned finding'],
-          head_sha: 'head2',
+          target: 'implement',
         }),
       ],
     };
     await render(bridge, '/card/fct-a');
     expect(
-      [
-        ...document.querySelectorAll(
-          '[data-workflow-progress="planimpl"] [data-stage-status]',
-        ),
-      ].map((node) => node.dataset.stageStatus),
+      [...document.querySelectorAll('[data-step-status]')].map(
+        (node) => node.dataset.stepStatus,
+      ),
     ).toEqual(['done', 'done', 'done', 'waiting']);
-    const result = (id) =>
-      document.querySelector(`[data-output-stage="${id}"]`);
-    expect(result('plan').dataset.outputKind).toBe('work');
-    expect(result('plan').textContent).toContain('test-owned plan summary');
-    expect(
-      result('plan').querySelector('.factory-document h1').textContent,
-    ).toBe('test-owned plan');
-    expect(
-      result('implement').querySelector('[data-output-change]').textContent,
-    ).toContain('base1..head2');
-    expect(result('implement').textContent).toContain('test-owned checks');
-    expect(result('planreview').textContent).toContain(
-      t('factory.reviewApproved'),
+    const plans = document.querySelectorAll('[data-output-step="plan"]');
+    expect(plans[0].querySelector('details').open).toBe(false);
+    expect(plans[1].querySelector('details').open).toBe(true);
+    expect(plans[1].querySelector('h1').textContent).toBe('test-owned plan');
+    expect(plans[1].querySelector('h4').textContent).toContain(
+      t('factory.passNumber', { pass: 2 }),
     );
-    expect(result('planreview').textContent).toContain(t('factory.noFindings'));
-    expect(
-      result('review').querySelector('[data-verdict]').dataset.verdict,
-    ).toBe('changes_requested');
-    expect(result('review').textContent).toContain(t('factory.reviewChanges'));
+    const result = (id) => document.querySelector(`[data-output-step="${id}"]`);
+    expect(result('implement').textContent).toContain(
+      'test-owned changes and checks',
+    );
     expect(result('review').textContent).toContain('test-owned finding');
-    expect(actionButtons()).toEqual([
-      t('factory.acceptAnyway'),
-      t('factory.sendBack'),
-      t('factory.discard'),
-    ]);
+    expect(result('review').textContent).toContain(
+      t('factory.returnedTo', { step: 'Implement' }),
+    );
     button(t('factory.sendBack')).click();
     await tick();
     expect(
-      document.getElementById('factory-send-back-stage').textContent,
-    ).toContain(t('factory.sendBackDefault', { stage: 'Implement' }));
+      document.getElementById('factory-send-back-step').textContent,
+    ).toContain(t('factory.sendBackDefault', { step: 'Implement' }));
     fill('factory-response', 'test-owned rework');
-    await choose('factory-send-back-stage', 'Plan');
+    await choose('factory-send-back-step', 'Plan review');
     button(
       t('factory.sendBack'),
       document.querySelector('[role="dialog"]'),
@@ -595,33 +415,29 @@ describe('Factory card decisions', () => {
     expect(calls(operation, 'card.send_back').at(-1)[1]).toEqual({
       id: 'fct-a',
       comment: 'test-owned rework',
-      stage: 'plan',
+      step: 'planreview',
     });
+    // A reset dependency no longer appears done, even if it precedes the active step.
+    state.cards[0].done_steps = ['plan'];
+    state.cards[0].step = { id: 'planreview', name: 'Plan review' };
+    bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 3 });
+    await settle();
+    expect(
+      [...document.querySelectorAll('[data-step-status]')].map(
+        (node) => node.dataset.stepStatus,
+      ),
+    ).toEqual(['done', 'current', 'pending', 'pending']);
   });
 
   it('confirms destructive actions in navigation layers, deletes only final cards and repairs their route', async () => {
     const { bridge, operation, state } = createBridge([
       card('fct-a', 'waiting', {
         waiting_reason: 'no_agreement',
-        head_sha: 'test-owned-head',
-        integration_landing: {
-          head_sha: 'test-owned-head',
-          base_sha: 'test-owned-base',
-          landing_sha: 'test-owned-landing',
-          branch_head_sha: null,
-          status: 'changes_requested',
-          extra_paths: [],
-          merge_paths: [],
-        },
       }),
     ]);
     await render(bridge, '/card/fct-a');
     button(t('factory.discard')).click();
     await tick();
-    expect(
-      document.querySelector('[role="dialog"] [data-landing-discard-warning]')
-        .textContent,
-    ).toBe(t('factory.landing.discardWarning'));
     bridge.back();
     await tick();
     expect(calls(operation, 'card.discard')).toHaveLength(0);
@@ -633,7 +449,6 @@ describe('Factory card decisions', () => {
     ).click();
     await settle();
     expect(calls(operation, 'card.discard').at(-1)[1]).toEqual({ id: 'fct-a' });
-    expect(document.querySelector('[data-integration-landing]')).not.toBeNull();
     button(t('factory.delete')).click();
     await tick();
     bridge.back();
@@ -729,12 +544,13 @@ describe('Factory existing-record editors', () => {
     );
   });
 
-  it('saves lane Model choices, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
+  it('saves step Model choices, warns about equal Models, waits for number completion and retains failed drafts', async () => {
     const { bridge, operation, state } = createBridge();
     await render(bridge, '/setups/project-a');
+    await selectStep('review');
     expect(document.getElementById('factory-review-rounds').value).toBe('2');
     expect(editorText()).not.toContain(t('factory.sameModel'));
-    await choose('factory-review-0-model', 'demo/worker');
+    await choose('factory-review-model', 'demo/worker');
     await bridge.autosave.flush();
     await tick();
     expect(editorText()).toContain(t('factory.sameModel'));
@@ -744,21 +560,18 @@ describe('Factory existing-record editors', () => {
       workflows: [
         {
           id: 'implement',
-          stages: [
-            { id: 'implement', lanes: [{ agent: 'builder' }] },
+          steps: [
+            { id: 'implement', agent: 'builder' },
             {
               id: 'review',
-              target: 'implement',
+              returns_to: 'implement',
               rounds: 2,
-              lanes: [
-                {
-                  source: 'team',
-                  agent: 'critic',
-                  model: 'demo/worker',
-                  effort: '',
-                },
-              ],
+              source: 'team',
+              agent: 'critic',
+              model: 'demo/worker',
+              effort: '',
             },
+            { id: 'integrate', approval: true },
           ],
         },
       ],
@@ -775,22 +588,24 @@ describe('Factory existing-record editors', () => {
     flushSync();
     expect(calls(operation, 'setup.update')).toHaveLength(2);
     expect(
-      calls(operation, 'setup.update').at(-1)[1].workflows[0].stages[1].rounds,
+      calls(operation, 'setup.update').at(-1)[1].workflows[0].steps[1].rounds,
     ).toBe(3);
     state.handlers['setup.update'] = () =>
       Promise.reject(new Error('test-owned write failure'));
-    fill('factory-base-branch', 'release');
+    fill('factory-review-task', 'test-owned changed task');
     expect(await bridge.autosave.flush()).toBe(false);
     await tick();
     bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 2 });
     await settle();
-    expect(document.getElementById('factory-base-branch').value).toBe(
-      'release',
+    expect(document.getElementById('factory-review-task').value).toBe(
+      'test-owned changed task',
     );
     expect(calls(operation, 'setup.get')).toHaveLength(1);
     delete state.handlers['setup.update'];
     expect(await bridge.autosave.flush()).toBe(true);
-    expect(state.setups[0].base_branch).toBe('release');
+    expect(state.setups[0].workflows[0].steps[1].task).toBe(
+      'test-owned changed task',
+    );
     const writes = calls(operation, 'setup.update').length;
     state.setups = [];
     bridge.invalidate({ resource: 'setups', ids: ['project-a'], revision: 0 });
@@ -800,117 +615,116 @@ describe('Factory existing-record editors', () => {
     expect(calls(operation, 'setup.update')).toHaveLength(writes);
   });
 
-  it('edits stages and lanes, refuses what the server would refuse and keeps the saved Workflow', async () => {
+  it('edits steps through the diagram and repairs dependencies when reordering or removing them', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge, '/setups/project-a');
-    const location = (stageName) =>
-      t('factory.location.stage', { workflow: 'Implement', stage: stageName });
-    const stageNode = (id) =>
-      document.querySelector(`#factory-workflow-panel [data-stage-id="${id}"]`);
-    expect(stageIds()).toEqual(['implement', 'review']);
-    button(t('factory.addLane'), stageNode('implement')).click();
+    expect(stepIds()).toEqual(['implement', 'review', 'integrate']);
+    expect(
+      document.querySelectorAll('.factory-edge:not(.factory-edge--back)'),
+    ).toHaveLength(2);
+    expect(document.querySelectorAll('.factory-edge--back')).toHaveLength(1);
+    expect(
+      document.querySelector('[data-step-id="integrate"] .factory-node-gate'),
+    ).not.toBeNull();
+    button(t('factory.addStep')).click();
     await tick();
-    await choose('factory-implement-1-agent', 'Critic');
+    const added = stepIds().at(-1);
     expect(await bridge.autosave.flush()).toBe(false);
     await tick();
     expect(editorText()).toContain(
-      t('factory.invalid.integratorLanes', { location: location('Implement') }),
-    );
-    button(t('factory.removeLane', { lane: 2, stage: 'Implement' })).click();
-    await tick();
-    document.getElementById('factory-implement-approval').click();
-    button(t('factory.addLane'), stageNode('review')).click();
-    await tick();
-    await choose('factory-review-1-agent', 'Planner');
-    button(t('factory.addWorkStage')).click();
-    await tick();
-    const added = stageIds()[2];
-    button(
-      t('factory.moveStageUp', { stage: t('factory.newWorkStage') }),
-    ).click();
-    await tick();
-    expect(stageIds()).toEqual(['implement', added, 'review']);
-    expect(await bridge.autosave.flush()).toBe(false);
-    await tick();
-    expect(editorText()).toContain(
-      t('factory.invalid.laneAgent', {
-        location: location(t('factory.newWorkStage')),
+      t('factory.invalid.stepAgent', {
+        location: t('factory.location.step', {
+          workflow: 'Implement',
+          step: 'Step 4',
+        }),
       }),
     );
     fill(`factory-${added}-name`, 'Notes');
-    await choose(`factory-${added}-0-agent`, 'Builder');
-    await choose(`factory-${added}-output`, t('factory.output.document'));
-    await choose('factory-review-target', 'Notes');
-    expect(await bridge.autosave.flush()).toBe(true);
-    const [implement, review] = implementWorkflow.stages;
-    expect(
-      calls(operation, 'setup.update').at(-1)[1].workflows[0].stages,
-    ).toEqual([
-      { ...implement, approval: true },
-      {
-        id: added,
-        name: 'Notes',
-        kind: 'work',
-        instructions: '',
-        lanes: [{ source: 'team', agent: 'builder', model: '', effort: '' }],
-        approval: false,
-        output: 'document',
-      },
-      {
-        ...review,
-        target: added,
-        lanes: [
-          ...review.lanes,
-          { source: 'agent', agent: 'planner', model: '', effort: '' },
-        ],
-      },
-    ]);
-    bridge.invalidate({ resource: 'setups', ids: ['project-a'], revision: 2 });
-    await settle();
-    expect(stageIds()).toEqual(['implement', added, 'review']);
-    expect(
-      document.getElementById('factory-review-target').textContent.trim(),
-    ).toBe('Notes');
-    expect(
-      document
-        .getElementById('factory-implement-approval')
-        .getAttribute('aria-checked'),
-    ).toBe('true');
-    button(t('factory.removeStage', { stage: 'Notes' })).click();
-    await tick();
+    await choose(`factory-${added}-agent`, 'Builder');
     expect(await bridge.autosave.flush()).toBe(false);
+    fill(`factory-${added}-task`, 'test-owned notes task');
+    button(t('factory.moveStepUp', { step: 'Notes' })).click();
     await tick();
-    expect(editorText()).toContain(
-      t('factory.invalid.reviewTarget', { location: location('Review') }),
+    expect(stepIds()).toEqual(['implement', 'review', added, 'integrate']);
+    document.getElementById(`factory-${added}-after-review`).click();
+    await tick();
+    document.getElementById(`factory-${added}-approval`).click();
+    await choose(`factory-${added}-returns`, 'Implement');
+    expect(await bridge.autosave.flush()).toBe(true);
+    const saved = calls(operation, 'setup.update').at(-1)[1].workflows[0].steps;
+    expect(saved[2]).toEqual(
+      step(added, 'Notes', {
+        task: 'test-owned notes task',
+        after: ['review'],
+        returns_to: 'implement',
+        approval: true,
+      }),
     );
+    await selectStep('integrate');
+    document.getElementById(`factory-integrate-after-${added}`).click();
+    await tick();
+    document.getElementById('factory-integrate-after-review').click();
+    await tick();
+    await choose('factory-integrate-returns', 'Implement');
+    await selectStep(added);
+    fill(`factory-${added}-rounds`, '');
+    // Removing an ancestor invalidates send-back targets of downstream steps too.
+    document.getElementById(`factory-${added}-after-review`).click();
+    await tick();
+    expect(await bridge.autosave.flush()).toBe(true);
+    const repaired = calls(operation, 'setup.update').at(-1)[1].workflows[0]
+      .steps;
+    expect(repaired[2].returns_to).toBe('');
+    expect(repaired[2].rounds).toBe(2);
+    expect(repaired[3].returns_to).toBe('');
+    await selectStep('integrate');
+    document.getElementById('factory-integrate-after-review').click();
+    await tick();
+    await choose('factory-integrate-returns', 'Notes');
+    await selectStep(added);
+    button(t('factory.removeStep', { step: 'Notes' })).click();
+    await tick();
+    expect(await bridge.autosave.flush()).toBe(true);
+    const remaining = calls(operation, 'setup.update').at(-1)[1].workflows[0]
+      .steps;
+    expect(remaining.map((item) => item.id)).toEqual([
+      'implement',
+      'review',
+      'integrate',
+    ]);
+    expect(remaining[2].after).toEqual(['review']);
+    expect(remaining[2].returns_to).toBe('');
+    bridge.invalidate({ resource: 'setups', ids: ['project-a'], revision: 5 });
+    await settle();
+    expect(stepIds()).toEqual(['implement', 'review', 'integrate']);
   });
 
-  it('adds Workflows from templates, previews unsaved lanes and duplicates, renames, defaults and deletes Workflows', async () => {
+  it('adds Workflows from templates, previews unsaved steps and duplicates, renames, defaults and deletes Workflows', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge, '/setups/project-a');
     vi.useFakeTimers();
     const panel = () => document.getElementById('factory-workflow-panel');
     await choose('factory-add-workflow', 'Plan');
     expect(panel().dataset.workflowId).toBe('plan');
-    expect(document.getElementById('factory-plan-instructions').value).toBe(
-      'test-owned plan instructions',
+    expect(document.getElementById('factory-plan-task').value).toBe(
+      'test-owned plan task',
     );
     expect(await bridge.autosave.flush()).toBe(false);
     await tick();
     expect(editorText()).toContain(
-      t('factory.invalid.laneAgent', {
-        location: t('factory.location.stage', {
+      t('factory.invalid.stepAgent', {
+        location: t('factory.location.step', {
           workflow: 'Plan',
-          stage: 'Plan',
+          step: 'Plan',
         }),
       }),
     );
-    await choose('factory-plan-0-agent', 'Drafter');
+    await choose('factory-plan-agent', 'Drafter');
     await vi.advanceTimersByTimeAsync(800);
     await tick();
     flushSync();
     expect(editorText()).toContain(t('factory.modelUnresolved'));
-    await choose('factory-plan-0-agent', 'Planner');
+    await choose('factory-plan-agent', 'Planner');
     await vi.advanceTimersByTimeAsync(800);
     await tick();
     flushSync();
@@ -918,10 +732,11 @@ describe('Factory existing-record editors', () => {
     expect(editorText()).not.toContain(t('factory.modelUnresolved'));
     expect(
       document
-        .querySelector('[data-stage-id="plan"] [data-effective-model]')
+        .querySelector('[data-step-id="plan"] [data-effective-model]')
         .textContent.trim(),
     ).toBe(t('factory.effectiveModel', { model: 'demo/worker' }));
-    await choose('factory-review-0-agent', 'Critic');
+    await selectStep('review');
+    await choose('factory-review-agent', 'Critic');
     fill('factory-workflow-name', 'Plan only');
     button(t('factory.makeDefault')).click();
     await tick();
@@ -946,14 +761,16 @@ describe('Factory existing-record editors', () => {
       ['implement', 'Implement'],
       ['plan', 'Plan only'],
     ]);
-    expect(payload.workflows[1].stages).toEqual([
+    expect(payload.workflows[1].steps).toEqual([
       {
-        ...templates[0].stages[0],
-        lanes: [{ source: 'agent', agent: 'planner', model: '', effort: '' }],
+        ...templates[0].steps[0],
+        source: 'agent',
+        agent: 'planner',
       },
       {
-        ...templates[0].stages[1],
-        lanes: [{ source: 'team', agent: 'critic', model: '', effort: '' }],
+        ...templates[0].steps[1],
+        source: 'team',
+        agent: 'critic',
       },
     ]);
   });
@@ -974,25 +791,19 @@ describe('Factory existing-record editors', () => {
     expect(
       document.getElementById('factory-workflow-panel').dataset.workflowId,
     ).toBe('plan');
-    expect(
-      document.getElementById(
-        document
-          .getElementById('factory-review-rounds')
-          .getAttribute('aria-describedby'),
-      ),
-    ).not.toBeNull();
     button(t('factory.createSetup')).click();
     await settle();
     expect(editorText()).toContain(
-      t('factory.invalid.laneAgent', {
-        location: t('factory.location.stage', {
+      t('factory.invalid.stepAgent', {
+        location: t('factory.location.step', {
           workflow: 'Plan',
-          stage: 'Plan',
+          step: 'Plan',
         }),
       }),
     );
-    await choose('factory-plan-0-agent', 'Planner');
-    await choose('factory-review-0-agent', 'Critic');
+    await choose('factory-plan-agent', 'Planner');
+    await selectStep('review');
+    await choose('factory-review-agent', 'Critic');
     expect(calls(operation, 'setup.update')).toHaveLength(0);
     button(t('factory.createSetup')).click();
     await settle();
@@ -1004,9 +815,9 @@ describe('Factory existing-record editors', () => {
       workflows: [
         {
           id: 'plan',
-          stages: [
-            { lanes: [{ source: 'agent', agent: 'planner' }] },
-            { lanes: [{ source: 'team', agent: 'critic' }] },
+          steps: [
+            { source: 'agent', agent: 'planner' },
+            { source: 'team', agent: 'critic' },
           ],
         },
       ],

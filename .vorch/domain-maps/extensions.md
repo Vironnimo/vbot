@@ -96,6 +96,6 @@ Read these only when your task matches - not by default.
 - Changing the bundled MCP client, transports, Tool opt-ins, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Adding or changing an Extension-owned page or configuration editor -> `webui.md` and `webui/extension-pages.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
-- Changing Factory Cards, Project setups, isolated Worker execution, independent review, acceptance or the Software Factory Board -> `extensions/factory.md`
+- Changing Factory Cards, Project setups, step execution, rework, approval or the Software Factory Board -> `extensions/factory.md`
 - Changing Factory participant instructions, continuations or Tool texts -> `extensions/factory-agent-facing-text.md`
 - Informing the Model about a background event or state change -> `model-communication.md`

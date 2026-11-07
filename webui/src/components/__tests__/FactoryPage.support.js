@@ -14,11 +14,19 @@ const { default: FactoryPage } =
   await import('../../../../resources/extensions/factory/ui/FactoryPage.svelte');
 let mounted;
 
-const lane = (source, agent, model = '') => ({
-  source,
-  agent,
-  model,
+export const step = (id, name, extra = {}) => ({
+  id,
+  name,
+  source: 'team',
+  agent: 'builder',
+  model: '',
   effort: '',
+  task: `test-owned task for ${name}`,
+  after: [],
+  approval: false,
+  returns_to: '',
+  rounds: 2,
+  ...extra,
 });
 
 export const setup = {
@@ -30,33 +38,20 @@ export const setup = {
       id: 'implement',
       name: 'Implement',
       description: 'test-owned workflow',
-      stages: [
-        {
-          id: 'implement',
-          name: 'Implement',
-          kind: 'work',
-          instructions: '',
-          lanes: [lane('team', 'builder', 'demo/worker')],
-          approval: false,
-          output: 'changes',
-        },
-        {
-          id: 'review',
-          name: 'Review',
-          kind: 'review',
-          instructions: '',
-          lanes: [lane('team', 'critic', 'demo/reviewer')],
-          approval: false,
-          target: 'implement',
-          rounds: 2,
-        },
+      steps: [
+        step('implement', 'Implement', { model: 'demo/worker' }),
+        step('review', 'Review', {
+          agent: 'critic',
+          model: 'demo/reviewer',
+          after: ['implement'],
+          returns_to: 'implement',
+        }),
+        step('integrate', 'Integrate', { after: ['review'], approval: true }),
       ],
     },
   ],
   default_workflow: 'implement',
   turn_budget: 30,
-  base_branch: 'main',
-  integration_check: 'merged',
 };
 
 export const templates = [
@@ -64,26 +59,18 @@ export const templates = [
     id: 'plan',
     name: 'Plan',
     description: 'test-owned template',
-    stages: [
-      {
-        id: 'plan',
-        name: 'Plan',
-        kind: 'work',
-        instructions: 'test-owned plan instructions',
-        lanes: [lane('agent', '')],
-        approval: false,
-        output: 'document',
-      },
-      {
-        id: 'review',
-        name: 'Review',
-        kind: 'review',
-        instructions: '',
-        lanes: [lane('agent', '')],
-        approval: false,
-        target: 'plan',
-        rounds: 2,
-      },
+    steps: [
+      step('plan', 'Plan', {
+        source: 'agent',
+        agent: '',
+        task: 'test-owned plan task',
+      }),
+      step('review', 'Review', {
+        source: 'agent',
+        agent: '',
+        after: ['plan'],
+        returns_to: 'plan',
+      }),
     ],
   },
 ];
@@ -92,16 +79,16 @@ export const templates = [
 const agentModel = (agent) =>
   ({ drafter: '', critic: 'demo/reviewer' })[agent] ?? 'demo/worker';
 
-// The server's effective Models, keyed `<workflow>/<stage>/<lane>`.
+// The server's effective Models, keyed `<workflow>/<step>`.
 export function effectiveModels(workflows = []) {
-  const found = {};
-  for (const workflow of workflows)
-    for (const stage of workflow.stages)
-      stage.lanes.forEach((entry, index) => {
-        found[`${workflow.id}/${stage.id}/${index}`] =
-          entry.model || agentModel(entry.agent);
-      });
-  return found;
+  return Object.fromEntries(
+    workflows.flatMap((workflow) =>
+      workflow.steps.map((entry) => [
+        `${workflow.id}/${entry.id}`,
+        entry.model || agentModel(entry.agent),
+      ]),
+    ),
+  );
 }
 
 export function card(id, state = 'queued', extra = {}) {
@@ -116,7 +103,7 @@ export function card(id, state = 'queued', extra = {}) {
     position: 1,
     revision: 1,
     group_id: id,
-    round: 0,
+    done_steps: [],
     runtime: {},
     created_at: '2026-11-07T09:00:00Z',
     ...extra,
@@ -184,9 +171,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
           ),
         ),
         wip: {
-          running: state.cards.filter((entry) =>
-            ['working', 'integrating', 'reviewing'].includes(entry.state),
-          ).length,
+          running: state.cards.filter((entry) => entry.state === 'working')
+            .length,
           limit: 2,
         },
         revision: 1,
@@ -281,7 +267,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
     }
     if (name.startsWith('card.')) {
       current.state = {
-        'card.accept': 'integrating',
+        'card.accept':
+          current.waiting_reason === 'finished' ? 'done' : 'working',
         'card.approve_proposal': 'queued',
         'card.send_back': 'working',
         'card.answer': 'working',

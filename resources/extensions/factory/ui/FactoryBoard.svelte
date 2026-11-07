@@ -13,12 +13,10 @@
     boardColumns,
     stateLabel,
     queuedActionLabel,
-    landingStatusLabel,
     waitingLabel,
     originLabel,
     projectName,
     cardWorkflow,
-    stageText,
   } from './presentation.js';
 
   let { model, onNavigate } = $props();
@@ -235,18 +233,10 @@
       >{projectName(model.catalog, card.project_id)}</span
     >
     <span class="factory-card-title">{card.title}</span>
-    {#if workflow}<span class="factory-card-stage" data-card-stage
-        ><span>{workflow.name}</span>{#if card.stage}<span aria-hidden="true"
+    {#if workflow}<span class="factory-card-step" data-card-step
+        ><span>{workflow.name}</span>{#if card.step}<span aria-hidden="true"
             >·</span
-          ><span>{stageText(card.stage)}</span>{/if}</span
-      >{/if}
-    {#if card.integration_landing}<span
-        class="factory-card-landing-status"
-        data-landing-status={card.integration_landing.status}
-        >{!card.integration_landing.base_sha ||
-        card.integration_landing.head_sha === card.head_sha
-          ? landingStatusLabel(card.integration_landing.status)
-          : t('factory.landing.alreadyLanded')}</span
+          ><span>{card.step.name}</span>{/if}</span
       >{/if}
     {#if card.state === 'waiting'}<span class="factory-card-reason"
         >{waitingLabel(card.waiting_reason)}</span
@@ -254,8 +244,8 @@
     {#if card.queued_action}<span class="factory-card-reason"
         >{queuedActionLabel(card.queued_action)}</span
       >{/if}
-    {#if card.recommendation && card.state === 'waiting'}<span
-        class="factory-card-preview">{card.recommendation}</span
+    {#if card.summary && card.state === 'waiting'}<span
+        class="factory-card-preview">{card.summary}</span
       >{/if}
     <span class="factory-card-meta"
       ><span>{stateLabel(card.state)}</span><span class="factory-origin-badge"
