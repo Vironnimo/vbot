@@ -75,6 +75,15 @@ async def apply_settings_change(
     if not runtime._started or runtime._startup_id != startup_id:
         return SettingsChangeEffects()
 
+    old_providers = previous.get("providers") or {}
+    new_providers = current.get("providers") or {}
+    old_claude = old_providers.get("claude_agent") or {}
+    new_claude = new_providers.get("claude_agent") or {}
+    old_path = old_claude.get("executable_path", "")
+    new_path = new_claude.get("executable_path", "")
+    if old_path != new_path:
+        await runtime._provider_operations().apply_claude_configuration(new_path)
+
     skills_changed = "skills" in refresh_sections or previous.get(
         "skill_directories"
     ) != current.get("skill_directories")

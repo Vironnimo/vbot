@@ -29,11 +29,14 @@ TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
     "subagents": timedelta(hours=24),
     "terminals": timedelta(hours=72),
     "web_fetch": timedelta(hours=72),
+    "providers": timedelta(minutes=5),
 }
 # Categories whose files vBot hands to one Session: each such file lies in the
 # folder of the Session it belongs to (``<category>/<owner>/``), so a restricted
 # Session may read its own files and no other Session's (``session_artifact_dirs``).
-SESSION_ARTIFACT_CATEGORIES: tuple[str, ...] = tuple(TEMPORARY_FILE_RETENTION)
+SESSION_ARTIFACT_CATEGORIES: tuple[str, ...] = tuple(
+    category for category in TEMPORARY_FILE_RETENTION if category != "providers"
+)
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")

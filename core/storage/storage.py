@@ -568,6 +568,7 @@ class StorageManager:
                     "connections": connections,
                     "custom": custom,
                     "openrouter": current["openrouter"],
+                    "claude_agent": current["claude_agent"],
                 }
             )
             return dict(settings["providers"]["custom"][normalized_id])
@@ -603,6 +604,7 @@ class StorageManager:
                     "connections": current["connections"],
                     "custom": custom,
                     "openrouter": current["openrouter"],
+                    "claude_agent": current["claude_agent"],
                 }
             )
             return dict(settings["providers"]["custom"][normalized_id])
@@ -627,6 +629,7 @@ class StorageManager:
                     "connections": connections,
                     "custom": custom,
                     "openrouter": current["openrouter"],
+                    "claude_agent": current["claude_agent"],
                 }
             )
             return dict(removed)
@@ -664,6 +667,7 @@ class StorageManager:
                     "connections": connections,
                     "custom": current["custom"],
                     "openrouter": current["openrouter"],
+                    "claude_agent": current["claude_agent"],
                 }
             )
 

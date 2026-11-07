@@ -35,6 +35,7 @@ NOTIFICATION_DEFAULTS = {
     "update_result": True,
     "update_available": True,
     "server_stopped": True,
+    "extension_notification": True,
 }
 
 Read = Callable[[StorageManager], Any]

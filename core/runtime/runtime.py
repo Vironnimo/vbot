@@ -1159,6 +1159,10 @@ class Runtime(RuntimeServiceGraph):
         """Start a local sweep that Runtime shutdown cancels and drains."""
         return self._provider_operations().start_local_catalog_refresh()
 
+    def start_external_catalog_refresh(self) -> asyncio.Task[None] | None:
+        """Start native discovery separately from local HTTP listing sweeps."""
+        return self._provider_operations().start_external_catalog_refresh()
+
     def start_installation_catalog_restore(self) -> asyncio.Task[None] | None:
         """Restore a lost installation catalog once, before local startup sweeps."""
         return self._provider_operations().start_installation_catalog_restore()

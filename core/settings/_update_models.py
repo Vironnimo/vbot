@@ -110,19 +110,31 @@ def _parse_providers_update(providers: Any) -> JsonObject:
     """Parse the public Provider-settings subset.
 
     Connection enablement remains owned by ``connection.set_enabled``. The
-    public Settings update surface accepts only OpenRouter routing policy so a
-    routing save cannot accidentally replace Connection state.
+    public Settings update surface accepts Provider-owned configuration so a
+    save cannot accidentally replace Connection state.
     """
 
     if not isinstance(providers, Mapping):
         raise SettingsValidationError("params.providers must be an object")
-    unsupported_fields = sorted(set(providers) - {"openrouter"})
+    unsupported_fields = sorted(set(providers) - {"openrouter", "claude_agent"})
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported providers settings: {', '.join(unsupported_fields)}"
         )
+    if not providers:
+        raise SettingsValidationError("params.providers requires a Provider setting")
+
+    result: JsonObject = {}
+    if "claude_agent" in providers:
+        from core.settings._provider_settings import normalize_claude_agent_settings
+        from core.utils.errors import StorageError
+
+        try:
+            result["claude_agent"] = normalize_claude_agent_settings(providers["claude_agent"])
+        except StorageError as error:
+            raise SettingsValidationError(str(error).replace("settings.", "params.", 1)) from error
     if "openrouter" not in providers:
-        raise SettingsValidationError("params.providers requires openrouter")
+        return result
 
     openrouter = providers["openrouter"]
     if not isinstance(openrouter, Mapping):
@@ -134,7 +146,8 @@ def _parse_providers_update(providers: Any) -> JsonObject:
         )
     if "routing" not in openrouter:
         raise SettingsValidationError("params.providers.openrouter requires routing")
-    return {"openrouter": {"routing": parse_openrouter_routing(openrouter["routing"])}}
+    result["openrouter"] = {"routing": parse_openrouter_routing(openrouter["routing"])}
+    return result
 
 
 def parse_openrouter_routing(value: Any) -> JsonObject:

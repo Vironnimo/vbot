@@ -866,6 +866,10 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         item["adapter"] = provider.adapter
     if provider.id == "openrouter":
         item["routing"] = runtime.storage.load_openrouter_routing_settings()
+    if getattr(provider, "adapter", None) == "claude_agent":
+        item["executable_path"] = build_effective_settings(runtime.storage.load_settings())[
+            "providers"
+        ]["claude_agent"]["executable_path"]
     return item
 
 

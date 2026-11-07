@@ -421,13 +421,16 @@ def test_startup_checks_the_runtime_model_db_before_the_local_catalog_sweep(
     monkeypatch.setattr(
         runtime, "start_installation_catalog_restore", lambda: calls.append("restore check")
     )
+    monkeypatch.setattr(
+        runtime, "start_external_catalog_refresh", lambda: calls.append("native check")
+    )
     app = create_app(runtime=runtime)
     with TestClient(app) as client:
         assert client.portal is not None
         client.portal.call(asyncio.wait_for, app.state.local_catalog_refresh_task, 5)
 
     # The check sees the runtime Model DB before the sweep can publish a new one.
-    assert calls == ["restore check", "local sweep"]
+    assert calls == ["restore check", "native check", "local sweep"]
 
 
 @pytest.mark.parametrize("timeline", [False, True])

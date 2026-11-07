@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.providers._claude_agent_usage import ClaudeAgentUsage
 from core.providers._usage_types import _PRIMARY_FALLBACK_LABEL, _SECONDARY_FALLBACK_LABEL
 from core.providers.errors import ProviderError
 from core.providers.openai import CODEX_EXTRA_HEADERS
@@ -680,9 +681,14 @@ async def test_usage_recovers_oauth_once_and_rebuilds_account_headers(
 
 
 @pytest.mark.asyncio
-async def test_report_never_probes_an_unusable_connection() -> None:
+@pytest.mark.parametrize("provider_id", ["openai", "claude-agent"])
+async def test_report_never_probes_an_unusable_connection(provider_id: str) -> None:
     transport = FakeTransport(USAGE_RESPONSES)
-    service = ProviderUsageService(usage_runtime("openai", usable=False), transport=transport)
+    service = ProviderUsageService(
+        usage_runtime(provider_id, usable=False),
+        transport=transport,
+        claude_usage=lambda: (UsageWindow(label="5h", used_percent=50),),
+    )
 
     report = await service.report()
 
@@ -773,3 +779,76 @@ async def test_report_fans_out_across_providers_failing_open() -> None:
     assert by_connection["openai:subscription"].error is None
     assert by_connection["github-copilot:oauth"].error == "HTTP 401"
     assert by_connection["minimax:api-key"].windows[0].used_percent == 75.0
+
+
+@pytest.mark.asyncio
+async def test_native_claude_usage_is_passive_current_and_expires_without_inventing_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 11, 7, tzinfo=UTC)
+    observed = ClaudeAgentUsage(clock=lambda: now)
+    runtime = usage_runtime("claude-agent")
+    transport = FakeTransport({})
+
+    def forbidden_auth(_connection: Any) -> Any:
+        raise AssertionError("Passive usage cannot request native login or tokens")
+
+    monkeypatch.setattr(runtime, "get_connection_token_getter", forbidden_auth)
+    monkeypatch.setattr(runtime, "get_connection_token_extra", forbidden_auth)
+    service = ProviderUsageService(runtime, transport=transport, claude_usage=observed.windows)
+    try:
+        assert (await service.report()).providers == []
+        for window_type, status, utilization, reset in (
+            ("five_hour", "allowed", 0.25, now.timestamp() + 60),
+            ("seven_day", "allowed_warning", 0.6, now.timestamp() + 3600),
+            ("seven_day_opus", "rejected", 1.2, now.timestamp() + 3600),
+        ):
+            observed.observe(
+                {
+                    "rate_limit_type": window_type,
+                    "status": status,
+                    "utilization": utilization,
+                    "resets_at": reset,
+                }
+            )
+        [snapshot] = (await service.report()).providers
+        assert snapshot.connection == "claude-agent:subscription" and snapshot.account == "default"
+        assert [window.used_percent for window in snapshot.windows] == [25.0, 60.0, 100.0]
+        assert [window.window_seconds for window in snapshot.windows] == [18000, 604800, 604800]
+        assert snapshot.windows[0].reset_at == _iso(int(now.timestamp()) + 60)
+        # The report owns its list; callers cannot erase cached native facts.
+        snapshot.windows.clear()
+        observed.observe(
+            {
+                "rateLimitType": "five_hour",
+                "status": "allowed",
+                "utilization": 0.5,
+                "resetsAt": now.timestamp() + 60,
+            }
+        )
+        [updated] = (await service.report()).providers
+        assert [window.used_percent for window in updated.windows] == [50.0, 60.0, 100.0]
+        now = datetime.fromtimestamp(now.timestamp() + 60, UTC)
+        [after_reset] = (await service.report()).providers
+        assert [window.used_percent for window in after_reset.windows] == [60.0, 100.0]
+        observed.clear()
+        assert (await service.report()).providers == []
+        assert transport.calls == []
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utilization", [True, float("nan"), -0.1, None])
+async def test_native_claude_usage_omits_unmeasured_or_invalid_consumption(
+    utilization: Any,
+) -> None:
+    observed = ClaudeAgentUsage()
+    info = {"rate_limit_type": "seven_day", "status": "allowed", "utilization": 0.2}
+    observed.observe(info)
+    observed.observe({**info, "utilization": utilization})
+    service = ProviderUsageService(usage_runtime("claude-agent"), claude_usage=observed.windows)
+    try:
+        assert (await service.report()).providers == []
+    finally:
+        await service.aclose()

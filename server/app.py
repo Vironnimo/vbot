@@ -291,6 +291,7 @@ def create_app(
                 # A missing or incompatible runtime Model DB is detected before the
                 # sweep below can publish a new one.
                 app_runtime.start_installation_catalog_restore()
+                app_runtime.start_external_catalog_refresh()
             # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
             # in the background — never blocking startup; the method itself is
             # throttled and swallows failures.

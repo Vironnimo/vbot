@@ -507,6 +507,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         description="Enabled override for one Provider Connection.",
     ),
     _static(
+        "providers.claude_agent.executable_path",
+        "string",
+        "Claude Code executable on the server. Empty uses PATH and the native install location.",
+        default="",
+    ),
+    _static(
         "providers.openrouter.routing.default",
         "object",
         "Default OpenRouter routing policy.",

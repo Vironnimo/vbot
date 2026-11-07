@@ -36,6 +36,7 @@ from core.providers._usage_parsers import (
     clamp_percent,
 )
 from core.providers._usage_types import (
+    CLAUDE_AGENT_USAGE_CONNECTION,
     COPILOT_USAGE_CONNECTION,
     COPILOT_USAGE_URL,
     MINIMAX_USAGE_CONNECTION,
@@ -84,6 +85,7 @@ from core.utils.tls import shared_ssl_context
 from core.utils.workers import cancel_and_wait
 
 __all__ = [
+    "CLAUDE_AGENT_USAGE_CONNECTION",
     "COPILOT_USAGE_CONNECTION",
     "COPILOT_USAGE_URL",
     "DEFAULT_USAGE_CACHE_TTL_SECONDS",
@@ -155,6 +157,7 @@ class HttpxUsageTransport:
 
 
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
+    _SupportedConnection("claude-agent", "subscription"),
     _SupportedConnection("openai", "subscription"),
     _SupportedConnection("github-copilot", "oauth"),
     _SupportedConnection("ollama-cloud", "api-key"),
@@ -182,6 +185,7 @@ class ProviderUsageService:
         history_interval: float = DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        claude_usage: Callable[[], tuple[UsageWindow, ...]] | None = None,
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
@@ -197,12 +201,14 @@ class ProviderUsageService:
         self._history_interval = history_interval
         self._monotonic = monotonic
         self._clock = clock
+        self._claude_usage = claude_usage
         self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
         self._fetch_locks: dict[str, asyncio.Lock] = {}
         self._history_task: asyncio.Task[None] | None = None
         self._history_started = False
         # Only connections with a registered fetcher are queried.
         self._fetchers: dict[str, _Fetcher] = {
+            CLAUDE_AGENT_USAGE_CONNECTION: self._fetch_claude_agent,
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
             OLLAMA_USAGE_CONNECTION: self._fetch_ollama,
@@ -394,6 +400,10 @@ class ProviderUsageService:
         return replace(connection, account_id=account_id)
 
     async def _snapshot_for(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        if connection.connection_id == CLAUDE_AGENT_USAGE_CONNECTION:
+            # This source is already in memory and changes only when native
+            # streams report new facts. A polling TTL would hide fresh events.
+            return await self._run_fetcher(connection)
         cached = self._cached_snapshot(connection.target_id)
         if cached is not None:
             return cached
@@ -462,6 +472,14 @@ class ProviderUsageService:
     # ------------------------------------------------------------------
     # Per-provider fetchers
     # ------------------------------------------------------------------
+
+    async def _fetch_claude_agent(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        return ProviderUsageSnapshot(
+            connection=connection.connection_id,
+            account=connection.account_id,
+            display_name=self._display_name(connection),
+            windows=list(self._claude_usage()) if self._claude_usage is not None else [],
+        )
 
     async def _fetch_openai(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         provider = self._runtime.providers.get(connection.provider_id)

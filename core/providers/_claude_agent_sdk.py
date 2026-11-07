@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from core.providers._claude_agent_wire import JsonObject, tool_result
@@ -27,6 +28,7 @@ SUBSCRIPTION_REQUIRED_MESSAGE = (
 )
 
 ISOLATION_ENV = {
+    "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
     "DISABLE_AUTO_COMPACT": "1",
@@ -51,17 +53,35 @@ def load_sdk() -> Any:
         ) from error
 
 
-def executable() -> str:
-    selected = os.environ.get("VBOT_CLAUDE_PATH") or shutil.which("claude")
+def executable(configured_path: str | None = None) -> str:
+    from core.utils.file_status import is_file_strict
+
+    explicit = os.environ.get("VBOT_CLAUDE_PATH") or configured_path
+    selected = (
+        str(Path(explicit).expanduser())
+        if explicit
+        else shutil.which("claude.exe" if os.name == "nt" else "claude")
+    )
+    if explicit and not is_file_strict(Path(explicit).expanduser()):
+        raise ProviderAuthError(
+            "The configured Claude Code executable is unavailable. "
+            "Correct its path in Settings or VBOT_CLAUDE_PATH."
+        )
+    if not selected:
+        native = Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude")
+        if is_file_strict(native):
+            selected = str(native)
     if not selected:
         raise ProviderAuthError(
-            "Install Claude Code on the vBot server, then run `claude auth login`."
+            "Claude Code was not found on PATH or in ~/.local/bin on the vBot server. "
+            "Install the native Claude Code program or select its executable in Settings, "
+            "then run `claude auth login`."
         )
     if os.name == "nt" and selected.lower().endswith((".cmd", ".bat")):
         raise ProviderAuthError(
             "Install the native Claude Code executable or set VBOT_CLAUDE_PATH to claude.exe."
         )
-    return selected
+    return str(Path(selected).resolve())
 
 
 def login_info(info: Any) -> JsonObject:
@@ -87,6 +107,8 @@ def login_info(info: Any) -> JsonObject:
         connected
         and account.get("apiProvider") in (None, "firstParty")
         and not account.get("apiKeySource")
+        and isinstance(account.get("subscriptionType"), str)
+        and bool(account["subscriptionType"].strip())
     )
     models = []
     for model in info.get("models", []):
@@ -113,6 +135,16 @@ def login_info(info: Any) -> JsonObject:
     }
     if not connected:
         result["message"] = "Run `claude auth login` on the vBot server."
+    elif not subscription:
+        if account.get("apiKeySource") or account.get("apiProvider") not in (None, "firstParty"):
+            result["status"] = "api_billing"
+            result["message"] = SUBSCRIPTION_REQUIRED_MESSAGE
+        else:
+            result["status"] = "subscription_unconfirmed"
+            result["message"] = (
+                "Claude Code did not confirm a subscription for this login. "
+                "Run `claude auth login` with your subscription account on the vBot server."
+            )
     return result
 
 

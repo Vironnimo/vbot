@@ -14,6 +14,7 @@
     accountUnusableReason,
     accountSourceTooltip,
     describeAccountSource,
+    describeExternalStatus,
     isOAuthDeviceFlowConnection,
     isOAuthAccount,
     isOAuthConnection,
@@ -23,6 +24,7 @@
   import Button from '../../ui/Button.svelte';
   import InfoHint from '../../ui/InfoHint.svelte';
   import StatusChip from '../../ui/StatusChip.svelte';
+  import ClaudeExecutableSetting from './ClaudeExecutableSetting.svelte';
   let {
     provider,
     summaryStatus,
@@ -115,11 +117,18 @@
       </div>
 
       {#if isExternalConnection(connection)}
-        <p class="s-row-desc">{t('settings.providers.external.setupHelp')}</p>
+        <p class="s-row-desc">
+          {t('settings.providers.external.setupHelp', {
+            provider: provider.name,
+          })}
+        </p>
         {#if connection.setup_command}<code>{connection.setup_command}</code
           >{/if}
-        {#if connection.external_auth?.message}
-          <p class="s-row-desc">{connection.external_auth.message}</p>
+        <p class="s-row-desc">
+          {describeExternalStatus(provider, connection.external_auth?.status)}
+        </p>
+        {#if provider.id === 'claude-agent'}
+          <ClaudeExecutableSetting {provider} />
         {/if}
         {#if connection.setup_url}
           <a href={connection.setup_url} target="_blank" rel="noreferrer"

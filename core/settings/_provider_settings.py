@@ -115,7 +115,9 @@ def normalize_providers_settings(providers: Any) -> dict[str, Any]:
     else:
         raise StorageError("Expected settings.providers to be an object")
 
-    unsupported_fields = sorted(set(section) - {"connections", "custom", "openrouter"})
+    unsupported_fields = sorted(
+        set(section) - {"connections", "custom", "openrouter", "claude_agent"}
+    )
     if unsupported_fields:
         raise StorageError(f"Unsupported providers settings: {', '.join(unsupported_fields)}")
 
@@ -149,7 +151,19 @@ def normalize_providers_settings(providers: Any) -> dict[str, Any]:
         "connections": connections,
         "custom": normalize_custom_providers_settings(section.get("custom")),
         "openrouter": {"routing": routing},
+        "claude_agent": normalize_claude_agent_settings(section.get("claude_agent", {})),
     }
+
+
+def normalize_claude_agent_settings(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) - {"executable_path"}:
+        raise StorageError("settings.providers.claude_agent requires executable_path only")
+    path = value.get("executable_path", "")
+    if not isinstance(path, str) or any(character in path for character in ("\0", "\n", "\r")):
+        raise StorageError(
+            "settings.providers.claude_agent.executable_path must be a single-line path"
+        )
+    return {"executable_path": path.strip()}
 
 
 def normalize_custom_providers_settings(custom: Any) -> dict[str, dict[str, Any]]:

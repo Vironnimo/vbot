@@ -7,7 +7,7 @@ import {
   createAutosaveCoordinator,
   createAutosaveParticipant,
 } from '../../lib/autosave.js';
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
@@ -452,6 +452,10 @@ describe('SettingsProvidersPanel', () => {
     ).toBeTruthy();
     expect(document.querySelector('#provider-api-key')).toBeNull();
     expect(document.querySelector('#provider-account-name')).toBeNull();
+    const executable = document.querySelector('#claude-executable-connect');
+    executable.value = 'C:/native/claude.exe';
+    executable.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
     findButton('Check login and connect').click();
     await waitForCondition(
       () => onRefreshProviderSettingsMock.mock.calls.length > 0,
@@ -461,7 +465,115 @@ describe('SettingsProvidersPanel', () => {
       connection_id: 'claude-agent:subscription',
       account: 'default',
     });
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      providers: { claude_agent: { executable_path: 'C:/native/claude.exe' } },
+      base: { providers: { claude_agent: { executable_path: '' } } },
+    });
+    expect(
+      rpcMock.mock.calls.findIndex(([method]) => method === 'settings.update'),
+    ).toBeLessThan(
+      rpcMock.mock.calls.findIndex(([method]) => method === 'provider.connect'),
+    );
     expect(document.querySelector('.provider-connect-modal')).toBeNull();
+  });
+
+  it('keeps unchecked external setup editable and localizes readiness', async () => {
+    const writes = [];
+    rpcMock.mockImplementation((method) =>
+      method === 'settings.update'
+        ? new Promise((resolve) => writes.push(resolve))
+        : Promise.resolve({}),
+    );
+    const props = reactiveProps({
+      visible: true,
+      settings: {
+        providers: {
+          items: [
+            {
+              id: 'claude-agent',
+              name: 'Claude Agent',
+              connections: [
+                {
+                  id: 'claude-agent:subscription',
+                  type: 'external',
+                  label: 'Subscription',
+                  added: true,
+                  configured: true,
+                  enabled: true,
+                  usable: true,
+                  accounts: [],
+                  external_auth: {
+                    status: 'not_checked',
+                    connected: false,
+                    message: 'RAW_SERVER_DIAGNOSTIC',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    expect(document.body.textContent).toContain('Not checked');
+    expect(document.body.textContent).not.toContain('RAW_SERVER_DIAGNOSTIC');
+    expect(document.body.textContent).not.toContain('Not usable');
+    const executable = document.querySelector(
+      'input[aria-label="Claude Code executable"]',
+    );
+    executable.value = 'C:/native/claude.exe';
+    executable.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    findButton('Save').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'settings.update'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      providers: { claude_agent: { executable_path: 'C:/native/claude.exe' } },
+      base: { providers: { claude_agent: { executable_path: '' } } },
+    });
+    const settled = () =>
+      !document.body.textContent.includes(t('common.saving'));
+    writes[0]({});
+    await waitForCondition(settled);
+    // Unchanged pre-save props must not roll back a successful local save.
+    expect(executable.value).toBe('C:/native/claude.exe');
+
+    executable.value = 'C:/native/newer.exe';
+    executable.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    findButton('Save').click();
+    await waitForCondition(() => writes.length === 2);
+    props.settings.providers.items[0].executable_path = 'C:/remote/current.exe';
+    flushSync();
+    expect(executable.value).toBe('C:/native/newer.exe');
+    writes[1]({});
+    await waitForCondition(settled);
+    expect(executable.value).toBe('C:/remote/current.exe');
+
+    executable.value = 'C:/native/third.exe';
+    executable.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    findButton('Save').click();
+    await waitForCondition(() => writes.length === 3);
+    props.settings.providers.items[0].executable_path = 'C:/native/third.exe';
+    executable.value = 'C:/native/unsaved.exe';
+    executable.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    writes[2]({});
+    await waitForCondition(settled);
+    // A newer local draft retains its base/conflict protection.
+    expect(executable.value).toBe('C:/native/unsaved.exe');
+    findButton('Save').click();
+    await waitForCondition(() => writes.length === 4);
+    writes[3]({});
+    await waitForCondition(settled);
+    // A prior acknowledgement must not roll back the following successful save.
+    expect(executable.value).toBe('C:/native/unsaved.exe');
   });
 
   it('adds a fresh keyless local provider through Add provider', async () => {

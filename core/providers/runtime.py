@@ -15,7 +15,9 @@ from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.models import Model, ModelRegistry
 from core.providers import _catalog_refresh
 from core.providers._claude_agent_sdk import SUBSCRIPTION_REQUIRED_MESSAGE
+from core.providers._claude_agent_usage import ClaudeAgentUsage
 from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
+from core.providers._usage_types import UsageWindow
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
@@ -55,6 +57,7 @@ from core.providers.wire_profiles import (
     log_wire_profile_issue,
     wire_profile_files,
 )
+from core.settings.paths import build_effective_settings
 from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
@@ -89,6 +92,9 @@ class ProviderRuntime:
         self._catalog_refresh_lock: asyncio.Lock | None = None
         self._catalog_refresh_tasks: set[asyncio.Task[Any]] = set()
         self._catalog_refresh_closed = False
+        self._external_catalog_task: asyncio.Task[None] | None = None
+        self._external_refresh_at: dict[str, float] = {}
+        self._external_refresh_lock = asyncio.Lock()
         self._configuration_publication_lock = threading.Lock()
         self._async_configuration_publication_lock = asyncio.Lock()
         self._catalog_changed_callbacks: list[Callable[[], None]] = []
@@ -100,8 +106,11 @@ class ProviderRuntime:
         self._loaded_context_windows: dict[str, int] = {}
         self._loaded_context_lock = threading.Lock()
         self._responses_transports = ResponsesTransports()
-        self._claude_sessions = ClaudeAgentSessions()
         self._external_status: dict[str, dict[str, Any]] = {}
+        self._claude_usage = ClaudeAgentUsage()
+        self._retired_claude_sessions: set[ClaudeAgentSessions] = set()
+        self._claude_configured_path = self._claude_executable_path()
+        self._claude_sessions = self._new_claude_sessions()
         self._http_transports = ProviderHTTPTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
@@ -127,16 +136,79 @@ class ProviderRuntime:
         self._models = models
         self._credentials = credentials
         self._token_store = token_store
-        if storage.data_dir != self._storage.data_dir:
+        data_changed = storage.data_dir != self._storage.data_dir
+        self._storage = storage
+        if data_changed:
             self._claude_sessions.abort()
-            self._claude_sessions = ClaudeAgentSessions()
+            self._retired_claude_sessions.add(self._claude_sessions)
+            self._claude_configured_path = self._claude_executable_path()
+            self._claude_sessions = self._new_claude_sessions()
             self._external_status.clear()
+            self._external_refresh_at.clear()
+            self._claude_usage.clear()
             self.retire_http_transports()
             self._wire_observations.close()
             self._wire_observations = self._load_wire_observations(storage)
             self._wire_profiles.set_observations(self._wire_observations)
         self._storage = storage
         self._logger = logger
+
+    def _claude_executable_path(self) -> str:
+        return str(
+            build_effective_settings(self._storage.load_settings())["providers"]["claude_agent"][
+                "executable_path"
+            ]
+        )
+
+    def _new_claude_sessions(self) -> ClaudeAgentSessions:
+        def observe(info: dict[str, Any]) -> None:
+            if sessions is self._claude_sessions and not self._catalog_refresh_closed:
+                self._claude_usage.observe(info)
+
+        def auth_failed() -> None:
+            if sessions is self._claude_sessions:
+                self._native_auth_failed()
+
+        sessions = ClaudeAgentSessions(
+            temporary_files=self._storage.temporary_files,
+            executable_path=self._claude_executable_path,
+            observe_usage=observe,
+            on_auth_error=auth_failed,
+        )
+        return sessions
+
+    def claude_usage_windows(self) -> tuple[UsageWindow, ...]:
+        return self._claude_usage.windows()
+
+    async def apply_claude_configuration(self, configured_path: str) -> None:
+        """Retire native processes on the Event Loop after a persisted path change."""
+        if configured_path == self._claude_configured_path:
+            return
+        self._claude_configured_path = configured_path
+        previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
+        self._external_status.clear()
+        self._external_refresh_at.clear()
+        self._claude_usage.clear()
+        await previous.aclose()
+
+    def _native_auth_failed(self) -> None:
+        self._claude_usage.clear()
+        if self._catalog_refresh_closed:
+            return
+        for provider_id, provider, connection in self._auto_refresh_targets():
+            if provider.adapter != "claude_agent" or connection.type != "external":
+                continue
+            key = f"{provider_id}:{connection.id}"
+            self._external_status[key] = {"connected": False, "status": "not_checked"}
+            self._external_refresh_at.pop(key, None)
+
+            async def check(provider_id: str = provider_id, key: str = key) -> None:
+                try:
+                    await self.refresh_external_connection(provider_id, key)
+                except ConfigError:
+                    return
+
+            self._track_catalog_refresh(asyncio.create_task(check(), name="native-login-refresh"))
 
     def reload_custom_wire_profiles(
         self, custom_providers: Mapping[str, Mapping[str, Any]]
@@ -218,10 +290,12 @@ class ProviderRuntime:
         ``connection_id`` is local (``subscription``); without it, every
         Connection of the Provider closes.
         """
-        if provider_id == "claude-agent":
-            previous, self._claude_sessions = self._claude_sessions, ClaudeAgentSessions()
-            await previous.aclose()
+        if self._providers.get(provider_id).adapter == "claude_agent":
+            previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
             self._external_status.clear()
+            self._external_refresh_at.clear()
+            self._claude_usage.clear()
+            await previous.aclose()
         try:
             await self._responses_transports.close_connection(provider_id, connection_id)
         finally:
@@ -230,8 +304,19 @@ class ProviderRuntime:
     async def aclose_transports(self) -> None:
         """Close every kept-open Provider connection (Runtime shutdown)."""
         try:
-            await self._claude_sessions.aclose()
+            results = await settle_before_cancelling(
+                asyncio.gather(
+                    self._claude_sessions.aclose(),
+                    *(sessions.aclose() for sessions in self._retired_claude_sessions),
+                    return_exceptions=True,
+                )
+            )
+            self._retired_claude_sessions.clear()
+            failures = [result for result in results if isinstance(result, BaseException)]
+            if failures:
+                raise BaseExceptionGroup("Native Provider cleanup failed.", failures)
         finally:
+            self._claude_usage.clear()
             await self._aclose_http_transports()
 
     async def _aclose_http_transports(self) -> None:
@@ -243,6 +328,9 @@ class ProviderRuntime:
     def abort_transports(self) -> None:
         """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
         self._claude_sessions.abort()
+        self._claude_usage.clear()
+        for sessions in self._retired_claude_sessions:
+            sessions.abort()
         try:
             self._responses_transports.abort()
         finally:
@@ -426,12 +514,13 @@ class ProviderRuntime:
             if self._catalog_refresh_closed:
                 raise ConfigError("Provider catalog refresh is shutting down")
             task = asyncio.current_task()
+            already_tracked = task in self._catalog_refresh_tasks
             if task is not None:
                 self._catalog_refresh_tasks.add(task)
             try:
                 yield
             finally:
-                if task is not None:
+                if task is not None and not already_tracked:
                     self._catalog_refresh_tasks.discard(task)
 
     async def refresh_model_database(
@@ -480,8 +569,10 @@ class ProviderRuntime:
             result = {
                 **result,
                 "connected": False,
-                "status": "api_billing",
-                "message": SUBSCRIPTION_REQUIRED_MESSAGE,
+                "status": result.get("status")
+                if result.get("status") == "subscription_unconfirmed"
+                else "api_billing",
+                "message": result.get("message", SUBSCRIPTION_REQUIRED_MESSAGE),
             }
         self._external_status[f"{provider_id}:{connection.id}"] = {
             key: result[key]
@@ -494,32 +585,19 @@ class ProviderRuntime:
         self, provider_id: str, connection_id: str
     ) -> dict[str, Any]:
         """Check the user's native login and publish its installation catalog."""
-        if ":" not in connection_id:
-            connection_id = f"{provider_id}:{connection_id}"
-        config, _ = self._connection_config(self._providers.get(provider_id), connection_id)
-        if config.type != "external":
-            raise ConfigError("Connection does not use an external login")
-        if not self._credentials.is_usable(provider_id, connection_id):
-            return {"connected": False, "status": "disabled"}
+        if self._catalog_refresh_closed:
+            raise ConfigError("Provider catalog refresh is shutting down")
+        task = asyncio.current_task()
+        already_tracked = task in self._catalog_refresh_tasks
+        if task is not None:
+            self._catalog_refresh_tasks.add(task)
         try:
-            await self.refresh_model_database(provider_id=provider_id, notify_changed=True)
-        except ConfigError:
-            status = self.external_connection_status(provider_id, connection_id)
-            if status.get("status") in {"not_checked", "ready"}:
-                raise
-            return status
-        status = self.external_connection_status(provider_id, connection_id)
-        if status.get("connected"):
-            key = f"{provider_id}:{config.id}"
-            previous = self._connection_reachability.get(key)
-            self._connection_reachability[key] = True
-            if previous is False:
-                _LOGGER.info(
-                    "Native Provider connection recovered (provider=%s connection=%s)",
-                    provider_id,
-                    config.id,
-                )
-        return status
+            return await _catalog_refresh.refresh_external_connection(
+                self, provider_id, connection_id
+            )
+        finally:
+            if task is not None and not already_tracked:
+                self._catalog_refresh_tasks.discard(task)
 
     def discovery_credential(
         self, provider_id: str, connection_id: str, connection: ConnectionConfig
@@ -535,6 +613,9 @@ class ProviderRuntime:
         )
         self._track_catalog_refresh(task)
         return task
+
+    def start_external_catalog_refresh(self) -> asyncio.Task[None] | None:
+        return _catalog_refresh.start_external_catalog_refresh(self)
 
     def start_installation_catalog_restore(self) -> asyncio.Task[None] | None:
         return _catalog_refresh.start_installation_catalog_restore(self)
