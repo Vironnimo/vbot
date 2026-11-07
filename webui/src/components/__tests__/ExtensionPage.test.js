@@ -193,6 +193,18 @@ describe('ExtensionPage frame bridge', () => {
         timezone: 'Europe/Berlin',
       }),
     );
+    operation.mockRejectedValueOnce(
+      new ApiClientError('revision_conflict', 'The revision changed', {
+        details: { data: { reason: 'private-operation-detail' } },
+      }),
+    );
+    page.call('conflict', 'operation', { operation: 'update', arguments: {} });
+    await page.replied('conflict');
+    expect(page.reply('conflict')).toMatchObject({
+      type: 'vbot.extension.error',
+      code: 'revision_conflict',
+    });
+    expect(page.reply('conflict')).not.toHaveProperty('reason');
   });
 
   it('spells the navigation place as the page route and moves it on route calls', async () => {

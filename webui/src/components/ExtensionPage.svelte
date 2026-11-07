@@ -332,15 +332,15 @@
     );
   }
 
-  // A failed listing keeps the API error's code and the server's reason
-  // (not_found, not_a_directory, unreadable, timeout), so the page's path
-  // field shows the same failure as the app's.
-  function listingFailure(error) {
+  // Domain codes survive every bridge call; listings additionally keep their
+  // structured reason for the shared PathField's recovery choices.
+  function requestFailure(error, method) {
     const failure = {};
     if (typeof error?.code === 'string' && error.code)
       failure.code = error.code;
     const reason = error?.details?.data?.reason;
-    if (typeof reason === 'string' && reason) failure.reason = reason;
+    if (method === 'directory.list' && typeof reason === 'string' && reason)
+      failure.reason = reason;
     return failure;
   }
 
@@ -735,7 +735,7 @@
         descriptor: context.descriptor,
         id: data.id,
         error: error.message,
-        ...(data.method === 'directory.list' ? listingFailure(error) : {}),
+        ...requestFailure(error, data.method),
       });
     }
   }
