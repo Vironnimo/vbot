@@ -18,9 +18,11 @@ export const setup = {
   project_id: 'project-a',
   revision: 1,
   enabled: true,
+  worker_source: 'team',
   worker_profile: 'builder',
   worker_model: 'demo/worker',
   worker_effort: '',
+  reviewer_source: 'team',
   reviewer_profile: 'critic',
   reviewer_model: 'demo/reviewer',
   reviewer_effort: '',
@@ -82,6 +84,10 @@ export function createBridge(initialCards = [card('fct-a')]) {
               { id: 'critic', name: 'Critic', source: 'agents' },
             ],
           })),
+          agents: [
+            { id: 'planner', name: 'Planner', description: 'Plans work' },
+            { id: 'drafter', name: 'Drafter', description: 'Has no Model' },
+          ],
           models: ['worker', 'reviewer'].map((id) => ({
             id: `demo/${id}`,
             name: `Demo ${id}`,
@@ -116,7 +122,9 @@ export function createBridge(initialCards = [card('fct-a')]) {
     if (name === 'setup.preview')
       return {
         effective_models: {
-          worker: args.worker_model || 'demo/worker',
+          worker:
+            args.worker_model ||
+            (args.worker_profile === 'drafter' ? '' : 'demo/worker'),
           reviewer:
             args.reviewer_model ||
             (args.reviewer_profile === 'builder'

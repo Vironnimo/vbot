@@ -3,6 +3,7 @@
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
+  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import SortableList from '../../../../webui/src/components/ui/SortableList.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
@@ -103,16 +104,15 @@
       onValueChange={model.filterProject}
     />
   </div>
-  <Button
-    class="factory-inbox-count"
-    variant="tertiary"
-    disabled={!waiting}
-    onClick={() =>
-      boardElement
-        ?.querySelector('[data-column="waiting"]')
-        ?.scrollIntoView({ block: 'nearest', inline: 'center' })}
-    >{t('factory.waitingCount', { count: waiting })}</Button
-  >
+  {#if waiting}<Button
+      class="factory-inbox-count"
+      variant="tertiary"
+      onClick={() =>
+        boardElement
+          ?.querySelector('[data-column="waiting"]')
+          ?.scrollIntoView({ block: 'nearest', inline: 'center' })}
+      >{t('factory.waitingCount', { count: waiting })}</Button
+    >{/if}
   <span class="factory-switch-label"
     >{t('factory.showDiscarded')}<Toggle
       checked={model.showDiscarded}
@@ -122,6 +122,16 @@
   >
   <Button variant="primary" onClick={newCard}>{t('factory.newCard')}</Button>
 </div>
+{#if !model.setups.length && !model.cards.length}<EmptyState
+    class="factory-board-empty"
+    title={t('factory.boardEmpty')}
+    description={t('factory.boardEmptyHelp')}
+    >{#snippet actions()}<Button
+        variant="primary"
+        onClick={() => onNavigate('/setups')}
+        >{t('factory.setUpProject')}</Button
+      >{/snippet}</EmptyState
+  >{/if}
 <div
   class="factory-board"
   aria-label={t('factory.board')}
@@ -130,7 +140,8 @@
   {#each columns as column (column.id)}
     <section
       class="factory-column"
-      class:factory-column--waiting={column.id === 'waiting'}
+      class:factory-column--waiting={column.id === 'waiting' &&
+        column.cards.length > 0}
       data-column={column.id}
       aria-labelledby={`factory-column-${column.id}`}
     >

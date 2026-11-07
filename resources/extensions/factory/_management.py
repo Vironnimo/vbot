@@ -12,7 +12,7 @@ from core.settings.agent_defaults import normalize_agent_default_value
 from core.tools.availability import ToolAccess
 from core.utils.logging import get_logger
 
-from ._values import SETUP_DEFAULTS, require_state, text
+from ._values import SETUP_DEFAULTS, participant_profile, require_state, text
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 if TYPE_CHECKING:
@@ -174,21 +174,24 @@ class FactoryManagement:
                 "project_not_found",
                 "The Project does not exist. Choose a Project from the catalog.",
             )
-        profiles = {item["id"] for item in project.get("agent_profiles", [])}
+        choices = {
+            "agent": {item["id"] for item in catalog.get("agents", [])},
+            "team": {item["id"] for item in project.get("agent_profiles", [])},
+        }
         models = {item["id"] for item in catalog["models"]}
         for role in ("worker", "reviewer"):
-            if values[f"{role}_profile"] not in profiles:
-                available = ", ".join(sorted(profiles)) or "(none; configure a Team profile first)"
+            if values[f"{role}_profile"] not in choices[values[f"{role}_source"]]:
                 raise FactoryError(
                     "profile_not_found",
-                    f"Choose an available {role} profile from the Project's Team: {available}.",
+                    f"The {role} Agent is unavailable. Choose an Agent or a member "
+                    "of the Project's Team for each role.",
                 )
             model = values[f"{role}_model"]
             if model and model.partition("::")[0] not in models:
                 raise FactoryError(
                     "model_not_found",
                     f"The {role} Model is unavailable. Choose a Model from the catalog "
-                    "or clear it to inherit the profile's Model.",
+                    "or clear it to use the Agent's Model.",
                 )
             if values[f"{role}_effort"]:
                 values[f"{role}_effort"] = normalize_agent_default_value(
@@ -198,7 +201,14 @@ class FactoryManagement:
             raise FactoryError(
                 "invalid_base", "Use a non-empty base branch name that does not begin with '-'."
             )
-        effective = await self._effective_models(values)
+        effective, problems = await self._resolve_models(values)
+        if problems:
+            role, problem = next(iter(problems.items()))
+            raise FactoryError(
+                "model_unresolved",
+                f"The {role} cannot run with this setup: {problem}. Choose a Model for the "
+                f"{role}, or give its Agent a usable Model.",
+            )
         saved = await store.save_setup(values, expected_revision=arguments.get("expected_revision"))
         self._setup_changed(project_id, saved["revision"])
         _LOGGER.info(
@@ -208,20 +218,24 @@ class FactoryManagement:
         return {"setup": saved, "effective_models": effective}
 
     async def _effective_models(self, values: Json) -> Json:
+        """Each chosen role's Model; an empty string marks a role that cannot resolve one."""
+        return (await self._resolve_models(values))[0]
+
+    async def _resolve_models(self, values: Json) -> tuple[Json, dict[str, str]]:
         host = self.service.host
         assert host is not None
         if host.inspect_prompt is None or host.catalog is None:
-            return {role: values.get(f"{role}_model", "") for role in ("worker", "reviewer")}
+            return {role: values.get(f"{role}_model", "") for role in ("worker", "reviewer")}, {}
         catalog = await host.catalog()
         project = next(
             (item for item in catalog["projects"] if item["id"] == values["project_id"]), None
         )
         if project is None:
-            return {}
-        result = {}
+            return {}, {}
+        result: Json = {}
+        problems: dict[str, str] = {}
         for role in ("worker", "reviewer"):
-            profile = values.get(f"{role}_profile")
-            if not profile:
+            if not values.get(f"{role}_profile"):
                 continue
             config = TemporaryAgentConfig(
                 model="",
@@ -230,13 +244,20 @@ class FactoryManagement:
                 allowed_skills=[],
                 tools={},
                 name=f"Factory {role} preview",
-                repository_profile=profile,
+                **participant_profile(values, role),
                 model_override=values.get(f"{role}_model") or None,
                 thinking_effort_override=values.get(f"{role}_effort") or None,
             )
-            preview = await host.inspect_prompt(config, values["project_id"])
+            try:
+                preview = await host.inspect_prompt(config, values["project_id"])
+            except ValueError as error:
+                # Resolution refuses an Agent without a usable Model; reading
+                # or previewing a setup still answers for the other role.
+                result[role] = ""
+                problems[role] = str(error).rstrip(".")
+                continue
             result[role] = preview["model"]
-        return result
+        return result, problems
 
     def _setup_changed(self, project_id: str, revision: int) -> None:
         host = self.service.host

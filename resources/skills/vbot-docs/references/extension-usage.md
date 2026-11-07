@@ -6,7 +6,7 @@ Read the section of the requested Extension: [Software Factory](#software-factor
 
 Software Factory turns work Cards into isolated changes, independently reviewed before the user accepts them. It is bundled as `factory`; the `Software Factory` page holds the Board and its `Waiting for you` review inbox.
 
-In Setups, select a registered Project's Worker and Reviewer Team profiles, optionally override their Models and thinking effort, and set review rounds, turn budget, base branch and integration check. Empty Model and effort selections inherit the Team profile; using the same effective Model shows a warning, not a refusal.
+In Setups, choose a Worker and a Reviewer Agent for a registered Project: any of your Agents or a member of the Project's Team. Optionally override their Models and thinking effort, and set review rounds, turn budget, base branch and integration check. Empty Model and effort selections use the Agent's own; using the same effective Model shows a warning, not a refusal.
 
 - The Project's instructions decide how the Worker isolates and integrates work; the Factory does not create worktrees or merge code itself.
 - Cards the user creates on the page or through management operations queue automatically; `factory_card` queues direct user requests and currently authorized automations, while an Agent's own idea stays a Proposal until the user approves it.

@@ -527,7 +527,7 @@ describe('Factory existing-record editors', () => {
     );
   });
 
-  it('uses Team and Model pickers, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
+  it('uses Agent and Model pickers, warns about equal effective Models, waits for number completion and keeps failed setup drafts', async () => {
     const { bridge, operation, state } = createBridge();
     await render(bridge, '/setups/project-a');
     expect(document.getElementById('factory-review-rounds').value).toBe('2');
@@ -578,7 +578,7 @@ describe('Factory existing-record editors', () => {
     expect(calls(operation, 'setup.update')).toHaveLength(writes);
   });
 
-  it('creates setups explicitly at revision zero and resets the editor after deletion', async () => {
+  it('creates setups explicitly at revision zero from any Agent, names unusable choices and resets the editor after deletion', async () => {
     const { bridge, operation, state } = createBridge();
     state.setups = [];
     state.handlers['setup.get'] = ({ project_id }) => ({
@@ -599,24 +599,44 @@ describe('Factory existing-record editors', () => {
           .getAttribute('aria-describedby'),
       ),
     ).not.toBeNull();
+    button(t('factory.createSetup')).click();
+    await settle();
+    expect(
+      document.querySelector('.factory-setup-editor').textContent,
+    ).toContain(t('factory.invalid.agent', { role: t('factory.worker') }));
+    expect(calls(operation, 'setup.update')).toHaveLength(0);
     vi.useFakeTimers();
     await choose('factory-worker_model', t('factory.inheritModel'));
     await choose('factory-reviewer_model', t('factory.inheritModel'));
-    await choose('factory-worker_profile', 'Builder');
+    await choose('factory-worker_profile', 'Drafter');
     await choose('factory-reviewer_profile', 'Builder');
     await vi.advanceTimersByTimeAsync(800);
     await tick();
     flushSync();
-    expect(calls(operation, 'setup.preview')).toHaveLength(1);
     expect(
       document.querySelector('.factory-setup-editor').textContent,
-    ).toContain(t('factory.sameModel'));
+    ).toContain(t('factory.modelUnresolved'));
+    await choose('factory-worker_profile', 'Planner');
+    await vi.advanceTimersByTimeAsync(800);
+    await tick();
+    flushSync();
+    expect(calls(operation, 'setup.preview')).toHaveLength(2);
+    const editorText = document.querySelector(
+      '.factory-setup-editor',
+    ).textContent;
+    expect(editorText).toContain(t('factory.sameModel'));
+    expect(editorText).not.toContain(t('factory.modelUnresolved'));
     expect(calls(operation, 'setup.update')).toHaveLength(0);
     button(t('factory.createSetup')).click();
     await settle();
     expect(calls(operation, 'setup.update').at(-1)[1]).toMatchObject({
       project_id: 'project-b',
       expected_revision: 0,
+      enabled: true,
+      worker_source: 'agent',
+      worker_profile: 'planner',
+      reviewer_source: 'team',
+      reviewer_profile: 'builder',
       review_rounds: 3,
     });
     button(t('factory.deleteSetup')).click();

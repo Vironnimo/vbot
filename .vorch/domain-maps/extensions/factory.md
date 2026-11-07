@@ -1,6 +1,6 @@
 # Software Factory
 
-The bundled `resources/extensions/factory/` Extension carries isolated Project work from Cards through a Worker, independent review and an operator's integration decision; it loads through ordinary bundled discovery (API 24).
+The bundled `resources/extensions/factory/` Extension carries isolated Project work from Cards through a Worker, independent review and an operator's integration decision; it loads through ordinary bundled discovery (API 25).
 
 ## Terms
 
@@ -25,7 +25,7 @@ The Worker's structured hand-in: branch, base, exact commit range, summary and c
 One independent judgment of a Submission. Integration reviews are distinguished from rounds spent resolving automatic rejections.
 
 ### Project setup
-The Factory's Project-specific participant profiles, Model choices and execution limits.
+The Factory's Project-specific choice of Worker and Reviewer Agents, Model choices and execution limits.
 
 ### Origin
 The recorded source of a Card, deciding whether it starts automatically or waits as a Proposal.
@@ -54,7 +54,8 @@ Preparing a continuation never consumes its pending intent: repeated request cal
 
 ## Execution contracts and verify-first findings
 
-- One execution group per Card (`group_id == id`), participant `worker`, independent `reviewer-N` participants. `repository_profile` plus explicit `project_id` propagates the Project Context and its AGENTS instructions. A cwd alone does not select a Project. Prompt inspection shares execution's resolution.
+- One execution group per Card (`group_id == id`), participant `worker`, independent `reviewer-N` participants. Each role names any roster Agent (`<role>_source` `agent` -> `identity_profile`) or a member of the Project's Team (`team` -> `repository_profile`); `_values.participant_profile` maps it, and setups and Card snapshots saved before the source columns mean `team`. The Profile plus explicit `project_id` propagates the Project Context and its AGENTS instructions. A cwd alone does not select a Project. Prompt inspection shares execution's resolution.
+- Setup reads and previews return an empty effective Model for a role whose Agent resolves none; saving refuses it as `model_unresolved` naming the role. New setups default to `enabled` (Cards can be created and queued Cards start).
 - A repository profile previously overrode the owner's mandatory fallback Model. API 24 permits an empty fallback only with a profile, inherits its effective Model, and adds deliberate Model/effort overrides after resolution; existing Swarm configurations retain their semantics (`agent/temporary-agents.md`).
 - All private Tools of an owner are Session grants; each role denies the other role's Tools. Reviewer file-editing denials are exactly `apply_patch`, `edit`, `write` (the latter two hidden followers, so the public catalog alone is incomplete). Shell remains available for Git/tests. Read-only review is instruction scope, not an OS sandbox: the shell can still write, and ordinary Project Permission Rules remain unchanged.
 - `run_finished` carries binding, participant, Run id and outcome, but fires before the Run releases its Session. Admission/drain for the next phase runs in tracked work after that release, not inline in the completion callback. A successful private Tool uses `context.request_turn_end()`; no extra Model-facing channel is introduced.

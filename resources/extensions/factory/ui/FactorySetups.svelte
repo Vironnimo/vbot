@@ -14,7 +14,7 @@
 
 <div class="factory-setups">
   <nav class="factory-project-list" aria-label={t('factory.setups')}>
-    <h2>{t('factory.setups')}</h2>
+    <h2>{t('factory.projects')}</h2>
     {#each model.catalog.projects ?? [] as entry (entry.id)}
       {@const setup = model.setups.find((item) => item.project_id === entry.id)}
       <button
@@ -45,7 +45,7 @@
         >{/key}
     {:else if model.detailLoading}<p role="status">{t('common.loading')}</p>
     {:else}<EmptyState
-        title={t('factory.setups')}
+        title={t('factory.chooseProject')}
         description={t('factory.noSetups')}
       />{/if}
   </div>

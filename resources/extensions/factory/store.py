@@ -20,6 +20,8 @@ ACTIVE_STATES = frozenset({"working", "reviewing", "integrating"})
 FINAL_STATES = frozenset({"done", "discarded"})
 DATABASE_NAME = "factory"
 # Generation 1 SQL defaults stay stable; setup creation supplies current defaults explicitly.
+# A role's ``*_source`` says what its ``*_profile`` names: ``agent`` an Identity Agent,
+# ``team`` a Team Agent of the Project (setups saved before the column).
 SCHEMA_SQL = """
 CREATE TABLE project_setups (
  project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
@@ -28,7 +30,8 @@ CREATE TABLE project_setups (
  reviewer_model TEXT NOT NULL DEFAULT '', reviewer_effort TEXT NOT NULL DEFAULT '',
  review_rounds INTEGER NOT NULL DEFAULT 2, turn_budget INTEGER NOT NULL DEFAULT 30,
  base_branch TEXT NOT NULL DEFAULT 'main', integration_check TEXT NOT NULL DEFAULT 'merged',
- revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+ revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
+ worker_source TEXT NOT NULL DEFAULT 'team', reviewer_source TEXT NOT NULL DEFAULT 'team'
 ) STRICT;
 CREATE TABLE cards (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
@@ -94,9 +97,11 @@ _CARD_FIELDS = (
 _SETUP_FIELDS = (
     "project_id",
     "enabled",
+    "worker_source",
     "worker_profile",
     "worker_model",
     "worker_effort",
+    "reviewer_source",
     "reviewer_profile",
     "reviewer_model",
     "reviewer_effort",
