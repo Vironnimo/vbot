@@ -24,8 +24,8 @@ from core.tools.process_tree import RunningProcess
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalInfo,
+    TerminalInputUnconfirmedError,
     TerminalManager,
-    TerminalManagerError,
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalRenderHost,
@@ -266,7 +266,7 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(
     assert adapter.writes == writes
 
 
-@pytest.mark.parametrize("writer", ["operator", "agent", "cancelled-agent", "stopped"])
+@pytest.mark.parametrize("writer", ["operator", "agent"])
 @pytest.mark.asyncio
 async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
     tmp_path: Path,
@@ -292,7 +292,6 @@ async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
         adapter = factory.adapters[0]
         reading = threading.Event()
         release = threading.Event()
-        failed = threading.Event()
         read = adapter.read
 
         def delayed_read(size: int) -> str:
@@ -311,14 +310,14 @@ async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
 
         # A write the PTY refuses while the program still runs ends nothing.
         adapter.write = unwritable  # type: ignore[method-assign]
-        with pytest.raises(TerminalManagerError, match="could not be written") as refused:
+        with pytest.raises(TerminalInputUnconfirmedError) as refused:
             await manager.send_operator_input(started.terminal_id, "early input")
+        assert refused.value.characters_sent == 0
         assert not isinstance(refused.value, TerminalClosedError)
         assert terminal_info(manager, started.terminal_id).finished_at is None
         del adapter.write
 
         def closed_write(text: str) -> None:
-            failed.set()
             raise EOFError("Pty is closed")
 
         monkeypatch.setattr(adapter, "write", closed_write)
@@ -326,51 +325,18 @@ async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
         try:
             await eventually(reading.is_set)
             adapter.finish(7)
-            draining = asyncio.Event()
-            if writer == "stopped":
-                wait = asyncio.wait
-
-                async def observe_drain(futures: Any, **kwargs: Any) -> Any:
-                    if len(futures) == 1:
-                        draining.set()
-                    return await wait(futures, **kwargs)
-
-                monkeypatch.setattr(terminal_session.asyncio, "wait", observe_drain)
-            sending = asyncio.create_task(
-                manager.send_operator_input(started.terminal_id, "late input")
-                if writer == "operator"
-                else _agent_input(manager, started, data="late input")
-            )
-            await eventually(failed.is_set)
-            assert not sending.done()
+            # An attempted write has uncertain effects even after process exit.
+            # Reporting it neither waits for nor cancels the final output drain.
+            with pytest.raises(TerminalInputUnconfirmedError) as late:
+                if writer == "operator":
+                    await manager.send_operator_input(started.terminal_id, "late input")
+                else:
+                    await _agent_input(manager, started, data="late input")
+            assert late.value.characters_sent == 0
             assert terminal_info(manager, started.terminal_id).finished_at is None
             assert not adapter.closed
-            if writer == "cancelled-agent":
-                sending.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await sending
-            elif writer == "stopped":
-                await draining.wait()
-                wait_for = asyncio.wait_for
-
-                async def stop_drain_timeout(awaitable: Any, timeout: float | None) -> Any:
-                    if timeout == 5:
-                        # Stop exhausted its drain allowance. Cancelling the
-                        # shield leaves terminate responsible for its reader.
-                        awaitable.cancel()
-                        raise TimeoutError
-                    return await wait_for(awaitable, timeout)
-
-                with monkeypatch.context() as stopping:
-                    stopping.setattr(terminal_session.asyncio, "wait_for", stop_drain_timeout)
-                    stopped = await manager.kill(started.terminal_id, owner())
-                assert stopped.stopped
-                assert sending.cancelling() == 0
         finally:
             release.set()
-        if writer != "cancelled-agent":
-            with pytest.raises(TerminalClosedError):
-                await sending
         await eventually(lambda: terminal_info(manager, started.terminal_id).state == "exited")
 
         closed = terminal_info(manager, started.terminal_id)
@@ -378,12 +344,6 @@ async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
         snapshot = await manager.snapshot(started.terminal_id, owner())
         assert snapshot["exit_code"] == 7
         assert snapshot["log_complete"] is True
-        if writer == "stopped":
-            # An explicit stop cancels a stuck read; the earlier logged output
-            # stays available, and its waiting input is closed, not cancelled.
-            assert snapshot["stopped"] is True
-            assert Path(snapshot["log_file"]).read_bytes() == b"last words\r\n"
-            return
         assert closed.attention is not None
         assert closed.attention.kind == "exited"
         assert Path(snapshot["log_file"]).read_bytes() == b"last words\r\nfinal words\r\n"
