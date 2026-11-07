@@ -111,7 +111,7 @@ async def test_recency_maps_to_brave_freshness(
             ],
             "example.com, docs.example.com",
             ["https://example.com/docs", "https://docs.example.com/vbot"],
-            "vbot site:example.com OR site:docs.example.com",
+            "vbot (site:example.com OR site:docs.example.com)",
         ),
         (
             ["www.example.com"],

@@ -260,7 +260,7 @@ async def test_other_spellings_run_the_same_search(
         ),
         (
             {"query": "asyncio", "include_domains": "docs.python.org, example.com"},
-            "asyncio site:docs.python.org OR site:example.com",
+            "asyncio (site:docs.python.org OR site:example.com)",
             {"domains": "docs.python.org, example.com"},
             None,
         ),
@@ -273,7 +273,7 @@ async def test_other_spellings_run_the_same_search(
         ),
         (
             {"query": "asyncio (site:docs.python.org OR site:example.com) -site:reddit.com"},
-            "asyncio site:docs.python.org OR site:example.com -site:reddit.com",
+            "asyncio (site:docs.python.org OR site:example.com) -site:reddit.com",
             {"domains": "docs.python.org, example.com", "excluded_domains": "reddit.com"},
             None,
         ),
@@ -297,7 +297,7 @@ async def test_other_spellings_run_the_same_search(
         (
             # With several sites the paths are alternatives and add no words.
             {"query": "asyncio (site:docs.python.org/3/library OR site:example.com/docs)"},
-            "asyncio site:docs.python.org OR site:example.com",
+            "asyncio (site:docs.python.org OR site:example.com)",
             {"domains": "docs.python.org, example.com"},
             "site:example.com/docs",
         ),
@@ -363,6 +363,123 @@ async def test_site_operators_become_native_filters_for_other_providers(tmp_path
         "domains": "python.org",
         "content": "1. Docs\nhttps://docs.python.org/3/\nGuide",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "rust site:docs.rs OR python site:docs.python.org",
+        "site:docs.rs rust OR python",
+        "rust OR python site:docs.python.org",
+        "rust site:docs.rs AND site:docs.python.org",
+        "rust (site:docs.rs AND site:docs.python.org)",
+        "rust NOT site:docs.rs",
+        "rust (site:docs.rs OR -site:docs.python.org)",
+        "rust -site:docs.rs/private",
+        "rust site:docs.rs/public AND site:docs.rs/private",
+    ],
+)
+@pytest.mark.parametrize("provider", ["brave", "tavily", "exa", "firecrawl", "perplexity"])
+async def test_branch_specific_sites_are_preserved_or_refused_before_searching(
+    tmp_path: Path, brave: Any, query: str, provider: str
+) -> None:
+    result = await search(tmp_path, {"query": query}, provider=provider)
+
+    if provider == "brave":
+        shown = assert_success_envelope(result)
+        assert sent(brave)["q"] == query
+        assert "domains" not in shown
+        assert "excluded_domains" not in shown
+    else:
+        assert_failure_envelope(result, "invalid_arguments")
+        assert brave.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (
+            {"query": "rust OR python", "domains": ["docs.rs", "docs.python.org"]},
+            "(rust OR python) (site:docs.rs OR site:docs.python.org)",
+        ),
+        (
+            {"query": "rust OR python", "exclude_domains": ["reddit.com"]},
+            "(rust OR python) -site:reddit.com",
+        ),
+        (
+            {"query": "(rust OR python) (site:docs.rs OR site:docs.python.org)"},
+            "(rust OR python) (site:docs.rs OR site:docs.python.org)",
+        ),
+        (
+            {"query": "(site:docs.rs OR site:docs.python.org) (rust OR python)"},
+            "(rust OR python) (site:docs.rs OR site:docs.python.org)",
+        ),
+        (
+            {"query": '"site:docs.rs OR site:docs.python.org"', "domains": ["example.com"]},
+            '"site:docs.rs OR site:docs.python.org" site:example.com',
+        ),
+        (
+            {"query": "rust site:docs.rs OR python site:python.org", "domains": ["docs.rs"]},
+            "(rust site:docs.rs OR python site:python.org) site:docs.rs",
+        ),
+    ],
+)
+async def test_global_filters_apply_to_the_entire_query(
+    tmp_path: Path, brave: Any, arguments: dict[str, Any], expected: str
+) -> None:
+    assert_success_envelope(await search(tmp_path, arguments))
+    assert sent(brave)["q"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "domains", "expected_domains"),
+    [
+        (
+            "(rust OR python) (site:docs.rs OR site:docs.python.org)",
+            None,
+            ["docs.rs", "docs.python.org"],
+        ),
+        (
+            "(site:docs.rs OR site:docs.python.org) (rust OR python)",
+            None,
+            ["docs.rs", "docs.python.org"],
+        ),
+        ("python site:docs.python.org", ["python.org"], ["docs.python.org"]),
+        ("python site:python.org", ["docs.python.org"], ["docs.python.org"]),
+        ("python site:python.org site:python.org", None, ["python.org"]),
+        ("python site:python.org AND site:python.org", None, ["python.org"]),
+        ("python site:python.org AND site:docs.python.org", None, ["docs.python.org"]),
+        (
+            "python (site:python.org OR site:docs.rs) (site:docs.python.org OR site:docs.rs)",
+            None,
+            ["docs.python.org", "docs.rs"],
+        ),
+    ],
+)
+async def test_global_sites_retain_their_scope_with_native_filters(
+    tmp_path: Path, query: str, domains: list[str] | None, expected_domains: list[str]
+) -> None:
+    with respx.mock() as router:
+        route = router.post(TAVILY_ENDPOINT).respond(200, json={"results": []})
+        arguments: dict[str, Any] = {"query": query}
+        if domains is not None:
+            arguments["domains"] = domains
+        assert_success_envelope(await search(tmp_path, arguments, provider="tavily"))
+    body = request_json(route.calls[0].request)
+    assert body["include_domains"] == expected_domains
+    assert body["query"] == ("(rust OR python)" if "rust OR python" in query else "python")
+
+
+@pytest.mark.asyncio
+async def test_disjoint_inline_and_explicit_sites_are_not_broadened(
+    tmp_path: Path, brave: Any
+) -> None:
+    result = await search(tmp_path, {"query": "python site:python.org", "domains": ["docs.rs"]})
+    assert_failure_envelope(result, "invalid_arguments")
+    assert brave.call_count == 0
 
 
 @pytest.mark.asyncio
