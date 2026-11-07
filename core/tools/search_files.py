@@ -86,6 +86,7 @@ from core.tools._search_roots import (
     _missing_warnings,
     _nothing_searched,
     _resolve_roots,
+    _Roots,
 )
 from core.tools.contracts import ToolContractError
 from core.tools.edit import offered_edit_tool
@@ -162,11 +163,11 @@ def _bound_failure(error: SearchBoundError, query: SearchQuery, cwd: Path) -> st
     return text
 
 
-def _scopes(roots: list[Path], cwd: Path) -> list[Scope]:
-    """Group roots into ripgrep runs: one at the working directory, one per outside root."""
+def _scopes(roots: _Roots, cwd: Path) -> list[Scope]:
+    """Group plain roots by cwd; keep each wildcard root's selection in its own run."""
     inside = Scope(cwd=cwd, paths=[])
     scopes: list[Scope] = []
-    for root in roots:
+    for root in roots.plain:
         try:
             relative = root.relative_to(cwd).as_posix()
         except ValueError:
@@ -181,6 +182,11 @@ def _scopes(roots: list[Path], cwd: Path) -> list[Scope]:
             inside.prefixes.append(relative)
     if inside.paths:
         scopes.insert(0, inside)
+    for root, glob in roots.globs:
+        if root.is_relative_to(cwd):
+            scopes.append(Scope(cwd=cwd, paths=[root.relative_to(cwd).as_posix()], globs=[glob]))
+        else:
+            scopes.append(Scope(cwd=root, paths=["."], globs=[glob]))
     return scopes
 
 
@@ -257,7 +263,7 @@ class _Found:
 
 
 def _list_directories(
-    execution: SearchExecution, query: SearchQuery, roots: list[Path], found: _Found
+    execution: SearchExecution, query: SearchQuery, roots: _Roots, found: _Found
 ) -> None:
     """List the directories below the roots that ripgrep's walker enters, empty ones too.
 
@@ -299,7 +305,7 @@ def _list_directories(
             follow = argument == "--follow"
         elif argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
             case_sensitive = argument.startswith("--no-")
-    bases = [root for root in roots if root.is_dir()]
+    bases = [root for root in roots.paths if root.is_dir()]
     directories: dict[str, Path] = {}
     for root in bases:
         for path in _walk_directories(
@@ -327,6 +333,14 @@ def _list_directories(
         path
         for path in directories.values()
         if _directory_selected(path, bases, query.globs, execution.cwd, case_sensitive)
+        and (
+            any(path.is_relative_to(root) for root in roots.plain)
+            or any(
+                path.is_relative_to(root)
+                and _directory_selected(path, [root], [glob], execution.cwd, case_sensitive)
+                for root, glob in roots.globs
+            )
+        )
     ]
     if query.name_patterns:
         names = _matching_names(execution, query, [path.name for path in selected])
@@ -668,7 +682,7 @@ def _note_match_count(
         query.notes.append(match_count_note(matches))
 
 
-def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -> _Outcome:
+def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _Outcome:
     execution.widen_type_case(query)
     found = _Found()
     if query.mode == "list_dirs":
@@ -678,7 +692,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         for index, scope in enumerate(scopes):
             found.take(index, scope, execution.list_scan(query, scope), execution.cwd)
         if query.name_patterns:
-            # Like a content search's name fallback, a pattern matches a name or a shown path.
+            # A listing's pattern matches a name or a shown path.
             names = [entry.label for entry in found.entries]
             names += [entry.path.name for entry in found.entries]
             matched = _matching_names(execution, query, names)
@@ -713,6 +727,10 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         repair_note = note
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
         found.take(index, scope, result, execution.cwd)
+    if roots.globs and len(scopes) > 1:
+        # Separate root selections can search the same file. Matching entries are
+        # deduplicated below, but native totals do not identify the unmatched files.
+        found.files_searched = None
     found.finish(query)
     lines_total = sum(entry.count for entry in found.entries)
     if (
@@ -721,18 +739,13 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         and found.complete
         and not execution.budget.stopped
     ):
-        # No content matches, so a pattern that matches file names was meant for them.
+        # A filename match cannot satisfy a search of file contents.
         named, listed = _names_matching(execution, query, scopes, patterns)
         found.ignored = listed.ignored
-        if named:
-            query.mode = "list_files"
-            query.notes.append(
-                "No file contents match pattern, so the files whose names match it were listed."
-            )
-            found.entries = named
-            _restart_past_the_end(query, len(named))
-            return _Outcome(entry_page(named, query), found, len(named), len(named))
-        if not _note_wrapped_phrases(execution, query, scopes, patterns, matched=False):
+        if (
+            not _note_wrapped_phrases(execution, query, scopes, patterns, matched=False)
+            and not named
+        ):
             _note_no_match(execution, query, scopes, patterns, listed, repair_note)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
@@ -821,7 +834,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd, context.permissions)
-        outcome = _search(execution, query, roots.paths)
+        outcome = _search(execution, query, roots)
         left_out = _left_out_note(roots.paths, cwd, context.permissions)
         if left_out:
             query.notes.append(left_out)

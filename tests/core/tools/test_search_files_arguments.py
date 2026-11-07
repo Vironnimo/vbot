@@ -125,27 +125,31 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "listed"),
+    "arguments",
     [
-        ({"pattern": r".*\.[pP][yY]$", "output": "files"}, "src/app.py"),
-        ({"pattern": r"\.(py|ts)$", "output": "files"}, "src/app.py\nsrc/view.ts"),
-        # A bare file name, as DeepSeek sent it to find a file (agent-eval 2026-10-10).
-        ({"pattern": "app.py", "output": "files"}, "src/app.py"),
-        ({"pattern": "src/view"}, "src/view.ts"),
+        {"pattern": r".*\.[pP][yY]$", "output": "files"},
+        {"pattern": r"\.(py|ts)$", "output": "files"},
+        {"pattern": "app.py", "output": "files"},
+        {"pattern": "app.py", "args": ["-l"]},
+        {"pattern": "src/view"},
+        {"pattern": "src|MISSING", "path": "src", "context": 2},
+        {"pattern": "app|view", "output": "count"},
+        {"pattern": "app|view", "args": ["-c"]},
     ],
 )
-async def test_a_content_search_without_matches_lists_files_whose_names_match(
-    project: Path, arguments: dict, listed: str
+async def test_a_content_search_without_matches_does_not_return_matching_file_names(
+    project: Path, arguments: dict
 ):
     result = await dispatch(project, arguments)
-    assert result["data"]["content"] == listed
-    assert result["data"]["note"] == (
-        "No file contents match pattern, so the files whose names match it were listed."
-    )
-    # Content matches keep the search a content search.
+    assert result["ok"], result
+    assert "content" not in result["data"]
+    assert "next_offset" not in result["data"]
+    # An explicit name listing still finds those paths.
+    listing = await dispatch(project, {"pattern": arguments["pattern"], "args": ["--files"]})
+    assert listing["ok"] and listing["data"]["content"]
+    # Content matches keep the requested output.
     contents = await dispatch(project, {**arguments, "pattern": arguments["pattern"] + "|load"})
     assert "matching line" in contents["data"]["summary"]
-    assert contents["data"].get("note") != result["data"]["note"]
 
 
 @pytest.mark.asyncio
@@ -570,28 +574,72 @@ async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "message", "content"),
     [
-        ({"pattern": "*.ts", "path": "src/*.py"}, ""),
-        ({"pattern": "def", "path": "src/*.py"}, 'so src was searched with glob "/src/*.py"'),
-        ({"pattern": "def", "path": "{src,docs}"}, "names several paths, so src, docs"),
-        ({"pattern": "def", "path": "src,docs"}, "names several paths, so src, docs"),
+        ({"pattern": "*.ts", "path": "src/*.py"}, "", None),
+        (
+            {"pattern": "def", "path": "src/*.py"},
+            'so src was searched with glob "/src/*.py"',
+            "src/app.py\n2:def load():",
+        ),
+        (
+            {"pattern": "def", "path": "{src,docs}"},
+            "names several paths, so src, docs",
+            "src/app.py\n2:def load():",
+        ),
+        (
+            {"pattern": "def", "path": "src,docs"},
+            "names several paths, so src, docs",
+            "src/app.py\n2:def load():",
+        ),
         # A missing path starting with ! is an excluding glob; alone it searches the cwd.
         (
             {"args": ["load", "!docs/**", "!*.ts"]},
             'path "!docs/**" starts with !, so it was applied as an excluding glob.',
+            "src/app.py\n2:def load():",
+        ),
+        (
+            {"pattern": "load", "path": ["src/*.py", "src"], "output": "count"},
+            'so src was searched with glob "/src/*.py"',
+            "src/app.py:1\nsrc/view.ts:1",
+        ),
+        (
+            {"pattern": "load", "path": ["src", "src/*.py"], "output": "files"},
+            'so src was searched with glob "/src/*.py"',
+            "src/app.py\nsrc/view.ts",
+        ),
+        (
+            {"pattern": "load", "path": ["src/*.py", "docs"]},
+            'so src was searched with glob "/src/*.py"',
+            "docs/guide.md\n1:Call load() first.\n\nsrc/app.py\n2:def load():",
+        ),
+        (
+            {"pattern": "load", "path": ["src/*.py", "docs/*.md"]},
+            'so docs was searched with glob "/docs/*.md"',
+            "docs/guide.md\n1:Call load() first.\n\nsrc/app.py\n2:def load():",
+        ),
+        (
+            {"path": ["src/*.py", "src"]},
+            'so src was searched with glob "/src/*.py"',
+            "src/app.py\nsrc/view.ts",
+        ),
+        (
+            {"path": ["s*", "."], "args": ["--dirs", "--sort=path"]},
+            'so . was searched with glob "/s*"',
+            "docs/\nsrc/",
         ),
     ],
 )
 async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
-    project: Path, arguments: dict, message: str
+    project: Path, arguments: dict, message: str, content: str | None
 ) -> None:
     result = await dispatch(project, arguments)
     if not message:
         # Another field already selects names, so the path stays a missing path.
         assert result["error"]["code"] == "path_not_found"
         return
-    assert result["data"]["content"] == "src/app.py\n2:def load():"
+    assert result["ok"], result
+    assert result["data"]["content"] == content
     assert message in result["data"]["note"]
 
 

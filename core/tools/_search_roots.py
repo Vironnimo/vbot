@@ -38,6 +38,16 @@ class _Roots:
 
     paths: list[Path] = field(default_factory=list)
     missing: list[tuple[str, Path]] = field(default_factory=list)
+    plain: list[Path] = field(default_factory=list)
+    globs: list[tuple[Path, str]] = field(default_factory=list)
+
+    def add(self, path: Path, glob: str | None = None) -> None:
+        """Keep each root's selection separate from filters for the whole call."""
+        _add(self.paths, path)
+        if glob is None:
+            _add(self.plain, path)
+        elif (path, glob) not in self.globs:
+            self.globs.append((path, glob))
 
 
 def _resolve_roots(
@@ -71,14 +81,14 @@ def _resolve_roots(
         if allowed or not interpreted:
             resolved = _checked(candidate, permissions, grant)
             if _exists(resolved):
-                _add(roots.paths, resolved)
+                roots.add(resolved)
                 continue
         else:
             resolved = candidate
         alternatives = _existing_alternatives(text, cwd, permissions, grant)
         if alternatives:
             for path in alternatives:
-                _add(roots.paths, path)
+                roots.add(path)
             shown = ", ".join(path_label(path, cwd) for path in alternatives)
             query.notes.append(f'path "{raw}" names several paths, so {shown} were searched.')
             continue
@@ -89,13 +99,13 @@ def _resolve_roots(
             )
             excluded = True
             continue
-        base = _glob_root(text, cwd, query, permissions, grant)
-        if base is not None:
-            _add(roots.paths, base)
+        selected = _glob_root(text, cwd, query, permissions, grant)
+        if selected is not None:
+            roots.add(*selected)
             continue
         roots.missing.append((raw, resolved))
     if excluded and not roots.paths and not roots.missing:
-        roots.paths.append(cwd)
+        roots.add(cwd)
     return roots
 
 
@@ -321,9 +331,9 @@ def _glob_root(
     query: SearchQuery,
     permissions: PermissionBoundary,
     grant: PermissionGrant | None = None,
-) -> Path | None:
+) -> tuple[Path, str] | None:
     """Search a path written as a glob, such as src/**/*.py, as its directory and glob."""
-    if query.globs or not _GLOB_CHARACTERS.search(text):
+    if any(not glob.startswith("!") for glob in query.globs) or not _GLOB_CHARACTERS.search(text):
         return None
     parts = Path(text).parts
     fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
@@ -335,12 +345,11 @@ def _glob_root(
         glob = "/".join(("", *base.relative_to(cwd).parts, remainder))
     except ValueError:
         glob = "/" + remainder
-    query.globs.append(glob)
     query.notes.append(
         f'path "{text}" contains glob characters, so {path_label(base, cwd)} was searched with '
         f'glob "{glob}".'
     )
-    return base
+    return base, glob
 
 
 _GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
