@@ -15,6 +15,7 @@ from core.providers import _claude_agent_sessions as sessions_module
 from core.providers._claude_agent_sdk import PendingTools, login_info
 from core.providers._claude_agent_sessions import ClaudeAgentSessions
 from core.providers._claude_agent_wire import StreamState, record
+from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.errors import (
     ProviderAuthError,
     ProviderContextOverflowError,
@@ -296,6 +297,30 @@ def test_native_login_status_never_reports_api_keys_as_subscriptions(
     assert result["connected"] and result["subscription"] is expected
     assert result["status"] == status
     assert "private" not in str(result)
+
+
+def test_native_model_aliases_become_their_exact_resolved_models() -> None:
+    result = login_info(
+        {
+            "claude_code_version": "2.1.257",
+            "account": {"tokenSource": "oauth", "subscriptionType": "max"},
+            "models": [
+                {"value": "default", "resolvedModel": "claude-opus-5-5"},
+                {"value": "opus", "displayName": "Opus 5.5", "resolvedModel": "claude-opus-5-5"},
+                {"value": "claude-opus-5", "displayName": "Opus 5"},
+                {
+                    "value": "claude-opus-5-5",
+                    "resolvedModel": "claude-opus-5-5",
+                    "contextWindow": 1_000_000,
+                },
+            ],
+        }
+    )
+    assert [model["value"] for model in result["models"]] == ["claude-opus-5-5", "claude-opus-5"]
+    assert result["models"][0]["displayName"] == "Opus 5.5"
+    assert result["models"][0]["contextWindow"] == 1_000_000
+    catalog = ClaudeAgentAdapter.normalize_catalog_entry(result["models"][0])
+    assert (catalog.model_id, catalog.name) == ("claude-opus-5-5", "Opus 5.5")
 
 
 def test_context_estimator_reserves_media_instead_of_counting_base64(

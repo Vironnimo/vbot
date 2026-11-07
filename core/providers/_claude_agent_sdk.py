@@ -110,23 +110,36 @@ def login_info(info: Any) -> JsonObject:
         and isinstance(account.get("subscriptionType"), str)
         and bool(account["subscriptionType"].strip())
     )
-    models = []
+    models: list[JsonObject] = []
+    by_id: dict[str, JsonObject] = {}
     for model in info.get("models", []):
-        if isinstance(model, dict) and model.get("value") != "default":
-            models.append(
-                {
-                    key: model[key]
-                    for key in (
-                        "value",
-                        "displayName",
-                        "description",
-                        "supportedEffortLevels",
-                        "resolvedModel",
-                        "contextWindow",
-                    )
-                    if key in model
-                }
+        if not isinstance(model, dict) or model.get("value") == "default":
+            continue
+        entry = {
+            key: model[key]
+            for key in (
+                "value",
+                "displayName",
+                "description",
+                "supportedEffortLevels",
+                "resolvedModel",
+                "contextWindow",
             )
+            if key in model
+        }
+        # Claude Code lists its newest generation only under moving aliases such
+        # as `opus`; the resolved id names the exact Model and stays stable.
+        resolved = entry.get("resolvedModel")
+        if isinstance(resolved, str) and resolved.strip():
+            entry["value"] = resolved.strip()
+        value = entry.get("value")
+        if isinstance(value, str) and value in by_id:
+            for key, item in entry.items():
+                by_id[value].setdefault(key, item)
+            continue
+        if isinstance(value, str):
+            by_id[value] = entry
+        models.append(entry)
     result: JsonObject = {
         "connected": connected,
         "status": "ready" if connected else "logged_out",

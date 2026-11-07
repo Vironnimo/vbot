@@ -36,7 +36,7 @@ from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 IDLE_SECONDS = 300.0
 STARTUP_SECONDS = 30.0
-CONTEXT_DISCOVERY_SECONDS = 10.0
+CONTEXT_DISCOVERY_SECONDS = 60.0
 SHUTDOWN_SECONDS = 10.0
 MAX_SESSIONS = 16
 CAPACITY_WAIT_SECONDS = 30.0
