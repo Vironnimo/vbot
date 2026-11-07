@@ -113,6 +113,8 @@ Profile Skill rules narrow the effective Skills. Permitted available preloads in
 
 `prepare_temporary_config` consumes the same Profile and translation with the owner's selection as the Tool ceiling: it takes the Default Profile Tools' place and bounds the Profile allowlist and a Team override (`all` becomes the owner's selection), and the Project's Skill rule does not apply. It snapshots resolved Model/scalars, restrictions and instructions before binding creation. A Model wish that resolves to no usable Model, with no Project or global default either, leaves the participant on its own Model. The original `repository_profile_request` makes replays idempotent across repository edits. The resolved Tool policy stays in the protected binding; an owner's `fixed` selection stays fixed.
 
+An owner's optional `model_override` and `thinking_effort_override` explicitly replace the Profile's resolved choices after that chain; ordinary `model` and `thinking_effort` keep their fallback meaning. The Model still passes the shared usable-Model gate and effort the shared Settings validator; neither override changes capabilities or permissions (`agent/temporary-agents.md`).
+
 ## Working Project resolution
 
 `AgentResolver` decides which Project a Run works in (GLOSSARY -> Working Project). There is no process-global selection, and Workspace equality never establishes Project identity or replaces explicit `project_id` routing.

@@ -26,6 +26,7 @@ _SENDER_KIND = "(SELECT s.source_kind FROM user_entry_senders AS s WHERE s.entry
 _SENDER_ID = "(SELECT s.sender_id FROM user_entry_senders AS s WHERE s.entry_key = e.entry_key)"
 _SENDER_ROLE = "(SELECT s.sender_role FROM user_entry_senders AS s WHERE s.entry_key = e.entry_key)"
 _RUN_KIND = "(SELECT r.run_kind FROM runs AS r WHERE r.run_key = e.run_key)"
+_RUN_ID = "(SELECT r.run_id FROM runs AS r WHERE r.run_key = e.run_key)"
 _SCHEDULE_ID = "(SELECT n.schedule_id FROM run_notifications AS n WHERE n.run_key = e.run_key)"
 # Task inputs use a configured source id as the durable receipt's namespace.
 # Match the initial User carrier only: later human steering is a separate request.
@@ -67,7 +68,7 @@ def conversation_page(
         f"substr({_TEXT}, 1, {max_text_chars + 1}) AS text, "
         f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id, e.subagent_reply_target, "
         f"{_SENDER_ROLE} AS sender_role, {_RUN_KIND} AS run_kind, "
-        f"{_SCHEDULE_ID} AS schedule_id, {_INPUT_SOURCE} AS input_source_id"
+        f"{_SCHEDULE_ID} AS schedule_id, {_INPUT_SOURCE} AS input_source_id, {_RUN_ID} AS run_id"
     )
     rows = _store_lineage.ordered_rows(
         connection,
@@ -146,6 +147,7 @@ def _message(row: sqlite3.Row, limit: int) -> SessionConversationMessage:
         run_kind=row["run_kind"],
         schedule_id=row["schedule_id"],
         input_source_id=row["input_source_id"],
+        run_id=row["run_id"],
         subagent_reply_target=(
             str(row["subagent_reply_target"]) if row["subagent_reply_target"] is not None else None
         ),

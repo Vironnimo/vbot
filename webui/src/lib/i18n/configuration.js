@@ -1,5 +1,7 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
+  'extensions.page.attentionCount': '{count} waiting for you',
+  'extensions.page.open': 'Open',
   'extensions.page.invalidLink': 'This link cannot be opened.',
   'extensions.page.fileUnavailable': 'This local file is no longer available.',
   'extensions.page.requestFailed': 'The Extension request failed.',
@@ -396,6 +398,7 @@ export default Object.freeze({
   'settings.notifications.updateResult': 'Update finished',
   'settings.notifications.updateAvailable': 'New version available',
   'settings.notifications.serverStopped': 'Server stopped',
+  'settings.notifications.extensions': 'Extension notifications',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
   'settings.toolLoading.description':

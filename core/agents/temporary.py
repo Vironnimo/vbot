@@ -58,11 +58,15 @@ class TemporaryAgentConfig:
     # A boundary the owner imposes on top, in its stored ceiling form
     # (``PermissionBoundary.to_ceiling_dict(source="extension")``).
     permission_ceiling: Mapping[str, Any] | None = None
+    # Explicit owner choices win after repository Profile resolution. The ordinary
+    # model/effort fields retain their existing fallback semantics.
+    model_override: str | None = None
+    thinking_effort_override: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
 
-        if not isinstance(self.model, str) or not self.model:
+        if not isinstance(self.model, str) or (not self.model and not self.repository_profile):
             raise ValueError("temporary model must be a non-empty string")
         cwd = Path(self.cwd)
         if not cwd.is_absolute():
@@ -105,6 +109,20 @@ class TemporaryAgentConfig:
             not isinstance(self.repository_profile, str) or not self.repository_profile
         ):
             raise ValueError("repository_profile must name a Team Agent")
+        if self.model_override is not None and (
+            not isinstance(self.model_override, str) or not self.model_override
+        ):
+            raise ValueError("temporary model_override must be a non-empty string")
+        if self.repository_profile is None and (
+            self.model_override is not None or self.thinking_effort_override is not None
+        ):
+            raise ValueError("temporary Profile overrides require repository_profile")
+        if self.thinking_effort_override is not None:
+            from core.settings import validate_thinking_effort
+
+            validate_thinking_effort(
+                self.thinking_effort_override, label="thinking_effort_override"
+            )
         normalized_access = replace(
             normalize_tool_access(self.tool_access), fixed=getattr(self.tool_access, "fixed", False)
         )
@@ -270,6 +288,10 @@ class TemporaryAgentRegistry:
             result["fixed_tool_access"] = True
         if config.repository_profile is not None:
             result["repository_profile"] = config.repository_profile
+        if config.model_override is not None:
+            result["model_override"] = config.model_override
+        if config.thinking_effort_override is not None:
+            result["thinking_effort_override"] = config.thinking_effort_override
         if isinstance(config.permission_rules, PermissionRules):
             result["permission_rules"] = permission_rules_to_dict(config.permission_rules)
         if config.permission_ceiling is not None:

@@ -86,6 +86,21 @@ async def apply_settings_change(
     if not runtime._started or runtime._startup_id != startup_id:
         return SettingsChangeEffects()
 
+    # Reload startup observes the final values. A live config edit explicitly
+    # wakes an unchanged owner, including an otherwise idle scheduler.
+    registry = runtime.extensions
+    if not rebuild_extensions and registry is not None:
+        old_configs = _extension_configs(previous)
+        new_configs = _extension_configs(current)
+        for name in sorted(old_configs.keys() | new_configs.keys()):
+            if old_configs.get(name, {}) == new_configs.get(name, {}):
+                continue
+            await registry.fire_config_change(
+                name, old_configs.get(name, {}), new_configs.get(name, {})
+            )
+        if not runtime._started or runtime._startup_id != startup_id:
+            return SettingsChangeEffects()
+
     recall_changed = "recall" in refresh_sections or previous.get("recall") != current.get("recall")
     if recall_changed and not rebuild_extensions:
         runtime.reload_recall_backend(current)
@@ -147,6 +162,16 @@ def _disabled_names(settings: Mapping[str, Any]) -> set[str]:
     disabled = extensions.get("disabled") if isinstance(extensions, dict) else None
     # Raw Settings accept null as the default empty disabled set.
     return set(disabled) if isinstance(disabled, list) else set()
+
+
+def _extension_configs(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    extensions = settings.get("extensions")
+    config = extensions.get("config") if isinstance(extensions, dict) else None
+    return (
+        {name: value for name, value in config.items() if isinstance(value, dict)}
+        if isinstance(config, dict)
+        else {}
+    )
 
 
 def reload_skills(runtime: Runtime) -> None:

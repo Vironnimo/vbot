@@ -10,6 +10,7 @@
     // The App navigator whose layers the page registers with.
     shell = null,
     onToast = () => {},
+    onOpenSession = () => {},
     autosaveContext = null,
   } = $props();
   let descriptor = $state(initialDescriptor);
@@ -47,4 +48,5 @@
   {timezone}
   {subscribeInvalidations}
   {onToast}
+  {onOpenSession}
 />

@@ -6,8 +6,9 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from core.agents import AgentStore, normalize_agent_tools
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
@@ -20,6 +21,14 @@ from core.automation.cron import CronJobNotFoundError, CronService
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
 from core.extensions.databases import ExtensionDatabases
+from core.extensions.notifications import (
+    MAX_NOTIFICATION_BODY,
+    MAX_NOTIFICATION_KEY,
+    MAX_NOTIFICATION_TITLE,
+    PAGE_BADGES_RESOURCE,
+    notification_text,
+    validate_page_route,
+)
 from core.extensions.operations import ExtensionHost
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import DecisionService
@@ -32,8 +41,8 @@ from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
 from core.providers.providers import ProviderRegistry
-from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
-from core.runtime._shell_review_context import shell_review_context
+from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner, RunNotFoundError
+from core.runtime._shell_review_context import current_input_authority, shell_review_context
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     LoggerProtocol,
@@ -61,6 +70,7 @@ from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.ids import is_safe_id
+from core.utils.timestamps import utc_now_timestamp
 
 
 def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
@@ -154,6 +164,7 @@ class ExtensionHostFactory:
         portals: PortalRegistry | None,
         scratch_areas: ScratchAreas,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
+        get_notification_publisher: Callable[[], Callable[[dict[str, Any]], None] | None],
         get_title_service: Callable[[], SessionTitleService | None],
         session_boundary: SessionBoundaryBuilder,
         logger: LoggerProtocol | None,
@@ -186,6 +197,7 @@ class ExtensionHostFactory:
         self._portals = portals
         self._scratch_areas = scratch_areas
         self._get_change_publisher = get_change_publisher
+        self._get_notification_publisher = get_notification_publisher
         self._get_title_service = get_title_service
         self._session_boundary = session_boundary
         self.logger = logger
@@ -237,6 +249,7 @@ class ExtensionHostFactory:
             self._host,
             decide=lambda context, request: self._decide(identity, context, request),
             review_context=lambda context: self._review_context(identity, context),
+            input_authority=lambda context: self._input_authority(identity, context),
             sample=self._guard_host_async_call(identity, self._host.sample),
             resolve_agent=self._guard_host_call(identity, self._host.resolve_agent),
             resolve_tool_agent=self._guard_host_call(identity, self._host.resolve_tool_agent),
@@ -275,6 +288,11 @@ class ExtensionHostFactory:
             ),
             publish_change=lambda resource, ids, revision: self._publish_extension_change(
                 identity, resource, ids, revision
+            ),
+            notify=partial(self._notify, identity),
+            set_page_badge=lambda page_id, count: self._set_page_badge(identity, page_id, count),
+            pending_approvals=lambda group_id, run_ids: self._pending_approvals(
+                identity, group_id, run_ids
             ),
             load_result_payload=lambda context, payload_id: self._load_result_payload(
                 identity, context, payload_id
@@ -349,6 +367,20 @@ class ExtensionHostFactory:
             result["evidence"]["automated_requests"] = unverified
         self._require_registration(identity)
         return result
+
+    async def _input_authority(
+        self, identity: Any, context: ToolContext
+    ) -> Literal["user", "authorized_task", "none"]:
+        self._require_registration(identity)
+        try:
+            run = self.chat_run_manager.get(context.run_id)
+        except RunNotFoundError:
+            run = None
+        authority = await current_input_authority(
+            self.chat_sessions, context, run=run, cron=self._cron, masker=self.tools.secret_masker
+        )
+        self._require_registration(identity)
+        return authority
 
     def _guard_host_async_call[**P, T](
         self, identity: Any, handler: Callable[P, Awaitable[T]]
@@ -594,6 +626,48 @@ class ExtensionHostFactory:
         if self._extensions is None or not self._extensions.is_registration_current(identity):
             raise ValueError("Extension registration is no longer current")
 
+    async def _notify(
+        self,
+        identity: Any,
+        title: str,
+        body: str,
+        *,
+        page_id: str,
+        route: str = "",
+        key: str | None = None,
+    ) -> None:
+        self._require_registration(identity)
+        assert self._extensions is not None
+        if not isinstance(page_id, str) or self._extensions.current_page(identity, page_id) is None:
+            raise ValueError("Extension page is unavailable")
+        title = notification_text(title, name="title", maximum=MAX_NOTIFICATION_TITLE)
+        body = notification_text(body, name="body", maximum=MAX_NOTIFICATION_BODY, multiline=True)
+        validate_page_route(route)
+        if key is not None:
+            key = notification_text(key, name="key", maximum=MAX_NOTIFICATION_KEY)
+        publisher = self._get_notification_publisher()
+        if publisher is not None:
+            publisher(
+                {
+                    "extension": identity.name,
+                    "page_id": page_id,
+                    "route": route,
+                    "title": title,
+                    "body": body,
+                    "key": key,
+                    "at": utc_now_timestamp(),
+                }
+            )
+
+    def _set_page_badge(self, identity: Any, page_id: str, count: int) -> None:
+        self._require_registration(identity)
+        assert self._extensions is not None
+        if not isinstance(page_id, str):
+            raise ValueError("Extension page is unavailable")
+        revision = self._extensions.set_page_badge(identity, page_id, count)
+        if revision is not None:
+            self._publish_extension_change(identity, PAGE_BADGES_RESOURCE, (page_id,), revision)
+
     async def _capture_tool_call(self, identity: Any, context: ToolContext) -> str | None:
         self._require_registration(identity)
         if self.tools.get(context.tool_name).extension != identity.name:
@@ -608,6 +682,38 @@ class ExtensionHostFactory:
         )
         self._require_registration(identity)
         return receipt
+
+    async def _pending_approvals(
+        self, identity: Any, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, Any]:
+        self._require_registration(identity)
+        if (
+            not isinstance(group_id, str)
+            or not group_id
+            or isinstance(run_ids, str)
+            or len(run_ids) > 1000
+            or not all(isinstance(run_id, str) and run_id for run_id in run_ids)
+        ):
+            raise ValueError("Supply a group id and at most 1000 Run ids")
+        records = await self.chat_sessions.owned_runs_by_id_async(
+            owner_name=identity.name, group_id=group_id, run_ids=run_ids
+        )
+        self._require_registration(identity)
+        snapshot = self.chat_run_manager.approvals_snapshot()
+        pending = {request["run_id"] for request in snapshot["requests"]}
+        return {
+            "revision": snapshot["revision"],
+            "requests": [
+                {
+                    "run_id": record.run_id,
+                    "project_id": record.address.project_id,
+                    "agent_id": record.address.agent_id,
+                    "session_id": record.address.session_id,
+                }
+                for record in records.values()
+                if record.run_id in pending
+            ],
+        }
 
     async def _restore_tool_call(self, identity: Any, receipt: str) -> ToolContext | None:
         self._require_registration(identity)
@@ -741,7 +847,13 @@ class ExtensionHostFactory:
             session_tool_grants=grants,
             block_details=blocks,
         )
-        return {"text": text, "blocks": blocks, "tools": definitions}
+        return {
+            "text": text,
+            "blocks": blocks,
+            "tools": definitions,
+            "model": agent.model,
+            "thinking_effort": agent.thinking_effort,
+        }
 
     def _extension_catalog_projection(self) -> dict[str, Any]:
         self._ensure_started()

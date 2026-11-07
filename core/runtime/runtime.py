@@ -127,6 +127,7 @@ class Runtime(RuntimeServiceGraph):
         self._extension_change_publisher: Callable[[str, str, Sequence[str], int], None] | None = (
             None
         )
+        self._extension_notification_publisher: Callable[[dict[str, Any]], None] | None = None
         # The serving port, which restricted Runs may not reach on loopback.
         self._server_port: int | None = None
         self._server_hosts: Callable[[], tuple[str, ...]] | None = None
@@ -202,6 +203,7 @@ class Runtime(RuntimeServiceGraph):
                 portals=self._portals,
                 scratch_areas=self.scratch_areas,
                 get_change_publisher=lambda: self._extension_change_publisher,
+                get_notification_publisher=lambda: self._extension_notification_publisher,
                 get_title_service=lambda: self._session_title_service,
                 session_boundary=self._session_boundary,
                 logger=self.logger,
@@ -265,6 +267,12 @@ class Runtime(RuntimeServiceGraph):
     ) -> None:
         """Install the server-owned generic resource invalidation publisher."""
         self._extension_change_publisher = publisher
+
+    def set_extension_notification_publisher(
+        self, publisher: Callable[[dict[str, Any]], None] | None
+    ) -> None:
+        """Install the server's transient user-notification publisher."""
+        self._extension_notification_publisher = publisher
 
     def set_server_port(
         self, port: int | None, *, own_hosts: Callable[[], tuple[str, ...]] | None = None

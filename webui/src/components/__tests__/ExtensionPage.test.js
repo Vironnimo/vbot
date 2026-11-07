@@ -130,6 +130,33 @@ async function flushReplies() {
 }
 
 describe('ExtensionPage frame bridge', () => {
+  it('opens canonical Session addresses through the shell, never a supplied URL', async () => {
+    const onOpenSession = vi.fn();
+    const page = openPage({ onOpenSession });
+    page.call('open', 'session.open', {
+      address: {
+        project_id: 'project',
+        agent_id: 'tmp_worker',
+        session_id: 'ses_one',
+      },
+    });
+    await page.replied('open');
+    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith({
+      agentId: 'tmp_worker@project',
+      sessionId: 'ses_one',
+    });
+    for (const [index, address] of [
+      { agent_id: 'worker', session_id: '//other' },
+      { agent_id: 'worker', session_id: 'one', url: 'https://external' },
+      { agent_id: 'worker@other', session_id: 'one' },
+    ].entries()) {
+      page.call(`bad-${index}`, 'session.open', { address });
+      await page.replied(`bad-${index}`);
+      expect(page.reply(`bad-${index}`).type).toBe('vbot.extension.error');
+    }
+    expect(onOpenSession).toHaveBeenCalledOnce();
+  });
+
   it('permits clipboard writes from the opaque frame without granting reads or same-origin access', () => {
     mountPage();
     const frame = document.querySelector('iframe');

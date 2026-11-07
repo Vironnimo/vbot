@@ -42,6 +42,29 @@ afterEach(() => {
 });
 
 describe('extension page client', () => {
+  it('asks the shell to open one Session by canonical address', async () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    const address = {
+      project_id: 'project',
+      agent_id: 'tmp_worker',
+      session_id: 'ses_one',
+    };
+    const opened = client.openSession(address);
+    const request = target.postMessage.mock.calls.at(-1)[0];
+    expect(request).toMatchObject({
+      method: 'session.open',
+      params: { address },
+    });
+    dispatchFrom(target, {
+      ...request,
+      type: 'vbot.extension.result',
+      result: {},
+    });
+    await expect(opened).resolves.toEqual({});
+  });
+
   it('flushes a registered editor and rejects obsolete completion after reinitialization', async () => {
     const target = parent();
     client = createExtensionPageClient({ target });

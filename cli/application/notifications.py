@@ -26,6 +26,7 @@ from typing import Any, Protocol
 from cli.application.monitor import COOPERATIVE_CLOSE_CODES, MonitorStatus
 from cli.application.state import Operation
 from cli.formatting import duration_text
+from core.extensions.notifications import page_link
 
 _LOGGER = logging.getLogger("vbot.application.notifications")
 
@@ -36,6 +37,7 @@ NOTIFICATION_KINDS = (
     "update_result",
     "update_available",
     "server_stopped",
+    "extension_notification",
 )
 SERVER_TOAST_KEY = "server"
 #: One toast at a time says what the update channel offers.
@@ -74,6 +76,7 @@ class Toast:
     body: str
     failure: bool = False
     session: tuple[str, str] | None = None
+    extension_page: tuple[str, str, str] | None = None
 
 
 class ToastSink(Protocol):
@@ -142,6 +145,8 @@ class Notifier:
         self._acknowledged: OrderedDict[str, None] = OrderedDict()
         self._shown: OrderedDict[str, None] = OrderedDict()
         self._pending: dict[str, asyncio.Task[None]] = {}
+        self._extension_latest: OrderedDict[str, object] = OrderedDict()
+        self._extension_sequence = 0
         # Session activity, touched only on the monitor's thread: the Sessions the
         # server reports as not idle (with their span start) and the held toasts.
         self._busy: dict[SessionKey, str] = {}
@@ -214,6 +219,39 @@ class Notifier:
                 self._track(
                     asyncio.get_running_loop().create_task(self._deliver_job_alert(payload))
                 )
+            return
+        if event_type == "extension_notification":
+            owner, page_id, route = (
+                payload.get(name) for name in ("extension", "page_id", "route")
+            )
+            if not all(isinstance(value, str) for value in (owner, page_id, route)):
+                return
+            try:
+                page_link(str(owner), str(page_id), str(route))
+            except TypeError, ValueError:
+                return
+            if not isinstance(payload.get("title"), str) or not isinstance(
+                payload.get("body"), str
+            ):
+                return
+            key = payload.get("key")
+            if key is not None and (not isinstance(key, str) or not key):
+                return
+            self._extension_sequence += 1
+            toast_key = (
+                f"extension:{owner}:{key}"
+                if key is not None
+                else f"extension-event:{self._extension_sequence}"
+            )
+            token = object()
+            self._extension_latest[toast_key] = token
+            self._extension_latest.move_to_end(toast_key)
+            _trim(self._extension_latest)
+            self._track(
+                asyncio.get_running_loop().create_task(
+                    self._deliver_extension_notification(toast_key, token, payload)
+                )
+            )
             return
         kind = run_toast_kind(event_type, payload)
         run_id = payload.get("run_id")
@@ -451,6 +489,28 @@ class Notifier:
                 if isinstance(section.get(kind), bool)
             }
 
+    async def _deliver_extension_notification(
+        self, key: str, token: object, payload: dict[str, Any]
+    ) -> None:
+        await self._refresh_settings()
+        if self._extension_latest.get(key) is not token:
+            return
+        with self._lock:
+            if not self._enabled.get("extension_notification", True):
+                return
+        # NIF_INFO has one current balloon. Dismiss a matching key before
+        # replacement so it cannot be queued behind its own obsolete content.
+        self._sink.dismiss(key)
+        self._sink.show(
+            Toast(
+                key,
+                "extension_notification",
+                payload["title"],
+                payload["body"][:_TOAST_BODY_MAX_CHARS],
+                extension_page=(payload["extension"], payload["page_id"], payload["route"]),
+            )
+        )
+
     def _track(self, task: asyncio.Task[None]) -> None:
         task.add_done_callback(_log_failure)
 
@@ -495,7 +555,7 @@ def _milliseconds(value: object) -> float | None:
     return float(value)
 
 
-def _trim(values: OrderedDict[str, None]) -> None:
+def _trim[T](values: OrderedDict[str, T]) -> None:
     while len(values) > _REMEMBERED_RUNS:
         values.popitem(last=False)
 

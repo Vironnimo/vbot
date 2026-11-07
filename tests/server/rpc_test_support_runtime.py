@@ -727,6 +727,11 @@ class StubRuntime:
     ) -> None:
         self._extension_change_publisher = publisher
 
+    def set_extension_notification_publisher(
+        self, publisher: Callable[[JsonObject], None] | None
+    ) -> None:
+        self._extension_notification_publisher = publisher
+
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         return None
 

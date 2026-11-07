@@ -158,6 +158,7 @@ export function createAppController({
   onReloadAgents,
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
+  onExtensionNotification = () => {},
   // A Session's Portals changed (its `portals` scope), or, with null, every
   // Session's may have.
   onPortalsChanged = () => {},
@@ -314,6 +315,10 @@ export function createAppController({
       state.providerAuthEvent = event;
       return;
     }
+    if (event.type === 'extension_notification') {
+      onExtensionNotification(event.payload);
+      return;
+    }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       onSpeechEvent(event);
       invalidateCatalogReads();
@@ -381,6 +386,12 @@ export function createAppController({
         Array.isArray(snapshot.requests)
       ) {
         state.permissionApprovals = snapshot;
+        onExtensionChange({
+          owner: null,
+          resource: 'permissions_approvals',
+          ids: [],
+          revision: snapshot.revision,
+        });
       }
       return;
     }

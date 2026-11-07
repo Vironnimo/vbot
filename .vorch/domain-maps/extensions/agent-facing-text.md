@@ -1,11 +1,23 @@
 # Extensions Agent-facing text
 
-Why each sentence of the Agent-facing text the Extensions domain owns exists: the bundled-page paragraphs of the `vbot-docs` Skill's page reference (`resources/skills/vbot-docs/references/extension-pages.md`). Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the Agent-facing authoring text the Extensions domain owns exists: the `vbot-docs` references `extensions.md` and `extension-pages.md`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
-Rows cover only the bundled-page paragraphs of the `vbot-docs` Skill's page reference (`resources/skills/vbot-docs/references/extension-pages.md`) listed below; its older wording has no recorded reasons yet.
+Rows cover the listed additions to the `vbot-docs` authoring references; older wording has no recorded reasons yet. Software Factory runtime/usage text has its sentence reasons in `extensions/factory-agent-facing-text.md`.
 
 | Text | Reason |
 |---|---|
+| API version entry `24 notifications and page badges...` | Authors must declare the version that owns each newly used capability so older hosts refuse before partially loading it. |
+| `Use await host.notify(...) to request user attention on a declared page; key replaces...` | Gives the supported transient attention channel and keyed replacement rather than a duplicate inbox or an unbounded pile of toasts. |
+| `Titles hold up to 200 characters...` | Authors can bound title/body/route/key at the source and send a valid internal page route instead of guessing an external URL. |
+| `host.set_page_badge(page_id, count) sets a transient non-negative navigation count...` | The badge is derived presentation; the Extension's database remains its durable inbox. |
+| `Both capabilities belong to the current registration...` | A retained callback cannot send attention from an undeclared page or retired owner. |
+| `api.on_config_change(handler) calls a sync or async handler(previous, current)...` | Authors can respond to saved live settings without unnecessary reloads. |
+| `Use it to re-evaluate idle background admission...` | A cached startup value would leave queued work stalled after a capacity change; live reads preserve current policy. |
+| `For a Tool that distinguishes user-authorized work...host.input_authority...` | Old or ancestral human messages do not authorize this Run's autonomous proposal. The current ingress classification must come from the host, not the Model. |
+| `await host.pending_approvals(group_id, run_ids) reports...openSession(address)...` | Reuses the owner-scoped normal approval flow without exposing other owners' Runs or inventing a second approval form. |
+| `For TemporaryAgentConfig with repository_profile, model="" inherits...` | A Team profile resolves its own defaults; explicit overrides must be applied after that resolution instead of being silently lost. |
+| `host.inspect_prompt returns those effective values...` | A setup's same-Model warning needs actual profile resolution, not guessed global defaults. |
+| `Raise ExtensionOperationError(code, message)...` | Real RPC otherwise erases domain codes to invalid_request, so a page cannot recover from a deleted Card or stale revision even when its fake bridge tests pass. |
 | `A bundled page keeps its English UI text in its own catalog: ...` | The WebUI English catalog is the only source of page text and `t()` takes no English fallback (`webui.md`). Without the paragraph, an Agent authoring a bundled page hard-codes English text or calls `t()` for keys no catalog holds, which render as raw keys; a key that collides with the WebUI catalog makes `registerCatalog` throw before the page mounts. Preventive; no Session evidence yet (2026-09). |
 | `The context's route is the page's place in the app's Back/Forward history: ...` | Pages became places in the app-wide Back/Forward history (2026-09-29, `webui/app-shell.md` -> Navigation): `pushRoute` adds a step, `replaceRoute` corrects the current one, and the route arrives through context. Without it, an Agent authoring a page replaces the route on every selection, so Back skips the page's steps, or applies its own selection instead of the route it receives, so Back does nothing visible. Preventive; no Session evidence yet. |
 | `A Svelte page calls provideNavigation(...) ...` | Back and Forward close the topmost dialog or menu app-wide before navigating (2026-09-29). A page that does not provide the client's layer registry leaves its dialogs open while Back moves the page's place underneath them. Preventive; no Session evidence yet. |

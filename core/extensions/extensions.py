@@ -9,6 +9,7 @@ touch the live dispatch table directly.
 
 from __future__ import annotations
 
+import copy
 import inspect
 import time
 import uuid
@@ -81,6 +82,7 @@ from core.extensions.interactions import (
     InteractionEvent,
     InteractionResponder,
 )
+from core.extensions.notifications import MAX_PAGE_BADGE
 from core.extensions.operations import ExtensionHost, ExtensionOperations
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -115,6 +117,8 @@ class ExtensionRegistry:
         # Pages resolved once per registration, keyed by (Extension, page id).
         # Replaced as a whole, never mutated: worker threads iterate it.
         self._pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
+        self._page_badges: dict[tuple[str, str], int] = {}
+        self._page_badge_revision = 0
 
     def registration_identity(self, name: str) -> ExtensionRegistrationIdentity:
         """Return the current loaded identity for an Extension declaration owner."""
@@ -172,6 +176,32 @@ class ExtensionRegistry:
                 (ExtensionRegistrationIdentity(record.name, self._epoch), declaration, entry)
             )
         return pages
+
+    def page_badge(self, identity: ExtensionRegistrationIdentity, page_id: str) -> int:
+        return (
+            self._page_badges.get((identity.name, page_id), 0)
+            if self.current_page(identity, page_id)
+            else 0
+        )
+
+    def set_page_badge(
+        self, identity: ExtensionRegistrationIdentity, page_id: str, count: int
+    ) -> int | None:
+        """Set one current declared page's count; return a revision only on change."""
+        if self.current_page(identity, page_id) is None:
+            raise ValueError("Extension page is unavailable")
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 0 <= count <= MAX_PAGE_BADGE
+        ):
+            raise ValueError(f"Page badge must be an integer from 0 to {MAX_PAGE_BADGE}")
+        key = (identity.name, page_id)
+        if self._page_badges.get(key, 0) == count:
+            return None
+        self._page_badges = {**self._page_badges, key: count}
+        self._page_badge_revision += 1
+        return self._page_badge_revision
 
     def retire_registration(self) -> None:
         """Invalidate owner capabilities before their declarations are removed.
@@ -631,6 +661,9 @@ class ExtensionRegistry:
         record.status = "disabled"
         record.declarations = ExtensionDeclarations()
         self._pages = {key: page for key, page in self._pages.items() if key[0] != name}
+        self._page_badges = {
+            key: count for key, count in self._page_badges.items() if key[0] != name
+        }
         self._retire_owner_host(name)
         _LOGGER.info("Deactivated Extension live (extension=%s)", name)
         return True
@@ -758,6 +791,42 @@ class ExtensionRegistry:
     def diagnostics(self) -> list[ExtensionRecord]:
         """Return only the records that failed to load (mirrors skills diagnostics)."""
         return [record for record in self._records if record.status == "failed"]
+
+    async def fire_config_change(
+        self, name: str, previous: dict[str, Any], current: dict[str, Any]
+    ) -> None:
+        """Deliver live values only to this exact, still-installed owner."""
+        if previous == current:
+            return
+        if not self.is_registration_current(ExtensionRegistrationIdentity(name, self._epoch)):
+            return
+        identity = self.registration_identity(name)
+        record = next(record for record in self._records if record.name == name)
+        handlers = tuple(record.declarations.config_change)
+        for handler in handlers:
+
+            def available(callback: Any = handler) -> bool:
+                return self.is_registration_current(identity) and any(
+                    candidate is callback for candidate in record.declarations.config_change
+                )
+
+            if inspect.iscoroutinefunction(handler):
+
+                async def invoke_async(callback: Any = handler, check: Any = available) -> None:
+                    if check():
+                        await callback(copy.deepcopy(previous), copy.deepcopy(current))
+
+                invoke: Callable[[], Any] = invoke_async
+            else:
+
+                def invoke_sync(callback: Any = handler, check: Any = available) -> Any:
+                    if check():
+                        return callback(copy.deepcopy(previous), copy.deepcopy(current))
+                    return None
+
+                invoke = invoke_sync
+
+            await invoke_lifecycle_fail_open("config change", name, invoke)
 
     async def fire_startup(self) -> None:
         """Fire every loaded extension's startup handlers in load order, fail-open."""

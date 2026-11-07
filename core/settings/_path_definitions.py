@@ -473,6 +473,10 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
                 "Windows notification from the vBot tray when the local vBot server stops "
                 "unexpectedly.",
             ),
+            (
+                "extension_notification",
+                "Windows notification from the vBot tray when an Extension requests attention.",
+            ),
         )
     ),
     _static(

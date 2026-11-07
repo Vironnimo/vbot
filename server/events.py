@@ -41,6 +41,7 @@ SERVER_STOPPING_EVENT = "server_stopping"
 # A failure alert of a Cron job that delivers to vBot, for a failure no Run
 # reports: ``{"job_id", "name", "agent_id", "project_id", "message"}``.
 CRON_FAILURE_ALERT_EVENT = "cron_failure_alert"
+EXTENSION_NOTIFICATION_EVENT = "extension_notification"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -60,6 +61,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         SESSION_ACTIVITY_CHANGED_EVENT,
         SERVER_STOPPING_EVENT,
         CRON_FAILURE_ALERT_EVENT,
+        EXTENSION_NOTIFICATION_EVENT,
     }
 )
 

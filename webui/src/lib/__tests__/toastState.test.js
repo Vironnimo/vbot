@@ -46,4 +46,22 @@ describe('toast state helpers', () => {
       expect.objectContaining({ title: 'Second', message: 'B' }),
     ]);
   });
+
+  it('updates a keyed toast in place, including its action, without merging other owners', () => {
+    const state = createToastState();
+    const key = JSON.stringify(['extension', 'factory', 'one']);
+    const id = addToast(state, { title: 'Old', key });
+    addToast(state, {
+      title: 'Other',
+      key: JSON.stringify(['extension', 'other', 'one']),
+    });
+    const action = { label: 'Open', onClick: () => {} };
+    expect(addToast(state, { title: 'New', key, actions: [action] })).toBe(id);
+    expect(state.toasts).toHaveLength(2);
+    expect(state.toasts[0]).toMatchObject({
+      id,
+      title: 'New',
+      actions: [action],
+    });
+  });
 });

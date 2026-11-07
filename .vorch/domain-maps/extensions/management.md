@@ -33,6 +33,9 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v21: `host.computers`, the shared Computer registry for Session-policy resolution and native capability requests (`extensions/host.md`, `computers.md`).
 - v22: programmatic Tool calls through the owning Run (`ToolContext.call_tool`, `ToolContext.tool_calls_available`) and the `ToolContext.programmatic` result-projection marker (`tools/registry-dispatch.md` -> ToolContext).
 - v23: owner-bound native Decision requests and canonical review context (`host.decide`, `host.review_context`, `extensions/host.md`), prepared shell reviewer declarations (`extensions/capabilities.md`) and `textarea` Extension Settings fields.
+- v24: owner-bound transient notifications and page badges, current-input authority and owned pending-approval reads, effective Model/effort in prompt inspection (`extensions/host.md`), live config-change callbacks (below), and optional Session navigation from pages (`webui/extension-pages.md`).
+
+API 24 also preserves actionable management-refusal codes through `ExtensionOperationError(code, message)` (`core/extensions/operations.py`). `extensions.operation` maps this explicit type to the same RPC code/message; ordinary `ValueError`, even with an unrelated `.code` attribute, remains `invalid_request`. Extensions retain ownership of their domain codes and recovery choices (`test_extensions_methods.py::test_extension_operation_error_boundary`).
 
 ## Offline document validation
 
@@ -45,6 +48,8 @@ Doctor reports configured roots that are missing or not directories, unavailable
 `api.register_settings(fields)` declares at most one schema. `settings_schema.py` parses field keys, labels/descriptions, required/default metadata, and the supported `text`, `textarea`, `number`, `toggle`, and `secret` types. `textarea` has the same string validation as `text` and renders a multiline control. Invalid declarations fail registration with a field-specific error.
 
 Non-secret values live in `settings.extensions.config.<extension>` and are read live through `api.get_config()`. The Settings RPC layer validates config for loaded schema-owning Extensions before persistence because that layer has both the registry and the update; core Settings storage continues to own only the generic section shape.
+
+API 24 `api.on_config_change(handler)` registers a synchronous or asynchronous `(previous, current)` callback for actual changes to that owner's non-secret config after persistence. Runtime's shared Settings coordinator invokes the still-loaded registration without polling or a reload; each callback gets detached deep copies and uses the existing bounded, fail-open lifecycle dispatch. Retired or disabled registrations do not receive queued callbacks. A rebuild uses the new registration's startup with the saved config instead of an extra config callback. `get_config()` remains the live read seam; a callback is a wake-up, not a second config store (`test_registration.py`, `test_runtime_settings.py`).
 
 A secret declaration supplies an explicit `env_key`, cannot carry a normal default, and never enters the JSON config. `extensions.set_secret` accepts Extension name, schema field key, and a string value; it resolves the declared field server-side, writes or clears the data-dir credential, reloads Provider credentials, and returns only `{name, key, set}`. Process-environment precedence still applies to live resolution.
 
@@ -62,7 +67,7 @@ Readiness is a display projection, not a stored Extension status. A loaded Exten
 
 The disabled set and config are persisted together under Settings, but their runtime consequences differ:
 
-- Config-only change: persist and return; Extension handlers read new values through `get_config()` with no rebuild.
+- Config-only change: persist, notify the changed loaded owners through `on_config_change`, and return; Extension handlers read new values through `get_config()` with no rebuild.
 - Disable-only change: under the ExtensionRuntime mutation lock, deactivate newly disabled loaded records, remove their applied Commands, refresh Prompt blocks and Extension-bundled Skills, and recover the active Recall backend if necessary.
 - Any newly enabled name: perform one full `reload_extensions()` after persistence. A mixed enable/disable save needs no second disable pass because the rebuild reads the final persisted set.
 - Explicit reload: rebuild the whole layer even when the disabled set did not change, so disk edits/additions/deletions and repaired failures become visible.

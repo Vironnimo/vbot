@@ -662,6 +662,27 @@ def test_open_session_shows_the_session_where_this_installation_can(
     assert launches == [opened]
 
 
+@pytest.mark.parametrize("shape", ["server", "desktop-client"])
+def test_extension_page_links_open_on_the_observed_server_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    install = _install(tmp_path, shape=shape)
+    local = SimpleNamespace(url="http://127.0.0.1:8420")
+    remote = SimpleNamespace(url="https://vbot.example.com")
+    opened: list[str] = []
+    monkeypatch.setattr(host.processes, "target", lambda _install: local)
+    monkeypatch.setattr(host.webbrowser, "open", opened.append)
+    facade = host.ApplicationFacade(install)
+    monkeypatch.setattr(facade, "_monitor_target", lambda: remote)
+    facade.open_extension_page("factory", "board", "/card/card one")
+    assert opened == [
+        f"{(local if shape == 'server' else remote).url}/#extension:factory:board/card/card%20one"
+    ]
+    with pytest.raises(ValueError):
+        facade.open_extension_page("factory", "board", "https://external")
+    assert len(opened) == 1
+
+
 def test_a_desktop_client_tray_follows_the_desktop_server_and_sign_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -869,6 +890,13 @@ _BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
             [_BROWSER_TICKET],
             id="login-turned-off",
         ),
+        pytest.param(
+            "extension",
+            _TICKET,
+            f"https://vbot.example.com/auth/ticket/{_TICKET_ID}#extension:factory:board/card/card%20one",
+            [("auth.login_ticket", {"name": "Browser on desk", "next": "/"})],
+            id="extension-signed-in",
+        ),
         pytest.param("browser", "auth_required", ApplicationError, [_BROWSER_TICKET], id="refused"),
         # Only a sign-in link of the server's own shape is opened.
         pytest.param(
@@ -919,6 +947,8 @@ def test_a_browser_opens_signed_in_when_the_server_requires_login(
     def act() -> None:
         if action == "session":
             facade.open_session("coder@site", "ses_1")
+        elif action == "extension":
+            facade.open_extension_page("factory", "board", "/card/card one")
         else:
             facade.open_browser()
 

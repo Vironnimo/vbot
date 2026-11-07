@@ -95,6 +95,16 @@ class ExtensionAPI:
             return dict(self.config)
         return self._config_provider()
 
+    def on_config_change(self, handler: Callable[[dict[str, Any], dict[str, Any]], Any]) -> None:
+        """Observe a persisted live config change as (previous, current).
+
+        Both arguments are detached, non-secret config objects. Startup handles
+        initial configuration and reloads; this callback needs no polling.
+        """
+        if not callable(handler):
+            raise ValueError("Config change handler must be callable")
+        self._declarations.config_change.append(handler)
+
     def resolve_credential(self, key: str) -> str:
         """Resolve one credential **live** per call (process env, then the Secret Store).
 

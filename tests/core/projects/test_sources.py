@@ -698,6 +698,33 @@ def test_profiles_preload_skills_map_models_and_snapshot_temporary_participants(
         assert participant.tool_access.allowed == ("read",)
         assert not participant.tool_access.fixed
         assert "Check regression risks." in participant.instructions
+        explicit = replace(config, model_override="openai/gpt-mini", thinking_effort_override="low")
+        chosen = resolver.prepare_temporary_config(explicit, "repo")
+        assert (chosen.model, chosen.thinking_effort) == ("openai/gpt-mini", "low")
+        assert chosen.tool_access == participant.tool_access
+        assert chosen.model_override is chosen.thinking_effort_override is None
+        explicit_binding = registry.create(
+            owner_name="swarm",
+            group_id="group",
+            participant_id="explicit",
+            config=explicit,
+            project_id="repo",
+        )
+        assert "model_override" not in explicit_binding.config
+        assert (
+            explicit_binding.config["repository_profile_request"]["model_override"]
+            == "openai/gpt-mini"
+        )
+        assert explicit_binding.config["model"] == "openai/gpt-mini"
+        assert explicit_binding.config["thinking_effort"] == "low"
+        inherited = resolver.prepare_temporary_config(replace(config, model=""), "repo")
+        assert inherited.model == resolved.model
+        with pytest.raises(ValueError):
+            resolver.prepare_temporary_config(
+                replace(explicit, model_override="unknown/model"), "repo"
+            )
+        with pytest.raises(ValueError):
+            replace(explicit, thinking_effort_override="not-an-effort")
         path.write_text("---\ntools: Bash\n---\nChanged.", encoding="utf-8")
         assert (
             registry.create(
@@ -710,6 +737,16 @@ def test_profiles_preload_skills_map_models_and_snapshot_temporary_participants(
             == binding
         )
         assert registry.resolve(binding.address, generation_id=binding.generation_id) == participant
+        assert (
+            registry.create(
+                owner_name="swarm",
+                group_id="group",
+                participant_id="explicit",
+                config=explicit,
+                project_id="repo",
+            )
+            == explicit_binding
+        )
         with pytest.raises(ValueError, match="differs"):
             registry.create(
                 owner_name="swarm",

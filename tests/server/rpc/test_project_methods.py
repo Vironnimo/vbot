@@ -63,8 +63,20 @@ async def _vbot_state(tmp_path: Path, *agents: str, **fields: Any) -> tuple[Simp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill_lists",
+    [
+        {},
+        {
+            "skills_bundled_enabled": ["pdf"],
+            "skills_global_enabled": ["project-workflow"],
+            "skills_project_disabled": ["debugging"],
+        },
+    ],
+    ids=["default-skills", "explicit-skills"],
+)
 async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
-    tmp_path: Path,
+    tmp_path: Path, skill_lists: dict[str, list[str]]
 ) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
@@ -77,6 +89,7 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
         display_name="vBot",
         default_temperature=0.4,
         default_thinking_effort="high",
+        **skill_lists,
     )
 
     project = result["project"]
@@ -88,9 +101,10 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     assert project["auto_load"] == []
     assert project["instruction_status"] == {"main_file": "CLAUDE.md", "missing": []}
     assert "allowed_tools" not in project
-    assert project["skills_bundled_enabled"] == []
-    assert project["skills_global_enabled"] == []
-    assert project["skills_project_disabled"] == []
+    persisted = state.runtime.projects.get("vbot")
+    for field in ("skills_bundled_enabled", "skills_global_enabled", "skills_project_disabled"):
+        assert project[field] == skill_lists.get(field, [])
+        assert getattr(persisted, field) == skill_lists.get(field, [])
     assert project["default_temperature"] == 0.4
     assert project["default_thinking_effort"] == "high"
     assert project["context_commands"] == ["git --no-optional-locks status --short --branch"]
@@ -182,6 +196,24 @@ async def test_add_detects_mixed_sources(tmp_path: Path) -> None:
             "sources",
         ),
         ("project.add", {"cwd": "{fresh}", "default_temperature": 3.0}, "invalid_request", ""),
+        (
+            "project.add",
+            {"cwd": "{fresh}", "skills_bundled_enabled": "pdf"},
+            "invalid_request",
+            "skills_bundled_enabled",
+        ),
+        (
+            "project.add",
+            {"cwd": "{fresh}", "skills_global_enabled": [7]},
+            "invalid_request",
+            "skills_global_enabled",
+        ),
+        (
+            "project.add",
+            {"cwd": "{fresh}", "skills_project_disabled": [" "]},
+            "invalid_request",
+            "skills_project_disabled",
+        ),
         ("project.detect", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
         ("project.show", {"project_id": "ghost"}, "project_not_found", ""),
         # Ids are exact even where the filesystem would open ``vbot`` for ``VBOT``.
@@ -226,12 +258,16 @@ async def test_a_refused_project_request_leaves_the_projects_unchanged(
         for key, value in params.items()
     }
     before = state.runtime.projects.list()
+    anchors_before = sorted((state.runtime.projects.data_dir / "projects").iterdir())
+    changes_before = resource_changes(state)
 
     error = await rpc_error(state, method, **params)
 
     assert error["code"] == code
     assert named.format(**paths) in error["message"]
     assert state.runtime.projects.list() == before
+    assert sorted((state.runtime.projects.data_dir / "projects").iterdir()) == anchors_before
+    assert resource_changes(state) == changes_before
 
 
 # ---------------------------------------------------------------------------

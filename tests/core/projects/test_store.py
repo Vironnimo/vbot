@@ -98,6 +98,9 @@ def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
             {"id": "claude.skills", "enabled": True},
         ],
         auto_load=["docs/guide.md", "CONTEXT.md"],
+        skills_bundled_enabled=["pdf"],
+        skills_global_enabled=["project-workflow"],
+        skills_project_disabled=["debugging"],
     )
 
     assert store.get("vbot") == project
@@ -109,6 +112,9 @@ def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
         [item.id for item in project.sources],
     ) == ("orchestrator", "openai/gpt-5", 0.4, "high", ["claude.agents", "claude.skills"])
     assert project.auto_load == ["docs/guide.md", "CONTEXT.md"]
+    assert project.skills_bundled_enabled == ["pdf"]
+    assert project.skills_global_enabled == ["project-workflow"]
+    assert project.skills_project_disabled == ["debugging"]
 
 
 def test_failed_create_removes_anchor_so_retry_succeeds(
@@ -451,6 +457,14 @@ def test_update_clears_a_field_with_its_empty_value(
             InvalidProjectIdError,
             "The Project id 'aux' is reserved on Windows",
             id="windows-reserved-id",
+        ),
+        pytest.param(
+            lambda store, repos: store.create(
+                "fresh", "Fresh", repos / "fresh", skills_project_disabled=[""]
+            ),
+            ProjectError,
+            "skills_project_disabled",
+            id="create-invalid-skill-list",
         ),
         pytest.param(
             lambda store, repos: store.update("other", cwd=str(repos / "vbot")),

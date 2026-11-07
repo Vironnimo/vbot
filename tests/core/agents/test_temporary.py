@@ -147,6 +147,12 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
     )
 
     assert second == first
+    assert "model_override" not in first.config
+    assert "thinking_effort_override" not in first.config
+    with pytest.raises(ValueError):
+        _config(tmp_path, model="")
+    with pytest.raises(ValueError):
+        _config(tmp_path, model_override="provider/other")
     agent = registry.resolve(first.address, generation_id=first.generation_id)
     assert agent is not None
     assert agent.workspace == ""

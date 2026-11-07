@@ -1,6 +1,33 @@
 # Using bundled Extensions
 
-Read the section of the requested Extension: [Swarm](#swarm), [Computer Use](#computer-use), or [KeePassXC and 1Password](#keepassxc-and-1password). MCP connections have their own reference, [mcp.md](mcp.md); creating an Extension is in [extensions.md](extensions.md), its settings and enable/disable in [configuration.md](configuration.md#extensions).
+Read the section of the requested Extension: [Software Factory](#software-factory), [Swarm](#swarm), [Computer Use](#computer-use), or [KeePassXC and 1Password](#keepassxc-and-1password). MCP connections have their own reference, [mcp.md](mcp.md); creating an Extension is in [extensions.md](extensions.md), its settings and enable/disable in [configuration.md](configuration.md#extensions).
+
+## Software Factory
+
+Software Factory turns work Cards into isolated changes, independently reviewed before the user accepts them. It is bundled as `factory`; the `Software Factory` page holds the Board and its `Waiting for you` review inbox.
+
+In Setups, select a registered Project's Worker and Reviewer Team profiles, optionally override their Models and thinking effort, and set review rounds, turn budget, base branch and integration check. Empty Model and effort selections inherit the Team profile; using the same effective Model shows a warning, not a refusal.
+
+- The Project's instructions decide how the Worker isolates and integrates work; the Factory does not create worktrees or merge code itself.
+- Cards the user creates on the page or through management operations queue automatically; `factory_card` queues direct user requests and currently authorized automations, while an Agent's own idea stays a Proposal until the user approves it.
+- Review changes return to the same Worker Session and a fresh Reviewer checks each submission; exhausted rounds or a blocked participant reach the user with both the result and the reason.
+- Accept asks the Worker to integrate the reviewed commit; Send back supplies a comment, Answer resolves a blocked question, Retry resumes a failed phase, and Discard asks the Worker to clean up its isolated work.
+- Changed commits require another review before integration; `merged` verifies the reviewed commit is on the base, while `reference_only` records an integration reference such as a PR URL.
+- The Extension settings `wip_limit` (default 2) and `max_waiting` (default 0, unlimited) control admission; waiting Cards do not occupy running slots, and accepted work waits in Backlog when all slots are busy.
+- A waiting Card produces a WebUI/tray notification and contributes to the page badge; the Board, not the transient toast, keeps the durable record.
+- Permission requests stay in vBot's normal approval UI; open the linked Session from the Card rather than changing Permission Rules or granting the request yourself.
+
+Page actions and scripts share management operations:
+
+```bash
+vbot extensions operations factory
+vbot extensions run factory setup.update --help
+vbot extensions run factory board.get
+vbot extensions run factory card.create --help
+vbot extensions run factory card.get --help
+```
+
+Use Card and Project ids from those reads. Deleting a final Card archives its participant Sessions; done and discarded Cards otherwise keep readable Sessions on the Board.
 
 ## Swarm
 

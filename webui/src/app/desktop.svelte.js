@@ -301,6 +301,8 @@ export function createAppDesktop(context) {
     message = '',
     variant = 'info',
     autoDismiss,
+    key,
+    actions,
   }) => {
     // A disconnected server is already represented by the global availability
     // notice. Suppress dependent action/load errors so one transport failure
@@ -312,14 +314,15 @@ export function createAppDesktop(context) {
       return;
     }
 
-    const id = addToast(toastState, { title, message, variant });
+    const id = addToast(toastState, { title, message, variant, key, actions });
+    clearToastDismissTimer(id);
     // Error toasts stay until the user dismisses them (a transport/server
     // failure the user must acknowledge); success/info/warn auto-dismiss. An
     // explicit `autoDismiss` from the caller always wins over this default.
     const effectiveAutoDismiss =
       autoDismiss === undefined ? variant !== 'error' : autoDismiss;
     if (!effectiveAutoDismiss) {
-      return;
+      return id;
     }
 
     const timer = setTimeout(() => {
@@ -327,6 +330,7 @@ export function createAppDesktop(context) {
       toastDismissTimers.delete(id);
     }, TOAST_AUTO_DISMISS_MS);
     toastDismissTimers.set(id, timer);
+    return id;
   };
 
   const handleStopVoiceRecording = () => {
