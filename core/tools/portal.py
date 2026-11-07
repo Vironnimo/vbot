@@ -103,10 +103,11 @@ def _action_word(value: Any) -> Any:
 
 
 def _normalize_arguments(arguments: Any) -> Any:
+    addresses: list[Any] = []
     if isinstance(arguments, dict):
         arguments = dict(arguments)
         for key in [key for key in arguments if key.casefold() in _URL_FIELDS]:
-            _take_url(arguments, arguments.pop(key))
+            addresses.append(arguments.pop(key))
     normalized = normalize_call_arguments(
         _repair_contract(),
         arguments,
@@ -126,7 +127,12 @@ def _normalize_arguments(arguments: Any) -> Any:
             normalized.pop("title")
     path = normalized.get("path")
     if isinstance(path, str):
-        normalized["path"] = _page_path(path)
+        if "://" in path:
+            addresses.append(normalized.pop("path"))
+        else:
+            normalized["path"] = _page_path(path)
+    for address in addresses:
+        _take_url(normalized, address)
     return normalized
 
 
@@ -147,16 +153,35 @@ def _take_url(arguments: dict[str, Any], value: Any) -> None:
             f"{REFUSAL_PREFIX}{value!r} is not a localhost address with a port. Pass port, "
             "the localhost port the app listens on."
         )
-    arguments.setdefault("port", port)
-    if parts.path not in ("", "/") or parts.query:
-        arguments.setdefault("path", parts.path + (f"?{parts.query}" if parts.query else ""))
+    if parts.scheme != "http":
+        raise ToolContractError(
+            f"{REFUSAL_PREFIX}Portals forward only to HTTP localhost apps; "
+            f"{parts.scheme!r} is not supported. Pass the app's HTTP address if it has one."
+        )
+    if parts.username is not None or parts.password is not None:
+        raise ToolContractError(
+            f"{REFUSAL_PREFIX}Portals cannot forward credentials from an address. "
+            "Pass an HTTP localhost address without user information, and sign in "
+            "through the app if it requires authentication."
+        )
+    selected: dict[str, Any] = {"port": port}
+    if parts.path or parts.query or parts.fragment:
+        selected["path"] = _page_path(
+            (parts.path or "/")
+            + (f"?{parts.query}" if parts.query else "")
+            + (f"#{parts.fragment}" if parts.fragment else "")
+        )
+    for field, choice in selected.items():
+        if field in arguments and arguments[field] != choice:
+            raise ToolContractError(
+                f"{REFUSAL_PREFIX}{field} is {arguments[field]!r}, but the address selects "
+                f"{choice!r}. Pass one consistent port and page; nothing was opened."
+            )
+        arguments[field] = choice
 
 
 def _page_path(value: str) -> str:
     path = value.strip()
-    if "://" in path:
-        parts = urlsplit(path)
-        path = parts.path + (f"?{parts.query}" if parts.query else "")
     if not path.startswith("/"):
         path = f"/{path}"
     if len(path) > MAX_PORTAL_PATH_LENGTH or any(ord(char) < 0x21 for char in path):
