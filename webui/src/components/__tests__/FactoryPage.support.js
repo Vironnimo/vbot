@@ -14,23 +14,95 @@ const { default: FactoryPage } =
   await import('../../../../resources/extensions/factory/ui/FactoryPage.svelte');
 let mounted;
 
+const lane = (source, agent, model = '') => ({
+  source,
+  agent,
+  model,
+  effort: '',
+});
+
 export const setup = {
   project_id: 'project-a',
   revision: 1,
   enabled: true,
-  worker_source: 'team',
-  worker_profile: 'builder',
-  worker_model: 'demo/worker',
-  worker_effort: '',
-  reviewer_source: 'team',
-  reviewer_profile: 'critic',
-  reviewer_model: 'demo/reviewer',
-  reviewer_effort: '',
-  review_rounds: 2,
+  workflows: [
+    {
+      id: 'implement',
+      name: 'Implement',
+      description: 'test-owned workflow',
+      stages: [
+        {
+          id: 'implement',
+          name: 'Implement',
+          kind: 'work',
+          instructions: '',
+          lanes: [lane('team', 'builder', 'demo/worker')],
+          approval: false,
+          output: 'changes',
+        },
+        {
+          id: 'review',
+          name: 'Review',
+          kind: 'review',
+          instructions: '',
+          lanes: [lane('team', 'critic', 'demo/reviewer')],
+          approval: false,
+          target: 'implement',
+          rounds: 2,
+        },
+      ],
+    },
+  ],
+  default_workflow: 'implement',
   turn_budget: 30,
   base_branch: 'main',
   integration_check: 'merged',
 };
+
+export const templates = [
+  {
+    id: 'plan',
+    name: 'Plan',
+    description: 'test-owned template',
+    stages: [
+      {
+        id: 'plan',
+        name: 'Plan',
+        kind: 'work',
+        instructions: 'test-owned plan instructions',
+        lanes: [lane('agent', '')],
+        approval: false,
+        output: 'document',
+      },
+      {
+        id: 'review',
+        name: 'Review',
+        kind: 'review',
+        instructions: '',
+        lanes: [lane('agent', '')],
+        approval: false,
+        target: 'plan',
+        rounds: 2,
+      },
+    ],
+  },
+];
+
+// An Agent's own Model: Drafter has none, Critic uses the reviewer Model.
+const agentModel = (agent) =>
+  ({ drafter: '', critic: 'demo/reviewer' })[agent] ?? 'demo/worker';
+
+// The server's effective Models, keyed `<workflow>/<stage>/<lane>`.
+export function effectiveModels(workflows = []) {
+  const found = {};
+  for (const workflow of workflows)
+    for (const stage of workflow.stages)
+      stage.lanes.forEach((entry, index) => {
+        found[`${workflow.id}/${stage.id}/${index}`] =
+          entry.model || agentModel(entry.agent);
+      });
+  return found;
+}
 
 export function card(id, state = 'queued', extra = {}) {
   return {
@@ -102,6 +174,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
             },
           })),
         },
+        templates: clone(templates),
       };
     if (name === 'board.get')
       return {
@@ -120,18 +193,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
       };
     if (name === 'setup.list') return { setups: clone(state.setups) };
     if (name === 'setup.preview')
-      return {
-        effective_models: {
-          worker:
-            args.worker_model ||
-            (args.worker_profile === 'drafter' ? '' : 'demo/worker'),
-          reviewer:
-            args.reviewer_model ||
-            (args.reviewer_profile === 'builder'
-              ? 'demo/worker'
-              : 'demo/reviewer'),
-        },
-      };
+      return { effective_models: effectiveModels(args.workflows) };
     if (name === 'setup.get') {
       const saved = state.setups.find(
         (entry) => entry.project_id === args.project_id,
@@ -140,10 +202,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
         setup: clone(
           saved ?? { ...setup, project_id: args.project_id, revision: 0 },
         ),
-        effective_models: {
-          worker: saved?.worker_model || 'demo/worker',
-          reviewer: saved?.reviewer_model || 'demo/reviewer',
-        },
+        effective_models: effectiveModels(saved?.workflows),
       };
     }
     if (name === 'setup.update') {
@@ -159,10 +218,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
       ];
       return {
         setup: clone(next),
-        effective_models: {
-          worker: next.worker_model || 'demo/worker',
-          reviewer: next.reviewer_model || 'demo/reviewer',
-        },
+        effective_models: effectiveModels(next.workflows),
       };
     }
     if (name === 'setup.delete') {
@@ -175,7 +231,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
       return {
         card: clone(current),
         events: [],
-        reviews: [],
+        outputs: [],
         comments: [],
         participants: [],
         runs: [],
