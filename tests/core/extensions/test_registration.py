@@ -422,6 +422,9 @@ def test_page_declarations_are_checked_and_scoped_to_the_live_registry_epoch(
     for unsafe_entry in ("../index.html", "/index.html", "index.js"):
         with pytest.raises(ValueError, match="relative HTML asset path"):
             api.register_page("board", "Board", unsafe_entry)
+    # The WebUI draws only the icons it knows.
+    with pytest.raises(ValueError, match="icon"):
+        api.register_page("board", "Board", "index.html", icon="rocket")
 
 
 def _lifecycle_source(

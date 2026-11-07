@@ -8,11 +8,14 @@ from .store import FactoryError
 
 type Json = dict[str, Any]
 
+PROFILE_SOURCES = ("agent", "team")
 SETUP_DEFAULTS: Json = {
     "enabled": True,
+    "worker_source": "agent",
     "worker_profile": "",
     "worker_model": "",
     "worker_effort": "",
+    "reviewer_source": "agent",
     "reviewer_profile": "",
     "reviewer_model": "",
     "reviewer_effort": "",
@@ -24,6 +27,8 @@ SETUP_DEFAULTS: Json = {
 SETUP_PROPERTIES: Json = {
     "project_id": {"type": "string", "minLength": 1},
     "enabled": {"type": "boolean"},
+    "worker_source": {"type": "string", "enum": list(PROFILE_SOURCES)},
+    "reviewer_source": {"type": "string", "enum": list(PROFILE_SOURCES)},
     **{
         field: {"type": "string"}
         for field in (
@@ -41,6 +46,17 @@ SETUP_PROPERTIES: Json = {
     "integration_check": {"type": "string", "enum": ["merged", "reference_only"]},
     "expected_revision": {"type": "integer", "minimum": 0},
 }
+
+
+def participant_profile(setup: Json, role: str) -> Json:
+    """The ``TemporaryAgentConfig`` Profile fields of one role's chosen Agent.
+
+    Card snapshots saved before ``*_source`` existed name a Team Agent.
+    """
+    profile = setup[f"{role}_profile"]
+    if setup.get(f"{role}_source", "team") == "agent":
+        return {"identity_profile": profile}
+    return {"repository_profile": profile}
 
 
 def schema(properties: Json, required: tuple[str, ...] = ()) -> Json:

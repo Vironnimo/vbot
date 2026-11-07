@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MethodType
@@ -30,7 +31,7 @@ class FakeHost:
 
     def __init__(self, directory: Path) -> None:
         self.authority: Literal["user", "authorized_task", "none"] = "none"
-        self.inspect_prompt = None
+        self.inspect_prompt: Callable[[Any, str | None], Awaitable[Json]] | None = None
         self.authority_calls: list[ToolContext] = []
         self.published: list[tuple[str, list[str], int]] = []
         self.badges: list[tuple[str, int]] = []
@@ -44,6 +45,7 @@ class FakeHost:
                 }
                 for project_id in ("project", "other", "disabled")
             ],
+            "agents": [{"id": "worker"}, {"id": "reviewer"}],
             "models": [{"id": "test/worker"}, {"id": "test/reviewer"}],
         }
 

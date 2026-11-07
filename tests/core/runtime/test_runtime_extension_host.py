@@ -406,6 +406,14 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             "allowed_skills": ["global-skill", "project-skill"],
         }
     ]
+    # Every roster Agent can be chosen; built-in Agents stay out.
+    assert [agent["id"] for agent in catalog["agents"]] == [
+        agent.id for agent in runtime.agents.list()
+    ]
+    assert all(
+        set(agent) == {"id", "name", "description", "placement"} for agent in catalog["agents"]
+    )
+    assert "librarian" not in {agent["id"] for agent in catalog["agents"]}
     assert {"name": "global-skill", "description": "global sentinel"} in catalog["skills"]
     assert "project-skill" not in {skill["name"] for skill in catalog["skills"]}
     assert "core:runtime" in {block["id"] for block in catalog["prompt_blocks"]}

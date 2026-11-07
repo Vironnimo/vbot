@@ -21,7 +21,7 @@ from core.utils.logging import get_logger
 
 from . import agent_text
 from ._git import GitRepository
-from ._values import SETUP_DEFAULTS
+from ._values import SETUP_DEFAULTS, participant_profile
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 type Json = dict[str, Any]
@@ -91,7 +91,7 @@ class FactoryExecution:
             denied.update({"apply_patch", "edit", "write"})
         return TemporaryAgentConfig(
             model="",
-            repository_profile=setup[f"{role}_profile"],
+            **participant_profile(setup, role),
             model_override=setup.get(f"{role}_model") or None,
             thinking_effort_override=setup.get(f"{role}_effort") or None,
             cwd=Path(runtime["cwd"]),

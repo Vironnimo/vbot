@@ -801,7 +801,7 @@ class ExtensionHostFactory:
         )
         agent = await _RUNTIME_WORKERS.run(
             self.agent_resolver.preview_temporary_agent,
-            replace(config, repository_profile=None),
+            replace(config, repository_profile=None, identity_profile=None),
             project_id,
         )
         record = next(item for item in self._extensions.records() if item.name == identity.name)
@@ -869,6 +869,16 @@ class ExtensionHostFactory:
             for skill in self._get_skills().list_all()
         ]
         return {
+            # Identity Agents in roster order; built-in Agents stay hidden.
+            "agents": [
+                {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "description": agent.description,
+                    "placement": agent.placement.kind if agent.placement is not None else "chat",
+                }
+                for agent in self.agents.list()
+            ],
             "projects": [
                 {
                     "id": project.project_id,

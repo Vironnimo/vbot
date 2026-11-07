@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.extensions._declarations import (
+    PAGE_ICONS,
     CommandDeclaration,
     CommandHandler,
     ExtensionDeclarations,
@@ -215,7 +216,10 @@ class ExtensionAPI:
         *,
         icon: str = "network",
     ) -> None:
-        """Declare one page whose asset remains under this Extension's root."""
+        """Declare one page whose asset remains under this Extension's root.
+
+        ``icon`` names its main-menu icon, one of :data:`PAGE_ICONS`.
+        """
         if not _is_page_id(page_id):
             raise ValueError("page_id must use lowercase letters, digits, hyphens, or underscores")
         if not isinstance(title, str) or not title.strip() or len(title) > 120:
@@ -232,8 +236,8 @@ class ExtensionAPI:
             or entry_path.suffix.lower() != ".html"
         ):
             raise ValueError("page entry must be a relative HTML asset path")
-        if not isinstance(icon, str) or icon not in {"network", "panel", "grid", "sparkles"}:
-            raise ValueError("page icon is not supported")
+        if not isinstance(icon, str) or icon not in PAGE_ICONS:
+            raise ValueError(f"page icon must be one of: {', '.join(sorted(PAGE_ICONS))}")
         if any(item.page_id == page_id for item in self._declarations.pages):
             raise ValueError(f"page already declared: {page_id}")
         self._declarations.pages.append(PageDeclaration(page_id, title.strip(), entry, icon))

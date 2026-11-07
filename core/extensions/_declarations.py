@@ -21,7 +21,9 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 24
+API_VERSION = 25
+# Menu icons a page may declare; the WebUI draws each (``AppShell.svelte``).
+PAGE_ICONS = frozenset({"network", "panel", "grid", "sparkles", "factory"})
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]

@@ -489,6 +489,22 @@
                 {:else if item.id === 'statistics'}
                   <path d="M2.5 13.5h11" />
                   <path d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5" />
+                {:else if item.icon === 'factory'}
+                  <path d="M1.5 14.5V8l4-2.5V8l4-2.5V8h3V2h2v12.5z" />
+                  <path d="M4 11.5h1.5m2.5 0h1.5" />
+                {:else if item.icon === 'grid'}
+                  <rect x="2" y="2" width="5" height="5" rx="1" />
+                  <rect x="9" y="2" width="5" height="5" rx="1" />
+                  <rect x="2" y="9" width="5" height="5" rx="1" />
+                  <rect x="9" y="9" width="5" height="5" rx="1" />
+                {:else if item.icon === 'panel'}
+                  <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                  <path d="M6 2.5v11" />
+                {:else if item.icon === 'sparkles'}
+                  <path
+                    d="M7 2.5 8.2 6 11.5 7.2 8.2 8.4 7 12 5.8 8.4 2.5 7.2 5.8 6z"
+                  />
+                  <path d="M12.5 10.5v3m-1.5-1.5h3" />
                 {:else}
                   <path d="m7 5-3 5m5-5 3 5M5 12h6" />
                   <circle cx="8" cy="3" r="2" />

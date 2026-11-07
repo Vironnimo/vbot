@@ -54,18 +54,21 @@
     project: projectFields,
     normalize,
     validate(draft) {
-      return !draft.worker_profile ||
-        !draft.reviewer_profile ||
-        !draft.base_branch.trim() ||
-        draft.base_branch.trim().startsWith('-') ||
-        !Number.isInteger(Number(draft.review_rounds)) ||
-        Number(draft.review_rounds) < 1 ||
-        Number(draft.review_rounds) > 20 ||
-        !Number.isInteger(Number(draft.turn_budget)) ||
-        Number(draft.turn_budget) < 1 ||
-        Number(draft.turn_budget) > 1000
-        ? t('factory.invalidSetup')
-        : '';
+      const within = (value, maximum) =>
+        Number.isInteger(Number(value)) &&
+        Number(value) >= 1 &&
+        Number(value) <= maximum;
+      if (!draft.worker_profile)
+        return t('factory.invalid.agent', { role: t('factory.worker') });
+      if (!draft.reviewer_profile)
+        return t('factory.invalid.agent', { role: reviewerLabel() });
+      if (!within(draft.review_rounds, 20))
+        return t('factory.invalid.reviewRounds');
+      if (!within(draft.turn_budget, 1000))
+        return t('factory.invalid.turnBudget');
+      if (!draft.base_branch.trim() || draft.base_branch.trim().startsWith('-'))
+        return t('factory.error.invalidBase');
+      return '';
     },
     save: async (values, revision) => {
       const result = await model.call('setup.update', {
@@ -82,10 +85,14 @@
     },
     onSave: (saved) => model.acceptSavedSetup(saved),
   });
+  function reviewerLabel() {
+    return t('factory.reviewer', { round: '' }).trim();
+  }
   const roles = $derived([
     {
       id: 'worker',
       label: t('factory.worker'),
+      source: 'worker_source',
       profile: 'worker_profile',
       model: 'worker_model',
       effort: 'worker_effort',
@@ -93,20 +100,24 @@
     },
     {
       id: 'reviewer',
-      label: t('factory.reviewer', { round: '' }).trim(),
+      label: reviewerLabel(),
+      source: 'reviewer_source',
       profile: 'reviewer_profile',
       model: 'reviewer_model',
       effort: 'reviewer_effort',
       empty: t('factory.inheritModel'),
     },
   ]);
+  const agents = $derived(model.catalog.agents ?? []);
   const team = $derived(project.agent_profiles ?? []);
   const models = $derived(model.catalog.models ?? []);
   const previewChoices = $derived({
     project_id: projectId,
+    worker_source: editor.draft.worker_source,
     worker_profile: editor.draft.worker_profile,
     worker_model: editor.draft.worker_model,
     worker_effort: editor.draft.worker_effort,
+    reviewer_source: editor.draft.reviewer_source,
     reviewer_profile: editor.draft.reviewer_profile,
     reviewer_model: editor.draft.reviewer_model,
     reviewer_effort: editor.draft.reviewer_effort,
@@ -150,17 +161,22 @@
       cancel();
     };
   });
-  function effectiveRoleModel(role) {
+  // The role's Model, '' when its Agent resolves none, undefined while unknown.
+  function resolvedRoleModel(role) {
     const saved = model.selectedSetup;
     if (editor.draft[`${role}_model`]) return editor.draft[`${role}_model`];
     return saved &&
+      editor.draft[`${role}_source`] === saved[`${role}_source`] &&
       editor.draft[`${role}_profile`] === saved[`${role}_profile`] &&
       editor.draft[`${role}_model`] === saved[`${role}_model`]
       ? model.setupEffectiveModels[role]
       : previewed?.key === previewKey
         ? previewed.models[role]
-        : '';
+        : undefined;
   }
+  const effectiveRoleModel = (role) => resolvedRoleModel(role) || '';
+  const modelUnresolved = (role) =>
+    Boolean(editor.draft[`${role}_profile`]) && resolvedRoleModel(role) === '';
   const workerModel = $derived(effectiveRoleModel('worker'));
   const reviewerModel = $derived(effectiveRoleModel('reviewer'));
   const sameModel = $derived(
@@ -171,23 +187,45 @@
     { value: 'reference_only', label: t('factory.checkReference') },
   ]);
 
-  function profileOptions(selected) {
+  // One picker per role over every Agent: the Identity Agents, then the
+  // Project's Team. A value is `<source>:<id>`, split into the two fields.
+  const profileValue = (role) =>
+    editor.draft[role.profile]
+      ? `${editor.draft[role.source]}:${editor.draft[role.profile]}`
+      : '';
+
+  function profileOptions(role) {
+    const selected = profileValue(role);
     const options = [
-      { value: '', label: t('factory.selectProfile') },
+      { value: '', label: t('factory.selectAgent') },
+      ...agents.map((agent) => ({
+        value: `agent:${agent.id}`,
+        label: agent.name,
+        secondaryLabel: agent.description,
+        group: t('factory.agentsGroup'),
+      })),
       ...team.map((profile) => ({
-        value: profile.id,
+        value: `team:${profile.id}`,
         label: profile.name,
-        secondaryLabel: profile.source,
+        group: t('factory.teamGroup', { project: project.name }),
       })),
     ];
     if (selected && !options.some((option) => option.value === selected))
       options.push({
         value: selected,
-        label: selected,
-        secondaryLabel: t('factory.profileUnavailable'),
+        label: editor.draft[role.profile],
+        secondaryLabel: t('factory.agentUnavailable'),
         disabled: true,
       });
     return options;
+  }
+
+  function selectProfile(role, value) {
+    const separator = value.indexOf(':');
+    editor.draft[role.source] =
+      separator > 0 ? value.slice(0, separator) : editor.draft[role.source];
+    editor.draft[role.profile] =
+      separator > 0 ? value.slice(separator + 1) : '';
   }
 
   function modelOptions(role) {
@@ -244,8 +282,7 @@
         onChange={(value) => (editor.draft.enabled = value)}
       />
     </div>
-    {#if !team.length}<Banner variant="warn">{t('factory.noProfiles')}</Banner
-      >{/if}
+    <p class="factory-help">{t('factory.enableSetupHelp')}</p>
   </section>
   {#each roles as role (role.id)}
     {@const allOptions = modelOptions(role)}
@@ -259,18 +296,18 @@
     >
       <h3 id={`factory-setup-${role.id}`}>{role.label}</h3>
       <div class="factory-fields">
-        <div class="factory-field">
+        <div class="factory-field factory-field--wide">
           <label
             id={`factory-label-${role.profile}`}
-            for={`factory-${role.profile}`}>{t('factory.teamProfile')}</label
+            for={`factory-${role.profile}`}>{t('factory.agent')}</label
           >
           <Dropdown
             id={`factory-${role.profile}`}
             ariaLabelledby={`factory-label-${role.profile}`}
-            value={editor.draft[role.profile]}
-            options={profileOptions(editor.draft[role.profile])}
+            value={profileValue(role)}
+            options={profileOptions(role)}
             onOpenChange={model.pickerOpen}
-            onValueChange={(value) => (editor.draft[role.profile] = value)}
+            onValueChange={(value) => selectProfile(role, value)}
           />
         </div>
         <div class="factory-field">
@@ -294,6 +331,12 @@
             onOpenChange={model.pickerOpen}
             onValueChange={(value) => selectModel(role, value)}
           />
+          {#if modelUnresolved(role.id)}<p
+              class="factory-field-error"
+              role="status"
+            >
+              {t('factory.modelUnresolved')}
+            </p>{/if}
         </div>
         <div class="factory-field">
           <label
@@ -316,7 +359,8 @@
     >{/if}
   {#if previewError}<Banner variant="error" role="alert">{previewError}</Banner
     >{/if}
-  <section class="factory-section">
+  <section class="factory-section" aria-labelledby="factory-setup-execution">
+    <h3 id="factory-setup-execution">{t('factory.execution')}</h3>
     <div class="factory-fields">
       <div class="factory-field">
         <label for="factory-review-rounds">{t('factory.reviewRounds')}</label
@@ -342,9 +386,13 @@
           min="1"
           max="1000"
           step="1"
+          aria-describedby="factory-turn-budget-help"
           value={editor.draft.turn_budget}
           onInput={(value) => (editor.draft.turn_budget = value)}
         />
+        <p id="factory-turn-budget-help" class="factory-help">
+          {t('factory.turnBudgetHelp')}
+        </p>
       </div>
       <div class="factory-field">
         <label for="factory-base-branch">{t('factory.baseBranch')}</label
@@ -427,6 +475,15 @@
   }
   .factory-save-status {
     margin-left: auto;
+  }
+  .factory-field--wide {
+    grid-column: 1 / -1;
+  }
+  .factory-field-error {
+    margin: 0;
+    color: var(--red);
+    font-size: 12px;
+    line-height: 1.5;
   }
   .factory-setup-editor > :global(.banner) {
     margin-bottom: 18px;

@@ -380,6 +380,7 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
     [
         ({"project_id": "missing"}, "project_not_found"),
         ({"reviewer_profile": "missing"}, "profile_not_found"),
+        ({"reviewer_source": "team", "reviewer_profile": "missing"}, "profile_not_found"),
         ({"worker_model": "missing"}, "model_not_found"),
         ({"base_branch": "--all"}, "invalid_base"),
     ],
@@ -393,6 +394,26 @@ async def test_setup_refuses_unavailable_execution_configuration_without_writes(
     assert refused.value.code == code
     assert await factory.operation("setup.list") == before
     assert factory.host.published == []
+
+
+async def test_setup_reports_a_role_whose_agent_has_no_usable_model(
+    factory: FactoryHarness,
+) -> None:
+    async def inspect(config, project_id):
+        if config.model_override is None and config.identity_profile == "worker":
+            raise ValueError("model '' is not usable in this instance")
+        return {"model": config.model_override or "test/reviewer"}
+
+    factory.host.inspect_prompt = inspect
+    choices = {"project_id": "project", "worker_profile": "worker", "reviewer_profile": "reviewer"}
+    preview = await factory.operation("setup.preview", **choices)
+    assert preview["effective_models"] == {"worker": "", "reviewer": "test/reviewer"}
+    with pytest.raises(FactoryError) as refused:
+        await factory.operation("setup.update", **choices)
+    assert refused.value.code == "model_unresolved"
+    assert "worker" in str(refused.value)
+    saved = await factory.operation("setup.update", **choices, worker_model="test/worker")
+    assert saved["effective_models"] == {"worker": "test/worker", "reviewer": "test/reviewer"}
 
 
 async def test_setup_deletion_requires_all_project_cards_final(factory: FactoryHarness) -> None:

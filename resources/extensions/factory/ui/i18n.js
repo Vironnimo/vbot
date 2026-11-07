@@ -1,5 +1,5 @@
 export default {
-  'factory.title': 'Factory',
+  'factory.title': 'Software Factory',
   'factory.board': 'Board',
   'factory.setups': 'Project setups',
   'factory.newCard': 'New card',
@@ -16,7 +16,7 @@ export default {
   'factory.descriptionRequired':
     'Describe the objective and acceptance criteria.',
   'factory.projectRequired': 'Choose a Project.',
-  'factory.running': '{running}/{limit} running',
+  'factory.running': '{running} of {limit} cards running',
   'factory.waitingCount': '{count} waiting for you',
   'factory.showDiscarded': 'Show discarded cards',
   'factory.column.proposals': 'Proposals',
@@ -131,36 +131,52 @@ export default {
     'This record changed elsewhere. Conflicting fields now show the saved values; your other edits were kept.',
   'factory.setupDeleted':
     'This setup was deleted elsewhere. Your draft is kept, but creating the setup again requires an explicit Create setup action.',
-  'factory.invalidSetup':
-    'Choose both Team profiles, a valid base branch, and whole-number limits in the indicated ranges.',
+  'factory.invalid.agent': 'Choose an Agent for the {role}.',
+  'factory.invalid.reviewRounds':
+    'Enter a whole number of review rounds from 1 to 20.',
+  'factory.invalid.turnBudget':
+    'Enter a whole number of Worker turns from 1 to 1,000.',
   'factory.setupHelp':
     'The Worker implements in isolation. A fresh Reviewer judges each submission before it reaches you.',
   'factory.noProjects': 'Register a Project to configure its Factory setup.',
   'factory.noSetups':
     'Choose a Project to configure the Worker, Reviewer and execution limits.',
+  'factory.projects': 'Projects',
+  'factory.chooseProject': 'Choose a Project',
+  'factory.boardEmpty': 'No Project is set up yet',
+  'factory.boardEmptyHelp':
+    'Choose which Agents implement and review for a Project, then create cards for it.',
+  'factory.setUpProject': 'Set up a Project',
   'factory.enabled': 'Enabled',
   'factory.disabled': 'Disabled',
   'factory.notConfigured': 'Not configured',
-  'factory.enableSetup': 'Automatically start queued cards',
-  'factory.teamProfile': 'Team profile',
-  'factory.selectProfile': 'Select a Team profile',
-  'factory.profileUnavailable': 'Unavailable Team profile',
-  'factory.noProfiles':
-    'This Project has no available Team profiles. Add an Agent to its Team before enabling Factory.',
+  'factory.enableSetup': 'Factory active for this Project',
+  'factory.enableSetupHelp':
+    'Cards can be created for this Project, and queued cards start automatically when a slot is free.',
+  'factory.agent': 'Agent',
+  'factory.selectAgent': 'Select an Agent',
+  'factory.agentsGroup': 'Agents',
+  'factory.teamGroup': '{project} Team',
+  'factory.agentUnavailable': 'Unavailable Agent',
+  'factory.modelUnresolved':
+    'This Agent has no usable Model. Choose a Model here or give the Agent one.',
   'factory.model': 'Model',
-  'factory.inheritModel': 'Inherit the Team profile’s Model',
+  'factory.inheritModel': 'The Agent’s Model',
   'factory.effort': 'Thinking effort',
-  'factory.defaultEffort': 'Profile / Provider default',
+  'factory.defaultEffort': 'The Agent’s thinking effort',
   'factory.sameModel':
     'Worker and Reviewer use the same Model. A different Reviewer Model provides a more independent judgment.',
   'factory.reviewRounds': 'Total review rounds',
   'factory.reviewRoundsHelp':
-    'Includes the first review. Each additional round allows one automatic rework; integration reviews do not count.',
+    'From 1 to 20, including the first review. Each additional round allows one automatic rework; integration reviews do not count.',
   'factory.turnBudget': 'Worker turns per phase',
+  'factory.turnBudgetHelp':
+    'From 1 to 1,000. When the Worker uses them up, the card waits for you.',
+  'factory.execution': 'Review and integration',
   'factory.baseBranch': 'Default base branch',
-  'factory.integrationCheck': 'Integration verification',
-  'factory.checkMerged': 'Reviewed commit is merged into base',
-  'factory.checkReference': 'Integration reference only',
+  'factory.integrationCheck': 'After integration, check',
+  'factory.checkMerged': 'The reviewed commit is in the base branch',
+  'factory.checkReference': 'Only that the Worker reports a reference',
   'factory.createSetup': 'Create setup',
   'factory.deleteSetup': 'Delete setup',
   'factory.deleteSetupTitle': 'Delete setup for “{project}”?',
@@ -183,9 +199,11 @@ export default {
   'factory.error.projectMissing':
     'This Project is unavailable. Choose an existing Project.',
   'factory.error.profileMissing':
-    'A selected Team profile is unavailable. Choose an available profile for each role.',
+    'A selected Agent is unavailable. Choose an available Agent for each role.',
   'factory.error.modelMissing':
-    'A selected Model is unavailable. Choose an available Model or inherit the Team profile’s Model.',
+    'A selected Model is unavailable. Choose an available Model or use the Agent’s Model.',
+  'factory.error.modelUnresolved':
+    'An Agent has no usable Model. Choose a Model for that role or give the Agent one.',
   'factory.error.setupMissing':
     'This Project has no Factory setup. Create its setup first.',
   'factory.error.setupInUse':

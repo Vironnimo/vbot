@@ -63,7 +63,7 @@ def register(api: ExtensionAPI) -> None:
         run_finished=service.execution.run_finished,
         quiesce=service.execution.quiesce,
     )
-    api.register_page("board", "Software Factory", "web/page.html", icon="grid")
+    api.register_page("board", "Software Factory", "web/page.html", icon="factory")
     for name, parameters in OPERATION_SCHEMAS.items():
         api.operations.register(
             name, name.replace(".", " "), parameters, _operation_handler(service, name)

@@ -14,6 +14,8 @@ export function failureText(cause) {
       return t('factory.error.profileMissing');
     case 'model_not_found':
       return t('factory.error.modelMissing');
+    case 'model_unresolved':
+      return t('factory.error.modelUnresolved');
     case 'setup_not_found':
       return t('factory.error.setupMissing');
     case 'setup_in_use':
@@ -262,10 +264,12 @@ export function usageSummary(usage = {}) {
 
 export const setupDefaults = (projectId) => ({
   project_id: projectId,
-  enabled: false,
+  enabled: true,
+  worker_source: 'agent',
   worker_profile: '',
   worker_model: '',
   worker_effort: '',
+  reviewer_source: 'agent',
   reviewer_profile: '',
   reviewer_model: '',
   reviewer_effort: '',

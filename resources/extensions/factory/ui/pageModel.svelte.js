@@ -186,6 +186,9 @@ export function createFactoryPageModel(bridgeClient) {
       selectedSetup = null;
       setupEffectiveModels = {};
     }
+    // Projects and Agents change outside the page; setups read them fresh.
+    if (load && normalized.startsWith('/setups'))
+      void loadCatalog().catch(() => {});
     if (!load || (!cardId && !setupId)) return;
     detailLoading = true;
     try {

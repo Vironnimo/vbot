@@ -86,7 +86,7 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | Text | Reason |
 |---|---|
 | `Software Factory turns work Cards into isolated changes...` / `It is bundled as factory...` | Gives the purpose, installed identity and durable user inbox without implying the user supervises every turn. |
-| `In Setups, select a registered Project's Worker and Reviewer Team profiles...` / `Empty Model and effort selections inherit...` | Uses existing Team context and explains overrides without inventing another Agent type or requiring configuration of every scalar. |
+| `In Setups, choose a Worker and a Reviewer Agent...` / `Empty Model and effort selections use the Agent's own...` | Names both Agent sources the picker offers (user decision 2026-11-07: every Agent can take either role, not only Team members) and explains overrides without inventing another Agent type or requiring configuration of every scalar. |
 | `The Project's instructions decide...` | Keeps isolation and integration policy outside the Extension. |
 | `Cards the user creates...queue automatically...own idea stays a Proposal...` | Makes the origin gate discoverable to an Agent using management or the public Tool. |
 | `Review changes return to the same Worker Session...` / `New Setups default to 3 reviews including the first...` / `Integration reviews do not consume this limit.` | Explains independent rework and the total-review count, so configuring 3 is not mistaken for three automatic reworks or retroactive changes to existing Cards. |

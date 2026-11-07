@@ -59,7 +59,10 @@ class Store:
             "integration_reference": "",
             "runtime": {
                 "cwd": str(self.directory),
+                # The reviewer's setup predates participant sources: it names
+                # a Team member.
                 "setup": {
+                    "worker_source": "agent",
                     "worker_profile": "builder",
                     "reviewer_profile": "reviewer",
                     "worker_model": "provider/worker",
@@ -457,11 +460,13 @@ async def test_worker_reviewer_acceptance_integration_and_archival(
     assert card["state"] == "working" and card["worker_turns"] == 1
     groups = service.host.temporary_agents
     assert groups.configs["worker"].model_override == "provider/worker"
+    assert groups.configs["worker"].identity_profile == "builder"
     assert "factory_submit_review" in groups.configs["worker"].tool_access.denied
     card = await approved(service)
     assert card["state"] == "waiting" and card["waiting_reason"] == "approved"
     assert service.publications[-1] == ("cards", [card["id"]], card["revision"], False)
     assert groups.configs["reviewer-1"].model_override == "other/reviewer"
+    assert groups.configs["reviewer-1"].repository_profile == "reviewer"
     assert {"apply_patch", "edit", "write", "factory_submit_work", "factory_report_blocked"} <= set(
         groups.configs["reviewer-1"].tool_access.denied
     )
