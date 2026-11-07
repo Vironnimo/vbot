@@ -115,6 +115,9 @@ _ADD_FIELDS = frozenset(
         "auto_instructions",
         "folder_instructions",
         "memory_enabled",
+        "skills_bundled_enabled",
+        "skills_global_enabled",
+        "skills_project_disabled",
     }
 )
 _SET_MUTABLE_FIELDS = frozenset(
@@ -226,6 +229,15 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
     auto_instructions = _optional_bool(params, "auto_instructions", default=True)
     folder_instructions = _optional_bool(params, "folder_instructions", default=True)
     memory_enabled = _optional_bool(params, "memory_enabled", default=True)
+    skill_lists = {
+        field: _string_list_field(params, field)
+        for field in (
+            "skills_bundled_enabled",
+            "skills_global_enabled",
+            "skills_project_disabled",
+        )
+        if field in params
+    }
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
     project_id = _slug_from_display_name(resolved_display_name)
 
@@ -246,6 +258,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             folder_instructions=folder_instructions,
             memory_enabled=memory_enabled,
             context_commands=list(NEW_PROJECT_CONTEXT_COMMANDS),
+            **skill_lists,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

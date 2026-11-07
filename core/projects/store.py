@@ -177,6 +177,9 @@ class ProjectStore:
         folder_instructions: bool = True,
         memory_enabled: bool = True,
         context_commands: list[str] | None = None,
+        skills_bundled_enabled: list[str] | None = None,
+        skills_global_enabled: list[str] | None = None,
+        skills_project_disabled: list[str] | None = None,
     ) -> Project:
         """Create and persist a project anchor.
 
@@ -202,6 +205,9 @@ class ProjectStore:
                 folder_instructions=folder_instructions,
                 memory_enabled=memory_enabled,
                 context_commands=context_commands,
+                skills_bundled_enabled=skills_bundled_enabled,
+                skills_global_enabled=skills_global_enabled,
+                skills_project_disabled=skills_project_disabled,
             )
             _reject_reserved_project_id(project.project_id)
 
