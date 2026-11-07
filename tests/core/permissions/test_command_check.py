@@ -400,7 +400,16 @@ async def test_git_reads_and_changes_what_its_paths_or_work_tree_reach(
 
 @pytest.mark.parametrize("ancestor_repository", [True, False])
 @pytest.mark.parametrize("line", ["git reset --hard", "git init; git checkout -b task"])
-@pytest.mark.parametrize("shell", ["bash", "powershell"])
+@pytest.mark.parametrize(
+    "shell",
+    [
+        "bash",
+        pytest.param(
+            "powershell",
+            marks=pytest.mark.skipif(_PWSH is None, reason="PowerShell's own parser needs pwsh"),
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_an_unresolved_work_tree_root_explains_the_preflight_limit(
     real_analyzer: CommandAnalyzer,
