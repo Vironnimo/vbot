@@ -17,7 +17,7 @@ Native Decision calls are a separate host capability: `_extension_host.py` deleg
 
 `_shell_review_context.py` reads bounded canonical conversation projections on the Sessions pool for `host.review_context`, retaining human/peer/Parent provenance and known ancestor generations (`extensions/shell-review.md` -> Execution integration). It never promotes Assistant text or a delegated instruction to human consent.
 
-The same helper module supplies `host.input_authority` using the latest canonical input of only the current Run, not the ancestor-rich review projection. A missing live Run is passed as `None`; the owner host rechecks its registration after the await (`extensions/host.md` -> Current authority and pending approvals).
+The same helper module supplies `host.input_authority` using the latest canonical input of only the current Run, not the ancestor-rich review projection or the human-filtered latest task (`sessions/history-api.md` -> Bounded conversation projection). A missing live Run is passed as `None`; the owner host rechecks its registration after the await (`extensions/host.md` -> Current authority and pending approvals).
 
 The storage scope adapter and Tool/Extension Prompt-block contributions live together in `_prompt_blocks.py`; bootstrap and reload use the same projection.
 

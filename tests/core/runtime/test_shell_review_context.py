@@ -99,10 +99,21 @@ async def test_current_input_authority_only_uses_this_runs_trusted_input(
             )
             == expected
         )
-        if source == "task":
-            # Human steering is a separate input, not another authenticated task.
-            session.for_run(run.id).append(ChatMessage.user("Human follow-up"))
-            assert await current_input_authority(sessions, context, run=run) == "user"
+        if source in {"user", "task"}:
+            # Direct-user provenance stays set on the Run during peer steering.
+            # Only the newest canonical User input carries current authority,
+            # even when the peer supplies no text (for example, an attachment).
+            for peer_text in ("Peer follow-up", ""):
+                session.for_run(run.id).append(
+                    ChatMessage.user(
+                        peer_text,
+                        sender=MessageSender("peer", "Peer", kind="session"),
+                    )
+                )
+                assert await current_input_authority(sessions, context, run=run) == "none"
+                # Human steering is its own input, not a peer or the initial task.
+                session.for_run(run.id).append(ChatMessage.user("Human follow-up"))
+                assert await current_input_authority(sessions, context, run=run) == "user"
             assert (
                 await current_input_authority(sessions, replace(context, run_id="other"), run=run)
                 == "none"

@@ -32,6 +32,8 @@ Their optional `expected_generation_id` checks the live target within that same 
 
 `SessionConversationPage` also carries current cursor floors and independent latest human task, conversation/response sequence and terminal Run-summary markers. Those facts cover the whole current view, not only its returned page; incoming peer messages never replace the human task or count as the recipient's response. Source: `_store_conversation.py`; contracts: `tests/core/sessions/test_conversation_page.py`.
 
+`latest_input` independently projects the latest canonical User carrier with its ingress provenance, including peer and text-empty inputs, regardless of paging or `include_peer_messages`. Current-input authority consumers use it, not the human-filtered `latest_user`, so peer steering cannot inherit an earlier human task's authority within the same Run.
+
 Each message also projects stored sender role, originating Run id/kind and Schedule id. The Run id lets current-input consumers reject older or inherited authority without hydrating whole Run messages. Task-input provenance joins the initial User carrier to its started Accessor receipt and the receipt's configured source namespace; it does not label later human steering or every message in an input-owned Session as machine input. Shell Review consumes these facts without changing peer-coordination paging semantics.
 
 Each `SessionConversationMessage` retains the entry's stamped `subagent_reply_target` as well as sender kind/id. Consumers evaluating human authority can therefore distinguish Parent-generated input in a Sub-Agent from actual user input even when the former has no MessageSender (`extensions/shell-review.md` -> Execution integration).

@@ -96,6 +96,16 @@ def conversation_page(
         descending=True,
         limit=1,
     )
+    # Ingress authority needs the actual latest User carrier, not the last
+    # non-peer human task. Empty input still carries provenance.
+    latest_input = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns=columns,
+        where="e.role = 'user'",
+        descending=True,
+        limit=1,
+    )
     latest_message = _store_lineage.ordered_rows(
         connection, ranges, columns="e.seq", where=_CONVERSATION, descending=True, limit=1
     )
@@ -124,6 +134,7 @@ def conversation_page(
         cursor_floor_sequence=int(state["cursor_floor_seq"]),
         messages=tuple(_message(row, max_text_chars) for row in rows),
         latest_user=_message(latest_user[0], max_text_chars) if latest_user else None,
+        latest_input=_message(latest_input[0], max_text_chars) if latest_input else None,
         latest_message_sequence=int(latest_message[0]["seq"]) if latest_message else None,
         latest_response_sequence=int(latest_response[0]["seq"]) if latest_response else None,
         latest_completion_sequence=int(latest_completion[0]["seq"]) if latest_completion else None,

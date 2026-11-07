@@ -54,7 +54,7 @@ async def current_input_authority(
         limit=1,
         max_text_chars=20_000,
     )
-    latest = page.latest_user
+    latest = page.latest_input
     if latest is None or latest.run_id != run.id or latest.truncated:
         return "none"
     if latest.sender_kind == "session" or latest.subagent_reply_target == "parent":

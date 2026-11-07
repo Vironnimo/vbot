@@ -38,6 +38,8 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
     assert [message.text for message in page.messages] == ["Peer question", "Latest answer"]
     assert page.latest_user is not None and page.latest_user.message_id == question.id
     assert page.latest_user.truncated and len(page.latest_user.text) == 40
+    assert page.latest_input is not None and page.latest_input.message_id == peer.id
+    assert page.latest_input.sender_kind == "session"
     assert page.messages[0].sender_kind == "session"
     assert page.messages[0].sender_id == "other-ref"
     assert page.messages[0].sender_role == "member"
@@ -51,7 +53,17 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
     )
     assert older.messages[0].text == "First answer"
     assert older.messages[1].message_id == question.id
+    assert older.latest_input == page.latest_input
     assert all("PRIVATE" not in item.text for item in (*page.messages, *older.messages))
+    filtered = manager.conversation_page(
+        fork.address,
+        expected_generation_id=generation,
+        limit=1,
+        max_text_chars=40,
+        include_peer_messages=False,
+    )
+    assert filtered.latest_user == page.latest_user
+    assert filtered.latest_input == page.latest_input
 
     fork.apply_edit(question.id, [ChatMessage.user("Replacement task")])
     edited = manager.conversation_page(fork.address, expected_generation_id=generation, limit=10)
@@ -61,6 +73,7 @@ async def test_conversation_page_follows_lineage_and_excludes_replaced_and_priva
         "Replacement task",
     ]
     assert edited.cursor_floor_sequence > 0
+    assert edited.latest_input is not None and edited.latest_input.text == "Replacement task"
     # Inherited context remains source-faithful after later source changes.
     source.apply_edit(first.id, [ChatMessage.user("Different source task")])
     inherited = manager.conversation_page(fork.address, expected_generation_id=generation, limit=10)

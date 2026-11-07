@@ -522,6 +522,9 @@ class SessionConversationPage:
     latest_completion_sequence: int | None
     latest_completion_status: str | None
     has_more: bool
+    # Latest canonical User carrier, including peer and text-empty inputs;
+    # unlike latest_user, this is ingress provenance, not the human task.
+    latest_input: SessionConversationMessage | None = None
 
 
 @dataclass(frozen=True)
