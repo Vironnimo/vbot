@@ -343,6 +343,8 @@ def provider_set_enabled(
     resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
     state = "enabled" if payload.data.get("enabled") else "disabled"
     lines = [f"{state} {resolved_connection_id}"]
+    if isinstance(payload.data.get("external_auth"), Mapping):
+        lines.extend(_external_login_lines(payload.data))
     if "reachable" in payload.data:
         reachable = payload.data.get("reachable")
         if reachable is True:
@@ -365,7 +367,7 @@ def _resolve_single_connection_id(
     instance: ServerInstance,
     provider_id: str,
     *,
-    oauth_only: bool = False,
+    login_only: bool = False,
 ) -> tuple[str | None, CommandResult | None]:
     """Resolve a provider's single connection id, or explain which to pass."""
 
@@ -387,17 +389,17 @@ def _resolve_single_connection_id(
             instance=instance,
             refused=True,
         )
-    if oauth_only:
+    if login_only:
         provider_connections = [
             connection
             for connection in provider_connections
-            if isinstance(connection, dict) and connection.get("type") == "oauth"
+            if isinstance(connection, dict) and connection.get("type") in {"oauth", "external"}
         ]
         if not provider_connections:
             return None, CommandResult(
                 ok=False,
                 message=(
-                    f"Provider '{provider_id}' has no OAuth Connection. "
+                    f"Provider '{provider_id}' has no login Connection. "
                     f"Inspect authentication with: vbot provider status {provider_id}; "
                     "API-key Connections use vbot provider key set <provider-id> --stdin. "
                     "Keep the same target options."
@@ -433,10 +435,10 @@ def provider_connect(
     connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
-    """Start the OAuth device flow via `provider.connect` RPC."""
+    """Connect a login through `provider.connect` RPC."""
 
     if connection_id is None:
-        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, login_only=True)
         if error is not None:
             return error
 
@@ -446,6 +448,15 @@ def provider_connect(
     payload = _rpc_call(instance, "provider.connect", params)
     if not payload.ok:
         return payload.to_command_result()
+
+    if isinstance(payload.data.get("external_auth"), Mapping):
+        connected = payload.data.get("connected") is True
+        return CommandResult(
+            ok=connected,
+            message="\n".join([f"enabled {connection_id}", *_external_login_lines(payload.data)]),
+            instance=instance,
+            attention=() if connected else ("Complete Claude Code login on the server computer",),
+        )
 
     user_code = _string_or_default(payload.data.get("user_code"), "?")
     verification_uri = _string_or_default(payload.data.get("verification_uri"), "?")
@@ -480,10 +491,10 @@ def provider_disconnect(
     connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
-    """Remove a stored OAuth token via `provider.disconnect` RPC."""
+    """Disconnect vBot-managed or external login enrollment through RPC."""
 
     if connection_id is None:
-        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, login_only=True)
         if error is not None:
             return error
 
@@ -494,6 +505,12 @@ def provider_disconnect(
     if not payload.ok:
         return payload.to_command_result()
     resolved_account = _string_or_default(payload.data.get("account"), "default")
+    if payload.data.get("type") == "external":
+        return CommandResult(
+            ok=True,
+            message=f"disabled {connection_id} in vBot; the external login is unchanged",
+            instance=instance,
+        )
     return CommandResult(
         ok=True,
         message=f"disconnected {connection_id} (account: {resolved_account})",
@@ -507,10 +524,10 @@ def provider_connect_status(
     connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
-    """Show OAuth connection state via `provider.connection_status` RPC."""
+    """Check login state through `provider.connection_status` RPC."""
 
     if connection_id is None:
-        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, login_only=True)
         if error is not None:
             return error
 
@@ -523,6 +540,18 @@ def provider_connect_status(
     connected = "yes" if payload.data.get("connected") else "no"
     flow_active = "yes" if payload.data.get("flow_active") else "no"
     resolved_account = _string_or_default(payload.data.get("account"), "default")
+    if payload.data.get("type") == "external":
+        return CommandResult(
+            ok=True,
+            message="\n".join(
+                [f"{connection_id}: connected={connected}", *_external_login_lines(payload.data)]
+            ),
+            instance=instance,
+            attention=()
+            if payload.data.get("connected")
+            or payload.data.get("status") not in {"missing", "logged_out"}
+            else ("Complete Claude Code login on the server computer",),
+        )
     return CommandResult(
         ok=True,
         message=(
@@ -534,6 +563,21 @@ def provider_connect_status(
         if payload.data.get("connected")
         else ("Account is not connected; inspect the device-flow state",),
     )
+
+
+def _external_login_lines(data: Mapping[str, Any]) -> list[str]:
+    status = data.get("external_auth")
+    status = status if isinstance(status, Mapping) else data
+    lines = [f"external login: {_string_or_default(status.get('status'), 'unknown')}"]
+    if isinstance(status.get("message"), str) and status["message"]:
+        lines.append(f"  {status['message']}")
+    command = data.get("setup_command")
+    if isinstance(command, str) and command:
+        lines.append(f"Server setup (same operating-system account as vBot): {command}")
+    setup_url = data.get("setup_url")
+    if isinstance(setup_url, str) and setup_url:
+        lines.append(f"Installation guide: {setup_url}")
+    return lines
 
 
 def provider_usage_history(
@@ -810,6 +854,12 @@ def _format_connection_row(connection: object, *, details: bool = True) -> str:
         state, description = "warning", f"{description} · local service unreachable"
     elif "reachable" in connection and connection["reachable"] is None:
         description += " · reachability not checked"
+    if connection_type == "external" and connection.get("enabled"):
+        auth = connection.get("external_auth")
+        if isinstance(auth, Mapping) and auth.get("connected") is True:
+            state, description = "success", "External login connected"
+        else:
+            state, description = "warning", "External login not ready"
     heading = status_line(state, f"{label} ({connection_id}) — {description}")
     if not details:
         accounts = connection.get("accounts")
@@ -830,7 +880,10 @@ def _format_connection_row(connection: object, *, details: bool = True) -> str:
         reachable = connection.get("reachable")
         reachable_text = "unknown" if reachable is None else ("yes" if reachable else "no")
         header = f"{header}  reachable: {reachable_text}"
-    return "\n".join([heading, header, _format_account_rows(connection.get("accounts"))])
+    rows = [heading, header, _format_account_rows(connection.get("accounts"))]
+    if connection_type == "external":
+        rows.extend(_external_login_lines(connection))
+    return "\n".join(rows)
 
 
 def _format_account_rows(accounts: object) -> str:

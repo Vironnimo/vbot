@@ -4,7 +4,7 @@
 
 ## Overview
 
-Providers translate canonical vBot requests and responses at the external-service boundary. Bundled Provider and Connection definitions live in `resources/providers/*.json`; user-defined OpenAI-compatible Providers live as secret-free records under `settings.json` `providers.custom` and are materialized through the same registry. Model facts and refreshable catalogs belong to the Models domain. Runtime resolves one exact Provider Connection, creates the configured outer Adapter, and injects credentials, Model lookup, connection mode, and optional debug capture. Chat and task domains consume normalized interfaces and must not know Provider wire fields.
+Providers translate canonical vBot requests and responses at the external-service or native model-harness boundary. Bundled Provider and Connection definitions live in `resources/providers/*.json`; user-defined OpenAI-compatible Providers live as secret-free records under `settings.json` `providers.custom` and are materialized through the same registry. Model facts and refreshable catalogs belong to the Models domain. Runtime resolves one exact Provider Connection, creates the configured outer Adapter, and injects credentials, Model lookup, connection mode, and optional debug capture. Chat and task domains consume normalized interfaces and must not know Provider wire fields.
 
 A Provider can expose multiple Connection variants through one Adapter or route Models to different wire implementations inside a Provider-owned Adapter. Runtime selects only the outer Adapter from Provider config; per-Model protocol selection, request rules and Model admission are Provider policy, resolved per `(provider, connection, model)` into a wire profile from `resources/wire/<provider>.json` or a Custom Provider's Settings `wire` block (`providers/wire-profiles.md`).
 
@@ -56,11 +56,15 @@ Returning a Model's earlier reasoning state in later requests of the same conver
 - **Before changing or judging any Provider wire behavior, read `providers/compatibility-verification.md` and the Provider-specific reference.** New Models may inherit defaults without prior per-Model verification (Defaults and concrete exceptions; user decision, 2026-10-15); label this inference honestly. Controlled live evidence remains necessary to claim verified transport behavior or pin a restrictive compatibility exception; search snippets, accepted payloads, behavioral recall, serializer tests, generated catalogs, and third-party implementations are not transport proof by themselves.
 - Adapter creation requires an exact compositional Connection id. It never silently falls back to another Connection; only an omitted Account within that Connection resolves to the first usable Account.
 - Provider JSON uses `connections`; the obsolete single-provider `auth` shape is invalid. Provider ids cannot contain `:`; Connection ids cannot contain `:` or `--`.
-- A Custom Provider cannot shadow a bundled Provider id or take a reserved name, since Model discovery names files after it (`.vorch/PROJECT.md` -> Object IDs; `provider.custom_save` -> `invalid_request`). Its normalized Settings record selects the allowlisted `openai_compatible` Adapter with one `default` Connection (auth and key naming: `providers/connections.md` -> Configuration model); Settings/RPC never contain the key value. Its optional `wire` block is its whole wire profile file and applies live on save (`providers/wire-profiles.md` -> Custom Provider wire block).
+- Custom Provider naming, allowed Adapter, secret-free Settings/RPCs and default Connection: `providers/connections.md` -> Configuration model. Wire blocks apply live on save (`providers/wire-profiles.md` -> Custom Provider wire block).
 - Adapters rebuild authorization headers inside every retry attempt and never cache raw OAuth tokens outside `TokenGetter`; rejected-token recovery is the shared `OAuthRequestRecovery`, which tells token rejection from entitlement before one renewal (`providers/connections.md`).
 - `NetworkError` is retryable and remains Provider-neutral. Chat exhausts same-Model recovery first, then its normalized network interruption may advance an explicitly configured Model fallback chain because a different route can reach another host. Only `ProviderStreamingUnsupportedError` permits Chat's streaming-to-nonstreaming fallback.
 - Kernel-internal note messages (`role: "note"`) never reach adapters: Chat embeds persisted notes into requests as system reminders before wire translation. See `model-communication.md`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery omits only those exact ids from the usable Model projection (logged per model at DEBUG, since it repeats on every refresh) and retains no raw response. Do not use this as a preference allow/deny list.
+
+## Agent-facing text
+
+Claude Agent history framing (`_claude_agent_wire.py`): read and maintain its sentence rationale in `providers/claude-agent.md` -> Agent-facing text before editing.
 
 ## References
 
@@ -73,6 +77,7 @@ Read these only when your task matches - not by default.
 - Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, token estimation, shared task HTTP plumbing, or the internal module layout of `core/providers/` -> `providers/request-policy.md`
 - Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, the automatic usage history in `provider-usage.db`, or the `provider.usage*` RPCs -> `providers/usage.md`
 - Adding a Provider, Connection variant, Adapter selector or composed inner Adapter, discovery normalizer, or Provider-specific map -> `providers/add-a-provider.md`
+- Changing Claude Agent SDK auth, sessions, Tool bridging or history framing -> `providers/claude-agent.md`
 - Changing native Anthropic Messages behavior -> `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`
 - Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior -> `providers/kimi.md`

@@ -217,6 +217,83 @@ def _ollama_state(*, reachable: bool | None) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
+async def test_external_login_enrollment_and_probe_never_manage_the_program_credentials() -> None:
+    provider = ProviderConfig(
+        id="claude-agent",
+        name="Claude Agent",
+        adapter="claude_agent",
+        base_url="claude-code://local",
+        connections=[
+            ConnectionConfig(
+                id="subscription",
+                type="external",
+                label="Claude Code login",
+                auth=AuthConfig(header="", prefix=""),
+                auto_refresh=True,
+                setup_command="claude auth login",
+                setup_url="https://example.test/setup",
+            )
+        ],
+    )
+    overrides: dict[str, bool] = {}
+    auth: dict[str, Any] = {"connected": False, "status": "missing"}
+    probes: list[tuple[str, str]] = []
+    closed: list[tuple[str, str]] = []
+
+    async def refresh(provider_id: str, local_id: str) -> dict[str, Any]:
+        probes.append((provider_id, local_id))
+        return dict(auth)
+
+    async def close(provider_id: str, local_id: str) -> None:
+        closed.append((provider_id, local_id))
+
+    registry = ProviderRegistry({provider.id: provider})
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            providers=registry,
+            provider_credentials=ProviderCredentialResolver(
+                registry,
+                process_env={},
+                enabled_overrides_loader=lambda: overrides,
+            ),
+            storage=SimpleNamespace(
+                set_provider_connection_enabled=lambda key, enabled: overrides.__setitem__(
+                    key, enabled
+                )
+            ),
+            refresh_external_connection=refresh,
+            external_connection_status=lambda *_: dict(auth),
+            close_connection_transports=close,
+            connection_reachability=lambda _: None,
+        ),
+        event_bus=ServerEventBus(),
+    )
+    listing = await rpc_result(state, "connection.list")
+    assert not listing["connections"][0]["added"]
+    assert not probes
+    target = {"provider_id": provider.id, "connection_id": "claude-agent:subscription"}
+    rejected = await rpc_error(state, "provider.connect", **target, account="work")
+    assert rejected["code"] == "invalid_request"
+    assert not overrides and not probes
+    result = await rpc_result(state, "provider.connect", **target)
+    assert result["enabled"] and not result["connected"]
+    assert result["setup_command"] == "claude auth login"
+    assert overrides == {"claude-agent:subscription": True}
+    auth.update(connected=True, status="connected")
+    status = await rpc_result(state, "provider.connection_status", **target)
+    assert status["connected"] and not status["flow_active"]
+    assert len(probes) == 2
+    await rpc_result(state, "provider.disconnect", **target)
+    assert closed == [(provider.id, "subscription")]
+    assert auth["connected"]  # Disconnect only disables vBot's enrollment.
+    listing = await rpc_result(state, "connection.list")
+    assert listing["connections"][0]["added"]
+    assert not listing["connections"][0]["usable"]
+    await rpc_result(state, "provider.connection_status", **target)
+    assert len(probes) == 2  # Disabled connections do not start native probes.
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("connection_id", "enabled", "reachable", "expected", "probed"),
     [

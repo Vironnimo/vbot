@@ -59,8 +59,16 @@ class _RefreshOutcome:
     publish: bool = True
 
 
+class _NativeCatalogBusyError(ModelDiscoveryError):
+    """Native discovery was deferred without evidence of lost reachability."""
+
+
 async def refresh_model_database(
-    runtime: ProviderRuntime, *, provider_id: str | None = None, target: str = "runtime"
+    runtime: ProviderRuntime,
+    *,
+    provider_id: str | None = None,
+    target: str = "runtime",
+    notify_changed: bool = False,
 ) -> JsonObject:
     """Refresh one Provider or the whole Model DB, then publish and reload in place."""
     if target not in {"runtime", "system"}:
@@ -87,7 +95,9 @@ async def refresh_model_database(
                 runtime, resources_dir, include_instance_catalogs=target == "runtime"
             )
 
-        outcome, invalid_entry_count = await _publish_model_db_refresh(runtime, begin, refresh)
+        outcome, invalid_entry_count = await _publish_model_db_refresh(
+            runtime, begin, refresh, notify_changed=notify_changed
+        )
     result = outcome.result
     if provider_id is None:
         provider_count = int(result.get("refreshed_count", 0))
@@ -144,13 +154,16 @@ async def maybe_refresh_local_catalogs(runtime: ProviderRuntime, *, force: bool 
                     continue
                 try:
                     with caller_owns_retries():
-                        await discovery.refresh_models(
-                            provider,
-                            credential_value,
-                            resources_dir,
-                            credential_connection=connection,
-                            wire_files=runtime._wire_profiles.files,
+                        await _refresh_connection_catalog(
+                            runtime, provider, connection, credential_value, resources_dir
                         )
+                except _NativeCatalogBusyError:
+                    runtime._logger.debug(
+                        "Native Provider catalog refresh deferred (provider=%s connection=%s)",
+                        provider_id,
+                        connection.id,
+                    )
+                    continue
                 except ModelDiscoveryError as error:
                     previous = runtime._connection_reachability.get(connection_id)
                     runtime._connection_reachability[connection_id] = False
@@ -227,6 +240,7 @@ async def _publish_model_db_refresh(
     staged: list[ModelDatabaseRefresh] = []
     providers = runtime._providers
     storage = runtime._storage
+    native_sessions = runtime._claude_sessions
     configurations = {
         provider_id: providers.get(provider_id) for provider_id in providers.list_ids()
     }
@@ -244,6 +258,7 @@ async def _publish_model_db_refresh(
         if (
             runtime._providers is not providers
             or runtime._storage is not storage
+            or runtime._claude_sessions is not native_sessions
             or set(providers.list_ids()) != configurations.keys()
             or any(providers.get(key) is not config for key, config in configurations.items())
         ):
@@ -528,7 +543,11 @@ async def _refresh_provider_model_db(
             f"provider '{provider_id}' does not support model refresh",
         )
 
-    catalog = await _fetch_catalog_for_refresh()
+    catalog = (
+        None
+        if any(c.type == "external" for c in provider.connections)
+        else await _fetch_catalog_for_refresh()
+    )
     successes, errors = await _refresh_provider_connections(
         runtime,
         provider_id,
@@ -576,7 +595,10 @@ def _provider_supports_refresh(provider: Any) -> bool:
     if getattr(provider, "models_endpoint", None):
         return True
     return any(
-        getattr(connection, "models_endpoint", None)
+        (
+            getattr(connection, "models_endpoint", None)
+            or getattr(connection, "type", None) == "external"
+        )
         for connection in getattr(provider, "connections", [])
     )
 
@@ -589,7 +611,7 @@ def _no_refreshable_connection_message(
     disabled = [
         f"{provider_id}:{connection.id}"
         for connection in getattr(provider, "connections", [])
-        if _connection_models_endpoint(connection, provider)
+        if (_connection_models_endpoint(connection, provider) or connection.type == "external")
         and not runtime._credentials.is_connection_enabled(
             provider_id, f"{provider_id}:{connection.id}"
         )
@@ -630,7 +652,7 @@ async def _refresh_provider_connections(
     successes: list[JsonObject] = []
     errors: list[JsonObject] = []
     for connection in getattr(provider, "connections", []):
-        if not _connection_models_endpoint(connection, provider):
+        if not (_connection_models_endpoint(connection, provider) or connection.type == "external"):
             continue
         connection_id = f"{provider_id}:{connection.id}"
         requires_credentials = getattr(connection, "catalog_requires_credentials", True)
@@ -644,13 +666,13 @@ async def _refresh_provider_connections(
                 credential_value,
             ):
                 with _single_attempt_if(getattr(connection, "auto_refresh", False)):
-                    result = await discovery.refresh_models(
+                    result = await _refresh_connection_catalog(
+                        runtime,
                         provider,
+                        discovery_connection,
                         credential_value,
                         resources_dir,
-                        credential_connection=discovery_connection,
-                        models_dev_catalog=models_dev_catalog,
-                        wire_files=runtime.wire_profile_files,
+                        models_dev_catalog,
                     )
         except (ConfigError, ModelDiscoveryError, ProviderError, NetworkError) as exc:
             _LOGGER.warning(
@@ -669,6 +691,33 @@ async def _refresh_provider_connections(
             continue
         successes.append(result)
     return successes, errors
+
+
+async def _refresh_connection_catalog(
+    runtime: ProviderRuntime,
+    provider: Any,
+    connection: ConnectionConfig,
+    credential_value: str | TokenGetter,
+    resources_dir: Path,
+    catalog: ModelsDevCatalog | None = None,
+) -> JsonObject:
+    raw_models = None
+    if connection.type == "external":
+        probe = await runtime._probe_external_connection(provider.id, connection)
+        if probe.get("status") == "busy":
+            raise _NativeCatalogBusyError(str(probe.get("message") or "Native Provider is busy"))
+        if not probe.get("connected"):
+            raise ModelDiscoveryError(str(probe.get("message") or "External login is not ready"))
+        raw_models = probe.get("models", [])
+    return await discovery.refresh_models(
+        provider,
+        credential_value,
+        resources_dir,
+        credential_connection=connection,
+        models_dev_catalog=catalog,
+        wire_files=runtime.wire_profile_files,
+        raw_models=raw_models,
+    )
 
 
 def _single_attempt_if(auto_refresh: bool) -> AbstractContextManager[None]:

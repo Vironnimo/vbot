@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Any, ClassVar, cast, override
+from typing import Any, ClassVar, Literal, cast, override
 from urllib.parse import quote
 
 import httpx
@@ -453,9 +453,12 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         """Pin OpenRouter routing to one cache lineage without leaking its address."""
 
+        del session_generation_id, request_kind
         scope: list[str | None] = (
             ["prompt-cache-affinity", prompt_cache_affinity_id]
             if prompt_cache_affinity_id is not None

@@ -25,7 +25,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Projects and their Agents, Sessions (create, fork, rename, delete), archived Agents, Projects and Sessions | `references/projects-sessions.md` |
 | Send a message to an Agent and read its answer, with files or in a throwaway Session, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
 | Past conversations beyond `session_search`: listing Sessions, full transcripts, exact Tool Results | `references/session-search.md` |
-| Provider keys/OAuth/limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
+| Provider keys, logins and limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
 | Use bundled Swarm or Computer Use, or connect KeePassXC or 1Password as a source for Agent Secrets | `references/extension-usage.md` |

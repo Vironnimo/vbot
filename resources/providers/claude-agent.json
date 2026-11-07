@@ -1,0 +1,17 @@
+{
+  "id": "claude-agent",
+  "name": "Claude Agent",
+  "adapter": "claude_agent",
+  "base_url": "claude-code://local",
+  "catalog_scope": "instance",
+  "connections": [
+    {
+      "id": "subscription",
+      "type": "external",
+      "label": "Claude Code login",
+      "auto_refresh": true,
+      "setup_command": "claude auth login",
+      "setup_url": "https://code.claude.com/docs/en/setup"
+    }
+  ]
+}

@@ -94,7 +94,16 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
         )
 
         reachable: bool | None = None
-        if enabled and getattr(connection, "auto_refresh", False):
+        external_auth: JsonObject | None = None
+        if connection.type == "external":
+            if enabled:
+                external_auth = await runtime.refresh_external_connection(
+                    provider_id, connection.id
+                )
+            else:
+                await runtime.close_connection_transports(provider_id, connection.id)
+                external_auth = runtime.external_connection_status(provider_id, connection.id)
+        elif enabled and getattr(connection, "auto_refresh", False):
             await runtime.maybe_refresh_local_catalogs(force=True)
             reachable = _connection_reachability(runtime, public_connection_id)
         configured = await _CONNECTION_WORKERS.run(
@@ -116,6 +125,10 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = reachable
+    if external_auth is not None:
+        response["external_auth"] = external_auth
+        response["setup_command"] = connection.setup_command
+        response["setup_url"] = connection.setup_url
     if was_enabled != enabled:
         _LOGGER.info(
             "Provider connection %s (provider=%s connection=%s configured=%s usable=%s%s)",
@@ -536,6 +549,25 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
     connection_id = _required_string(params, "connection_id")
     account = _account_param(params)
 
+    connection = _login_connection(state.runtime, provider_id, connection_id)
+    if connection.type == "external":
+        _require_external_default_account(provider_id, connection_id, account)
+        result = await _set_connection_enabled(
+            state,
+            {
+                "provider_id": provider_id,
+                "connection_id": compose_connection_id(provider_id, connection.id),
+                "enabled": True,
+            },
+        )
+        return {
+            **result,
+            **result["external_auth"],
+            "account": DEFAULT_ACCOUNT_ID,
+            "setup_command": connection.setup_command,
+            "setup_url": connection.setup_url,
+        }
+
     try:
         connection = _oauth_device_connection(state.runtime, provider_id, connection_id)
         account_id = _effective_account_id(provider_id, connection_id, account)
@@ -581,6 +613,24 @@ async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
     connection_id = _required_string(params, "connection_id")
     account = _account_param(params)
 
+    connection = _login_connection(state.runtime, provider_id, connection_id)
+    if connection.type == "external":
+        _require_external_default_account(provider_id, connection_id, account)
+        result = await _set_connection_enabled(
+            state,
+            {
+                "provider_id": provider_id,
+                "connection_id": compose_connection_id(provider_id, connection.id),
+                "enabled": False,
+            },
+        )
+        return {
+            **result,
+            "account": DEFAULT_ACCOUNT_ID,
+            "status": "disconnected",
+            "type": "external",
+        }
+
     try:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
         account_id = _effective_account_id(provider_id, connection_id, account)
@@ -625,6 +675,28 @@ async def _provider_connection_status(state: Any, params: JsonObject) -> JsonObj
     connection_id = _required_string(params, "connection_id")
     account = _account_param(params)
 
+    connection = _login_connection(state.runtime, provider_id, connection_id)
+    if connection.type == "external":
+        _require_external_default_account(provider_id, connection_id, account)
+        enabled = state.runtime.provider_credentials.is_connection_enabled(
+            provider_id, connection_id
+        )
+        status = (
+            await state.runtime.refresh_external_connection(provider_id, connection.id)
+            if enabled
+            else {"connected": False, "status": "disabled"}
+        )
+        return {
+            "provider_id": provider_id,
+            "connection_id": compose_connection_id(provider_id, connection.id),
+            "account": DEFAULT_ACCOUNT_ID,
+            "flow_active": False,
+            "type": "external",
+            "setup_command": connection.setup_command,
+            "setup_url": connection.setup_url,
+            **status,
+        }
+
     try:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
         account_id = _effective_account_id(provider_id, connection_id, account)
@@ -644,6 +716,23 @@ async def _provider_connection_status(state: Any, params: JsonObject) -> JsonObj
         "connected": connected,
         "flow_active": flow_active,
     }
+
+
+def _require_external_default_account(
+    provider_id: str, connection_id: str, account: str | None
+) -> None:
+    if _effective_account_id(provider_id, connection_id, account) != DEFAULT_ACCOUNT_ID:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "External connections use the program's own login and do not support named accounts",
+        )
+
+
+def _login_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
+    try:
+        return _provider_connection(runtime, provider_id, connection_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

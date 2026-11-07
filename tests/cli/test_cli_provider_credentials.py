@@ -192,7 +192,7 @@ def test_oauth_commands_select_the_only_oauth_connection(
     ("types", "shown"),
     [
         pytest.param([], ("example",), id="unknown-provider"),
-        pytest.param(["api_key"], ("no OAuth Connection", "vbot provider key set"), id="no-oauth"),
+        pytest.param(["api_key"], ("no login Connection", "vbot provider key set"), id="no-oauth"),
         pytest.param(
             ["oauth", "oauth"],
             ("--connection", "example:connection-0", "example:connection-1"),
@@ -215,6 +215,95 @@ def test_oauth_connect_never_starts_without_exactly_one_oauth_connection(
     assert rpc.methods == ["connection.list"]
     for text in shown:
         assert text in out
+
+
+@pytest.mark.parametrize("connected", [False, True])
+def test_external_connect_reports_server_setup_instead_of_device_flow(
+    rpc: FakeRpc, run_cli: RunCli, connected: bool
+) -> None:
+    rpc.reply(
+        "connection.list",
+        {
+            "connections": [
+                {
+                    "id": "claude-agent:subscription",
+                    "provider_id": "claude-agent",
+                    "type": "external",
+                }
+            ]
+        },
+    )
+    status = {"connected": connected, "status": "connected" if connected else "missing"}
+    rpc.reply(
+        "provider.connect",
+        {
+            "external_auth": status,
+            **status,
+            "setup_command": "claude auth login",
+            "setup_url": "https://example.test/setup",
+        },
+    )
+    code, out, _ = run_cli("provider", "connect", "claude-agent")
+    assert code == (0 if connected else 1)
+    assert rpc.calls[-1] == (
+        "provider.connect",
+        {"provider_id": "claude-agent", "connection_id": "claude-agent:subscription"},
+    )
+    assert "claude-agent:subscription" in out
+    assert "claude auth login" in out and "server" in out.lower()
+    assert "https://example.test/setup" in out
+    assert "user_code" not in out and "verification_uri" not in out
+
+
+@pytest.mark.parametrize(
+    ("status", "connected", "message", "warns"),
+    [
+        pytest.param("connected", True, None, False, id="connected"),
+        pytest.param("missing", False, "missing-server-sentinel", True, id="setup-required"),
+        pytest.param("disabled", False, None, False, id="disabled-without-login-warning"),
+        pytest.param(
+            "api_billing",
+            False,
+            "billing-recovery-sentinel",
+            False,
+            id="billing-diagnostic-without-generic-login-warning",
+        ),
+    ],
+)
+def test_external_connection_status_preserves_program_state_and_server_recovery(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    status: str,
+    connected: bool,
+    message: str | None,
+    warns: bool,
+) -> None:
+    payload = {"type": "external", "status": status, "connected": connected}
+    if message is not None:
+        payload["message"] = message
+    rpc.reply("provider.connection_status", payload)
+
+    code, out, err = run_cli(
+        "provider",
+        "connection",
+        "status",
+        "claude-agent",
+        "--connection",
+        "claude-agent:subscription",
+    )
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "provider.connection_status",
+            {"provider_id": "claude-agent", "connection_id": "claude-agent:subscription"},
+        )
+    ]
+    assert f"external login: {status}" in out
+    if message is not None:
+        assert message in out
+    assert ("[WARN]" in err) is warns
+    assert "user_code" not in out and "verification_uri" not in out
 
 
 @pytest.mark.parametrize(

@@ -155,6 +155,8 @@ async def test_compaction_routes_session_context_through_selected_adapter(
         "session_id": session.id,
         "project_id": None,
         "prompt_cache_affinity_id": affinity,
+        "session_generation_id": session.generation_id,
+        "request_kind": "compaction",
         "adapter": id(selected),
     }
     assert compaction_request["kwargs"]["thinking_effort"] == ("" if separate_summary else "high")

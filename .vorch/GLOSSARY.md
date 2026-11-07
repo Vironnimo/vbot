@@ -9,7 +9,7 @@ A Session participant that vBot runs: it supplies the identity, instructions and
 The chat processing cycle: the Model receives a user message, produces text and/or Tool calls, and receives Tool results until it answers without Tool calls (`chat.md`). Not an event loop, game loop or separate process.
 
 ## Provider
-An external API service that hosts Models and routes requests to them, connected through vBot's Provider configuration (`providers.md`). Not the Model that processes the requests.
+An external service or locally installed model harness that supplies Models and routes requests to them, connected through vBot's Provider configuration (`providers.md`). Not the Model that processes the requests.
 
 ## Model
 An AI endpoint at one Provider, with its own id, capabilities and context window; the same underlying Model has a separate entry per Provider (`models.md`). Not the Provider that hosts it.

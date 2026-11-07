@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
 import httpx
 
@@ -246,8 +246,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         session_id: str,
         project_id: str | None = None,
         prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
     ) -> dict[str, Any]:
         del agent_id, session_id, project_id, prompt_cache_affinity_id
+        del session_generation_id, request_kind
         return {}
 
     @override

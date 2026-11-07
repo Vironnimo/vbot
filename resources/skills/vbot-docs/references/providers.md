@@ -53,7 +53,7 @@ vbot provider key unset <provider-id> [--connection <provider:connection-id>] [-
 
 ## OAuth device flow
 
-`vbot provider connect openai` starts the Subscription sign-in. When `--connection` is omitted, `connect`, `connection status`, and `disconnect` select the Provider's only OAuth Connection. Multiple candidates require an explicit `--connection`; API-key Connections are never selected for OAuth. The response names the exact Connection and Account for subsequent checks.
+`vbot provider connect openai` starts the Subscription sign-in. When `--connection` is omitted, `connect`, `connection status`, and `disconnect` select the Provider's only login Connection (OAuth or externally managed). Multiple candidates require an explicit `--connection`; API-key Connections are excluded. The response names the exact Connection and Account for subsequent checks.
 
 OAuth/subscription connections use the device flow instead of `key set` (`key set` rejects OAuth connections, `connect` rejects API-key connections):
 
@@ -64,6 +64,20 @@ vbot provider disconnect <provider-id> [--connection <provider:connection-id>] [
 ```
 
 `connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connection status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
+
+## Claude subscription through Claude Code
+
+The `claude-agent` Provider uses the user's installed Claude Code program and its own login. The user installs Claude Code and runs `claude auth login` on the computer running the vBot server, under the server process's operating-system account.
+
+This Connection accepts Claude subscription billing; a detected API-key or cloud-billed login is refused before inference. If status reports `api_billing`, the user signs in with a Claude subscription and removes conflicting API or cloud credentials from the vBot server environment, then repeats `connect`. For intentional direct API use, select the existing `anthropic` Provider and configure its API-key Connection.
+
+```bash
+vbot provider connect claude-agent
+vbot provider connection status claude-agent
+vbot model list --provider claude-agent --task chat
+```
+
+`connect` enables the Connection and checks the program's login; its output gives server setup instructions when the program or login is missing. The enabled Connection stays enrolled after a failed check. After the user completes setup, repeat `connect` to check again and discover Models. Copy the selected Model id from `model list` into the Agent's Model setting. This Connection has one default Account; named Accounts and API-key mutation are unavailable. `vbot provider disconnect claude-agent` disables this Connection in vBot and leaves Claude Code's login unchanged.
 
 ## Accounts: several credentials per Connection
 

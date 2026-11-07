@@ -158,7 +158,7 @@ class ProviderCredentialResolver:
         return connection_default_enabled(connection)
 
     def _connection_added(self, provider_id: str, connection: ConnectionConfig) -> bool:
-        if connection.type == "none":
+        if connection.type in {"none", "external"}:
             return f"{provider_id}:{connection.id}" in self._enabled_overrides()
         return self._has_connection_credentials(provider_id, connection, None)
 
@@ -259,6 +259,12 @@ class ProviderCredentialResolver:
     ) -> str:
         if connection.type == "none":
             return ""
+        if connection.type == "external":
+            if account_id == DEFAULT_ACCOUNT_ID and self._connection_added(provider_id, connection):
+                return ""
+            raise ConfigError(
+                "External connections use the program's own login and default account"
+            )
         if self._uses_token_store(connection):
             token = None
             if self._token_store is not None:
@@ -337,6 +343,14 @@ class ProviderCredentialResolver:
             # A keyless connection has exactly one implicit, always-usable
             # account — there is no credential to discover or scan for.
             return [ProviderAccount(id=DEFAULT_ACCOUNT_ID, usable=True, source="none")]
+        if connection.type == "external":
+            return [
+                ProviderAccount(
+                    id=DEFAULT_ACCOUNT_ID,
+                    usable=self._connection_added(provider_id, connection),
+                    source="external",
+                )
+            ]
         if self._uses_token_store(connection):
             return self._token_store_accounts(provider_id, connection)
         return self._environment_accounts(connection)

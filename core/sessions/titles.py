@@ -281,6 +281,7 @@ class SessionTitleService:
                 session_id=session_id,
                 project_id=project_id,
                 debug_run_id=f"title-{run_id}",
+                session_generation_id=request.generation_id,
                 run_id=run_id,
             )
             chat_sessions = self._runtime.chat_sessions
@@ -410,6 +411,7 @@ class SessionTitleService:
         session_id: str,
         project_id: str | None,
         debug_run_id: str,
+        session_generation_id: str | None = None,
         run_id: str | None = None,
         owner_name: str | None = None,
         group_id: str | None = None,
@@ -442,6 +444,8 @@ class SessionTitleService:
                     agent_id=agent_id,
                     session_id=session_id,
                     project_id=project_id,
+                    session_generation_id=session_generation_id,
+                    request_kind="utility",
                 )
             )
             adapter.set_debug_context(

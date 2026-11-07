@@ -301,6 +301,7 @@ class CompactionRunCoordinator:
                 checkpoint = await compaction_service.compact(
                     messages,
                     session_address=session.address,
+                    session_generation_id=session.generation_id,
                     run_id=run.id,
                     owner_name=(
                         run.execution_owner.extension if run.execution_owner is not None else None
@@ -593,6 +594,7 @@ class CompactionRunCoordinator:
                 checkpoint = await self._host.compaction_service.compact(
                     session_messages,
                     session_address=session.address,
+                    session_generation_id=session.generation_id,
                     run_id=run.id,
                     owner_name=(
                         run.execution_owner.extension if run.execution_owner is not None else None

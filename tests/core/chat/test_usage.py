@@ -22,7 +22,8 @@ from core.providers.adapter import (
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     estimate_wire_request_input_tokens,
 )
-from core.providers.providers import RequestInput
+from core.providers.claude_agent import ClaudeAgentAdapter
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, RequestInput
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.providers.github_copilot_test_support import copilot_metadata
 from tests.core.providers.github_copilot_test_support import make_adapter as make_copilot_adapter
@@ -537,7 +538,24 @@ def test_counting_holds_no_older_request_and_a_bounded_memo() -> None:
 
 _IMAGE = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}
 
+
+def _native_claude_wire() -> tuple[ClaudeAgentAdapter, str]:
+    config = ProviderConfig(
+        id="claude-agent",
+        name="Claude Agent",
+        adapter="claude_agent",
+        base_url="claude-code://local",
+        connections=[
+            ConnectionConfig(
+                "subscription", "external", "Claude login", AuthConfig(header="", prefix="")
+            )
+        ],
+    )
+    return ClaudeAgentAdapter(config), "opus"
+
+
 _WIRES = {
+    "claude-agent": _native_claude_wire,
     "go-gemini": lambda: (go_adapter(), GO_GEMINI_MODEL),
     "chat-completions": lambda: (zen_adapter(), CHAT_MODEL),
     "messages": lambda: (zen_adapter(), MESSAGES_MODEL),

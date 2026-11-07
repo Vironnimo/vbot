@@ -23,6 +23,7 @@ from core.models.models import (
 )
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
@@ -80,6 +81,22 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
 @pytest.mark.parametrize(
     ("adapter_class", "provider_id", "record", "effort", "expected"),
     [
+        pytest.param(
+            ClaudeAgentAdapter,
+            "claude-agent",
+            _model("sonnet", control=REASONING_CONTROL_LEVELS, levels=("low", "medium", "high")),
+            "xhigh",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            id="claude-agent-sdk-snaps-to-reported-efforts",
+        ),
+        pytest.param(
+            ClaudeAgentAdapter,
+            "claude-agent",
+            _ON_OFF,
+            "none",
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="claude-agent-sdk-disables-thinking",
+        ),
         # The generic wire sends the snapped effort even for an on_off Model, and
         # without a feed ladder it snaps against its low/medium/high floor.
         pytest.param(

@@ -135,6 +135,7 @@ export {
   getAddProviderCandidates,
   isOAuthConnection,
   isKeylessConnection,
+  isExternalConnection,
   isOAuthDeviceFlowConnection,
   getPublicConnectionId,
   buildProviderConnectPayload,

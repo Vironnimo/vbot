@@ -12,6 +12,7 @@
     connectionReachability,
     getConnectionAccounts,
     isKeylessConnection,
+    isExternalConnection,
     isAccountUsable,
     getAddableConnections,
     getAddProviderCandidates,
@@ -112,6 +113,12 @@
   function connectionStatus(connection) {
     if (!isConnectionEnabled(connection)) {
       return 'disabled';
+    }
+    if (
+      isExternalConnection(connection) &&
+      connection.external_auth?.connected !== true
+    ) {
+      return 'not_usable';
     }
     if (connectionReachability(connection) === false) {
       return 'unreachable';
@@ -241,8 +248,9 @@
 
   function providerAppearsRefreshEligible(provider) {
     return (
-      typeof provider?.models_endpoint === 'string' &&
-      provider.models_endpoint.length > 0 &&
+      ((typeof provider?.models_endpoint === 'string' &&
+        provider.models_endpoint.length > 0) ||
+        (provider?.connections ?? []).some(isExternalConnection)) &&
       (provider.credentials_configured === true ||
         provider.status === 'configured')
     );

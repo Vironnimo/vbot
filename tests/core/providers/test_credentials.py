@@ -80,7 +80,21 @@ def _registry() -> ProviderRegistry:
             ),
         ],
     )
-    return ProviderRegistry({"openai": openai, "ollama": ollama})
+    external = ProviderConfig(
+        id="claude-agent",
+        name="Claude Agent",
+        adapter="claude_agent",
+        base_url="claude-code://local",
+        connections=[
+            ConnectionConfig(
+                id="subscription",
+                type="external",
+                label="Claude Code login",
+                auth=AuthConfig(header="", prefix=""),
+            )
+        ],
+    )
+    return ProviderRegistry({"openai": openai, "ollama": ollama, "claude-agent": external})
 
 
 def _resolver(
@@ -341,6 +355,29 @@ def test_bundled_opencode_connections_share_key_slots_but_not_enablement() -> No
     ("overrides", "env", "connection_id", "enabled", "added", "credentialed", "usable"),
     [
         pytest.param(None, {}, "ollama:local", False, False, True, False, id="keyless-default"),
+        pytest.param(
+            None, {}, "claude-agent:subscription", False, False, False, False, id="external-default"
+        ),
+        pytest.param(
+            {"claude-agent:subscription": True},
+            {},
+            "claude-agent:subscription",
+            True,
+            True,
+            True,
+            True,
+            id="external-added",
+        ),
+        pytest.param(
+            {"claude-agent:subscription": False},
+            {},
+            "claude-agent:subscription",
+            False,
+            True,
+            True,
+            False,
+            id="external-disabled",
+        ),
         pytest.param(
             {"ollama:local": True}, {}, "ollama:local", True, True, True, True, id="keyless-added"
         ),
