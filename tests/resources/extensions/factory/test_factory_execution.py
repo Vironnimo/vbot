@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,7 +32,8 @@ _NEW = "b" * 40
 
 
 class Store:
-    def __init__(self) -> None:
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
         self.cards: dict[str, Json] = {}
         self.histories: dict[str, Json] = {}
 
@@ -56,7 +58,7 @@ class Store:
             "recommendation": "",
             "integration_reference": "",
             "runtime": {
-                "cwd": "C:/repo",
+                "cwd": str(self.directory),
                 "setup": {
                     "worker_profile": "builder",
                     "reviewer_profile": "reviewer",
@@ -270,9 +272,9 @@ class Groups:
 
 
 class Service:
-    def __init__(self) -> None:
+    def __init__(self, directory: Path) -> None:
         self.lock = asyncio.Lock()
-        self.store = Store()
+        self.store = Store(directory)
         self.tasks: list[asyncio.Task[Any]] = []
         self.changes: list[tuple[str, str | None]] = []
         self.publications: list[tuple[str, list[str], int, bool]] = []
@@ -397,7 +399,7 @@ class Git:
 
 
 @pytest.fixture
-def service(monkeypatch):
+def service(monkeypatch, tmp_path):
     monkeypatch.setattr(_execution, "GitRepository", Git)
     monkeypatch.setattr(Git, "head_value", _HEAD)
     monkeypatch.setattr(Git, "ancestor", True)
@@ -405,7 +407,7 @@ def service(monkeypatch):
     monkeypatch.setattr(Git, "extra_paths", ())
     monkeypatch.setattr(Git, "merge_paths", ())
     monkeypatch.setattr(Git, "unknown_base", False)
-    return Service()
+    return Service(tmp_path)
 
 
 async def started(service):
