@@ -9,18 +9,27 @@ from core.tools import tool_failure, tool_success
 
 type Json = dict[str, Any]
 
-WORKER_RULES = (
-    "Work in isolation according to the Project instructions. Do not integrate into the base "
-    "branch before the user accepts the Card. Run the checks the Project prescribes, then call "
-    "factory_submit_work. If you need a decision or information from the user, call "
-    "factory_report_blocked."
+_WORK_RULES = (
+    "You do one stage of a Factory workflow for a Card. Do the work your stage instructions "
+    "describe, then call factory_submit_work. If you need a decision or information from the "
+    "user, call factory_report_blocked."
 )
-
-REVIEWER_RULES = (
-    "Review the submitted commit range without changing files or branches. Judge whether the "
-    "idea is worth having and whether the implementation is correct, simple and fits the Project "
-    "conventions. Check whether previous findings were addressed, then call factory_submit_review. "
-    "Your recommendation tells the user whether to accept and what you would add or change."
+_CHANGES_RULES = (
+    "Work in isolation according to the Project instructions. Do not integrate into the base "
+    "branch before the user accepts the Card. Run the checks the Project prescribes, commit "
+    "your change on a local branch and submit that branch."
+)
+_DOCUMENT_RULES = (
+    "Your stage produces a document, not repository changes: investigate as needed, but do not "
+    "change files or branches. Submit the complete document as result."
+)
+_REVIEW_RULES = (
+    "Review the results handed to you without changing files or branches. Judge whether they "
+    "achieve the Card's objective and their stage instructions, and whether the approach is "
+    "sound, correct and simple. For repository changes, review the submitted commit range "
+    "against the Project conventions. Check whether previous findings were addressed, then call "
+    "factory_submit_review. Your recommendation tells the user whether to accept and what you "
+    "would add or change."
 )
 
 _INTEGRATION_REVIEW_GATE = (
@@ -28,6 +37,20 @@ _INTEGRATION_REVIEW_GATE = (
     "call factory_report_integration with outcome needs_changes before updating the base. "
     "A changed commit SHA needs review even when its patch is unchanged."
 )
+
+
+def rules(stage: Json) -> str:
+    """A participant's standing instructions: the stage kind's rules, then the user's."""
+    if stage["kind"] == "review":
+        parts = [_REVIEW_RULES]
+    else:
+        parts = [
+            _WORK_RULES,
+            _CHANGES_RULES if stage["output"] == "changes" else _DOCUMENT_RULES,
+        ]
+    if stage.get("instructions", "").strip():
+        parts.append(f"Stage instructions:\n{stage['instructions'].strip()}")
+    return "\n\n".join(parts)
 
 
 def _data(label: str, value: Any) -> str:
@@ -40,63 +63,120 @@ def _data(label: str, value: Any) -> str:
     return f"{label} (data):\n{text}"
 
 
-def worker_input(card: Json) -> str:
-    return "\n\n".join(
-        (
-            "Implement this Factory Card.",
-            _data(
-                "Card",
-                {key: card.get(key, "") for key in ("id", "project_id", "title", "description")},
-            ),
-            _data("Default base branch", card["runtime"]["setup"].get("base_branch", "main")),
-            _data("User comments", card.get("comments", [])),
-        )
+def _card(card: Json) -> Json:
+    return {key: card.get(key, "") for key in ("id", "project_id", "title", "description")}
+
+
+def output_view(output: Json) -> Json:
+    """One recorded stage result as participants read it."""
+    view: Json = {"stage": output["stage_name"]}
+    if output.get("lanes", 1) > 1:
+        view["lane"] = output["lane"] + 1
+    if output["kind"] == "work":
+        view["summary"] = output["summary"]
+        if output.get("result"):
+            view["result"] = output["result"]
+        if output.get("branch"):
+            view.update(
+                branch=output["branch"],
+                base=output["base"],
+                range=f"{output['base_sha']}..{output['head_sha']}",
+            )
+        if output.get("checks"):
+            view["checks"] = output["checks"]
+    else:
+        view["verdict"] = output["verdict"]
+        if output.get("recommendation"):
+            view["recommendation"] = output["recommendation"]
+        if output.get("findings"):
+            view["findings"] = output["findings"]
+    return view
+
+
+def _position(workflow: Json, index: int, lane: int) -> str:
+    stages = workflow["stages"]
+    stage = stages[index]
+    text = (
+        f"Do stage {stage['name']!r} ({index + 1} of {len(stages)}) of the Factory workflow "
+        f"{workflow['name']!r} for this Card."
     )
+    if len(stage["lanes"]) > 1:
+        text += (
+            f" You are lane {lane + 1} of {len(stage['lanes'])}: the other lanes do the same "
+            "task independently, and a later stage sees all results."
+        )
+    return text
 
 
-def reviewer_input(card: Json, reviews: list[Json]) -> str:
+def work_input(
+    card: Json, workflow: Json, index: int, lane: int, comments: list[Json], earlier: list[Json]
+) -> str:
+    stage = workflow["stages"][index]
+    parts = [_position(workflow, index, lane), _data("Card", _card(card))]
+    if stage["output"] == "changes":
+        parts.append(
+            _data("Default base branch", card["runtime"]["settings"].get("base_branch", "main"))
+        )
+    parts.append(_data("User comments", comments))
+    if earlier:
+        parts.append(_data("Results of earlier stages", [output_view(item) for item in earlier]))
+    return "\n\n".join(parts)
+
+
+def review_input(
+    card: Json,
+    workflow: Json,
+    index: int,
+    *,
+    under_review: list[Json],
+    previous: list[Json],
+    integration: bool,
+) -> str:
+    stage = workflow["stages"][index]
+    target = next(item for item in workflow["stages"] if item["id"] == stage["target"])
     landing = card["runtime"].get("integration_landing")
-    after_landing = isinstance(landing, dict) and landing.get("head_sha") == card["head_sha"]
-    parts = [
-        "Independently review this already integrated change."
-        if after_landing
-        else "Independently review this Factory submission.",
-        _data(
-            "Card",
-            {key: card.get(key, "") for key in ("id", "project_id", "title", "description")},
-        ),
-        _data(
-            "Submission",
-            {
-                key: card.get(key, "")
-                for key in (
-                    "base",
-                    "branch",
-                    "base_sha",
-                    "head_sha",
-                    "summary",
-                    "checks",
-                )
-            }
-            | {"range": f"{card['base_sha']}..{card['head_sha']}"},
-        ),
+    after_landing = (
+        integration and isinstance(landing, dict) and landing.get("head_sha") == card["head_sha"]
+    )
+    if after_landing:
+        heading = "Independently review this already integrated change."
+    elif integration:
+        heading = "Independently review the changed integration of this Factory Card."
+    else:
+        heading = f"Independently review the results of stage {target['name']!r} for this Card."
+    parts = [heading, _data("Card", _card(card))]
+    if integration:
+        parts.append(
+            _data(
+                "Submission",
+                {
+                    key: card.get(key, "")
+                    for key in ("base", "branch", "base_sha", "head_sha", "summary", "checks")
+                }
+                | {"range": f"{card['base_sha']}..{card['head_sha']}"},
+            )
+        )
+    else:
+        parts.append(_data("Results under review", [output_view(item) for item in under_review]))
+    parts.append(
         _data(
             "Previous review findings",
             [
-                {"round": review["round"], "findings": review.get("findings", [])}
-                for review in reviews
+                {"round": item["pass"], "findings": item.get("findings", [])}
+                for item in previous
+                if item.get("findings")
             ],
-        ),
-    ]
+        )
+    )
     if after_landing:
         parts.append(_data("Integration landing", landing))
     return "\n\n".join(parts)
 
 
-def note(kind: str, card: Json, text: str = "") -> str:
+def note(kind: str, card: Json, text: str = "", earlier: list[Json] | None = None) -> str:
     notes = {
         "keep_working": (
-            "Continue implementing the Card, then call factory_submit_work. If you need the user's "
+            "Continue your stage's work, then call factory_submit_work. If you need the user's "
             "decision or information, call factory_report_blocked."
         ),
         "keep_integrating": (
@@ -107,18 +187,22 @@ def note(kind: str, card: Json, text: str = "") -> str:
             "Finish the independent review with factory_submit_review; an ordinary answer does "
             "not submit the verdict."
         ),
-        "review_retry": (
-            "The previous Reviewer did not submit a verdict. Review the submission independently "
-            "and call factory_submit_review."
-        ),
         "rework": (
-            "The Reviewer requested changes. Address the findings in your isolated change, run "
-            "the prescribed checks, then call factory_submit_work. The Card has not been accepted "
-            "for integration."
+            "A review requested changes to your stage's result. Address the findings, run the "
+            "checks your stage needs, then call factory_submit_work. The Card has not been "
+            "accepted for integration."
         ),
         "send_back": (
-            "The user sent the Card back. Act on their comment in your isolated change, then call "
+            "The user sent the Card back to your stage. Act on their comment, then call "
             "factory_submit_work. The Card has not been accepted for integration."
+        ),
+        "answer": (
+            "The user answered your question. Continue with their answer and finish with the "
+            "Factory Tool your current step needs."
+        ),
+        "refresh": (
+            "Results of earlier stages changed after your last hand-in. Redo your part with the "
+            "updated results, then call factory_submit_work."
         ),
         "restart": (
             "vBot restarted. Continue this Card from its saved phase and use the matching Factory "
@@ -151,7 +235,13 @@ def note(kind: str, card: Json, text: str = "") -> str:
             content += "\n\n" + _data(
                 "Target base at acceptance", {"base": card["base"], "commit": commit}
             )
-    return f"{content}\n\n{_data('Comment or findings', text)}" if text else content
+    if text:
+        content += "\n\n" + _data("Comment or findings", text)
+    if earlier:
+        content += "\n\n" + _data(
+            "Results of earlier stages", [output_view(item) for item in earlier]
+        )
+    return content
 
 
 PUBLIC_DESCRIPTION = (
@@ -176,6 +266,13 @@ PUBLIC_PARAMETERS: Json = {
             "description": (
                 "Required for create: the user's objective and acceptance criteria, "
                 "without extra requirements."
+            ),
+        },
+        "workflow": {
+            "type": "string",
+            "description": (
+                "For create: the name of one of the Project's Factory workflows, such as Plan "
+                "or Implement. Omit to use the Project's default workflow."
             ),
         },
         "state": {
@@ -203,25 +300,43 @@ PUBLIC_PARAMETERS: Json = {
 
 PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
     "factory_submit_work": (
-        "Submit your isolated change for independent review and end this turn; "
-        "this does not authorize integration.",
+        "Hand in your stage's result and end this turn; the Factory passes it to the next stage. "
+        "This does not authorize integration.",
         {
             "type": "object",
             "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "What you did and what came of it, for later stages and "
+                    "the user.",
+                },
+                "result": {
+                    "type": "string",
+                    "description": (
+                        "Required when your stage produces a document: the complete document, "
+                        "such as the plan. Omit when your stage changes the repository."
+                    ),
+                },
                 "branch": {
                     "type": "string",
-                    "description": "The local branch containing the finished change.",
+                    "description": (
+                        "Required when your stage changes the repository: the local branch "
+                        "containing the finished change. Omit for a document."
+                    ),
                 },
-                "base": {"type": "string", "description": "The branch the change is based on."},
-                "summary": {"type": "string"},
+                "base": {
+                    "type": "string",
+                    "description": "Required with branch: the branch the change is based on.",
+                },
                 "checks": {
                     "type": "string",
                     "description": (
-                        "Which prescribed checks ran and their outcomes; name any not run."
+                        "Required with branch: which prescribed checks ran and their outcomes; "
+                        "name any not run."
                     ),
                 },
             },
-            "required": ["branch", "base", "summary", "checks"],
+            "required": ["summary"],
             "additionalProperties": False,
         },
     ),
@@ -235,9 +350,9 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
         },
     ),
     "factory_submit_review": (
-        "Submit your independent verdict and end this turn. An approval sends your recommendation "
-        "to the user; requested changes return to the Worker within the review limit, but go "
-        "directly to the user after landing.",
+        "Submit your independent verdict and end this turn. Approval passes the results on; "
+        "requested changes return them to their stage within the review limit, otherwise to "
+        "the user. After landing, requested changes go directly to the user.",
         {
             "type": "object",
             "properties": {
@@ -253,8 +368,8 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Required and non-empty for changes_requested: concrete issues the Worker "
-                        "can address. Omit when there are no findings."
+                        "Required and non-empty for changes_requested: concrete issues the "
+                        "authors can address. Omit when there are no findings."
                     ),
                 },
             },
@@ -302,13 +417,11 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
 def tool_result(kind: str, card: Json | None = None, text: str = "") -> Json:
     messages = {
         "created": (
-            "Card created and queued; work continues independently within the WIP limit. "
-            "Progress and review results appear on the Board, not in this Session."
+            "Card created and queued with workflow {workflow}; work continues independently "
+            "within the WIP limit. Progress and results appear on the Board, not in this Session."
         ),
         "proposal": "Proposal saved; work waits for the user's approval on the Board.",
-        "submitted": (
-            "Submission recorded; an independent Reviewer takes over. This turn ends here."
-        ),
+        "submitted": "Result recorded; the Factory handles the next step. This turn ends here.",
         "blocked": (
             "Question sent to the user; the Card waits for their answer. This turn ends here."
         ),
@@ -327,8 +440,15 @@ def tool_result(kind: str, card: Json | None = None, text: str = "") -> Json:
         "integration_failed": (
             "Integration could not finish; the Card waits for the user. This turn ends here."
         ),
+        "integration_waiting": (
+            "Changed integration recorded; the Card waits for the user to review it. "
+            "This turn ends here."
+        ),
     }
-    data: Json = {"message": text or messages.get(kind, "Factory action recorded.")}
+    message = text or messages.get(kind, "Factory action recorded.")
+    if card is not None and "{workflow}" in message:
+        message = message.format(workflow=json.dumps(card.get("workflow_name", "default")))
+    data: Json = {"message": message}
     if card is not None:
         data.update(id=card["id"], state=card["state"])
         if card.get("waiting_reason"):
@@ -360,6 +480,14 @@ ERROR_MESSAGES = {
         "Read the Card on the Board for its available actions."
     ),
     "missing_text": "Nothing was changed. Supply non-empty text for {field}.",
+    "missing_result": (
+        "Nothing was changed. Your stage produces a document: supply result with the complete "
+        "document."
+    ),
+    "missing_changes": (
+        "Nothing was changed. Your stage changes the repository: commit the change on a local "
+        "branch and supply branch, base and checks."
+    ),
     "invalid_verdict": (
         "Nothing was changed. Use verdict approve with a recommendation, "
         "or changes_requested with concrete findings."
@@ -419,7 +547,7 @@ ERROR_MESSAGES = {
         "Check the integration before retrying."
     ),
     "budget_exhausted": (
-        "The Worker reached its turn budget without a hand-in. "
+        "The participant reached its turn budget without a hand-in. "
         "Send the Card back with guidance to continue."
     ),
     "run_failed": (
@@ -427,8 +555,12 @@ ERROR_MESSAGES = {
         "Inspect its Session, then retry or send the Card back."
     ),
     "review_failed": (
-        "The Reviewers did not produce a verdict after a nudge and one fresh Reviewer. "
+        "The review did not produce a verdict after a nudge and one fresh reviewer. "
         "Inspect their Sessions, then retry the review."
+    ),
+    "integration_unreviewed": (
+        "Integration changed the reviewed commits, and no review stage of this workflow reviews "
+        "the integrating stage. Review the changed commits before accepting."
     ),
     "restart": (
         "The Card was interrupted again without a hand-in. "
