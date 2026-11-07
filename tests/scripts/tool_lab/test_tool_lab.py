@@ -29,11 +29,26 @@ def test_probe_runs_a_case_file_through_the_production_tool_path(
                 "files": {"a.txt": "one\ntwo\n"},
                 "cases": [
                     {
-                        "name": "read",
-                        "tool": "read",
-                        "arguments": {"path": "a.txt"},
-                        "expect": {"ok": True, "contains": ["two"]},
-                    }
+                        "name": "replace a read file",
+                        "steps": [
+                            {"tool": "read", "arguments": {"path": "a.txt"}},
+                            {
+                                "tool": "write",
+                                "arguments": {"path": "a.txt", "content": "after\n"},
+                            },
+                        ],
+                        "expect": {"ok": True, "files": {"a.txt": "after\n"}},
+                    },
+                    {
+                        "name": "refuse replacement without a read",
+                        "tool": "write",
+                        "arguments": {"path": "a.txt", "content": "after"},
+                        "expect": {
+                            "ok": False,
+                            "error_code": "file_not_read",
+                            "files": {"a.txt": "one\ntwo\n"},
+                        },
+                    },
                 ],
             }
         ),
@@ -41,7 +56,7 @@ def test_probe_runs_a_case_file_through_the_production_tool_path(
     )
 
     assert main(["probe", str(case_file)]) == 0
-    assert "1/1 checked cases pass" in capsys.readouterr().out
+    assert "2/2 checked cases pass" in capsys.readouterr().out
 
 
 def test_sessions_reads_a_copy_and_leaves_the_source_untouched(
@@ -191,6 +206,14 @@ async def test_replay_confines_repaired_calls_and_corpus_files_to_each_case(tmp_
             tool="write",
         )
         assert safe.ok and safe.files == {"cwd/safe.txt": "after"}
+        unread = await dispatch(
+            {"path": "safe.txt", "content": "after"},
+            {"cwd/safe.txt": "before"},
+            set(),
+            tool="write",
+        )
+        assert not unread.ok and unread.error_code == "file_not_read"
+        assert unread.files == {"cwd/safe.txt": "before"}
         per_item = await dispatch(
             {"edits": [{"path": "safe.txt", "old_string": "before", "new_string": "after"}]},
             {"cwd/safe.txt": "before"},

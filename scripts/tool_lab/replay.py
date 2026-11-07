@@ -58,6 +58,7 @@ from core.tools.apply_patch import patch_targets
 from core.tools.arguments import split_text_lines
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor, _checked_arguments
 from core.utils.file_status import is_link_status, stat_or_none
+from core.utils.ids import new_id
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime
 from scripts.tool_lab._replay_evidence import HistoryCall, session_histories
 from scripts.tool_lab._replay_history import (
@@ -154,10 +155,12 @@ class Dispatcher:
         number = self._count
         workspace = self._root / "replay" / str(number)
         session_id = f"replay-{number}"
+        generation_id = new_id("replay")
         rewritten = _with_root(arguments, workspace)
         context = ToolContext(
             agent_id=DEFAULT_AGENT_ID,
             session_id=session_id,
+            session_generation_id=generation_id,
             run_id=f"replay-run-{number}",
             tool_call_id=f"replay-call-{number}",
             tool_name=tool,
@@ -199,7 +202,7 @@ class Dispatcher:
                 with target.open("w", encoding="utf-8", newline="") as handle:
                     handle.write(content)
                 if location in stamped:
-                    self._state.record_read(session_id, target.resolve())
+                    self._state.record_read(generation_id, target.resolve())
         except (OSError, UnicodeEncodeError) as error:
             if created:
                 shutil.rmtree(workspace, ignore_errors=True)
@@ -207,6 +210,7 @@ class Dispatcher:
         config = ToolExecutionConfig(
             agent_id=DEFAULT_AGENT_ID,
             session_id=session_id,
+            session_generation_id=generation_id,
             run_id=f"replay-run-{number}",
             workspace=workspace,
             vbot_root=_VBOT_ROOT,
