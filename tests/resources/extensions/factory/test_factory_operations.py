@@ -92,6 +92,7 @@ async def test_public_creation_uses_host_authority_and_preserves_provenance(
     assert [item["key"] for item in factory.host.notifications] == (
         [card_id] if origin == "agent" else []
     )
+    assert factory.host.badges[-1] == ("board", 1 if origin == "agent" else 0)
 
 
 async def test_public_schema_cannot_supply_creation_authority(factory: FactoryHarness) -> None:
@@ -134,24 +135,64 @@ async def test_public_failure_after_persistence_reports_an_unconfirmed_outcome(
     assert factory.execution.calls == []
 
 
+@pytest.mark.parametrize(
+    ("state", "reason", "content_field"),
+    [
+        ("waiting", "approved", "recommendation"),
+        ("waiting", "blocked", "question"),
+        ("waiting", "run_failed", "note"),
+        ("waiting", "no_agreement", None),
+        ("waiting", "unknown_reason", None),
+        ("proposal", "", None),
+    ],
+)
 async def test_attention_renders_a_plain_summary_without_rewriting_card_content(
-    factory: FactoryHarness,
+    factory: FactoryHarness, state: str, reason: str, content_field: str | None
 ) -> None:
-    card = await factory.card("waiting", waiting_reason="approved")
+    card = await factory.card(state, waiting_reason=reason)
     title = "Objective\nwith a second line"
-    recommendation = "\n\nApproved on review.\nFurther detail."
+    content = "\n\nTest-owned summary.\nFurther detail."
+    patch: dict[str, Any] = {"title": title}
+    if content_field == "recommendation":
+        patch[content_field] = content
+    elif content_field is not None:
+        patch["runtime"] = {**card["runtime"], content_field: content}
     card = await factory.store.change(
         card["id"],
-        {"title": title, "recommendation": recommendation},
+        patch,
         actor="reviewer",
         event="reviewed",
     )
     await factory.service.changed(card, {**card, "state": "reviewing"})
     notice = factory.host.notifications[0]
     assert title.replace("\n", " ") in notice["title"]
-    assert notice["body"] == recommendation.strip().splitlines()[0]
+    if content_field is not None:
+        assert notice["body"] == content.strip().splitlines()[0]
+    else:
+        assert len(notice["body"].split()) > 3
+        if reason:
+            assert reason not in notice["body"]
     assert notice["key"] == card["id"] and notice["route"] == f"/card/{card['id']}"
     assert (await factory.store.get_card(card["id"]))["title"] == title
+    await factory.settle()
+
+
+async def test_board_badge_counts_waiting_cards_and_proposals_until_resolved(
+    factory: FactoryHarness,
+) -> None:
+    proposal = await factory.card("proposal")
+    waiting = await factory.card("waiting", waiting_reason="approved")
+    for state in ("queued", "working", "reviewing", "integrating", "done", "discarded"):
+        await factory.card(state)
+    await factory.service.changed(proposal)
+    assert factory.host.badges[-1] == ("board", 2)
+    await factory.operation("card.approve_proposal", id=proposal["id"])
+    assert factory.host.badges[-1] == ("board", 1)
+    saved = await factory.store.change(
+        waiting["id"], {"state": "done"}, actor="worker", event="integrated"
+    )
+    await factory.service.changed(saved, waiting)
+    assert factory.host.badges[-1] == ("board", 0)
     await factory.settle()
 
 
@@ -173,6 +214,40 @@ async def test_public_reads_filter_cards_without_exposing_execution_runtime(
     detail = await factory.call({"action": "get", "id": proposal["id"]})
     assert detail["ok"] is True
     assert "runtime" not in detail["data"]["card"]
+    assert "integration_landing" not in detail["data"]["card"]
+    landing: dict[str, Any] = {
+        "head_sha": "captured-head",
+        "base_sha": "captured-base",
+        "landing_sha": "landing-commit",
+        "branch_head_sha": None,
+        "status": "changes_requested",
+        "extra_paths": ["src/additional.py"],
+        "merge_paths": ["src/merged.py"],
+    }
+    stored_landing = {
+        **landing,
+        "private_config": {"not_for_the_board": True},
+        "extra_paths": [*landing["extra_paths"], {"not_a_path": "private"}],
+    }
+    saved = await factory.store.change(
+        proposal["id"],
+        {
+            "head_sha": "newer-submission-head",
+            "runtime": {**proposal["runtime"], "integration_landing": stored_landing},
+        },
+        actor="factory",
+        event="test_historical_landing",
+    )
+    projected = await factory.call({"action": "get", "id": proposal["id"]})
+    assert projected["ok"] is True
+    assert "runtime" not in projected["data"]["card"]
+    assert projected["data"]["card"]["integration_landing"] == landing
+    board = await factory.operation("board.get", project_id="project")
+    on_board = next(card for card in board["cards"] if card["id"] == proposal["id"])
+    assert on_board["integration_landing"] == landing
+    assert "runtime" not in on_board
+    assert (await factory.store.get_card(proposal["id"])) == saved
+    assert saved["runtime"]["integration_landing"] == stored_landing
     invalid = await factory.call({"action": "list", "state": "unknown"})
     assert invalid["ok"] is False and invalid["error"]["code"] == "invalid_arguments"
 
@@ -262,11 +337,13 @@ async def test_card_detail_retains_completed_run_status_beside_live_work(
     assert detail["usage"] == {"cost": {"total": 0.01}}
 
 
+@pytest.mark.parametrize("review_rounds", [None, 2], ids=["new-default", "explicit-two"])
 async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
-    factory: FactoryHarness,
+    factory: FactoryHarness, review_rounds: int | None
 ) -> None:
     empty = await factory.operation("setup.get", project_id="other")
     assert empty["setup"]["revision"] == 0
+    assert empty["setup"]["review_rounds"] == 3
     created = await factory.operation(
         "setup.update",
         project_id="other",
@@ -275,12 +352,16 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
         worker_model="test/worker",
         reviewer_model="test/reviewer",
         expected_revision=0,
+        **({"review_rounds": review_rounds} if review_rounds is not None else {}),
     )
     assert created["setup"]["revision"] == 1
+    assert created["setup"]["review_rounds"] == (review_rounds if review_rounds is not None else 3)
     updated = await factory.operation(
-        "setup.update", project_id="other", review_rounds=3, expected_revision=1
+        "setup.update", project_id="other", base_branch="release", expected_revision=1
     )
     assert updated["setup"]["revision"] == 2
+    assert updated["setup"]["base_branch"] == "release"
+    assert updated["setup"]["review_rounds"] == created["setup"]["review_rounds"]
     assert updated["setup"]["worker_model"] == "test/worker"
     assert updated["setup"]["reviewer_model"] == "test/reviewer"
     before = list(factory.host.published)

@@ -49,37 +49,42 @@ def worker_input(card: Json) -> str:
 
 
 def reviewer_input(card: Json, reviews: list[Json]) -> str:
-    return "\n\n".join(
-        (
-            "Independently review this Factory submission.",
-            _data(
-                "Card",
-                {key: card.get(key, "") for key in ("id", "project_id", "title", "description")},
-            ),
-            _data(
-                "Submission",
-                {
-                    key: card.get(key, "")
-                    for key in (
-                        "base",
-                        "branch",
-                        "base_sha",
-                        "head_sha",
-                        "summary",
-                        "checks",
-                    )
-                }
-                | {"range": f"{card['base_sha']}..{card['head_sha']}"},
-            ),
-            _data(
-                "Previous review findings",
-                [
-                    {"round": review["round"], "findings": review.get("findings", [])}
-                    for review in reviews
-                ],
-            ),
-        )
-    )
+    landing = card["runtime"].get("integration_landing")
+    after_landing = isinstance(landing, dict) and landing.get("head_sha") == card["head_sha"]
+    parts = [
+        "Independently review this already integrated change."
+        if after_landing
+        else "Independently review this Factory submission.",
+        _data(
+            "Card",
+            {key: card.get(key, "") for key in ("id", "project_id", "title", "description")},
+        ),
+        _data(
+            "Submission",
+            {
+                key: card.get(key, "")
+                for key in (
+                    "base",
+                    "branch",
+                    "base_sha",
+                    "head_sha",
+                    "summary",
+                    "checks",
+                )
+            }
+            | {"range": f"{card['base_sha']}..{card['head_sha']}"},
+        ),
+        _data(
+            "Previous review findings",
+            [
+                {"round": review["round"], "findings": review.get("findings", [])}
+                for review in reviews
+            ],
+        ),
+    ]
+    if after_landing:
+        parts.append(_data("Integration landing", landing))
+    return "\n\n".join(parts)
 
 
 def note(kind: str, card: Json, text: str = "") -> str:
@@ -90,7 +95,8 @@ def note(kind: str, card: Json, text: str = "") -> str:
         ),
         "keep_integrating": (
             "Continue the accepted integration, then call factory_report_integration. If it "
-            "requires code changes, report needs_changes and submit the changed work for review."
+            "changes the reviewed commits, including by rebase, report needs_changes before "
+            "landing them and resubmit for review."
         ),
         "review_nudge": (
             "Finish the independent review with factory_submit_review; an ordinary answer does "
@@ -125,11 +131,23 @@ def note(kind: str, card: Json, text: str = "") -> str:
             f"The user accepted. Integrate the reviewed commit {card.get('head_sha', '')} of "
             f"{card.get('branch', '')} according to the Project instructions, "
             "then clean up as they say, "
-            "then call factory_report_integration. If integration requires code changes, report "
-            "needs_changes and resubmit the changed work instead of landing it unreviewed."
+            "then call factory_report_integration. If integration changes the reviewed commits, "
+            "including by rebase, report needs_changes before landing them and resubmit for review."
         ),
     }
     content = notes[kind]
+    if kind in {"integrate", "keep_integrating"}:
+        landing = card["runtime"].get("integration_landing")
+        if isinstance(landing, dict) and landing.get("head_sha") == card.get("head_sha"):
+            content = (
+                f"The user accepted the change already integrated at {landing['landing_sha']}. "
+                "Leave the base unchanged, finish cleanup according to the Project instructions, "
+                "then call factory_report_integration."
+            )
+        if kind == "integrate" and (commit := card["runtime"].get("integration_base_sha")):
+            content += "\n\n" + _data(
+                "Target base at acceptance", {"base": card["base"], "commit": commit}
+            )
     return f"{content}\n\n{_data('Comment or findings', text)}" if text else content
 
 
@@ -215,7 +233,8 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
     ),
     "factory_submit_review": (
         "Submit your independent verdict and end this turn. An approval sends your recommendation "
-        "to the user; requested changes return to the Worker.",
+        "to the user; requested changes return to the Worker within the review limit, but go "
+        "directly to the user after landing.",
         {
             "type": "object",
             "properties": {
@@ -250,7 +269,8 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
                 "reference": {
                     "type": "string",
                     "description": (
-                        "For integrated: the merge commit or PR URL. Omit for the submitted "
+                        "For integrated: the merge commit or PR URL. After rebasing, supply the "
+                        "resulting commit if cleanup removed the branch. Omit for the submitted "
                         "commit when no other reference exists."
                     ),
                 },
@@ -259,6 +279,13 @@ PRIVATE_TOOLS: dict[str, tuple[str, Json]] = {
                     "description": (
                         "For needs_changes or failed: what prevents the reviewed change from "
                         "integrating. Omit when nothing needs explaining."
+                    ),
+                },
+                "base_commit": {
+                    "type": "string",
+                    "description": (
+                        "For integrated after changed commits landed: the target commit before "
+                        "integration. Omit when the reviewed commits were unchanged."
                     ),
                 },
             },
@@ -287,6 +314,13 @@ def tool_result(kind: str, card: Json | None = None, text: str = "") -> Json:
         "integration_changes": (
             "Integration changes require another submission and review. This turn ends here."
         ),
+        "integration_review": (
+            "Changed integration recorded; an independent Reviewer takes over. This turn ends here."
+        ),
+        "post_integration_review": (
+            "Changed integration is already on the base; a post-integration Reviewer takes over. "
+            "This turn ends here."
+        ),
         "integration_failed": (
             "Integration could not finish; the Card waits for the user. This turn ends here."
         ),
@@ -297,6 +331,16 @@ def tool_result(kind: str, card: Json | None = None, text: str = "") -> Json:
         if card.get("waiting_reason"):
             data["waiting_reason"] = card["waiting_reason"]
     return tool_success(data)
+
+
+def integration_base_required() -> Json:
+    return tool_failure(
+        "integration_base_required",
+        "The Card now records that the changed integration has already landed; no review was "
+        "started. Its pre-integration base is unknown. Call factory_report_integration with "
+        "outcome integrated and base_commit set to the exact target commit before integration, "
+        "or call factory_report_blocked if you cannot establish it.",
+    )
 
 
 ERROR_MESSAGES = {
@@ -341,6 +385,11 @@ ERROR_MESSAGES = {
     "unrelated_history": (
         "Nothing was changed. The branch and base have no common commit. "
         "Submit a branch based on this Project's base branch."
+    ),
+    "review_base_changed": (
+        "Nothing was changed. The captured review base is no longer an ancestor of this head. "
+        "If integration changes the reviewed commits, call factory_report_integration with "
+        "outcome needs_changes before landing them, then submit the changed work for review."
     ),
     "git_unavailable": (
         "Nothing was changed. Git could not inspect the Project repository. "

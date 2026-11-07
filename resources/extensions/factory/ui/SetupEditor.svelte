@@ -326,9 +326,13 @@
           min="1"
           max="20"
           step="1"
+          aria-describedby="factory-review-rounds-help"
           value={editor.draft.review_rounds}
           onInput={(value) => (editor.draft.review_rounds = value)}
         />
+        <p id="factory-review-rounds-help" class="factory-help">
+          {t('factory.reviewRoundsHelp')}
+        </p>
       </div>
       <div class="factory-field">
         <label for="factory-turn-budget">{t('factory.turnBudget')}</label

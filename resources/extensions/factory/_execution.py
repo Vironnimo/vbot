@@ -21,6 +21,7 @@ from core.utils.logging import get_logger
 
 from . import agent_text
 from ._git import GitRepository
+from ._values import SETUP_DEFAULTS
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 type Json = dict[str, Any]
@@ -378,6 +379,7 @@ class FactoryExecution:
         patch: Json | None = None,
         event: str = "review_started",
         actor: str = "factory",
+        detail: Json | None = None,
     ) -> Json:
         runtime = runtime if runtime is not None else self._runtime(card)
         runtime["reviewer_sequence"] = int(runtime.get("reviewer_sequence", 0)) + 1
@@ -395,6 +397,7 @@ class FactoryExecution:
             patch=patch,
             event=event,
             actor=actor,
+            detail=detail,
         )
 
     async def submit_work(self, context: ToolContext, arguments: Json) -> Json:
@@ -409,6 +412,7 @@ class FactoryExecution:
             "next_review_kind", "integration_review" if card["state"] == "integrating" else "review"
         )
         runtime.update(review_kind=kind, reviewer_retries=0, restarts=0)
+        runtime.pop("review_branch_head_sha", None)
         if kind == "review":
             runtime["auto_round"] = int(runtime.get("auto_round", 0)) + 1
         saved = await self._review(
@@ -459,6 +463,11 @@ class FactoryExecution:
             raise self._error("invalid_verdict")
         runtime = self._runtime(card)
         runtime.update(restarts=0)
+        landing = runtime.get("integration_landing")
+        after_landing = isinstance(landing, dict) and landing.get("head_sha") == card["head_sha"]
+        if after_landing:
+            assert isinstance(landing, dict)
+            landing["status"] = "approved" if verdict == "approve" else "changes_requested"
         review = {
             "round": card["round"],
             "kind": runtime.get("review_kind", "review"),
@@ -468,8 +477,11 @@ class FactoryExecution:
             "findings": findings,
             "reviewed_head_sha": card["head_sha"],
         }
-        if verdict == "approve" or int(runtime.get("auto_round", 1)) >= int(
-            runtime["setup"].get("review_rounds", 2)
+        if (
+            verdict == "approve"
+            or after_landing
+            or int(runtime.get("auto_round", 1))
+            >= int(runtime["setup"].get("review_rounds", SETUP_DEFAULTS["review_rounds"]))
         ):
             saved = await self._change(
                 card,
@@ -482,6 +494,7 @@ class FactoryExecution:
                 actor="reviewer",
                 event="reviewed",
                 review=review,
+                detail={"after_landing": after_landing},
             )
             self._close_later(saved)
         else:
@@ -519,7 +532,20 @@ class FactoryExecution:
             raise self._error("invalid_outcome")
         runtime = self._runtime(card)
         runtime["restarts"] = 0
+        base_commit = self._text(arguments, "base_commit") if "base_commit" in arguments else None
+        repository = GitRepository(runtime["cwd"])
         if outcome == "needs_changes":
+            inspection = await repository.integration(
+                card["branch"],
+                card["base"],
+                reviewed_base=card["base_sha"],
+                reviewed_head=card["head_sha"],
+                expected_branch_head=runtime.get("review_branch_head_sha"),
+                accepted_base=runtime.get("integration_base_sha"),
+                base_commit=base_commit,
+            )
+            if inspection["review_required"] and inspection["landed"]:
+                return await self._review_integration(card, runtime, inspection, context)
             runtime["next_review_kind"] = "integration_review"
             saved = await self._queue(
                 card,
@@ -552,32 +578,35 @@ class FactoryExecution:
             )
             if parsed.scheme and not url:
                 raise self._error("invalid_reference")
-            repository = GitRepository(runtime["cwd"])
-            head = await repository.head(card["branch"], missing_ok=True)
-            if head is not None and head != card["head_sha"]:
-                facts = await repository.submission(
-                    card["branch"], card["base"], head_sha=head, base_sha=card["base_sha"]
-                )
-                runtime.update(review_kind="integration_review", reviewer_retries=0)
-                saved = await self._review(
-                    card,
-                    runtime=runtime,
-                    patch={**facts, "round": card["round"] + 1},
-                    event="integration_review",
-                    actor="worker",
-                )
-                result = "integration_changes"
-            elif url or runtime["setup"].get("integration_check", "merged") == "reference_only":
+            reference_only = (
+                url or runtime["setup"].get("integration_check", "merged") == "reference_only"
+            )
+            inspection = await repository.integration(
+                card["branch"],
+                card["base"],
+                reviewed_base=card["base_sha"],
+                reviewed_head=card["head_sha"],
+                expected_branch_head=runtime.get("review_branch_head_sha"),
+                accepted_base=runtime.get("integration_base_sha"),
+                base_commit=base_commit,
+                verify_merged=not reference_only,
+                reported_reference=reference,
+            )
+            if inspection["review_required"]:
+                return await self._review_integration(card, runtime, inspection, context)
+            if reference_only:
                 saved = await self._done(card, reference or card["head_sha"], runtime)
                 result = "integrated"
-            elif await repository.is_ancestor(card["head_sha"], card["base"]):
+            elif inspection["landed"]:
                 # Project cleanup can legitimately delete the submitted branch.
-                # The exact reviewed commit on base is sufficient in that case.
+                # Inspection still verifies its exact candidate and landing scope.
                 saved = await self._done(card, reference or card["head_sha"], runtime)
                 result = "integrated"
             else:
                 runtime["note"] = agent_text.error_message(
-                    "integration_not_found" if head else "integration_branch_missing"
+                    "integration_not_found"
+                    if inspection["branch_head_sha"]
+                    else "integration_branch_missing"
                 )
                 saved = await self._wait(
                     card, "integration_failed", runtime=runtime, actor="worker"
@@ -585,6 +614,57 @@ class FactoryExecution:
                 result = "integration_failed"
         context.request_turn_end()
         return agent_text.tool_result(result, saved)
+
+    async def _review_integration(
+        self, card: Json, runtime: Json, inspection: Json, context: ToolContext
+    ) -> Json:
+        runtime.update(
+            review_kind="integration_review",
+            reviewer_retries=0,
+        )
+        if inspection["landed"]:
+            runtime["integration_landing"] = {
+                key: inspection[key]
+                for key in (
+                    "head_sha",
+                    "base_sha",
+                    "landing_sha",
+                    "branch_head_sha",
+                    "extra_paths",
+                    "merge_paths",
+                )
+            } | {"status": "pending"}
+        detail = {
+            key: inspection[key]
+            for key in ("landed", "landing_sha", "target_sha", "extra_paths", "merge_paths")
+        }
+        if not inspection["base_sha"]:
+            await self._change(
+                card,
+                {"runtime": runtime},
+                actor="worker",
+                event="integration_base_required",
+                detail=detail,
+            )
+            return agent_text.integration_base_required()
+        runtime["review_branch_head_sha"] = inspection["branch_head_sha"]
+        saved = await self._review(
+            card,
+            runtime=runtime,
+            patch={
+                "base_sha": inspection["base_sha"],
+                "head_sha": inspection["head_sha"],
+                "round": card["round"] + 1,
+                "recommendation": "",
+            },
+            event="integration_review",
+            actor="worker",
+            detail=detail,
+        )
+        context.request_turn_end()
+        return agent_text.tool_result(
+            "post_integration_review" if inspection["landed"] else "integration_review", saved
+        )
 
     async def _done(self, card: Json, reference: str, runtime: Json) -> Json:
         saved = await self._change(
@@ -616,12 +696,16 @@ class FactoryExecution:
         runtime = self._action(card, "accept")
         if card["waiting_reason"] not in {"approved", "no_agreement"}:
             raise self._error("wrong_state")
+        if runtime["setup"].get("integration_check", "merged") == "reference_only":
+            runtime.pop("integration_base_sha", None)
+        else:
+            runtime["integration_base_sha"] = await GitRepository(runtime["cwd"]).base(card["base"])
         runtime["restarts"] = 0
         return await self._queue(
             card,
             phase="integrating",
             participant="worker",
-            content=agent_text.note("integrate", card),
+            content=agent_text.note("integrate", {**card, "runtime": runtime}),
             runtime=runtime,
             patch={"worker_turns": 0},
             event="accepted",

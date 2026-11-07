@@ -68,9 +68,11 @@ async def test_setup_revisions_and_unfinished_card_lifetime(factory_store: Facto
         "project_id": "project",
         "worker_profile": "coder",
         "reviewer_profile": "reviewer",
+        "review_rounds": 2,
     }
     saved = await store.save_setup(setup, expected_revision=0)
     assert saved["revision"] == 1
+    assert saved["review_rounds"] == 2
     with pytest.raises(FactoryError):
         await store.save_setup(setup, expected_revision=0)
     assert await store.list_setups() == [saved]

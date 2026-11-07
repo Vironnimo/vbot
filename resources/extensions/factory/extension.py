@@ -23,8 +23,28 @@ _LOGGER = get_logger("extensions.factory")
 def projection(card: Json) -> Json:
     """Decode provenance once; no transcript or private configuration on the Board."""
     value = {key: item for key, item in card.items() if key != "runtime"}
-    if pending := card.get("runtime", {}).get("pending_action"):
+    runtime = card.get("runtime", {})
+    if pending := runtime.get("pending_action"):
         value["queued_action"] = pending["action"]
+    landing = runtime.get("integration_landing")
+    if isinstance(landing, dict) and landing.get("status") in (
+        "pending",
+        "approved",
+        "changes_requested",
+    ):
+        value["integration_landing"] = {
+            **{
+                field: landing[field] if isinstance(landing.get(field), str) else None
+                for field in ("head_sha", "base_sha", "landing_sha", "branch_head_sha")
+            },
+            "status": landing["status"],
+            **{
+                field: [item for item in landing[field] if isinstance(item, str)]
+                if isinstance(landing.get(field), list)
+                else []
+                for field in ("extra_paths", "merge_paths")
+            },
+        }
     raw = card.get("origin_session", "")
     if raw:
         try:
@@ -160,8 +180,7 @@ class FactoryExtension:
     async def _badge(self) -> None:
         host = self.host
         if host is not None and host.set_page_badge is not None and self.store is not None:
-            count = len(await self.store.list_cards(state="waiting"))
-            host.set_page_badge("board", count)
+            host.set_page_badge("board", await self.store.attention_count())
 
     async def changed(
         self, card: Json, previous: Json | None = None, *, actor: str = "factory"
@@ -193,11 +212,12 @@ class FactoryExtension:
                             card.get("recommendation"),
                             card["runtime"].get("question"),
                             card["runtime"].get("note"),
-                            card.get("waiting_reason"),
                         )
                         if isinstance(value, str) and value.strip()
                     ),
-                    "Review this proposed work on the Board.",
+                    "This Card needs your attention. Open it on the Board."
+                    if card["state"] == "waiting"
+                    else "Review this proposed work on the Board.",
                 )
                 try:
                     await host.notify(
