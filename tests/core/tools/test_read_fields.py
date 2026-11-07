@@ -394,6 +394,22 @@ async def test_pattern_on_a_file_shows_the_matching_lines(project: Path) -> None
     assert "10|     Greeter().greet()" in content(last)
     assert "next_offset" not in last["data"]
 
+    # Filtering selects the complete line even when its matching word precedes
+    # the character continuation. Each suggested offset advances within it.
+    long_line = "greet " + "\u00e4" * 4000 + " END"
+    (project / "long.txt").write_text(long_line + "\n", encoding="utf-8")
+    for character in (1, 2001, 4001):
+        offset = f"1:{character}"
+        page = content(
+            await dispatch(project, {"path": "long.txt", "pattern": "greet", "offset": offset})
+        )
+        gutter = "1| " if character == 1 else f"{offset}| "
+        assert gutter + long_line[character - 1 : character + 1999] in page
+        if character < 4001:
+            assert f'offset="1:{character + 2000}"' in page
+        else:
+            assert page.endswith(" END\n")
+
 
 @pytest.mark.asyncio
 async def test_pattern_with_case_and_context_fields(project: Path) -> None:
