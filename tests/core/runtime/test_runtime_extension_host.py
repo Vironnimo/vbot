@@ -238,10 +238,12 @@ async def test_execution_usage_keeps_owner_scope_and_rejects_retired_hosts(runti
     host = _owner_host(runtime, "factory")
     assert await host.execution_usage("card", ["run"]) == {"calls": 1, "cost_usd": 0.125}
     reader.assert_awaited_once_with("factory", "card", ["run"])
+    await host.execution_usage("card")
+    reader.assert_awaited_with("factory", "card", None)
     runtime.extensions.retire_registration()
     with pytest.raises(ValueError):
         await host.execution_usage("card", None)
-    reader.assert_awaited_once()
+    assert reader.await_count == 2
 
 
 def _participant(

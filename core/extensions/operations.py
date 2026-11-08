@@ -6,7 +6,7 @@ import copy
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from jsonschema import Draft202012Validator
 
@@ -35,6 +35,14 @@ class ExtensionOperationError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class ExecutionUsage(Protocol):
+    """Owner-scoped consumption, with an optional exact Run selection."""
+
+    def __call__(
+        self, group_id: str, run_ids: list[str] | None = None
+    ) -> Awaitable[JsonObject]: ...
 
 
 @dataclass(frozen=True)
@@ -93,7 +101,7 @@ class ExtensionHost:
     set_page_badge: Callable[[str, int], None] | None = None
     pending_approvals: Callable[[str, Sequence[str]], Awaitable[JsonObject]] | None = None
     # API v27: durable settled Model usage at recorded prices for this owner.
-    execution_usage: Callable[[str, list[str] | None], Awaitable[JsonObject]] | None = None
+    execution_usage: ExecutionUsage | None = None
     input_authority: (
         Callable[[ToolContext], Awaitable[Literal["user", "authorized_task", "none"]]] | None
     ) = None
