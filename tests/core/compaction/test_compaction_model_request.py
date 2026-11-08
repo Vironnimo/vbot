@@ -361,6 +361,9 @@ async def test_compaction_calibrates_from_the_final_physical_request(last) -> No
         (["overflow"], ["failed"], ["rejected"]),
         (["dropped", "stop"], ["failed", "completed"], ["network", None]),
         (["dropped", "dropped"], ["failed", "failed"], ["network", "network"]),
+        (["stop_dropped"], ["completed"], [None]),
+        (["stop_timed_out"], ["completed"], [None]),
+        (["stop_rejected"], ["failed"], ["provider"]),
     ],
     ids=[
         "truncated",
@@ -369,6 +372,9 @@ async def test_compaction_calibrates_from_the_final_physical_request(last) -> No
         "unreducible-context-overflow",
         "dropped-once",
         "dropped-twice",
+        "transport-lost-after-finish",
+        "transport-stalled-after-finish",
+        "fatal-provider-error-after-finish",
     ],
 )
 async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_once(
@@ -398,7 +404,13 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
                 # A connection lost mid-stream surfaces as a retryable error.
                 raise NetworkError("stream dropped")
             yield {"type": "content_delta", "text": "Summary"}
-            yield {"type": "finish", "reason": outcome}
+            yield {"type": "finish", "reason": "stop" if outcome.startswith("stop_") else outcome}
+            if outcome == "stop_dropped":
+                raise NetworkError("stream dropped after finish")
+            if outcome == "stop_timed_out":
+                raise StreamingChunkTimeoutError("stream stalled after finish")
+            if outcome == "stop_rejected":
+                raise ProviderError("bad request after finish", retryable=False)
 
     monkeypatch.setattr("core.compaction._model_request._sleep", record_wait)
     recorder = RecordingUsageRecorder()
@@ -415,7 +427,7 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
         settings=CompactionSettings(strategy="continuation"),
         request_messages=provider_request(messages),
     )
-    if outcomes[-1] == "stop":
+    if statuses[-1] == "completed":
         checkpoint = await operation
         assert checkpoint.usage is not None
         assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == recorder.calls[-1]["id"]

@@ -967,6 +967,7 @@ async def stream_model_response(
     chunk_timeout_seconds = stream_stall_timeout(adapter)
     source = adapter.stream(messages, model_id=model_id, **request_options)
     awaiting_delta = True
+    completed_response = False
     try:
         async for delta in iter_with_chunk_timeout(
             source,
@@ -989,6 +990,7 @@ async def stream_model_response(
             raise NetworkError("Provider stream ended without finish delta")
         if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
             on_tool_calls(completed)
+        completed_response = True
     except ProviderStreamingUnsupportedError as exc:
         if accumulator.has_taken_tool_calls:
             raise StreamBrokenAfterToolCallsError(
@@ -1004,6 +1006,7 @@ async def stream_model_response(
         )
         if on_tool_calls is not None and normalized.get("tool_calls"):
             on_tool_calls(list(normalized["tool_calls"]))
+        completed_response = True
         return normalized
     except Exception as exc:
         if (
@@ -1019,6 +1022,7 @@ async def stream_model_response(
         ):
             # Logical completion survives a later transport failure, just as
             # in Chat. Callback and normalization failures still propagate.
+            completed_response = True
             return accumulator.finalize_assistant_fields().to_response_dict()
         if isinstance(exc, StreamingRepetitionError):
             # A guard can add an output estimate without a Provider usage
@@ -1026,7 +1030,7 @@ async def stream_model_response(
             if on_usage is not None and accumulator.usage is not None:
                 _report_usage(on_usage, accumulator.usage)
             try:
-                await _close_repetition_stream(source)
+                await _close_model_stream(source)
             except asyncio.CancelledError:
                 if not accumulator.has_taken_tool_calls:
                     raise
@@ -1037,6 +1041,16 @@ async def stream_model_response(
                 exc, accumulator.finalize_partial_fields().to_response_dict()
             ) from exc
         raise
+    finally:
+        # The consumer can fail between reads while the Provider generator
+        # still owns a connection or native conversation. Await its close
+        # before returning output or propagating the original failure.
+        try:
+            await _close_model_stream(source)
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if completed_response and task is not None and task.cancelling():
+                raise
     return accumulator.finalize_assistant_fields().to_response_dict()
 
 
@@ -1068,6 +1082,9 @@ async def iter_with_chunk_timeout(
     if timeout_seconds is None and progress_timeout_seconds is None and deadline is None:
         async for chunk in source:
             yield chunk
+            # Local Providers may deliver an entirely buffered response without
+            # I/O. Let Stop and other Runs progress after this accepted delta.
+            await asyncio.sleep(0)
         return
     iterator = source.__aiter__()
     last_progress_at = time.monotonic()
@@ -1083,7 +1100,12 @@ async def iter_with_chunk_timeout(
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
-            await _close_async_iterator(iterator)
+            try:
+                await _close_model_stream(iterator)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise
             # The bound that sized this wait decides the failure: ``wait_for`` can
             # resume marginally before the bound it was given, so comparing the bound
             # is race-free where a wall-clock comparison is not.
@@ -1172,11 +1194,11 @@ async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:
         await result
 
 
-async def _close_repetition_stream(iterator: AsyncIterator[JsonObject]) -> None:
-    """Close a rejected stream without losing its sanitized output on a cleanup error."""
+async def _close_model_stream(iterator: AsyncIterator[JsonObject]) -> None:
+    """Close an abandoned stream without replacing its output or primary failure."""
     try:
         await _close_async_iterator(iterator)
     except Exception as exc:
-        # The primary repetition failure is reported by the caller; cleanup
-        # detail must not replace it or discard already started Tool Calls.
-        _LOGGER.debug("Failed to close repetitive Model stream (error_type=%s)", type(exc).__name__)
+        # The caller reports the primary failure. Cleanup must not discard
+        # already visible output or started Tool Calls.
+        _LOGGER.debug("Failed to close Model stream (error_type=%s)", type(exc).__name__)

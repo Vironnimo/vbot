@@ -11,6 +11,8 @@ from core.chat.messages import usage_token_is_estimated
 from core.chat.streaming import (
     STREAM_PROGRESS_TIMEOUT_SECONDS,
     StreamingAccumulator,
+    StreamRecoveryAction,
+    decide_stream_recovery,
     iter_with_chunk_timeout,
     stream_stall_timeout,
 )
@@ -292,50 +294,64 @@ async def _stream_attempt(
         # an output limit can stop consumption between two stream reads.
         source = adapter.stream(messages, **request_options)
         chunk_timeout_seconds = stream_stall_timeout(adapter)
-        stream_failed = False
         try:
-            summary_characters = 0
-            async for delta in iter_with_chunk_timeout(
-                source,
-                timeout_seconds=chunk_timeout_seconds,
-                progress_timeout_seconds=(
-                    STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
-                ),
+            stream_failed = False
+            try:
+                summary_characters = 0
+                async for delta in iter_with_chunk_timeout(
+                    source,
+                    timeout_seconds=chunk_timeout_seconds,
+                    progress_timeout_seconds=(
+                        STREAM_PROGRESS_TIMEOUT_SECONDS
+                        if chunk_timeout_seconds is not None
+                        else None
+                    ),
+                ):
+                    if _budget_exhausted(budget):
+                        raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
+                    if delta.get("type") != "heartbeat":
+                        if delta.get("type") == "content_delta" and isinstance(
+                            delta.get("text"), str
+                        ):
+                            summary_characters += len(delta["text"])
+                            if summary_characters > MAX_SUMMARY_CHARACTERS:
+                                raise CompactionLimitError(
+                                    f"Compaction exceeded its {MAX_SUMMARY_CHARACTERS:,}-character "
+                                    "summary limit. No checkpoint was saved."
+                                )
+                        accumulator.add_delta(delta)
+            except BaseException:
+                stream_failed = True
+                raise
+            finally:
+                if close := getattr(source, "aclose", None):
+                    try:
+                        await close()
+                    except Exception as error:
+                        if not stream_failed:
+                            raise
+                        # Cleanup must not turn a limit or cancellation into a
+                        # retryable Provider error and start another request.
+                        _LOGGER.warning(
+                            "Compaction stream cleanup failed while aborting "
+                            "(run=%s model=%s cause=%s)",
+                            run_id,
+                            model,
+                            type(error).__name__,
+                        )
+        except Exception as error:
+            if (
+                decide_stream_recovery(
+                    error,
+                    can_restart=False,
+                    has_partial_content=bool(accumulator.partial_content),
+                    finish_received=accumulator.finish_reason is not None,
+                )
+                is not StreamRecoveryAction.ACCEPT_COMPLETE
             ):
-                if _budget_exhausted(budget):
-                    raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
-                if delta.get("type") != "heartbeat":
-                    if delta.get("type") == "content_delta" and isinstance(delta.get("text"), str):
-                        summary_characters += len(delta["text"])
-                        if summary_characters > MAX_SUMMARY_CHARACTERS:
-                            raise CompactionLimitError(
-                                f"Compaction exceeded its {MAX_SUMMARY_CHARACTERS:,}-character "
-                                "summary limit. No checkpoint was saved."
-                            )
-                    accumulator.add_delta(delta)
-                if chunk_timeout_seconds is None:
-                    # A local source can yield buffered deltas without any I/O.
-                    # Account for this frame before a Stop interrupts processing.
-                    await asyncio.sleep(0)
-        except BaseException:
-            stream_failed = True
-            raise
-        finally:
-            if close := getattr(source, "aclose", None):
-                try:
-                    await close()
-                except Exception as error:
-                    if not stream_failed:
-                        raise
-                    # Cleanup must not turn a limit or cancellation into a
-                    # retryable Provider error and start another request.
-                    _LOGGER.warning(
-                        "Compaction stream cleanup failed while aborting "
-                        "(run=%s model=%s cause=%s)",
-                        run_id,
-                        model,
-                        type(error).__name__,
-                    )
+                raise
+            # The normalized finish is authoritative even when transport
+            # teardown fails; the summary and deadline checks still apply.
         if _budget_exhausted(budget):
             # A Provider can suppress cancellation while closing its stream.
             raise CompactionLimitError(_TIME_LIMIT_MESSAGE)

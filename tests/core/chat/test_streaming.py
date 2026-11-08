@@ -789,6 +789,39 @@ async def test_stream_model_response_reports_usage_before_a_break() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_buffered_stream_remains_cancellable_between_deltas() -> None:
+    buffered_deltas = 0
+    closed = False
+
+    async def stream(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal buffered_deltas, closed
+        try:
+            yield {"type": "usage", "input_tokens": 1}
+            for index in range(100):
+                buffered_deltas += 1
+                yield {"type": "content_delta", "text": f"item {index}; "}
+            yield {"type": "finish", "reason": "stop"}
+        finally:
+            closed = True
+
+    def stop_after_usage(_usage: JsonObject) -> None:
+        asyncio.get_running_loop().call_soon(request.cancel)
+
+    request = asyncio.create_task(
+        streaming_module.stream_model_response(
+            SimpleNamespace(stream=stream, local_endpoint=True),
+            [],
+            model_id="local",
+            on_usage=stop_after_usage,
+        )
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert buffered_deltas == 0
+    assert closed
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [
@@ -834,7 +867,12 @@ async def test_stream_model_response_keeps_completed_output_after_transport_fail
 
 
 @pytest.mark.asyncio
-async def test_stream_model_response_preserves_tool_callback_failure_after_finish() -> None:
+@pytest.mark.parametrize(
+    "close_error", [None, NetworkError("transport cleanup failed"), asyncio.CancelledError()]
+)
+async def test_stream_model_response_preserves_tool_callback_failure_after_finish(
+    close_error: BaseException | None,
+) -> None:
     error = NetworkError("tool delivery failed")
     adapter = _BreakingStreamAdapter(
         [
@@ -842,6 +880,7 @@ async def test_stream_model_response_preserves_tool_callback_failure_after_finis
             {"type": "finish", "reason": "tool_calls"},
         ],
         AssertionError("continued after a failed callback"),
+        close_error=close_error,
     )
     source = adapter.stream([], model_id="m")
 
@@ -859,8 +898,65 @@ async def test_stream_model_response_preserves_tool_callback_failure_after_finis
             )
         assert broken.value.cause is error
         assert [call["id"] for call in broken.value.response["tool_calls"]] == ["call_1"]
+        assert adapter.closed
     finally:
         await source.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_cancelled", [False, True])
+async def test_completed_stream_cleanup_distinguishes_caller_cancellation(
+    caller_cancelled: bool,
+) -> None:
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    closed = False
+
+    class ClosingSource:
+        def __init__(self) -> None:
+            self.deltas = iter(
+                [
+                    {"type": "content_delta", "text": "Complete answer"},
+                    {"type": "finish", "reason": "stop"},
+                ]
+            )
+
+        def __aiter__(self) -> ClosingSource:
+            return self
+
+        async def __anext__(self) -> JsonObject:
+            if (delta := next(self.deltas, None)) is None:
+                raise StopAsyncIteration
+            return delta
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closing.set()
+            try:
+                await release.wait()
+            finally:
+                closed = True
+            if not caller_cancelled:
+                raise asyncio.CancelledError
+
+    source = ClosingSource()
+    request = asyncio.create_task(
+        streaming_module.stream_model_response(
+            SimpleNamespace(stream=lambda *_args, **_kwargs: source), [], model_id="m"
+        )
+    )
+    await closing.wait()
+    if caller_cancelled:
+        request.cancel()
+    release.set()
+    if caller_cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    else:
+        response = await request
+        assert response["content"] == "Complete answer"
+        assert response["terminal_outcome"] == "stop"
+    assert closed
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -37,7 +36,7 @@ from core.chat.streaming import (
     StreamingProgressTimeoutError,
     StreamingRepetitionError,
     StreamRecoveryAction,
-    _close_repetition_stream,
+    _close_model_stream,
     decide_stream_recovery,
     iter_with_chunk_timeout,
 )
@@ -165,62 +164,74 @@ async def consume_stream_response(
     last_model_delta_at = time.monotonic()
     preserve_complete_after_cancel = False
     try:
-        async for delta in iter_with_chunk_timeout(
-            stream,
-            timeout_seconds=chunk_timeout_seconds,
-            deadline=recovery_deadline,
-            progress_timeout_seconds=(
-                STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
-            ),
-        ):
-            run.raise_if_cancelled()
-            if delta.get("type") == "heartbeat":
-                delta_emitter.flush()
-                run.emit(
-                    PROVIDER_HEARTBEAT_EVENT,
-                    {
-                        "idle_seconds": round(time.monotonic() - last_model_delta_at, 1),
-                        "state": "waiting_for_model_delta",
-                    },
-                )
-                continue
-            if awaiting_first_delta:
-                awaiting_first_delta = False
-                _record_first_token(run, attempt_started)
-            last_model_delta_at = time.monotonic()
-            visible_deltas = accumulator.add_delta(delta)
-            for visible_delta in visible_deltas:
-                if stream_draft is not None:
-                    stream_draft.record(
-                        model=public_model,
-                        reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
-                        content=str(visible_delta.payload.get("content_delta", "")),
-                    )
-                delta_emitter.add(visible_delta)
-            if on_tool_calls is not None and accumulator.finish_reason is None:
-                # After the finish, Chat decides on the remaining calls
-                # with the terminal outcome in hand.
-                completed = accumulator.take_completed_tool_calls()
-                if completed:
-                    # Every fragment of these calls reaches the Run first.
+        stream_failed = False
+        try:
+            async for delta in iter_with_chunk_timeout(
+                stream,
+                timeout_seconds=chunk_timeout_seconds,
+                deadline=recovery_deadline,
+                progress_timeout_seconds=(
+                    STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
+                ),
+            ):
+                run.raise_if_cancelled()
+                if delta.get("type") == "heartbeat":
                     delta_emitter.flush()
-                    on_tool_calls(completed)
-            run.raise_if_cancelled()
-        delta_emitter.flush()
-        if accumulator.finish_reason is None:
-            raise NetworkError("Provider stream ended without finish delta")
-        assistant_fields = accumulator.finalize_assistant_fields()
-        _check_empty_response(assistant_fields.to_response_dict(), assistant_fields.finish_reason)
+                    run.emit(
+                        PROVIDER_HEARTBEAT_EVENT,
+                        {
+                            "idle_seconds": round(time.monotonic() - last_model_delta_at, 1),
+                            "state": "waiting_for_model_delta",
+                        },
+                    )
+                    continue
+                if awaiting_first_delta:
+                    awaiting_first_delta = False
+                    _record_first_token(run, attempt_started)
+                last_model_delta_at = time.monotonic()
+                visible_deltas = accumulator.add_delta(delta)
+                for visible_delta in visible_deltas:
+                    if stream_draft is not None:
+                        stream_draft.record(
+                            model=public_model,
+                            reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
+                            content=str(visible_delta.payload.get("content_delta", "")),
+                        )
+                    delta_emitter.add(visible_delta)
+                if on_tool_calls is not None and accumulator.finish_reason is None:
+                    # After the finish, Chat decides on the remaining calls
+                    # with the terminal outcome in hand.
+                    completed = accumulator.take_completed_tool_calls()
+                    if completed:
+                        # Every fragment of these calls reaches the Run first.
+                        delta_emitter.flush()
+                        on_tool_calls(completed)
+                run.raise_if_cancelled()
+            delta_emitter.flush()
+            if accumulator.finish_reason is None:
+                raise NetworkError("Provider stream ended without finish delta")
+            assistant_fields = accumulator.finalize_assistant_fields()
+            _check_empty_response(
+                assistant_fields.to_response_dict(), assistant_fields.finish_reason
+            )
+        except BaseException:
+            stream_failed = True
+            raise
+        finally:
+            # Stop and consumer errors can leave the Provider at a yield.
+            # Close before classifying the outcome, so a caller cancellation
+            # here uses the same complete/partial boundary as a stream read.
+            try:
+                await _close_model_stream(stream)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if not stream_failed and task is not None and task.cancelling():
+                    raise
     except StreamingRepetitionError as exc:
         # The accumulator has removed only the degenerate suffix. Preserve
         # the safe prefix and any started calls, then fail without replay,
         # continuation or a Model switch that could amplify the same output.
         delta_emitter.close()
-        # Cancellation here cannot abandon the already visible output or
-        # started Tool effects. Return their sanitized boundary first;
-        # the Run's ordinary cancellation path then persists and settles it.
-        with suppress(asyncio.CancelledError):
-            await _close_repetition_stream(stream)
         step = _finalize_interrupted_partial(
             public_model,
             response_model,

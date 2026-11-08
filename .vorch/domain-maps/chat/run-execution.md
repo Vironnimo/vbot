@@ -199,6 +199,10 @@ One `RecoveryBudget` in the Run context bounds each unfinished Model step on eac
 
 Like Chat, it keeps a response whose normalized finish arrived before a transport failure or timeout, including its Usage and completed Tool Calls. Other Provider failures and callback failures still propagate.
 
+Both Chat and the standalone helper explicitly close the source iterator before returning or propagating a consumer failure, including Stop between deltas and a failed Tool callback. Native Provider conversations are therefore released without waiting for garbage collection; cleanup failures cannot replace the primary failure or discard the preserved partial. A cleanup callback's own cancellation does not cancel a completed response; actual caller cancellation remains authoritative and Chat retains its usual complete/partial boundary.
+
+The shared stream iterator yields to the Event Loop after every buffered local delta even when stall guards are disabled, so Stop and other Runs remain responsive. Compaction uses this same scheduling boundary.
+
 When the repetition guard stops a standalone request, the callback receives the final Usage snapshot before the error propagates, including any output estimate computed before the repeated suffix was removed. Reported counters stay unchanged, and an observer failure cannot replace the repetition error.
 
 Cancellation during the rejected stream's close cannot skip Chat's sanitized Assistant/Tool persistence boundary: a user-cancelled Run retains its partial and started Tool facts, then ends cancelled without retry. A close callback's own `CancelledError` without Run cancellation leaves the repetition failure intact. A standalone caller with already handed-out Tool Calls still receives their sanitized `StreamBrokenAfterToolCallsError` on close cancellation; without handed-out Calls, cancellation propagates normally after the Usage callback.
