@@ -657,14 +657,16 @@ _GLOBAL_AGENT_SCOPE = "s.project_id = '' AND s.agent_id = ? AND s.state = 'live'
 def _stays_archived_with_its_owner(alias: str) -> str:
     """SQL: the archived Session ``alias`` belongs to an owner that restores or deletes it.
 
-    An archived Agent of the same id holds it in its own entry, or an Extension
-    manages it.
+    An archived Agent of the same id holds it in its own entry or its owner's
+    private group, or an Extension manages it.
     """
     return (
         "(EXISTS (SELECT 1 FROM archive_entry_sessions AS held "
         "JOIN archive_entries AS holder ON holder.entry_key = held.entry_key "
         f"WHERE held.session_key = {alias}.session_key AND holder.kind = '{ARCHIVE_KIND_AGENT}' "
-        f"AND holder.subject_id = {alias}.agent_id) "
+        f"AND (holder.subject_id = {alias}.agent_id OR EXISTS ("
+        "SELECT 1 FROM archive_entry_trees AS tree WHERE tree.entry_key = holder.entry_key "
+        f"AND tree.role = 'private_agent' AND tree.source_path = 'agents/' || {alias}.agent_id))) "
         "OR EXISTS (SELECT 1 FROM temporary_session_bindings AS managed "
         f"WHERE managed.session_key = {alias}.session_key))"
     )
