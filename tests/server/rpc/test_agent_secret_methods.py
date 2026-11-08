@@ -153,6 +153,64 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["add", "remove"])
+async def test_request_overviews_survive_concurrent_request_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    state = _state(tmp_path)
+    requests: SecretRequests = state.runtime.secret_requests
+    address = SessionAddress(None, "main", "s1")
+
+    async def ask(name: str) -> Any:
+        return await requests.request(
+            agent_id=address.agent_id,
+            session_id=address.session_id,
+            project_id=address.project_id,
+            name=name,
+            kind="token",
+            description="",
+            lifetime="session",
+        )
+
+    waiting = [asyncio.create_task(ask(name)) for name in ("FIRST", "SECOND")]
+    await asyncio.sleep(0)
+    first = requests.pending_for(address, "FIRST")
+    second = requests.pending_for(address, "SECOND")
+    assert first is not None and second is not None
+    describe = first.describe
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def blocked_describe() -> dict[str, Any]:
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(2)
+        return describe()
+
+    monkeypatch.setattr(first, "describe", blocked_describe)
+    listing = asyncio.create_task(rpc_result(state, "agent_secrets.list"))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        if change == "add":
+            waiting.append(asyncio.create_task(ask("THIRD")))
+            await asyncio.sleep(0)
+        else:
+            await rpc_result(state, "agent_secrets.decline", id=second.id)
+        release.set()
+        snapshot = (await listing)["requests"]
+        assert [item["name"] for item in snapshot] == ["FIRST", "SECOND"]
+        current = (await rpc_result(state, "agent_secrets.list"))["requests"]
+        expected = ["FIRST", "SECOND", "THIRD"] if change == "add" else ["FIRST"]
+        assert [item["name"] for item in current] == expected
+    finally:
+        release.set()
+        await asyncio.gather(listing, return_exceptions=True)
+        for task in waiting:
+            task.cancel()
+        await asyncio.gather(*waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overlap", ["cancel", "answer", "decline", "replacement", "invalid", "timeout"]
 )

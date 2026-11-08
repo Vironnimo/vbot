@@ -182,11 +182,10 @@ class SecretRequests:
                 self._changed(pending.id)
 
     def list(self, address: SessionAddress | None = None) -> list[dict[str, Any]]:
-        return [
-            item.describe()
-            for item in self._pending.values()
-            if address is None or item.address == address
-        ]
+        # RPC overviews run on a worker while the Event Loop adds and withdraws
+        # requests. Describe a snapshot, never iterate that changing dictionary.
+        pending = tuple(self._pending.values())
+        return [item.describe() for item in pending if address is None or item.address == address]
 
     def pending_for(self, address: SessionAddress, name: str) -> PendingSecretRequest | None:
         try:
