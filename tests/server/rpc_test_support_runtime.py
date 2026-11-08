@@ -51,6 +51,7 @@ from core.runtime._agent_rename import AgentRenameServices, rename_identity_agen
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
 from core.skills import SkillAuthoringService
+from core.skills.policy import SkillPolicyService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.tools.command_manager import CommandManager
@@ -553,6 +554,7 @@ class StubRuntime:
         )
         self.memory = MemoryService(history_root=self.storage.layout.agents)
         self.skill_authoring = SkillAuthoringService()
+        self.skill_policy = SkillPolicyService(self.storage)
         self.learning_changes = LearningChanges(
             memory=self.memory,
             skills=self.skill_authoring,
@@ -690,6 +692,7 @@ class StubRuntime:
             terminals=cast(Any, self.terminal_manager),
             commands=self.command_manager,
             portals=None,
+            skill_policy=self.skill_policy,
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:

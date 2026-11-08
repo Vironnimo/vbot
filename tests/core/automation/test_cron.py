@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import core.automation.cron as cron_module
+from core.automation import _cron_schedule as cron_schedule
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
     CronDelivery,
@@ -1226,10 +1227,21 @@ async def test_unnamed_job_uses_stable_first_prompt_line(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reference_hour", "expected_next_hour", "owed_hour", "earlier_missed"),
+    [(7, 10, None, 0), (8, 10, None, 0), (9, 10, None, 0), (10, 12, 10, 0), (13, 14, 12, 1)],
+)
 async def test_interval_next_fire_uses_persisted_anchor_and_skips_missed_ticks(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference_hour: int,
+    expected_next_hour: int,
+    owed_hour: int | None,
+    earlier_missed: int,
 ) -> None:
-    service, _trigger_service = make_service(tmp_path)
+    created = datetime(2026, 7, 28, 7, tzinfo=UTC)
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: created)
+    service, _trigger_service = make_service(tmp_path, tz="UTC")
     job = await service.create_job(
         agent_id="agent-one",
         prompt="Check status",
@@ -1238,13 +1250,26 @@ async def test_interval_next_fire_uses_persisted_anchor_and_skips_missed_ticks(
         interval_anchor_at="2026-07-28T08:00:00+00:00",
     )
 
-    next_fire_at = service.next_fire_at(
-        job,
-        reference_time=datetime(2026, 7, 28, 13, 15, tzinfo=UTC),
-    )
+    reference = created.replace(hour=reference_hour)
+    next_fire_at = service.next_fire_at(job, reference_time=reference)
 
-    assert next_fire_at == "2026-07-28T14:00:00+00:00"
+    assert next_fire_at == created.replace(hour=expected_next_hour).isoformat()
     assert service.format_schedule(job) == "every 2h"
+    owed = cron_schedule.owed_fire(ZoneInfo("UTC"), reference, job)
+    if owed_hour is None:
+        assert owed is None
+    else:
+        assert owed is not None
+        assert owed.due_at == created.replace(hour=owed_hour)
+        assert owed.earlier_missed == earlier_missed
+        if earlier_missed:
+            assert owed.first_due_at == created.replace(hour=10)
+    # Calendar projection and live scheduling share the same first interval.
+    projected = service.project_occurrences(created, created.replace(hour=13))
+    assert [item.fire_at_utc for item in projected] == [
+        created.replace(hour=10),
+        created.replace(hour=12),
+    ]
 
 
 @pytest.mark.asyncio

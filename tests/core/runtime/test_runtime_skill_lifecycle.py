@@ -6,7 +6,7 @@ import asyncio
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, override
 
 import pytest
 
@@ -18,7 +18,7 @@ from core.skills.policy import SkillPackageRef
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
-from server.rpc import agent_methods
+from server.rpc import agent_methods, skill_methods
 from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill
 
 
@@ -159,8 +159,75 @@ async def test_shared_write_serializes_with_owner_lifecycle(
             .endswith("After\n" if write_first else "Before\n")
         )
         assert runtime.skills_for(None, "receiver") is not before
+        receiver_names = {skill.name for skill in runtime.skills_for(None, "receiver").list_all()}
+        assert ("demo" in receiver_names) == (operation == "rename")
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_private_skill_disable_finishes_before_owner_rename(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    release = threading.Event()
+    entered = asyncio.Event()
+    rename_waiting = asyncio.Event()
+    tasks: list[asyncio.Task[Any]] = []
+
+    class ReferenceLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if entered.is_set():
+                # The rename must wait for lookup, persistence and publication
+                # of the disable that already selected the old package id.
+                assert self.locked()
+                rename_waiting.set()
+            return await super().acquire()
+
+    try:
+        write_agent_skill(runtime.storage.data_dir, "main", "demo", "Private fixture")
+        entry = next(item for item in runtime.skill_inventory()["skills"] if item["name"] == "demo")
+        state = SimpleNamespace(
+            runtime=runtime,
+            chat_runs=runtime.chat_runs,
+            agent_delete_lock=ReferenceLock(),
+            event_bus=ServerEventBus(),
+        )
+        loop = asyncio.get_running_loop()
+        persist = runtime.skill_policy.set_package_disabled
+
+        def paused_disable(ref: SkillPackageRef, *, disabled: bool) -> Any:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(2)
+            return persist(ref, disabled=disabled)
+
+        monkeypatch.setattr(runtime.skill_policy, "set_package_disabled", paused_disable)
+        disable = asyncio.create_task(
+            call_rpc(
+                skill_methods.method_handlers(),
+                "skill.set_disabled",
+                state,
+                {"id": entry["id"], "disabled": True},
+            )
+        )
+        tasks.append(disable)
+        await asyncio.wait_for(entered.wait(), 2)
+        rename = asyncio.create_task(_change_owner(state, "rename"))
+        tasks.append(rename)
+        await asyncio.wait_for(rename_waiting.wait(), 2)
+        assert not rename.done()
+        release.set()
+        await asyncio.gather(*tasks)
+
+        assert runtime.skill_policy.load().disabled_packages == {
+            SkillPackageRef("agent", "demo", "renamed")
+        }
         assert "demo" not in {
-            skill.name for skill in runtime.skills_for(None, "receiver").list_all()
+            skill.name for skill in runtime.skills_for(None, "renamed").list_all()
         }
     finally:
         release.set()

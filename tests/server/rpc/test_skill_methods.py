@@ -839,6 +839,9 @@ async def test_policy_mutation_persists_off_the_loop_and_applies_after_cancellat
 
     def slow_write(*args: Any, **kwargs: Any) -> Any:
         assert threading.get_ident() != loop_thread
+        # Package lookup and policy persistence must stay ahead of Agent
+        # rename/delete, including when the caller is cancelled.
+        assert state.agent_delete_lock.locked()
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(2)
         return original(*args, **kwargs)

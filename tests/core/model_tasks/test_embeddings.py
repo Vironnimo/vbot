@@ -41,6 +41,7 @@ from core.model_tasks.embeddings_providers import (
     ProviderEmbeddingResponse,
 )
 from core.providers.errors import ProviderAuthError
+from core.utils.errors import ConfigError
 
 OPENROUTER_TARGET = "openrouter/google/gemini-embedding-2::api-key"
 
@@ -294,11 +295,12 @@ async def test_embed_applies_the_model_family_purpose_handling(
 
 
 @pytest.mark.parametrize(
-    ("client", "message", "log_level", "logs_traceback"),
+    ("client", "message", "error_type", "log_level", "logs_traceback"),
     [
         pytest.param(
             _FakeProviderClient(embed_exception=ProviderAuthError("Unauthorized")),
             "Unauthorized",
+            EmbeddingExecutionError,
             logging.WARNING,
             False,
             id="expected-provider-failure",
@@ -306,29 +308,77 @@ async def test_embed_applies_the_model_family_purpose_handling(
         pytest.param(
             _FakeProviderClient(embed_exception=RuntimeError("kaboom")),
             "kaboom",
+            EmbeddingExecutionError,
             logging.ERROR,
             True,
             id="unexpected-failure",
         ),
-        pytest.param(_FakeProviderClient(vectors=[]), "no vectors", None, False, id="no-vectors"),
+        pytest.param(
+            _FakeProviderClient(vectors=[]),
+            "no vectors",
+            EmbeddingExecutionError,
+            None,
+            False,
+            id="no-vectors",
+        ),
+        pytest.param(
+            ConfigError("credential removed"),
+            "credential removed",
+            EmbeddingConfigurationError,
+            None,
+            False,
+            id="preparation-credential-removed",
+        ),
+        pytest.param(
+            KeyError("provider removed"),
+            "provider removed",
+            EmbeddingConfigurationError,
+            None,
+            False,
+            id="preparation-provider-removed",
+        ),
+        pytest.param(
+            ProviderAuthError("Unauthorized"),
+            "Unauthorized",
+            EmbeddingExecutionError,
+            logging.WARNING,
+            False,
+            id="preparation-provider-failure",
+        ),
+        pytest.param(
+            RuntimeError("kaboom"),
+            "kaboom",
+            EmbeddingExecutionError,
+            logging.ERROR,
+            True,
+            id="preparation-unexpected-failure",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_failed_provider_execution_is_an_execution_error(
+async def test_provider_failures_use_embedding_error_boundary(
     provider_factory: MagicMock,
     caplog: pytest.LogCaptureFixture,
-    client: _FakeProviderClient,
+    client: _FakeProviderClient | Exception,
     message: str,
+    error_type: type[Exception],
     log_level: int | None,
     logs_traceback: bool,
 ) -> None:
-    provider_factory.return_value = client
+    if isinstance(client, Exception):
+        provider_factory.side_effect = client
+    else:
+        provider_factory.return_value = client
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.embeddings"),
-        pytest.raises(EmbeddingExecutionError, match=message),
+        pytest.raises(error_type, match=message) as failure,
     ):
         await _service().embed(["alpha"])
+
+    if isinstance(client, Exception):
+        assert failure.value.__cause__ is client
+        assert provider_factory.return_value.embed_calls == []
 
     logged = [
         (record.levelno, record.exc_info is not None)

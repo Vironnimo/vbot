@@ -17,7 +17,9 @@ from core.automation.cron import CronDelivery
 from core.runtime.runtime import Runtime
 from core.secrets.agent_secrets import Lifetime
 from core.sessions import SessionAddress
+from core.skills.policy import SkillPackageRef
 from core.utils.config import Config
+from tests.core.runtime.runtime_test_support import write_agent_skill
 
 
 class _Killed(BaseException):
@@ -82,7 +84,33 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
             session_id="kept",
             agents=["coder"],
         )
+    # The Agent both owns and receives shares; private package disables must
+    # follow its directory too. Warm both registries before the rename.
+    write_agent_skill(runtime.storage.data_dir, "coder", "deploy", "Deploy changes")
+    write_agent_skill(runtime.storage.data_dir, "coder", "disabled", "Disabled instructions")
+    write_agent_skill(runtime.storage.data_dir, "main", "review", "Review changes")
+    runtime.skill_policy.set_shared("coder", "deploy", shared=True, receivers=["main"])
+    runtime.skill_policy.set_shared("main", "review", shared=True, receivers=["coder"])
+    runtime.skill_policy.set_package_disabled(
+        SkillPackageRef("agent", "disabled", "coder"), disabled=True
+    )
+    runtime.invalidate_agent_skills()
+    _assert_skills(runtime, "coder")
     return coder.current_session_id
+
+
+def _assert_skills(runtime: Runtime, agent_id: str) -> None:
+    policy = runtime.skill_policy.load()
+    assert policy.shared == {
+        agent_id: {"deploy": frozenset({"main"})},
+        "main": {"review": frozenset({agent_id})},
+    }
+    assert policy.disabled_packages == {SkillPackageRef("agent", "disabled", agent_id)}
+    owned = {skill.name for skill in runtime.skills_for(None, agent_id).list_all()}
+    received = {skill.name for skill in runtime.skills_for(None, "main").list_all()}
+    assert {"deploy", "review"} <= owned
+    assert "disabled" not in owned
+    assert "deploy" in received
 
 
 def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -> None:
@@ -105,6 +133,7 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
         "SCRATCH",
     ]
     assert len(secrets.naming_identity_agent(agent_id)) == len(secrets.all()) == 2
+    _assert_skills(runtime, agent_id)
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
@@ -287,8 +316,9 @@ async def test_a_live_rename_moves_every_reference_or_none(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("policy_reference", ["owner", "receiver", "disabled"])
 async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: Config, monkeypatch: pytest.MonkeyPatch, policy_reference: str
 ) -> None:
     runtime = _started(config)
     try:
@@ -315,12 +345,28 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
             unchecked.setattr(runtime.automation_references, "agent_references", lambda _id: ())
             await runtime.archive.archive_agent("researcher")
         assert runtime.agents.get("coder").tools["subagent"]["allowed_agents"] == []
+        # Retained policy entries must not be adopted by a renamed namesake,
+        # including a stale share whose package no longer exists.
+        if policy_reference == "owner":
+            runtime.skill_policy.set_shared("researcher", "old", shared=True, receivers=["main"])
+        elif policy_reference == "receiver":
+            runtime.skill_policy.set_shared("main", "old", shared=True, receivers=["researcher"])
+        else:
+            runtime.skill_policy.set_package_disabled(
+                SkillPackageRef("agent", "old", "researcher"), disabled=True
+            )
+        policy_before = runtime.skill_policy.policy_path.read_bytes()
 
         with pytest.raises(AgentReferencedError) as refused:
             await runtime.rename_agent("coder", "researcher")
 
         # A Secret grant left for the id refuses the rename too; deletion checks only automations.
-        assert refused.value.references == (f"cron:{leftover.id}", "secret:LEFT")
+        assert refused.value.references == (
+            f"cron:{leftover.id}",
+            "secret:LEFT",
+            "skill-policy:researcher",
+        )
+        assert runtime.skill_policy.policy_path.read_bytes() == policy_before
         assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
         # The archived Agent keeps its grant for a restore; a namesake may not take it.
         with pytest.raises(AgentReferencedError) as created:

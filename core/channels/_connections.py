@@ -375,25 +375,37 @@ class ChannelConnections:
                     exc_info=True,
                 )
 
-        self._adapter_stop_tasks.pop(channel_id, None)
-
-        pending = self._pending_start_requests.pop(channel_id, None)
+        pending = self._pending_start_requests.get(channel_id)
         if pending is None or not self._started:
             return
 
         reset_backoff, config_override = pending
-        if config_override is None and not self._can_restart_channel(channel_id):
-            return
-
+        admitted = False
         try:
             if config_override is None:
                 config_override = await self._get_channel(channel_id)
+            # Keep shutdown and its requested restart tracked while configuration
+            # is refreshed. A stop during that await revokes the request; repeated
+            # starts coalesce into the latest request rather than reviving an old one.
+            pending = self._pending_start_requests.pop(channel_id, None)
+            if pending is None or not self._started:
+                return
+            self._adapter_stop_tasks.pop(channel_id, None)
+            reset_backoff, latest_override = pending
+            if latest_override is None and not self._can_restart_channel(channel_id):
+                return
+            admitted = True
             self.start_channel(
                 channel_id,
                 reset_backoff=reset_backoff,
-                config_override=config_override,
+                config_override=latest_override or config_override,
             )
         except Exception as error:
+            if not self._started or (
+                not admitted and self._pending_start_requests.pop(channel_id, None) is None
+            ):
+                return
+            self._adapter_stop_tasks.pop(channel_id, None)
             self.mark_failed(channel_id, str(error) or type(error).__name__)
             self.schedule_restart(channel_id)
             _LOGGER.error(

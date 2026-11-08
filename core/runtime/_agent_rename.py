@@ -36,6 +36,7 @@ from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSessionManager
+from core.skills.policy import SkillPolicyService
 from core.tools.command_manager import CommandManager
 from core.tools.portal_registry import PortalRegistry
 from core.tools.terminal_manager import TerminalManager
@@ -63,6 +64,7 @@ class AgentRenameServices:
     # Agent Secret grants to the Agent and its Sessions.
     secrets: AgentSecrets | None = None
     inputs: DirectInputService | None = None
+    skill_policy: SkillPolicyService | None = None
 
 
 @dataclass(frozen=True)
@@ -111,12 +113,13 @@ async def rename_identity_agent(
 async def identity_agent_references(
     services: AgentRenameServices, agent_id: str
 ) -> tuple[str, ...]:
-    """Name the Channels and jobs outside the Agent store that address an id.
+    """Name references outside the Agent store that would follow an id's rename.
 
     This is the selection a rename retargets, labelled ``channel:<id>``,
     ``cron:<id>`` and ``bootstrap:<id>`` and sorted: Channels that answer as the
-    Identity Agent and its non-terminal identity Cron and Bootstrap jobs. Runs on
-    the Event Loop that owns the jobs; the Channel configs are read off it.
+    Identity Agent and its non-terminal identity Cron and Bootstrap jobs, Secret
+    grants, Task inputs and stored Skill Policy entries. Runs on the Event Loop
+    that owns the jobs; Channel configs and Skill Policy are read off it.
     """
     references = [
         f"channel:{channel.id}"
@@ -141,6 +144,10 @@ async def identity_agent_references(
             for row in services.inputs.list_inputs()
             if row["agent_id"] == agent_id and row.get("project_id") is None
         )
+    if services.skill_policy is not None and await services.sessions.run_async(
+        services.skill_policy.references_agent, agent_id
+    ):
+        references.append(f"skill-policy:{agent_id}")
     return tuple(sorted(references))
 
 
@@ -269,7 +276,7 @@ def _finish(services: AgentRenameServices, rename: AgentRename) -> bool:
 
 
 def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> _References:
-    """Point every Channel, Cron job, Bootstrap job and Secret grant at the target id.
+    """Point every stored reference owner at the target id.
 
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
@@ -293,6 +300,8 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
     )
     if services.secrets is not None:
         services.secrets.retarget_agent(source, target)
+    if services.skill_policy is not None:
+        services.skill_policy.retarget_agent(source, target)
     return _References(
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
@@ -328,6 +337,8 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
     if services.secrets is not None:
         # A Secret Store write blocks.
         await asyncio.to_thread(services.secrets.retarget_agent, source, target)
+    if services.skill_policy is not None:
+        await services.sessions.run_async(services.skill_policy.retarget_agent, source, target)
     terminals = services.terminals
     terminal_count = (
         0 if terminals is None else await terminals.transfer_agent_scope(source, target)

@@ -17,6 +17,7 @@ out, and mutations write every stored entry back except the one they change.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -467,6 +468,68 @@ class SkillPolicyService:
                 target=f"{owner_id}/{name}->{target}",
             )
 
+    def references_agent(self, agent_id: str) -> bool:
+        """Whether any stored policy entry names an Identity Agent, including stale entries.
+
+        A rename target must be unused so a rollback cannot adopt another Agent's
+        policy. Read strictly: a malformed file cannot establish that it is free.
+        """
+        with self._lock:
+            return self._references_agent(self._read_stored(), agent_id)
+
+    def retarget_agent(self, agent_id: str, new_agent_id: str) -> None:
+        """Move an Identity Agent's disables, owned shares and received shares.
+
+        Runtime calls this for rename, rollback and startup recovery. One atomic
+        write moves every reference; repeating a completed direction writes
+        nothing. The target must be unused whenever the source still has entries.
+        """
+        with self._lock:
+            stored = self._read_stored()
+            if agent_id == new_agent_id or not self._references_agent(stored, agent_id):
+                return
+            if self._references_agent(stored, new_agent_id):
+                raise SkillPolicyError(f"Skill policy already references Agent {new_agent_id!r}")
+            moved = _StoredPolicy(
+                disabled_packages=frozenset(
+                    SkillPackageRef(ref.source, ref.name, new_agent_id)
+                    if ref.source == "agent" and ref.location == agent_id
+                    else ref
+                    for ref in stored.disabled_packages
+                ),
+                shared={
+                    new_agent_id if owner == agent_id else owner: {
+                        name: tuple(
+                            new_agent_id if receiver == agent_id else receiver
+                            for receiver in receivers
+                        )
+                        for name, receivers in skills.items()
+                    }
+                    for owner, skills in stored.shared.items()
+                },
+            )
+            self._write_policy(
+                moved,
+                operation="rename_agent",
+                target=f"{agent_id}->{new_agent_id}",
+                log_level=logging.DEBUG,
+            )
+
+    @staticmethod
+    def _references_agent(stored: _StoredPolicy, agent_id: str) -> bool:
+        return (
+            agent_id in stored.shared
+            or any(
+                ref.source == "agent" and ref.location == agent_id
+                for ref in stored.disabled_packages
+            )
+            or any(
+                agent_id in receivers
+                for skills in stored.shared.values()
+                for receivers in skills.values()
+            )
+        )
+
     @staticmethod
     def _validate_skill_name(name: str) -> None:
         if not isinstance(name, str) or not SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):
@@ -523,7 +586,14 @@ class SkillPolicyService:
             )
         return _StoredPolicy.from_document(data)
 
-    def _write_policy(self, stored: _StoredPolicy, *, operation: str, target: str) -> SkillPolicy:
+    def _write_policy(
+        self,
+        stored: _StoredPolicy,
+        *,
+        operation: str,
+        target: str,
+        log_level: int = logging.INFO,
+    ) -> SkillPolicy:
         try:
             write_json_document(
                 self.policy_path,
@@ -536,7 +606,8 @@ class SkillPolicyService:
         except OSError as error:
             raise SkillPolicyError(f"Cannot write skill policy: {error}") from error
         policy = stored.effective()
-        _LOGGER.info(
+        _LOGGER.log(
+            log_level,
             "Applied skill policy change (operation=%s target=%s disabled=%d shared_owners=%d)",
             operation,
             target,
