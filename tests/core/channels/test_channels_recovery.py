@@ -355,8 +355,9 @@ async def test_a_failed_adapter_rebuild_restores_the_previous_config_and_adapter
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["update", "restart"])
+@pytest.mark.parametrize("ending", ["resume", "channel-stop", "service-stop"])
 async def test_a_rebuilt_adapter_starts_only_after_the_old_one_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str, ending: str
 ) -> None:
     config = make_config(enabled=True)
     ChannelStorage(tmp_path).save(config)
@@ -364,6 +365,15 @@ async def test_a_rebuilt_adapter_starts_only_after_the_old_one_stopped(
     stop_gate = asyncio.Event()
     lifecycle_events: list[str] = []
     created: list[DelayedStopAdapter] = []
+    refreshing = asyncio.Event()
+    refreshed = asyncio.Event()
+    get_channel = service._connections._get_channel
+
+    async def refresh_config(channel_id: str) -> ChannelConfig:
+        current = await get_channel(channel_id)
+        refreshing.set()
+        await refreshed.wait()
+        return current
 
     def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
         label = "old" if not created else "new"
@@ -373,6 +383,7 @@ async def test_a_rebuilt_adapter_starts_only_after_the_old_one_stopped(
 
     monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
     monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service._connections, "_get_channel", refresh_config)
     service.start()
     try:
         await asyncio.wait_for(created[0].started.wait(), timeout=1)
@@ -385,10 +396,25 @@ async def test_a_rebuilt_adapter_starts_only_after_the_old_one_stopped(
         assert "start:new" not in lifecycle_events
 
         stop_gate.set()
-        await wait_until(lambda: "start:new" in lifecycle_events)
-        assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
+        await asyncio.wait_for(refreshing.wait(), timeout=1)
+        stopping = service._connections.stopping(config.id)
+        assert stopping is not None
+        if ending == "channel-stop":
+            service.stop_channel(config.id)
+        elif ending == "service-stop":
+            service.stop()
+        refreshed.set()
+        await asyncio.wait_for(asyncio.shield(stopping), timeout=1)
+        if ending == "resume":
+            await asyncio.wait_for(created[1].started.wait(), timeout=1)
+            assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
+        else:
+            assert len(created) == 1
+            assert not service.is_running(config.id)
+            assert not service._connections._pending_start_requests
     finally:
         stop_gate.set()
+        refreshed.set()
         await service.aclose()
         service.close()
 
