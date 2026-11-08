@@ -104,6 +104,10 @@ class RecordingTriggerService:
     def to(self, target: SessionAddress) -> list[Notice]:
         return [notice for notice in self.notices if notice.target == target]
 
+    async def suppress_completion_wakes(self, addresses, **_options) -> int:
+        # This double commits submissions immediately, so no pending wake remains.
+        return 0
+
     async def wait_for_notice(self, notice_id: str) -> Notice:
         """Wait for the named delivery, including one already submitted."""
         while True:

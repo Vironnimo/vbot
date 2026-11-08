@@ -489,7 +489,10 @@ async def test_steps_run_until_the_user_accepts_and_deleted_cards_are_archived(
 
 
 @pytest.mark.asyncio
-async def test_change_requests_use_fresh_participants_and_exhaust_rounds(service):
+@pytest.mark.parametrize("resolution", ["send_back", "accept_final", "accept_next"])
+async def test_change_requests_use_fresh_participants_and_exhaust_rounds(service, resolution):
+    if resolution == "accept_next":
+        service.store.setup["workflows"][0]["steps"].append(step("publish", after=["review"]))
     await started(service)
     stale_context = None
     for round_number in (1, 2):
@@ -515,13 +518,23 @@ async def test_change_requests_use_fresh_participants_and_exhaust_rounds(service
         if participant == "review-r2"
     ]
     assert len(inputs) == 1 and "Finding 1" in inputs[0]
+    admissions = len(service.host.temporary_agents.admissions)
     async with service.lock:
-        await service.execution.send_back(card, "Reconsider both findings")
+        if resolution == "send_back":
+            await service.execution.send_back(card, "Reconsider both findings")
+        else:
+            await service.execution.accept(card)
     await service.flush()
     card = await service.card()
-    assert card["runtime"]["rounds"] == {} and card["runtime"]["current_participant"] == (
-        "implement"
-    )
+    assert card["runtime"]["rounds"] == {}
+    if resolution == "accept_final":
+        assert card["state"] == "done"
+        assert len(service.host.temporary_agents.admissions) == admissions
+    else:
+        assert card["state"] == "working"
+        assert card["runtime"]["current_participant"] == (
+            "implement" if resolution == "send_back" else "publish"
+        )
 
 
 @pytest.mark.asyncio

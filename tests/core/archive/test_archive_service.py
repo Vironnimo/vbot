@@ -957,15 +957,22 @@ async def test_a_session_scope_blocker_names_the_entry_that_restores_its_agent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private_member", [False, True])
 async def test_a_renamed_agent_takes_its_archived_sessions_and_an_earlier_one_keeps_its_own(
     world: ArchiveWorld,
+    private_member: bool,
 ) -> None:
-    world.agents.create("coder")
+    if private_member:
+        world.agents.create("owner")
+    world.agents.create(
+        "coder", placement=AgentPlacement("private", "owner") if private_member else None
+    )
     world.sessions.create("coder", session_id="earlier")
-    earlier = (await world.service.archive_agent("coder")).entry_id
+    earlier = (await world.service.archive_agent("owner" if private_member else "coder")).entry_id
     agent_with_session(world, "coder")
     notes = world.sessions.create("coder", session_id="notes").address
     deleted = (await world.service.archive_session(notes)).entry_id
+    assert world.sessions.archive_ledger.identity_agent_entry_ids("coder") == (deleted,)
 
     world.agents.finish_rename(world.agents.rename("coder", "researcher").rename)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -111,6 +111,8 @@ class _CompletionBucket:
     address: SessionAddress
     notices: dict[str, _CompletionNotice] = field(default_factory=dict)
     delivery_task: asyncio.Task[None] | None = None
+    start_task: asyncio.Future[Run] | None = None
+    start_stop: tuple[str, str] | None = None
 
 
 class _CompletionDeliveryCoordinator:
@@ -161,6 +163,46 @@ class _CompletionDeliveryCoordinator:
         if bucket is None:
             return 0
         return sum(1 for notice in bucket.notices.values() if notice.wakes)
+
+    def suppress_wakes(
+        self, addresses: Sequence[SessionAddress], reason: str, initiator: str
+    ) -> Awaitable[int]:
+        """Stop pending automatic continuations, keeping their results as notes.
+
+        Tree stopping owns active Runs. Delivery owns the earlier preflight
+        window, so cancel its admission task before it can become a new Run.
+        """
+        stopped = 0
+        tasks: list[asyncio.Future[Run]] = []
+        for address in addresses:
+            bucket = self._buckets.get(address)
+            if bucket is None:
+                continue
+            pending = [notice for notice in bucket.notices.values() if notice.wakes]
+            if not pending:
+                continue
+            stopped += len(pending)
+            for notice in pending:
+                notice.suppress_run = True
+                self._suppress_origin(address, notice.origin_run_id)
+            if bucket.start_task is not None:
+                bucket.start_stop = (reason, initiator)
+                bucket.start_task.cancel()
+                tasks.append(bucket.start_task)
+            self._changed(address)
+
+        async def settle() -> int:
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Run):
+                        # A starter may finish admitted work before honoring
+                        # cancellation. Stop it before reporting the tree stopped.
+                        result.request_cancel(reason=reason, initiator=initiator)
+                        await _wait_for_terminal_run(result)
+            return stopped
+
+        return settle()
 
     def add_changed_callback(self, callback: CompletionChangedCallback) -> Callable[[], None]:
         """Call *callback* with a Session address whenever its held notices change."""
@@ -490,6 +532,9 @@ class _CompletionDeliveryCoordinator:
                 pending = self._still_pending(bucket, pending)
                 if not pending:
                     continue
+                if any(notice.suppress_run for notice in pending):
+                    # Stop all can cross the reply-surface lookup above.
+                    continue
                 owner = pending[0].execution_owner
                 pending = [notice for notice in pending if notice.execution_owner == owner]
                 settings = pending[0].schedule_options.get("run_overrides")
@@ -517,7 +562,7 @@ class _CompletionDeliveryCoordinator:
                         # Session is later reused by unrelated work.
                         if self._owned_run_starter is None:
                             raise RuntimeError("owned completion starter is unavailable")
-                        run = await self._owned_run_starter(
+                        start = self._owned_run_starter(
                             address,
                             owner,
                             message,
@@ -538,7 +583,7 @@ class _CompletionDeliveryCoordinator:
                             for notice in pending
                         ):
                             schedule_options = {}
-                        run = await self._chat_loop.start_run(
+                        start = self._chat_loop.start_run(
                             address.agent_id,
                             message,
                             session_id=address.session_id,
@@ -559,6 +604,10 @@ class _CompletionDeliveryCoordinator:
                                 else None
                             ),
                         )
+                    run = await self._start_follow_up(bucket, start)
+                    if run is None:
+                        _claim(pending, False)
+                        continue
                 except RunAdmissionBlockedError as error:
                     _claim(pending, False)
                     if owner is not None:
@@ -677,6 +726,27 @@ class _CompletionDeliveryCoordinator:
         finally:
             if not bucket.notices and self._buckets.get(address) is bucket:
                 self._buckets.pop(address, None)
+
+    async def _start_follow_up(
+        self, bucket: _CompletionBucket, start: Awaitable[Run]
+    ) -> Run | None:
+        bucket.start_stop = None
+        task = bucket.start_task = asyncio.ensure_future(start)
+        try:
+            run = await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if bucket.start_stop is not None and current is not None and not current.cancelling():
+                return None
+            raise
+        finally:
+            bucket.start_task = None
+        if bucket.start_stop is not None:
+            reason, initiator = bucket.start_stop
+            run.request_cancel(reason=reason, initiator=initiator)
+            await _wait_for_terminal_run(run)
+            return None
+        return run
 
     def _active_run(self, address: SessionAddress) -> Run | None:
         return self._run_manager.active_run(

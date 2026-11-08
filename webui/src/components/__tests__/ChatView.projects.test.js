@@ -568,6 +568,54 @@ describe('ChatView Projects', () => {
   });
 
   describe('Project Sessions', () => {
+    it.each(['response', 'error'])(
+      'keeps an explicitly started draft after the initial Session list %s arrives',
+      async (outcome) => {
+        serveProject();
+        const pending = Promise.withResolvers();
+        listSessionsMock.mockImplementation((address, options) =>
+          address === 'builder@vbot' && options?.limit === 1
+            ? pending.promise
+            : Promise.resolve({ sessions: [] }),
+        );
+        rpcMock.mockImplementation(
+          createChatRpcMock({ sessionMessages: builderReply }),
+        );
+        const onSessionNavigation = vi.fn();
+        await chat.mountChat(projectChatProps({ onSessionNavigation }), {
+          ready: null,
+        });
+        await waitForCondition(() =>
+          listSessionsMock.mock.calls.some(
+            ([address, options]) =>
+              address === 'builder@vbot' && options?.limit === 1,
+          ),
+        );
+        const newSession = document.querySelector(
+          `.chat-header button[aria-label="${t('chat.newSession')}"]`,
+        );
+        expect(newSession.disabled).toBe(false);
+        newSession.click();
+        flushSync();
+        await waitForCondition(
+          () => onSessionNavigation.mock.calls.at(-1)?.[0].sessionId === '',
+        );
+
+        if (outcome === 'error') pending.reject(new Error('obsolete list'));
+        else pending.resolve({ sessions: [builderSession] });
+        await pending.promise.catch(() => {});
+        await settle(2);
+
+        expect(onSessionNavigation.mock.calls.at(-1)?.[0]).toEqual({
+          agentId: 'builder@vbot',
+          sessionId: '',
+          subAgent: false,
+        });
+        expect(historyReads('builder-session')).toBe(0);
+        expect(document.body.textContent).not.toContain('obsolete list');
+      },
+    );
+
     it('displays a Session override over the active Project Agent and loads it by address', async () => {
       serveProject();
       listedSessions(builderSession);

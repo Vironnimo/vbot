@@ -11,7 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from core.sessions import ARCHIVE_KIND_AGENT, ArchiveScope, ChatSessionManager, SessionAddress
+from core.runs import RunKind
+from core.sessions import (
+    ARCHIVE_KIND_AGENT,
+    ArchiveScope,
+    ArchiveTree,
+    ChatSessionManager,
+    SessionAddress,
+)
 
 _MIGRATION = "sessions.0002_session_working_projects"
 
@@ -43,25 +50,58 @@ def test_sessions_of_rooted_agents_keep_working_in_their_root_project(
         ("gone", "gone-1"),
         ("plain", "plain-1"),
         ("retired", "retired-1"),
+        ("unrooted", "unrooted-1"),
+        ("member", "member-1"),
     ):
         manager.create(agent_id, session_id=session_id, working_project_id=None)
     manager.create("coder", session_id="coder-own", working_project_id="beta")
     manager.create("builder", session_id="team-1", project_id="alpha")
     asyncio.run(manager.archive(SessionAddress(None, "coder", "coder-archived")))
+    # A moved source's review remains owned by the reviewing Agent.
+    source = manager.create("reviewer", session_id="review-source", working_project_id=None)
+    review = asyncio.run(manager.fork(source.address, run_kind=RunKind.MEMORY_REFLECTION))
+    asyncio.run(manager.move(source.address, SessionAddress(None, "retired", "review-source")))
     # An archived Agent's Sessions count with the root Project its entry records.
     ledger = manager.archive_ledger
     entry = ledger.begin(
         ARCHIVE_KIND_AGENT,
         subject_id="retired",
         agent_id="retired",
-        facts={"root_project_id": "alpha"},
+        facts={
+            "root_project_id": "alpha",
+            "private_agents": [{"agent_id": "member", "root_project_id": "gamma"}],
+        },
+        trees=lambda entry_id: (
+            ArchiveTree(
+                f"archive/entries/{entry_id}/private/member", "private_agent", "agents/member"
+            ),
+        ),
     )
-    ledger.commit_scope(entry.entry_key, ArchiveScope(agent_id="retired"))
+    ledger.commit_scope(
+        entry.entry_key, ArchiveScope(agent_id="retired", private_agent_ids=("member",))
+    )
+    unrooted_entry = ledger.begin(
+        ARCHIVE_KIND_AGENT,
+        subject_id="unrooted",
+        agent_id="unrooted",
+        facts={"root_project_id": None},
+    )
+    ledger.commit_scope(unrooted_entry.entry_key, ArchiveScope(agent_id="unrooted"))
+    # Replacement Agents can reuse archived ids but own neither archived conversation.
+    manager.create("retired", session_id="replacement-1", working_project_id=None)
+    manager.create("unrooted", session_id="replacement-2", working_project_id=None)
+    manager.create("member", session_id="replacement-3", working_project_id=None)
     manager.close()
     _write(tmp_path / "agents/coder/agent.json", {"root_project_id": "alpha"})
     _write(tmp_path / "agents/gone/agent.json", {"root_project_id": "missing"})
     _write(tmp_path / "agents/plain/agent.json", {"root_project_id": None})
+    _write(tmp_path / "agents/retired/agent.json", {"root_project_id": "beta"})
+    _write(tmp_path / "agents/unrooted/agent.json", {"root_project_id": "beta"})
+    _write(tmp_path / "agents/member/agent.json", {"root_project_id": "beta"})
+    _write(tmp_path / "agents/reviewer/agent.json", {"root_project_id": "gamma"})
     _write(tmp_path / "projects/alpha/project.json", {"cwd": str(tmp_path)})
+    _write(tmp_path / "projects/beta/project.json", {"cwd": str(tmp_path)})
+    _write(tmp_path / "projects/gamma/project.json", {"cwd": str(tmp_path)})
 
     with caplog.at_level(logging.INFO, logger="vbot.sessions"):
         stored = _rerun_migration(tmp_path)
@@ -77,6 +117,13 @@ def test_sessions_of_rooted_agents_keep_working_in_their_root_project(
         "gone-1": None,
         "plain-1": None,
         "retired-1": "alpha",
+        "unrooted-1": None,
+        "replacement-1": "beta",
+        "replacement-2": "beta",
+        "replacement-3": "beta",
+        "member-1": "gamma",
+        "review-source": "alpha",
+        review.address.session_id: "gamma",
     }
     warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
     assert warnings == [

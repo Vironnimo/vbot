@@ -77,23 +77,50 @@ def _rooted_agents(
                 continue
             project_id = _root_project(_document(agent_dir / "agent.json"))
             if project_id is not None:
-                rooted.append((agent_dir.name, project_id, "agent_id = ?", (agent_dir.name,)))
+                # A reused id belongs to a different live Agent. Its default
+                # must not claim the Sessions an archived Agent still owns,
+                # including an archived Agent that worked in its Workspace.
+                rooted.append(
+                    (
+                        agent_dir.name,
+                        project_id,
+                        "agent_id = ? AND NOT EXISTS ("
+                        "SELECT 1 FROM archive_entry_sessions AS member "
+                        "JOIN archive_entries AS owner ON owner.entry_key = member.entry_key "
+                        "WHERE member.session_key = sessions.session_key AND owner.kind = ? "
+                        "AND (owner.subject_id = sessions.agent_id OR EXISTS ("
+                        "SELECT 1 FROM archive_entry_trees AS tree "
+                        "WHERE tree.entry_key = owner.entry_key AND tree.role = 'private_agent' "
+                        "AND tree.source_path = 'agents/' || sessions.agent_id)))",
+                        (agent_dir.name, ARCHIVE_KIND_AGENT),
+                    )
+                )
     for row in connection.execute(
         "SELECT entry_key, subject_id, facts_json FROM archive_entries "
         "WHERE kind = ? AND state = ? ORDER BY entry_key",
         (ARCHIVE_KIND_AGENT, ARCHIVE_STATE_ARCHIVED),
     ):
-        project_id = _root_project(_facts(str(row["facts_json"])))
-        if project_id is not None:
-            rooted.append(
-                (
-                    str(row["subject_id"]),
-                    project_id,
-                    "session_key IN (SELECT session_key FROM archive_entry_sessions "
-                    "WHERE entry_key = ?)",
-                    (int(row["entry_key"]),),
-                )
+        facts = _facts(str(row["facts_json"])) or {}
+        owners = [(str(row["subject_id"]), facts)]
+        private = facts.get("private_agents")
+        if isinstance(private, list):
+            owners.extend(
+                (member["agent_id"], member)
+                for member in private
+                if isinstance(member, dict) and isinstance(member.get("agent_id"), str)
             )
+        for agent_id, owner_facts in owners:
+            project_id = _root_project(owner_facts)
+            if project_id is not None:
+                rooted.append(
+                    (
+                        agent_id,
+                        project_id,
+                        "agent_id = ? AND session_key IN ("
+                        "SELECT session_key FROM archive_entry_sessions WHERE entry_key = ?)",
+                        (agent_id, int(row["entry_key"])),
+                    )
+                )
     return rooted
 
 

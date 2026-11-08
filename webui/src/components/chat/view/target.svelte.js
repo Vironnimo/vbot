@@ -566,6 +566,10 @@ export function createChatViewTarget(context) {
     { preferUnread = false } = {},
   ) => {
     const { agentAddress } = addressing;
+    let heldSessionId = projectAgentSessions[agentAddress];
+    const isCurrent = () =>
+      currentProjectAgentAddress() === agentAddress &&
+      projectAgentSessions[agentAddress] === heldSessionId;
     context.actions.clearSessionActionError();
     try {
       const newestUnreadSession = preferUnread
@@ -581,13 +585,15 @@ export function createChatViewTarget(context) {
           includeSkillReflections: false,
           includeCron: false,
         });
-        // A newer project/agent selection may have superseded this one.
-        if (currentProjectAgentAddress() !== agentAddress) {
+        // A new draft or Session can supersede this lookup without changing
+        // the selected Agent. Its explicit choice wins over the old landing.
+        if (!isCurrent()) {
           return;
         }
         sessionId = pickProjectAgentSessionId(listed?.sessions);
       }
       if (projectAgentSessions[agentAddress] !== sessionId) {
+        heldSessionId = sessionId;
         projectAgentSessions = {
           ...projectAgentSessions,
           [agentAddress]: sessionId,
@@ -598,7 +604,7 @@ export function createChatViewTarget(context) {
       }
       await context.loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
-      if (currentProjectAgentAddress() !== agentAddress) {
+      if (!isCurrent()) {
         return;
       }
       context.actions.setSessionActionError(

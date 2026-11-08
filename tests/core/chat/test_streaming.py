@@ -20,7 +20,12 @@ from core.chat.streaming import (
     StreamingRepetitionError,
     StreamingVisibleDelta,
 )
-from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    ProviderStreamingUnsupportedError,
+    ProviderTimeoutError,
+)
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -781,6 +786,81 @@ async def test_stream_model_response_reports_usage_before_a_break() -> None:
     with pytest.raises(NetworkError):
         await streaming_module.stream_model_response(broken, [], model_id="m", on_usage=observe)
     assert reported == [{"input_tokens": 9}, {"input_tokens": 9, "output_tokens": 2}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        NetworkError("connection reset"),
+        ProviderTimeoutError("request timed out"),
+        streaming_module.StreamingChunkTimeoutError("stream stalled"),
+        streaming_module.StreamingProgressTimeoutError("progress stalled"),
+        ProviderError("request refused", retryable=False),
+    ],
+)
+async def test_stream_model_response_keeps_completed_output_after_transport_failure(
+    error: Exception,
+) -> None:
+    handed_out: list[str] = []
+    adapter = _BreakingStreamAdapter(
+        [
+            {"type": "content_delta", "text": "Completed answer"},
+            _tool_delta('{"a":1}', name="first", id="call_1"),
+            {"type": "usage", "input_tokens": 9, "output_tokens": 2},
+            {"type": "finish", "reason": "tool_calls"},
+        ],
+        error,
+    )
+    request = streaming_module.stream_model_response(
+        adapter,
+        [],
+        model_id="m",
+        on_tool_calls=lambda calls: handed_out.extend(call["id"] for call in calls),
+    )
+    if isinstance(error, ProviderError) and not isinstance(error, ProviderTimeoutError):
+        with pytest.raises(StreamBrokenAfterToolCallsError) as broken:
+            await request
+        assert broken.value.cause is error
+    else:
+        response = await request
+        assert response["content"] == "Completed answer"
+        assert response["terminal_outcome"] == "tool_calls"
+        assert response["usage"] == {"input_tokens": 9, "output_tokens": 2}
+        assert [call["id"] for call in response["tool_calls"]] == ["call_1"]
+    assert handed_out == ["call_1"]
+    assert adapter.closed
+    assert adapter.sent == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_model_response_preserves_tool_callback_failure_after_finish() -> None:
+    error = NetworkError("tool delivery failed")
+    adapter = _BreakingStreamAdapter(
+        [
+            _tool_delta('{"a":1}', name="first", id="call_1"),
+            {"type": "finish", "reason": "tool_calls"},
+        ],
+        AssertionError("continued after a failed callback"),
+    )
+    source = adapter.stream([], model_id="m")
+
+    def reject_calls(calls: list[JsonObject]) -> None:
+        assert [call["id"] for call in calls] == ["call_1"]
+        raise error
+
+    try:
+        with pytest.raises(StreamBrokenAfterToolCallsError) as broken:
+            await streaming_module.stream_model_response(
+                SimpleNamespace(stream=lambda *_args, **_kwargs: source),
+                [],
+                model_id="m",
+                on_tool_calls=reject_calls,
+            )
+        assert broken.value.cause is error
+        assert [call["id"] for call in broken.value.response["tool_calls"]] == ["call_1"]
+    finally:
+        await source.aclose()
 
 
 @pytest.mark.asyncio

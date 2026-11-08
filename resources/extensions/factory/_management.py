@@ -432,7 +432,14 @@ class FactoryManagement:
             action = "send_back" if action == "answer" else action
             cards = await store.list_cards()
             limit, _ = service.limits()
-            if sum(item["state"] in ACTIVE_STATES for item in cards) >= limit:
+            finishes = False
+            if action == "accept":
+                runtime = card["runtime"]
+                done = [*runtime.get("done", [])]
+                if card["waiting_reason"] == "no_agreement":
+                    done.append(runtime["step"])
+                finishes = _workflows.next_step(runtime["workflow"], done) is None
+            if not finishes and sum(item["state"] in ACTIVE_STATES for item in cards) >= limit:
                 runtime = {
                     **card["runtime"],
                     "pending_action": {

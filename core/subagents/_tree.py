@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from core.runs import (
     Run,
+    RunStatus,
 )
 from core.sessions import (
     SessionAddress,
@@ -58,11 +60,13 @@ class SubAgentTreeControl:
         admission_lock: asyncio.Lock,
         activities: SubAgentActivities,
         forwarding: SubAgentForwarding,
+        suppress_wakes: Callable[[Sequence[SessionAddress], str, str], Awaitable[int]],
     ) -> None:
         self._runtime = runtime
         self._admission_lock = admission_lock
         self._activities = activities
         self._forwarding = forwarding
+        self._suppress_wakes = suppress_wakes
 
     async def inspect(
         self,
@@ -371,6 +375,15 @@ class SubAgentTreeControl:
         async with self._admission_lock:
             below = await sessions.run_async(descendants, sessions, root, strict=True)
             addresses = [root, *(link.session for link in below)]
+            silenced_addresses = {
+                address for address in addresses if address != root or silence_root
+            }
+            for followed in self._forwarding.followed_runs():
+                followed_address = SessionAddress(
+                    followed.project_id, followed.agent_id, followed.session_id
+                )
+                if followed_address in silenced_addresses and self._forwarding.silence(followed.id):
+                    stopped += followed.status != RunStatus.RUNNING
             stopped += await manager.clear_queued_many(
                 [address for address in addresses if address != root or clear_root_queue]
             )
@@ -386,11 +399,14 @@ class SubAgentTreeControl:
                     run.request_cancel(reason=reason, initiator=initiator)
                     runs.append(run)
                     stopped += 1
+            # Mark held wakes and cancel their pending admission while the
+            # captured tree is still stable; await settlement outside its lock.
+            wake_cleanup = self._suppress_wakes(addresses, reason, initiator)
 
         async def cleanup() -> int:
             # Cleanup can wait on other work; never hold the admission lock here.
             # One failed resource must not leave the rest of the captured tree running.
-            closed = 0
+            closed = await wake_cleanup
             failures: list[Exception] = []
             if terminals is not None:
                 owners = [

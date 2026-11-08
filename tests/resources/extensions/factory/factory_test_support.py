@@ -20,7 +20,7 @@ from core.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 from core.tools.contracts import ToolContractError
 from resources.extensions.factory import register
 from resources.extensions.factory._values import SETUP_DEFAULTS
-from resources.extensions.factory._workflows import templates
+from resources.extensions.factory._workflows import next_step, templates
 from resources.extensions.factory.extension import FactoryExtension
 from resources.extensions.factory.store import FactoryStore
 
@@ -119,7 +119,12 @@ class FakeExecution:
         await self._admit("start", card, "working")
 
     async def accept(self, card: Json) -> None:
-        await self._admit("accept", card, "working")
+        runtime = card["runtime"]
+        done = [*runtime.get("done", [])]
+        if card["waiting_reason"] == "no_agreement":
+            done.append(runtime["step"])
+        finishes = next_step(runtime["workflow"], done) is None
+        await self._admit("accept", card, "done" if finishes else "working")
 
     async def send_back(self, card: Json, comment: str, step: str = "") -> None:
         await self._admit("send_back", card, "working", comment)

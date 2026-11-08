@@ -966,6 +966,7 @@ async def stream_model_response(
     accumulator = StreamingAccumulator()
     chunk_timeout_seconds = stream_stall_timeout(adapter)
     source = adapter.stream(messages, model_id=model_id, **request_options)
+    awaiting_delta = True
     try:
         async for delta in iter_with_chunk_timeout(
             source,
@@ -976,11 +977,14 @@ async def stream_model_response(
         ):
             if delta.get("type") == "heartbeat":
                 continue
+            awaiting_delta = False
             accumulator.add_delta(delta)
             if on_usage is not None and delta.get("type") == "usage":
                 _report_usage(on_usage, accumulator.usage or {})
             if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
                 on_tool_calls(completed)
+            awaiting_delta = True
+        awaiting_delta = False
         if accumulator.finish_reason is None:
             raise NetworkError("Provider stream ended without finish delta")
         if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
@@ -1002,6 +1006,20 @@ async def stream_model_response(
             on_tool_calls(list(normalized["tool_calls"]))
         return normalized
     except Exception as exc:
+        if (
+            awaiting_delta
+            and decide_stream_recovery(
+                exc,
+                can_restart=False,
+                has_partial_content=bool(accumulator.partial_content),
+                finish_received=accumulator.finish_reason is not None,
+                tools_started=accumulator.has_taken_tool_calls,
+            )
+            is StreamRecoveryAction.ACCEPT_COMPLETE
+        ):
+            # Logical completion survives a later transport failure, just as
+            # in Chat. Callback and normalization failures still propagate.
+            return accumulator.finalize_assistant_fields().to_response_dict()
         if isinstance(exc, StreamingRepetitionError):
             # A guard can add an output estimate without a Provider usage
             # delta. Standalone callers account through this observer alone.
