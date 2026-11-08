@@ -20,6 +20,7 @@ from core.chat import ChatMessage, ChatSession, ChatSessionError, ChatSessionMan
 from core.chat.messages import SubAgentMessage
 from core.projects import AgentOverrides
 from core.runs import (
+    ActiveRunError,
     ChatRunManager,
     Run,
     RunAdmission,
@@ -637,17 +638,37 @@ async def test_closing_during_a_reminder_write_persists_it_once(
     await manager.aclose()
 
 
-@pytest.mark.parametrize("stale_generation", [None, "continuation", "expected"])
+@pytest.mark.parametrize(
+    ("failure_stage", "stale_generation", "cancel_waiter"),
+    [
+        ("start", None, False),
+        ("start", "continuation", False),
+        ("start", "expected", False),
+        ("execution", None, False),
+        ("execution", None, True),
+    ],
+)
 async def test_completion_start_failure_persists_system_reminder_without_run(
     tmp_path: Path,
+    failure_stage: str,
     stale_generation: str | None,
+    cancel_waiter: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
-    completion_loop = SimpleNamespace(
-        start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
-    )
+
+    async def fail_before_input(*_args: Any, **_kwargs: Any) -> Run:
+        if failure_stage == "start":
+            raise RuntimeError("provider unavailable")
+
+        async def execute(_run: Run) -> None:
+            raise RuntimeError("input could not be committed")
+
+        return await run_manager.start(_ADDRESS, execute)
+
+    completion_loop = SimpleNamespace(start_run=AsyncMock(side_effect=fail_before_input))
     trigger_service = TriggerService(
         cast(Any, completion_loop),
         run_manager,
@@ -656,6 +677,15 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         secret_masker=lambda: SecretMasker({"hunter2-very-secret": "{{secret:GITHUB}}"}),
     )
 
+    persisted = asyncio.Event()
+    append = ChatSession.append_many_async
+
+    async def append_reminder(session: ChatSession, *args: Any, **kwargs: Any) -> Any:
+        result = await append(session, *args, **kwargs)
+        persisted.set()
+        return result
+
+    monkeypatch.setattr(ChatSession, "append_many_async", append_reminder)
     delivery = trigger_service.submit_completion(
         SessionAddress(None, "coder", "session-one"),
         notice_id="bash:fallback",
@@ -674,12 +704,20 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         ),
         expected_session_generation_id="retired" if stale_generation == "expected" else None,
     )
+    if cancel_waiter:
+        delivery.cancel()
     if stale_generation:
         with pytest.raises(SessionNotFoundError):
             await asyncio.wait_for(delivery, timeout=5)
         assert _notes(sessions.get(_ADDRESS)) == []
+        await trigger_service.aclose()
+        await run_manager.aclose()
         return
-    await asyncio.wait_for(delivery, timeout=5)
+    await asyncio.wait_for(persisted.wait(), timeout=1)
+    if cancel_waiter:
+        assert delivery.cancelled()
+    else:
+        await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
     # Results reach the Run input and the Session masked.
@@ -688,6 +726,9 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     assert len(notes) == 1
     assert "background command finished: {{secret:GITHUB}}" in notes[0]
     assert "hunter2" not in completion_loop.start_run.await_args.args[1] + notes[0]
+    assert trigger_service.pending_completion_wakes(_ADDRESS) == 0
+    await trigger_service.aclose()
+    await run_manager.aclose()
 
 
 @pytest.mark.parametrize("boundary", ["followup", "read", "append"])
@@ -1169,6 +1210,60 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
         await origin.wait()
     await service.aclose()
     await manager.aclose()
+
+
+@pytest.mark.parametrize("user_finishes_before_preflight", [False, True])
+async def test_a_claimed_follow_up_is_not_delivered_by_a_concurrent_user_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, user_finishes_before_preflight: bool
+) -> None:
+    manager = ChatRunManager()
+    service, loop, session = _completion_service(tmp_path, manager)
+    entered, release, blocked = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    start_run = loop.start_run
+
+    async def held_start(*args: Any, **kwargs: Any) -> Run:
+        entered.set()
+        await release.wait()
+        try:
+            return await start_run(*args, **kwargs)
+        except ActiveRunError:
+            blocked.set()
+            raise
+
+    monkeypatch.setattr(loop, "start_run", held_start)
+    result = _submit(service, "claimed-result", "RESULT_CLAIMED_FOR_FOLLOW_UP", "origin")
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    user, user_release = await _active_origin(manager)
+    try:
+        # The follow-up already owns the handoff. A new request cannot also
+        # consume its result while its asynchronous preflight is unfinished.
+        assert await service.deliver_background_completions(user, session) is None
+        assert _notes(session) == []
+        if user_finishes_before_preflight:
+            user.iteration_count += 1
+            user_release.set()
+            await user.wait()
+        release.set()
+        if not user_finishes_before_preflight:
+            await asyncio.wait_for(blocked.wait(), timeout=1)
+            # Let the failed admission return to the coordinator and release
+            # its claim before the user's next Model-request boundary.
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert await service.deliver_background_completions(user, session) is not None
+            user.iteration_count += 1
+            user_release.set()
+            await user.wait()
+        await asyncio.wait_for(result, timeout=1)
+        assert loop.start_attempts == 1
+        delivered = [*loop.messages, *_notes(session)]
+        assert len(delivered) == 1
+        assert "RESULT_CLAIMED_FOR_FOLLOW_UP" in delivered[0]
+    finally:
+        release.set()
+        user_release.set()
+        await service.aclose()
+        await manager.aclose()
 
 
 @pytest.mark.parametrize(
