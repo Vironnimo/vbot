@@ -592,9 +592,6 @@ class ComputerSharing:
                         )
                         continue
                     scope.seen.add(call_id)
-                    scope.seen_order.append(call_id)
-                    if len(scope.seen_order) > MAX_REMEMBERED_CALLS:
-                        scope.seen.discard(scope.seen_order.popleft())
                     task = asyncio.create_task(self._call(scope, socket, scope.connection, message))
                     scope.calls.add(task)
                     task.add_done_callback(scope.calls.discard)
@@ -677,6 +674,11 @@ class ComputerSharing:
                 message = str(error)
             await self._failure(socket, call_id, code, message)
         finally:
+            # Pending requests remain deduplicated even while newer requests
+            # exhaust the bounded history of completed operations.
+            scope.seen_order.append(call_id)
+            if len(scope.seen_order) > MAX_REMEMBERED_CALLS:
+                scope.seen.discard(scope.seen_order.popleft())
             if starting_terminal:
                 with self._lock:
                     self._starting_terminals -= 1

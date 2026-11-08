@@ -179,7 +179,9 @@ def test_grants_and_private_identity_belong_to_one_server(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(execution, "MAX_REMEMBERED_CALLS", 2)
     sharing, connections, handlers = make_sharing(tmp_path)
     url = "https://one.example/"
     sharing.set_server_url(url)
@@ -198,6 +200,24 @@ async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
         duplicate = await socket.call("call-one", "start")
         assert duplicate["error"]["code"] == "computer_duplicate_call"
         assert len(handlers[0].calls) == 1
+        await socket.incoming.put(
+            {
+                "type": "call",
+                "id": "held-original",
+                "capability": "terminal",
+                "operation": "held",
+                "params": {},
+            }
+        )
+        await handlers[0].entered.wait()
+        for request_id in ("fast-one", "fast-two"):
+            assert (await socket.call(request_id, "status"))["ok"] is True
+        duplicate = await socket.call("held-original", "held")
+        assert duplicate["error"]["code"] == "computer_duplicate_call"
+        assert sum(operation == "held" for operation, _ in handlers[0].calls) == 1
+        handlers[0].release.set()
+        completed = await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        assert completed["id"] == "held-original" and completed["ok"] is True
         # Turning Terminal off would stop the running program: it asks first,
         # and without an answer or with a refusal Terminal stays shared.
         asked: list[str] = []
