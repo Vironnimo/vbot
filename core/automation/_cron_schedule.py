@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -362,76 +362,63 @@ def _project_job_occurrences(
     window_start: datetime,
     window_end: datetime,
     now_utc: datetime,
-    cap: int,
-) -> list[CronOccurrence]:
-    ticks = _job_schedule_ticks(timezone, job, window_start, window_end, cap)
-    if job.remaining_runs is not None:
-        future_budget = job.remaining_runs
-        if job.schedule_type == "interval" and window_start > now_utc:
+    step: Callable[[], None],
+) -> Iterator[CronOccurrence]:
+    """Yield only proven ticks; recurrence work includes a finite budget's earlier ticks."""
+    future_budget = job.remaining_runs
+    if job.schedule_type == "interval":
+        if future_budget is not None and window_start > now_utc:
             assert job.interval_anchor_at is not None and job.interval_seconds is not None
             anchor = _parse_utc_timestamp(job.interval_anchor_at, field_name="interval_anchor_at")
             period = timedelta(seconds=job.interval_seconds)
             first = max(1, -((anchor - now_utc) // period))
             stop = max(1, -((anchor - window_start) // period))
             future_budget = max(0, future_budget - (stop - first))
-        limited: list[datetime] = []
-        for tick in ticks:
-            if tick >= now_utc:
-                if future_budget <= 0:
-                    break
-                future_budget -= 1
-            limited.append(tick)
-        ticks = limited
-    return [
-        CronOccurrence(
-            job_id=job.id, name=job.name, fire_at_utc=tick, schedule_type=job.schedule_type
-        )
-        for tick in ticks
-    ]
-
-
-def _job_schedule_ticks(
-    timezone: ZoneInfo,
-    job: CronJob,
-    window_start: datetime,
-    window_end: datetime,
-    cap: int,
-) -> list[datetime]:
-    if job.schedule_type == "once":
+            if future_budget == 0:
+                return
+        ticks = _project_interval_ticks(job, window_start, window_end)
+    elif job.schedule_type == "cron":
+        scan_start = min(window_start, now_utc) if future_budget is not None else window_start
+        ticks = _project_cron_ticks(timezone, job, scan_start, window_end, step)
+    elif job.schedule_type == "once":
         fire_at = _parse_run_at_utc(timezone, job)
-        if window_start <= fire_at < window_end:
-            return [fire_at]
-        return []
-    if job.schedule_type == "interval":
-        return _project_interval_ticks(timezone, job, window_start, window_end, cap)
-    if job.schedule_type == "cron":
-        return _project_cron_ticks(timezone, job, window_start, window_end, cap)
-    return []
+        ticks = iter((fire_at,)) if window_start <= fire_at < window_end else iter(())
+    else:
+        return
+    for tick in ticks:
+        if tick >= now_utc and future_budget is not None:
+            if future_budget == 0:
+                return
+            future_budget -= 1
+        if tick >= window_start:
+            yield CronOccurrence(
+                job_id=job.id, name=job.name, fire_at_utc=tick, schedule_type=job.schedule_type
+            )
+        if future_budget == 0 and tick >= now_utc:
+            return
 
 
 def _project_interval_ticks(
-    timezone: ZoneInfo,
     job: CronJob,
     window_start: datetime,
     window_end: datetime,
-    cap: int,
-) -> list[datetime]:
+) -> Iterator[datetime]:
     if job.interval_seconds is None or job.interval_anchor_at is None:
-        return []
+        return
     anchor = _parse_utc_timestamp(
         job.interval_anchor_at,
         field_name="interval_anchor_at",
     )
-    elapsed = (window_start - anchor).total_seconds()
-    first_index = max(1, math.ceil(elapsed / job.interval_seconds)) if elapsed > 0 else 1
-    ticks: list[datetime] = []
-    index = first_index
-    tick = anchor + timedelta(seconds=index * job.interval_seconds)
-    while tick < window_end and len(ticks) < cap:
-        ticks.append(tick)
-        index += 1
-        tick = anchor + timedelta(seconds=index * job.interval_seconds)
-    return ticks
+    period = timedelta(seconds=job.interval_seconds)
+    index = max(1, -((anchor - window_start) // period))
+    if index * period >= window_end - anchor:
+        return
+    tick = anchor + index * period
+    while tick < window_end:
+        yield tick
+        if window_end - tick <= period:
+            return
+        tick += period
 
 
 def _project_cron_ticks(
@@ -439,25 +426,24 @@ def _project_cron_ticks(
     job: CronJob,
     window_start: datetime,
     window_end: datetime,
-    cap: int,
-) -> list[datetime]:
+    step: Callable[[], None],
+) -> Iterator[datetime]:
     if job.cron_expression is None:
-        return []
+        return
     window_start = max(window_start, _parse_utc_timestamp(job.created_at, field_name="created_at"))
     if window_start >= window_end:
-        return []
+        return
     # get_next is exclusive; step back in UTC to include an exact window-start tick.
     cursor_local = (window_start - timedelta(microseconds=1)).astimezone(timezone)
-    ticks: list[datetime] = []
-    while len(ticks) < cap:
+    while True:
+        step()
         fire_local = _next_cron_fire_local(timezone, job.cron_expression, cursor_local)
         next_utc = fire_local.astimezone(UTC)
         if next_utc >= window_end:
             break
         if next_utc >= window_start:
-            ticks.append(next_utc)
+            yield next_utc
         cursor_local = fire_local
-    return ticks
 
 
 def _parse_run_at_utc(timezone: ZoneInfo, job: CronJob) -> datetime:

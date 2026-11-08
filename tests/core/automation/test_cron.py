@@ -95,7 +95,7 @@ async def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_p
     assert reloaded.next_fire_at(reloaded.get_job(job.id)) is not None
     assert reloaded.project_occurrences(
         datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
-    )
+    ).occurrences
     await reloaded.update_job(job.id, name="changed")
     assert invalid in json.loads(path.read_text())["jobs"]
 
@@ -1265,7 +1265,7 @@ async def test_interval_next_fire_uses_persisted_anchor_and_skips_missed_ticks(
         if earlier_missed:
             assert owed.first_due_at == created.replace(hour=10)
     # Calendar projection and live scheduling share the same first interval.
-    projected = service.project_occurrences(created, created.replace(hour=13))
+    projected = service.project_occurrences(created, created.replace(hour=13)).occurrences
     assert [item.fire_at_utc for item in projected] == [
         created.replace(hour=10),
         created.replace(hour=12),

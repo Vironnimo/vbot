@@ -184,12 +184,20 @@ def dues_in_window(
     job: CronJob,
     window_start: datetime,
     window_end: datetime,
-    limit: int,
-) -> list[EventDue]:
-    """The occurrences the job is due for in the half-open UTC window, by due time."""
+    step: Callable[[], None],
+) -> Iterator[EventDue]:
+    """Stream due candidates for a bounded preview; the consumer sorts their due times."""
     tick = timedelta(microseconds=1)
-    found = _dues_between(calendar, event, job, window_start - tick, window_end - tick)
-    return [_event_due(calendar, event, occurrence, due_at) for occurrence, due_at in found[:limit]]
+    offset = _offset(job)
+    occurrences = calendar.iter_occurrences(event, window_start - tick - offset)
+    while True:
+        step()
+        occurrence = next(occurrences, None)
+        if occurrence is None or occurrence.start_utc + offset >= window_end:
+            return
+        due_at = _due_at(job, occurrence)
+        if window_start <= due_at < window_end:
+            yield _event_due(calendar, event, occurrence, due_at)
 
 
 def can_fire(

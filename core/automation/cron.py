@@ -80,7 +80,7 @@ from core.automation._cron_notification_model import (
     CronNotification,
 )
 from core.automation._cron_notifications import CronNotifications
-from core.automation._cron_projection import CronProjection
+from core.automation._cron_projection import CronPreview, CronProjection
 from core.automation._cron_scheduler import CronScheduler
 from core.automation._cron_watch import WatchCheckError, WatchChecks
 from core.automation._cron_watcher import FIRST_CHECK_WAIT_SECONDS, CronWatcher
@@ -704,7 +704,7 @@ class CronService:
         window_end_utc: datetime,
         *,
         max_per_job: int = MAX_PROJECTED_OCCURRENCES_PER_JOB,
-    ) -> list[CronOccurrence]:
+    ) -> CronPreview:
         """Project committed schedules without mutating scheduler state."""
         return self.projection().project_occurrences(
             window_start_utc, window_end_utc, max_per_job=max_per_job

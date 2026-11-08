@@ -329,6 +329,66 @@ describe('controller', () => {
     expect(state.jobsError).toBe('cron store unreadable');
   });
 
+  it.each(['success', 'failure'])(
+    'keeps completeness with its projection across reloads and stale %s',
+    async (staleOutcome) => {
+      const projection = (id, incomplete) => ({
+        ...serverWindow('UTC'),
+        cron: [{ job_id: id, fire_at: '2026-09-09T08:00:00+00:00' }],
+        cron_incomplete: incomplete,
+      });
+      getCalendarWindow.mockResolvedValueOnce(projection('initial', true));
+      const state = createCalendarViewState();
+      const controller = createCalendarController({ state });
+      await controller.show('day', '2026-09-09');
+      expect(state.cronIncomplete).toBe(true);
+
+      getCalendarWindow.mockRejectedValueOnce(new Error('reload failed'));
+      await controller.load({ silent: true });
+      expect(state.cronIncomplete).toBe(true);
+      expect(state.cron[0].job_id).toBe('initial');
+      expect(state.loadError).toBe('reload failed');
+
+      const stale = Promise.withResolvers();
+      const latest = Promise.withResolvers();
+      getCalendarWindow
+        .mockReturnValueOnce(stale.promise)
+        .mockReturnValueOnce(latest.promise);
+      const oldLoad = controller.load({ silent: true });
+      const newLoad = controller.load({ silent: true });
+      expect(state.cronIncomplete).toBe(true);
+      expect(state.cron[0].job_id).toBe('initial');
+      latest.resolve(projection('latest', false));
+      await newLoad;
+      if (staleOutcome === 'success') stale.resolve(projection('stale', true));
+      else stale.reject(new Error('stale failure'));
+      await oldLoad;
+      expect(state.cronIncomplete).toBe(false);
+      expect(state.cron[0].job_id).toBe('latest');
+      expect(state.loadError).toBe('');
+
+      const next = Promise.withResolvers();
+      getCalendarWindow.mockReturnValueOnce(next.promise);
+      const navigation = controller.show('day', '2026-09-10');
+      expect(state.loading).toBe(true);
+      expect(state.cronIncomplete).toBe(false);
+      expect(state.cron[0].job_id).toBe('latest');
+      next.resolve(projection('next', true));
+      await navigation;
+      expect(state.loading).toBe(false);
+      expect(state.cronIncomplete).toBe(true);
+      expect(state.cron[0].job_id).toBe('next');
+
+      // The additive field may be absent on an otherwise complete response.
+      getCalendarWindow.mockResolvedValueOnce(
+        projection('complete', undefined),
+      );
+      await controller.load({ silent: true });
+      expect(state.cronIncomplete).toBe(false);
+      expect(state.cron[0].job_id).toBe('complete');
+    },
+  );
+
   it('toggles layers', () => {
     const state = createCalendarViewState();
     const controller = createCalendarController({ state });

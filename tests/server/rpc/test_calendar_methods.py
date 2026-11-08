@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from core.automation import CronPreview
 from core.automation.cron import CronOccurrence
 from core.calendar import BoundJob, CalendarService
 from server.events import ServerEventBus
@@ -31,7 +32,7 @@ _WEEKLY_STANDUP = {
 @pytest.fixture()
 def state(tmp_path: Path) -> SimpleNamespace:
     cron_service = Mock()
-    cron_service.project_occurrences.return_value = []
+    cron_service.project_occurrences.return_value = CronPreview([], False)
     cron_service.load_projection = AsyncMock()
     cron_service.projection.return_value = cron_service
     return SimpleNamespace(
@@ -45,25 +46,31 @@ def state(tmp_path: Path) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamespace) -> None:
+@pytest.mark.parametrize("incomplete", [False, True])
+async def test_calendar_window_returns_event_and_cron_layers(
+    state: SimpleNamespace, incomplete: bool
+) -> None:
     service = state.runtime.calendar_service
     service.create_event(title="Zahnarzt", start="2026-09-03T15:00:00+02:00")
-    state.runtime.cron_service.project_occurrences.return_value = [
-        CronOccurrence(
-            job_id="job-1",
-            name="Check mail",
-            fire_at_utc=datetime(2026, 9, 3, 9, 0, tzinfo=UTC),
-            schedule_type="cron",
-        ),
-        CronOccurrence(
-            job_id="job-2",
-            name="Prepare",
-            fire_at_utc=datetime(2026, 9, 7, 6, 30, tzinfo=UTC),
-            schedule_type="event",
-            event_id="evt_x",
-            occurrence_id="evt_x_20260907T0900",
-        ),
-    ]
+    state.runtime.cron_service.project_occurrences.return_value = CronPreview(
+        [
+            CronOccurrence(
+                job_id="job-1",
+                name="Check mail",
+                fire_at_utc=datetime(2026, 9, 3, 9, 0, tzinfo=UTC),
+                schedule_type="cron",
+            ),
+            CronOccurrence(
+                job_id="job-2",
+                name="Prepare",
+                fire_at_utc=datetime(2026, 9, 7, 6, 30, tzinfo=UTC),
+                schedule_type="event",
+                event_id="evt_x",
+                occurrence_id="evt_x_20260907T0900",
+            ),
+        ],
+        incomplete,
+    )
 
     window = await rpc_result(
         state, "calendar.window", **{"from": "2026-09-01", "to": "2026-09-30"}
@@ -107,6 +114,14 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
         },
     ]
     assert window["system_timezone"] == service.system_timezone_name()
+    assert window["cron_incomplete"] is incomplete
+
+    # An undecided job may yield no rows; the status still belongs to the window.
+    state.runtime.cron_service.project_occurrences.return_value = CronPreview([], incomplete)
+    empty = await rpc_result(state, "calendar.window", **{"from": "2026-09-01", "to": "2026-09-30"})
+    assert empty["cron"] == []
+    assert empty["cron_incomplete"] is incomplete
+    assert empty["occurrences"] == window["occurrences"]
 
 
 @pytest.mark.asyncio

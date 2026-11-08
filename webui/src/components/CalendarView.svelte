@@ -477,6 +477,12 @@
     />
   </div>
 
+  {#if viewState.cronIncomplete && !viewState.loading && !viewState.loadError && !serverUnavailable}
+    <Banner variant="warn" class="calendar-preview-notice" role="status">
+      {t('calendar.cronIncomplete')}
+    </Banner>
+  {/if}
+
   {#if viewState.loadError}
     <Banner variant="error">
       <span
@@ -719,7 +725,9 @@
             </h2>
             {#if entries.length === 0}
               <p class="calendar-agenda-free">
-                {t('calendar.freeDay')}
+                {viewState.cronIncomplete
+                  ? t('calendar.previewEmpty')
+                  : t('calendar.freeDay')}
               </p>
             {:else}
               <ul class="calendar-agenda-list">

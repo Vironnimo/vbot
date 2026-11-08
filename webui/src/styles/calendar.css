@@ -17,6 +17,10 @@
   flex-wrap: wrap;
 }
 
+.calendar-preview-notice {
+  margin-bottom: 12px;
+}
+
 .calendar-nav {
   display: flex;
   align-items: center;

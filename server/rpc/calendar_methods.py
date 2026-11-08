@@ -58,16 +58,15 @@ def _window_response(
     calendar: CalendarProjection, cron: CronProjection, start: str, end: str
 ) -> JsonObject:
     window_start, window_end = calendar.parse_window(start, end)
+    cron_preview = cron.project_occurrences(window_start, window_end)
     return {
         "occurrences": [
             _occurrence_payload(item)
             for item in calendar.occurrences_in_window(window_start, window_end)
         ],
         "events": [_event_payload(event) for event in calendar.list_events()],
-        "cron": [
-            _cron_occurrence_payload(item)
-            for item in cron.project_occurrences(window_start, window_end)
-        ],
+        "cron": [_cron_occurrence_payload(item) for item in cron_preview.occurrences],
+        "cron_incomplete": cron_preview.incomplete,
         "system_timezone": calendar.system_timezone_name(),
     }
 
