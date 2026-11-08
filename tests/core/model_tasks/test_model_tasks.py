@@ -299,7 +299,8 @@ def test_patch_options_can_remove_a_stale_option_no_longer_in_schema() -> None:
     }
 
 
-def test_update_rejects_unknown_option_name() -> None:
+@pytest.mark.parametrize("previous_value", [None, 1])
+def test_update_rejects_unknown_option_name(previous_value: int | None) -> None:
     target = "openrouter/microsoft/mai-voice-2::api-key"
     service = TaskModelService(
         _Providers(),
@@ -313,7 +314,16 @@ def test_update_rejects_unknown_option_name() -> None:
             ]
         ),
         _Credentials(),
-        _Storage(),
+        _Storage(
+            {
+                TASK_TEXT_TO_SPEECH: {
+                    "target": target,
+                    "options": {"voice": "de-de-klaus:mai-voice-2", "fake": previous_value},
+                }
+            }
+            if previous_value is not None
+            else {}
+        ),
     )
 
     with pytest.raises(TaskModelValidationError, match="fake"):

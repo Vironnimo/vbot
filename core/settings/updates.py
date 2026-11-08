@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
+from core.settings._json_settings import settings_values_equal
 from core.settings._rules import (
     APPEARANCE_FIELDS,
     ARCHIVE_FIELDS,
@@ -597,12 +598,12 @@ def stale_setting_paths(
     return tuple(
         ".".join(path)
         for path in _changed_leaves(current, build_effective_settings(candidate_settings), ())
-        if _lookup(believed, path) != _lookup(current, path)
+        if not settings_values_equal(_lookup(believed, path), _lookup(current, path))
     )
 
 
 def _changed_leaves(before: Any, after: Any, path: tuple[str, ...]) -> list[tuple[str, ...]]:
-    if before == after:
+    if settings_values_equal(before, after):
         return []
     if isinstance(before, Mapping) and isinstance(after, Mapping):
         return [

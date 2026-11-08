@@ -616,6 +616,30 @@ BASED_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], A
         {"model_tasks": {"text_to_speech": {"target": ""}}},
         ("model_tasks.text_to_speech.target",),
     ),
+    "boolean-replaced-numeric-base": (
+        {"extensions": {"config": {"example": {"value": True}}}},
+        {"extensions": {"config": {"example": {"value": 2}}}},
+        {"extensions": {"config": {"example": {"value": 1}}}},
+        ("extensions.config.example.value",),
+    ),
+    "boolean-update-replaces-newer-number": (
+        {"extensions": {"config": {"example": {"value": 1}}}},
+        {"extensions": {"config": {"example": {"value": True}}}},
+        {"extensions": {"config": {"example": {"value": 0}}}},
+        ("extensions.config.example.value",),
+    ),
+    "boolean-replaced-numeric-base-inside-list": (
+        {"extensions": {"config": {"example": {"value": [{"enabled": False}]}}}},
+        {"extensions": {"config": {"example": {"value": [{"enabled": True}]}}}},
+        {"extensions": {"config": {"example": {"value": [{"enabled": 0}]}}}},
+        ("extensions.config.example.value",),
+    ),
+    "same-numeric-value-keeps-effective-base": (
+        {"extensions": {"config": {"example": {"value": 1.0}}}},
+        {"extensions": {"config": {"example": {"value": 2}}}},
+        {"extensions": {"config": {"example": {"value": 1}}}},
+        None,
+    ),
 }
 
 
