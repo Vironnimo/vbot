@@ -875,7 +875,10 @@ startup interruption persists first, then resumes the same participant Sessions.
 Start admission, automatic wakes, posting, Stop, Resume and delete share one
 control lock per Swarm. All initial inputs are admitted before automatic
 continuations; Resume cannot race an automatic admission. A pending admission
-does not block operations on another Swarm. Concurrent Starts with the same
+does not block operations on another Swarm. Once a lifecycle or human-post
+operation acquires its control lock, cancellation waits for its durable receipt,
+execution effects and publication to settle before releasing the lock; cancelling
+while waiting for the lock starts no mutation. Concurrent Starts with the same
 request id also serialize before creating the Swarm. A message sent during
 draining waits for it to finish. Resume prepares delivery without scheduling an additional
 automatic wake. Replaying a saved post never restarts a later stopped execution;

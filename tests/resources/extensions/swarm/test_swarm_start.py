@@ -356,13 +356,40 @@ async def test_swarm_command_preserves_quoted_unicode_prompt_and_starts_distinct
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("concurrent", [False, True])
-async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, concurrent):
+@pytest.mark.parametrize("attempt", ["sequential", "concurrent", "cancelled"])
+async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, monkeypatch, attempt):
     adapter = PausedSwarmAdapter(pause_at=1)
     lifecycle.runtime.adapter = adapter
     profile = await single_participant_profile(lifecycle, tmp_path)
     arguments = {"profile_id": profile["id"], "prompt": "review goal", "request_id": "same-start"}
-    if concurrent:
+    if attempt == "cancelled":
+        committed = asyncio.Event()
+        release = asyncio.Event()
+        create = lifecycle.service.store.create_swarm
+
+        async def held_create(*args, **kwargs):
+            result = await create(*args, **kwargs)
+            committed.set()
+            await release.wait()
+            return result
+
+        monkeypatch.setattr(lifecycle.service.store, "create_swarm", held_create)
+        starting = asyncio.create_task(
+            lifecycle.service.management.operation("swarms.start", arguments)
+        )
+        try:
+            await asyncio.wait_for(committed.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
+            starting.cancel()
+            await asyncio.sleep(0)
+            assert not starting.done()
+        finally:
+            release.set()
+            await asyncio.gather(starting, return_exceptions=True)
+        assert starting.cancelled()
+        first = await lifecycle.service.management.operation("swarms.start", arguments)
+        assert first.pop("replayed")
+        replay = await lifecycle.service.management.operation("swarms.start", arguments)
+    elif attempt == "concurrent":
         first, replay = await asyncio.gather(
             lifecycle.service.management.operation("swarms.start", arguments),
             lifecycle.service.management.operation("swarms.start", arguments),
