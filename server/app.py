@@ -673,11 +673,29 @@ def create_app(
                 raise ValueError("Extension Run is not live")
         except KeyError, ValueError, ExtensionUnavailableError:
             raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
+
+        async def current_events(events: AsyncGenerator[str]) -> AsyncGenerator[str]:
+            async with aclosing(events) as stream:
+                async for chunk in stream:
+                    # Both projections may await History or file capabilities.
+                    # Retire their stream before exposing any subsequent chunk.
+                    try:
+                        current = (
+                            request.app.state.runtime.extensions is registry
+                            and registry.current_page(identity, claims["page"]) is not None
+                            and registry.host_for(identity).temporary_agents is not None
+                        )
+                    except KeyError, ValueError, ExtensionUnavailableError:
+                        break
+                    if not current:
+                        break
+                    yield chunk
+
         if request.url.path.endswith("/timeline"):
             from server.timeline import TimelineStreamingResponse, sse_timeline
 
-            async def projected_events() -> AsyncGenerator[str]:
-                async with aclosing(
+            return TimelineStreamingResponse(
+                current_events(
                     sse_timeline(
                         request.app.state,
                         inspection.run,
@@ -687,36 +705,21 @@ def create_app(
                         file_actor=_file_actor(request.scope),
                         file_expires_at=request.scope.get("vbot.capability_expires_at"),
                     )
-                ) as stream:
-                    async for chunk in stream:
-                        # Projection awaits History and file capabilities. A reload
-                        # or disable in that time must retire the stream too.
-                        try:
-                            current = (
-                                request.app.state.runtime.extensions is registry
-                                and registry.current_page(identity, claims["page"]) is not None
-                                and registry.host_for(identity).temporary_agents is not None
-                            )
-                        except KeyError, ValueError, ExtensionUnavailableError:
-                            break
-                        if not current:
-                            break
-                        yield chunk
-
-            return TimelineStreamingResponse(
-                projected_events(),
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         return _RunStreamingResponse(
-            _sse_run_events(
-                inspection.run,
-                after_sequence=claims["after_sequence"],
-                shutdown_event=request.app.state.shutdown_event,
-                file_delivery=delivery,
-                include_file_urls=True,
-                file_actor=_file_actor(request.scope),
-                file_expires_at=request.scope.get("vbot.capability_expires_at"),
+            current_events(
+                _sse_run_events(
+                    inspection.run,
+                    after_sequence=claims["after_sequence"],
+                    shutdown_event=request.app.state.shutdown_event,
+                    file_delivery=delivery,
+                    include_file_urls=True,
+                    file_actor=_file_actor(request.scope),
+                    file_expires_at=request.scope.get("vbot.capability_expires_at"),
+                )
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

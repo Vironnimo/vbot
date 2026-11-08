@@ -477,19 +477,36 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(
     groups = Groups()
     registry = Registry()
     app = create_app(runtime=ServerStubRuntime(tmp_path / "data", extensions=registry))
+    closed = []
     if timeline:
 
         async def projected_events(state: Any, selected: Any, **kwargs: Any) -> AsyncIterator[str]:
             assert state is app.state
             assert selected is run
             assert kwargs["include_file_urls"] is True
-            yield 'event: timeline_snapshot\ndata: {"items":[],"file_urls":[]}\n\n'
-            # A reload while the projector awaits its next snapshot must close
-            # the capability stream before that retired projection is exposed.
-            registry.current = False
-            yield 'event: timeline_update\ndata: {"retired":true}\n\n'
+            try:
+                yield 'event: timeline_snapshot\ndata: {"items":[],"file_urls":[]}\n\n'
+                # A reload while the projector awaits its next snapshot must close
+                # the capability stream before that retired projection is exposed.
+                registry.current = False
+                yield 'event: timeline_update\ndata: {"retired":true}\n\n'
+            finally:
+                closed.append(True)
 
         monkeypatch.setattr("server.timeline.sse_timeline", projected_events)
+    else:
+        from server._streams import _sse_run_events
+
+        async def raw_events(*args: Any, **kwargs: Any) -> AsyncIterator[str]:
+            try:
+                async for event in _sse_run_events(*args, **kwargs):
+                    yield event
+                registry.current = False
+                yield 'event: model.response\ndata: {"retired":true}\n\n'
+            finally:
+                closed.append(True)
+
+        monkeypatch.setattr("server.app._sse_run_events", raw_events)
 
     with TestClient(app) as client:
         url = app.state.file_delivery.open_extension_run(
@@ -517,11 +534,12 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(
     if timeline:
         assert "event: timeline_snapshot" in response.text
         assert "timeline_update" not in response.text
-        assert "retired" not in response.text
     else:
         assert "event: model.response" in response.text
         assert '"text":"visible"' in response.text
     assert '"file_urls":[]' in response.text
+    assert "retired" not in response.text
+    assert closed == [True]
     assert stale_response.status_code == 404
     assert reloading_response.status_code == 404
     assert retired_response.status_code == 404
