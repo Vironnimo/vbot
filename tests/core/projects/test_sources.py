@@ -156,9 +156,16 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
             "opencode",
             "opencode.jsonc",
             '{\n  // Shared\n  "permission": {"bash": "deny"},\n'
-            '  "agent": {"reviewer": {"prompt": "Review.",},},\n}',
+            '  "agent": /* Definitions */ {"reviewer": {"prompt": "Review.",},},\n}',
             NO_SHELL,
             "ready",
+        ),
+        (
+            "opencode",
+            "opencode.jsonc",
+            '{"agent":{"reviewer":{"prompt":"Review.","tools":{"bash":tru/* comment */e}}}}',
+            set(),
+            "needs_attention",
         ),
         (
             "codex",
@@ -556,43 +563,66 @@ def test_selected_profile_reloads_inherited_rules_and_only_its_definition(
         assert read_profile(repo, sources, "reviewer", selected=selected) is None
 
 
-@pytest.mark.parametrize("source", ["claude", "opencode", "codex"])
+@pytest.mark.parametrize("source", ["claude", "opencode", "codex", "opencode-json", "claude-json"])
 @pytest.mark.parametrize("failure", ["malformed", "unreadable", "too_deep"])
 def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
-    agents, projects, repo, deny_access, source, failure
+    agents, projects, repo, deny_access, monkeypatch, source, failure
 ):
+    ecosystem = source.removesuffix("-json")
     if source == "codex":
         path = write(
             repo, ".codex/agents/definition.toml", 'name="reviewer"\nmodel="openai/gpt-5.2"'
         )
         broken = "name = ["
+    elif source == "opencode-json":
+        path = write(
+            repo,
+            "opencode.json",
+            '{"agent":{"reviewer":{"prompt":"Review.","model":"openai/gpt-5.2"}}}',
+        )
+        broken = '{"agent":['
     else:
         filename = "reviewer" if source == "opencode" else "definition"
         path = write(
             repo,
-            f".{source}/agents/{filename}.md",
+            f".{ecosystem}/agents/{filename}.md",
             "---\nname: reviewer\nmodel: openai/gpt-5.2\n---\nSelected.",
         )
         broken = "---\nname: [\n---\nBroken."
+        if source == "claude-json":
+            path = write(repo, ".claude/settings.json", "{}")
+            broken = '{"permissions":['
     write(repo, ".cursor/agents/reviewer.md", "---\nmodel: openai/gpt-5.2\n---\nShadowed.")
     write(repo, ".cursor/agents/healthy.md", "---\nmodel: openai/gpt-5.2\n---\nHealthy.")
     project = projects.create(
         "repo",
         "Repo",
         repo,
-        sources=[{"id": f"{source}.agents"}, {"id": "cursor.agents"}],
+        sources=[{"id": f"{ecosystem}.agents"}, {"id": "cursor.agents"}],
     )
     resolver = _resolver(agents, projects, _openai_configured())
     resolver.rescan_project(project)
     if failure == "malformed":
         path.write_text(broken, encoding="utf-8")
     elif failure == "too_deep":
-        nested = "[" * 1200 + "0" + "]" * 1200
-        broken = (
-            f'name="reviewer"\nunknown={nested}'
-            if source == "codex"
-            else f"---\nname: reviewer\nunknown: {nested}\n---\nBroken."
-        )
+        depth = 64000 if source.endswith("-json") else 1200
+        nested = "[" * depth + "0" + "]" * depth
+        if source.endswith("-json"):
+            broken = '{"unknown":' + nested + "}"
+            # The native JSON decoder's stack limit varies by platform. Exercise
+            # its failure boundary deterministically for this one input.
+            decode = json.loads
+
+            def bounded_decode(document, *args, **kwargs):
+                if document == broken:
+                    raise RecursionError("JSON metadata nesting limit exceeded")
+                return decode(document, *args, **kwargs)
+
+            monkeypatch.setattr(json, "loads", bounded_decode)
+        elif source == "codex":
+            broken = f'name="reviewer"\nunknown={nested}'
+        else:
+            broken = f"---\nname: reviewer\nunknown: {nested}\n---\nBroken."
         path.write_text(broken, encoding="utf-8")
     else:
         deny_access(path)

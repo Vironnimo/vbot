@@ -90,7 +90,7 @@ def json_object(path: Path) -> dict[str, Any]:
         text = _strip_jsonc(text)
     try:
         data = json.loads(text, object_pairs_hook=unique_mapping)
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, RecursionError) as error:
         raise SourceError(f"Invalid JSON metadata: {error}") from error
     if not isinstance(data, dict):
         raise SourceError("Configuration must be an object.")
@@ -122,6 +122,9 @@ def _strip_jsonc(text: str) -> str:
             end = text.find("*/", index + 2)
             if end < 0:
                 raise SourceError("Unterminated comment in JSONC metadata.")
+            # A comment separates tokens; removing it must not turn tru/**/e
+            # into true (or join two numeric literals).
+            result.append(" ")
             index = end + 2
             continue
         elif character in "]}":
