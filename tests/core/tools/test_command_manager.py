@@ -1416,7 +1416,18 @@ async def test_run_cancel_stops_only_its_foreground_commands(harness: Harness) -
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_launch_leaves_no_command_behind(harness: Harness) -> None:
+@pytest.mark.parametrize("failure", [None, OSError, KillNotConfirmedError])
+async def test_a_cancelled_launch_stops_its_command_or_keeps_survivors_visible(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, failure: type[OSError] | None
+) -> None:
+    terminate = FakeTree.terminate
+    if failure is not None:
+
+        def fail_kill(tree: FakeTree) -> None:
+            tree.terminations += 1
+            raise failure("controlled stop failure")
+
+        monkeypatch.setattr(FakeTree, "terminate", fail_kill)
     harness.launcher.gate = asyncio.Event()
     launching = asyncio.ensure_future(harness.launch())
     await turns()
@@ -1428,7 +1439,18 @@ async def test_a_cancelled_launch_leaves_no_command_behind(harness: Harness) -> 
         await launching
 
     [process] = harness.launcher.processes
-    assert process.tree.terminations == 1 and process.released
+    assert process.tree.terminations == 1
+    if failure is None:
+        assert process.released
+    else:
+        [survivor] = harness.manager.commands([OWNER])
+        assert survivor.pid == process.pid and survivor.status == "running"
+        assert harness.manager.status(survivor.command_id) == "running"
+        assert harness.manager.pending_wakes(OWNER) == 0
+        assert not process.released
+        monkeypatch.setattr(FakeTree, "terminate", terminate)
+        await harness.manager.stop(survivor.command_id, "user")
+        assert process.tree.terminations == 2 and process.released
 
 
 @pytest.mark.asyncio
