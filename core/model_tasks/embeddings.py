@@ -40,8 +40,8 @@ from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_tar
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
+from core.utils.errors import ConfigError, VBotError
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
-from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -181,12 +181,17 @@ class EmbeddingService:
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
-        provider_client = await ProviderEmbeddingClient.from_runtime_async(
-            self._runtime,
-            target_ref,
-            usage_observer=TaskUsage(self._usage_recorder, TASK_TEXT_EMBEDDING, target_ref),
-        )
         try:
+            try:
+                provider_client = await ProviderEmbeddingClient.from_runtime_async(
+                    self._runtime,
+                    target_ref,
+                    usage_observer=TaskUsage(self._usage_recorder, TASK_TEXT_EMBEDDING, target_ref),
+                )
+            except (ConfigError, KeyError) as exc:
+                # Settings can change after binding validation and before the
+                # factory resolves the Provider, Connection and credentials.
+                raise EmbeddingConfigurationError(str(exc)) from exc
             response = await provider_client.embed(
                 request.inputs,
                 options=options,
