@@ -175,6 +175,16 @@ class TriggerService:
         """
         return self._completion_delivery.pending_wakes(address)
 
+    def suppress_completion_wakes(
+        self,
+        addresses: Sequence[SessionAddress],
+        *,
+        reason: str = "user",
+        initiator: str = "user_stop_all",
+    ) -> Awaitable[int]:
+        """Suppress held wakes now; await their pending admission cleanup."""
+        return self._completion_delivery.suppress_wakes(addresses, reason, initiator)
+
     def add_completion_changed_callback(
         self, callback: CompletionChangedCallback
     ) -> Callable[[], None]:

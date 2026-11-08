@@ -186,7 +186,13 @@ class SubAgentCoordinator:
         # a count that is stale once another start has finished meanwhile.
         self._admission_lock = asyncio.Lock()
         self._tree = SubAgentTreeControl(
-            self._runtime, self._admission_lock, self._activities, self._forwarding
+            self._runtime,
+            self._admission_lock,
+            self._activities,
+            self._forwarding,
+            lambda addresses, reason, initiator: trigger_service.suppress_completion_wakes(
+                addresses, reason=reason, initiator=initiator
+            ),
         )
 
     async def _limit_refusal(

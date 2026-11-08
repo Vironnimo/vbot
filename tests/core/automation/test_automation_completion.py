@@ -1171,6 +1171,91 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
     await manager.aclose()
 
 
+@pytest.mark.parametrize(
+    "boundary", ["pending", "reply_surface", "preflight", "owned_preflight", "settling_admission"]
+)
+async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    manager = ChatRunManager()
+    service, loop, session = _completion_service(tmp_path, manager)
+    entered, release = asyncio.Event(), asyncio.Event()
+    start_run = loop.start_run
+    late_runs: list[Run] = []
+
+    async def held_start(*args: Any, **kwargs: Any) -> Run:
+        entered.set()
+        await release.wait()
+        raise AssertionError("stopped completion must not finish admission")
+
+    async def held_surface(_address: SessionAddress) -> None:
+        entered.set()
+        await release.wait()
+
+    async def settling_start(*args: Any, **kwargs: Any) -> Run:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # Admission may need to finish an already admitted transaction.
+            async def executor(_run: Run) -> None:
+                await release.wait()
+                raise AssertionError("stopped follow-up must not execute")
+
+            run = await manager.start(_ADDRESS, executor)
+            late_runs.append(run)
+            return run
+        raise AssertionError("admission was not cancelled")
+
+    owner = None
+    if boundary == "owned_preflight":
+        owner = RunExecutionOwner("fixture", "group", "participant", "generation", "epoch")
+        service.set_owned_completion_validator(_OwnerAdmission(owner))
+        service.set_owned_completion_starter(held_start)
+    elif boundary == "preflight":
+        monkeypatch.setattr(loop, "start_run", held_start)
+    elif boundary == "settling_admission":
+        monkeypatch.setattr(loop, "start_run", settling_start)
+    elif boundary == "reply_surface":
+        service.set_completion_run_relay(AsyncMock())
+        monkeypatch.setattr(service._completion_delivery, "_latest_reply_surface", held_surface)  # noqa: SLF001
+
+    result = service.submit_completion(
+        _ADDRESS,
+        notice_id="stopped-result",
+        origin_run_id="stopped-origin",
+        body="RESULT_BEFORE_STOP",
+        execution_owner=owner,
+    )
+    try:
+        if boundary != "pending":
+            await asyncio.wait_for(entered.wait(), timeout=1)
+        assert await service.suppress_completion_wakes([_ADDRESS]) == 1
+        assert service.pending_completion_wakes(_ADDRESS) == 0
+        release.set()
+        await asyncio.wait_for(result, timeout=1)
+        assert loop.messages == []
+        assert len(_notes(session)) == 1
+        assert "RESULT_BEFORE_STOP" in _notes(session)[0]
+        if boundary == "settling_admission":
+            [late] = late_runs
+            assert late.status.value == "cancelled"
+            assert (late.cancel_reason, late.cancel_initiator) == ("user", "user_stop_all")
+
+        # A stop applies to the held work, not to future independent work in
+        # this Session or to its next automatic completion.
+        monkeypatch.setattr(loop, "start_run", start_run)
+        service.set_completion_run_relay(None)
+        fresh = _submit(service, "fresh-result", "RESULT_AFTER_STOP", "fresh-origin")
+        await asyncio.wait_for(fresh, timeout=1)
+        assert len(loop.messages) == 1
+        assert "RESULT_AFTER_STOP" in loop.messages[0]
+    finally:
+        release.set()
+        await service.aclose()
+        await manager.aclose()
+
+
 async def test_user_cancelled_origin_gets_its_completions_as_notes_without_a_run(
     tmp_path: Path,
 ) -> None:

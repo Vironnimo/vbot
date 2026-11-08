@@ -1075,6 +1075,37 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
 
 
 @pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
+async def test_a_tree_stop_silences_a_terminal_run_still_forwarding(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, user_stop: bool
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    forwarding = harness.coordinator._forwarding  # noqa: SLF001
+    siblings = forwarding._siblings_text  # noqa: SLF001
+
+    async def held_siblings(link: Any, run_id: str) -> str | None:
+        entered.set()
+        await release.wait()
+        return await siblings(link, run_id)
+
+    monkeypatch.setattr(forwarding, "_siblings_text", held_siblings)
+    child = await harness.spawn("child")
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert not harness.manager.active_runs()
+        assert forwarding.pending(harness.subagent_session(child["id"]))
+        if user_stop:
+            assert await harness.coordinator.stop_tree(harness.parent) == 1
+        else:
+            result = await harness.background_tasks({"action": "stop", "id": child["id"]})
+            assert result["data"]["status"] == "stopped"
+        assert not forwarding.pending(harness.subagent_session(child["id"]))
+    finally:
+        release.set()
+    await harness.settle()
+    assert harness.triggers.to(harness.parent) == []
+
+
+@pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
 async def test_a_tree_stop_stops_its_background_commands_without_delivery(
     harness: SubAgentHarness, commands: CommandHarness, user_stop: bool
 ) -> None:

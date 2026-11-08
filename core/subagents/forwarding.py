@@ -133,9 +133,15 @@ class SubAgentForwarding:
         """Start following Runs as *run_manager* starts them."""
         run_manager.add_run_started_callback(self._on_run_started)
 
-    def silence(self, run_id: str) -> None:
+    def silence(self, run_id: str) -> bool:
         """Do not forward the outcome of a Run its Parent stopped itself."""
+        if run_id in self._silenced:
+            return False
         self._silenced.add(run_id)
+        followed = self._followed.get(run_id)
+        if followed is not None:
+            self._notify_forwarded(_run_address(followed[0]))
+        return True
 
     def followed_runs(self) -> list[Run]:
         """Return the Runs currently followed for forwarding."""
@@ -201,7 +207,9 @@ class SubAgentForwarding:
         _log_task_failure(task)
         if followed is None:
             return
-        address = _run_address(followed[0])
+        self._notify_forwarded(_run_address(followed[0]))
+
+    def _notify_forwarded(self, address: SessionAddress) -> None:
         for callback in list(self._forwarded_callbacks):
             try:
                 callback(address)
@@ -245,6 +253,10 @@ class SubAgentForwarding:
             facts=facts,
         )
         parent = link.parent
+        # Stop all can cross the awaited facts/sibling reads after the Run
+        # became terminal. A silenced answer must never start a new Parent Run.
+        if run.id in self._silenced:
+            return
         delivery = self._trigger_service.submit_completion(
             parent,
             notice_id=f"subagent:{run.id}",
