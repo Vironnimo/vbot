@@ -633,7 +633,10 @@ async def test_live_wip_config_change_releases_capacity_without_reload(
 @pytest.mark.parametrize(
     ("action", "reason", "arguments", "execution_action", "state", "comment"),
     [
-        ("accept", "finished", {}, "accept", "working", ""),
+        ("accept", "checkpoint", {}, "accept", "working", ""),
+        ("accept", "no_agreement", {}, "accept", "working", ""),
+        ("accept", "finished", {}, "accept", "done", ""),
+        ("accept", "no_agreement", {}, "accept", "done", ""),
         (
             "send_back",
             "finished",
@@ -646,7 +649,7 @@ async def test_live_wip_config_change_releases_capacity_without_reload(
         ("retry", "run_failed", {}, "retry", "working", ""),
     ],
 )
-async def test_user_resume_at_full_wip_is_queued_and_admitted_once(
+async def test_user_actions_at_full_wip_queue_only_when_resuming_work(
     factory: FactoryHarness,
     action: str,
     reason: str,
@@ -659,8 +662,39 @@ async def test_user_resume_at_full_wip_is_queued_and_admitted_once(
     running = await factory.card("working")
     waiting = await factory.card("waiting", waiting_reason=reason)
     if action == "accept":
+        workflow = implement_workflow()
+        current = len(workflow["steps"]) - (1 if state == "done" else 2)
+        waiting = await factory.store.change(
+            waiting["id"],
+            {
+                "runtime": {
+                    **waiting["runtime"],
+                    "workflow": workflow,
+                    "done": [
+                        step["id"]
+                        for step in (
+                            workflow["steps"]
+                            if reason == "finished"
+                            else workflow["steps"][:current]
+                        )
+                    ],
+                    "step": workflow["steps"][current]["id"],
+                }
+            },
+            actor="factory",
+            event="test_seed",
+        )
+    if action == "accept":
         arguments = {**arguments, "expected_revision": waiting["revision"]}
     result = await factory.operation(f"card.{action}", id=waiting["id"], **arguments)
+    if state == "done":
+        assert result["card"]["state"] == "done"
+        assert "queued_action" not in result["card"]
+        await factory.settle()
+        assert factory.execution.calls == [(execution_action, waiting["id"], comment)]
+        assert (await factory.store.get_card(running["id"]))["state"] == "working"
+        assert (await factory.operation("board.get"))["wip"] == {"running": 1, "limit": 1}
+        return
     assert result["card"]["state"] == "queued"
     assert result["card"]["queued_action"] == execution_action
     await factory.settle()
