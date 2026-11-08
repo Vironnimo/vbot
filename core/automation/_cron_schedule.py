@@ -160,14 +160,14 @@ def _owed_interval_fire(job: CronJob, after: datetime, now_utc: datetime) -> Owe
         return None
     anchor = _parse_utc_timestamp(job.interval_anchor_at, field_name="interval_anchor_at")
     period = job.interval_seconds
-    if now_utc < anchor:
-        return None
     latest = int((now_utc - anchor).total_seconds() // period)
+    if latest < 1:
+        return None
     due_at = anchor + timedelta(seconds=latest * period)
     if due_at <= after:
         return None
-    # Ticks are anchor + k * period; the first owed one follows ``after``.
-    first = 0 if after < anchor else int((after - anchor).total_seconds() // period) + 1
+    # Ticks are anchor + k * period for k >= 1, including a future anchor.
+    first = max(1, int((after - anchor).total_seconds() // period) + 1)
     if first == latest:
         return OwedFire(due_at=due_at)
     return OwedFire(
@@ -479,10 +479,8 @@ def _next_interval_fire_at(
         job.interval_anchor_at,
         field_name="interval_anchor_at",
     )
-    if reference_utc < anchor_utc:
-        return anchor_utc
     elapsed_seconds = (reference_utc - anchor_utc).total_seconds()
-    elapsed_intervals = int(elapsed_seconds // job.interval_seconds)
+    elapsed_intervals = max(0, int(elapsed_seconds // job.interval_seconds))
     return anchor_utc + timedelta(seconds=(elapsed_intervals + 1) * job.interval_seconds)
 
 
