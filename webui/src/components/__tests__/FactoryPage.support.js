@@ -26,6 +26,7 @@ export const step = (id, name, extra = {}) => ({
   approval: false,
   returns_to: '',
   rounds: 2,
+  limits: {},
   ...extra,
 });
 
@@ -51,7 +52,6 @@ export const setup = {
     },
   ],
   default_workflow: 'implement',
-  turn_budget: 30,
 };
 
 export const templates = [
@@ -290,6 +290,13 @@ export function createBridge(initialCards = [card('fct-a')]) {
       if (current.revision !== args.expected_revision) throw conflict();
       for (const field of ['title', 'description'])
         if (field in args) current[field] = args[field];
+      current.revision += 1;
+      return { card: clone(current) };
+    }
+    if (name === 'card.limits') {
+      if (current.revision !== args.expected_revision) throw conflict();
+      for (const field of ['card_limits', 'step_limits'])
+        if (field in args) current.runtime[field] = clone(args[field]);
       current.revision += 1;
       return { card: clone(current) };
     }

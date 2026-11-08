@@ -24,7 +24,7 @@ from core.tools.availability import ToolAccess
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
-from . import _workflows, agent_text
+from . import _limits, _workflows, agent_text
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
 type Json = dict[str, Any]
@@ -75,9 +75,95 @@ class FactoryExecution:
             )
         return value
 
-    @staticmethod
-    def _budget(runtime: Json) -> int:
-        return int(runtime.get("settings", {}).get("turn_budget", 30))
+    async def budget_status(
+        self, card: Json, *, resources: bool = True, report_all: bool = False
+    ) -> Json:
+        runtime = card["runtime"]
+        card_limits, step_limits = _limits.configured(runtime)
+        result: Json = {}
+        for scope, limits in (("card", card_limits), ("step", step_limits)):
+            report = None
+            if resources and (report_all or limits.get("tokens") or limits.get("cost_usd")):
+                run_ids = (
+                    runtime.get("budget", {}).get("step_runs", []) if scope == "step" else None
+                )
+                report = await self.service.host.execution_usage(card["group_id"], run_ids)
+            result[scope] = {"limits": limits, "usage": _limits.consumption(runtime, scope, report)}
+        return result
+
+    async def _check_budget(self, card: Json, *, check_runs: bool, resources: bool = True) -> bool:
+        status = await self.budget_status(card, resources=resources)
+        for scope, item in status.items():
+            limits = (
+                item["limits"] if resources else {"tool_calls": item["limits"].get("tool_calls", 0)}
+            )
+            hit = _limits.reached(limits, item["usage"], scope, check_runs=check_runs)
+            if hit is not None:
+                runtime = self._runtime(card)
+                runtime["limit_hit"] = hit
+                runtime["note"] = _limits.message(hit)
+                await self._wait(card, "budget_exhausted", runtime=runtime, detail=hit)
+                return True
+        return False
+
+    async def _budget_notice(
+        self, card: Json, context: SessionRequestContext
+    ) -> PreparedSessionDelivery | None:
+        runtime = self._runtime(card)
+        recipient = f"{context.agent_id}/{context.session_id}"
+        notices = runtime.setdefault("budget_notices", {})
+        notice = notices.setdefault(recipient, {"seen": []})
+        pending = notice.get("pending")
+        if pending is None:
+            warnings = _limits.warnings(runtime, await self.budget_status(card), notice["seen"])
+            if not warnings:
+                return None
+            pending = {
+                "id": new_id("fnotice"),
+                "content": agent_text.budget_warning(warnings),
+                "keys": [warning["key"] for warning in warnings],
+                "revision": str(card["revision"]),
+            }
+            notice["pending"] = pending
+            await self.store.change(card["id"], {"runtime": runtime}, actor="factory", event=None)
+        content = pending["content"]
+        return PreparedSessionDelivery(
+            pending["id"],
+            hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            (content,),
+            pending["revision"],
+            "factory_budget_notice",
+        )
+
+    async def before_tool_call(
+        self, context: SessionRequestContext, *, tool_name: str, tool_call_id: str
+    ) -> str | None:
+        owner = context.execution_owner
+        if owner is None:
+            return None
+        async with self.service.lock:
+            card = await self.store.get_card(context.binding.group_id)
+            runtime = self._runtime(card)
+            if (
+                self._quiescing
+                or owner.epoch != runtime.get("epoch")
+                or owner.participant_id != runtime.get("current_participant")
+            ):
+                raise self._error("stale_run")
+            if card["state"] not in ACTIVE_STATES:
+                return (
+                    agent_text.limit_refusal(runtime["limit_hit"])
+                    if runtime.get("limit_hit")
+                    else agent_text.error_message("wrong_state")
+                )
+            if await self._check_budget(card, check_runs=False, resources=False):
+                stopped = await self.store.get_card(card["id"])
+                return agent_text.limit_refusal(stopped["runtime"]["limit_hit"])
+            budget = runtime.setdefault("budget", {})
+            for key in ("tool_calls", "step_tool_calls"):
+                budget[key] = budget.get(key, 0) + 1
+            await self.store.change(card["id"], {"runtime": runtime}, actor="factory", event=None)
+        return None
 
     async def _change(
         self, card: Json, patch: Json, *, actor: str = "factory", event: str, **extra: Any
@@ -272,6 +358,8 @@ class FactoryExecution:
                         return
                     if await self._acknowledge_pending(card) is not None:
                         return
+                    if await self._check_budget(card, check_runs=True):
+                        return
                     participant = pending["participant"]
                     participants = runtime.setdefault("participants", {})
                     if participant not in participants:
@@ -306,6 +394,7 @@ class FactoryExecution:
                         epoch=handle.epoch,
                     )
                     runtime.setdefault("runs", {})[participant] = admission.run_id
+                    _limits.observe_run(runtime, admission.run_id)
                     if (
                         resume_terminal
                         and admission.existing
@@ -318,7 +407,6 @@ class FactoryExecution:
                                 "keep_working", card, step=self._step(runtime, participant)
                             ),
                             runtime=runtime,
-                            patch={"turns": 0},
                             event="retry_reconciled",
                             detail={"run_id": admission.run_id},
                         )
@@ -405,7 +493,7 @@ class FactoryExecution:
         runtime.pop("setup", None)
         runtime.update(
             workflow=workflow,
-            settings={"turn_budget": setup["turn_budget"]},
+            settings={},
             done=[],
             approved=[],
             notes={},
@@ -438,6 +526,11 @@ class FactoryExecution:
             return await self._wait(
                 card, "finished", runtime=runtime, actor=actor, event=event, patch=patch, **extra
             )
+        reason = runtime.get("pending_action", {}).get("waiting_reason") or card["waiting_reason"]
+        if not (
+            event == "accepted" and reason == "checkpoint" and runtime.get("step") == step["id"]
+        ):
+            _limits.new_step(runtime)
         runtime["step"] = step["id"]
         if step["approval"] and step["id"] not in runtime.get("approved", []):
             return await self._wait(
@@ -502,7 +595,7 @@ class FactoryExecution:
             initial=initial,
             content=content,
             runtime=runtime,
-            patch={**(patch or {}), "turns": 0},
+            patch={"turns": 0, **(patch or {})},
             event=event,
             actor=actor,
             **extra,
@@ -686,7 +779,6 @@ class FactoryExecution:
                 participant=participant,
                 content=agent_text.note("answer", card, comment),
                 runtime=runtime,
-                patch={"turns": 0},
                 event="answered",
                 actor="user",
                 comment=None if recorded else comment,
@@ -736,20 +828,20 @@ class FactoryExecution:
                 initial=pending["kind"] == "initial",
                 runtime=runtime,
                 pending=pending,
-                patch={"turns": 0},
                 event="retried",
                 actor="user",
             )
         step = self._step(runtime)
         if step["returns_to"]:
             # A step that judges earlier work starts over with a fresh participant.
-            return await self._run_step(card, runtime, step, event="retried", actor="user")
+            return await self._run_step(
+                card, runtime, step, event="retried", actor="user", patch={"turns": card["turns"]}
+            )
         return await self._queue(
             card,
             participant=self._participant(runtime, step),
             content=agent_text.note("keep_working", card, step=step),
             runtime=runtime,
-            patch={"turns": 0},
             event="retried",
             actor="user",
         )
@@ -908,6 +1000,18 @@ class FactoryExecution:
     ) -> None:
         async with self.service.lock:
             card = await self.store.get_card(context.binding.group_id)
+            if delivery.effect_kind == "factory_budget_notice":
+                runtime = self._runtime(card)
+                recipient = f"{context.agent_id}/{context.session_id}"
+                notice = runtime.get("budget_notices", {}).get(recipient, {})
+                pending_notice = notice.get("pending", {})
+                if pending_notice.get("id") == delivery.delivery_id:
+                    notice.setdefault("seen", []).extend(pending_notice["keys"])
+                    notice.pop("pending")
+                    await self.store.change(
+                        card["id"], {"runtime": runtime}, actor="factory", event=None
+                    )
+                return
             pending = card["runtime"].get("pending", {})
             if pending.get("id") != delivery.delivery_id:
                 return
@@ -947,18 +1051,26 @@ class FactoryExecution:
                 raise self._error("stale_run")
             if card["state"] not in ACTIVE_STATES:
                 raise self._error("wrong_state")
+            new_run = context.run_id not in runtime.get("budget", {}).get("runs", [])
+            if await self._check_budget(card, check_runs=new_run):
+                raise self._error("budget_exhausted")
             if (context.agent_id, context.session_id) != (
                 binding.address.agent_id,
                 binding.address.session_id,
             ):
+                if new_run:
+                    _limits.observe_run(runtime, context.run_id)
+                    await self.store.change(
+                        card["id"], {"runtime": runtime}, actor="factory", event=None
+                    )
                 return None
             if pending and pending.get("kind") != "continuation":
                 raise self._error("stale_run")
             if runtime.get("current_run") == context.run_id:
-                return self._prepared_delivery(pending) if pending.get("delivery") else None
-            if card["turns"] >= self._budget(runtime):
-                await self._wait(card, "budget_exhausted", "budget_exhausted")
-                raise self._error("budget_exhausted")
+                if pending.get("delivery"):
+                    return self._prepared_delivery(pending)
+                return await self._budget_notice(card, context)
+            _limits.observe_run(runtime, context.run_id)
             runtime["current_run"] = context.run_id
             runtime.setdefault("runs", {})[owner.participant_id] = context.run_id
             if pending and not pending.get("delivery"):
@@ -971,7 +1083,7 @@ class FactoryExecution:
                     "generation_id": binding.generation_id,
                     "settings_revision": str(card["revision"]),
                 }
-            await self._change(
+            saved = await self._change(
                 card,
                 {"runtime": runtime, "turns": card["turns"] + 1},
                 event="run_observed",
@@ -979,7 +1091,7 @@ class FactoryExecution:
             )
             if pending:
                 return self._prepared_delivery(pending)
-        return None
+            return await self._budget_notice(saved, context)
 
     async def _pause_failed_handoff(
         self, card: Json, context: SessionRequestContext, outcome: str
@@ -1081,10 +1193,10 @@ class FactoryExecution:
         if card["state"] not in ACTIVE_STATES:
             self._close_later(card, delete=runtime.get("deleting", False))
             return
+        if await self._check_budget(card, check_runs=True):
+            return
         if outcome != "success":
             await self._wait(card, "run_failed", "run_failed")
-        elif int(card["turns"]) >= self._budget(runtime):
-            await self._wait(card, "budget_exhausted", "budget_exhausted")
         else:
             participant = runtime["current_participant"]
             await self._queue(
@@ -1137,7 +1249,6 @@ class FactoryExecution:
         patch: Json = {"state": "waiting", "waiting_reason": "finished", "turns": 0}
         output: Json | None = None
         workflow: Json | None = None
-        budget = old.get("settings", {}).get("turn_budget")
         if isinstance(old.get("workflow"), dict) and old["workflow"].get("stages"):
             workflow = _workflows.from_stages(old["workflow"])
         else:
@@ -1147,13 +1258,12 @@ class FactoryExecution:
                 setup = None
             if setup is not None:
                 workflow = _workflows.choose(setup, None)
-                budget = setup["turn_budget"]
         if workflow is not None and workflow["steps"]:
             steps = [step["id"] for step in workflow["steps"]]
             done = steps[:-1] if card["branch"] else steps
             runtime.update(
                 workflow=workflow,
-                settings={"turn_budget": int(budget or 30)},
+                settings={},
                 done=done,
                 approved=list(done),
                 notes={},
@@ -1197,6 +1307,16 @@ class FactoryExecution:
             cards = await self.store.list_cards()
             known = {card["group_id"] for card in cards}
             for card in cards:
+                if card["runtime"].get("budget", {}).get("import_tool_usage"):
+                    runtime = self._runtime(card)
+                    budget = runtime["budget"]
+                    for prefix, query in (("", {}), ("step_", {"run_ids": budget["step_runs"]})):
+                        usage = await self.groups.usage(card["group_id"], query)
+                        budget[prefix + "tool_calls"] = usage["activity"]["tool_calls"]
+                    budget.pop("import_tool_usage")
+                    card = await self.store.change(
+                        card["id"], {"runtime": runtime}, actor="factory", event=None
+                    )
                 card = await self._acknowledge_pending(card) or card
                 runtime = card["runtime"]
                 if runtime.get("deleting"):

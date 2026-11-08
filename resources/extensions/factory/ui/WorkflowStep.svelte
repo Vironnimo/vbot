@@ -1,4 +1,5 @@
 <script>
+  import LimitsEditor from './LimitsEditor.svelte';
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import Checkbox from '../../../../webui/src/components/ui/Checkbox.svelte';
@@ -319,6 +320,13 @@
       {t('factory.sameModel')}
     </p>{/if}
 </article>
+
+<LimitsEditor
+  bind:value={step.limits}
+  prefix={`${prefix}-limit`}
+  label={t('factory.limit.step')}
+/>
+<p class="factory-help">{t('factory.limit.stepHelp')}</p>
 
 <style>
   .factory-step {

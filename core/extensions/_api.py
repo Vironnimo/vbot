@@ -278,16 +278,22 @@ class ExtensionAPI:
         quiesce: Callable[..., Any],
         acknowledge_delivery: Callable[..., Any] | None = None,
         reconcile_tool_batch: Callable[..., Any] | None = None,
+        before_tool_call: Callable[..., Any] | None = None,
     ) -> None:
         if self._declarations.session_runtime is not None:
             raise ValueError("session runtime already declared")
         if not all(callable(item) for item in (before_request, run_finished, quiesce)) or any(
             item is not None and not callable(item)
-            for item in (acknowledge_delivery, reconcile_tool_batch)
+            for item in (acknowledge_delivery, reconcile_tool_batch, before_tool_call)
         ):
             raise ValueError("session runtime handlers must be callable")
         self._declarations.session_runtime = SessionRuntimeDeclaration(
-            before_request, run_finished, quiesce, acknowledge_delivery, reconcile_tool_batch
+            before_request,
+            run_finished,
+            quiesce,
+            acknowledge_delivery,
+            reconcile_tool_batch,
+            before_tool_call,
         )
 
     def register_tool_family(self, family_id: str, label: str) -> None:

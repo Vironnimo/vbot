@@ -312,10 +312,7 @@ ERROR_MESSAGES = {
         "Nothing was changed. Supply findings as a non-empty list of concrete issues, one per "
         "item. To hand in your assessment without sending work back, call factory_submit_work."
     ),
-    "budget_exhausted": (
-        "The participant reached its turn budget without a hand-in. "
-        "Send the Card back with guidance to continue."
-    ),
+    "budget_exhausted": ("The Factory paused this Card because an execution limit was reached."),
     "run_failed": (
         "The participant Run failed or was cancelled. "
         "Inspect its Session, then retry or send the Card back."
@@ -361,3 +358,40 @@ def unknown_outcome(*, participant: bool = False) -> Json:
             "before repeating a create call."
         ),
     )
+
+
+def limit_refusal(hit: Json) -> str:
+    subject = "Card" if hit["scope"] == "card" else "Step"
+    metric = {"runs": "Runs", "tool_calls": "Tool calls", "tokens": "tokens", "cost_usd": "USD"}[
+        hit["metric"]
+    ]
+    reason = (
+        f"the {subject} limit of {hit['limit']} {metric} was reached"
+        if hit["reason"] == "limit_reached"
+        else f"{subject} {metric} consumption was unavailable for its configured limit"
+    )
+    return f"This Tool call was not run: {reason}. The Factory paused the Card for the user."
+
+
+def budget_warning(warnings: list[Json]) -> str:
+    labels = {
+        "runs": "Runs",
+        "tool_calls": "Tool calls",
+        "tokens": "input + output tokens",
+        "cost_usd": "USD of Model cost",
+    }
+    lines = ["Factory budget notice: execution is approaching a configured limit."]
+    for warning in warnings:
+        subject = "Card" if warning["scope"] == "card" else "Step execution"
+        lines.append(
+            f"{subject}: {warning['used']:g} / {warning['limit']:g} {labels[warning['metric']]} "
+            f"used at this check; {warning['remaining']:g} remaining."
+        )
+    if any(warning["metric"] == "runs" for warning in warnings):
+        lines.append("The current Run is already counted and can finish within the other limits.")
+    lines.append(
+        "Use the remaining budget to finish your Step. Submit it if the task is complete; "
+        "otherwise call factory_report_blocked with your progress, the remaining work "
+        "and the additional budget you need."
+    )
+    return "\n".join(lines)

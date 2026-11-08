@@ -117,6 +117,8 @@ public address or Run-id reuse never proves historical ownership.
   background import would race Session deletion); Statistics catches up before
   reads.
 
+`execution_totals(owner_name, group_id, run_ids=None)` sums settled requests for one owner/group, optionally exact Run ids, through an owner/group/Run index. It returns `calls`, `input_tokens`, `output_tokens`, `cost_usd`, `unreported_calls` and `unpriced_calls`; partial known costs remain visible, all-unpriced nonempty selections return null cost. It excludes in-flight requests, keeps failed/cancelled consumption, and sums stored USD snapshots in integer nano-USD without repricing. Extensions use the registration-bound host capability for execution limits.
+
 ## Persistence and failures
 
 `_schema.py` declares canonical Generation 1 tables through `core/database/`.

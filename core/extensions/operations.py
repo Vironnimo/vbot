@@ -92,6 +92,8 @@ class ExtensionHost:
     notify: Notify | None = None
     set_page_badge: Callable[[str, int], None] | None = None
     pending_approvals: Callable[[str, Sequence[str]], Awaitable[JsonObject]] | None = None
+    # API v27: durable settled Model usage at recorded prices for this owner.
+    execution_usage: Callable[[str, list[str] | None], Awaitable[JsonObject]] | None = None
     input_authority: (
         Callable[[ToolContext], Awaitable[Literal["user", "authorized_task", "none"]]] | None
     ) = None

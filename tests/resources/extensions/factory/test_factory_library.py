@@ -64,14 +64,17 @@ def test_insertion_copies_identity_and_connects_results(placement: list[str] | N
 
 @pytest.mark.parametrize("choice", [None, "local", "template"])
 def test_update_preserves_local_fields_and_requires_conflict_choices(choice: str | None) -> None:
-    definition = template(step("review"), kind="workflow")
+    definition = template(step("review", limits={"tool_calls": 20}), kind="workflow")
+    definition["workflow"]["limits"] = {"cost_usd": 2}
     use = _library.insert(None, definition)
+    assert use["limits"] == {"cost_usd": 2}
+    assert use["steps"][0]["limits"] == {"tool_calls": 20}
     source = use["sources"][0]
     local_id = source["step_map"]["review"]
     use["name"] = "Project review"
     use["steps"][0].update(task="Check the Project API", agent="project-reviewer")
     newer = template(
-        step("review", task="Check all acceptance criteria", effort="high"),
+        step("review", task="Check all acceptance criteria", effort="high", limits={"tokens": 500}),
         version=2,
         kind="workflow",
     )
@@ -84,6 +87,8 @@ def test_update_preserves_local_fields_and_requires_conflict_choices(choice: str
     assert updated["name"] == "Project review"
     assert updated["steps"][0]["agent"] == "project-reviewer"
     assert updated["steps"][0]["effort"] == "high"
+    assert "limits" not in updated
+    assert updated["steps"][0]["limits"] == {"tokens": 500}
     assert updated["steps"][0]["task"] == (
         "Check all acceptance criteria" if choice == "template" else "Check the Project API"
     )

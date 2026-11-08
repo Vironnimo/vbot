@@ -523,6 +523,35 @@ class ExtensionRegistry:
             raise ValueError("Session delivery batch is invalid")
         return result
 
+    async def dispatch_session_before_tool_call(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+        context: SessionRequestContext,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+    ) -> str | None:
+        """A required owner admission check before any Tool handler or hook."""
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        runtime = capability.runtime
+        if runtime is None or runtime.before_tool_call is None:
+            return None
+        result = await invoke_extension_handler(
+            runtime.before_tool_call,
+            context,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            extension_name=capability.identity.name,
+        )
+        if not self._session_capability_current(binding, capability, tool_registry):
+            raise SessionCapabilityExpiredError("session capability expired")
+        if result is not None and (not isinstance(result, str) or not result):
+            raise TypeError("Session before_tool_call must return a non-empty reason or None")
+        return result
+
     async def acknowledge_session_delivery(
         self,
         binding: Any,

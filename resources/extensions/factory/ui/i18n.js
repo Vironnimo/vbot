@@ -233,8 +233,6 @@ export default {
     'Two Workflows are named “{name}”. Rename one.',
   'factory.invalid.rounds':
     '{location}: enter a whole number of automatic send-backs from 1 to 20.',
-  'factory.invalid.turnBudget':
-    'Enter a whole number of turns per step from 1 to 1,000.',
   'factory.setupHelp':
     'Workflows carry each card through steps. Choose what each Agent does, which results it receives, and where your approval is required.',
   'factory.noProjects': 'Register a Project to configure its Factory setup.',
@@ -288,10 +286,24 @@ export default {
   'factory.defaultEffort': 'The Agent’s thinking effort',
   'factory.sameModel':
     'This step uses the same Model as the step it can send work back to. A different Model gives a more independent judgment.',
-  'factory.turnBudget': 'Agent turns per step',
-  'factory.turnBudgetHelp':
-    'From 1 to 1,000. When an Agent uses them up, the card waits for you.',
-  'factory.execution': 'Execution',
+  'factory.limit.title': 'Execution limits',
+  'factory.limit.tools': 'Tool calls',
+  'factory.limit.tokens': 'Tokens (input + output)',
+  'factory.limit.cost': 'Model cost (USD)',
+  'factory.limit.runs': 'Runs',
+  'factory.limit.card': 'Entire Card',
+  'factory.limit.step': 'This Step execution',
+  'factory.limit.unlimited': 'Unlimited',
+  'factory.limit.unknown': 'Unavailable',
+  'factory.limit.used': 'Used: {value}',
+  'factory.limit.help':
+    'Leave blank or enter 0 for unlimited. The first reached limit pauses the Card. Agents receive a notice near 80% at their next Model request. Tokens and Model costs include estimates; a running request can exceed a limit. Unavailable usage pauses work when that limit is enabled.',
+  'factory.limit.stepHelp':
+    'Each rework starts a new Step budget. The Card keeps counting across all Steps and rework. Pausing or retrying does not reset consumption.',
+  'factory.limit.resume':
+    'Increase or clear the reached limit, then Retry. Consumption is retained. These changes apply to this Card; Step changes apply to its current execution.',
+  'factory.invalid.limits':
+    'Use non-negative whole numbers for Runs, Tool calls and Tokens, and a non-negative USD amount for cost. Leave blank or enter 0 for unlimited.',
   'factory.createSetup': 'Create setup',
   'factory.deleteSetup': 'Delete setup',
   'factory.deleteSetupTitle': 'Delete setup for “{project}”?',

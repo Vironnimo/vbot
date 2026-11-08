@@ -148,7 +148,7 @@ def _mapped(material: Json, mapping: dict[str, str], after: list[str]) -> Json:
         step["id"] = mapping[step["id"]]
         step["after"] = [mapping[item] for item in step["after"]] if step["after"] else list(after)
         step["returns_to"] = mapping.get(step["returns_to"], "")
-    return {key: value[key] for key in ("name", "description", "steps")}
+    return {key: value.get(key, {}) for key in ("name", "description", "steps", "limits")}
 
 
 def _terminals(steps: list[Json]) -> list[str]:
@@ -187,6 +187,7 @@ def insert(workflow: Json | None, template: Json, *, after: list[str] | None = N
             "id": _workflows._new_id("w"),
             "name": material["name"],
             "description": material["description"],
+            "limits": deepcopy(material.get("limits", {})),
             "steps": [],
         }
         if whole
@@ -589,12 +590,21 @@ def preview_update(
                 field: merge.value(step_id, field, old[field], local[field], new[field])
                 for field in _FIELDS
             }
+            value["limits"] = merge.value(
+                step_id,
+                "limits",
+                old.get("limits", {}),
+                local.get("limits", {}),
+                new.get("limits", {}),
+            )
         if value is not None:
             merged[step_id] = value
 
     if source["whole_workflow"]:
-        for field in ("name", "description"):
-            result[field] = merge.value("", field, base[field], result[field], upstream[field])
+        for field in ("name", "description", "limits"):
+            result[field] = merge.value(
+                "", field, base.get(field, {}), result.get(field, {}), upstream.get(field, {})
+            )
 
     surviving = set(merged)
     common = set(before) & set(current) & set(incoming) & surviving

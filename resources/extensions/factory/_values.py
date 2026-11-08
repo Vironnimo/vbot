@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._limits import LIMIT_SCHEMA
 from .store import FactoryError
 
 type Json = dict[str, Any]
@@ -12,12 +13,12 @@ SETUP_DEFAULTS: Json = {
     "enabled": True,
     "workflows": [],
     "default_workflow": "",
-    "turn_budget": 30,
 }
 _STEP = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
+        "limits": LIMIT_SCHEMA,
         "name": {"type": "string"},
         "source": {"type": "string", "enum": ["agent", "team"]},
         "agent": {"type": "string"},
@@ -34,6 +35,7 @@ _WORKFLOW = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
+        "limits": LIMIT_SCHEMA,
         "name": {"type": "string"},
         "description": {"type": "string"},
         "steps": {"type": "array", "items": _STEP},
@@ -48,7 +50,6 @@ SETUP_PROPERTIES: Json = {
         "items": _WORKFLOW,
     },
     "default_workflow": {"type": "string"},
-    "turn_budget": {"type": "integer", "minimum": 1, "maximum": 1000},
     "expected_revision": {"type": "integer", "minimum": 0},
 }
 
@@ -91,6 +92,10 @@ OPERATION_SCHEMAS: dict[str, Json] = {
     "card.update": schema(
         {**_ID, **_REVISION, "title": {"type": "string"}, "description": {"type": "string"}},
         ("id",),
+    ),
+    "card.limits": schema(
+        {**_ID, **_REVISION, "card_limits": LIMIT_SCHEMA, "step_limits": LIMIT_SCHEMA},
+        ("id", "expected_revision"),
     ),
     "card.move": schema({**_ID, "position": {"type": "number"}}, ("id", "position")),
     "card.accept": schema({**_ID, **_REVISION}, ("id", "expected_revision")),
@@ -166,6 +171,9 @@ OPERATION_SCHEMAS: dict[str, Json] = {
 }
 
 OPERATION_DESCRIPTIONS = {
+    "card.limits": "Replace the Card or current Step execution limits of a waiting Card. "
+    "Omit a scope to keep its limits; use {} to remove all limits in that scope. "
+    "Consumption is retained. Resume with card.retry after a budget pause.",
     "library.list": "List shared templates in id order. Omit include_archived to hide archived "
     "templates; continue with next_cursor as after.",
     "library.get": "Read a template and its version numbers. Omit version for the latest version.",

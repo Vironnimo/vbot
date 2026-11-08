@@ -2,5 +2,5 @@
   "name": "Software Factory",
   "description": "Isolated work, independent review and a Kanban inbox for your decisions.",
   "version": "1.0.0",
-  "api_version": 25
+  "api_version": 27
 }

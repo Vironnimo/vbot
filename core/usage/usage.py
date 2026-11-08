@@ -544,6 +544,54 @@ class UsageRecorder:
         self._calibration.adopt(learned)
         return saved
 
+    async def execution_totals(
+        self, owner_name: str, group_id: str, run_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Settled request consumption at its recorded prices, for one owned group.
+
+        In-flight requests have not reported their final counters yet. They do
+        not masquerade as unpriced completed work; their eventual settlement,
+        including failure or cancellation, enters the next read.
+        """
+        if (
+            not owner_name
+            or not group_id
+            or (
+                run_ids is not None
+                and (
+                    not isinstance(run_ids, list)
+                    or not all(isinstance(item, str) and item for item in run_ids)
+                )
+            )
+        ):
+            raise ValueError("Supply an owner, group and optional list of Run ids")
+        selected = json.dumps(run_ids) if run_ids is not None else None
+
+        def read(connection: sqlite3.Connection) -> dict[str, Any]:
+            row = connection.execute(
+                "SELECT COUNT(*), COALESCE(SUM(json_extract(usage_json, '$.input_tokens')), 0), "
+                "COALESCE(SUM(json_extract(usage_json, '$.output_tokens')), 0), "
+                "COALESCE(SUM(json_extract(usage_json, '$.input_tokens') IS NULL OR "
+                "json_extract(usage_json, '$.output_tokens') IS NULL), 0), "
+                "COALESCE(SUM(json_extract(usage_json, '$.cost.amount_usd') IS NULL), 0), "
+                "COALESCE(SUM(CAST(ROUND(json_extract(usage_json, '$.cost.amount_usd') * 1e9) "
+                "AS INTEGER)), 0) "
+                "FROM usage_calls WHERE owner_name = ? AND group_id = ? AND status != 'started' "
+                "AND (? IS NULL OR run_id IN (SELECT value FROM json_each(?)))",
+                (owner_name, group_id, selected, selected),
+            ).fetchone()
+            calls, inputs, outputs, unreported, unpriced, nano_usd = row
+            return {
+                "calls": calls,
+                "input_tokens": inputs,
+                "output_tokens": outputs,
+                "unreported_calls": unreported,
+                "unpriced_calls": unpriced,
+                "cost_usd": nano_usd / 1e9 if not calls or unpriced < calls else None,
+            }
+
+        return await self.database.read_async(read)
+
     def read_since(
         self, revision: int = 0, *, page_size: int = READ_PAGE_SIZE
     ) -> Iterator[UsagePage]:

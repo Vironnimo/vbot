@@ -250,6 +250,22 @@ class _EmittingToolRegistry(ToolRegistry):
             # replace its authorization failure with a successful result.
             if self._extension_registry is not None:
                 self._registry.authorize(context, arguments, allowed_tools)
+            if (
+                self._result_payloads is not None
+                and self._result_payloads.owner_tool_guard is not None
+            ):
+                reason = await self._result_payloads.owner_tool_guard(context)
+                if reason is not None:
+                    self._result_payloads.request_turn_end(context.tool_call_id)
+                    return await self._answer_without_running(
+                        context,
+                        events,
+                        tool_failure("execution_paused", reason, retryable=False),
+                        error_code="execution_paused",
+                        display=_empty_tool_display_payload(),
+                        started_at=started_at,
+                        started_perf=started_perf,
+                    )
             # Decision pipeline runs before the started event so the timeline
             # shows the effective (possibly modified) arguments. A deny or
             # replace short-circuits execution; a modify rewrites the input the

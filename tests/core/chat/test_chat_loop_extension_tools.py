@@ -75,6 +75,95 @@ async def _tool_results(runtime: Any, run: Any) -> tuple[dict[str, Any], dict[st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("programmatic", [False, True])
+async def test_owned_tool_budget_refuses_effects_and_stops_model_continuation(
+    tmp_path, programmatic
+):
+    tools = ToolRegistry()
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("private", declarations, config={}, logger=None)
+    effects = []
+    admitted = []
+
+    async def effect(context, _arguments):
+        effects.append(context.tool_call_id)
+        return tool_success({"applied": True})
+
+    async def program(context, _arguments):
+        await context.call_tool("effect", {})
+        return await context.call_tool("effect", {})
+
+    async def guard(context, *, tool_name, tool_call_id):
+        assert context.binding.group_id == "group"
+        if tool_name != "program":
+            if admitted:
+                return "This Tool call was not run: the test-owned limit was reached."
+            admitted.append(tool_call_id)
+        return None
+
+    api.register_session_tool("effect", "test-owned effect", {"type": "object"}, effect)
+    api.register_session_tool("program", "test-owned program", {"type": "object"}, program)
+    api.register_session_runtime(
+        before_request=lambda _context: None,
+        before_tool_call=guard,
+        run_finished=lambda _context, **_kwargs: None,
+        quiesce=lambda: None,
+    )
+    extensions = ExtensionRegistry()
+    extensions._records.append(  # noqa: SLF001 - focused live-registry fixture
+        ExtensionRecord(
+            "private", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    extensions.apply_tools(tools)
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": (
+                    [{"id": "program-call", "name": "program", "arguments": {}}]
+                    if programmatic
+                    else [
+                        {"id": f"effect-{i}", "name": "effect", "arguments": {}} for i in range(3)
+                    ]
+                ),
+            }
+        ]
+    )
+    agent = StubAgent(id="ordinary", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.extensions = extensions
+    temporary = TemporaryAgentRegistry(runtime.chat_sessions)
+    runtime.agent_resolver.temporary_agents = temporary
+    binding = temporary.create(
+        owner_name="private",
+        group_id="group",
+        participant_id="participant",
+        config=TemporaryAgentConfig(
+            model="openai/gpt-5.2",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="test",
+        ),
+    )
+    run = await build_chat_loop(runtime).start_temporary_run(binding, "initial")
+    await run.wait()
+    assert effects == admitted and len(effects) == 1
+    assert len(adapter.requests) == 1
+    persisted = [
+        json.loads(message.content)
+        for message in runtime.chat_sessions.get(binding.address).load()
+        if message.role == "tool"
+    ]
+    refusals = [value for value in persisted if value.get("error")]
+    assert len(refusals) == 2
+    assert all(value["error"]["code"] == "execution_paused" for value in refusals)
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("catalog_change", "valid_hook_result"),
     [("replace", False), ("replace", True), ("remove", True)],

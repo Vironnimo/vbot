@@ -202,12 +202,55 @@ def _migrate_steps(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_limits(connection: sqlite3.Connection) -> None:
+    """Keep earlier configured Run caps, while new definitions default to unlimited."""
+    for project_id, raw, turns in connection.execute(
+        "SELECT project_id, workflows_json, turn_budget FROM setups"
+    ).fetchall():
+        workflows = json.loads(raw)
+        for workflow in workflows:
+            for step in workflow.get("steps", []):
+                step.setdefault("limits", {"runs": turns} if turns > 0 else {})
+        connection.execute(
+            "UPDATE setups SET workflows_json = ? WHERE project_id = ?",
+            (_dump(workflows), project_id),
+        )
+    for card_id, raw, turns in connection.execute(
+        "SELECT id, runtime_json, turns FROM cards"
+    ).fetchall():
+        runtime = json.loads(raw)
+        cap = runtime.get("settings", {}).pop("turn_budget", 0)
+        for step in runtime.get("workflow", {}).get("steps", []):
+            step.setdefault("limits", {"runs": cap} if cap > 0 else {})
+        runs = []
+        for (detail,) in connection.execute(
+            "SELECT detail_json FROM card_events WHERE card_id = ? "
+            "AND event IN ('run_admitted', 'run_observed') ORDER BY id",
+            (card_id,),
+        ):
+            run_id = json.loads(detail).get("run_id")
+            if run_id and run_id not in runs:
+                runs.append(run_id)
+        runtime.setdefault(
+            "budget",
+            {
+                "runs": runs,
+                "step_runs": runs[-turns:] if turns else [],
+                "import_tool_usage": bool(runtime.get("workflow")),
+            },
+        )
+        connection.execute(
+            "UPDATE cards SET runtime_json = ? WHERE id = ?", (_dump(runtime), card_id)
+        )
+
+
 # ``steps`` changes the meaning of saved Workflows; older code would misread them.
 MIGRATIONS = (
     Migration("workflows", apply=_migrate_workflows),
     Migration("steps", breaks_older=True, apply=_migrate_steps),
     # Older Workflow writers would silently drop links to shared templates.
     Migration("library_links", breaks_older=True),
+    Migration("execution_limits", breaks_older=True, apply=_migrate_limits),
 )
 
 _CARD_FIELDS = (
@@ -244,7 +287,6 @@ _SETUP_FIELDS = (
     "enabled",
     "workflows_json",
     "default_workflow",
-    "turn_budget",
     "revision",
     "updated_at",
 )
@@ -253,7 +295,6 @@ _SETUP_KEYS = (
     "enabled",
     "workflows",
     "default_workflow",
-    "turn_budget",
     "revision",
     "updated_at",
 )
@@ -644,7 +685,7 @@ class FactoryStore:
         patch: Json,
         *,
         actor: str,
-        event: str,
+        event: str | None,
         detail: Json | None = None,
         comment: str | None = None,
         output: Json | None = None,
@@ -676,7 +717,8 @@ class FactoryStore:
             event_detail = dict(detail or {})
             if "state" in patch:
                 event_detail.update(previous_state=previous["state"], state=patch["state"])
-            _event(connection, card_id, at, actor, event, event_detail)
+            if event is not None:
+                _event(connection, card_id, at, actor, event, event_detail)
             if comment is not None:
                 connection.execute(
                     "INSERT INTO comments (card_id, at, author, text) VALUES (?, ?, ?, ?)",

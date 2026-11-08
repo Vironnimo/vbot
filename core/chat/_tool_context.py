@@ -17,6 +17,7 @@ from core.runs import Run
 from core.sessions import ChatSession, ToolResultFacts, ToolResultPayload
 from core.tools import (
     ChangeTracker,
+    ToolContext,
     ToolContract,
     ToolNotFoundError,
     ToolRegistry,
@@ -77,6 +78,7 @@ class ToolDispatchContext:
     direct_user_input: bool = False
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
+    owner_tool_guard: Callable[[ToolContext], Awaitable[str | None]] | None = None
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)

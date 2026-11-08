@@ -15,6 +15,7 @@ import secrets
 from copy import deepcopy
 from typing import Any
 
+from . import _limits
 from .store import FactoryError
 
 type Json = dict[str, Any]
@@ -311,6 +312,7 @@ def normalize(workflows: Any) -> list[Json]:
             raise _refuse(where, f"it has more than {MAX_STEPS} steps.")
         normalized: Json = {
             "id": workflow_id,
+            "limits": _limits.normalize(raw.get("limits")),
             "name": name,
             "description": _text(
                 raw.get("description"), where, "description", 2000, required=False
@@ -325,6 +327,8 @@ def normalize(workflows: Any) -> list[Json]:
             ]:
                 raise _refuse(where, "linked step ids must be distinct valid identifiers.")
             normalized["sources"] = normalize_sources(raw["sources"], normalized["steps"])
+        if not normalized["limits"]:
+            normalized.pop("limits")
         result.append(normalized)
     return result
 
@@ -388,7 +392,10 @@ def _steps(steps: list[Any], where: str) -> list[Json]:
             "approval": raw.get("approval") is True,
             "returns_to": returns_to,
             "rounds": rounds,
+            "limits": _limits.normalize(raw.get("limits")),
         }
+        if not step["limits"]:
+            step.pop("limits")
         result.append(step)
         names.add(name.casefold())
         known[step_id] = step_id

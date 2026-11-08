@@ -370,7 +370,7 @@ class StatisticsService:
 
     def _group_usage(self, owner_name: str, group_id: str, query: JsonObject) -> JsonObject:
         self._import_session_usage()
-        if set(query) - {"participant_id"}:
+        if set(query) - {"participant_id", "run_ids"}:
             raise ValueError("invalid group usage query")
         if (
             not isinstance(owner_name, str)
@@ -385,6 +385,14 @@ class StatisticsService:
         ):
             raise ValueError("participant_id must be a non-empty string")
         records = self._owned_run_page(owner_name, group_id, participant_id)
+        run_ids = query.get("run_ids")
+        if run_ids is not None:
+            if not isinstance(run_ids, list) or not all(
+                isinstance(run_id, str) and run_id for run_id in run_ids
+            ):
+                raise ValueError("run_ids must be a list of non-empty strings")
+            selected = set(run_ids)
+            records = [record for record in records if record.run_id in selected]
         activity, participants = self._group_report(owner_name, group_id, records)
         return {
             "group_id": group_id,

@@ -37,6 +37,48 @@ async def factory(factory_store: FactoryStore, tmp_path: Path) -> AsyncIterator[
         await harness.service.close()
 
 
+async def test_card_limits_are_revision_checked_and_keep_consumption(factory: FactoryHarness):
+    card = await factory.card("waiting", waiting_reason="budget_exhausted")
+    budget = {"runs": ["run-one"], "step_runs": ["run-one"], "tool_calls": 12}
+    card = await factory.store.change(
+        card["id"],
+        {
+            "runtime": {
+                "workflow": implement_workflow(),
+                "step": "implement",
+                "budget": budget,
+                "budget_notices": {"peer": {"seen": [], "pending": {"id": "old"}}},
+            }
+        },
+        actor="factory",
+        event="test_seed",
+    )
+    result = await factory.operation(
+        "card.limits",
+        id=card["id"],
+        expected_revision=card["revision"],
+        card_limits={"tool_calls": 20, "runs": 0},
+        step_limits={"cost_usd": 0.5},
+    )
+    saved = result["card"]
+    assert saved["runtime"]["card_limits"] == {"tool_calls": 20}
+    assert saved["runtime"]["step_limits"] == {"cost_usd": 0.5}
+    assert saved["runtime"]["budget"] == budget
+    assert saved["runtime"]["budget_notices"] == {"peer": {"seen": []}}
+    with pytest.raises(FactoryError) as conflict:
+        await factory.operation(
+            "card.limits", id=card["id"], expected_revision=card["revision"], card_limits={}
+        )
+    assert conflict.value.code == "revision_conflict"
+    cleared = await factory.operation(
+        "card.limits", id=card["id"], expected_revision=saved["revision"], card_limits={}
+    )
+    assert cleared["card"]["runtime"]["card_limits"] == {}
+    assert cleared["card"]["runtime"]["step_limits"] == {"cost_usd": 0.5}
+    assert cleared["card"]["runtime"]["budget"] == budget
+    assert cleared["card"]["state"] == "waiting"
+
+
 @pytest.mark.parametrize(
     ("authority", "context_values", "origin", "initial_state"),
     [
@@ -355,11 +397,13 @@ async def test_setup_updates_preserve_fields_and_reject_stale_revisions(
         "drafts/merge",
         "drafts/review",
     }
+    workflows[0]["limits"] = {"cost_usd": 5}
+    workflows[0]["steps"][0]["limits"] = {"tool_calls": 12}
     updated = await factory.operation(
-        "setup.update", project_id="other", turn_budget=12, expected_revision=1
+        "setup.update", project_id="other", workflows=workflows, expected_revision=1
     )
     assert updated["setup"]["revision"] == 2
-    assert updated["setup"]["turn_budget"] == 12
+    assert updated["setup"]["workflows"][0]["steps"][0]["limits"] == {"tool_calls": 12}
     assert updated["setup"]["workflows"] == workflows
     before = list(factory.host.published)
     with pytest.raises(FactoryError) as conflict:

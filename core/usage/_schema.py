@@ -47,6 +47,7 @@ CREATE TABLE usage_calls (
 
 -- Statistics reconciles changed calls, including updates to cumulative Usage.
 CREATE UNIQUE INDEX usage_calls_by_revision ON usage_calls (revision);
+CREATE INDEX usage_calls_by_owner_group ON usage_calls (owner_name, group_id, run_id);
 
 -- Resumable, named Session-history import: insertion and cursor move are atomic.
 -- source_restore_id is the source database's latest restore when the cursor

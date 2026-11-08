@@ -13,6 +13,7 @@
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
   import WorkflowStep from './WorkflowStep.svelte';
+  import LimitsEditor from './LimitsEditor.svelte';
   import LibraryInsert from './LibraryInsert.svelte';
   import PublishTemplate from './PublishTemplate.svelte';
   import LinkedTemplates from './LinkedTemplates.svelte';
@@ -32,7 +33,6 @@
     sameExceptNameSpacing,
     setupDefaults,
     stepKey,
-    turnBudgetValid,
     workflowProblem,
   } from './workflows.js';
 
@@ -64,7 +64,6 @@
     enabled: Boolean(draft.enabled),
     workflows: canonicalWorkflows(draft.workflows),
     default_workflow: draft.default_workflow,
-    turn_budget: Number(draft.turn_budget),
   });
   const editor = createRecordEditor({
     identity: projectId,
@@ -78,8 +77,6 @@
     validate(draft) {
       const problem = workflowProblem(draft.workflows);
       if (problem) return problem;
-      if (!turnBudgetValid(draft.turn_budget))
-        return t('factory.invalid.turnBudget');
       return '';
     },
     save: async (values, revision) => {
@@ -434,6 +431,12 @@
             />
           </div>
         </div>
+        <LimitsEditor
+          bind:value={selected.limits}
+          prefix="factory-workflow-limit"
+          label={t('factory.limit.card')}
+        />
+        <p class="factory-help">{t('factory.limit.help')}</p>
         <LinkedTemplates
           {model}
           workflow={selected}
@@ -486,27 +489,6 @@
   {#if libraryError}<Banner variant="error" role="alert">{libraryError}</Banner
     >{/if}
 
-  <section class="factory-section" aria-labelledby="factory-setup-execution">
-    <h3 id="factory-setup-execution">{t('factory.execution')}</h3>
-    <div class="factory-fields">
-      <div class="factory-field">
-        <label for="factory-turn-budget">{t('factory.turnBudget')}</label
-        ><TextField
-          id="factory-turn-budget"
-          type="number"
-          min="1"
-          max="1000"
-          step="1"
-          aria-describedby="factory-turn-budget-help"
-          value={editor.draft.turn_budget}
-          onInput={(value) => (editor.draft.turn_budget = value)}
-        />
-        <p id="factory-turn-budget-help" class="factory-help">
-          {t('factory.turnBudgetHelp')}
-        </p>
-      </div>
-    </div>
-  </section>
   {#if editor.notice}<Banner variant="warn" role="status"
       >{editor.notice}</Banner
     >{/if}

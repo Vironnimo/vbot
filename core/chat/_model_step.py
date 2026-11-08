@@ -33,7 +33,7 @@ from core.chat.usage import (
 from core.chat.wire_shaping import (
     extend_request_with_notes,
 )
-from core.extensions import HookContext
+from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
     TerminalOutcome,
 )
@@ -250,6 +250,24 @@ class ModelStepBoundary:
             await refresh_run_permissions(self._dependencies, context, force=force)
             return context.permissions, context.execution
 
+        async def guard_tool(tool):
+            registry = self._dependencies.get_extension_registry()
+            if registry is None:
+                raise RuntimeError("Session owner is unavailable")
+            return await registry.dispatch_session_before_tool_call(
+                context.request.temporary_binding,
+                self._dependencies.tools,
+                SessionRequestContext(
+                    binding=context.request.temporary_binding,
+                    run_id=run.id,
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    execution_owner=run.execution_owner,
+                ),
+                tool_name=tool.tool_name,
+                tool_call_id=tool.tool_call_id,
+            )
+
         return ToolDispatchContext(
             registry=self._dependencies.tools,
             extension_registry=self._dependencies.get_extension_registry(),
@@ -285,6 +303,7 @@ class ModelStepBoundary:
             unloadable_tools=state.unloadable_tools,
             change_tracker=self._dependencies.change_tracker,
             allow_owned_effects=context.request.temporary_binding is not None,
+            owner_tool_guard=guard_tool if context.request.temporary_binding is not None else None,
             activity_writer=partial(self._persist_programmatic_activity, context),
             current_skill_context=lambda: (context.skill_project_id, context.skill_registry),
             tool_repetition_observer=context.tool_progress.repeated_calls.observe,

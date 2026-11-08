@@ -93,7 +93,6 @@ class Store:
             "project_id": "repo",
             "workflows": [implement_workflow()],
             "default_workflow": "implement",
-            "turn_budget": 2,
         }
 
     def add(self, card_id: str = "fct_card") -> Json:
@@ -528,6 +527,7 @@ async def test_change_requests_use_fresh_participants_and_exhaust_rounds(service
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
 async def test_worker_budget_and_failure_do_not_retry_failed_runs(service, outcome):
+    service.store.setup["workflows"][0]["steps"][0]["limits"] = {"runs": 2}
     await started(service)
     await service.finish(outcome)
     card = await service.card()
@@ -542,7 +542,179 @@ async def test_worker_budget_and_failure_do_not_retry_failed_runs(service, outco
 
 
 @pytest.mark.asyncio
+async def test_unconfigured_steps_continue_past_the_previous_default(service):
+    await started(service)
+    for _ in range(31):
+        await service.finish()
+    card = await service.card()
+    assert card["state"] == "working"
+    assert len(card["runtime"]["budget"]["runs"]) == 32
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
+async def test_upgrade_imports_retained_tool_consumption_once(service):
+    card = await started(service)
+    card["runtime"]["budget"]["import_tool_usage"] = True
+    await service.store.change(
+        card["id"], {"runtime": card["runtime"]}, actor="factory", event="test_seed"
+    )
+    reads = []
+
+    async def usage(group_id, query):
+        reads.append(query)
+        return {"activity": {"tool_calls": 3 if "run_ids" in query else 12}}
+
+    service.host.temporary_agents.usage = usage
+    await service.execution.reconcile()
+    card = await service.card()
+    assert card["runtime"]["budget"]["tool_calls"] == 12
+    assert card["runtime"]["budget"]["step_tool_calls"] == 3
+    assert "import_tool_usage" not in card["runtime"]["budget"]
+    service.execution = FactoryExecution(service)
+    await service.execution.reconcile()
+    assert reads == [{}, {"run_ids": card["runtime"]["budget"]["step_runs"]}]
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [1, 10])
+async def test_budget_warning_has_remaining_capacity_and_is_delivered_once(service, limit):
+    service.store.setup["workflows"][0]["steps"][0]["limits"] = {"tool_calls": limit}
+    card = await started(service)
+    groups = service.host.temporary_agents
+    context = groups.context(groups.runs[card["runtime"]["current_run"]])
+    if limit == 10:
+        assert await service.execution.before_request(context) is None
+        for i in range(8):
+            assert (
+                await service.execution.before_tool_call(
+                    context, tool_name="read", tool_call_id=str(i)
+                )
+                is None
+            )
+    warning = await service.execution.before_request(context)
+    assert warning is not None and warning.effect_kind == "factory_budget_notice"
+    assert warning == await service.execution.before_request(context)
+    # The note holds a snapshot with useful remaining capacity, not a request to change settings.
+    assert str(limit) in warning.entries[0]
+    assert "factory_report_blocked" in warning.entries[0]
+    assert "Board" not in warning.entries[0]
+    await groups.append_delivery(context, warning)
+    await service.execution.acknowledge_delivery(context, warning)
+    assert await service.execution.before_request(context) is None
+    assert (await service.card())["state"] == "working"
+    service.execution = FactoryExecution(service)
+    assert await service.execution.before_request(context) is None
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["card", "step"])
+async def test_tool_budget_reserves_parallel_calls_and_survives_retry_and_rework(service, scope):
+    workflow = service.store.setup["workflows"][0]
+    (workflow if scope == "card" else workflow["steps"][0])["limits"] = {"tool_calls": 2}
+    card = await started(service)
+    groups = service.host.temporary_agents
+    context = groups.context(groups.runs[card["runtime"]["current_run"]])
+    results = await asyncio.gather(
+        *[
+            service.execution.before_tool_call(context, tool_name="read", tool_call_id=f"call-{i}")
+            for i in range(4)
+        ]
+    )
+    assert sum(result is None for result in results) == 2
+    card = await service.card()
+    assert card["waiting_reason"] == "budget_exhausted"
+    assert card["runtime"]["limit_hit"] == {
+        "scope": scope,
+        "metric": "tool_calls",
+        "used": 2,
+        "limit": 2,
+        "reason": "limit_reached",
+    }
+    await service.finish()
+    # A new controller, like Extension Reload, reads the same durable counters.
+    service.execution = FactoryExecution(service)
+    async with service.lock:
+        await service.execution.retry(await service.card())
+    await service.flush()
+    card = await service.card()
+    assert card["state"] == "waiting"
+    assert card["runtime"]["budget"]["tool_calls"] == 2
+    async with service.lock:
+        card["runtime"][scope + "_limits"] = {"tool_calls": 3}
+        await service.execution.retry(card)
+    await service.flush()
+    card = await service.card()
+    assert card["state"] == "working"
+    assert card["runtime"]["budget"]["step_tool_calls"] == 2
+    # A human send-back is a new Step execution; the whole Card keeps its usage.
+    async with service.lock:
+        await service.execution.report_blocked(service.tool_context(card), {"question": "Review?"})
+    await service.finish()
+    async with service.lock:
+        await service.execution.send_back(await service.card(), "Rework", step="implement")
+    await service.flush()
+    card = await service.card()
+    assert card["runtime"]["budget"]["tool_calls"] == 2
+    assert card["runtime"]["budget"]["step_tool_calls"] == 0
+    assert len(card["runtime"]["budget"]["step_runs"]) == 1
+    assert len(card["runtime"]["budget"]["runs"]) == 3
+    await service.execution.quiesce()
+    await service.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["card", "step"])
+@pytest.mark.parametrize(
+    "metric, totals, reason",
+    [
+        ("tokens", {"calls": 1, "input_tokens": 8, "output_tokens": 3}, "limit_reached"),
+        ("cost_usd", {"calls": 1, "cost_usd": 11}, "limit_reached"),
+        ("cost_usd", {"calls": 1, "cost_usd": 0.1, "unpriced_calls": 1}, "usage_unavailable"),
+        ("tokens", {"calls": 1, "unreported_calls": 1}, "usage_unavailable"),
+    ],
+)
+async def test_resource_limits_stop_inside_a_run_and_unknown_usage_is_not_free(
+    service, scope, metric, totals, reason
+):
+    current: Json = {}
+    queries = []
+
+    async def usage(group_id, run_ids):
+        queries.append(run_ids)
+        return current
+
+    groups = service.host.temporary_agents
+    service.host.execution_usage = usage
+    workflow = service.store.setup["workflows"][0]
+    # Independent limits are alternatives: generous Tool and Run limits do not mask this one.
+    (workflow if scope == "card" else workflow["steps"][0])["limits"] = {
+        metric: 10,
+        "tool_calls": 100,
+        "runs": 100,
+    }
+    card = await started(service)
+    current.update(totals)
+    context = groups.context(groups.runs[card["runtime"]["current_run"]])
+    with pytest.raises(FactoryError) as stopped:
+        await service.execution.before_request(context)
+    assert stopped.value.code == "budget_exhausted"
+    card = await service.card()
+    assert card["runtime"]["limit_hit"]["metric"] == metric
+    assert card["runtime"]["limit_hit"]["reason"] == reason
+    assert queries[-1] == ([context.run_id] if scope == "step" else None)
+    assert len(groups.admissions) == 1
+    await service.finish()
+
+
+@pytest.mark.asyncio
 async def test_judging_step_is_nudged_within_budget_and_retries_fresh(service):
+    service.store.setup["workflows"][0]["steps"][1]["limits"] = {"runs": 2}
     await started(service)
     await submitted(service)
     for _ in range(2):
@@ -550,6 +722,7 @@ async def test_judging_step_is_nudged_within_budget_and_retries_fresh(service):
     card = await service.card()
     assert card["waiting_reason"] == "budget_exhausted"
     async with service.lock:
+        card["runtime"]["step_limits"] = {"runs": 3}
         await service.execution.retry(card)
     await service.flush()
     admissions = service.host.temporary_agents.admissions
@@ -745,7 +918,7 @@ async def test_failed_admission_retries_original_guidance_without_replaying_cano
     if boundary == "admission":
         assert groups.admissions[-1][1].request_id != pending["id"]
         assert "unique-sendback-guidance" not in groups.admissions[-1][1].content
-    assert card["state"] == "working" and card["turns"] == 1
+    assert card["state"] == "working" and card["turns"] == 2
     await service.finish("error")
     assert (await service.card())["waiting_reason"] == "run_failed"
     assert len(groups.admissions) == admissions
@@ -1123,7 +1296,10 @@ async def test_parallel_steps_feed_later_steps_and_rework_reruns_what_follows(se
 
 
 @pytest.mark.asyncio
-async def test_approval_waits_before_its_step_and_send_back_targets_the_chosen_step(service):
+@pytest.mark.parametrize("queued", [False, True])
+async def test_approval_waits_before_its_step_and_send_back_targets_the_chosen_step(
+    service, queued
+):
     service.store.setup["workflows"] = [
         {
             "id": "planimpl",
@@ -1157,9 +1333,14 @@ async def test_approval_waits_before_its_step_and_send_back_targets_the_chosen_s
     await hand_in(service, "Second plan")
     card = await hand_in(service, "Sound plan with migration.")
     assert card["waiting_reason"] == "checkpoint"
+    card["runtime"]["step_limits"] = {"tool_calls": 7}
+    if queued:
+        card["runtime"]["pending_action"] = {"action": "accept", "waiting_reason": "checkpoint"}
+        card["state"], card["waiting_reason"] = "queued", ""
     async with service.lock:
         await service.execution.accept(card)
     await service.flush()
+    assert (await service.card())["runtime"]["step_limits"] == {"tool_calls": 7}
     participant, implement = groups.admissions[-1]
     assert participant == "implement" and implement.kind == "initial"
     assert "Second plan" in implement.content and "First plan" not in implement.content

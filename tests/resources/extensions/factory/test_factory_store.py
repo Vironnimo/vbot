@@ -254,7 +254,11 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
         store = FactoryStore(database)
         setup = await store.get_setup("project")
         workflow = setup["workflows"][0]
-        assert (setup["default_workflow"], setup["turn_budget"], setup["revision"]) == (
+        assert (
+            setup["default_workflow"],
+            workflow["steps"][0]["limits"]["runs"],
+            setup["revision"],
+        ) == (
             workflow["id"],
             12,
             3,

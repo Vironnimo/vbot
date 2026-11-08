@@ -312,6 +312,7 @@ class ExtensionHostFactory:
             ),
             notify=partial(self._notify, identity),
             set_page_badge=lambda page_id, count: self._set_page_badge(identity, page_id, count),
+            execution_usage=partial(self._execution_usage, identity),
             pending_approvals=lambda group_id, run_ids: self._pending_approvals(
                 identity, group_id, run_ids
             ),
@@ -589,6 +590,16 @@ class ExtensionHostFactory:
             not tool_is_ready(effective_by_name[name]) for name in effective.session_tool_grants
         ) or set(effective.session_tool_grants) != set(session_tool_grants):
             raise RuntimeError("temporary execution is unavailable")
+
+    async def _execution_usage(
+        self, identity: Any, group_id: str, run_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        self._require_registration(identity)
+        if self._usage_recorder is None:
+            raise RuntimeError("Model usage accounting is unavailable")
+        result = await self._usage_recorder.execution_totals(identity.name, group_id, run_ids)
+        self._require_registration(identity)
+        return result
 
     async def _extension_group_usage(
         self,

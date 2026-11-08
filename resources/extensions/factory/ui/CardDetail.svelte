@@ -17,6 +17,8 @@
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
+  import LimitsEditor from './LimitsEditor.svelte';
+  import { limitsProblem, normalizeLimits } from './limits.js';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import {
     acceptLabel,
@@ -76,36 +78,57 @@
       return card;
     },
     get editable() {
-      return editableCard(card);
+      return editableCard(card) || card.state === 'waiting';
     },
     project: (record) => ({
       title: record.title ?? '',
       description: record.description ?? '',
+      card_limits:
+        record.runtime?.card_limits ?? record.runtime?.workflow?.limits ?? {},
+      step_limits:
+        record.runtime?.step_limits ??
+        record.runtime?.workflow?.steps.find(
+          (s) => s.id === record.runtime?.step,
+        )?.limits ??
+        {},
     }),
     normalize: (draft) => ({
       title: draft.title.trim(),
       description: draft.description.trim(),
+      card_limits: normalizeLimits(draft.card_limits),
+      step_limits: normalizeLimits(draft.step_limits),
     }),
-    validate: (draft) =>
-      !editableCard(card)
+    validate: (draft) => {
+      if (card.state === 'waiting')
+        return (
+          limitsProblem(draft.card_limits) || limitsProblem(draft.step_limits)
+        );
+      return !editableCard(card)
         ? t('factory.editStopped')
         : !draft.title.trim()
           ? t('factory.titleRequired')
           : !draft.description.trim()
             ? t('factory.descriptionRequired')
-            : '',
-    save: async (values, revision, baseline) =>
-      (
-        await model.call('card.update', {
+            : '';
+    },
+    save: async (values, revision, baseline) => {
+      const limits = card.state === 'waiting';
+      return (
+        await model.call(limits ? 'card.limits' : 'card.update', {
           id,
           expected_revision: revision,
           ...Object.fromEntries(
             Object.entries(values).filter(
-              ([key, value]) => value !== baseline[key],
+              ([key, value]) =>
+                (limits
+                  ? ['card_limits', 'step_limits'].includes(key)
+                  : ['title', 'description'].includes(key)) &&
+                JSON.stringify(value) !== JSON.stringify(baseline[key]),
             ),
           ),
         })
-      ).card,
+      ).card;
+    },
     read: async () => (await model.call('card.get', { id })).card,
     onSave: (saved) => model.acceptSavedCard(saved),
   });
@@ -448,6 +471,40 @@
         </section>{/if}
     </div>
     <aside class="factory-detail-aside">
+      {#if card.runtime?.workflow}
+        <section class="factory-section" aria-label={t('factory.limit.title')}>
+          <h3>{t('factory.limit.title')}</h3>
+          <LimitsEditor
+            bind:value={editor.draft.card_limits}
+            prefix="factory-card-limit"
+            label={t('factory.limit.card')}
+            disabled={card.state !== 'waiting'}
+            usage={model.detail.budget?.card.usage}
+          />
+          <LimitsEditor
+            bind:value={editor.draft.step_limits}
+            prefix="factory-step-limit"
+            label={t('factory.limit.step')}
+            disabled={card.state !== 'waiting'}
+            usage={model.detail.budget?.step.usage}
+          />
+          <p class="factory-help">{t('factory.limit.help')}</p>
+          {#if card.state === 'waiting'}
+            <p class="factory-help">{t('factory.limit.resume')}</p>
+            <SaveStatus
+              saving={editor.saving}
+              pending={editor.hasChanges()}
+              onClick={editor.save}
+            />
+            {#if editor.error}<Banner variant="error" role="alert"
+                >{editor.error}</Banner
+              >{/if}
+            {#if editor.notice}<Banner variant="warn" role="status"
+                >{editor.notice}</Banner
+              >{/if}
+          {/if}
+        </section>
+      {/if}
       <section class="factory-section" data-usage>
         <h3>{t('factory.cost')}</h3>
         <strong class="factory-cost">{usage.cost}</strong>

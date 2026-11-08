@@ -231,6 +231,11 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(
     peers = {peer["participant_id"]: peer["activity"] for peer in first["participants"]}
     assert peers["one"]["totals"]["input_tokens"] == 6
     assert peers["two"] == filtered["activity"]
+    for run_ids, count in ((["one-1", "two-0", "outside-one", "other-group"], 2), ([], 0)):
+        selected = await service.group_usage(
+            owner_name="swarm", group_id="group", query={"run_ids": run_ids}
+        )
+        assert selected["owned_run_count"] == selected["activity"]["tool_calls"] == count
 
 
 async def test_group_usage_never_loads_or_prunes_unrelated_indexed_sessions(

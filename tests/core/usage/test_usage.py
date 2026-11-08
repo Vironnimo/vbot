@@ -78,6 +78,41 @@ async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder,
 
 
 @pytest.mark.asyncio
+async def test_execution_totals_use_settled_owner_usage_and_historical_prices(recorder):
+    async def start(owner="factory", group="card", run="step"):
+        return await recorder.start(
+            model="p/model", kind="chat", owner_name=owner, group_id=group, run_id=run
+        )
+
+    first = await start()
+    await recorder.finish(first, {"input_tokens": 10, "output_tokens": 2, "reported_cost_usd": 0.1})
+    second = await start(run="rework")
+    await recorder.finish(
+        second, {"input_tokens": 20, "output_tokens": 3, "reported_cost_usd": 0.2}
+    )
+    await start()  # Still running: absence of final counters is not missing settled usage.
+    for owner, group in (("another", "card"), ("factory", "other")):
+        await recorder.finish(await start(owner, group), {"input_tokens": 999, "output_tokens": 1})
+    total = await recorder.execution_totals("factory", "card")
+    assert total == {
+        "calls": 2,
+        "input_tokens": 30,
+        "output_tokens": 5,
+        "unreported_calls": 0,
+        "unpriced_calls": 0,
+        "cost_usd": 0.3,
+    }
+    step = await recorder.execution_totals("factory", "card", ["step"])
+    assert step["calls"] == 1 and step["cost_usd"] == 0.1
+    assert (await recorder.execution_totals("factory", "card", []))["calls"] == 0
+    # Failed/cancelled work remains chargeable; missing data stays explicitly unknown.
+    await recorder.finish(await start(), {}, status="cancelled")
+    total = await recorder.execution_totals("factory", "card")
+    assert total["unreported_calls"] == total["unpriced_calls"] == 1
+    assert total["cost_usd"] == 0.3
+
+
+@pytest.mark.asyncio
 async def test_changes_stream_in_pages_whose_last_watermark_covers_concurrent_changes(recorder):
     first, second, third = [await recorder.start(model="p/m", kind="decision") for _ in range(3)]
     pages = recorder.read_since(page_size=2)

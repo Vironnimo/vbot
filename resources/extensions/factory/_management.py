@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,7 +13,7 @@ from core.settings.agent_defaults import normalize_agent_default_value
 from core.tools.availability import ToolAccess
 from core.utils.logging import get_logger
 
-from . import _workflows
+from . import _limits, _workflows
 from ._values import SETUP_DEFAULTS, require_state, text
 from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
 
@@ -167,6 +168,7 @@ class FactoryManagement:
             "runs": runs,
             "approvals": approvals["requests"],
             "usage": await host.temporary_agents.usage(card["group_id"], {}),
+            "budget": await service.execution.budget_status(card, report_all=True),
         }
 
     async def _setup(self, name: str, arguments: Json) -> Json:
@@ -320,6 +322,26 @@ class FactoryManagement:
                 event="updated",
                 expected_revision=arguments.get("expected_revision"),
             )
+        elif name == "card.limits":
+            require_state(card, {"waiting"})
+            runtime = deepcopy(card["runtime"])
+            if not runtime.get("workflow"):
+                raise FactoryError(
+                    "wrong_state",
+                    "Configure the Workflow limits in the Project setup before starting this Card.",
+                )
+            for key in ("card_limits", "step_limits"):
+                if key in arguments:
+                    runtime[key] = _limits.normalize(arguments[key])
+            for notice in runtime.get("budget_notices", {}).values():
+                notice.pop("pending", None)
+            saved = await store.change(
+                card["id"],
+                {"runtime": runtime},
+                actor="user",
+                event="limits_updated",
+                expected_revision=arguments["expected_revision"],
+            )
         elif name == "card.move":
             position = arguments["position"]
             if not isinstance(position, (float, int)) or not math.isfinite(position):
@@ -449,4 +471,4 @@ class FactoryManagement:
                 name,
                 saved["revision"],
             )
-        return {"card": self._projection(saved)}
+        return {"card": {**self._projection(saved), "runtime": saved["runtime"]}}

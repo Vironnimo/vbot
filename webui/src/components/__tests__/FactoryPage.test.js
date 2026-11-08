@@ -485,6 +485,56 @@ describe('Factory card decisions', () => {
 });
 
 describe('Factory existing-record editors', () => {
+  it('saves independent optional Workflow and Step limits, and clears them to unlimited', async () => {
+    const { bridge, state, operation } = createBridge();
+    await render(bridge, '/setups/project-a');
+    fill('factory-workflow-limit-cost_usd', '2.5');
+    fill('factory-workflow-limit-tokens', '10000');
+    await selectStep('implement');
+    fill('factory-implement-limit-tool_calls', '50');
+    await tick();
+    expect(await bridge.autosave.flush()).toBe(true);
+    const saved = state.setups[0].workflows[0];
+    expect(saved.limits).toEqual({ cost_usd: 2.5, tokens: 10000 });
+    expect(saved.steps[0].limits).toEqual({ tool_calls: 50 });
+    fill('factory-workflow-limit-cost_usd', '');
+    fill('factory-implement-limit-tool_calls', '0');
+    await tick();
+    expect(await bridge.autosave.flush()).toBe(true);
+    expect(state.setups[0].workflows[0].limits).toEqual({ tokens: 10000 });
+    expect(state.setups[0].workflows[0].steps[0].limits).toEqual({});
+    expect(calls(operation, 'setup.update').at(-1)[1]).not.toHaveProperty(
+      'turn_budget',
+    );
+  });
+
+  it('flushes paused Card limits before Retry and retains consumption', async () => {
+    const budget = { runs: ['run-one'], tool_calls: 5, step_tool_calls: 5 };
+    const { bridge, state, operation } = createBridge([
+      card('fct-a', 'waiting', {
+        waiting_reason: 'budget_exhausted',
+        runtime: { workflow: implementWorkflow, step: 'implement', budget },
+      }),
+    ]);
+    await render(bridge, '/card/fct-a');
+    fill('factory-card-limit-tokens', '1000');
+    fill('factory-step-limit-tool_calls', '8');
+    await tick();
+    button(t('factory.retry')).click();
+    await settle();
+    expect(calls(operation, 'card.limits').at(-1)[1]).toMatchObject({
+      expected_revision: 1,
+      card_limits: { tokens: 1000 },
+      step_limits: { tool_calls: 8 },
+    });
+    expect(calls(operation, 'card.retry')).toHaveLength(1);
+    const actions = operation.mock.calls.map(([name]) => name);
+    expect(actions.indexOf('card.limits')).toBeLessThan(
+      actions.indexOf('card.retry'),
+    );
+    expect(state.cards[0].runtime.budget).toEqual(budget);
+  });
+
   it('debounces repeated backlog edits, preserves newer input through a slow save, and flushes before leaving', async () => {
     const { bridge, state, operation } = createBridge();
     await render(bridge, '/card/fct-a');

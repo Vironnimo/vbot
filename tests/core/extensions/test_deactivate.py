@@ -48,11 +48,14 @@ _SESSION_OWNER_SOURCE = (
     "    from core.extensions.extensions import PreparedSessionDelivery\n"
     "    await _gate()\n"
     "    return PreparedSessionDelivery('receipt', 'hash', ('entry',), '1')\n"
+    "async def _before_tool_call(*_args, **_kwargs):\n"
+    "    await _gate()\n"
     "def register(api):\n"
     "    api.register_session_tool('owned_tool', 'test-sentinel', {'type': 'object'},"
     " lambda *_: {})\n"
     "    api.register_session_runtime(\n"
     "        before_request=_before_request,\n"
+    "        before_tool_call=_before_tool_call,\n"
     "        run_finished=lambda *_args, **_kwargs: None,\n"
     "        quiesce=_gate,\n"
     "    )\n"
@@ -190,8 +193,10 @@ async def test_deactivate_quiesces_before_removing_capabilities_and_retires_host
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["request", "tool"])
 async def test_retired_session_before_request_cannot_return_stale_delivery(
     tmp_path: Path,
+    boundary: str,
 ) -> None:
     write_extension(tmp_path / "extensions", "owned", _SESSION_OWNER_SOURCE)
     registry = ExtensionRegistry.load(tmp_path / "extensions")
@@ -203,7 +208,13 @@ async def test_retired_session_before_request_cannot_return_stale_delivery(
     )()
     context = SessionRequestContext(binding, "run", "agent", "session")
 
-    pending = asyncio.create_task(registry.dispatch_session_before_request(binding, tools, context))
+    pending = asyncio.create_task(
+        registry.dispatch_session_before_request(binding, tools, context)
+        if boundary == "request"
+        else registry.dispatch_session_before_tool_call(
+            binding, tools, context, tool_name="owned_tool", tool_call_id="call"
+        )
+    )
     await gates.entered.wait()
     registry.retire_registration()
     gates.release.set()
@@ -212,6 +223,10 @@ async def test_retired_session_before_request_cannot_return_stale_delivery(
         await pending
     with pytest.raises(SessionCapabilityExpiredError):
         await registry.dispatch_session_before_request(binding, tools, context)
+    with pytest.raises(SessionCapabilityExpiredError):
+        await registry.dispatch_session_before_tool_call(
+            binding, tools, context, tool_name="owned_tool", tool_call_id="call"
+        )
     with pytest.raises(SessionCapabilityExpiredError):
         await registry.reconcile_session_tool_batch(binding, tools, context, (), (), True)
     with pytest.raises(SessionCapabilityExpiredError):

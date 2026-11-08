@@ -1,3 +1,4 @@
+import { normalizeLimits, limitsProblem } from './limits.js';
 import { t } from '../../../../webui/src/lib/i18n.js';
 
 // A Project setup's Workflows as the page edits them. The server validates
@@ -146,6 +147,7 @@ function editableStep(step) {
     approval: Boolean(step.approval),
     returns_to: step.returns_to ?? '',
     rounds: step.rounds ?? DEFAULT_ROUNDS,
+    limits: { ...(step.limits ?? {}) },
   };
 }
 
@@ -180,6 +182,7 @@ export const editableWorkflows = (workflows) =>
     id: workflow.id ?? '',
     name: workflow.name ?? '',
     description: workflow.description ?? '',
+    limits: { ...(workflow.limits ?? {}) },
     steps: (workflow.steps ?? []).map(editableStep),
     ...(workflow.sources?.length ? { sources: copy(workflow.sources) } : {}),
   }));
@@ -190,8 +193,10 @@ export const canonicalWorkflows = (workflows) =>
     id: workflow.id,
     name: workflow.name,
     description: workflow.description ?? '',
+    limits: normalizeLimits(workflow.limits),
     steps: (workflow.steps ?? []).map((step) => ({
       ...editableStep(step),
+      limits: normalizeLimits(step.limits),
       rounds:
         !step.returns_to && !wholeNumber(step.rounds, 20)
           ? DEFAULT_ROUNDS
@@ -232,6 +237,7 @@ export function workflowProblem(workflows, { requireAgents = true } = {}) {
   if (!workflows.length) return t('factory.invalid.noWorkflow');
   const names = new Set();
   for (const workflow of workflows) {
+    if (limitsProblem(workflow.limits)) return limitsProblem(workflow.limits);
     const name = workflow.name.trim();
     if (!name) return t('factory.invalid.workflowName');
     if (names.has(name.toLowerCase()))
@@ -241,6 +247,7 @@ export function workflowProblem(workflows, { requireAgents = true } = {}) {
       return t('factory.invalid.noSteps', { workflow: name });
     const stepNames = new Set();
     for (const [position, step] of workflow.steps.entries()) {
+      if (limitsProblem(step.limits)) return limitsProblem(step.limits);
       const label = step.name.trim();
       if (!label)
         return t('factory.invalid.stepName', {
@@ -264,14 +271,11 @@ export function workflowProblem(workflows, { requireAgents = true } = {}) {
   return '';
 }
 
-export const turnBudgetValid = (value) => wholeNumber(value, 1000);
-
 export const SETUP_FIELDS = [
   'project_id',
   'enabled',
   'workflows',
   'default_workflow',
-  'turn_budget',
 ];
 
 // A setup draft before the server answered: the first template, as
@@ -283,7 +287,6 @@ export function setupDefaults(projectId, templates = []) {
     enabled: true,
     workflows: [workflow],
     default_workflow: workflow.id,
-    turn_budget: 30,
   };
 }
 

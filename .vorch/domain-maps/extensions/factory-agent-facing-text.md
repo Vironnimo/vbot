@@ -60,6 +60,19 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | `The outcome is not confirmed.` / `Read the Board with factory_card action list before repeating a create call.` / `Read this Card on the Board before repeating the hand-in.` | A publication failure can follow a durable change; reporting rollback would cause a duplicate Card or a replayed hand-in. |
 | `workflow_upgrade`: `This Card started under an earlier Factory version and cannot resume where it stopped.` / `Its results are kept: Accept continues with its next step or finishes it, and Send back reworks a step with your guidance.` | Shown to the user on Cards that ran under role- or stage-based Workflows; it explains why the Card waits and what each action does with the kept results. |
 
+Execution budget text (user correction 2026-11-08: participants need consumption and a next action, not directions to the Board UI):
+
+| Text | Reason |
+|---|---|
+| `Factory budget notice: execution is approaching a configured limit.` | Names the system event that changes how the participant uses its remaining capacity; sent once at the threshold, not on every request. |
+| `Card/Step execution: ... used at this check; ... remaining.` | Supplies scope, unit and a dated consumption snapshot so the participant can size its closing work without polling or treating a historical Note as live data. |
+| `The current Run is already counted and can finish within the other limits.` | A Run warning can show zero remaining admissions while the current Run still has capacity to finish; otherwise a participant could stop unnecessarily. |
+| `Use the remaining budget to finish your Step.` / `Submit it if the task is complete; otherwise call factory_report_blocked with your progress, the remaining work and the additional budget you need.` | Explicit user request for early warning: finish within capacity or preserve an actionable handoff rather than rush an incomplete submission or spend the remaining budget on unrelated work. Both private handoff Tools belong to every Factory participant. |
+| `This Tool call was not run: ...` / `The Factory paused the Card for the user.` | Refusal names the exhausted scope and cap (or unavailable consumption), confirms no effect, and identifies who can resume. It cannot send the participant to change Board settings or retry a call that the budget still blocks. |
+| `The Factory paused this Card because an execution limit was reached.` | Generic budget error states the actual stop reason when there is no Tool-result context; detailed consumption and recovery belong to Card detail. |
+| Usage reference: `Workflows and their Steps can independently limit...` through `...current execution.` | An Agent configuring Factory for the user needs the units, unlimited representation, scope/reset rules and revision-safe management operation; it must not change a Project default when asked to resume one Card. |
+| Management help: `Replace the Card or current Step execution limits...` / `Omit a scope...` / `Consumption is retained...` | Establishes replacement semantics, clearing syntax and the separate resume effect without guessing or losing existing scope settings. |
+
 ## Workflow task texts
 
 These are the default `task` values of the bundled templates; the user can edit them per step.

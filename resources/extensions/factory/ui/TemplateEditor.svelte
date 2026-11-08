@@ -9,6 +9,7 @@
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
   import WorkflowStep from './WorkflowStep.svelte';
+  import LimitsEditor from './LimitsEditor.svelte';
   import { copy, failureText } from './presentation.js';
   import {
     MAX_STEPS,
@@ -232,6 +233,13 @@
     </div>
   </div>
   <p class="factory-help">{t('factory.library.agentHelp')}</p>
+  {#if draft.kind === 'workflow'}
+    <LimitsEditor
+      bind:value={draft.workflow.limits}
+      prefix="factory-template-limit"
+      label={t('factory.limit.card')}
+    />
+  {/if}
   <WorkflowDiagram
     workflow={draft.workflow}
     selectedId={draft.workflow.steps[selectedIndex]?.id ?? ''}

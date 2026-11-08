@@ -8,6 +8,10 @@ API 6 adds owner-bound temporary execution groups, hidden Session Tools and prom
 
 Temporary-profile preflight validates ordinary names/settings separately from owner-issued private grants. A broad repository Tool policy snapshots only ordinary catalog names; private selections cannot grant capabilities. Unready ordinary integrations follow normal request-time visibility instead of blocking an unrelated participant's startup; the owner's private handoff Tools still require readiness (`test_runtime_extension_host.py`).
 
+API 27 adds optional `register_session_runtime(before_tool_call=...)`. Chat invokes it after Tool authorization and before hooks or handlers, including programmatic calls and owned Sub-Agents. It receives `SessionRequestContext`, `tool_name` and `tool_call_id`; return `None` to admit or a non-empty reason to refuse with `execution_paused` and request turn end. Already admitted sibling calls settle normally. Exceptions and retired registration fail closed; this is a required admission check, not a fail-open Hook.
+
+`await host.execution_usage(group_id, run_ids=None)` reads settled canonical Model consumption at recorded prices for this owner and group. Omit Run ids for the whole group, including group-level requests; an empty list selects none. It returns calls, input/output tokens, USD cost, and unreported/unpriced call counts. Running requests enter the next read after settlement, including failures and cancellations. Missing usage is explicit; estimates remain included. Both sides of the await check registration. Budgets use this read rather than the disposable Statistics projection (`usage.md`).
+
 ## Native Decisions
 
 `host.review_context(context)` returns bounded canonical human requests, separate delegated evidence and a Permission summary for a prepared-shell review. It uses Session sender provenance and stamped Sub-Agent reply targets, includes live ancestors' human requests and masks known Agent Secrets. Full bounds and truncation behavior: `extensions/shell-review.md` -> Execution integration.

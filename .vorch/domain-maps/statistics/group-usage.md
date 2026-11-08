@@ -12,7 +12,7 @@ How Statistics attributes Extension-owned Sessions (`extension:<owner>` actors, 
 
 ## Group usage
 
-`StatisticsService.group_usage(owner_name, group_id, query)` (the Extension API `temporary_agents.usage` behind Swarm's `swarms.usage`) reports one owner group, optionally one participant (`query.participant_id`, the only accepted key).
+`StatisticsService.group_usage(owner_name, group_id, query)` (the Extension API `temporary_agents.usage` behind Swarm's `swarms.usage`) reports one owner group, optionally one participant (`query.participant_id`) and/or exact Runs (`query.run_ids`, a list of non-empty ids; empty selects none). Both filters intersect the owned records, so foreign or ordinary Runs cannot enter the result. Factory uses these retained Tool counts once when upgrading existing Cards; live Model budgets read canonical Usage directly.
 
 Selection: canonical Sessions Run-owner records (`_owned_run_page`) list the owned Runs. The read reconciles only the owner's Sessions with their labelled summaries and never prunes normal Statistics scopes (`prune=False`). An owned Run counts only in the Session generation it was recorded in, so a reused Session is never treated as wholly owned and other Runs in it never count. `_group_usage.group_usage` joins the owned Runs (`temp.group_runs`) to `agg_runs` and `agg_run_models` by primary key; unrelated Sessions and requests are never scanned. An owned Run not yet in `agg_runs` (admitted without a subsequent Session revision change; `statistics.md` -> Run visibility) contributes nothing.
 

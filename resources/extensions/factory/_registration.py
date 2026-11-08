@@ -59,6 +59,7 @@ def register(api: ExtensionAPI) -> None:
         )
     api.register_session_runtime(
         before_request=service.execution.before_request,
+        before_tool_call=service.execution.before_tool_call,
         acknowledge_delivery=service.execution.acknowledge_delivery,
         run_finished=service.execution.run_finished,
         quiesce=service.execution.quiesce,

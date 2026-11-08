@@ -231,6 +231,19 @@ def _owner_host(runtime: Runtime, name: str) -> ExtensionHost:
     return root.for_owner(runtime.extensions.registration_identity(name))
 
 
+@pytest.mark.asyncio
+async def test_execution_usage_keeps_owner_scope_and_rejects_retired_hosts(runtime, monkeypatch):
+    reader = AsyncMock(return_value={"calls": 1, "cost_usd": 0.125})
+    monkeypatch.setattr(runtime._usage_recorder, "execution_totals", reader)  # noqa: SLF001
+    host = _owner_host(runtime, "factory")
+    assert await host.execution_usage("card", ["run"]) == {"calls": 1, "cost_usd": 0.125}
+    reader.assert_awaited_once_with("factory", "card", ["run"])
+    runtime.extensions.retire_registration()
+    with pytest.raises(ValueError):
+        await host.execution_usage("card", None)
+    reader.assert_awaited_once()
+
+
 def _participant(
     cwd: Path, *, model: str = "fixture/model", **tool_access: Any
 ) -> TemporaryAgentConfig:

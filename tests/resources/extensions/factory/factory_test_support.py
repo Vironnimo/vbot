@@ -97,6 +97,9 @@ class FakeExecution:
         self.calls: list[tuple[str, str, str]] = []
         self.start_gate: tuple[asyncio.Event, asyncio.Event] | None = None
 
+    async def budget_status(self, card: Json, **kwargs: Any) -> Json:
+        return {}
+
     async def _admit(self, action: str, card: Json, state: str, comment: str = "") -> None:
         self.calls.append((action, card["id"], comment))
         if action == "start" and self.start_gate is not None:
