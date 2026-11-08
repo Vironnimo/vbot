@@ -210,6 +210,46 @@ describe('QueuedMessages', () => {
     expect(openEditor.value).toBe('Unsaved change');
   });
 
+  it.each([true, false])(
+    'ignores a cancelled save result (%s) after reopening the same item',
+    async (previousResult) => {
+      const previous = Promise.withResolvers();
+      const current = Promise.withResolvers();
+      const onEditQueuedMessage = vi
+        .fn()
+        .mockReturnValueOnce(previous.promise)
+        .mockReturnValueOnce(current.promise);
+      mountQueue({
+        queuedMessages: [{ id: 'q', content: 'Original', editable: true }],
+        onEditQueuedMessage,
+      });
+      button('queue.editMessage').click();
+      flushSync();
+      typeInEditor('Updated');
+      button('queue.saveEdit').click();
+      flushSync();
+      button('queue.cancelEdit').click();
+      flushSync();
+      button('queue.editMessage').click();
+      flushSync();
+      typeInEditor('Updated');
+      button('queue.saveEdit').click();
+      flushSync();
+      expect(onEditQueuedMessage).toHaveBeenCalledTimes(2);
+
+      previous.resolve(previousResult);
+      await previous.promise;
+      await Promise.resolve();
+      flushSync();
+      expect(editor()?.value).toBe('Updated');
+      expect(button('queue.saveEdit').disabled).toBe(true);
+      expect(document.querySelector('.queued-messages__error')).toBeNull();
+
+      current.resolve(true);
+      await vi.waitFor(() => expect(editor()).toBeNull());
+    },
+  );
+
   it('focuses the editor it opens and keeps a modified draft open', async () => {
     mountQueue({
       queuedMessages: [

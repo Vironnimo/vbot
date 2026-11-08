@@ -25,6 +25,8 @@ export function createSessionActions(context) {
 
   let renameSaving = $state(false);
 
+  let renameEditorVersion = 0;
+
   // Row-delete state: a transient error surfaced when a delete is refused (for
   // example a busy session, #4) and an in-flight guard against double-clicks.
   let actionError = $state(null);
@@ -55,6 +57,7 @@ export function createSessionActions(context) {
   // "New Session") starts empty.
   const startRename = (session) => {
     context.closeMenu();
+    renameEditorVersion += 1;
     editingSessionId = session.id;
     editingAgentAddress = session.agent_address || asText(context.agentId);
     const named =
@@ -67,6 +70,7 @@ export function createSessionActions(context) {
   };
 
   const cancelRename = () => {
+    renameEditorVersion += 1;
     editingSessionId = null;
     editingAgentAddress = '';
     editValue = '';
@@ -89,17 +93,18 @@ export function createSessionActions(context) {
 
     renameSaving = true;
     renameError = null;
+    actionError = null;
+    const editorVersion = renameEditorVersion;
     try {
       await renameSession(targetAgentId, sessionId, editValue);
-      editingSessionId = null;
-      editingAgentAddress = '';
-      editValue = '';
-      editInitialValue = '';
+      if (editorVersion === renameEditorVersion) cancelRename();
       // Re-fetch so the row reflects the server-normalized title (and the
       // fallback label when the name was cleared).
       await context.loadSessions();
     } catch (error) {
-      renameError = error.message || t('sessions.rename_error');
+      const message = error.message || t('sessions.rename_error');
+      if (editorVersion === renameEditorVersion) renameError = message;
+      else actionError = message;
     } finally {
       renameSaving = false;
     }

@@ -214,6 +214,51 @@ describe('SessionListDrawer row actions', () => {
     );
   });
 
+  it.each(['success', 'failure'])(
+    'keeps a newer rename editor when an older save ends in %s',
+    async (outcome) => {
+      api.listSessions.mockResolvedValue({
+        sessions: [session('first'), session('second')],
+      });
+      const pending = Promise.withResolvers();
+      api.renameSession.mockReturnValueOnce(pending.promise);
+      drawer.mount({ currentSessionId: 'first' });
+      await waitForCondition(() => rowCount() === 2);
+
+      chooseRowAction(t('sessions.rename'), 'first');
+      keydown(typeRename('First updated'), 'Enter');
+      flushSync();
+      expect(api.renameSession).toHaveBeenCalledWith(
+        'alpha',
+        'first',
+        'First updated',
+      );
+      chooseRowAction(t('sessions.rename'), 'second');
+      const input = document.querySelector('.session-row__edit-input');
+      expect(input.value).toBe('second');
+
+      if (outcome === 'success') pending.resolve({});
+      else pending.reject(new Error('First rename failed'));
+      await waitForCondition(() => !input.disabled);
+      expect(document.querySelector('.session-row__edit-input')).toBe(input);
+      expect(input.value).toBe('second');
+      expect(document.querySelector('.session-row__edit-error')).toBeNull();
+      if (outcome === 'failure') {
+        expect(
+          document.querySelector('.session-drawer__state--error').textContent,
+        ).toContain('First rename failed');
+      }
+
+      keydown(typeRename('Second updated'), 'Enter');
+      await waitForCondition(() => api.renameSession.mock.calls.length === 2);
+      expect(api.renameSession).toHaveBeenLastCalledWith(
+        'alpha',
+        'second',
+        'Second updated',
+      );
+    },
+  );
+
   it('deletes a Session only after the confirm dialog is accepted', async () => {
     const onSessionDeleted = vi.fn();
     drawer.mount({ onSessionDeleted });
