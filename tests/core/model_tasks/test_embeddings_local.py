@@ -218,6 +218,61 @@ async def test_memory_release_stops_only_an_idle_loaded_model(
         ]
 
 
+@pytest.mark.asyncio
+async def test_synchronous_shutdown_releases_the_loaded_child(tmp_path: Path) -> None:
+    async with running(tmp_path) as executor:
+        install_fake(tmp_path, GRANITE)
+        await executor.embed(GRANITE.id, ["one"], query=True, options={})
+        executor.close()
+        assert not any(model["loaded"] for model in executor.memory_status()["models"])
+        executor.close()
+        assert FakeChild.events.count("kill") == FakeChild.events.count("close") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["setup", "child"])
+async def test_shutdown_settles_after_cancellation_and_concurrent_closers_join(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    async with running(tmp_path) as executor:
+        install_fake(tmp_path, GRANITE)
+        await executor.embed(GRANITE.id, ["one"], query=True, options={})
+        started, proceed = threading.Event(), threading.Event()
+
+        def delayed_kill(self: FakeChild) -> None:
+            FakeChild.events.append("kill")
+            started.set()
+            assert proceed.wait(timeout=2)
+
+        if phase == "child":
+            monkeypatch.setattr(FakeChild, "kill", delayed_kill)
+        else:
+
+            async def delayed_setup_close() -> None:
+                started.set()
+                assert await asyncio.to_thread(proceed.wait, 2)
+
+            monkeypatch.setattr(
+                executor.setup_for(f"local/{GRANITE.id}"), "aclose", delayed_setup_close
+            )
+        closing = asyncio.create_task(executor.aclose())
+        assert await asyncio.to_thread(started.wait, 2)
+        closing.cancel()
+        joined = asyncio.create_task(executor.aclose())
+        try:
+            await asyncio.sleep(0)
+            assert not closing.done()
+            assert not joined.done()
+        finally:
+            proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        await joined
+        assert not any(model["loaded"] for model in executor.memory_status()["models"])
+        await executor.aclose()
+        assert FakeChild.events.count("kill") == FakeChild.events.count("close") == 1
+
+
 class _Commands:
     """Fake setup commands: creates the environment and the prepared graph."""
 
