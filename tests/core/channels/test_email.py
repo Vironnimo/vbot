@@ -426,15 +426,26 @@ async def test_forwarded_mail_reaches_the_attachment_store_without_losing_its_co
 
 @pytest.mark.asyncio
 async def test_watermark_holds_a_mail_until_its_triggers_take_it(harness: Harness) -> None:
+    other = FakeFolder()
+    harness.mailbox.folders["Tasks"] = other
+    harness.adapter._settings = replace(harness.adapter._settings, folders=("INBOX", "Tasks"))
+    await harness.clock.tick()
+    other.add(make_mail(message_id="<independent@example.com>"))
     harness.sink.failures = 1
 
     await harness.deliver(make_mail(sender="stranger@example.com"))
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 1)
     assert harness.clock.delays[-1] == email_module.RETRY_SECONDS[0]
+    # An unreadable trigger inbox must not hold up a different folder's conversation.
+    assert len(harness.engine.inbound) == 1
+    assert harness.state.email.watermark(_CHANNEL, "Tasks") == MailboxWatermark(
+        "imap.example.com/bot@example.com", 1, 1
+    )
 
     await harness.clock.tick()
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 2)
     assert len(harness.sink.mails) == 1
+    assert len(harness.engine.inbound) == 1
     # Back to the normal wait once the mail is taken.
     assert harness.clock.delays[-1] == email_module.POLL_SECONDS
 
@@ -645,7 +656,7 @@ def imap_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("imap_client")
-def test_imap_mailbox_reads_without_changing_the_mailbox() -> None:
+def test_imap_mailbox_reads_without_changing_the_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
     mailbox = ImapMailbox(_SETTINGS, "secret")
 
     assert mailbox.status("Entwürfe") == FolderStatus(uid_validity=3, uid_next=8)
@@ -663,6 +674,21 @@ def test_imap_mailbox_reads_without_changing_the_mailbox() -> None:
     fetched = [command[3] for command in commands if command[:2] == ("UID", "FETCH")]
     assert fetched == ["(RFC822.SIZE)", "(BODY.PEEK[])", "(RFC822.SIZE)", "(BODY.PEEK[HEADER])"]
     assert not any("STORE" in command for command in commands)
+
+    # A refused size lookup cannot authorize a potentially oversized body fetch.
+    calls: list[tuple[str, ...]] = []
+
+    def refuse_size(command: str, *args: str) -> tuple[str, list[Any]]:
+        calls.append((command, *args))
+        if args[1] == "(RFC822.SIZE)":
+            return "NO", [b"temporary lookup failure"]
+        return "OK", [(b"7 (UID 7 BODY[] {5}", b"mail!"), b")"]
+
+    monkeypatch.setattr(FakeImapClient.last, "uid", refuse_size)
+    with pytest.raises(ChannelError) as raised:
+        mailbox.fetch(7)
+    assert raised.value.retryable
+    assert calls == [("FETCH", "7", "(RFC822.SIZE)")]
 
 
 @pytest.mark.usefixtures("imap_client")

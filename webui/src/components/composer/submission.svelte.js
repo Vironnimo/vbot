@@ -27,7 +27,11 @@ export function createComposerSubmission(context) {
       try {
         const result = await snapshot.listFiles();
         files = Array.isArray(result?.files) ? result.files : [];
-        if (context.draftKey === snapshot.draftKey) {
+        if (
+          context.draftKey === snapshot.draftKey &&
+          context.onListFiles === snapshot.listFiles &&
+          picker.fileCandidates === null
+        ) {
           picker.fileCandidates = files;
           picker.fileDirectories = Array.isArray(result?.directories)
             ? result.directories

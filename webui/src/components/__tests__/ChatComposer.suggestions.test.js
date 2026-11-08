@@ -431,29 +431,61 @@ describe('ChatComposer suggestions', () => {
       );
     });
 
-    it('checks mentions against a changed file listing', async () => {
-      const onSendMessage = vi.fn().mockResolvedValue(true);
-      const listing = (files) =>
-        vi.fn().mockResolvedValue({ files, truncated: false });
-      const props = reactiveProps({
-        onSendMessage,
-        onListFiles: listing(['vbot.md']),
-      });
-      composer.mount(props);
-      typeInComposer('@vb');
-      await settle();
+    it.each(['picker', 'submission', 'newer picker'])(
+      'checks mentions against a changed file listing during %s',
+      async (lookupSource) => {
+        const onSendMessage = vi.fn().mockResolvedValue(true);
+        const listing = (files) =>
+          vi.fn().mockResolvedValue({ files, truncated: false });
+        const pendingFiles = deferred();
+        const pendingSubmission = lookupSource !== 'picker';
+        if (pendingSubmission) {
+          setDraft('agent::one', 'check @vbot.md now');
+        }
+        const props = reactiveProps({
+          draftKey: 'agent::one',
+          onSendMessage,
+          onListFiles: pendingSubmission
+            ? listing(['docs.md']).mockReturnValueOnce(pendingFiles.promise)
+            : listing(['vbot.md']),
+        });
+        composer.mount(props);
+        if (pendingSubmission) {
+          submitComposer();
+        } else {
+          typeInComposer('@vb');
+        }
+        await settle();
 
-      // Another draft Project lists other files.
-      props.onListFiles = listing(['docs.md']);
-      typeInComposer('see @docs.md now');
-      submitComposer();
-      await vi.waitFor(() =>
-        expect(onSendMessage).toHaveBeenCalledWith('see @docs.md now', {
-          fileMentions: ['docs.md'],
-        }),
-      );
-      expect(props.onListFiles).toHaveBeenCalledTimes(1);
-    });
+        if (lookupSource === 'newer picker') {
+          // A picker refresh sees newer files while the submit lookup runs.
+          typeInComposer('@docs');
+        } else {
+          // Another draft Project lists other files.
+          props.onListFiles = listing(['docs.md']);
+        }
+        await settle();
+        if (pendingSubmission) {
+          pendingFiles.resolve({ files: ['vbot.md'], truncated: false });
+          await vi.waitFor(() =>
+            expect(onSendMessage).toHaveBeenCalledWith('check @vbot.md now', {
+              fileMentions: ['vbot.md'],
+            }),
+          );
+        }
+        typeInComposer('see @vbot.md and @docs.md now');
+        submitComposer();
+        await vi.waitFor(() =>
+          expect(onSendMessage).toHaveBeenLastCalledWith(
+            'see @vbot.md and @docs.md now',
+            {
+              fileMentions: ['docs.md'],
+            },
+          ),
+        );
+        expect(props.onListFiles).toHaveBeenCalledWith();
+      },
+    );
 
     it('does not open the file picker inside an email address', async () => {
       const onListFiles = vi.fn().mockResolvedValue({ files: ['a.txt'] });

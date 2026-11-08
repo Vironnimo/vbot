@@ -7,6 +7,7 @@ import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -36,8 +37,10 @@ from core.recall._passage_catalog import (
     SessionPassages,
     text_hash,
 )
+from core.recall.canonical import RecallScope
 from core.recall.passage_index import IndexSpent, SpentMeasure
 from core.recall.passages import PASSAGE_POLICY_VERSION, Passage
+from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.recall.recall_test_support import (
     HybridBackendFactory,
@@ -149,7 +152,10 @@ async def _embed_waiting(
 
 def _candidates(*session_ids: str, project: str = "") -> Candidates:
     return Candidates(
-        "coder", project, {session_id: order for order, session_id in enumerate(session_ids)}
+        "coder",
+        project,
+        {session_id: order for order, session_id in enumerate(session_ids)},
+        dict.fromkeys(session_ids, ("generation", 1)),
     )
 
 
@@ -549,6 +555,12 @@ async def test_refresh_skips_a_session_refreshed_by_another_writer(
 
     assert await index.list_indexed_sessions("coder") == {"one": ("generation", 2)}
     assert set(_refs(index.path)) == {"beta"}
+    await _embed_waiting(index)
+    # A ranking prepared for the old version must not read the concurrent
+    # writer's replacement, even when the public Session id stays the same.
+    assert await _nearest(index, [0.0, 1.0, 0.0], _candidates("one")) == []
+    current = replace(_candidates("one"), versions={"one": ("generation", 2)})
+    assert await _nearest(index, [0.0, 1.0, 0.0], current) == [("one", "beta")]
     index.close()
 
 
@@ -684,18 +696,18 @@ async def test_shared_passage_is_reported_once_by_owner_then_newest(tmp_path: Pa
         _change("newer", [shared], owned=[False]),
     )
     await _embed_waiting(index)
-    everyone = Candidates("coder", "", {"origin": 1, "older": 2, "newer": 3})
+    everyone = _candidates("origin", "older", "newer")
 
     assert await _nearest(index, [1.0, 0.0, 0.0], everyone) == [
         ("origin", "alpha"),
         ("older", "beta"),
     ]
-    without_origin = Candidates("coder", "", {"older": 2, "newer": 3})
+    without_origin = _candidates("older", "newer")
     assert await _nearest(index, [1.0, 0.0, 0.0], without_origin) == [
         ("newer", "alpha"),
         ("older", "beta"),
     ]
-    only_older = Candidates("coder", "", {"older": 2})
+    only_older = _candidates("older")
     assert await _nearest(index, [1.0, 0.0, 0.0], only_older) == [
         ("older", "alpha"),
         ("older", "beta"),
@@ -785,6 +797,39 @@ async def test_same_session_uuid_in_two_scopes_stays_distinct(tmp_path: Path) ->
 def recall(hybrid_backend: HybridBackendFactory) -> HybridRecallBackend:
     """Hybrid without an embedding model: only its literal Passage arm ranks."""
     return hybrid_backend()
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+async def test_search_does_not_adopt_a_hidden_replacement_generation(
+    sessions: ChatSessionManager,
+    recall: HybridRecallBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    indexed: bool,
+) -> None:
+    source = sessions.create("coder", session_id="reused")
+    source.append(ChatMessage.user("public needle"))
+    if indexed:
+        await recall.search_page(request("needle"))
+        source.append(ChatMessage.user("public needle tail"))
+    prior_stamps = await recall.index.list_indexed_sessions("coder")
+    refresh = recall.index.refresh
+
+    async def replace_after_selection(
+        sessions: ChatSessionManager, agent_id: str, project_id: str | None, scope: RecallScope
+    ) -> None:
+        await sessions.run_async(sessions.delete, source.address)
+        replacement = sessions.create(
+            "coder", session_id="reused", run_kind=RunKind.MEMORY_REFLECTION
+        )
+        replacement.append(ChatMessage.user("hidden needle"))
+        await refresh(sessions, agent_id, project_id, scope)
+
+    monkeypatch.setattr(recall.index, "refresh", replace_after_selection)
+    page = await recall.search_page(request("needle"))
+
+    assert page.hits == ()
+    assert await recall.index.list_indexed_sessions("coder") == prior_stamps
+    assert sessions.list_history_revisions("coder")[0].recall_visibility == "hidden"
 
 
 async def test_literal_search_returns_multiple_source_faithful_passages(
@@ -914,8 +959,12 @@ def _stored_passages(path: Path) -> dict[str, int]:
         }
 
 
+@pytest.mark.parametrize("concurrent_append", [False, True])
 async def test_search_refresh_rewrites_only_changed_passages(
-    sessions: ChatSessionManager, recall: HybridRecallBackend, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    recall: HybridRecallBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    concurrent_append: bool,
 ) -> None:
     session = sessions.create("coder", session_id="growing")
     session.append_many(
@@ -926,6 +975,11 @@ async def test_search_refresh_rewrites_only_changed_passages(
     )
     await recall.search_page(request("needle"))
     before = _stored_passages(recall.index.path)
+    await recall.index.use_space(HEADER)
+    await recall.index.store_vectors(
+        HEADER,
+        {digest: [1.0, 0.0, 0.0] for digest, _text in await recall.index.pending_texts(limit=20)},
+    )
     projected: list[str] = []
     original = catalog_module.build_session_passages
 
@@ -936,10 +990,29 @@ async def test_search_refresh_rewrites_only_changed_passages(
     monkeypatch.setattr(catalog_module, "build_session_passages", build)
     tail = "needle tail " + "y" * 1000
     session.append(ChatMessage.user(tail, timestamp=timestamp(9)))
+    raced_tail = "needle concurrent tail"
+    if concurrent_append:
+        refresh = recall.index.refresh
+
+        async def append_after_selection(
+            sessions: ChatSessionManager, agent_id: str, project_id: str | None, scope: RecallScope
+        ) -> None:
+            session.append(ChatMessage.user(raced_tail, timestamp=timestamp(10)))
+            await refresh(sessions, agent_id, project_id, scope)
+
+        monkeypatch.setattr(recall.index, "refresh", append_after_selection)
+        assert (await recall.search_page(request("tail"))).hits == ()
+        assert _stored_passages(recall.index.path) == before
+        assert await recall.index.pending_texts(limit=20) == []
+        monkeypatch.setattr(recall.index, "refresh", refresh)
     page = await recall.search_page(request("tail"))
     after = _stored_passages(recall.index.path)
 
-    assert projected == [tail]
+    expected_tails = [tail, raced_tail] if concurrent_append else [tail]
+    assert projected == expected_tails
+    assert {text for _digest, text in await recall.index.pending_texts(limit=20)} == set(
+        expected_tails
+    )
     kept = before.keys() & after.keys()
     assert kept
     assert all(before[passage_id] == after[passage_id] for passage_id in kept)
@@ -953,8 +1026,9 @@ async def test_search_refresh_rewrites_only_changed_passages(
     assert stamp == [(version[0], version[1])]
 
 
+@pytest.mark.parametrize("old_ownership_policy", [False, True])
 async def test_literal_search_reports_shared_fork_history_once(
-    sessions: ChatSessionManager, recall: HybridRecallBackend
+    sessions: ChatSessionManager, recall: HybridRecallBackend, old_ownership_policy: bool
 ) -> None:
     source = sessions.create("coder", session_id="source")
     for day in range(1, 4):
@@ -1003,6 +1077,29 @@ async def test_literal_search_reports_shared_fork_history_once(
         for revision in revisions
     }
     assert set(stamps) == {older.id, newer.id}
+
+    # A new fork inherits the materialized copy; that copy's storing Session
+    # still wins attribution even though it precedes its audit fork point.
+    await sessions.fork(newer.address)
+    await recall.index.use_space(HEADER)
+    waiting = await recall.index.pending_texts(limit=100)
+    await recall.index.store_vectors(HEADER, {key: [1.0, 0.0, 0.0] for key, _text in waiting})
+    before_reconcile = _refs(recall.index.path)
+    if old_ownership_policy:
+        # Older catalogs used the audit fork point for ownership and wrote the
+        # canonical history id without a policy token. Reconcile those flags
+        # while retaining identical Passage rows and their paid embeddings.
+        with closing(connect_store(recall.index.path)) as connection:
+            connection.execute("UPDATE passage_views SET owned = 0")
+            connection.execute("DELETE FROM catalog_history")
+            connection.execute(
+                "INSERT INTO catalog_history (history_id) VALUES (?)", (sessions.history_id,)
+            )
+            connection.commit()
+    after_fork = await recall.search_page(request("needle", limit=20))
+    assert {hit.session_id for hit in after_fork.hits} == {newer.id}
+    assert _refs(recall.index.path) == before_reconcile
+    assert await recall.index.pending_texts(limit=100) == []
 
 
 async def test_literal_search_attributes_own_fork_content_to_the_fork(

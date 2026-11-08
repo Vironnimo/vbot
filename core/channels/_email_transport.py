@@ -149,6 +149,8 @@ class ImapMailbox:
 
     def fetch(self, uid: int) -> tuple[bytes, bool]:
         typ, data = self._client.uid("FETCH", str(uid), "(RFC822.SIZE)")
+        if typ != "OK":
+            raise ChannelError("IMAP fetch failed", retryable=True)
         size_match = _SIZE_VALUE.search(b" ".join(item for item in data if isinstance(item, bytes)))
         header_only = size_match is not None and int(size_match.group(1)) > MAIL_FETCH_MAX_BYTES
         section = "(BODY.PEEK[HEADER])" if header_only else "(BODY.PEEK[])"

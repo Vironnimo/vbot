@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 from ._extension_values import (
     Json,
@@ -125,7 +126,10 @@ class SwarmManagement:
                     else self.control(_string(arguments, "swarm_id"))
                 )
                 async with lock:
-                    return await handlers[name](arguments)
+                    # Durable receipts and their execution effects form one
+                    # mutation. Keep the lock until both settle, even if the
+                    # caller goes away after the receipt was saved.
+                    return await settle_before_cancelling(handlers[name](arguments))
             return await handlers[name](arguments)
         except SwarmStoreError as error:
             # The page words the code; the log keeps the field it concerns.

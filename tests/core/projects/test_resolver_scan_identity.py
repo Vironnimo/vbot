@@ -1,6 +1,7 @@
 """Project scan, Identity-Agent resolution, and working-Project scope tests."""
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any
 
@@ -368,8 +369,13 @@ def test_selected_definition_priority_changes_on_rescan_or_source_mutation(
         resolver.resolve_agent("vbot", "builder")
 
 
-def test_team_membership_uses_cache_not_live_new_file(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize("refresh", ["source-change", "rescan", "invalidate", "invalidate-all"])
+def test_team_membership_uses_cache_until_a_refresh_that_older_scans_cannot_undo(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    refresh: str,
 ) -> None:
     # Arrange: Team is scanned/cached with one agent.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
@@ -377,21 +383,45 @@ def test_team_membership_uses_cache_not_live_new_file(
     resolver = _resolver(agents, projects, _openai_configured())
     resolver.rescan_project(project)
 
-    # A new agent file appears in the repo *after* the open-time scan.
-    _write_agent(repo, "planner.md", model="openai/gpt-5.2")
+    captured, release = threading.Event(), threading.Event()
+    scan = resolver._team_resolution.scan_project_report
 
-    # Act / Assert: the new agent is not on the cached Team until a re-scan.
-    with pytest.raises(ResolutionAgentNotFoundError):
-        resolver.resolve_agent(project.project_id, "planner")
+    def paused_scan(project: Any) -> Any:
+        result = scan(project)
+        if not captured.is_set():
+            captured.set()
+            assert release.wait(2)
+        return result
 
-    # A changed Source list (here a Source refresh adding an entry) re-scans.
-    projects.update(
-        project.project_id,
-        sources=[
-            *(source.to_dict() for source in project.sources),
-            {"id": "future.agents", "enabled": True},
-        ],
-    )
+    monkeypatch.setattr(resolver._team_resolution, "scan_project_report", paused_scan)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        old_scan = worker.submit(resolver.rescan_project, project)
+        try:
+            assert captured.wait(2)
+            # A new Agent appears after an older worker captured its Team.
+            _write_agent(repo, "planner.md", model="openai/gpt-5.2")
+            with pytest.raises(ResolutionAgentNotFoundError):
+                resolver.resolve_agent(project.project_id, "planner")
+
+            if refresh == "source-change":
+                projects.update(
+                    project.project_id,
+                    sources=[
+                        *(source.to_dict() for source in project.sources),
+                        {"id": "future.agents", "enabled": True},
+                    ],
+                )
+            elif refresh == "rescan":
+                resolver.rescan_project(project)
+            else:
+                resolver.invalidate_team_cache(
+                    project.project_id if refresh == "invalidate" else None
+                )
+        finally:
+            release.set()
+        old_scan.result(timeout=2)
+
+    # Late completion cannot replace a newer Team or undo invalidation.
     resolved = resolver.resolve_agent(project.project_id, "planner")
     assert resolved.id == "planner"
 

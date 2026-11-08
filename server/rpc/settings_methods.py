@@ -26,6 +26,7 @@ from core.settings import (
     parse_settings_update,
     parse_settings_update_base,
     setting_details,
+    settings_values_equal,
 )
 from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
@@ -276,7 +277,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
 def _changed_setting_paths(path: str, previous: Any, current: Any) -> list[str]:
     """Dotted paths of the leaves that differ, for a log line: names, never values."""
-    if previous == current:
+    if settings_values_equal(previous, current):
         return []
     if isinstance(previous, Mapping) or isinstance(current, Mapping):
         before = previous if isinstance(previous, Mapping) else {}
@@ -358,7 +359,9 @@ def _validate_public_settings_candidate(
             and binding.get("target")
             and (
                 not task_model_targets_equal(binding["target"], previous_binding.get("target"))
-                or binding.get("options", {}) != previous_binding.get("options", {})
+                or not settings_values_equal(
+                    binding.get("options", {}), previous_binding.get("options", {})
+                )
             )
         ):
             runtime.model_tasks.validate_binding(task_type, binding)

@@ -245,6 +245,12 @@ def test_edits_outside_the_service_are_recorded_when_next_noticed(
             id="replacement-among-duplicates-after-unrelated-prefix-addition",
         ),
         pytest.param(
+            [("add", "A"), ("external", "A", "A", "A"), ("external", "A", "X", "A", "A")],
+            [2],
+            ["A", "X"],
+            id="undo-duplicate-additions-after-unrelated-middle-insertion",
+        ),
+        pytest.param(
             [
                 ("external", "A", "C", "B"),
                 ("replace-index", "3", "C"),
@@ -601,6 +607,67 @@ def test_unreadable_history_lines_are_skipped(
     # The new revision is a line of its own, so it is read back after a restart.
     last = json.loads(history_file.read_bytes().splitlines()[-1])
     assert (last["id"], last["actor"], last["run_id"]) == (2, "tool", "r-1")
+
+
+@pytest.mark.parametrize("damaged_baseline", [b"{torn revision}", b'{"v": 2, "id": 1}'])
+def test_history_sync_recovers_current_entries_after_a_skipped_revision(
+    service: MemoryService, workspace: Path, agents_root: Path, damaged_baseline: bytes
+) -> None:
+    workspace.mkdir()
+    memory_file = workspace / "MEMORY.md"
+    memory_file.write_text("- Existing fact.\n", encoding="utf-8")
+    service.add_entry(workspace, "agent", "Added fact.", writer=_TOOL)
+    history_file = agents_root / "coder" / "memory-history.jsonl"
+    baseline, edit = history_file.read_bytes().splitlines()
+    assert json.loads(baseline)["kind"] == "baseline"
+    original_history = damaged_baseline + b"\n" + edit + b"\n"
+    history_file.write_bytes(original_history)
+    original_memory = memory_file.read_bytes()
+
+    revisions = service.history(workspace, "coder")
+
+    assert [(r.id, r.kind) for r in revisions] == [(2, "edit"), (3, "external")]
+    assert revisions[-1].entries == ("Existing fact.", "Added fact.")
+    assert service.entries_at(workspace, "coder") == {
+        "user": [],
+        "agent": ["Existing fact.", "Added fact."],
+    }
+    assert service.history(workspace, "coder") == revisions
+    assert history_file.read_bytes().startswith(original_history)
+    assert memory_file.read_bytes() == original_memory
+
+    # Repairing the replay preserves the actual Memory file and permits undoing
+    # the readable edit without removing the fact from the skipped baseline.
+    service.revert(workspace, [2], writer=_RPC)
+    assert [entry.content for entry in service.list_entries(workspace, "agent")] == [
+        "Existing fact."
+    ]
+
+
+def test_unavailable_history_is_not_restarted_as_an_empty_log(
+    service: MemoryService,
+    workspace: Path,
+    agents_root: Path,
+    deny_access: Callable[[Path], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service.add_entry(workspace, "agent", "First fact.", writer=_TOOL)
+    history_file = agents_root / "coder" / "memory-history.jsonl"
+    original = history_file.read_bytes()
+    deny_access(history_file)
+
+    with pytest.raises(MemoryError):
+        service.history(workspace, "coder")
+    added = service.add_entry(workspace, "agent", "Second fact.", writer=_TOOL)
+
+    assert added.revision is None
+    monkeypatch.undo()
+    assert history_file.read_bytes() == original
+    assert [(r.id, r.kind) for r in service.history(workspace, "coder")] == [
+        (1, "edit"),
+        (2, "external"),
+    ]
+    assert service.entries_at(workspace, "coder")["agent"] == ["First fact.", "Second fact."]
 
 
 @pytest.mark.parametrize(

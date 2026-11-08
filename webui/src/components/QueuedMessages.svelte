@@ -46,6 +46,7 @@
     error: '',
     notice: '',
     saving: false,
+    generation: 0,
   });
   let drafts = Object.create(null);
   let activeScope;
@@ -116,11 +117,12 @@
   };
 
   const cancelEdit = (draft = editDraft) => {
-    Object.assign(draft, newDraft());
+    Object.assign(draft, newDraft(), { generation: draft.generation + 1 });
   };
 
   const saveEdit = async () => {
     const draft = editDraft;
+    const generation = draft.generation;
     const currentEditingId = draft.id;
     const nextContent = editDraft.content.trim();
     if (!currentEditingId || editUnavailable) {
@@ -145,7 +147,7 @@
       saved = false;
     }
 
-    if (draft.id !== currentEditingId) {
+    if (draft.id !== currentEditingId || draft.generation !== generation) {
       return;
     }
     draft.saving = false;

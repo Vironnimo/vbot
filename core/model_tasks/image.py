@@ -362,15 +362,21 @@ class ImageService:
             max_size_bytes=self._max_input_bytes,
         )
 
-        provider_client = await ProviderImageClient.from_runtime_async(
-            self._runtime,
-            target_ref,
-            usage_observer=TaskUsage(
-                self._usage_recorder, TASK_IMAGE_GENERATION, target_ref, context=usage_context
-            ),
-            debug_context=task_debug_context(usage_context, target_ref),
-        )
         try:
+            try:
+                provider_client = await ProviderImageClient.from_runtime_async(
+                    self._runtime,
+                    target_ref,
+                    usage_observer=TaskUsage(
+                        self._usage_recorder,
+                        TASK_IMAGE_GENERATION,
+                        target_ref,
+                        context=usage_context,
+                    ),
+                    debug_context=task_debug_context(usage_context, target_ref),
+                )
+            except (ConfigError, KeyError) as exc:
+                raise ImageConfigurationError(_safe_error_text(exc, target_ref)) from exc
             result = await provider_client.generate(
                 normalized_prompt,
                 options=merged_options,

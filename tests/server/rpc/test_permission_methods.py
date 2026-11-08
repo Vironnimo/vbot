@@ -384,8 +384,12 @@ async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
             state, "permissions.set_session_rules", **params, permission_rules={"write": "nowhere"}
         )
         assert invalid["code"] == "invalid_request"
-        unknown = await rpc_error(state, "permissions.set_session_rules", **params, preset="root")
-        assert unknown["code"] == "invalid_request"
+        invalid_presets: tuple[Any, ...] = ("root", {}, [], None)
+        for preset in invalid_presets:
+            unknown = await rpc_error(
+                state, "permissions.set_session_rules", **params, preset=preset
+            )
+            assert unknown["code"] == "invalid_request"
 
         # Session rules replace whole parts of the Agent's rules, for this Session only.
         narrowed = await rpc_result(

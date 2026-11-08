@@ -39,7 +39,7 @@ from core.model_tasks.options import TaskModelOptionField
 from core.utils.errors import VBotError
 from core.utils.file_status import is_file_strict
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("embeddings.local")
 _WORKER = Path(__file__).with_name("embedding_worker.py")
@@ -431,6 +431,7 @@ class LocalEmbeddingExecutor:
         self._child_lock = Lock()
         self._pending = dict.fromkeys(self._models, 0)
         self._closed = False
+        self._close_task: asyncio.Task[None] | None = None
 
     def _descriptor(self, model: LocalEmbeddingModel) -> LocalTaskTargetDescriptor:
         return LocalTaskTargetDescriptor(
@@ -656,9 +657,17 @@ class LocalEmbeddingExecutor:
         for setup in self._setups.values():
             setup.close()
         self._kill_child()
-        self._workers.shutdown(wait=False)
+        self._workers.shutdown()
+        self._unload()
 
     async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                self._finish_close(), name="local-embedding-close"
+            )
+        await settle_before_cancelling(self._close_task)
+
+    async def _finish_close(self) -> None:
         for setup in self._setups.values():
             await setup.aclose()
         if self._closed:
@@ -666,8 +675,8 @@ class LocalEmbeddingExecutor:
         self._closed = True
         # Killing the child ends an exchange in progress; the worker thread
         # then settles and the pipes close in order.
-        await asyncio.to_thread(self._kill_child)
         try:
+            await asyncio.to_thread(self._kill_child)
             await self._workers.run(self._unload)
         finally:
             self._workers.shutdown(wait=False)

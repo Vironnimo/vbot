@@ -405,7 +405,8 @@ class CommandManager:
         cancelled, the execution group closed or vBot shuts down,
         ``CommandCapacityError`` when ``COMMAND_MAX_LIVE`` commands run, and
         ``CommandLaunchError`` when the process cannot be started or tracked.
-        A cancelled caller leaves no command behind.
+        A cancelled caller stops its command; an unconfirmed stop keeps the
+        surviving command listed for inspection and another stop attempt.
         """
         if not owner.agent_id or not owner.session_id:
             raise ValueError("A command needs the Agent and Session it belongs to")

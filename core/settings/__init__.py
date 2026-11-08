@@ -5,6 +5,7 @@ from core.config_validation import (
     JsonValidationReport,
     format_report_diagnostics,
 )
+from core.settings._json_settings import settings_values_equal
 from core.settings.agent_defaults import (
     AgentDefaults,
     agent_default_catalog,
@@ -129,6 +130,7 @@ __all__ = [
     "resolve_setting",
     "setting_definitions",
     "setting_details",
+    "settings_values_equal",
     "unusable_settings_fallback",
     "validate_data_dir_config",
     "validate_settings_data",

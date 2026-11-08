@@ -438,6 +438,10 @@ class CommandRecord:
                 # An end recorded meanwhile delivered nothing yet.
                 if self.ended and self._background and self._delivering and sink is not None:
                     self._submit_result(sink)
+            if not self.finished:
+                # A failed stop can outlive the foreground caller, especially
+                # when a cancelled launch never returned its command id.
+                self.to_background(deliver=False)
             raise
         await self._finished.wait()
 

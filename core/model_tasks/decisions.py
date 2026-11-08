@@ -18,7 +18,7 @@ from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.errors import VBotError
+from core.utils.errors import ConfigError, VBotError
 from core.utils.tokens import estimate_json_tokens
 from core.utils.workers import BoundedWorkerPool
 
@@ -134,13 +134,18 @@ class DecisionService:
     ) -> dict[str, Any]:
         ref = parse_task_model_target_id(target.target)
         try:
-            client = await ProviderDecisionClient.from_runtime_async(
-                self._runtime,
-                ref,
-                usage_observer=TaskUsage(
-                    self._usage_recorder, "decision", ref, context=usage_context
-                ),
-            )
+            try:
+                client = await ProviderDecisionClient.from_runtime_async(
+                    self._runtime,
+                    ref,
+                    usage_observer=TaskUsage(
+                        self._usage_recorder, "decision", ref, context=usage_context
+                    ),
+                )
+            except (ConfigError, KeyError) as exc:
+                # A binding snapshot cannot keep its Provider, Connection or
+                # credentials alive while other items are being evaluated.
+                raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured") from exc
             return await client.evaluate(
                 state, questions, profile=target.profile, options=target.options
             )

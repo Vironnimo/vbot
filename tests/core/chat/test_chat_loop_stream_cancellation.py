@@ -153,18 +153,43 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_boundary", ["stream_close", "persistence"])
+@pytest.mark.parametrize("cancel_boundary", ["stream_close", "consumer_close", "persistence"])
 async def test_user_cancel_after_complete_stream_preserves_answer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     cancel_boundary: str,
 ) -> None:
     adapter = CompletedStreamingStubAdapter()
+    closing = asyncio.Event()
+    release_close = asyncio.Event()
+    if cancel_boundary == "consumer_close":
+        original_stream = adapter.stream
+
+        class ClosingSource:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                self.source = original_stream(*args, **kwargs)
+
+            def __aiter__(self) -> ClosingSource:
+                return self
+
+            async def __anext__(self) -> JsonObject:
+                return await anext(self.source)
+
+            async def aclose(self) -> None:
+                closing.set()
+                await release_close.wait()
+                await self.source.aclose()
+
+        monkeypatch.setattr(adapter, "stream", ClosingSource)
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.finish_emitted.wait()
+
+    if cancel_boundary == "consumer_close":
+        adapter.release_stream.set()
+        await closing.wait()
 
     if cancel_boundary == "persistence":
         target_lock = runtime.chat_sessions.write_lock(session_address("coder", "session-one"))
@@ -196,6 +221,7 @@ async def test_user_cancel_after_complete_stream_preserves_answer(
         await persist_wait_started.wait()
 
     run.request_cancel(reason="user")
+    release_close.set()
     await asyncio.sleep(0)
     if cancel_boundary == "persistence":
         release_holder.set()
@@ -213,6 +239,7 @@ async def test_user_cancel_after_complete_stream_preserves_answer(
     assert messages[1].interrupted is False
     assert adapter.closed is True
     assert run.iteration_count == 1
+    assert (await event_types(runtime, run)).count("assistant_output") == 1
     # A complete answer leaves nothing unfinished even though Stop won.
     followup_adapter = StubAdapter([{"content": "New answer", "tool_calls": None}])
     runtime.adapter = followup_adapter

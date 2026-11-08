@@ -22,6 +22,7 @@ from core.permissions import (
     PERMISSION_PRESETS,
     PermissionRules,
     PermissionRulesError,
+    PresetName,
     RuleSetCheck,
     check_permission_rules,
     describe_layer,
@@ -261,12 +262,12 @@ async def _set_session_rules(state: Any, params: JsonObject) -> JsonObject:
     address = _required_session_address(params)
     if "preset" in params:
         preset = params["preset"]
-        if preset not in PERMISSION_PRESETS:
+        if not isinstance(preset, str) or preset not in PERMISSION_PRESETS:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
                 f"params.preset must be one of {', '.join(PERMISSION_PRESETS)}",
             )
-        rules = permission_rules_to_dict(PERMISSION_PRESETS[preset])
+        rules = permission_rules_to_dict(PERMISSION_PRESETS[cast(PresetName, preset)])
     else:
         rules = params["permission_rules"]
     try:

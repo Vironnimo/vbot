@@ -947,9 +947,12 @@ class FactoryExecution:
         """Close the Card's group once its current Run ended, or at once to cancel it."""
         if self._quiescing:
             return
-        key = card["id"] + (
-            ":delete" if delete else f":close:{card['runtime'].get('current_run', '')}"
-        )
+        # Discard must still cancel a Run whose ordinary cleanup is already
+        # waiting for terminal publication after a hand-in or blocked report.
+        action = "delete" if delete else "cancel" if cancel else "close"
+        key = f"{card['id']}:{action}"
+        if not delete:
+            key += f":{card['runtime'].get('current_run', '')}"
         if key in self._closing_groups:
             return
         self._closing_groups.add(key)

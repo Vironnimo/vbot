@@ -367,6 +367,13 @@ def _project_job_occurrences(
     ticks = _job_schedule_ticks(timezone, job, window_start, window_end, cap)
     if job.remaining_runs is not None:
         future_budget = job.remaining_runs
+        if job.schedule_type == "interval" and window_start > now_utc:
+            assert job.interval_anchor_at is not None and job.interval_seconds is not None
+            anchor = _parse_utc_timestamp(job.interval_anchor_at, field_name="interval_anchor_at")
+            period = timedelta(seconds=job.interval_seconds)
+            first = max(1, -((anchor - now_utc) // period))
+            stop = max(1, -((anchor - window_start) // period))
+            future_budget = max(0, future_budget - (stop - first))
         limited: list[datetime] = []
         for tick in ticks:
             if tick >= now_utc:

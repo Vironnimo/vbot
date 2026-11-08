@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Hashable
 from dataclasses import replace
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from core.projects._resolution_values import _overridden_model, effective_project_allowed_skills
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 class TeamResolution:
     def __init__(self, owner: AgentResolver) -> None:
         self._owner = owner
+        self._cache_lock = Lock()
+        self._pending_scans: dict[str, object] = {}
 
     def _preload_profile(
         self, project_id: str, profile: AgentProfile, allowed: list[str]
@@ -70,16 +73,31 @@ class TeamResolution:
         Team-membership cache so subsequent ``resolve_agent`` calls see the new
         Team without re-walking the repo.
         """
-        result = self.scan_project_report(project)
-        self._owner._team_cache[project.project_id] = (_team_key(project), result)
-        return result
+        token = object()
+        with self._cache_lock:
+            self._pending_scans[project.project_id] = token
+        try:
+            result = self.scan_project_report(project)
+            with self._cache_lock:
+                # Scans run on workers. An older read must not undo a newer
+                # refresh or repopulate a cache invalidated while it read files.
+                if self._pending_scans.get(project.project_id) is token:
+                    self._owner._team_cache[project.project_id] = (_team_key(project), result)
+            return result
+        finally:
+            with self._cache_lock:
+                if self._pending_scans.get(project.project_id) is token:
+                    self._pending_scans.pop(project.project_id)
 
     def invalidate_team_cache(self, project_id: str | None = None) -> None:
         """Drop the cached Team for one project, or for all when ``None``."""
-        if project_id is None:
-            self._owner._team_cache.clear()
-            return
-        self._owner._team_cache.pop(project_id, None)
+        with self._cache_lock:
+            if project_id is None:
+                self._owner._team_cache.clear()
+                self._pending_scans.clear()
+                return
+            self._owner._team_cache.pop(project_id, None)
+            self._pending_scans.pop(project_id, None)
 
     def cached_scan(self, project: Project) -> ScanResult:
         """Return the cached Team + complete report, scanning only on first use.
@@ -88,7 +106,8 @@ class TeamResolution:
         already scanned, so listing every Project's Team stays cheap; an open or an
         explicit re-scan refreshes the cache.
         """
-        cached = self._owner._team_cache.get(project.project_id)
+        with self._cache_lock:
+            cached = self._owner._team_cache.get(project.project_id)
         # A changed Source list, location or Model mapping (a background Source
         # refresh included) makes the cached Team stale.
         if cached is not None and cached[0] == _team_key(project):
@@ -113,7 +132,8 @@ class TeamResolution:
             # may be requested before that scan; keep its ordinary live lookup
             # instead of filling the Team/Skill report just for this read.
             selected: AgentProfile | None = None
-            cached = self._owner._team_cache.get(project.project_id)
+            with self._cache_lock:
+                cached = self._owner._team_cache.get(project.project_id)
             if cached is not None and cached[0] == _team_key(project):
                 selected = next(
                     (member for member in cached[1].team if member.agent_id == agent_id), None

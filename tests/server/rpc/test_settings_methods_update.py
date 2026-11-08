@@ -1013,12 +1013,13 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "params", "logged"),
+    ("method", "params", "logged", "seed"),
     [
         pytest.param(
             "settings.update",
             {"session_titles": {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"}},
             ["session_titles.model"],
+            {"extensions": {"disabled": ["one"]}},
             id="changed-section",
         ),
         # Appearance is a per-browser preference, not an operational change.
@@ -1032,19 +1033,36 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
                 }
             },
             [],
+            {"extensions": {"disabled": ["one"]}},
             id="appearance-only",
         ),
         pytest.param(
             "settings.update",
             _extensions(["two"]),
             ["extensions.disabled extensions_enabled=one extensions_disabled=two"],
+            {"extensions": {"disabled": ["one"]}},
             id="extension-enablement",
         ),
         pytest.param(
             "settings.patch",
             _patch(_set("web_search.provider", "searxng")),
             ["paths=web_search.provider"],
+            {"extensions": {"disabled": ["one"]}},
             id="patch",
+        ),
+        pytest.param(
+            "settings.update",
+            {"extensions": {"disabled": [], "config": {"legacy": {"value": True}}}},
+            ["paths=extensions.config.legacy.value"],
+            {"extensions": {"disabled": [], "config": {"legacy": {"value": 1}}}},
+            id="opaque-number-to-boolean",
+        ),
+        pytest.param(
+            "settings.patch",
+            _patch(_set('extensions.config["legacy"]["value"]', True)),
+            ['paths=extensions.config["legacy"]["value"]'],
+            {"extensions": {"disabled": [], "config": {"legacy": {"value": 1}}}},
+            id="opaque-number-to-boolean-patch",
         ),
     ],
 )
@@ -1054,12 +1072,16 @@ async def test_settings_changes_log_only_operational_changes(
     method: str,
     params: JsonObject,
     logged: list[str],
+    seed: JsonObject,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.save_settings({"extensions": {"disabled": ["one"]}})
+    state.runtime.storage.save_settings(seed)
 
     with caplog.at_level(logging.INFO, logger=_SETTINGS_LOGGER):
-        await rpc_result(state, method, **params)
+        result = await rpc_result(state, method, **params)
+
+    if method == "settings.patch":
+        assert result["changed"] == [operation["path"] for operation in params["operations"]]
 
     messages = [record.getMessage() for record in caplog.records if record.name == _SETTINGS_LOGGER]
     assert len(messages) == len(logged)
@@ -1079,6 +1101,76 @@ def _tts_state(tmp_path: Path) -> SimpleNamespace:
     state.runtime.storage = StorageManager(tmp_path)
     _add_tts_model(state)
     return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["settings.update", "settings.patch", "task_model.update", "task_model.patch_options"]
+)
+async def test_numeric_task_option_cannot_change_to_a_boolean(tmp_path: Path, method: str) -> None:
+    state = _tts_state(tmp_path)
+    storage = state.runtime.storage
+    storage.update_model_task_settings(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": "openai/gpt-4o-mini-tts::api-key",
+                "options": {"voice": "alloy", "speed": 1},
+            }
+        }
+    )
+    previous = storage.settings_path.read_bytes()
+    options = {"voice": "alloy", "speed": True}
+    if method == "settings.patch":
+        params = _patch(_set('model_tasks["text_to_speech"].options', options))
+    elif method == "task_model.patch_options":
+        params = {"task_type": TASK_TEXT_TO_SPEECH, "set": {"speed": True}}
+    else:
+        params = {"model_tasks": {TASK_TEXT_TO_SPEECH: {"options": options}}}
+
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert "speed" in error["message"]
+    assert "finite number" in error["message"]
+    assert storage.settings_path.read_bytes() == previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["settings.update", "settings.patch", "task_model.update", "task_model.patch_options"]
+)
+async def test_opaque_task_option_type_changes_persist_refresh_and_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, method: str
+) -> None:
+    state = _tts_state(tmp_path)
+    storage = state.runtime.storage
+    storage.update_model_task_settings(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": "openai/gpt-4o-mini-tts::api-key",
+                "options": {"voice": "alloy", "extra_options": {"opaque": 1}},
+            }
+        }
+    )
+    preloads: list[list[str]] = []
+    state.runtime.speech.preload_configured = lambda tasks: preloads.append(list(tasks))
+    options = {"voice": "alloy", "extra_options": {"opaque": True}}
+    if method == "settings.patch":
+        params = _patch(_set('model_tasks["text_to_speech"].options', options))
+    elif method == "task_model.patch_options":
+        params = {"task_type": TASK_TEXT_TO_SPEECH, "set": options}
+    else:
+        params = {"model_tasks": {TASK_TEXT_TO_SPEECH: {"options": options}}}
+
+    with caplog.at_level(logging.INFO, logger=_SETTINGS_LOGGER):
+        result = await rpc_result(state, method, **params)
+
+    saved = storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]["options"]
+    assert saved["extra_options"]["opaque"] is True
+    assert preloads == [[TASK_TEXT_TO_SPEECH]]
+    assert len([record for record in caplog.records if record.name == _SETTINGS_LOGGER]) == 1
+    if method == "settings.patch":
+        assert result["changed"] == ['model_tasks["text_to_speech"].options']
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from core.extensions.extensions import ExtensionDeclarations
 from core.runs import ActiveRunError, RunExecutionOwner
 from core.sessions import DeliveryReceipt, SessionAddress
 from resources.extensions.factory._execution import FactoryExecution
+from resources.extensions.factory._management import FactoryManagement
 from resources.extensions.factory._registration import register
 from resources.extensions.factory.store import FactoryError
 
@@ -339,6 +340,9 @@ class Service:
             ),
         )
         self.execution = FactoryExecution(self)
+
+    def records(self):
+        return self.store
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -810,12 +814,48 @@ async def test_terminal_tool_handoff_waits_until_old_run_is_published(service):
 
 
 @pytest.mark.asyncio
-async def test_discard_cancels_the_running_step_without_another_turn(service):
+@pytest.mark.parametrize(
+    ("state", "cancelled"), [("working", False), ("working", True), ("waiting", False)]
+)
+async def test_discard_cancels_the_running_step_without_another_turn(
+    service, monkeypatch, state, cancelled
+):
     await started(service)
     card = await submitted(service)
     count = len(service.host.temporary_agents.admissions)
-    async with service.lock:
-        await service.execution.discard(card)
+    if state == "waiting":
+        async with service.lock:
+            await service.execution.report_blocked(
+                service.tool_context(card), {"question": "A decision is needed."}
+            )
+        run = service.host.temporary_agents.runs[card["runtime"]["current_run"]]
+        # The owner callback can precede terminal publication while another
+        # parallel Tool is still running. Discard must cancel that work too.
+        await run.wait_entered.wait()
+    management = FactoryManagement(service)
+    if cancelled:
+        committed = asyncio.Event()
+        release = asyncio.Event()
+        changed = service.changed
+
+        async def held_change(*args, **kwargs):
+            await changed(*args, **kwargs)
+            committed.set()
+            await release.wait()
+
+        monkeypatch.setattr(service, "changed", held_change)
+        discarding = asyncio.create_task(management.operation("card.discard", {"id": card["id"]}))
+        try:
+            await committed.wait()
+            discarding.cancel()
+            await asyncio.sleep(0)
+            assert not discarding.done()
+        finally:
+            release.set()
+            await asyncio.gather(discarding, return_exceptions=True)
+        assert discarding.cancelled()
+    else:
+        await management.operation("card.discard", {"id": card["id"]})
     await service.flush()
     card = await service.card()
     assert card["state"] == "discarded" and "pending" not in card["runtime"]

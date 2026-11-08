@@ -570,8 +570,12 @@ async def test_new_subagent_captures_the_running_parent_or_its_other_agent(
 
 
 @pytest.mark.parametrize("failed_link_read", [None, 1, 2], ids=["available", "at-start", "at-end"])
+@pytest.mark.parametrize("continuation_kind", [RunKind.SYSTEM, RunKind.SESSION_MESSAGE])
 async def test_every_answer_reaches_the_parent_with_what_is_still_running(
-    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, failed_link_read: int | None
+    harness: SubAgentHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_link_read: int | None,
+    continuation_kind: RunKind,
 ) -> None:
     read_link = forwarding_module.read_link
     reads = 0
@@ -611,12 +615,12 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     assert "Found two bugs." in notice.body
     assert notice.body.endswith(FACTS_NOTHING_RUNNING_TEXT)
 
-    # A delivery's turn in the Sub-Agent Session forwards too; the user's never does.
-    await harness.start_turn(child, "background result arrived")
+    # Background completions and peer input keep the Session's answer recipient.
+    await harness.start_turn(child, "background result arrived", kind=continuation_kind)
     await harness.settle()
     # The silent answer reports nothing and does not wake the Parent.
     harness.loop.answers["nothing new"] = " [SILENT]"
-    await harness.start_turn(child, "nothing new")
+    await harness.start_turn(child, "nothing new", kind=continuation_kind)
     await harness.settle()
     await harness.start_turn(child, "user question", kind=RunKind.USER)
     await harness.settle()
@@ -625,12 +629,12 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     assert len(bodies) == 2
     assert "answer to background result arrived" in bodies[1]
 
-    await harness.start_turn(child, "user background result")
+    await harness.start_turn(child, "user background result", kind=continuation_kind)
     await harness.settle()
     assert len(harness.triggers.to(harness.parent)) == 2
     assert (await harness.call({"action": "send", "id": data["id"], "content": "resume"}))["ok"]
     await harness.settle()
-    await harness.start_turn(child, "parent background result")
+    await harness.start_turn(child, "parent background result", kind=continuation_kind)
     await harness.settle()
     bodies = [notice.body for notice in harness.triggers.to(harness.parent)]
     assert len(bodies) == 4

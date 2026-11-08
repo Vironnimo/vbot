@@ -208,10 +208,11 @@ class EmailChannelAdapter(ChannelAdapter):
 
     async def _sync(self, mailbox: MailboxConnection) -> bool:
         """Handle every new mail of every folder in order; False when one must wait."""
+        handled = True
         for folder in self._settings.folders:
             if not await self._sync_folder(mailbox, folder):
-                return False
-        return True
+                handled = False
+        return handled
 
     async def _sync_folder(self, mailbox: MailboxConnection, folder: str) -> bool:
         status = await self._mailbox_io(mailbox, mailbox.status, folder)

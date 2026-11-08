@@ -12,6 +12,7 @@ from core.agents.temporary import TemporaryAgentConfig
 from core.settings.agent_defaults import normalize_agent_default_value
 from core.tools.availability import ToolAccess
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 from . import _limits, _workflows
 from ._values import SETUP_DEFAULTS, require_state, text
@@ -38,12 +39,16 @@ class FactoryManagement:
             return await self._read(name, arguments)
         async with self.service.lock:
             if name.startswith("setup."):
-                return await self._setup(name, arguments)
+                return await settle_before_cancelling(self._setup(name, arguments))
             if name == "card.create":
-                card = await self.service.create_card(arguments, origin="operator")
+                card = await settle_before_cancelling(
+                    self.service.create_card(arguments, origin="operator")
+                )
                 return {"card": self._projection(card)}
             card = await self.service.records().get_card(text(arguments, "id"))
-            return await self._action(name, card, arguments)
+            # A saved transition must also schedule its launch/drain and publish
+            # before cancellation releases the scheduler's lock.
+            return await settle_before_cancelling(self._action(name, card, arguments))
 
     @staticmethod
     def _projection(card: Json) -> Json:

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -15,6 +16,7 @@ from core.models import ModelRegistry
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
 from core.providers.wire_profile import DecisionWire
+from core.utils.errors import ConfigError
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
     _model,
@@ -305,6 +307,36 @@ async def test_a_size_rejection_by_the_provider_is_too_large(status, error, code
     assert isinstance(outcome, DecisionError) and outcome.code == code
     assert ("at most 262144 tokens" in str(outcome)) is (code == "too_large")
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("removed", ["provider", "connection", "credentials"])
+async def test_configuration_removed_after_preflight_fails_each_item_unsent(monkeypatch, removed):
+    owner = service()
+    runtime = owner._runtime
+    provider = runtime.providers.get("openrouter")
+
+    def missing(*args, **kwargs):
+        if removed == "credentials":
+            raise ConfigError("Credential removed after binding validation")
+        raise KeyError(removed)
+
+    if removed == "provider":
+        monkeypatch.setattr(runtime.providers, "get", missing)
+    elif removed == "connection":
+        monkeypatch.setattr(runtime.providers, "get", lambda _: replace(provider, connections=[]))
+    else:
+        monkeypatch.setattr(runtime, "prepare_provider_http", missing)
+
+    outcomes = await owner.classify(["one", "two"], QUESTIONS)
+
+    assert len(outcomes) == 2
+    assert all(
+        isinstance(outcome, DecisionError) and outcome.code == "not_configured"
+        for outcome in outcomes
+    )
+    assert not respx.calls
 
 
 @pytest.mark.asyncio

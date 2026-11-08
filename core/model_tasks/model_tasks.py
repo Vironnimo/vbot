@@ -373,6 +373,9 @@ class TaskModelService:
             raise TaskModelValidationError(str(error)) from error
 
     def _prepare_update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
+        # Settings also imports Task Model target parsing during initialization.
+        from core.settings import settings_values_equal
+
         if not isinstance(model_tasks, Mapping):
             raise TaskModelValidationError("Task model settings must be an object")
 
@@ -410,7 +413,7 @@ class TaskModelService:
             options: JsonObject = dict(raw_options)
             stored = previous.get("options") if isinstance(previous, Mapping) else None
             previous_options: Mapping[str, Any] = stored if isinstance(stored, Mapping) else {}
-            if not target_changed and options == previous_options:
+            if not target_changed and settings_values_equal(options, previous_options):
                 continue
             if not target_changed:
                 options = self._without_stale_options(task_type, target, options, previous_options)
@@ -432,6 +435,8 @@ class TaskModelService:
         with a new value still fails validation, so a typo is never ignored.
         """
 
+        from core.settings import settings_values_equal
+
         try:
             available = {field.name for field in self.options(task_type, target).fields}
         except VBotError, ValueError:
@@ -439,7 +444,9 @@ class TaskModelService:
         return {
             name: value
             for name, value in options.items()
-            if name in available or name not in previous_options or previous_options[name] != value
+            if name in available
+            or name not in previous_options
+            or not settings_values_equal(previous_options[name], value)
         }
 
     def _validate_target(self, task_type: str, target: str) -> None:

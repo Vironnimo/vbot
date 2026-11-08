@@ -420,6 +420,7 @@ class _CompletionDeliveryCoordinator:
             for notice in bucket.notices.values()
             if notice.boundary_run is run
             and not notice.suppress_run
+            and not notice.claimed
             and notice.execution_owner == run.execution_owner
             and notice.read_after is None
         ]
@@ -708,7 +709,10 @@ class _CompletionDeliveryCoordinator:
                 self._acknowledge(
                     address, bucket, [notice for notice in pending if notice.read_after is not None]
                 )
-                undelivered = [notice for notice in pending if not notice.delivered.done()]
+                # The producer can cancel its waiter without withdrawing the
+                # result. Only acknowledgement removes a persisted notice;
+                # a finished Future alone does not prove its input committed.
+                undelivered = self._still_pending(bucket, pending)
                 # The Run ended before its message reached the Session.
                 _claim(undelivered, False)
                 if undelivered:

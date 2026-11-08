@@ -557,6 +557,7 @@ def _detach_session(connection: sqlite3.Connection, session_key: int) -> None:
         _store_fts.fts_index_keys(connection, copies)
         connection.execute(
             "UPDATE sessions SET history_revision = history_revision + 1, "
+            "cursor_floor_revision = history_revision + 1, "
             "state_revision = state_revision + 1 WHERE session_key = ?",
             (descendant_key,),
         )

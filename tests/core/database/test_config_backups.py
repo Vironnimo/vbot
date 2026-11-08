@@ -38,6 +38,7 @@ from tests.directory_links import link_directory
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 # A configuration file that is no JSON document.
 NOTE = "prompts/blocks/custom/notes.md"
+INVALID_JSON = [b"\0" * 32, b'{"value":' + b"1" * 5000 + b"}"]
 
 
 def _settings(value: str) -> str:
@@ -127,11 +128,14 @@ def test_only_a_changed_configuration_is_backed_up_and_unchanged_contents_are_sh
     assert described["files"][NOTE]["state"] == "same"
 
 
-def test_a_damaged_json_document_is_marked_and_never_restored(data_dir: Path) -> None:
+@pytest.mark.parametrize("content", INVALID_JSON, ids=["torn-json", "integer-limit"])
+def test_a_damaged_json_document_is_marked_and_never_restored(
+    data_dir: Path, content: bytes
+) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
     good = _backup(data_dir)
-    # What a power loss can leave behind: a zero-filled or truncated document.
-    data_dir.joinpath("settings.json").write_bytes(b"\0" * 32)
+    # Preserve both damaged bytes and JSON that exceeds a decoder limit.
+    data_dir.joinpath("settings.json").write_bytes(content)
     damaged = _backup(data_dir, now=NOW + timedelta(minutes=5))
 
     assert read_config_backup(data_dir, damaged).damaged() == ("settings.json",)
@@ -143,6 +147,26 @@ def test_a_damaged_json_document_is_marked_and_never_restored(data_dir: Path) ->
     restore_config_backup(data_dir, good, paths=["settings.json"])
 
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
+
+
+@pytest.mark.parametrize("content", INVALID_JSON, ids=["torn-json", "integer-limit"])
+def test_unreadable_manifests_keep_their_objects_and_leave_purging_incomplete(
+    data_dir: Path, content: bytes
+) -> None:
+    _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+    backup_id = _backup(data_dir)
+    stored = _objects(data_dir)
+    manifest = config_backup_root(data_dir) / "backups" / f"{backup_id}.json"
+    manifest.write_bytes(content)
+
+    with pytest.raises(DatabaseCorruptError):
+        read_config_backup(data_dir, backup_id)
+    assert list_config_backups(data_dir) == []
+    assert not purge_config_backup_files(data_dir, (".env",)).complete
+    _write(data_dir, "settings.json", _settings("UTC"))
+    _backup(data_dir, now=NOW + timedelta(minutes=5))
+    assert stored <= _objects(data_dir)
+    assert manifest.read_bytes() == content
 
 
 def test_retention_keeps_the_newest_backups_and_the_newest_of_each_hour_day_and_week(
@@ -226,6 +250,22 @@ def test_a_reserved_backup_outlives_retention_until_released_or_expired(
     deny_access(reserve_config_backup(data_dir, paris, now=expired).path)
     backed_up("Europe/Madrid", expired + minute)
     assert rome in kept()
+
+
+@pytest.mark.parametrize("content", INVALID_JSON, ids=["torn-json", "integer-limit"])
+def test_malformed_reservations_do_not_interrupt_capture_or_retention(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, content: bytes
+) -> None:
+    monkeypatch.setattr(config_backups_module, "CONFIG_BACKUP_KEEP_LATEST", 1)
+    _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+    first = _backup(data_dir)
+    reservation = reserve_config_backup(data_dir, first, now=NOW)
+    reservation.path.write_bytes(content)
+    _write(data_dir, "settings.json", _settings("UTC"))
+
+    second = _backup(data_dir, now=NOW + timedelta(minutes=5))
+
+    assert [backup.backup_id for backup in list_config_backups(data_dir)] == [second]
 
 
 def test_a_restore_replaces_the_named_files_after_backing_up_the_state_it_replaces(

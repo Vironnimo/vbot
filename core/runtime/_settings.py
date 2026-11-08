@@ -14,6 +14,7 @@ from core.prompts import SkillPromptRegistry
 from core.runtime._configuration import _resolve_resources_path
 from core.runtime._recall import text_embedding_binding
 from core.runtime._workers import _RUNTIME_WORKERS
+from core.settings import settings_values_equal
 from core.settings.normalizers import normalize_debug_settings
 from core.settings.settings import effective_timezone_name
 from core.skills.skills import SkillRegistry
@@ -102,7 +103,7 @@ async def apply_settings_change(
         old_configs = _extension_configs(previous)
         new_configs = _extension_configs(current)
         for name in sorted(old_configs.keys() | new_configs.keys()):
-            if old_configs.get(name, {}) == new_configs.get(name, {}):
+            if settings_values_equal(old_configs.get(name, {}), new_configs.get(name, {})):
                 continue
             await registry.fire_config_change(
                 name, old_configs.get(name, {}), new_configs.get(name, {})
@@ -113,7 +114,7 @@ async def apply_settings_change(
     recall_changed = "recall" in refresh_sections or previous.get("recall") != current.get("recall")
     if recall_changed and not rebuild_extensions:
         runtime.reload_recall_backend(current)
-    if text_embedding_binding(previous) != text_embedding_binding(current):
+    if not settings_values_equal(text_embedding_binding(previous), text_embedding_binding(current)):
         runtime.recall.embedding_binding_changed()
 
     if previous.get("archive") != current.get("archive"):
@@ -125,7 +126,7 @@ async def apply_settings_change(
     changed_speech = [
         task_type
         for task_type in _SPEECH_TASKS
-        if _binding(previous, task_type) != _binding(current, task_type)
+        if not settings_values_equal(_binding(previous, task_type), _binding(current, task_type))
     ]
     if TASK_SPEECH_TO_TEXT in changed_speech:
         runtime.speech.transcription_binding_changed()

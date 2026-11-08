@@ -404,6 +404,7 @@ class HistoryDelta:
     view_rows: list[sqlite3.Row]
     cursor: SessionReadCursor
     inherited_count: int
+    active_owned: tuple[bool, ...]
 
 
 def message_rows_since(
@@ -425,7 +426,7 @@ def message_rows_since(
             and cursor.last_message_id == current.last_message_id
         ):
             # The Session row names its newest entry, so a current cursor needs no read.
-            return HistoryDelta(_store_codec.EntryBatch([]), [], [], current, 0)
+            return HistoryDelta(_store_codec.EntryBatch([]), [], [], current, 0, ())
         start = cursor.next_seq
         anchor = None if start == 0 else _store_lineage.entry_id_at(connection, ranges, start - 1)
         if anchor != cursor.last_message_id:
@@ -442,6 +443,7 @@ def message_rows_since(
         view,
         current,
         sum(1 for row in view if int(row["seq"]) < floor),
+        tuple(row["session_key"] == state["session_key"] for row in view),
     )
 
 
@@ -452,6 +454,7 @@ def read_batch(delta: HistoryDelta) -> SessionReadBatch:
         delta.cursor,
         tuple(delta.batch.message(row) for row in delta.view_rows),
         delta.inherited_count,
+        delta.active_owned,
     )
 
 

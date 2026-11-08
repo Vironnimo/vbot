@@ -147,10 +147,8 @@ class DeviceTokenStore:
         protected = _protect(token, origin)
 
         def change(record: dict[str, Any]) -> None:
-            if record.get(_DEVICE_ID_KEY) != device_id:
-                # The server binds a computer to its admitting Device. A new
-                # pairing is new authority, never a takeover of the old target.
-                record.pop("computer", None)
+            # The registration key identifies this installation independently
+            # of its sign-in. Only explicitly forgetting the origin removes it.
             record.pop(_TOKEN_KEY, None)
             record.pop(_DPAPI_TOKEN_KEY, None)
             record.update(protected)

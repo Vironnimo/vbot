@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -67,10 +67,15 @@ async def test_iter_with_chunk_timeout_passes_every_chunk_through(
 
 
 @pytest.mark.asyncio
-async def test_iter_with_chunk_timeout_fails_on_stalled_delta_and_closes_the_source() -> None:
+@pytest.mark.parametrize(
+    "close_error", [None, ProviderError("cleanup broke", retryable=False), asyncio.CancelledError()]
+)
+async def test_iter_with_chunk_timeout_fails_on_stalled_delta_and_closes_the_source(
+    close_error: BaseException | None,
+) -> None:
     closed = False
 
-    async def source() -> AsyncIterator[JsonObject]:
+    async def source() -> AsyncGenerator[JsonObject]:
         nonlocal closed
         try:
             yield {"type": "content_delta", "text": "first"}
@@ -78,7 +83,22 @@ async def test_iter_with_chunk_timeout_fails_on_stalled_delta_and_closes_the_sou
         finally:
             closed = True
 
-    iterator = iter_with_chunk_timeout(source(), timeout_seconds=0.01)
+    class ClosingSource:
+        def __init__(self) -> None:
+            self.source = source()
+
+        def __aiter__(self) -> ClosingSource:
+            return self
+
+        async def __anext__(self) -> JsonObject:
+            return await anext(self.source)
+
+        async def aclose(self) -> None:
+            await self.source.aclose()
+            if close_error is not None:
+                raise close_error
+
+    iterator = iter_with_chunk_timeout(ClosingSource(), timeout_seconds=0.01)
 
     assert await anext(iterator) == {"type": "content_delta", "text": "first"}
     with pytest.raises(StreamingChunkTimeoutError):

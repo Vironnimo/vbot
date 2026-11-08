@@ -1,4 +1,4 @@
-"""Shared recursive Settings JSON-object validation without persistence dependencies."""
+"""Shared Settings JSON validation and equality without persistence dependencies."""
 
 from __future__ import annotations
 
@@ -7,6 +7,21 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.utils.errors import StorageError
+
+
+def settings_values_equal(before: Any, after: Any) -> bool:
+    """Compare JSON values without Python's boolean/number equivalence."""
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        return before.keys() == after.keys() and all(
+            settings_values_equal(value, after[key]) for key, value in before.items()
+        )
+    if isinstance(before, list) and isinstance(after, list):
+        return len(before) == len(after) and all(
+            settings_values_equal(left, right) for left, right in zip(before, after, strict=True)
+        )
+    if isinstance(before, bool) != isinstance(after, bool):
+        return False
+    return bool(before == after)
 
 
 def normalize_json_object(value: Any, path: str) -> dict[str, Any]:

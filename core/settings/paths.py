@@ -11,6 +11,7 @@ from typing import Any
 
 from core.json_documents import OPAQUE, JsonShape, preserve_unknown_fields
 from core.model_tasks.constants import SUPPORTED_TASK_TYPES
+from core.settings._json_settings import settings_values_equal
 from core.settings._path_definitions import (
     _DEFINITIONS,
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -270,7 +271,7 @@ def apply_settings_patch(
             else:
                 before = _lookup(original, raw_path, _MISSING)
             _set_nested(candidate, raw_path, operation.value)
-            if before is _MISSING or before != operation.value:
+            if before is _MISSING or not settings_values_equal(before, operation.value):
                 changed_paths.append(operation.resolved.canonical_path)
             continue
 

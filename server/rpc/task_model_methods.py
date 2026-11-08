@@ -13,6 +13,7 @@ from core.settings import (
     SettingsValidationError,
     parse_settings_update,
     parse_settings_update_base,
+    settings_values_equal,
 )
 from core.utils.logging import get_logger
 from server.rpc._mutations import serialized_mutation
@@ -65,7 +66,7 @@ async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
     changed_tasks = sorted(
         task_type
         for task_type in set(previous) | set(model_tasks)
-        if previous.get(task_type) != model_tasks.get(task_type)
+        if not settings_values_equal(previous.get(task_type), model_tasks.get(task_type))
     )
     if changed_tasks:
         _LOGGER.info("Task Model bindings updated (tasks=%s)", ",".join(changed_tasks))
@@ -182,7 +183,7 @@ async def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObjec
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    if previous.get(task_type) != model_tasks.get(task_type):
+    if not settings_values_equal(previous.get(task_type), model_tasks.get(task_type)):
         _LOGGER.info("Task Model options updated (task=%s)", task_type)
     return {"model_tasks": model_tasks}
 

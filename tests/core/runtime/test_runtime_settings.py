@@ -162,6 +162,20 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"config_changes": [("two", {}, {"url": "http://y"})]},
             id="config-only",
         ),
+        pytest.param(
+            _extensions(config={"two": {"options": [1]}}),
+            _extensions(config={"two": {"options": [True]}}),
+            (),
+            {"config_changes": [("two", {"options": [1]}, {"options": [True]})]},
+            id="config-number-to-boolean",
+        ),
+        pytest.param(
+            _extensions(config={"two": {"options": [1]}}),
+            _extensions(config={"two": {"options": [1.0]}}),
+            (),
+            {},
+            id="config-same-numeric-value",
+        ),
         # Raw Settings accept null as the default empty disabled set.
         pytest.param({"extensions": {"disabled": None}}, _extensions(), (), {}, id="null-disabled"),
         pytest.param({}, {"keep_awake": True}, (), {"keep_awake_reloads": 1}, id="keep-awake"),
@@ -207,6 +221,25 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"embedding_binding_changes": 1},
             id="text-embedding-binding",
         ),
+        *[
+            pytest.param(
+                {"model_tasks": {task: {"target": "local/model", "options": {"value": 1}}}},
+                {"model_tasks": {task: {"target": "local/model", "options": {"value": True}}}},
+                (),
+                effects,
+                id=f"{task}-option-number-to-boolean",
+            )
+            for task, effects in (
+                ("text_embedding", {"embedding_binding_changes": 1}),
+                (
+                    "speech_to_text",
+                    {
+                        "transcription_binding_changes": 1,
+                        "speech_preloads": [["speech_to_text"]],
+                    },
+                ),
+            )
+        ],
         # Shared Agent defaults, the default Permission Rules among them, are
         # read on every resolve; accessors showing an Agent read it again.
         pytest.param(
