@@ -33,6 +33,7 @@ from core.model_tasks.image_profile import ImageWire, build_image_profile
 from core.model_tasks.image_types import GeneratedImage, ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.utils import ids
+from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
@@ -328,9 +329,38 @@ async def test_guarded_image_collision_checks_each_concrete_destination(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("removed", ["provider", "connection", "credentials"])
+async def test_generate_maps_configuration_removed_after_preflight(
+    removed: str, caplog: Any
+) -> None:
+    account_id = "private_account"
+    target = f"openrouter/openai/gpt-image-1::api-key:{account_id}"
+
+    def missing(*_args: Any) -> Any:
+        error = ConfigError if removed == "credentials" else KeyError
+        raise error(f"Missing {removed} for {account_id}")
+
+    provider = SimpleNamespace(
+        get_connection=missing if removed == "connection" else lambda _: None
+    )
+    runtime = SimpleNamespace(
+        providers=SimpleNamespace(get=missing if removed == "provider" else lambda _: provider),
+        prepare_provider_http=missing,
+    )
+    service = ImageService(_ProviderModelTasks(target=target), runtime)
+    with pytest.raises(ImageConfigurationError) as error:
+        await service.generate("a cat")
+    assert "[REDACTED]" in str(error.value)
+    assert account_id not in str(error.value)
+    assert account_id not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["preparation", "request"])
 async def test_generate_logs_provider_error_at_warning_without_traceback(
     tmp_path: Path,
     caplog: Any,
+    phase: str,
 ) -> None:
     """A provider :class:`ProviderError` (a VBotError) logs at warning, no traceback."""
 
@@ -341,6 +371,7 @@ async def test_generate_logs_provider_error_at_warning_without_traceback(
         patch(
             "core.model_tasks.image.ProviderImageClient.from_runtime",
             return_value=failing_client,
+            side_effect=ProviderError("rate limited") if phase == "preparation" else None,
         ),
         caplog.at_level(logging.WARNING, logger="vbot.image"),
         pytest.raises(ImageExecutionError, match="rate limited"),
