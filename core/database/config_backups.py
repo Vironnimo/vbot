@@ -286,7 +286,7 @@ def _parse_manifest(raw: bytes, backup_id: str) -> ConfigBackup:
     """
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise DatabaseCorruptError(f"configuration backup {backup_id} is not valid JSON") from exc
     if not isinstance(payload, dict) or not set(payload) >= _MANIFEST_KEYS:
         raise DatabaseCorruptError(f"configuration backup {backup_id} has an unexpected shape")
@@ -558,7 +558,7 @@ def _is_damaged(path: str, content: bytes) -> bool:
         return False
     try:
         return not isinstance(json.loads(content.decode("utf-8")), dict)
-    except UnicodeDecodeError, json.JSONDecodeError:
+    except ValueError, RecursionError:
         return True
 
 
@@ -718,7 +718,7 @@ def _reserved(root: Path, now: datetime) -> frozenset[str] | None:
 def _parse_reservation(raw: bytes) -> tuple[str, datetime] | None:
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except UnicodeDecodeError, json.JSONDecodeError:
+    except ValueError, RecursionError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -817,7 +817,7 @@ def _purge_locked(data_dir: Path, patterns: tuple[str, ...]) -> ConfigBackupPurg
             payload = json.loads(manifest.read_bytes().decode("utf-8"))
         except FileNotFoundError:
             continue
-        except OSError, UnicodeDecodeError, json.JSONDecodeError:
+        except OSError, ValueError, RecursionError:
             unreadable += 1
             continue
         files = payload.get("files") if isinstance(payload, dict) else None

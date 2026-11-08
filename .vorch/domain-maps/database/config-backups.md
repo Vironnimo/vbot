@@ -30,6 +30,8 @@ It never removes a file: files created after the backup stay, and a file whose f
 
 The guard records the normalized selected file set and whether the request restored all files or named files. A retry of the same backup requires that same selection, in both check-only planning and mutation; a smaller selection cannot clear an unfinished restore. A guard without that scope evidence cannot resume, but a full restore of another backup can still replace it as above.
 
+JSON decoder limits are handled like malformed JSON: configuration bytes are preserved and marked damaged, unreadable manifests block object collection and make purging incomplete, and malformed reservations are ignored.
+
 ## Logging
 
 A configuration backup logs one INFO line (backup, files, changed, reason) and a WARNING naming damaged documents; a configuration restore one INFO line with the before-restore backup; a reservation that cannot be read or is malformed logs one WARNING per condition, and one that cannot be released a WARNING with its expiry (`vbot.database`, policy in `logging.md`).
