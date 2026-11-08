@@ -105,12 +105,20 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
     inherited = source.load()[:6]
     assert child.load_active() == grandchild.load_active() == inherited
     revisions = [history_revision(manager, fork.address) for fork in (child, grandchild)]
+    before_materialization = child.load_since()
+    assert before_materialization is not None
+    assert before_materialization.active_owned == (False,) * len(inherited)
 
     manager.delete(source.address)
 
     assert not manager.exists(review.address)
     assert child.load_active() == grandchild.load_active() == inherited
     assert child.load() == grandchild.load() == []
+    assert child.load_since(before_materialization.cursor) is None
+    materialized = child.load_since()
+    assert materialized is not None
+    assert materialized.active_owned == (True,) * len(inherited)
+    assert materialized.inherited_count == len(inherited)
     assert [history_revision(manager, fork.address) for fork in (child, grandchild)] == [
         revision + 1 for revision in revisions
     ]

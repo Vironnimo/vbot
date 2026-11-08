@@ -375,13 +375,16 @@ class SessionReadBatch:
     ones included (the audit view). ``active_messages`` is the current view
     after the cursor: all of it on a full load. Its first ``inherited_count``
     Messages precede the Session's fork point, so a fork's own conversation is
-    ``active_messages[inherited_count:]``.
+    ``active_messages[inherited_count:]``. ``active_owned`` marks entries stored
+    by this Session rather than read through lineage, including materialized
+    copies; those copies still precede the audit fork point.
     """
 
     messages: tuple[ChatMessage, ...]
     cursor: SessionReadCursor
     active_messages: tuple[ChatMessage, ...] = ()
     inherited_count: int = 0
+    active_owned: tuple[bool, ...] = ()
 
 
 @dataclass(frozen=True)

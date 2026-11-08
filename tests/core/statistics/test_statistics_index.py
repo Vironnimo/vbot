@@ -516,14 +516,15 @@ def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(
     reads = _record_canonical_reads(monkeypatch)
 
     # Deleting the origin copies the history the fork shows into the fork and
-    # bumps its history revision, so the index reads the fork again; its own
-    # audit is unchanged, so the read continues from the stored cursor.
+    # raises its cursor floor because stored ownership changed. The index
+    # rereads the unchanged own audit without counting the materialized prefix.
     manager.delete(session.address)
     after_delete = service.report()
 
     revision = manager.list_history_versions([fork.address])[fork.address][1]
-    [(read_id, cursor)] = reads
+    [(read_id, cursor), rebuilt] = reads
     assert read_id == fork.id
+    assert rebuilt == (fork.id, None)
     assert cursor is not None
     assert cursor.history_revision < revision
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:

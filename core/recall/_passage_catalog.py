@@ -59,6 +59,8 @@ SessionVersion = tuple[str, int]
 GLOBAL_SCOPE = ""
 # A Recall write waits this long for the database before failing as busy.
 WRITE_PATIENCE_S = 5.0
+# Reconcile old ownership flags once without discarding already-paid vectors.
+_OWNERSHIP_POLICY_VERSION = 2
 
 CATALOG_SCHEMA = """
 CREATE TABLE indexed_sessions (
@@ -294,7 +296,12 @@ def is_current(scope: RecallScope, stamps: Mapping[str, SessionStamp]) -> bool:
 def follows_history(connection: sqlite3.Connection, history_id: str) -> bool:
     """Whether the stored freshness stamps were taken from the Session history *history_id*."""
     row = connection.execute("SELECT history_id FROM catalog_history").fetchone()
-    return row is not None and str(row[0]) == history_id
+    return row is not None and str(row[0]) == _history_token(history_id)
+
+
+def _history_token(history_id: str) -> str:
+    """Bind catalog freshness to canonical history and its ownership projection."""
+    return f"{history_id}:ownership-{_OWNERSHIP_POLICY_VERSION}"
 
 
 def follow_history(connection: sqlite3.Connection, history_id: str) -> None:
@@ -312,7 +319,9 @@ def follow_history(connection: sqlite3.Connection, history_id: str) -> None:
         "UPDATE indexed_sessions SET history_revision = -1, next_seq = NULL, last_message_id = NULL"
     )
     connection.execute("DELETE FROM catalog_history")
-    connection.execute("INSERT INTO catalog_history (history_id) VALUES (?)", (history_id,))
+    connection.execute(
+        "INSERT INTO catalog_history (history_id) VALUES (?)", (_history_token(history_id),)
+    )
 
 
 def plan_refresh(
@@ -351,6 +360,13 @@ def plan_refresh(
             continue
         if batch is None:  # Only a stale cursor yields no batch; a full read has none.
             continue
+        if (batch.cursor.generation_id, batch.cursor.history_revision) != version:
+            # The selection authorized this generation and history, not a
+            # replacement at the same address (which may be Recall-hidden).
+            # A later search or indexing pass will select its current version.
+            # Keep existing vectors for the next diff; candidate_refs rejects
+            # any index stamp that differs from the selected version.
+            continue
         changes.append(_session_passages(session_id, previous, batch, incremental=incremental))
     return CatalogPlan(
         agent_id,
@@ -369,12 +385,12 @@ def _session_passages(
 ) -> SessionPassages:
     passages: list[Passage] = []
     owned: list[bool] = []
-    for position, message in enumerate(batch.active_messages):
+    for message, stored_here in zip(batch.active_messages, batch.active_owned, strict=True):
         windows = build_session_passages([message])
         passages.extend(windows)
-        # Public Message ids can repeat. Ownership follows the canonical view
-        # position, never a map keyed by those ids.
-        owned.extend([position >= batch.inherited_count] * len(windows))
+        # Materialized copies belong to this storing Session for attribution,
+        # while remaining before its audit fork point. Public ids may repeat.
+        owned.extend([stored_here] * len(windows))
     return SessionPassages(
         session_id=session_id,
         previous=previous,
@@ -598,6 +614,7 @@ class Candidates:
     agent_id: str
     project: str
     creation_orders: Mapping[str, int]
+    versions: Mapping[str, SessionVersion]
 
     @classmethod
     def of(cls, agent_id: str, project_id: str | None, scope: RecallScope) -> Candidates:
@@ -605,6 +622,7 @@ class Candidates:
             agent_id,
             stored_scope(project_id),
             {session_id: scope.creation_orders[session_id] for session_id in scope.candidates},
+            scope.candidates,
         )
 
 
@@ -613,11 +631,16 @@ def candidate_refs(
 ) -> dict[int, tuple[str, int]]:
     """Map each indexed candidate's ``session_ref`` to its id and creation order."""
     rows = connection.execute(
-        "SELECT session_ref, session_id FROM indexed_sessions WHERE project_id = ? "
+        "SELECT session_ref, session_id, generation_id, history_revision "
+        "FROM indexed_sessions WHERE project_id = ? "
         "AND agent_id = ? AND session_id IN (SELECT value FROM json_each(?))",
         (candidates.project, candidates.agent_id, json.dumps(sorted(candidates.creation_orders))),
     ).fetchall()
-    return {int(row[0]): (str(row[1]), candidates.creation_orders[str(row[1])]) for row in rows}
+    return {
+        int(row[0]): (str(row[1]), candidates.creation_orders[str(row[1])])
+        for row in rows
+        if candidates.versions[str(row[1])] == (str(row[2]), int(row[3]))
+    }
 
 
 def refs_parameter(refs: Mapping[int, Any]) -> str:
