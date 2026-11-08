@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from core.computers import ComputerRegistry
 from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
 
 ORIGIN = "https://vbot.example.com"
@@ -33,24 +34,49 @@ def test_a_stored_sign_in_survives_a_restart(tmp_path: Path) -> None:
     assert TOKEN not in repr(stored)
 
 
-def test_computer_registration_is_private_and_bound_to_one_pairing(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_computer_registration_is_private_and_survives_pairing_changes(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
-    store.save_device(ORIGIN, TOKEN, DEVICE_ID)
     identity = store.computer_identity(ORIGIN, create=True)
     assert identity is not None
     assert identity.key not in repr(identity)
     assert _store(tmp_path).computer_identity(ORIGIN) == identity
     if sys.platform == "win32":
         assert identity.key not in (tmp_path / DEVICE_TOKENS_FILE_NAME).read_text(encoding="utf-8")
-    store.save_device(ORIGIN, TOKEN, DEVICE_ID)
-    assert store.computer_identity(ORIGIN, create=True) == identity
-    store.save_device(ORIGIN, f"vbt_{OTHER_DEVICE_ID}_{'N' * 43}", OTHER_DEVICE_ID)
-    replacement = store.computer_identity(ORIGIN, create=True)
-    assert replacement is not None and replacement.computer_id != identity.computer_id
+    registry = ComputerRegistry()
+    hello = {
+        "type": "hello",
+        "protocol": 1,
+        "computer_id": identity.computer_id,
+        "key": identity.key,
+        "instance_id": "desktop_one",
+        "name": "My laptop",
+        "platform": "win32",
+        "capabilities": ["terminal"],
+    }
+    try:
+        connected = await registry.connect(hello, actor="open")
+        for device_id, token in (
+            (DEVICE_ID, TOKEN),
+            (OTHER_DEVICE_ID, f"vbt_{OTHER_DEVICE_ID}_{'N' * 43}"),
+        ):
+            registry.disconnect(connected)
+            store.save_device(ORIGIN, token, device_id)
+            assert store.computer_identity(ORIGIN, create=True) == identity
+            connected = await registry.connect(hello, actor=device_id)
+            assert connected.info.id == identity.computer_id
+            assert len(registry.list()) == 2  # This Desktop and the server.
+            # A refused token is replaced by the next pairing, not the Computer.
+            assert store.drop_device(ORIGIN, token)
+            assert store.computer_identity(ORIGIN) == identity
+    finally:
+        registry.close()
     store.remove(ORIGIN)
     assert store.computer_identity(ORIGIN) is None
     later = store.computer_identity(ORIGIN, create=True)
-    assert later is not None and later.computer_id != replacement.computer_id
+    assert later is not None and later.computer_id != identity.computer_id
     assert _store(tmp_path).get(OTHER_ORIGIN) is None
 
 
