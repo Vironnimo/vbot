@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.agents import AgentError, AgentStore
+from core.agents import _workspace as workspace_module
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
@@ -245,9 +246,13 @@ def test_explicit_root_project_round_trips_independently_of_workspace(
     assert unrooted.workspace == created.workspace
 
 
-def test_workspace_copy_preserves_sources_and_backs_up_destinations(
+@pytest.mark.parametrize("backup_status", ["available", "missing", "unreadable"])
+def test_workspace_copy_preserves_sources_and_requires_backups_to_restore(
     store: AgentStore,
     tmp_path: Path,
+    deny_access: Callable[[Path], None],
+    monkeypatch: pytest.MonkeyPatch,
+    backup_status: str,
 ) -> None:
     agent = store.create("coder", "Coder Agent")
     source = Path(agent.workspace)
@@ -272,6 +277,28 @@ def test_workspace_copy_preserves_sources_and_backs_up_destinations(
     assert (source / "SOUL.md").read_text(encoding="utf-8") == "source soul"
     assert result.backup_dir is not None
     assert Path(result.backup_dir, "SOUL.md").read_text(encoding="utf-8") == "old soul"
+
+    if backup_status == "available":
+        store.restore_update(agent, result)
+        assert (destination / "SOUL.md").read_text(encoding="utf-8") == "old soul"
+        assert not (destination / "USER.md").exists()
+        assert not (destination / "MEMORY.md").exists()
+        assert persisted(store, "coder")["workspace"] == "agents/coder/workspace"
+    else:
+        if backup_status == "missing":
+            Path(result.backup_dir, "SOUL.md").unlink()
+        else:
+            deny_access(Path(result.backup_dir))
+
+            # Windows copy2 uses CopyFile2 directly, outside the file-access fake.
+            def refuse_copy(*args: Any, **kwargs: Any) -> None:
+                raise PermissionError("Backup cannot be read")
+
+            monkeypatch.setattr(workspace_module.shutil, "copy2", refuse_copy)
+        with pytest.raises(OSError):
+            store.restore_update(agent, result)
+        assert (destination / "SOUL.md").read_text(encoding="utf-8") == "source soul"
+        assert persisted(store, "coder")["workspace"] == str(destination.resolve())
 
 
 @pytest.mark.parametrize("failure", ["agent-write", "unreadable-destination"])

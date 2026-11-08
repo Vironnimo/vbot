@@ -118,8 +118,7 @@ class _WorkspaceRelocation:
         for filename in self.backed_up_files:
             if self.backup_dir is not None:
                 backup = self.backup_dir / filename
-                if backup.exists():
-                    shutil.copy2(backup, self.destination / filename)
+                shutil.copy2(backup, self.destination / filename)
         for filename in self.created_files:
             if filename not in self.backed_up_files:
                 (self.destination / filename).unlink(missing_ok=True)
