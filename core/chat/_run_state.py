@@ -39,6 +39,7 @@ from core.chat.wire_shaping import (
     request_tail_notes,
 )
 from core.computers import normalize_execution
+from core.extensions._declarations import SessionCapabilityExpiredError
 from core.permissions import PermissionBoundary
 from core.projects import (
     AgentOverrides,
@@ -386,6 +387,8 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     # Every Tool Call of this Run checks its accesses against this boundary.
     permissions: PermissionBoundary
+    # Admission owner only; descendants do not inherit private Session grants.
+    owner_binding: TemporarySessionBinding | None = None
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
@@ -966,6 +969,17 @@ async def create_run_execution_context(
     working_project_id = run.working_project_id
     temporary_binding = request.temporary_binding
     temporary_source = temporary_binding or request.temporary_parent_binding
+    owner_binding = temporary_binding
+    if owner_binding is None and run.execution_owner is not None:
+        owner = run.execution_owner
+        owner_binding = await _CHAT_TRANSFORM_WORKERS.run(
+            dependencies.sessions.temporary_binding_by_participant,
+            owner_name=owner.extension,
+            group_id=owner.group_id,
+            participant_id=owner.participant_id,
+        )
+        if owner_binding is None or owner_binding.generation_id != owner.generation_id:
+            raise SessionCapabilityExpiredError("session capability expired")
     project_cwd: Path | None
     agent = await resolve_run_agent(dependencies, run, request)
     target = await requests.targets.for_agent(agent)
@@ -1116,6 +1130,7 @@ async def create_run_execution_context(
         context = _RunExecutionContext(
             run=run,
             request=request,
+            owner_binding=owner_binding,
             session=session,
             agent=agent,
             agent_body=agent_body,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -177,6 +178,7 @@ class WireRequestRunner:
         on_tool_calls: ToolCallSink | None = None,
         effort: EffortState | None = None,
         session_generation_id: str | None = None,
+        before_request: Callable[[], Awaitable[None]] | None = None,
     ) -> _AssistantStep:
         """Send one Model step; its Assistant messages name ``public_model``.
 
@@ -191,7 +193,9 @@ class WireRequestRunner:
         thinking effort state; without it the request uses the Agent's effort.
         ``session_generation_id`` is the Session generation the Run works in, and
         ``connection_id`` (``provider:connection``) the Connection that serves the
-        request; both are recorded with each attempt's Usage.
+        request; both are recorded with each attempt's Usage. ``before_request``
+        admits each physical attempt after retry waiting, before accounting or
+        sending it; its failure stops the step without another paid request.
         """
         messages, effort_kwargs = route_effort(
             effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
@@ -246,6 +250,8 @@ class WireRequestRunner:
             while True:
                 run.raise_if_cancelled()
                 await budget.begin(response_model, retry_notice)
+                if before_request is not None:
+                    await before_request()
                 reasoning = await _CHAT_TRANSFORM_WORKERS.run(
                     adapter.describe_reasoning_render,
                     model_id,

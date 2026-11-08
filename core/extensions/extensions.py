@@ -523,6 +523,24 @@ class ExtensionRegistry:
             raise ValueError("Session delivery batch is invalid")
         return result
 
+    async def dispatch_session_before_model_request(
+        self, binding: Any, tool_registry: ToolRegistry, context: SessionRequestContext
+    ) -> None:
+        """Required owner admission immediately before each physical Chat request."""
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        runtime = capability.runtime
+        if runtime is None or runtime.before_model_request is None:
+            return
+        result = await invoke_extension_handler(
+            runtime.before_model_request, context, extension_name=capability.identity.name
+        )
+        if not self._session_capability_current(binding, capability, tool_registry):
+            raise SessionCapabilityExpiredError("session capability expired")
+        if result is not None:
+            raise TypeError("Session before_model_request must return None")
+
     async def dispatch_session_before_tool_call(
         self,
         binding: Any,

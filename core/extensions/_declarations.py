@@ -187,6 +187,7 @@ class SessionRuntimeDeclaration:
     acknowledge_delivery: Callable[..., Any] | None = None
     reconcile_tool_batch: Callable[..., Any] | None = None
     before_tool_call: Callable[..., Any] | None = None
+    before_model_request: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)

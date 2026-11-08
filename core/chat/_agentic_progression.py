@@ -164,6 +164,23 @@ class AgenticProgression:
         awaiting_steering = False
         track = session_track(run.agent_id, run.session_id, project_id)
         run_args = {"run_id": run.id}
+
+        async def admit_model_request() -> None:
+            registry = self._dependencies.get_extension_registry()
+            if registry is None:
+                raise RuntimeError("Session owner is unavailable")
+            await registry.dispatch_session_before_model_request(
+                context.owner_binding,
+                self._dependencies.tools,
+                SessionRequestContext(
+                    binding=context.owner_binding,
+                    run_id=run.id,
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    execution_owner=run.execution_owner,
+                ),
+            )
+
         while True:
             # Step 1 began before the Run assembled its initial request state.
             build_started = context.request_build_started or time.perf_counter()
@@ -381,6 +398,10 @@ class AgenticProgression:
                 replay_policy=target.replay_policy,
                 agent_model=target.model_reference,
             )
+            if context.owner_binding is not None and context.request.temporary_binding is None:
+                # Descendants have no private input-delivery boundary. Admit their
+                # Run before automatic Compaction can spend on its first request.
+                await admit_model_request()
             messages_for_request, request_estimate = await self._model_step._prepare_model_request(
                 context, target, state
             )
@@ -557,6 +578,9 @@ class AgenticProgression:
                             # Run Admission Guards keep the Session in this
                             # generation while the Run is active.
                             session_generation_id=context.session_snapshot.cursor.generation_id,
+                            before_request=admit_model_request
+                            if context.owner_binding is not None
+                            else None,
                         )
                 except (ProviderRequestTooLargeError, ProviderImageLimitError) as exc:
                     if isinstance(exc, ProviderImageLimitError):

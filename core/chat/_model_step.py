@@ -255,10 +255,10 @@ class ModelStepBoundary:
             if registry is None:
                 raise RuntimeError("Session owner is unavailable")
             return await registry.dispatch_session_before_tool_call(
-                context.request.temporary_binding,
+                context.owner_binding,
                 self._dependencies.tools,
                 SessionRequestContext(
-                    binding=context.request.temporary_binding,
+                    binding=context.owner_binding,
                     run_id=run.id,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
@@ -303,7 +303,7 @@ class ModelStepBoundary:
             unloadable_tools=state.unloadable_tools,
             change_tracker=self._dependencies.change_tracker,
             allow_owned_effects=context.request.temporary_binding is not None,
-            owner_tool_guard=guard_tool if context.request.temporary_binding is not None else None,
+            owner_tool_guard=guard_tool if context.owner_binding is not None else None,
             activity_writer=partial(self._persist_programmatic_activity, context),
             current_skill_context=lambda: (context.skill_project_id, context.skill_registry),
             tool_repetition_observer=context.tool_progress.repeated_calls.observe,

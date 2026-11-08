@@ -554,9 +554,18 @@ async def test_unconfigured_steps_continue_past_the_previous_default(service):
 
 
 @pytest.mark.asyncio
-async def test_upgrade_imports_retained_tool_consumption_once(service):
+@pytest.mark.parametrize("repair", [False, True])
+async def test_upgrade_imports_retained_tool_consumption_once(service, repair):
     card = await started(service)
-    card["runtime"]["budget"]["import_tool_usage"] = True
+    card["runtime"]["budget"].update(
+        {
+            "step_tool_adjustment": {"add": ["missing"], "remove": ["previous-step"]},
+            "tool_calls": 12,
+            "step_tool_calls": 2,
+        }
+        if repair
+        else {"import_tool_usage": True}
+    )
     await service.store.change(
         card["id"], {"runtime": card["runtime"]}, actor="factory", event="test_seed"
     )
@@ -564,6 +573,8 @@ async def test_upgrade_imports_retained_tool_consumption_once(service):
 
     async def usage(group_id, query):
         reads.append(query)
+        if query.get("run_ids") == ["previous-step"]:
+            return {"activity": {"tool_calls": 2}}
         return {"activity": {"tool_calls": 3 if "run_ids" in query else 12}}
 
     service.host.temporary_agents.usage = usage
@@ -572,9 +583,14 @@ async def test_upgrade_imports_retained_tool_consumption_once(service):
     assert card["runtime"]["budget"]["tool_calls"] == 12
     assert card["runtime"]["budget"]["step_tool_calls"] == 3
     assert "import_tool_usage" not in card["runtime"]["budget"]
+    assert "step_tool_adjustment" not in card["runtime"]["budget"]
     service.execution = FactoryExecution(service)
     await service.execution.reconcile()
-    assert reads == [{}, {"run_ids": card["runtime"]["budget"]["step_runs"]}]
+    assert reads == (
+        [{"run_ids": ["missing"]}, {"run_ids": ["previous-step"]}]
+        if repair
+        else [{}, {"run_ids": card["runtime"]["budget"]["step_runs"]}]
+    )
     await service.execution.quiesce()
     await service.flush()
 
@@ -670,6 +686,7 @@ async def test_tool_budget_reserves_parallel_calls_and_survives_retry_and_rework
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["card", "step"])
+@pytest.mark.parametrize("boundary", ["before_request", "before_model_request"])
 @pytest.mark.parametrize(
     "metric, totals, reason",
     [
@@ -680,7 +697,7 @@ async def test_tool_budget_reserves_parallel_calls_and_survives_retry_and_rework
     ],
 )
 async def test_resource_limits_stop_inside_a_run_and_unknown_usage_is_not_free(
-    service, scope, metric, totals, reason
+    service, scope, boundary, metric, totals, reason
 ):
     current: Json = {}
     queries = []
@@ -702,13 +719,41 @@ async def test_resource_limits_stop_inside_a_run_and_unknown_usage_is_not_free(
     current.update(totals)
     context = groups.context(groups.runs[card["runtime"]["current_run"]])
     with pytest.raises(FactoryError) as stopped:
-        await service.execution.before_request(context)
+        await getattr(service.execution, boundary)(context)
     assert stopped.value.code == "budget_exhausted"
     card = await service.card()
     assert card["runtime"]["limit_hit"]["metric"] == metric
     assert card["runtime"]["limit_hit"]["reason"] == reason
     assert queries[-1] == ([context.run_id] if scope == "step" else None)
     assert len(groups.admissions) == 1
+    await service.finish()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["card", "step"])
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_owned_child_requests_share_run_admission_without_becoming_the_participant(
+    service, scope, limit
+):
+    workflow = service.store.setup["workflows"][0]
+    (workflow if scope == "card" else workflow["steps"][0])["limits"] = {"runs": limit}
+    card = await started(service)
+    groups = service.host.temporary_agents
+    root = groups.context(groups.runs[card["runtime"]["current_run"]])
+    child = replace(root, run_id="child-run", agent_id="child", session_id="child-session")
+    if limit == 2:
+        await service.execution.before_model_request(child)
+        await service.execution.before_model_request(child)
+        await service.execution.before_tool_call(child, tool_name="read", tool_call_id="child-call")
+        child = replace(child, run_id="next-child-run")
+    with pytest.raises(FactoryError) as refusal:
+        await service.execution.before_model_request(child)
+    assert refusal.value.code == "budget_exhausted"
+    card = await service.card()
+    assert card["runtime"]["current_run"] == root.run_id
+    assert len(card["runtime"]["budget"]["runs"]) == limit
+    assert len(card["runtime"]["budget"]["step_runs"]) == limit
+    assert card["runtime"]["budget"].get("tool_calls", 0) == limit - 1
     await service.finish()
 
 
@@ -1028,6 +1073,10 @@ async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_p
         getattr(declarations.session_runtime.acknowledge_delivery, "__func__", None)
         is FactoryExecution.acknowledge_delivery
     )
+    assert (
+        getattr(declarations.session_runtime.before_model_request, "__func__", None)
+        is FactoryExecution.before_model_request
+    )
     await service.flush()
     card = await service.card()
     assert card["runtime"]["current_run"] == automatic.id and "pending" not in card["runtime"]
@@ -1067,6 +1116,32 @@ async def automatic_handoff(service):
     # The ordinary launch loses to the active automatic Run before its hook.
     await service.flush()
     return groups.context(automatic), pending
+
+
+@pytest.mark.asyncio
+async def test_final_run_warning_arrives_with_its_pending_continuation(service):
+    context, pending = await automatic_handoff(service)
+    card = await service.card()
+    card["runtime"]["step_limits"] = {"runs": 2}
+    await service.store.change(
+        card["id"], {"runtime": card["runtime"]}, actor="user", event="limits_updated"
+    )
+    delivery = await service.execution.before_request(context)
+    assert delivery.effect_kind == "factory_continuation"
+    assert delivery.entries[0] == pending["content"]
+    assert len(delivery.entries) == 2
+    assert "factory_report_blocked" in delivery.entries[1]
+    assert await service.execution.before_request(context) == delivery
+    await service.host.temporary_agents.append_delivery(context, delivery)
+    # Startup reconciliation acknowledges the warning with the same canonical receipt.
+    service.execution = FactoryExecution(service)
+    await service.execution.reconcile()
+    assert await service.execution.before_request(context) is None
+    card = await service.card()
+    assert len(card["runtime"]["budget"]["step_runs"]) == 2
+    assert all(notice["seen"] for notice in card["runtime"]["budget_notices"].values())
+    await service.finish()
+    assert (await service.card())["waiting_reason"] == "budget_exhausted"
 
 
 @pytest.mark.asyncio
@@ -1175,6 +1250,8 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
     if case == "error":
         assert (card["state"], card["waiting_reason"]) == ("waiting", "run_failed")
         assert card["runtime"]["current_run"] == original.run_id
+        assert card["runtime"]["budget"]["runs"] == ["run-1", original.run_id]
+        assert card["runtime"]["budget"]["step_runs"] == ["run-1", original.run_id]
         assert not groups.open[card["group_id"]]
         await service.execution.run_finished(context, outcome="error")
         await service.flush()
@@ -1183,6 +1260,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
             await service.execution.retry(await service.card())
         await service.flush()
         assert len(groups.admissions) == 3
+        assert len((await service.card())["runtime"]["budget"]["runs"]) == 3
         assert ("unique-sendback-guidance" in groups.admissions[-1][1].content) is (
             boundary != "committed"
         )

@@ -14,7 +14,8 @@ import pytest
 import core.tools.change_tracker as change_tracker_module
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.streaming import StreamingChunkTimeoutError
-from core.extensions import ExtensionRegistry
+from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
+from core.extensions.extensions import ExtensionDeclarations
 from core.projects import ProjectStore
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
@@ -425,6 +426,17 @@ async def test_owned_descendant_records_its_admission_and_skips_titles_and_refle
         participant_id="participant",
         config={},
     )
+    declarations = ExtensionDeclarations()
+    ExtensionAPI("swarm", declarations, config={}, logger=None).register_session_tool(
+        "private_finish", "test-owned Tool", {"type": "object"}, lambda *_args: {}
+    )
+    runtime.extensions = ExtensionRegistry()
+    runtime.extensions._records.append(  # noqa: SLF001 - live owner without optional callbacks
+        ExtensionRecord(
+            "swarm", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    runtime.extensions.apply_tools(runtime.tools)
     reflection = RecordingReflection()
     title_calls: list[dict[str, Any]] = []
 

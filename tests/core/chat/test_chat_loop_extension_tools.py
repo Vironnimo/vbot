@@ -17,7 +17,8 @@ from core.extensions import (
 )
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionOperations
-from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError
+from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
+from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError, RunExecutionOwner
 from core.sessions import SessionAddress
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
@@ -76,8 +77,9 @@ async def _tool_results(runtime: Any, run: Any) -> tuple[dict[str, Any], dict[st
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("programmatic", [False, True])
+@pytest.mark.parametrize("descendant", [False, True])
 async def test_owned_tool_budget_refuses_effects_and_stops_model_continuation(
-    tmp_path, programmatic
+    tmp_path, programmatic, descendant
 ):
     tools = ToolRegistry()
     declarations = ExtensionDeclarations()
@@ -101,8 +103,13 @@ async def test_owned_tool_budget_refuses_effects_and_stops_model_continuation(
             admitted.append(tool_call_id)
         return None
 
-    api.register_session_tool("effect", "test-owned effect", {"type": "object"}, effect)
-    api.register_session_tool("program", "test-owned program", {"type": "object"}, program)
+    register = api.register_tool if descendant else api.register_session_tool
+    register("effect", "test-owned effect", {"type": "object"}, effect)
+    register("program", "test-owned program", {"type": "object"}, program)
+    if descendant:
+        api.register_session_tool(
+            "private_finish", "test-owned Tool", {"type": "object"}, lambda *_args: tool_success({})
+        )
     api.register_session_runtime(
         before_request=lambda _context: None,
         before_tool_call=guard,
@@ -148,19 +155,143 @@ async def test_owned_tool_budget_refuses_effects_and_stops_model_continuation(
             name="test",
         ),
     )
-    run = await build_chat_loop(runtime).start_temporary_run(binding, "initial")
+    loop = build_chat_loop(runtime)
+    if descendant:
+        child = runtime.chat_sessions.create("ordinary", session_id="child")
+        owner = RunExecutionOwner("private", "group", "participant", binding.generation_id, "epoch")
+        run = await loop.start_owned_continuation(child.address, owner, "initial", "child-input")
+    else:
+        run = await loop.start_temporary_run(binding, "initial")
     await run.wait()
     assert effects == admitted and len(effects) == 1
     assert len(adapter.requests) == 1
     persisted = [
         json.loads(message.content)
-        for message in runtime.chat_sessions.get(binding.address).load()
+        for message in runtime.chat_sessions.get(
+            SessionAddress(run.project_id, run.agent_id, run.session_id)
+        ).load()
         if message.role == "tool"
     ]
     refusals = [value for value in persisted if value.get("error")]
     assert len(refusals) == 2
     assert all(value["error"]["code"] == "execution_paused" for value in refusals)
+    if descendant:
+        assert "private_finish" not in str(adapter.requests[0]["kwargs"].get("tools"))
     assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "descendant"),
+    [
+        ("compaction", False),
+        ("retry", False),
+        ("non_streaming", False),
+        ("compaction", True),
+        ("retry", True),
+        ("before_compaction", True),
+    ],
+)
+async def test_owned_model_admission_follows_compaction_and_each_physical_attempt(
+    tmp_path, monkeypatch, boundary, descendant
+):
+    tools = ToolRegistry()
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("private", declarations, config={}, logger=None)
+    delivery = PreparedSessionDelivery("notice", "hash", ("Close out the work.",), "1")
+    deliveries = []
+    acknowledgments = []
+    admissions = []
+    compacted = False
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            ProviderStreamingUnsupportedError("Streaming unavailable")
+            if boundary == "non_streaming"
+            else NetworkError("Connection interrupted")
+        ],
+    )
+
+    async def before_request(_context):
+        deliveries.append(delivery)
+        return delivery
+
+    async def before_model_request(context):
+        assert context.binding.group_id == "group"
+        admissions.append((compacted, len(adapter.stream_requests)))
+        if boundary == "before_compaction" or compacted or adapter.stream_requests:
+            raise RuntimeError("Owned execution limit reached")
+
+    async def compact(context, *_args, **_kwargs):
+        nonlocal compacted
+        compacted = True
+        return context.request_state
+
+    api.register_session_tool(
+        "finish", "test-owned Tool", {"type": "object"}, lambda *_args: tool_success({})
+    )
+    api.register_session_runtime(
+        before_request=before_request,
+        before_model_request=before_model_request,
+        acknowledge_delivery=lambda _context, prepared: acknowledgments.append(prepared),
+        run_finished=lambda _context, **_kwargs: None,
+        quiesce=lambda: None,
+    )
+    extensions = ExtensionRegistry()
+    extensions._records.append(  # noqa: SLF001 - focused live-registry fixture
+        ExtensionRecord(
+            "private", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    extensions.apply_tools(tools)
+    agent = StubAgent(id="ordinary", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.extensions = extensions
+    temporary = TemporaryAgentRegistry(runtime.chat_sessions)
+    runtime.agent_resolver.temporary_agents = temporary
+    binding = temporary.create(
+        owner_name="private",
+        group_id="group",
+        participant_id="participant",
+        config=TemporaryAgentConfig(
+            model="openai/gpt-5.2",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="test",
+        ),
+    )
+    service: Any = object() if "compaction" in boundary else None
+    loop = build_chat_loop(runtime, compaction_service=service)
+    monkeypatch.setattr(loop._compaction_runs, "maybe_auto_compact_state", compact)
+    if descendant:
+        child = runtime.chat_sessions.create("ordinary", session_id="child")
+        owner = RunExecutionOwner("private", "group", "participant", binding.generation_id, "epoch")
+        run = await loop.start_owned_continuation(child.address, owner, "initial", "child-input")
+    else:
+        run = await loop.start_temporary_run(binding, "initial")
+    with pytest.raises(RuntimeError, match="Owned execution limit reached"):
+        await run.wait()
+
+    expected = [(True, 0)] if boundary == "compaction" else [(False, 0), (False, 1)]
+    if descendant:
+        expected.insert(0, (False, 0))
+    if boundary == "before_compaction":
+        expected = [(False, 0)]
+        assert not compacted
+    assert admissions == expected
+    assert len(adapter.stream_requests) == (0 if "compaction" in boundary else 1)
+    assert adapter.requests == []
+    assert deliveries == acknowledgments == ([] if descendant else [delivery])
+    notes = [
+        m.content
+        for m in runtime.chat_sessions.get(
+            SessionAddress(run.project_id, run.agent_id, run.session_id)
+        ).load()
+        if m.role == "note"
+    ]
+    assert notes.count("Close out the work.") == (0 if descendant else 1)
 
 
 @pytest.mark.asyncio

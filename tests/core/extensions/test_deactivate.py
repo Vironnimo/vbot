@@ -56,6 +56,7 @@ _SESSION_OWNER_SOURCE = (
     "    api.register_session_runtime(\n"
     "        before_request=_before_request,\n"
     "        before_tool_call=_before_tool_call,\n"
+    "        before_model_request=_before_tool_call,\n"
     "        run_finished=lambda *_args, **_kwargs: None,\n"
     "        quiesce=_gate,\n"
     "    )\n"
@@ -193,7 +194,7 @@ async def test_deactivate_quiesces_before_removing_capabilities_and_retires_host
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["request", "tool"])
+@pytest.mark.parametrize("boundary", ["request", "model", "tool"])
 async def test_retired_session_before_request_cannot_return_stale_delivery(
     tmp_path: Path,
     boundary: str,
@@ -211,6 +212,8 @@ async def test_retired_session_before_request_cannot_return_stale_delivery(
     pending = asyncio.create_task(
         registry.dispatch_session_before_request(binding, tools, context)
         if boundary == "request"
+        else registry.dispatch_session_before_model_request(binding, tools, context)
+        if boundary == "model"
         else registry.dispatch_session_before_tool_call(
             binding, tools, context, tool_name="owned_tool", tool_call_id="call"
         )
@@ -223,6 +226,8 @@ async def test_retired_session_before_request_cannot_return_stale_delivery(
         await pending
     with pytest.raises(SessionCapabilityExpiredError):
         await registry.dispatch_session_before_request(binding, tools, context)
+    with pytest.raises(SessionCapabilityExpiredError):
+        await registry.dispatch_session_before_model_request(binding, tools, context)
     with pytest.raises(SessionCapabilityExpiredError):
         await registry.dispatch_session_before_tool_call(
             binding, tools, context, tool_name="owned_tool", tool_call_id="call"

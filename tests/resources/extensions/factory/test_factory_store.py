@@ -298,9 +298,75 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
         )
     finally:
         database.close()
-    # An older Workflow writer would erase the source links on its next save.
-    older_writer = extension_database_spec(
-        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+    # Old writers cannot discard limits or ignore a pending consumption repair.
+    for migrations in (MIGRATIONS[:-2], MIGRATIONS[:-1]):
+        older_writer = extension_database_spec(
+            tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=migrations
+        )
+        with pytest.raises(DatabaseFormatError):
+            open_offline_database(older_writer)
+
+
+@pytest.mark.parametrize("already_upgraded", [False, True])
+@pytest.mark.parametrize("checkpoint", [False, True])
+async def test_limit_migration_keeps_retries_and_answers_in_the_same_step(
+    tmp_path: Path, already_upgraded: bool, checkpoint: bool
+) -> None:
+    previous_spec = extension_database_spec(
+        tmp_path,
+        "factory",
+        DATABASE_NAME,
+        SCHEMA_SQL,
+        migrations=MIGRATIONS[:-1] if already_upgraded else MIGRATIONS[:-2],
     )
-    with pytest.raises(DatabaseFormatError):
-        open_offline_database(older_writer)
+    database = open_offline_database(previous_spec)
+    store = FactoryStore(database)
+    card = await store.create_card("project", "Objective", "Scope", origin="user")
+    runtime = {
+        "workflow": {"steps": [{"id": "plan"}, {"id": "implement"}, {"id": "review"}]},
+        "settings": {"turn_budget": 9},
+        "step": "review" if checkpoint else "implement",
+    }
+    if already_upgraded:
+        runtime["budget"] = {
+            "runs": ["plan", "first", "answered"],
+            "step_runs": ["answered"],
+            "tool_calls": 20,
+            "step_tool_calls": 3,
+        }
+    for event, detail in (
+        ("started", {"step": "plan", "state": "working"}),
+        ("run_admitted", {"run_id": "plan"}),
+        ("submitted", {"step": "implement", "state": "working"}),
+        ("run_admitted", {"run_id": "first"}),
+        ("answered", {"state": "working"}),
+        ("run_admitted", {"run_id": "answered"}),
+        # A judging Step's Retry also records a step id but starts no new budget.
+        ("retried", {"step": "implement", "state": "working"}),
+        ("run_failed", {"run_id": "failed-before-request"}),
+    ):
+        await store.change(card["id"], {}, actor="factory", event=event, detail=detail)
+    await store.change(
+        card["id"], {"turns": 1, "runtime": runtime}, actor="factory", event="test_seed"
+    )
+    database.close()
+    spec = extension_database_spec(
+        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS
+    )
+    database = open_offline_database(spec)
+    try:
+        budget = (await FactoryStore(database).get_card(card["id"]))["runtime"]["budget"]
+        assert budget["runs"] == ["plan", "first", "answered", "failed-before-request"]
+        assert budget["step_runs"] == (
+            [] if checkpoint else ["first", "answered", "failed-before-request"]
+        )
+        if already_upgraded:
+            assert budget["tool_calls"] == 20 and budget["step_tool_calls"] == 3
+            assert budget["step_tool_adjustment"] == {
+                "add": [] if checkpoint else ["first", "failed-before-request"],
+                "remove": ["answered"] if checkpoint else [],
+            }
+        else:
+            assert budget["import_tool_usage"] is True
+    finally:
+        database.close()

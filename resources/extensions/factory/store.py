@@ -202,6 +202,39 @@ def _migrate_steps(connection: sqlite3.Connection) -> None:
         )
 
 
+def _execution_runs(
+    connection: sqlite3.Connection, card_id: str, runtime: Json
+) -> tuple[list[str], list[str]]:
+    """Recover Step boundaries from transitions, never from resettable legacy turns."""
+    runs: list[str] = []
+    step_runs: list[str] = []
+    step = None
+    for event, raw in connection.execute(
+        "SELECT event, detail_json FROM card_events WHERE card_id = ? ORDER BY id", (card_id,)
+    ):
+        detail = json.loads(raw)
+        if (
+            event
+            in {
+                "started",
+                "submitted",
+                "changes_requested",
+                "sent_back",
+                "accepted",
+                "recovered_initial",
+            }
+            and detail.get("state") == "working"
+            and detail.get("step")
+        ):
+            step, step_runs = detail["step"], []
+        if event in {"run_admitted", "run_observed", "run_failed", "retry_reconciled"}:
+            run_id = detail.get("run_id")
+            if run_id and run_id not in runs:
+                runs.append(run_id)
+                step_runs.append(run_id)
+    return runs, step_runs if step == runtime.get("step") else []
+
+
 def _migrate_limits(connection: sqlite3.Connection) -> None:
     """Keep earlier configured Run caps, while new definitions default to unlimited."""
     for project_id, raw, turns in connection.execute(
@@ -215,30 +248,43 @@ def _migrate_limits(connection: sqlite3.Connection) -> None:
             "UPDATE setups SET workflows_json = ? WHERE project_id = ?",
             (_dump(workflows), project_id),
         )
-    for card_id, raw, turns in connection.execute(
-        "SELECT id, runtime_json, turns FROM cards"
-    ).fetchall():
+    for card_id, raw in connection.execute("SELECT id, runtime_json FROM cards").fetchall():
         runtime = json.loads(raw)
         cap = runtime.get("settings", {}).pop("turn_budget", 0)
         for step in runtime.get("workflow", {}).get("steps", []):
             step.setdefault("limits", {"runs": cap} if cap > 0 else {})
-        runs = []
-        for (detail,) in connection.execute(
-            "SELECT detail_json FROM card_events WHERE card_id = ? "
-            "AND event IN ('run_admitted', 'run_observed') ORDER BY id",
-            (card_id,),
-        ):
-            run_id = json.loads(detail).get("run_id")
-            if run_id and run_id not in runs:
-                runs.append(run_id)
+        runs, step_runs = _execution_runs(connection, card_id, runtime)
         runtime.setdefault(
             "budget",
             {
                 "runs": runs,
-                "step_runs": runs[-turns:] if turns else [],
+                "step_runs": step_runs,
                 "import_tool_usage": bool(runtime.get("workflow")),
             },
         )
+        connection.execute(
+            "UPDATE cards SET runtime_json = ? WHERE id = ?", (_dump(runtime), card_id)
+        )
+
+
+def _repair_limit_history(connection: sqlite3.Connection) -> None:
+    """Repair Cards already opened by the first limits migration without losing live counts."""
+    for card_id, raw in connection.execute("SELECT id, runtime_json FROM cards").fetchall():
+        runtime = json.loads(raw)
+        budget = runtime.get("budget")
+        if not budget or not runtime.get("workflow"):
+            continue
+        roots, current_roots = _execution_runs(connection, card_id, runtime)
+        previous = budget.get("step_runs", [])
+        # Child Runs observed since the upgrade have no Factory admission event.
+        current = list(dict.fromkeys(current_roots + [run for run in previous if run not in roots]))
+        if current != previous and not budget.get("import_tool_usage"):
+            budget["step_tool_adjustment"] = {
+                "add": [run for run in current if run not in previous],
+                "remove": [run for run in previous if run not in current],
+            }
+        budget["runs"] = list(dict.fromkeys(roots + budget.get("runs", [])))
+        budget["step_runs"] = current
         connection.execute(
             "UPDATE cards SET runtime_json = ? WHERE id = ?", (_dump(runtime), card_id)
         )
@@ -251,6 +297,7 @@ MIGRATIONS = (
     # Older Workflow writers would silently drop links to shared templates.
     Migration("library_links", breaks_older=True),
     Migration("execution_limits", breaks_older=True, apply=_migrate_limits),
+    Migration("execution_limit_history", breaks_older=True, apply=_repair_limit_history),
 )
 
 _CARD_FIELDS = (

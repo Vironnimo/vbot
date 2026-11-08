@@ -7,6 +7,12 @@ Rows cover the listed additions to the `vbot-docs` authoring references; older w
 | Text | Reason |
 |---|---|
 | API version entry `24 notifications and page badges...` | Authors must declare the version that owns each newly used capability so older hosts refuse before partially loading it. |
+| API version entry `27 required owner Tool and Model-request admission...` | Owners using either admission callback or canonical consumption reads declare the version that provides those boundaries. |
+| `register_session_runtime declares before_request...` | Lists the optional admission callbacks alongside the existing delivery callbacks so authors choose the correct boundary. |
+| `before_model_request(context) runs before each physical Chat Model request...` | A logical-request check occurs before Compaction charges and misses physical retries; owners enforcing settled consumption need the actual admission boundary. |
+| `Owned descendants also call it before preparing their request...` | Descendants have no private delivery callback to admit Runs; idempotent admission before their Compaction prevents spending beyond an already exhausted cap. |
+| `Return None to admit or raise to stop the request.` | Prevents returning a delivery or refusal string that this no-delivery callback cannot interpret. |
+| `This callback does not deliver Notes; use before_request for receipt-backed input.` | Keeps Agent input on the durable delivery and acknowledgment path instead of silently discarding it during admission. |
 | `Use await host.notify(...) to request user attention on a declared page; key replaces...` | Gives the supported transient attention channel and keyed replacement rather than a duplicate inbox or an unbounded pile of toasts. |
 | `Titles hold up to 200 characters...` | Authors can bound title/body/route/key at the source and send a valid internal page route instead of guessing an external URL. |
 | `host.set_page_badge(page_id, count) sets a transient non-negative navigation count...` | The badge is derived presentation; the Extension's database remains its durable inbox. |

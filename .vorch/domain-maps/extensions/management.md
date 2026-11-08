@@ -38,7 +38,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 
 - v26: `host.defer_tool_call(context)` retains original-call ownership after a pending Tool Result. Final outcomes use ordinary background completion delivery, with generation fencing and idempotent recovery (`extensions/host.md`).
 
-- v27: optional required `before_tool_call` Session-owner admission callback and owner-scoped `host.execution_usage(group_id, run_ids=None)` reads of settled canonical consumption (`extensions/host.md`). Group usage accepts optional `query.run_ids` for exact retained Run slices.
+- v27: optional required `before_tool_call` and `before_model_request` Session-owner admission callbacks and owner-scoped `host.execution_usage(group_id, run_ids=None)` reads of settled canonical consumption (`extensions/host.md`). Group usage accepts optional `query.run_ids` for exact retained Run slices.
 
 API 24 also preserves actionable management-refusal codes through `ExtensionOperationError(code, message)` (`core/extensions/operations.py`). `extensions.operation` maps this explicit type to the same RPC code/message; ordinary `ValueError`, even with an unrelated `.code` attribute, remains `invalid_request`. Extensions retain ownership of their domain codes and recovery choices (`test_extensions_methods.py::test_extension_operation_error_boundary`).
 

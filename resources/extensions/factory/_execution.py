@@ -106,6 +106,32 @@ class FactoryExecution:
                 return True
         return False
 
+    async def _prepare_budget_notice(
+        self, card: Json, runtime: Json, context: SessionRequestContext
+    ) -> Json | None:
+        recipient = f"{context.agent_id}/{context.session_id}"
+        notice = runtime.setdefault("budget_notices", {}).setdefault(recipient, {"seen": []})
+        warnings = _limits.warnings(
+            runtime, await self.budget_status({**card, "runtime": runtime}), notice["seen"]
+        )
+        if not warnings:
+            return None
+        return {
+            "id": new_id("fnotice"),
+            "recipient": recipient,
+            "content": agent_text.budget_warning(warnings),
+            "keys": [warning["key"] for warning in warnings],
+            "revision": str(card["revision"]),
+        }
+
+    @staticmethod
+    def _acknowledge_budget_notice(runtime: Json, pending: Json) -> None:
+        notice = runtime.setdefault("budget_notices", {}).setdefault(
+            pending["recipient"], {"seen": []}
+        )
+        notice["seen"] = list(dict.fromkeys([*notice["seen"], *pending["keys"]]))
+        notice.pop("pending", None)
+
     async def _budget_notice(
         self, card: Json, context: SessionRequestContext
     ) -> PreparedSessionDelivery | None:
@@ -115,15 +141,9 @@ class FactoryExecution:
         notice = notices.setdefault(recipient, {"seen": []})
         pending = notice.get("pending")
         if pending is None:
-            warnings = _limits.warnings(runtime, await self.budget_status(card), notice["seen"])
-            if not warnings:
+            pending = await self._prepare_budget_notice(card, runtime, context)
+            if pending is None:
                 return None
-            pending = {
-                "id": new_id("fnotice"),
-                "content": agent_text.budget_warning(warnings),
-                "keys": [warning["key"] for warning in warnings],
-                "revision": str(card["revision"]),
-            }
             notice["pending"] = pending
             await self.store.change(card["id"], {"runtime": runtime}, actor="factory", event=None)
         content = pending["content"]
@@ -134,6 +154,30 @@ class FactoryExecution:
             pending["revision"],
             "factory_budget_notice",
         )
+
+    async def before_model_request(self, context: SessionRequestContext) -> None:
+        owner = context.execution_owner
+        async with self.service.lock:
+            card = await self.store.get_card(context.binding.group_id)
+            runtime = card["runtime"]
+            if (
+                self._quiescing
+                or owner is None
+                or owner.epoch != runtime.get("epoch")
+                or owner.participant_id != runtime.get("current_participant")
+            ):
+                raise self._error("stale_run")
+            if card["state"] not in ACTIVE_STATES:
+                raise self._error("wrong_state")
+            new_run = context.run_id not in runtime.get("budget", {}).get("runs", [])
+            if await self._check_budget(card, check_runs=new_run):
+                raise self._error("budget_exhausted")
+            if new_run:
+                runtime = self._runtime(card)
+                _limits.observe_run(runtime, context.run_id)
+                await self.store.change(
+                    card["id"], {"runtime": runtime}, actor="factory", event=None
+                )
 
     async def before_tool_call(
         self, context: SessionRequestContext, *, tool_name: str, tool_call_id: str
@@ -962,11 +1006,14 @@ class FactoryExecution:
 
     @staticmethod
     def _prepared_delivery(pending: Json) -> PreparedSessionDelivery:
-        content = pending["content"]
+        entries: tuple[str, ...] = (pending["content"],)
+        if pending.get("budget_notice"):
+            entries += (pending["budget_notice"]["content"],)
+        content = "\n\n".join(entries)
         return PreparedSessionDelivery(
             pending["id"],
             hashlib.sha256(content.encode("utf-8")).hexdigest(),
-            (content,),
+            entries,
             pending["delivery"]["settings_revision"],
             "factory_continuation",
         )
@@ -992,6 +1039,8 @@ class FactoryExecution:
         ):
             raise FactoryError("receipt_conflict", "Factory continuation receipt conflicts")
         runtime = self._runtime(card)
+        if pending.get("budget_notice"):
+            self._acknowledge_budget_notice(runtime, pending["budget_notice"])
         runtime.pop("pending")
         return await self._change(card, {"runtime": runtime}, event="delivery_acknowledged")
 
@@ -1006,8 +1055,9 @@ class FactoryExecution:
                 notice = runtime.get("budget_notices", {}).get(recipient, {})
                 pending_notice = notice.get("pending", {})
                 if pending_notice.get("id") == delivery.delivery_id:
-                    notice.setdefault("seen", []).extend(pending_notice["keys"])
-                    notice.pop("pending")
+                    self._acknowledge_budget_notice(
+                        runtime, {**pending_notice, "recipient": recipient}
+                    )
                     await self.store.change(
                         card["id"], {"runtime": runtime}, actor="factory", event=None
                     )
@@ -1074,6 +1124,7 @@ class FactoryExecution:
             runtime["current_run"] = context.run_id
             runtime.setdefault("runs", {})[owner.participant_id] = context.run_id
             if pending and not pending.get("delivery"):
+                pending["budget_notice"] = await self._prepare_budget_notice(card, runtime, context)
                 pending["delivery"] = {
                     "address": {
                         "project_id": binding.address.project_id,
@@ -1151,6 +1202,7 @@ class FactoryExecution:
         runtime = self._runtime(card)
         runtime.update(current_run=context.run_id, note=agent_text.error_message("run_failed"))
         runtime.setdefault("runs", {})[participant] = context.run_id
+        _limits.observe_run(runtime, context.run_id)
         saved = await self._change(
             card,
             {"state": "waiting", "waiting_reason": "run_failed", "runtime": runtime},
@@ -1307,13 +1359,30 @@ class FactoryExecution:
             cards = await self.store.list_cards()
             known = {card["group_id"] for card in cards}
             for card in cards:
-                if card["runtime"].get("budget", {}).get("import_tool_usage"):
+                if card["runtime"].get("budget", {}).get("import_tool_usage") or card[
+                    "runtime"
+                ].get("budget", {}).get("step_tool_adjustment"):
                     runtime = self._runtime(card)
                     budget = runtime["budget"]
-                    for prefix, query in (("", {}), ("step_", {"run_ids": budget["step_runs"]})):
-                        usage = await self.groups.usage(card["group_id"], query)
-                        budget[prefix + "tool_calls"] = usage["activity"]["tool_calls"]
-                    budget.pop("import_tool_usage")
+                    if budget.pop("import_tool_usage", False):
+                        for prefix, query in (
+                            ("", {}),
+                            ("step_", {"run_ids": budget["step_runs"]}),
+                        ):
+                            usage = await self.groups.usage(card["group_id"], query)
+                            budget[prefix + "tool_calls"] = usage["activity"]["tool_calls"]
+                    else:
+                        budget.setdefault("step_tool_calls", 0)
+                        for direction, run_ids in budget["step_tool_adjustment"].items():
+                            if run_ids:
+                                usage = await self.groups.usage(
+                                    card["group_id"], {"run_ids": run_ids}
+                                )
+                                budget["step_tool_calls"] += usage["activity"]["tool_calls"] * (
+                                    1 if direction == "add" else -1
+                                )
+                        budget["step_tool_calls"] = max(0, budget["step_tool_calls"])
+                    budget.pop("step_tool_adjustment", None)
                     card = await self.store.change(
                         card["id"], {"runtime": runtime}, actor="factory", event=None
                     )
