@@ -486,12 +486,13 @@ describe('Projects controller editing', () => {
     ]);
   });
 
-  it('preserves edits made while a Project save is in flight', async () => {
+  it('preserves newer Project edits while adopting untouched saved fields', async () => {
     const firstSave = deferred();
     let persistedProject = {
       project_id: 'project-one',
       display_name: 'Project one',
       cwd: 'C:/repo',
+      memory_enabled: true,
     };
     const setProject = vi
       .fn()
@@ -522,10 +523,14 @@ describe('Projects controller editing', () => {
     controller.updateEditField('display_name', 'First draft');
     const initialSave = controller.saveSelectedProject();
     controller.updateEditField('display_name', 'Latest draft');
+    // Another writer changes an untouched field before the refreshed list
+    // returns. The next autosave must not restore its old form value.
+    persistedProject = { ...persistedProject, memory_enabled: false };
     firstSave.resolve();
     await expect(initialSave).resolves.toBe(true);
 
     expect(state.editForm.display_name).toBe('Latest draft');
+    expect(state.editForm.memory_enabled).toBe(false);
     expect(controller.pendingChanges()).toEqual({
       display_name: 'Latest draft',
     });

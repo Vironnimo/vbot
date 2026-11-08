@@ -16,6 +16,7 @@ import {
 import { scheduleAutosave } from '../autosave.js';
 import { t } from '../i18n.js';
 import { shouldApplyReloadNow } from '../resourceInvalidation.js';
+import { rebaseDraft } from '../settingsSave.js';
 import {
   normalizePermissionRules,
   permissionRulesComplete,
@@ -655,7 +656,7 @@ export function createProjectsController({
     state.editSaving = true;
     state.editError = '';
     state.statusMessage = '';
-    const savedEditFormSnapshot = JSON.stringify(state.editForm);
+    const submittedForm = JSON.parse(JSON.stringify(state.editForm));
     const { promise: settled, resolve: settle } = Promise.withResolvers();
     runningEditSave = settled;
     try {
@@ -679,11 +680,15 @@ export function createProjectsController({
             : candidate,
         );
       }
-      if (JSON.stringify(state.editForm) === savedEditFormSnapshot) {
-        state.editForm = createProjectEditForm(
-          selectedProject() ?? savedProject,
-        );
-      }
+      // Preserve only fields edited during the request. Keeping the entire
+      // old form would turn untouched values from before this refresh into
+      // pending edits and revert another writer on the next autosave.
+      state.editForm = rebaseDraft(
+        state.editForm,
+        submittedForm,
+        createProjectEditForm(selectedProject() ?? savedProject),
+        { draftWins: true },
+      ).value;
       applyScan(result?.scan);
       return true;
     } catch (error) {
