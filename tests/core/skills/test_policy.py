@@ -189,7 +189,7 @@ class TestLoad:
 
 
 class TestMutations:
-    @pytest.mark.parametrize("operation", ["disable", "share"])
+    @pytest.mark.parametrize("operation", ["disable", "share", "rename", "references"])
     @pytest.mark.parametrize(
         "original", [b"{broken", b'{"format_version": 999}', b'{"format_version":"\xff"}']
     )
@@ -203,8 +203,12 @@ class TestMutations:
         with pytest.raises(SkillPolicyError):
             if operation == "disable":
                 service.set_package_disabled(DEPLOY, disabled=True)
-            else:
+            elif operation == "share":
                 service.set_shared("main", "deploy", shared=True, receivers=["two"])
+            elif operation == "rename":
+                service.retarget_agent("main", "renamed")
+            else:
+                service.references_agent("renamed")
         assert path.read_bytes() == original
 
     @pytest.mark.parametrize("name", ["bad name", "deploy\n", "x" * 65])
@@ -298,24 +302,84 @@ class TestMutations:
         service.set_package_disabled(DEPLOY, disabled=True)
         service.set_package_disabled(SkillPackageRef("home", "old"), disabled=False)
         service.set_shared("main", "review", shared=True, receivers=["two"])
+        service.retarget_agent("main", "renamed")
+        service.retarget_agent("two", "receiver")
 
         document = json.loads(path.read_text(encoding="utf-8"))
         assert document["future"] == {"kept": True}
         assert document["disabled_packages"]["home"] == ["bad name!", "deploy"]
         assert document["disabled_packages"]["future_source"] == ["x"]
         assert document["shared"] == {
-            "main": {
-                "also bad!": ["two"],
-                "notes": ["Not An Id", "two"],
-                "review": ["two"],
+            "renamed": {
+                "also bad!": ["receiver"],
+                "notes": ["Not An Id", "receiver"],
+                "review": ["receiver"],
             },
             "other": {"deploy": []},
         }
         # The effective policy still leaves the unusable entries out.
         assert service.load() == SkillPolicy(
             disabled_packages=frozenset({DEPLOY}),
-            shared={"main": {"notes": frozenset({"two"}), "review": frozenset({"two"})}},
+            shared={
+                "renamed": {"notes": frozenset({"receiver"}), "review": frozenset({"receiver"})}
+            },
         )
+
+    def test_agent_retarget_moves_every_reference_once_and_reverts(
+        self, storage: StorageManager
+    ) -> None:
+        service = SkillPolicyService(storage)
+        service.retarget_agent("main", "renamed")
+        assert not policy_path(storage).exists()
+        service.set_shared("main", "notes", shared=True, receivers=["two"])
+        service.set_shared("two", "review", shared=True, receivers=["main"])
+        service.set_package_disabled(SkillPackageRef("agent", "private", "main"), disabled=True)
+        original = policy_path(storage).read_bytes()
+
+        service.retarget_agent("main", "renamed")
+
+        assert not service.references_agent("main")
+        assert service.references_agent("renamed")
+        assert service.load() == SkillPolicy(
+            disabled_packages=frozenset({SkillPackageRef("agent", "private", "renamed")}),
+            shared={
+                "renamed": {"notes": frozenset({"two"})},
+                "two": {"review": frozenset({"renamed"})},
+            },
+        )
+        moved = policy_path(storage).read_bytes()
+        service.retarget_agent("main", "renamed")
+        assert policy_path(storage).read_bytes() == moved
+        service.retarget_agent("renamed", "main")
+        service.retarget_agent("renamed", "main")
+        assert policy_path(storage).read_bytes() == original
+
+    @pytest.mark.parametrize(
+        "shared",
+        [
+            {"renamed": {}},
+            {"renamed": {"bad name!": ["other"]}},
+            {"other": {"bad name!": ["renamed"]}},
+        ],
+    )
+    def test_agent_retarget_refuses_stored_target_references(
+        self, storage: StorageManager, shared: dict[str, dict[str, list[str]]]
+    ) -> None:
+        path = write_policy(
+            storage,
+            {
+                "format_version": POLICY_FORMAT_VERSION,
+                "disabled_packages": {"agents": {"main": ["private"]}},
+                "shared": shared,
+            },
+        )
+        service = SkillPolicyService(storage)
+        original = path.read_bytes()
+
+        assert service.references_agent("renamed")
+        with pytest.raises(SkillPolicyError):
+            service.retarget_agent("main", "renamed")
+        assert path.read_bytes() == original
 
     def test_sharing_groups_by_owner_beside_disabled_packages(
         self, storage: StorageManager

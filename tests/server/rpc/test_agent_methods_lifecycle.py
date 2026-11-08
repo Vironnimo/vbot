@@ -67,6 +67,7 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
     agents.create("coder", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}})
     agents.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
+    state.runtime.skill_policy.set_shared("coder", "deploy", shared=True, receivers=["manager"])
     child = SessionAddress(project_id=None, agent_id="manager", session_id="child")
     state.runtime.chat_sessions.create("coder", session_id="parent")
     state.runtime.chat_sessions.create("manager", session_id="child")
@@ -126,6 +127,9 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
         "session_links_updated": 1,
     }
     assert [job.agent_id for job in cron_jobs] == ["researcher", "coder", "coder"]
+    assert state.runtime.skill_policy.load().shared == {
+        "researcher": {"deploy": frozenset({"manager"})}
+    }
     # Retargeting references is part of one compound mutation with the rename.
     assert snapshots_during_rename == ["held off"]
     events = [event["payload"] for event in state.event_bus.events]

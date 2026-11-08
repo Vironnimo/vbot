@@ -920,6 +920,7 @@ class Runtime(RuntimeServiceGraph):
             portals=self._portals,
             secrets=self._agent_secrets,
             inputs=self._direct_inputs,
+            skill_policy=self._skill_policy,
         )
 
     def reload_skills(self) -> None:

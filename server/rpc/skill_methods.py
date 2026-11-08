@@ -678,8 +678,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.inventory": _skill_inventory,
         "skill.usage": _skill_usage,
         "skill.inspect": _skill_inspect,
-        "skill.set_disabled": serialized_mutation(
-            _skill_set_disabled, lock_attribute="_skill_mutation_lock"
+        "skill.set_disabled": _serialized_skill_mutation(
+            _skill_set_disabled, references_agents=True
         ),
         "skill.share": _serialized_skill_mutation(_skill_share, references_agents=True),
     }
