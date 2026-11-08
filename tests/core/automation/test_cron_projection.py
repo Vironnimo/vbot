@@ -247,19 +247,30 @@ class TestProjectOccurrences:
         )
 
     @pytest.mark.asyncio
-    async def test_future_ticks_respect_remaining_runs(self, service: CronService) -> None:
+    @pytest.mark.parametrize("window_hour", [0, 1, 2, 3, 24])
+    async def test_future_ticks_respect_remaining_runs(
+        self,
+        service: CronService,
+        monkeypatch: pytest.MonkeyPatch,
+        window_hour: int,
+    ) -> None:
+        origin = datetime(2026, 9, 10, tzinfo=UTC)
+        monkeypatch.setattr(
+            "core.automation._cron_timing._utc_now", lambda: origin + timedelta(minutes=30)
+        )
         await service.create_job(
             agent_id="joel",
             prompt="limited",
             schedule_type="interval",
             interval_seconds=3600,
-            interval_anchor_at="2026-09-01T00:00:00+00:00",
+            interval_anchor_at=origin.isoformat(),
             remaining_runs=2,
         )
-        occurrences = service.project_occurrences(
-            datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
-        )
-        assert len(occurrences) == 2
+        start = origin + timedelta(hours=window_hour)
+        occurrences = service.project_occurrences(start, start + timedelta(days=1))
+        assert [occurrence.fire_at_utc for occurrence in occurrences] == [
+            origin + timedelta(hours=hour) for hour in (1, 2) if hour >= window_hour
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("elapsed_hours", [0, 12, 24])

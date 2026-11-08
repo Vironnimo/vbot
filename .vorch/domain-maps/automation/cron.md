@@ -23,6 +23,7 @@ New Cron and Bootstrap job ids use the prefixes `cron_` and `boot_` (format: PRO
 ## Execution health
 
 - Execution health (`last_*`, `consecutive_failures`) persists per job: a fire takes one of four global Cron Run slots as `RunKind.CRON`, admitted with activity disabled (-> Delivery decides it at completion), consumes one finite `remaining_runs` slot after admission, waits terminally; one job never overlaps itself, slow Runs skip intervening instants, five consecutive recurring failures stop the job as `failed`, success clears the counter. Capacity bounds: 512 stored / 64 active jobs; terminal history blocks no deletions, live references do.
+- A finite interval's Calendar projection counts future ticks against the remaining budget from its captured clock, including ticks before the requested window; changing the viewed window cannot renew the budget. Historical ticks do not consume it.
 
 ## Delivery
 
