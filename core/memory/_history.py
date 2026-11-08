@@ -360,11 +360,28 @@ def diff_entries(before: Sequence[str], after: Sequence[str]) -> tuple[MemoryCha
 def _diff_values[T](
     before: Sequence[T], after: Sequence[T], text: Callable[[T], str]
 ) -> tuple[MemoryChange, ...]:
+    # Keep unchanged edge occurrences attached before matching the middle.
+    # Otherwise a repeated value can make SequenceMatcher prefer a shifted
+    # longer block, describing a simple insertion as moving existing entries.
+    prefix = 0
+    while prefix < min(len(before), len(after)) and before[prefix] == after[prefix]:
+        prefix += 1
+    before_end, after_end = len(before), len(after)
+    while (
+        before_end > prefix
+        and after_end > prefix
+        and before[before_end - 1] == after[after_end - 1]
+    ):
+        before_end -= 1
+        after_end -= 1
     changes: list[MemoryChange] = []
-    matcher = difflib.SequenceMatcher(a=list(before), b=list(after), autojunk=False)
+    matcher = difflib.SequenceMatcher(
+        a=list(before[prefix:before_end]), b=list(after[prefix:after_end]), autojunk=False
+    )
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
+        i1, i2, j1, j2 = i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix
         paired = min(i2 - i1, j2 - j1) if tag == "replace" else 0
         for offset in range(paired):
             changes.append(
@@ -699,7 +716,10 @@ def _advance(log: _Log, revision: MemoryRevision) -> None:
         state = list(log.states.get(revision.scope, []))
         apply_changes(state, revision.changes)
     log.states[revision.scope] = state
-    log.hashes[revision.scope] = revision.state
+    # A skipped earlier revision can leave replay incomplete even when the
+    # latest readable line claims the current file's hash. Sync must compare
+    # what we actually reconstructed before deciding that no repair is needed.
+    log.hashes[revision.scope] = _state_hash(state)
 
 
 def _state_hash(entries: Sequence[str]) -> str:
@@ -709,8 +729,12 @@ def _state_hash(entries: Sequence[str]) -> str:
 def _signature(path: Path) -> tuple[int, int] | None:
     try:
         stat = path.stat()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        from core.memory.memory import MemoryError
+
+        raise MemoryError(f"failed to read Memory history {path}: {exc}") from exc
     return stat.st_size, stat.st_mtime_ns
 
 
