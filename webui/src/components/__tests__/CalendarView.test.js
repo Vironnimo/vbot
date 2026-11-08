@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init, t } from '../../lib/i18n.js';
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const rpcMock = vi.fn();
 
@@ -26,9 +27,16 @@ function calendarWindow({
   events = [],
   occurrences = [],
   cron = [],
+  incomplete = false,
   timezone = 'UTC',
 } = {}) {
-  return { events, occurrences, cron, system_timezone: timezone };
+  return {
+    events,
+    occurrences,
+    cron,
+    cron_incomplete: incomplete,
+    system_timezone: timezone,
+  };
 }
 
 // A stored event; timed times are naive local times of `tz_name`.
@@ -255,9 +263,104 @@ describe('CalendarView', () => {
       vi.useRealTimers();
     });
 
+    it('shows incomplete Schedule preview feedback alongside entries until a complete reload', async () => {
+      const partial = calendarWindow({
+        incomplete: true,
+        occurrences: [
+          occurrence(
+            'Local event',
+            '2026-09-23T09:00:00Z',
+            '2026-09-23T10:00:00Z',
+          ),
+        ],
+        cron: [
+          {
+            job_id: 'job',
+            name: 'Projected job',
+            fire_at: '2026-09-23T11:00:00Z',
+          },
+        ],
+      });
+      serveWindow(partial);
+      const props = reactiveProps({ calendarRefreshToken: 0 });
+      mountedComponent = mount(CalendarView, { target: document.body, props });
+      const notice = () =>
+        document.querySelector(
+          '.calendar-view .calendar-preview-notice[role="status"]',
+        );
+      await waitForCondition(notice);
+      const titles = () =>
+        [...document.querySelectorAll('.calendar-entry-title')].map(
+          (entry) => entry.textContent,
+        );
+      expect(titles()).toEqual(
+        expect.arrayContaining(['Local event', 'Projected job']),
+      );
+
+      const reload = Promise.withResolvers();
+      rpcMock.mockImplementation((method) =>
+        method === 'calendar.window'
+          ? reload.promise
+          : Promise.resolve({ jobs: [] }),
+      );
+      props.calendarRefreshToken += 1;
+      flushSync();
+      expect(notice()).not.toBeNull();
+      expect(titles()).toEqual(
+        expect.arrayContaining(['Local event', 'Projected job']),
+      );
+      reload.reject(new Error('Window unavailable'));
+      await waitForCondition(() => document.querySelector('.banner--error'));
+      expect(notice()).toBeNull();
+
+      // The same entries in a complete response remove the warning.
+      serveWindow({ ...partial, cron_incomplete: false });
+      props.calendarRefreshToken += 1;
+      await waitForCondition(
+        () => document.querySelector('.calendar-grid') && !notice(),
+      );
+      expect(notice()).toBeNull();
+      expect(titles()).toEqual(
+        expect.arrayContaining(['Local event', 'Projected job']),
+      );
+    });
+
+    it('does not claim an empty incomplete agenda is free, or carry its warning into another period', async () => {
+      serveWindow(calendarWindow({ incomplete: true }));
+      const navigation = createStandaloneNavigation(['agenda', '2026-09-23']);
+      mountedComponent = mount(CalendarView, {
+        target: document.body,
+        props: { navigation },
+      });
+      await waitForCondition(() => document.querySelector('.calendar-agenda'));
+      expect(
+        document.querySelector('.calendar-preview-notice[role="status"]'),
+      ).not.toBeNull();
+      expect(document.querySelectorAll('.calendar-entry')).toHaveLength(0);
+      expect(
+        document.querySelector('.calendar-agenda-free').textContent.trim(),
+      ).not.toBe(t('calendar.freeDay'));
+
+      const next = Promise.withResolvers();
+      rpcMock.mockImplementation((method) =>
+        method === 'calendar.window'
+          ? next.promise
+          : Promise.resolve({ jobs: [] }),
+      );
+      navigation.navigate(['day', '2026-09-24']);
+      flushSync();
+      expect(document.querySelector('.calendar-preview-notice')).toBeNull();
+      expect(document.querySelector('.calendar-loading')).not.toBeNull();
+      expect(document.querySelector('.calendar-agenda')).toBeNull();
+      next.resolve(calendarWindow());
+      await waitForCondition(() => document.querySelector('.calendar-columns'));
+      expect(document.querySelector('.calendar-preview-notice')).toBeNull();
+    });
+
     it('heads week columns with compact labels under a week range', async () => {
       mountedComponent = await mountCalendarView();
       showView('week');
+      await waitForCondition(() => document.querySelector('.calendar-columns'));
 
       // The toolbar names the week once; columns show only weekday and day
       // instead of repeating the full date and year seven times.
@@ -325,6 +428,7 @@ describe('CalendarView', () => {
     it('names the shown day once in the day view', async () => {
       mountedComponent = await mountCalendarView();
       showView('day');
+      await waitForCondition(() => document.querySelector('.calendar-columns'));
 
       expect(plainText(document.querySelector('.calendar-heading'))).toBe(
         'Wednesday, September 23, 2026',

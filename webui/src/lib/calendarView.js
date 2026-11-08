@@ -333,6 +333,7 @@ export function createCalendarViewState() {
     // Schedule Runs of the window, without those of Agent jobs, which their
     // events show.
     cron: [],
+    cronIncomplete: false,
     // The Cron jobs bound to events (`schedule_type` event), as `cron.list`
     // returns them; `jobsError` says why they could not be read.
     jobs: [],
@@ -358,11 +359,11 @@ export function createCalendarController({ state }) {
     if (started && state.view === view && state.anchorKey === anchorKey) {
       return Promise.resolve();
     }
-    const first = !started;
     started = true;
     state.view = view;
     state.anchorKey = anchorKey;
-    return load({ silent: !first });
+    // A previous window's entries and completeness cannot describe this period.
+    return load();
   }
 
   async function load({ silent = false } = {}) {
@@ -398,6 +399,7 @@ export function createCalendarController({ state }) {
       state.occurrences = result.occurrences ?? [];
       state.events = result.events ?? [];
       state.cron = (result.cron ?? []).filter((item) => !item.event_id);
+      state.cronIncomplete = result.cron_incomplete === true;
       if (jobs.error) {
         state.jobsError = jobs.error?.message ?? String(jobs.error);
       } else {

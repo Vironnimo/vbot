@@ -9,15 +9,26 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from core.automation import _cron_projection as projection_module
+from core.automation import _cron_schedule as schedule_module
+from core.automation._cron_jobs import ScheduleType
 from core.automation.cron import CronJobValidationError, CronService
+from core.calendar import CalendarProjection, CalendarService
 
 
 @pytest.fixture()
-def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
+def calendar(tmp_path: Any) -> CalendarService:
+    return CalendarService(tmp_path, tz="UTC")
+
+
+@pytest.fixture()
+def service(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, calendar: CalendarService
+) -> CronService:
     monkeypatch.setattr(
         "core.automation._cron_timing._utc_now", lambda: datetime(2010, 1, 1, tzinfo=UTC)
     )
-    return CronService(Mock(), tmp_path, tz="UTC")
+    return CronService(Mock(), tmp_path, tz="UTC", calendar=calendar)
 
 
 class TestProjectOccurrences:
@@ -72,10 +83,11 @@ class TestProjectOccurrences:
         # Projection includes its lower bound; exclude it here to match next_fire_at.
         rows = service.project_occurrences(
             start + timedelta(microseconds=1), expected_utc + timedelta(seconds=1)
-        )
+        ).occurrences
         assert rows[0].fire_at_utc == expected_utc
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("remaining", [None, 2])
     @pytest.mark.parametrize(
         ("zone", "expression", "start", "end", "expected"),
         [
@@ -107,7 +119,7 @@ class TestProjectOccurrences:
         ],
     )
     async def test_spring_gap_projection_matches_successive_live_fires(
-        self, service, zone, expression, start, end, expected
+        self, service, monkeypatch, zone, expression, start, end, expected, remaining
     ):
         service.set_timezone(zone)
         job = await service.create_job(
@@ -115,10 +127,15 @@ class TestProjectOccurrences:
             prompt="half-hour",
             schedule_type="cron",
             cron_expression=expression,
+            remaining_runs=remaining,
         )
         start = datetime.fromisoformat(start)
         end = datetime.fromisoformat(end)
-        projected = [row.fire_at_utc for row in service.project_occurrences(start, end)]
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: start)
+        expected = expected[:remaining]
+        preview = service.project_occurrences(start, end)
+        projected = [row.fire_at_utc for row in preview.occurrences]
+        assert not preview.incomplete
         assert projected == [datetime.fromisoformat(item) for item in expected]
         cursor = start - timedelta(microseconds=1)
         live = []
@@ -139,12 +156,12 @@ class TestProjectOccurrences:
         )
         start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo("Europe/Berlin"))
         end = start + timedelta(days=1)
-        rows = service.project_occurrences(start.astimezone(UTC), end.astimezone(UTC))
+        rows = service.project_occurrences(start.astimezone(UTC), end.astimezone(UTC)).occurrences
         assert [row.fire_at_utc for row in rows] == [start.astimezone(UTC)]
         assert (
             service.project_occurrences(
                 start.astimezone(UTC) + timedelta(microseconds=1), end.astimezone(UTC)
-            )
+            ).occurrences
             == []
         )
 
@@ -159,7 +176,7 @@ class TestProjectOccurrences:
         )
         occurrences = service.project_occurrences(
             datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
-        )
+        ).occurrences
         assert [occurrence.fire_at_utc for occurrence in occurrences] == [
             datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
         ]
@@ -175,7 +192,7 @@ class TestProjectOccurrences:
         )
         occurrences = service.project_occurrences(
             datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 2, tzinfo=UTC)
-        )
+        ).occurrences
         assert occurrences == []
 
     @pytest.mark.asyncio
@@ -193,35 +210,55 @@ class TestProjectOccurrences:
             prompt="check mail",
             schedule_type="cron",
             cron_expression="0 9 * * *",
+            remaining_runs=1,
         )
         start = datetime(2026, 9, 1, tzinfo=UTC)
         end = datetime(2026, 9, 4, tzinfo=UTC)
         projection = service.projection()
-        occurrences = projection.project_occurrences(start, end)
+        preview = projection.project_occurrences(start, end)
+        occurrences = preview.occurrences
         expected = [datetime(2026, 9, day, 9, tzinfo=UTC) for day in (2, 3)]
         assert [row.fire_at_utc for row in occurrences] == [
             tick for tick in expected if tick >= created
-        ]
+        ][:1]
+        assert not preview.incomplete
         assert all(row.schedule_type == "cron" for row in occurrences)
-        assert projection.project_occurrences(start, created) == []
+        monkeypatch.setattr(projection_module, "MAX_PREVIEW_STEPS", 0)
+        before_creation = projection.project_occurrences(start, created)
+        assert before_creation.occurrences == []
+        assert not before_creation.incomplete
 
     @pytest.mark.asyncio
-    async def test_interval_projects_from_anchor(self, service: CronService) -> None:
+    @pytest.mark.parametrize(
+        ("period", "first_index", "hours", "expected_indices"),
+        [
+            (3600, 24, 3, [24, 25, 26]),
+            (5000 * 365 * 86400, 1, 24, [1]),
+            (5000 * 365 * 86400, 0, 24, []),
+        ],
+    )
+    async def test_interval_projects_from_anchor(
+        self,
+        service: CronService,
+        period: int,
+        first_index: int,
+        hours: int,
+        expected_indices: list[int],
+    ) -> None:
+        anchor = datetime(2026, 9, 1, tzinfo=UTC)
         await service.create_job(
             agent_id="joel",
             prompt="interval job",
             schedule_type="interval",
-            interval_seconds=3600,
-            interval_anchor_at="2026-09-01T00:00:00+00:00",
+            interval_seconds=period,
+            interval_anchor_at=anchor.isoformat(),
         )
-        occurrences = service.project_occurrences(
-            datetime(2026, 9, 2, 0, 0, tzinfo=UTC), datetime(2026, 9, 2, 3, 0, tzinfo=UTC)
-        )
-        assert [occurrence.fire_at_utc for occurrence in occurrences] == [
-            datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
-            datetime(2026, 9, 2, 1, 0, tzinfo=UTC),
-            datetime(2026, 9, 2, 2, 0, tzinfo=UTC),
+        start = anchor + timedelta(seconds=first_index * period)
+        preview = service.project_occurrences(start, start + timedelta(hours=hours))
+        assert [occurrence.fire_at_utc for occurrence in preview.occurrences] == [
+            anchor + timedelta(seconds=index * period) for index in expected_indices
         ]
+        assert not preview.incomplete
 
     @pytest.mark.asyncio
     async def test_paused_and_terminal_jobs_do_not_project(self, service: CronService) -> None:
@@ -242,58 +279,77 @@ class TestProjectOccurrences:
         assert (
             service.project_occurrences(
                 datetime(2026, 9, 2, tzinfo=UTC), datetime(2026, 9, 3, tzinfo=UTC)
-            )
+            ).occurrences
             == []
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("schedule_type", ["interval", "cron"])
+    @pytest.mark.parametrize("now_minute", [0, 30])
     @pytest.mark.parametrize("window_hour", [0, 1, 2, 3, 24])
     async def test_future_ticks_respect_remaining_runs(
         self,
         service: CronService,
         monkeypatch: pytest.MonkeyPatch,
+        schedule_type: ScheduleType,
+        now_minute: int,
         window_hour: int,
     ) -> None:
         origin = datetime(2026, 9, 10, tzinfo=UTC)
         monkeypatch.setattr(
-            "core.automation._cron_timing._utc_now", lambda: origin + timedelta(minutes=30)
+            "core.automation._cron_timing._utc_now", lambda: origin + timedelta(minutes=now_minute)
         )
         await service.create_job(
             agent_id="joel",
             prompt="limited",
-            schedule_type="interval",
-            interval_seconds=3600,
-            interval_anchor_at=origin.isoformat(),
+            schedule_type=schedule_type,
+            cron_expression="0 * * * *" if schedule_type == "cron" else None,
+            interval_seconds=3600 if schedule_type == "interval" else None,
+            interval_anchor_at=origin.isoformat() if schedule_type == "interval" else None,
             remaining_runs=2,
         )
         start = origin + timedelta(hours=window_hour)
-        occurrences = service.project_occurrences(start, start + timedelta(days=1))
-        assert [occurrence.fire_at_utc for occurrence in occurrences] == [
-            origin + timedelta(hours=hour) for hour in (1, 2) if hour >= window_hour
+        preview = service.project_occurrences(start, start + timedelta(days=1))
+        first = 0 if schedule_type == "cron" and now_minute == 0 else 1
+        assert [occurrence.fire_at_utc for occurrence in preview.occurrences] == [
+            origin + timedelta(hours=hour)
+            for hour in range(first, first + 2)
+            if hour >= window_hour
         ]
+        assert not preview.incomplete
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("schedule_type", ["interval", "cron"])
     @pytest.mark.parametrize("elapsed_hours", [0, 12, 24])
     async def test_historical_ticks_do_not_consume_remaining_runs(
-        self, service: CronService, monkeypatch: pytest.MonkeyPatch, elapsed_hours: int
+        self,
+        service: CronService,
+        monkeypatch: pytest.MonkeyPatch,
+        elapsed_hours: int,
+        schedule_type: ScheduleType,
     ) -> None:
         window_start = datetime(2026, 9, 10, tzinfo=UTC)
         now = window_start + timedelta(hours=elapsed_hours)
-        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
+        monkeypatch.setattr(
+            "core.automation._cron_timing._utc_now", lambda: window_start - timedelta(days=1)
+        )
         await service.create_job(
             agent_id="joel",
             prompt="limited",
-            schedule_type="interval",
-            interval_seconds=3600,
-            interval_anchor_at="2026-09-01T00:00:00+00:00",
+            schedule_type=schedule_type,
+            cron_expression="0 * * * *" if schedule_type == "cron" else None,
+            interval_seconds=3600 if schedule_type == "interval" else None,
+            interval_anchor_at="2026-09-01T00:00:00+00:00" if schedule_type == "interval" else None,
             remaining_runs=2,
         )
 
-        occurrences = service.project_occurrences(window_start, window_start + timedelta(days=1))
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
+        preview = service.project_occurrences(window_start, window_start + timedelta(days=1))
 
-        assert [occurrence.fire_at_utc for occurrence in occurrences] == [
+        assert [occurrence.fire_at_utc for occurrence in preview.occurrences] == [
             window_start + timedelta(hours=hour) for hour in range(min(elapsed_hours + 2, 24))
         ]
+        assert not preview.incomplete
 
     @pytest.mark.asyncio
     async def test_projection_is_sorted_and_sorted_by_fire_time(self, service: CronService) -> None:
@@ -313,24 +369,172 @@ class TestProjectOccurrences:
         )
         occurrences = service.project_occurrences(
             datetime(2026, 9, 2, tzinfo=UTC), datetime(2026, 9, 3, tzinfo=UTC)
-        )
+        ).occurrences
         fire_times = [occurrence.fire_at_utc for occurrence in occurrences]
         assert fire_times == sorted(fire_times)
         assert [occurrence.name for occurrence in occurrences] == ["early", "late"]
 
     @pytest.mark.asyncio
-    async def test_caps_occurrences_per_job(self, service: CronService) -> None:
+    @pytest.mark.parametrize("schedule_type", ["interval", "cron", "event"])
+    @pytest.mark.parametrize("count", [500, 501])
+    async def test_caps_occurrences_per_job(
+        self,
+        service: CronService,
+        calendar: CalendarService,
+        schedule_type: ScheduleType,
+        count: int,
+    ) -> None:
+        start = datetime(2026, 9, 2, tzinfo=UTC)
+        event = calendar.create_event(
+            title="Daily", start=start.isoformat(), rrule=f"FREQ=DAILY;COUNT={count}"
+        )
         await service.create_job(
             agent_id="joel",
-            prompt="every minute",
+            prompt="daily",
+            schedule_type=schedule_type,
+            interval_seconds=86400 if schedule_type == "interval" else None,
+            interval_anchor_at="2026-09-01T00:00:00+00:00" if schedule_type == "interval" else None,
+            cron_expression="0 0 * * *" if schedule_type == "cron" else None,
+            event_id=event.id if schedule_type == "event" else None,
+            event_edge="start" if schedule_type == "event" else None,
+        )
+        preview = service.project_occurrences(start, start + timedelta(days=count))
+        assert len(preview.occurrences) == 500
+        assert preview.incomplete is (count > 500)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("days_ahead", [0, 730])
+    @pytest.mark.parametrize("remaining", [2, 4, 1_000_000])
+    async def test_counting_a_future_budget_is_bounded_and_keeps_only_proven_rows(
+        self,
+        service: CronService,
+        monkeypatch: pytest.MonkeyPatch,
+        days_ahead: int,
+        remaining: int,
+    ) -> None:
+        now = datetime(2026, 9, 2, tzinfo=UTC)
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
+        monkeypatch.setattr(projection_module, "MAX_PREVIEW_STEPS_PER_JOB", 4)
+        job = await service.create_job(
+            agent_id="joel",
+            prompt="limited",
+            schedule_type="cron",
+            cron_expression="* * * * *",
+            remaining_runs=remaining,
+        )
+        calls = 0
+        next_tick = schedule_module._next_cron_fire_local
+
+        def counted(*args: Any) -> datetime:
+            nonlocal calls
+            calls += 1
+            return next_tick(*args)
+
+        monkeypatch.setattr(schedule_module, "_next_cron_fire_local", counted)
+        projection = service.projection()
+        # The preview uses its captured clock even after the live clock advances.
+        monkeypatch.setattr(
+            "core.automation._cron_timing._utc_now", lambda: now + timedelta(days=1)
+        )
+        start = now + timedelta(days=days_ahead)
+        preview = projection.project_occurrences(start, start + timedelta(hours=1))
+        assert calls == min(remaining, 4)
+        assert preview.incomplete is (remaining > 4)
+        assert [row.fire_at_utc for row in preview.occurrences] == (
+            [now + timedelta(minutes=minute) for minute in range(min(remaining, 4))]
+            if days_ahead == 0
+            else []
+        )
+        assert service.get_job(job.id).remaining_runs == remaining
+
+    @pytest.mark.asyncio
+    async def test_shared_work_cap_preserves_other_jobs_and_cheap_schedules(
+        self,
+        service: CronService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        now = datetime(2026, 9, 2, tzinfo=UTC)
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
+        monkeypatch.setattr(projection_module, "MAX_PREVIEW_STEPS", 5)
+        monkeypatch.setattr(projection_module, "MAX_PREVIEW_STEPS_PER_JOB", 3)
+        jobs = [
+            await service.create_job(
+                agent_id="joel",
+                prompt="minute",
+                schedule_type="cron",
+                cron_expression="* * * * *",
+            )
+            for _ in range(3)
+        ]
+        once = await service.create_job(
+            agent_id="joel",
+            prompt="once",
+            schedule_type="once",
+            run_at=(now + timedelta(minutes=30)).isoformat(),
+        )
+        interval = await service.create_job(
+            agent_id="joel",
+            prompt="hourly",
             schedule_type="interval",
-            interval_seconds=60,
-            interval_anchor_at="2026-09-01T00:00:00+00:00",
+            interval_seconds=3600,
         )
-        occurrences = service.project_occurrences(
-            datetime(2026, 9, 2, tzinfo=UTC), datetime(2026, 9, 3, tzinfo=UTC)
+        calls = 0
+        next_tick = schedule_module._next_cron_fire_local
+
+        def counted(*args: Any) -> datetime:
+            nonlocal calls
+            calls += 1
+            return next_tick(*args)
+
+        monkeypatch.setattr(schedule_module, "_next_cron_fire_local", counted)
+        preview = service.project_occurrences(now, now + timedelta(hours=2))
+        assert preview.incomplete
+        assert calls == 5
+        assert [sum(row.job_id == job.id for row in preview.occurrences) for job in jobs] == [
+            3,
+            2,
+            0,
+        ]
+        assert {row.job_id for row in preview.occurrences} >= {once.id, interval.id}
+
+    @pytest.mark.asyncio
+    async def test_event_preview_limits_candidates_and_sorts_known_end_times(
+        self,
+        service: CronService,
+        calendar: CalendarService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        start = datetime(2026, 9, 2, tzinfo=UTC)
+        event = calendar.create_event(
+            title="Daily", start=start.isoformat(), rrule="FREQ=DAILY;COUNT=100"
         )
-        assert len(occurrences) == 500
+        first = next(calendar.iter_occurrences(event, start))
+        await calendar.update_occurrence(first.id, end=(start + timedelta(days=9)).isoformat())
+        await service.create_job(
+            agent_id="joel",
+            prompt="event end",
+            schedule_type="event",
+            event_id=event.id,
+            event_edge="end",
+        )
+        monkeypatch.setattr(projection_module, "MAX_PREVIEW_STEPS_PER_JOB", 2)
+        candidates = 0
+        iterate = CalendarProjection.iter_occurrences
+
+        def counted(self: CalendarProjection, *args: Any):
+            nonlocal candidates
+            for occurrence in iterate(self, *args):
+                candidates += 1
+                yield occurrence
+
+        monkeypatch.setattr(CalendarProjection, "iter_occurrences", counted)
+        preview = service.project_occurrences(start, start + timedelta(days=30))
+        assert candidates == 2
+        assert preview.incomplete
+        assert [row.fire_at_utc for row in preview.occurrences] == [
+            start + timedelta(days=1, hours=1),
+            start + timedelta(days=9),
+        ]
 
     def test_rejects_inverted_window(self, service: CronService) -> None:
         with pytest.raises(CronJobValidationError):

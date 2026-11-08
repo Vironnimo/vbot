@@ -39,7 +39,9 @@ def fires(tool: CronTool) -> list[datetime]:
     return [
         occurrence.fire_at_utc
         for start, end in _CLOCK_CHANGE_WINDOWS
-        for occurrence in tool.service.project_occurrences(start, end, max_per_job=10_000)
+        for occurrence in tool.service.project_occurrences(
+            start, end, max_per_job=10_000
+        ).occurrences
     ]
 
 

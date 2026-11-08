@@ -1,6 +1,6 @@
 """Automation domain public API."""
 
-from core.automation._cron_projection import CronProjection
+from core.automation._cron_projection import CronPreview, CronProjection
 from core.automation.automation import TriggerService
 from core.automation.bootstrap import (
     BootstrapService,
@@ -48,6 +48,7 @@ __all__ = [
     "AutomationReference",
     "AutomationReferences",
     "CronOccurrence",
+    "CronPreview",
     "CronProjection",
     "LaterChange",
     "LearningChange",

@@ -313,6 +313,9 @@ export default Object.freeze({
   'calendar.loadError': 'The calendar could not be loaded.',
   'calendar.serverUnavailable': 'The vBot server is not reachable right now.',
   'calendar.freeDay': 'Nothing scheduled.',
+  'calendar.cronIncomplete':
+    'The Schedule preview is incomplete. Some scheduled Runs may be missing. This does not affect job execution.',
+  'calendar.previewEmpty': 'No entries in this preview.',
   'calendar.layer.local': 'Events',
   'calendar.layer.localHint': 'Appointments stored in vBot.',
   'calendar.layer.cron': 'Schedules',

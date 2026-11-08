@@ -123,7 +123,7 @@ async def test_a_matching_mail_is_stored_once_and_starts_one_run_with_escaped_da
     scripted_runs(trigger_service, (RunStatus.COMPLETED, "Done."))
     job = service.get_job(job_id)
     assert (service.format_schedule(job), service.next_fire_at(job)) == ("email", None)
-    assert service.project_occurrences(_NOW, _NOW + timedelta(days=7)) == []
+    assert service.project_occurrences(_NOW, _NOW + timedelta(days=7)).occurrences == []
 
     # Mails from another sender, without the subject, or to another Channel are not taken.
     for ignored in (

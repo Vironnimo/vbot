@@ -709,7 +709,9 @@ async def test_projection_shows_each_due_time_with_its_event_and_occurrence(
     )
     job = await _event_job(services, event.id, "start - 15m")
 
-    rows = services.cron.project_occurrences(_local("2030-01-07T00:00"), _local("2030-01-15T00:00"))
+    rows = services.cron.project_occurrences(
+        _local("2030-01-07T00:00"), _local("2030-01-15T00:00")
+    ).occurrences
 
     assert rows == [
         CronOccurrence(

@@ -106,7 +106,7 @@ async def test_a_request_with_the_secret_starts_a_run_with_its_payload_as_escape
     status = service.webhook_status(job)
     assert status is not None
     assert status.url == f"https://vbot.example.com/api/hooks/{job_id}"
-    assert service.project_occurrences(clock.now, clock.now + timedelta(days=7)) == []
+    assert service.project_occurrences(clock.now, clock.now + timedelta(days=7)).occurrences == []
 
     body = json.dumps({"action": "opened", "title": "<script>alert(1)</script>"}).encode()
     headers = _bearer(
