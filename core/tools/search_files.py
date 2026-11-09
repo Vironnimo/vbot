@@ -9,13 +9,16 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from core.permissions import PermissionBoundary, PermissionGrant
-from core.tools._permission_preflight import authorize_paths
+from core.permissions import (
+    PermissionBoundary,
+    PermissionGrant,
+)
 from core.tools._refused_notes import search_note
 from core.tools._search_arguments import (
     interpret_search_call as interpret_search_call,
@@ -68,6 +71,7 @@ from core.tools._search_hints import (
 )
 from core.tools._search_query import (
     LIST_MODES,
+    MAX_OFFSET,
     SearchArgumentError,
     SearchQuery,
 )
@@ -85,8 +89,10 @@ from core.tools._search_roots import (
     _directory_globs,
     _missing_warnings,
     _nothing_searched,
+    _preflight_search,
     _resolve_roots,
     _Roots,
+    split_glob_lists,
 )
 from core.tools.contracts import ToolContractError
 from core.tools.edit import offered_edit_tool
@@ -212,6 +218,9 @@ class _Found:
     # Paths ripgrep could not read, as warnings, and how many more it did not name.
     unreadable: list[str] = field(default_factory=list)
     unreadable_unnamed: int = 0
+    # Listings retain selection before applying a regex to names, so an empty
+    # name match never reinterprets a glob that already selected real entries.
+    selected_entries: bool = False
 
     def take(self, index: int, scope: Scope, result: ScanResult, cwd: Path) -> None:
         self.entries.extend(
@@ -342,6 +351,7 @@ def _list_directories(
             )
         )
     ]
+    found.selected_entries = bool(selected)
     if query.name_patterns:
         names = _matching_names(execution, query, [path.name for path in selected])
         selected = [path for path in selected if path.name in names]
@@ -691,6 +701,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
     if query.mode == "list_files":
         for index, scope in enumerate(scopes):
             found.take(index, scope, execution.list_scan(query, scope), execution.cwd)
+        found.selected_entries = bool(found.entries)
         if query.name_patterns:
             # A listing's pattern matches a name or a shown path.
             names = [entry.label for entry in found.entries]
@@ -713,18 +724,30 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
         else query.patterns
     )
     repair_note = None
+    whole_budget = execution.budget
+    if query.mode == "content":
+        execution.budget = SearchBudget(execution.context, whole_budget.remaining_seconds() * 0.8)
+    count_budget = execution.budget
     try:
-        results = [execution.count_scan(query, patterns, scope) for scope in scopes]
-    except SearchRefusedError as error:
-        retry = None if query.literal else pattern_retry(str(error), patterns, query)
-        if retry is None:
-            raise
-        patterns, flag, note = retry
-        if flag is not None:
-            query.rg_args.append(flag)
-        results = [execution.count_scan(query, patterns, scope) for scope in scopes]
-        query.notes.append(note)
-        repair_note = note
+        try:
+            results = [execution.count_scan(query, patterns, scope) for scope in scopes]
+        except SearchRefusedError as error:
+            retry = None if query.literal else pattern_retry(str(error), patterns, query)
+            if retry is None:
+                raise
+            patterns, flag, note = retry
+            if flag is not None:
+                query.rg_args.append(flag)
+            results = [execution.count_scan(query, patterns, scope) for scope in scopes]
+            query.notes.append(note)
+            repair_note = note
+    finally:
+        execution.budget = whole_budget
+    if count_budget is not whole_budget and count_budget.timed_out and whole_budget.keep_going():
+        found.warnings.append(
+            "Counting stopped to leave time to return matching lines; totals are partial. "
+            "Narrow path or glob to search the rest."
+        )
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
         found.take(index, scope, result, execution.cwd)
     if roots.globs and len(scopes) > 1:
@@ -807,9 +830,12 @@ def _left_out_note(roots: list[Path], cwd: Path, permissions: PermissionBoundary
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
         query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
-        binary = require_binary()
         if query.mode == "help":
             return tool_success({"content": help_text()})
+        try:
+            binary = require_binary()
+        except ValueError as error:
+            return tool_failure("tool_not_ready", str(error))
         budget = SearchBudget(context)
         cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
         execution = SearchExecution(binary, context, budget, cwd)
@@ -818,9 +844,17 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             return tool_success({"content": text})
         confine_flags(query, cwd, context.permissions, context.permission_access)
         try:
-            roots = _resolve_roots(query, cwd, context.permissions, context.permission_access)
+            roots = _resolve_roots(
+                query, cwd, context.permissions, context.permission_access, context=context
+            )
         except OSError as error:
             target = path_label(Path(error.filename), cwd) if error.filename else "the search paths"
+            if getattr(error, "winerror", None) == 123:
+                return tool_failure(
+                    "invalid_arguments",
+                    f"Nothing was searched. Invalid path spelling: {target}. "
+                    "Send a local file path, a file: URL, or a glob in glob.",
+                )
             return tool_failure(
                 "search_error",
                 f"Nothing was searched. Could not check {target}: {os_error_reason(error)}. "
@@ -829,17 +863,75 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         execution.roots = roots.paths
         context.record_worked_paths(*roots.paths)
         missing = _missing_warnings(
-            query, roots, cwd, context.offers, context.permissions, arguments.get("args")
+            query,
+            roots,
+            cwd,
+            context.offers,
+            context.permissions,
+            arguments.get("args"),
+            context.permission_access,
         )
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
-        _directory_globs(query, roots.paths, cwd, context.permissions)
+        _directory_globs(query, roots.paths, cwd, context.permissions, context.permission_access)
+        if (
+            roots.paths
+            and all(path.is_file() for path in roots.paths)
+            and (
+                query.globs
+                or any(
+                    arg.startswith(("--type=", "--type-not=", "--iglob=")) for arg in query.rg_args
+                )
+            )
+        ):
+            query.notes.append(
+                "glob and type filters have no effect on explicitly named files. "
+                "Pass their directory in path to filter its files."
+            )
+        before_search = replace(query, notes=list(query.notes), rg_args=list(query.rg_args))
         outcome = _search(execution, query, roots)
+        if (
+            not outcome.total
+            and outcome.found.complete
+            and not budget.stopped
+            and (
+                (query.mode in LIST_MODES and not outcome.found.selected_entries)
+                or outcome.found.files_searched == 0
+            )
+        ):
+            separated = split_glob_lists(query)
+            if separated is not None:
+                query = before_search
+                query.notes.append(
+                    "The written glob selected no files, so its separate wildcard filters "
+                    f"were read as glob {json.dumps(separated, ensure_ascii=False)}."
+                )
+                query.globs = separated
+                outcome = _search(execution, query, roots)
+        if not outcome.total and outcome.found.complete and query.patterns:
+            if any(re.match(r"^(?:rg|ripgrep|grep)\s+-", pattern) for pattern in query.patterns):
+                query.notes.append(
+                    "The command-looking text was used as the search pattern. "
+                    "Put the search text in pattern, its options in args and its target in path."
+                )
+            if any(not pattern.isascii() for pattern in query.patterns) and not any(
+                arg.startswith("--encoding=") for arg in query.rg_args
+            ):
+                query.notes.append(
+                    "For files in a non-UTF-8 encoding without a Unicode BOM, pass their "
+                    'encoding in args, for example ["-E", "latin1"].'
+                )
         left_out = _left_out_note(roots.paths, cwd, context.permissions)
         if left_out:
             query.notes.append(left_out)
-    except (SearchArgumentError, ToolContractError, ValueError) as error:
+    except (SearchArgumentError, ToolContractError) as error:
         return tool_failure("invalid_arguments", str(error))
+    except ValueError:
+        return tool_failure(
+            "search_error",
+            "No results were returned. The search engine returned unreadable data. "
+            "Retry with a narrower path or glob; if this repeats, repair the vBot installation.",
+        )
     except SearchRefusedError as error:
         patterns = query.patterns or query.name_patterns
         return tool_failure("search_error", explain_failure(str(error), patterns))
@@ -879,7 +971,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         )
     }
     end = page.offset + page.returned
-    if page.returned and end < outcome.total:
+    if page.returned and end < outcome.total and end <= MAX_OFFSET:
         data["next_offset"] = end
     if query.notes:
         data["note"] = " ".join(dict.fromkeys(query.notes))
@@ -929,69 +1021,6 @@ def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[J
         if isinstance(warning, str) and warning.strip():
             blocks.append(display_notice("warning", warning))
     return blocks
-
-
-async def _preflight_search(context: ToolContext, arguments: JsonObject) -> None:
-    try:
-        query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
-    except SearchArgumentError, ToolContractError, ValueError:
-        return
-    if query.mode in {"help", "reference"}:
-        return
-    cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
-    roots: list[str] = []
-    if not query.roots:
-        for glob in query.globs:
-            path = Path(glob)
-            if glob.startswith("!") or not path.is_absolute():
-                continue
-            parts = path.parts
-            fixed = next(
-                (index for index, part in enumerate(parts) if any(char in part for char in "*?[{")),
-                len(parts) - 1,
-            )
-            if fixed < 1:
-                continue
-            base = Path(*parts[:fixed])
-            anchored = cwd.joinpath(*parts[1:fixed])
-            if (
-                os.name != "nt"
-                and context.permissions.check_path(anchored, "read") is None
-                and anchored.is_dir()
-            ):
-                continue
-            if not base.is_relative_to(cwd):
-                roots.append(str(base))
-                break
-    for raw in query.roots or ([] if roots else [str(cwd)]):
-        if raw.startswith("!"):
-            continue
-        if "{" in raw:
-            roots.extend(_expand_brace_alternations(raw))
-        elif "," in raw:
-            roots.extend(part.strip() for part in raw.split(",") if part.strip())
-        elif any(char in raw for char in "*?["):
-            parts = Path(raw).parts
-            fixed = next(index for index, part in enumerate(parts) if any(c in part for c in "*?["))
-            roots.append(str(Path(*parts[:fixed])) if fixed else ".")
-        else:
-            roots.append(raw)
-    if not roots:
-        roots.append(str(cwd))
-    flags = [
-        value
-        for item in query.rg_args
-        for name, sep, value in [item.partition("=")]
-        if sep and name in {"--file", "--ignore-file"}
-    ]
-    await authorize_paths(
-        context,
-        [
-            *((path, "read", {"filtered": True}) for path in roots),
-            *((path, "read", {}) for path in flags),
-        ],
-        arguments=arguments,
-    )
 
 
 def register_search_files_tool(registry: ToolRegistry) -> None:

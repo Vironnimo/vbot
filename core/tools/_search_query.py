@@ -184,6 +184,7 @@ _IGNORED_WITH_NOTE = {
     "replace": "results show the original lines",
 }
 _BLOCKED = {
+    "search-zip": "starts external decompressors",
     "pre": "runs another program on every file",
     "pre-glob": "only selects files for --pre",
     "hostname-bin": "runs another program",
@@ -276,7 +277,14 @@ def _is_encoding(value: str) -> bool:
     if value in {"auto", "none"}:
         return True
     try:
-        codecs.lookup(value)
+        "".encode(value)
+        if codecs.lookup(value).name in {
+            "idna",
+            "punycode",
+            "unicode-escape",
+            "raw-unicode-escape",
+        }:
+            return False
     except LookupError, ValueError:
         return False
     return True
@@ -291,6 +299,14 @@ def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Par
     """
     parsed = _Parsed()
     fields = fields or {}
+    if (
+        len(tokens) > 1
+        and tokens[0] in {"rg", "ripgrep", "grep"}
+        and tokens[1].startswith("-")
+        and "pattern" not in fields
+    ):
+        parsed.notes.append(f'The leading program name "{tokens[0]}" in args was omitted.')
+        tokens = tokens[1:]
 
     def bare(name: str, written: str) -> bool:
         """Leave out a flag without a value when a named field gives it."""
@@ -354,6 +370,11 @@ def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Par
                     continue
                 value = letters[position:].removeprefix("=")
                 if not value:
+                    if name == "encoding" and (
+                        index >= len(tokens) or not _is_encoding(tokens[index])
+                    ):
+                        # grep's bare -E selects the regex syntax already used here.
+                        break
                     if index >= len(tokens) and bare(name, f"-{letter}"):
                         break
                     if index >= len(tokens):
@@ -361,9 +382,6 @@ def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Par
                             f"-{letter} in args needs a value as the next item, for example "
                             f'["-{letter}", "{_example_value(name)}"].'
                         )
-                    if name == "encoding" and not _is_encoding(tokens[index]):
-                        # grep's -E (extended regex) is ripgrep's default syntax.
-                        break
                     value = tokens[index]
                     index += 1
                 elif name == "encoding" and not _is_encoding(value):
@@ -410,6 +428,12 @@ def _number(name: str, value: str, *, minimum: int, maximum: int, field_name: st
         )
     number = int(text)
     if not minimum <= number <= maximum:
+        if name == "offset":
+            raise SearchArgumentError(
+                f"{label} needs a whole number between {minimum} and {maximum}; "
+                f"received {number}. Narrow path, glob or "
+                "pattern and restart with offset 0."
+            )
         raise SearchArgumentError(
             f"{label} needs a whole number between {minimum} and {maximum}; received {number}."
         )
@@ -651,9 +675,21 @@ def interpret(
                         "have. Pass the patterns in pattern or as -e items."
                     )
         elif name in _BLOCKED:
+            if name == "search-zip":
+                raise SearchArgumentError(
+                    "Nothing was searched. -z (--search-zip) starts external decompressors "
+                    "and is not available in search_files. Extract the archive first, then "
+                    "search the extracted directory without -z."
+                )
             raise SearchArgumentError(
                 f"{written} {_BLOCKED[name]} and is not available in search_files. Remove it "
                 "from args."
+            )
+        elif name == "null-data":
+            raise SearchArgumentError(
+                "Nothing was searched. --null-data uses NUL-separated records, which "
+                "search_files does not support. Remove it; use -U for matches spanning "
+                "lines, or -a to search binary data as text."
             )
         elif name in _REFERENCE:
             reference = name

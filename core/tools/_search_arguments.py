@@ -48,7 +48,9 @@ def _repair_argument_array(value: Any) -> Any:
     flags = flag_list(value)
     if flags is not None:
         return flags
-    if value.lstrip().startswith("-") and "\\" not in value:
+    if (
+        value.lstrip().startswith("-") or re.match(r"^\s*(?:rg|ripgrep|grep)\s+-", value)
+    ) and "\\" not in value:
         with contextlib.suppress(ValueError):
             words = shlex.split(value)
             if len(words) > 1:
@@ -373,6 +375,14 @@ def _strings(arguments: JsonObject, name: str) -> list[str]:
 
 
 def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> SearchQuery:
+    """Keep argument failures separate from failures while executing the search."""
+    try:
+        return _interpret_search_call(arguments, edit_tool=edit_tool)
+    except ValueError as error:
+        raise SearchArgumentError(str(error)) from error
+
+
+def _interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> SearchQuery:
     """Interpret one call's named fields and args as a single ripgrep query.
 
     *edit_tool* is the file edit Tool the Agent is offered, which notes may name.
@@ -384,6 +394,14 @@ def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> Se
     if pattern is not None and not isinstance(pattern, str):
         raise SearchArgumentError("pattern must be a string.")
     output = arguments.get("output")
+    try:
+        offset = optional_int(
+            arguments.get("offset"), field_name="offset", minimum=0, maximum=MAX_OFFSET
+        )
+    except ValueError as error:
+        raise SearchArgumentError(
+            f"{error}. Narrow path, glob or pattern and restart with offset 0."
+        ) from error
     return interpret(
         pattern=pattern,
         roots=_strings(arguments, "path"),
@@ -394,8 +412,6 @@ def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> Se
         limit=optional_int(
             arguments.get("limit"), field_name="limit", minimum=1, maximum=MAX_LIMIT
         ),
-        offset=optional_int(
-            arguments.get("offset"), field_name="offset", minimum=0, maximum=MAX_OFFSET
-        ),
+        offset=offset,
         edit_tool=edit_tool,
     )

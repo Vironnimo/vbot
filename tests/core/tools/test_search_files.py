@@ -663,12 +663,17 @@ def test_python_caches_are_skipped_unless_asked_for(
     assert set(content.splitlines()) == listed
 
 
-def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path) -> None:
-    _write(tmp_path, {"a": "x" * 100000 + "NEEDLE" + "y" * 100000 + "\n"})
-    content = search(tmp_path, pattern="NEEDLE")["content"]
+@pytest.mark.parametrize("separator", ["", "\r"])
+def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path, separator: str) -> None:
+    _write(tmp_path, {"a": ("x" + separator) * 100000 + "NEEDLE" + "y" * 100000 + "\n"})
+    data = search(tmp_path, pattern="NEEDLE", limit=1)
+    content = data["content"]
     assert "NEEDLE" in content
-    assert content.startswith("a\n1:[99800 characters omitted] ")
+    assert len(content.splitlines()) == 2
+    assert len(content) < 2100
+    assert content.startswith(f"a\n1:[{100000 * (1 + len(separator)) - 200} characters omitted] ")
     assert content.endswith(" [99206 characters omitted]")
+    assert bool(data.get("note")) == bool(separator)
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
@@ -955,7 +960,9 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
         assert "links" in note
 
 
-@pytest.mark.parametrize("mode", ["content", "directories", "absolute_glob", "linked_root"])
+@pytest.mark.parametrize(
+    "mode", ["content", "directories", "absolute_glob", "directory_glob", "linked_root"]
+)
 def test_approved_search_root_still_filters_denied_descendants(tmp_path: Path, mode: str) -> None:
     work = tmp_path / "work"
     work.mkdir()
@@ -983,6 +990,8 @@ def test_approved_search_root_still_filters_denied_descendants(tmp_path: Path, m
     )
     if mode == "absolute_glob":
         arguments["glob"] = f"{outside.as_posix()}/**/*.txt"
+    elif mode == "directory_glob":
+        arguments["glob"] = f"{outside.as_posix()}/visible"
     elif mode == "linked_root":
         link_directory(work / "linked", outside)
         arguments["path"] = "linked"

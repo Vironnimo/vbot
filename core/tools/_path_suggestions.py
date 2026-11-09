@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from difflib import SequenceMatcher
 from itertools import islice
 from pathlib import Path
@@ -81,15 +82,17 @@ def similar_entries(
     permissions: PermissionBoundary,
     kind: EntryKind = "any",
     limit: int = _RESULT_LIMIT,
+    readable: Callable[[Path], bool] | None = None,
 ) -> list[Path]:
     """Return existing entries beside a missing path, best match first."""
     candidates: list[tuple[tuple[int, float], str, Path]] = []
-    if not _readable(permissions, missing.parent):
+    allowed = readable or (lambda path: _readable(permissions, path))
+    if not allowed(missing.parent):
         return []
     try:
         for entry in islice(missing.parent.iterdir(), _SCAN_LIMIT):
             score = _score(missing, entry)
-            if score is None or not _readable(permissions, entry):
+            if score is None or not allowed(entry):
                 continue
             try:
                 if (kind == "files" and not entry.is_file()) or (
@@ -137,7 +140,13 @@ def refused_similar(missing: Path, permissions: PermissionBoundary) -> list[Path
     return [path for _, _, path in candidates[:_RESULT_LIMIT]]
 
 
-def corrected_paths(missing: Path, cwd: Path, *, permissions: PermissionBoundary) -> list[Path]:
+def corrected_paths(
+    missing: Path,
+    cwd: Path,
+    *,
+    permissions: PermissionBoundary,
+    readable: Callable[[Path], bool] | None = None,
+) -> list[Path]:
     """Return existing paths that a missing absolute path most likely means.
 
     Covers a relative path that repeats the end of the working directory (such
@@ -147,6 +156,7 @@ def corrected_paths(missing: Path, cwd: Path, *, permissions: PermissionBoundary
     names beside the missing one.
     """
     suggestions: list[Path] = []
+    allowed = readable or (lambda path: _readable(permissions, path))
     try:
         relative = missing.relative_to(cwd).parts
     except ValueError:
@@ -155,27 +165,32 @@ def corrected_paths(missing: Path, cwd: Path, *, permissions: PermissionBoundary
     for count in range(1, len(relative)):
         repeated = [part.casefold() for part in relative[:count]]
         candidate = cwd.joinpath(*relative[count:])
-        if repeated == tail[-count:] and _readable(permissions, candidate) and candidate.exists():
+        if repeated == tail[-count:] and allowed(candidate) and candidate.exists():
             suggestions.append(candidate)
-    repaired = _repair_components(missing, permissions)
+    repaired = _repair_components(missing, permissions, allowed)
     if repaired is not None:
         suggestions.append(repaired)
     # Only a missing name in an existing folder is looked for elsewhere; a
     # missing folder is a misspelling or no path at all (example.com/cat.png).
-    if relative and _readable(permissions, missing.parent) and missing.parent.is_dir():
-        suggestions.extend(_same_name_below(cwd, missing.name, permissions))
-    suggestions.extend(similar_entries(missing, permissions=permissions))
+    if relative and allowed(missing.parent) and missing.parent.is_dir():
+        suggestions.extend(_same_name_below(cwd, missing.name, permissions, readable))
+    suggestions.extend(similar_entries(missing, permissions=permissions, readable=allowed))
     return list(dict.fromkeys(suggestions))[:_RESULT_LIMIT]
 
 
-def _same_name_below(root: Path, name: str, permissions: PermissionBoundary) -> list[Path]:
+def _same_name_below(
+    root: Path,
+    name: str,
+    permissions: PermissionBoundary,
+    readable: Callable[[Path], bool] | None = None,
+) -> list[Path]:
     """Return entries named ``name`` below ``root``, shallow levels first.
 
     Hidden directories, dependency folders and levels past the bound are not
     searched; the walk stops after a bounded number of entries. A restricted
     Session's walk sees only entries it may read.
     """
-    if not _readable(permissions, root):
+    if not (readable(root) if readable else _readable(permissions, root)):
         return []
     wanted = name.casefold()
     found: list[Path] = []
@@ -193,7 +208,9 @@ def _same_name_below(root: Path, name: str, permissions: PermissionBoundary) -> 
                 continue
             scanned += len(scan)
             entries = sorted(
-                permissions.readable_entries(directory, scan),
+                [entry for entry in scan if readable(Path(entry.path))]
+                if readable
+                else permissions.readable_entries(directory, scan),
                 key=lambda entry: entry.name.casefold(),
             )
             for entry in entries:
@@ -211,12 +228,14 @@ def _same_name_below(root: Path, name: str, permissions: PermissionBoundary) -> 
     return found
 
 
-def _repair_components(missing: Path, permissions: PermissionBoundary) -> Path | None:
+def _repair_components(
+    missing: Path, permissions: PermissionBoundary, readable: Callable[[Path], bool]
+) -> Path | None:
     """Replace each missing component with its closest existing sibling."""
     names: list[str] = []
     current = missing
-    while not current.exists():
-        if current.parent == current or not _readable(permissions, current.parent):
+    while readable(current) and not current.exists():
+        if current.parent == current or not readable(current.parent):
             return None
         names.append(current.name)
         current = current.parent
@@ -225,7 +244,9 @@ def _repair_components(missing: Path, permissions: PermissionBoundary) -> Path |
         return None
     for position, name in enumerate(reversed(names)):
         kind: EntryKind = "any" if position == len(names) - 1 else "dirs"
-        matches = similar_entries(current / name, permissions=permissions, kind=kind, limit=1)
+        matches = similar_entries(
+            current / name, permissions=permissions, kind=kind, limit=1, readable=readable
+        )
         if not matches:
             return None
         current = matches[0]

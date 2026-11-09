@@ -18,8 +18,8 @@ services:
 - `core/tools/_search_arguments.py`: the owner normalizer
   (`normalize_search_arguments`) and `interpret_search_call` (the provider probes
   use it too), translating call dialects into the named fields and `args`.
-- `core/tools/_search_roots.py`: root resolution, path/glob interpretation and
-  missing-path diagnostics.
+- `core/tools/_search_roots.py`: root resolution, shared permission preflight,
+  path/glob interpretation and missing-path diagnostics.
 - `core/tools/_search_confinement.py`: Permission Rules for a restricted Run
   (Permission Rules, below).
 - `core/tools/_search_definition.py`: the Tool schema, description and help
@@ -101,10 +101,14 @@ Rules for `args`:
     when neither is offered. grep's `-h` is also ignored with a note when the
     call has something to search; on its own, `-h` shows help.
   - **grep spellings**: `--include`, `--exclude` and `--exclude-dir` become globs.
-    `-r` and `-R` are grep's recursive switch. `-E` followed by something that is
-    not an encoding is grep's extended-regex flag.
-  - **Blocked flags** (`--pre`, `--pre-glob`, `--hostname-bin`, `--generate`) would
-    run other programs; they are rejected.
+    `-r` and `-R` are grep's recursive switch. `-E` without a value, or followed
+    by something that is not a text encoding, is grep's extended-regex flag. A leading `rg`,
+    `ripgrep` or `grep` followed by an option is omitted with a note when no
+    named pattern was supplied; ordinary pattern and root operands stay literal.
+  - **Blocked flags** (`--pre`, `--pre-glob`, `--hostname-bin`, `--generate`,
+    `-z`/`--search-zip`) run other programs or generate unrelated output; they
+    are rejected. `--null-data` is refused because content results count LF
+    lines; its correction names `-U` for multiline matches and `-a` for binary data.
   - **`--help`, `--type-list`, `--version` and `--pcre2-version`** return
     references instead of searching.
 - ripgrep rejects unknown flags itself. `explain_failure` rewrites that rejection
@@ -274,7 +278,8 @@ Other rules:
 - Unknown fields follow the shared rule (`tools.md` -> Unknown fields): the old `action` field refuses the call, the old `kind` runs without effect and says so.
 - A double-quoted encoded list in `args` keeps regex backslashes that are missing
   from its JSON escaping.
-- A scalar `args` string that starts with an option and contains no backslash
+- A scalar `args` string that starts with an option, or a recognized program
+  name followed by an option, and contains no backslash
   splits like a command line. One with backslashes asks for one argument per item
   and shows the split list as an example.
 - A scalar `args` string that broken list syntax wraps (`--files"]`,
@@ -293,9 +298,18 @@ Roots (`_resolve_roots`):
 
 - Without roots, the call searches the effective cwd. An empty path or `-` is
   rejected.
-- Relative roots start at the cwd; absolute roots are allowed.
+- Relative roots start at the cwd; absolute roots are allowed. The shared
+  `ToolContext.path_target` resolver accepts file URLs and host-valid quoting.
+  Windows extended-length prefixes are normalized before glob interpretation;
+  existing roots retain their stored case without substituting a link target.
+  Other extended device namespaces are refused, never converted to relative paths.
+- A literal spelling is authorized and checked before interpreting brackets,
+  braces or commas, including roots outside the Work Area. Windows `*` and `?`
+  cannot be literal filename characters and proceed directly to glob resolution.
 - If a missing root is a brace or comma list whose parts all exist, each part is
   searched, with a note.
+- Wildcard roots keep the cwd and existing directory prefixes literal, escaping
+  their glob punctuation in the fixed part of an anchored filter.
 - If a missing root contains glob characters and no selecting global glob is set, the call
   searches the root's fixed directory with the rest as an anchored glob, with a
   note. That selection belongs only to this root: multiple roots form a union,
@@ -398,6 +412,13 @@ glob syntax and `--dirs` listings (which match directories already) stay as
 sent. Swarm Agents passed directories as `glob` and got `No files found.`
 (Sessions, 2026-10).
 
+A complete empty selection can reinterpret positive relative wildcard filters
+separated by top-level commas or spaces as a glob list, with a note. Braces,
+classes and existing literal selections keep their meaning, even when a later
+name regex removes every listed entry. Directory depth survives a retry. Explicit file
+roots bypass glob/type selection as in ripgrep; the result names that lack of
+effect when every root is a file.
+
 Scopes (`_scopes`): plain roots inside the cwd share one run at the cwd, and each
 outside root gets its own run, so labels stay cwd-relative or absolute.
 Wildcard roots keep their selecting globs in separate runs.
@@ -409,7 +430,10 @@ A content search runs in two phases:
    - `--count-matches` with `-U`, `-o` or `--count-matches`;
    - `--files-without-match --null` for that mode.
 2. For line output, a `--json --max-count N` pass runs over only the page's files,
-   given as explicit paths in batches of at most 28,000 command-line bytes.
+   given as explicit paths in batches of at most 28,000 command-line bytes. The
+   effective `--max-count` is the smaller of the requested per-file cap and the
+   page requirement. Matching events beyond the counted cap are rendered as
+   trailing context when they fall inside its window.
 
 Neither phase runs with `--debug`: its skip reports name every file a glob or
 file type leaves out, which made such searches three times slower (probe on this
@@ -534,7 +558,8 @@ A successful result has these fields:
 - `data.summary`: totals, the shown range and how to continue.
 - `content`: the result lines; absent when there are none (the `result_schema`
   requires no field).
-- `next_offset`: set when more results exist.
+- `next_offset`: set when more results exist and the next offset is accepted
+  (at most 1,000,000); otherwise the summary asks for a narrower search.
 - `note`: present when interpretation changed the call.
 - `warnings`: at most 20.
 - `searched_paths`: present when a root is missing; it names the roots still
@@ -568,7 +593,9 @@ Content lines:
   Directory entries end in `/`.
 - Names with control characters are JSON-quoted so they can be passed back.
 - Line numbers equal `read`'s, except in files with lone-CR line endings, which
-  ripgrep does not count.
+  ripgrep does not count. Those CRs are shown as `\r` within the physical
+  LF line, the whole line gets one bounded excerpt, and a note explains the
+  difference from `read`.
 - Lines longer than 1000 characters become excerpts around the match, with
   `[N characters omitted]` markers.
 
@@ -614,7 +641,10 @@ notice about the next page and each warning
 ## Bounds, Cancellation and Errors
 
 - **Budget:** the shared 30-second `SearchBudget` covers all phases. A timeout or
-  a Run cancellation returns partial results with a warning. A user cancellation
+  a Run cancellation returns partial results with a warning. Content counting
+  uses at most 80% of the remaining budget, reserving the rest for the page
+  of matching lines. A stopped count reports partial totals; an empty line
+  pass never renders an impossible range such as `1-0`. A user cancellation
   kills the child and returns `cancelled_by_user`.
 - **Child process:** each child's RSS is bounded at 512 MiB (`MAX_CHILD_MEMORY`),
   polled every 50 ms. One output record is bounded at 8 MiB, the output queue is
@@ -662,7 +692,15 @@ notice about the next page and each warning
 
 ## Permission Rules
 
-Explicit roots and path-valued flags are preflighted together. An approved search root permits only that call to enumerate beneath it; hard-denied and protected descendants remain filtered, and suggestions and enumerated children never request approval.
+Preflight and execution use the same root resolver. Restricted preflight runs
+filesystem work on the permission worker, checks hard refusals across all
+absolute globs before requesting approval, checks all explicit roots and path
+flags before searching, and authorizes literal roots before probing them. A
+missing literal that becomes a list or glob can need another approval for its
+component roots. An approved search root permits only that call to enumerate
+beneath it; directory-glob expansion and suggestions use the same grant, while
+hard-denied and protected descendants remain filtered. Suggestions and
+enumerated children never request approval.
 
 A restricted Run searches only what its rules let it read; full access adds no
 argument and no check.
@@ -709,8 +747,11 @@ SHA-256 digest for each platform's archive and executable.
   build time. Downloads and extraction are bounded, and each asset is checked for
   integrity, validated as an executable and replaced atomically. Provisioning
   uses only the Python standard library.
-- **Missing or corrupt assets:** the Tool is not ready and shows a repair hint. A
-  verified existing asset works offline, and invoking the Tool never provisions.
+- **Missing or corrupt assets:** the Tool is not ready and shows a repair hint.
+  Losing the binary after registration still returns `tool_not_ready`, and
+  handler help needs no binary. Argument validation alone returns
+  `invalid_arguments`; malformed engine data returns `search_error` without
+  exposing parser exceptions. A verified existing asset works offline, and invoking the Tool never provisions.
 - **Packaging:** server packaging includes the executable and its notices; the
   desktop client excludes them.
 
@@ -768,6 +809,21 @@ blank placeholders, so no sentence has to warn about them.
 | Unknown refusal: `ripgrep refused the search:` / `<message>` / `Nothing was searched. Correct the call as that message says; {"args": ["--help"]} lists the accepted flags.` | Replaces `<message>` / `Nothing was searched.`, which gave no next step; in the Swarm run of 2026-10-20 its message was a cut path fragment, which read like nothing at all (F5). |
 | Failure without a message: `The search engine failed without giving a reason. Nothing was searched. Retry the call.` | Replaces `search_files could not complete the search: the search engine exited with code 2. Retry the call.` / `Nothing was searched.`, which ran together two endings and named an exit code the Agent cannot act on (F5). |
 | A refused regex retry keeps the retry's native diagnostic inside the existing `The pattern is not a valid regular expression ...` error. | The original engine's unsupported-look-around message hid a PCRE2 lookbehind-length error, so the Agent received advice for a fallback already attempted (F5; Session review 2026-11-03). Applies to content and name searches. |
+| `Counting stopped to leave time to return matching lines; totals are partial.` / `Narrow path or glob to search the rest.` | Keeps an interrupted count from consuming the content page's budget and reports its incomplete scope (review 2026-11-09, F3). |
+| `Found ... but no result lines could be returned.` / `Narrow path or glob and retry.` | Replaces impossible `1-0` ranges with the actual page state and a recovery action (F3). |
+| `Nothing was searched. --null-data uses NUL-separated records ...` / `Remove it; use -U ... or -a ...` | Refuses a record format the renderer cannot represent, with supported alternatives, instead of a false negative (F4). |
+| `<file> contains lone CR line endings, shown as \r; line numbers count LF boundaries and can differ from read.` | Explains one bounded physical-line excerpt instead of marking thousands of CR pieces as separate matches (F6). |
+| `The written glob selected no files, so its separate wildcard filters were read as glob [...]` | Reports a comma/space-list repair only after preserving the original literal selection (F7). |
+| `No results were returned. The search engine returned unreadable data.` / `Retry with a narrower path or glob; if this repeats, repair the vBot installation.` | Separates internal failures from bad arguments and suppresses raw decoder messages (F8). |
+| `Nothing was searched. Invalid path spelling: ...` / `Send a local file path, a file: URL, or a glob in glob.` | A Windows invalid-name error needs a different spelling, not an access retry (F10). |
+| `Nothing was searched. Device path ... is not a local file path.` / `Send a drive-letter path or a UNC file path.` | Prevents an unsupported Windows device namespace from becoming a different relative local target when removing the extended prefix (follow-up review). |
+| `The leading program name ... in args was omitted.` | A command-shaped rg/grep argument list should search its intended pattern, not the program name (F12). A following option and no named pattern establish this reading; a bare pattern or explicit file named `rg` stays literal. |
+| `The command-looking text was used as the search pattern.` / `Put the search text in pattern, its options in args and its target in path.` | Preserves explicit pattern text while explaining a no-match result from a whole command (F12). |
+| `Paging ends at offset ...` / `Narrow path, glob or pattern and restart with offset 0.` (also appended to an invalid offset) | Never proposes a continuation the Tool rejects (F14). |
+| `glob and type filters have no effect on explicitly named files.` / `Pass their directory in path to filter its files.` | Reports ripgrep's explicit-file selection behavior and the call that applies filters (F15). |
+| `Nothing was searched. -z (--search-zip) starts external decompressors and is not available in search_files.` / `Extract the archive first, then search the extracted directory without -z.` | Applies the existing external-program restriction consistently and avoids silent missing decompressor results (F16). |
+| `-r and -R mean recursive search here and take no value; replacement is not available.` / `The following operand was read as a path.` | Explains why a missing operand after grep's recursive switch was not a replacement value (F17). |
+| `For files in a non-UTF-8 encoding without a Unicode BOM, pass their encoding in args, for example ["-E", "latin1"].` | Gives a conditional encoding correction for non-ASCII patterns without matches, without asserting the file's encoding (F17). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a
@@ -794,6 +850,11 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   missing paths and their hints, flags owned by vBot, conflicts, regex repair, the
   notes for results that miss what the pattern seems to ask for, and the help
   examples.
+- **`test_search_files_paths.py`** checks literal approvals, file URLs and
+  Windows spellings, glob-list repair versus literal selections, and ignored
+  filters on explicit files.
+- **`test_search_files_failures.py`** checks count-timeout content, error phases,
+  rejected process/record modes, accepted continuations and max-count context.
 - **`test_search_files_lifecycle.py`** checks native child lifecycle, memory
   polling and cancellation with real subprocesses. The already-finished child
   case uses in-memory pipes and a fixed exit code, independent of process startup.

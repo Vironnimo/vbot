@@ -553,6 +553,10 @@ async def test_other_search_interfaces_spellings_run_as_intended(
     ("args", "content"),
     [
         (["-rn", "def", "."], "src/app.py\n2:def load():"),
+        (["rg", "-n", "def", "src/app.py"], "src/app.py\n2:def load():"),
+        (["grep", "-rnE", "def", "src"], "src/app.py\n2:def load():"),
+        (["-rnE", "def", "src"], "src/app.py\n2:def load():"),
+        (["def", "src", "-E"], "src/app.py\n2:def load():"),
         (
             ["-E", "import|export", "src"],
             "src/app.py\n1:import os\n\nsrc/view.ts\n1:export const load = 1;",
@@ -589,6 +593,11 @@ async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[
         ),
         (
             {"pattern": "def", "path": "src,docs"},
+            "names several paths, so src, docs",
+            "src/app.py\n2:def load():",
+        ),
+        (
+            {"pattern": "def", "path": "{project}/src,{project}/docs"},
             "names several paths, so src, docs",
             "src/app.py\n2:def load():",
         ),
@@ -633,6 +642,9 @@ async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[
 async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
     project: Path, arguments: dict, message: str, content: str | None
 ) -> None:
+    arguments = dict(arguments)
+    if isinstance(arguments.get("path"), str):
+        arguments["path"] = arguments["path"].replace("{project}", project.as_posix())
     result = await dispatch(project, arguments)
     if not message:
         # Another field already selects names, so the path stays a missing path.

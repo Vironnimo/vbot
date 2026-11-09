@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._search_execution import decode_event_text
-from core.tools._search_query import LIST_MODES, SearchQuery
+from core.tools._search_query import LIST_MODES, MAX_OFFSET, SearchQuery
 from core.tools.search import MAX_OUTPUT_BYTES, display_search_path
 
 MAX_LINE_CHARS = 1000
@@ -168,13 +168,13 @@ class _Line:
 def _excerpt(raw: bytes, position: int | None) -> str:
     text = raw.decode("utf-8", errors="backslashreplace").rstrip("\r\n")
     if len(text) <= MAX_LINE_CHARS:
-        return text
+        return text.replace("\r", r"\r")
     center = len(raw[:position].decode("utf-8", errors="backslashreplace")) if position else 0
     start = max(min(center - 200, len(text) - MAX_LINE_CHARS), 0)
     end = start + MAX_LINE_CHARS
     prefix = f"[{start} characters omitted] " if start else ""
     suffix = f" [{len(text) - end} characters omitted]" if end < len(text) else ""
-    return prefix + text[start:end] + suffix
+    return prefix + text[start:end].replace("\r", r"\r") + suffix
 
 
 def _event_lines(event: dict[str, Any]) -> list[_Line]:
@@ -184,7 +184,10 @@ def _event_lines(event: dict[str, Any]) -> list[_Line]:
     match = event["type"] == "match"
     submatches = data.get("submatches") or []
     position = submatches[0]["start"] if submatches else None
-    pieces = raw.splitlines(keepends=True) or [b""]
+    # ripgrep counts LF boundaries; bytes.splitlines also splits lone CRs.
+    pieces = raw.split(b"\n")
+    pieces = [piece + b"\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+    pieces = pieces or [b""]
     lines = []
     consumed = 0
     for index, piece in enumerate(pieces):
@@ -212,6 +215,14 @@ def content_page(
         if page.returned >= page.limit or page.byte_limited:
             break
         file_events = events.get((entry.scope, entry.native), [])
+        if any(
+            b"\r" in decode_event_text(event["data"]["lines"]).replace(b"\r\n", b"")
+            for event in file_events
+        ):
+            query.notes.append(
+                f"{entry.label} contains lone CR line endings, shown as \\r; line numbers "
+                "count LF boundaries and can differ from read."
+            )
         if query.only_matching:
             _only_matching(page, entry, file_events, skip)
             continue
@@ -268,6 +279,14 @@ def _file_lines(
                 (start + raw[: submatch["start"]].count(b"\n"), start + raw[:end].count(b"\n"))
             )
     block = _Block(page, entry, separate)
+    # rg can emit matching lines as match events inside trailing context even
+    # after --max-count. They are context here, not further counted results.
+    if len(groups) > entry.count:
+        last_counted = groups[entry.count - 1][1] if entry.count else -1
+        for first, last in groups[entry.count :]:
+            for line in lines[max(first, last_counted + 1) : last + 1]:
+                line.match = False
+        groups = groups[: entry.count]
     unit = 0
     lower = 0  # leading context never reaches a match this page leaves out
     shown = -1  # index in lines of the last line shown
@@ -408,7 +427,11 @@ def summary(
         shown = "directories"
     end = page.offset + page.returned
     whole_page = page.offset == 0 and end >= total
-    if whole_page:
+    if not page.returned:
+        text = (
+            f"Found {whole}, but no result lines could be returned. Narrow path or glob and retry."
+        )
+    elif whole_page:
         text = f"Found {whole}."
     else:
         text = f"Showing {shown} {page.offset + 1}-{end} of {whole}."
@@ -425,7 +448,13 @@ def summary(
     elif page.byte_limited and page.returned:
         text += " This page stopped at the 50 KB output limit."
     if page.returned and end < total:
-        text += f" Continue with offset {end}."
+        if end <= MAX_OFFSET:
+            text += f" Continue with offset {end}."
+        else:
+            text += (
+                f" Paging ends at offset {MAX_OFFSET}. "
+                "Narrow path, glob or pattern and restart with offset 0."
+            )
     if not complete:
         text += " The search is incomplete; see warnings."
     return text

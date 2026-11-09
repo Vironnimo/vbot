@@ -824,6 +824,16 @@ class SearchExecution:
 
         The second value holds the warnings and unreadable files of every batch.
         """
+        user_max = next(
+            (
+                arg.partition("=")[2]
+                for arg in reversed(query.rg_args)
+                if arg.startswith("--max-count=")
+            ),
+            None,
+        )
+        if user_max is not None:
+            max_count = min(max_count, int(user_max))
         base = [
             *DEFAULT_ARGUMENTS,
             *query.rg_args,
