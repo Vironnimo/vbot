@@ -25,6 +25,163 @@ DEFAULT_LIST = {
 SESSION = {"agent_id": "assistant", "session_id": "session-one"}
 
 
+def test_session_list_without_agent_preserves_global_paging(rpc: FakeRpc, run_cli: RunCli) -> None:
+    cursor = {"id": "older"}
+    rpc.reply(
+        "session.list",
+        {
+            "sessions": [{"id": "one", "agent_address": "coder", "run_kinds": ["cron"]}],
+            "total_count": 2,
+            "next_cursor": cursor,
+        },
+    )
+    code, out, _err = run_cli("session", "list", "--limit", "5")
+    assert code == 0 and "agent=coder" in out and "type=cron" in out
+    assert "agent_id" not in rpc.calls[0][1]
+    next_command = shlex.split(
+        next(line[6:] for line in out.splitlines() if line.startswith("Next: "))
+    )[1:]
+    assert parse_args(next_command).agent_filter is None
+    run_cli(*next_command)
+    assert rpc.calls[-1][1]["cursor"] == cursor
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_session_show_keeps_summary_details_and_continuation(
+    rpc: FakeRpc, run_cli: RunCli, json_output: bool
+) -> None:
+    cursor = {"generation": "g", "before": 2}
+    rpc.reply(
+        "session.show",
+        {
+            "session": {
+                "id": "one",
+                "agent_address": "coder",
+                "activity_state": "waiting",
+                "waiting_for": {"subagents": 1},
+            },
+            "summary": True,
+            "entries": [
+                {
+                    "seq": 2,
+                    "role": "tool",
+                    "tool": "bash",
+                    "status": "failed",
+                    "action": "Run tests",
+                    "error": "failure",
+                    "text": "",
+                },
+                {
+                    "seq": 3,
+                    "role": "tool",
+                    "tool": "shell",
+                    "status": "completed",
+                    "action": "Run background validation",
+                    "result_status": "running",
+                    "command_id": "cmd-still-running",
+                    "text": "",
+                },
+            ],
+            "subagents": [
+                {
+                    "id": "child",
+                    "agent_address": "helper",
+                    "activity_state": "working",
+                    "title": "Review\nNext: injected",
+                }
+            ],
+            "subagent_count": 1,
+            "next_cursor": cursor,
+        },
+    )
+    code, out, _err = run_cli(
+        "session", "show", "one", "--summary", *(("--json",) if json_output else ())
+    )
+    assert code == 0
+    assert rpc.calls[0][1] == {"session_id": "one", "summary": True, "limit": 20}
+    if json_output:
+        report = json.loads(out)
+        assert report["next_cursor"] == encode_cursor(cursor)
+        assert report["subagents"][0]["id"] == "child"
+    else:
+        assert "child" in out and "[failed]" in out and "subagents=1" in out
+        assert "recorded-result=running command=cmd-still-running" in out
+        assert "\nNext: injected" not in out
+        follow = shlex.split(
+            next(line[6:] for line in out.splitlines() if line.startswith("Next: "))
+        )[1:]
+        args = parse_args(follow)
+        assert args.summary and args.session == "one" and args.cursor == cursor
+        assert len(out) <= SESSION_TEXT_BUDGET
+
+
+def test_session_show_reduces_page_without_skipping_unseen_entries(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    start = {"before": 100}
+    for size in (20, 10, 5):
+        rpc.reply(
+            "session.show",
+            {
+                "session": {"id": "one", "agent_address": "coder"},
+                "entries": [
+                    {"seq": seq, "role": "user", "text": "x" * 1400}
+                    for seq in range(100 - size, 100)
+                ],
+                "next_cursor": {"before": 100 - size},
+            },
+        )
+    code, out, _err = run_cli("session", "show", "one", "--cursor", encode_cursor(start))
+    assert code == 0 and len(out) <= SESSION_TEXT_BUDGET
+    assert [params["limit"] for _, params in rpc.calls] == [20, 10, 5]
+    assert all(params["cursor"] == start for _, params in rpc.calls)
+    follow = shlex.split(next(line[6:] for line in out.splitlines() if line.startswith("Next: ")))[
+        1:
+    ]
+    assert parse_args(follow).cursor == {"before": 95}
+    assert "[95]" in out and "[94]" not in out
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_session_usage_sends_multiple_ids_and_keeps_unknown_costs(
+    rpc: FakeRpc, run_cli: RunCli, json_output: bool
+) -> None:
+    unknown = {"input_tokens": 30, "output_tokens": 4, "cost_usd": None, "unpriced_calls": 2}
+    rpc.reply(
+        "statistics.session_usage",
+        {
+            "sessions": [
+                {
+                    "session_id": "one",
+                    "agent_address": "coder",
+                    "session": unknown,
+                    "subagents": {},
+                    "total": unknown,
+                    "subagent_count": 0,
+                }
+            ],
+            "total": unknown,
+            "session_count": 1,
+        },
+    )
+    code, out, _err = run_cli(
+        "session", "usage", "one", "two", *(("--json",) if json_output else ())
+    )
+    assert code == 0 and rpc.calls[0][1] == {"session_ids": ["one", "two"]}
+    if json_output:
+        assert json.loads(out)["total"]["cost_usd"] is None
+    else:
+        assert "input=30 tokens" in out and "cost=unknown" in out and "unpriced calls=2" in out
+
+
+@pytest.mark.parametrize("command", ["show", "usage"])
+def test_session_read_failures_are_json(rpc: FakeRpc, run_cli: RunCli, command: str) -> None:
+    method = "session.show" if command == "show" else "statistics.session_usage"
+    rpc.fail(method, "session_not_found", "No Session", status=200)
+    code, out, _err = run_cli("session", command, "missing", "--json")
+    assert code == 1 and json.loads(out)["ok"] is False
+
+
 def test_session_list_prints_one_row_per_session(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply(
         "session.list",
@@ -120,7 +277,7 @@ def test_session_list_reads_one_page_unless_all_pages_are_requested(
                 )
             )[1:]
             followup = parse_args(tokens)
-            assert followup.agent == "builder@project"
+            assert followup.agent_filter == "builder@project"
             assert followup.port == 8420 and followup.data_dir
         code, out, _err = run_cli(*tokens)
         assert code == 0 and "s2" in out

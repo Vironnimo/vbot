@@ -47,3 +47,9 @@ Shared Project Memory changes carry `project_id` on their learning-change and co
 - `session.notification_policy {agent_id, session_id, policy}` saves `all`, `errors` or `muted`, returns the fresh Session summary and publishes the Session invalidation. It does not mark results read.
 - `session.mark_read {agent_id, session_id, run_id}` also accepts `run_ids` (1-200 exact ids) instead of the scalar. Acknowledgements affect only completed own Runs and return fresh revisioned counters; old results can be read independently.
 - `session.notification_status {agent_id, session_id, run_id}` returns `{allowed}` for desktop delivery immediately before showing a toast, combining current source policy, eligibility and unread state. A deleted Schedule suppresses its pending toast.
+
+## Session inspection by id
+
+`session.list` with no owner/Project selector lists across Agents with the existing visibility filters and global activity order. Optional `parent_session_id` selects direct children; `parent_agent_id` disambiguates only that Parent. Explicit incompatible selectors are refused.
+
+`session.show` (`_session_reads.py`) resolves an exact live Session id, with optional `agent_id` for ambiguity, then reads Sessions' bounded transcript/summary projection (`sessions/history-api.md` -> Operator inspection). It adds the existing Session activity and a bounded direct-child list. `session_id_ambiguous` returns candidate Agent addresses, never a selected target; unknown ids return `session_not_found`. History cursors additionally carry `history_id` so a restore cannot continue an earlier read. These reads run on the Sessions worker without a write lease.

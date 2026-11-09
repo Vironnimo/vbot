@@ -33,7 +33,7 @@ vbot project remove <project-id> [--copy-rooted-agent-files] [--permanent --yes]
 ## Sessions
 
 ```bash
-vbot session list <agent> [--limit <count>] [--cursor <cursor>] [--json] [--all]
+vbot session list [--agent <agent>] [--limit <count>] [--cursor <cursor>] [--json] [--all]
 vbot session create <agent> [--id <session-id>] [--make-current]
 vbot session fork <agent> <session-id> [--target-agent <agent>]
 vbot session rename <agent> <session-id> (--title <text> | --clear-title)
@@ -42,7 +42,7 @@ vbot session delete <agent> <session-id> [--permanent --yes]
 vbot session channel link <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
 ```
 
-- `list` prints a page of up to 40 Sessions by default, newest activity first: ids, title previews, last activity, linked Channel and whether the Compaction Policy is overridden or inherited. The header gives the shown count and the server's total when available; `Note:` names shortened titles or a page reduced to fit the output limit. Follow `Next:` for the next page on the same Agent and server, or pass its exact opaque token as `--cursor <cursor>`; a JSON-object cursor is also accepted. `--limit <count>` sets the requested page size. For code that processes complete records, `--json` returns those records and an opaque `next_cursor`; `--all` fetches every page and leaves output unbounded. To read a Session's Messages, read `references/session-search.md`.
+- `list` prints up to 40 Sessions across Agents, newest activity first, including Sub-Agents and Cron. Rows name the id, Agent, type, activity state, title preview, last activity, linked Channel and Compaction Policy source. `--agent <agent>` filters by owner; `--parent <session-id>` lists a Session's direct Sub-Agents. Follow `Next:` for another page with the same selection. `--limit <count>` changes the page size; text output can use a smaller page to fit its budget. `--json` includes complete records and an opaque `next_cursor`; `--all` fetches every page and leaves output unbounded. To inspect activity, consumption or Messages, read `references/session-search.md`.
 - `create` without `--id` lets the server choose the id; `--make-current` makes it the Agent's current Session.
 - `fork` copies the complete Session under a new id; `--target-agent` gives the copy to another Identity or Project Agent. The result prints the new id.
 - `rename --clear-title` returns to the automatic title. `policy set` needs the complete Compaction Policy object with `enabled`, `trigger` and `strategy`: read it from `list --json` and keep its other fields; `--clear` makes the Session follow the Agent and global settings again.

@@ -677,7 +677,7 @@ class ChatSessionManager:
 
     def list_summaries_page(
         self,
-        scopes: Sequence[tuple[str | None, str]],
+        scopes: Sequence[tuple[str | None, str]] | None,
         *,
         limit: int,
         cursor: SessionListCursor | None = None,
@@ -772,6 +772,32 @@ class ChatSessionManager:
     ) -> dict[SessionAddress, tuple[str, int]]:
         """Batched generation/revision lookup for derived-projection freshness."""
         return self._store.list_history_versions(addresses)
+
+    def addresses_by_id(self, session_id: str) -> builtins.list[SessionAddress]:
+        """Find all live Sessions with this exact id, across Agent scopes."""
+        return self._store.addresses_by_id(session_id)
+
+    def inspection_page(
+        self,
+        address: SessionAddress,
+        *,
+        summary: bool = False,
+        limit: int = 20,
+        cursor: JsonObject | None = None,
+        run_id: str | None = None,
+        entry: int | None = None,
+        offset: int = 0,
+    ) -> JsonObject:
+        """Read transcript/summary data without loading unbounded history."""
+        return self._store.inspection_page(
+            address,
+            summary=summary,
+            limit=limit,
+            cursor=cursor,
+            run_id=run_id,
+            entry=entry,
+            offset=offset,
+        )
 
     def conversation_page(
         self,

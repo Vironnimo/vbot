@@ -59,13 +59,13 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 | `projects-sessions.md` list paragraph: default 40, previews, shown/total, exact `Next:`, opaque cursor and full records via `--json` | Matches the compact listing and prevents treating a title preview as complete text, an opaque cursor as an id, or one page as the full Session history. |
 | `projects-sessions.md` Policy: `read it from list --json and keep its other fields` | Plain rows show only whether the Policy is inherited or overridden; replacing a Policy requires the full object. |
 | `projects-sessions.md` Delete: `delete moves the Session into the archive and prints how to restore it; --permanent --yes deletes it permanently.` | Describes direct reversible archiving and reserves confirmation for irreversible deletion. |
-| `session-search.md`: `vbot session list <agent-id>` lists one page, and `Follow its Next: command when the Session you need is not on that page.` | Locating one conversation should not require printing an Agent's entire history through `--all`. |
+| `session-search.md`: global `session list --limit 5`, optional Agent/Parent filters and `Next:` | Locating one conversation should not require printing an Agent's entire history through `--all`. |
 | Archive restore/purge and paging hints include the resolved target and local credential directory | A copied command after a remote or alternate-instance operation otherwise falls back to the default installation and can restore or delete the wrong archive entry. The same target preservation applies to delete results, confirmations, partial outcomes and blockers. |
 | Run stream error: `Run event stream sent a non-object event` | A JSON array, string or null is not a Run event; silently discarding it hid a malformed stream and could leave the caller waiting or reporting an incomplete Run. |
 | Session list header: `showing N of M, newest activity first` | Distinguishes the displayed page from the total; a cursor does not carry an absolute row offset. |
 | Session list `Note: page size reduced ...` and `Note: long titles are previews ending in ...; --json includes complete records.` | Makes size limits explicit while preserving exact ids and offering full records to programs. |
-| Session list `Next: vbot session list ... --cursor ...` | Provides a shell-safe continuation with the same Agent, resolved server and local credential directory; hand-building quoted JSON previously failed in PowerShell. |
-| Session list cursor error: `Use the exact cursor from the previous Session list; a JSON object is also accepted` | Rejects malformed tokens without guessing a page and keeps existing JSON input usable. |
+| Session list `Next: vbot session list ... --cursor ...` | Provides a shell-safe continuation with the same optional Agent/Parent filters, resolved server and local credential directory; hand-building quoted JSON previously failed in PowerShell. |
+| Session list cursor error: `Use the exact cursor from the previous Session page; a JSON object is also accepted` | Rejects malformed tokens without guessing a page and keeps existing JSON input usable. |
 | Session list failure: `A Session record and its continuation exceed the text output limit. Use --json for complete records.` | A single unusually large record or target cannot be silently truncated; names the lossless alternative. |
 | Session list count note: `the Session count changed while paging; the server now reports ...` | An explicit all-pages read can observe concurrent deletions; the latest total cannot be presented as a stable snapshot count. |
 | Session list `--limit`: `Maximum Sessions per page. Omit for 40; the server validates the range` | States the default and that a text budget can choose a smaller page. |
@@ -184,7 +184,7 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 | SKILL.md: `Use only commands and flags that help shows.` | Agents invented action flags such as `--restart`; the grammar sentence before it tells them where help is. |
 | SKILL.md step 3: `list and policy flags, such as --allow, --tool-allow or --sources, replace the whole value, so repeat every entry to keep. The references name the commands that clear omitted options.` | Omitting existing entries silently drops them; `application access set` clears omitted options, which the body's general rule would otherwise contradict. |
 | SKILL.md step 4: `A saved setting is not yet working behavior: ...` | The save result proves only the save: an Agent without an effective Model cannot run, a Channel can fail after `add`, an accepted update has not finished. Agents reported readiness from the save. |
-| SKILL.md: `For a question about a past conversation, use session_search first; read references/session-search.md only when ...` | Keeps the cheap Tool as the first step and names the cases only the reference covers (`tools/session_search.md` -> Extended inspection). |
+| SKILL.md: `For finding past conversations by content, use session_search first.` and its extended-inspection routing sentence | Keeps the cheap search Tool for content discovery without routing consumption or known-id reads through search, and names the cases the reference covers (`tools/session_search.md` -> Extended inspection). |
 | SKILL.md after the routing table: `When no row fits, or the reference you read lacks the answer, search the references folder ... with search_files ...` | Rows name areas, not every fact; a detail such as a config-backup path or a single flag sits in a reference whose row does not name it. A search finds it in one call instead of reading several references or guessing (user suggestion 2026-10-19). |
 | SKILL.md: `Edit vBot's files by hand only when no command can make the change, then run vbot doctor config.` | CLI writes are validated; a hand-edited JSON file is checked only by `doctor config`. Its one home is the body. |
 | SKILL.md: `On [ERROR], the output explains the failure and prints Next: commands ...; vBot never runs them itself. Inspect the target before you repeat a change, because earlier steps of a failed command can already be saved.` | A retry after a partly applied command can apply a change twice. What each `request_state` means and the output streams are printed by the CLI itself (`cli/rpc_client.py`, `vbot help`), so the Skill does not repeat them (review 2026-10-19). |
@@ -260,3 +260,32 @@ The bundled `vbot-docs/references/projects-sessions.md` teaches minimal Project 
 | `This Connection accepts Claude subscription billing; a detected API-key or cloud-billed login is refused before inference.` | A successful Claude Code authentication can select separately paid API or cloud billing; this Connection refuses it instead of silently charging a different route. |
 | `If status reports api_billing, the user signs in with a Claude subscription and removes conflicting API or cloud credentials from the vBot server environment, then repeats connect.` | Gives the recovery for the detected billing mode without collecting credentials or changing the user's environment automatically. |
 | `For intentional direct API use, select the existing anthropic Provider and configure its API-key Connection.` | Keeps intentional paid API use available through its explicit Provider instead of bypassing the subscription-only Connection's billing check. |
+
+## Session inspection and consumption
+
+| Text | Reason |
+|---|---|
+| SKILL.md step 1: `Use the Session recipes below, or read the reference ...` | Common Session goals can start from the body without an extra reference read. |
+| SKILL.md: `Find recent Sessions with ...` | The user's last-five task starts by choosing Sessions in the list, across Agents. |
+| SKILL.md: `Pass the returned ids to ...` | Connects list ids directly to usage and summary without an Agent lookup or SQL. |
+| SKILL.md: `Summaries name their Sub-Agent Sessions ...` | Lets the consuming Agent choose which descendants to inspect rather than expanding every tree. |
+| Routing rows: Session lists/consumption/activity versus instance-wide usage | Sends exact Session tasks to their direct recipes and time-window analysis to Statistics. |
+| `session-search.md`: `Replace <session-id> ...` and `These commands call the server ...` | Names the id source and removes the old prerequisite of local database access. |
+| `list` selection, filters and `Next:` sentences | States all-Agent/default category scope and prevents one bounded page being mistaken for all Sessions. |
+| `usage` ids, own/Sub-Agent/tree and combined-total sentences | Supports multiple ids in one request while preventing callers summing overlapping tree totals twice. |
+| `It covers requests assigned ...` / `inherited history is excluded` | Defines the Run-bound accounting scope and why a fork does not repeat its source's spend. |
+| `Reported USD costs ...` / `unknown costs ...` / `--json carries ...` | Preserves billing provenance and gives programs the detailed counters. |
+| `show --summary` contents / `It makes no Model request.` | Identifies a factual condensed view rather than a generated interpretation or a billed summarization request. |
+| `Summarize its evidence ...; a pending call is not a completed effect.` | Avoids treating proposed or unfinished Tool work as an accomplished change. |
+| Transcript, newest-page, exact Run and continuation sentences | Separates full content from summary and makes partial history coverage visible. |
+| `[seq] identifies an entry ...` / `show --entry ...` / `Follow Next ...` | Gives a direct path to exact Tool Results and long text without guessing a search fragment. |
+| `Shortened text is marked ...` / `Both views exclude ...` | Prevents quoting a preview as full text or treating the read as private Model context. |
+| Id-only, ambiguity and Parent-disambiguation sentences | Agent is optional; a repeated historical id needs an explicit choice instead of an arbitrary target. |
+| Child-list limit, child-summary and archive sentences | States coverage and names the routes to omitted children, deeper descendants and archived Sessions. |
+| Extended-search-script introduction | Retains useful substring/generation-based operations without making ordinary reads depend on a script. |
+| `diagnostics.md` specific-Session consumption sentence | Prevents using an instance-wide time window as a Session cost report. |
+| CLI `--summary`, `--run`, `--entry`, `--offset`, `--cursor`, limits and JSON help | Explains each selection, omission rule and detail/continuation path at the command. |
+| CLI ambiguity, invalid selection/history and unknown-id errors | Identifies a recoverable read failure without choosing a different Session or silently dropping a filter. |
+| Summary page header, shortened-content note and no-visible-Result label | Makes chronology, omissions and unfinished calls explicit in the evidence the Agent reads. |
+| Usage own/descendant/tree/combined labels and USD note | Names attribution and disjoint cost categories; partial/unknown amounts cannot look free. |
+| `recorded-result=running` and Command id, plus the Session-search reference explanation that this is a recorded result | Distinguishes Tool invocation completion from background command completion without claiming a historical result is live state. |

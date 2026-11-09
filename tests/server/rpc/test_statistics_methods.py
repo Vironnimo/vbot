@@ -252,6 +252,14 @@ async def test_session_usage_sums_the_session_and_its_subagents(tmp_path: Path) 
     assert result["session"]["input_tokens"] == 30
     assert result["subagents"]["input_tokens"] == 12
     assert result["total"]["input_tokens"] == 42
+    batch = await _result(
+        state, "statistics.session_usage", {"session_ids": [root.id, child.id, root.id]}
+    )
+    assert len(batch["sessions"]) == 2
+    assert batch["total"]["input_tokens"] == 42
+    assert batch["session_count"] == 2
+    assert batch["sessions"][1]["session"]["input_tokens"] == 12
+
     assert missing["ok"] is False
 
 
