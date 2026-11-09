@@ -865,6 +865,42 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
             ],
             id="unknown-fields-below-strict-sections-warn",
         ),
+        pytest.param(
+            {
+                "model_tasks": {
+                    "text_to_speech": {
+                        "target": "openai/tts::api-key",
+                        "fallbacks": [{"target": "openai/tts::openai:api-key"}],
+                    }
+                }
+            },
+            [
+                (
+                    "error",
+                    "$.model_tasks.text_to_speech.fallbacks",
+                    "A fallback must differ from the primary target",
+                )
+            ],
+            id="fallback-repeats-primary",
+        ),
+        pytest.param(
+            {
+                "model_tasks": {
+                    "text_to_speech": {
+                        "target": "local/primary",
+                        "fallbacks": [{"target": "local/backup", "fallbacks": []}],
+                    }
+                }
+            },
+            [
+                (
+                    "error",
+                    "$.model_tasks.text_to_speech.fallbacks",
+                    "text_to_speech.fallbacks entries must not contain nested fallbacks",
+                )
+            ],
+            id="nested-fallbacks",
+        ),
     ],
 )
 def test_settings_data_reports_each_invalid_field(

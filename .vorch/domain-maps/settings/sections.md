@@ -10,7 +10,7 @@ Live side effects come either from read-at-use accessors or from the shared Runt
 
 ## Task Model paths
 
-Changing a Task Model target leaf resets prior options before explicit option edits; unsetting that target removes the complete binding and overlaps every option edit for that task. An option named `target`, at any depth inside `options`, is an ordinary option: unsetting it preserves its siblings. Unchanged effective Task Model bindings skip live catalog validation.
+The `model_tasks["<task>"].fallbacks` path replaces the ordered list of complete target/options entries; entries retain their own options across primary changes and reordering. Changing a Task Model target leaf resets prior options before explicit option edits; unsetting that target removes the complete binding and overlaps every option edit for that task. An option named `target`, at any depth inside `options`, is an ordinary option: unsetting it preserves its siblings. Unchanged effective Task Model bindings skip live catalog validation.
 
 ## Patch pruning
 

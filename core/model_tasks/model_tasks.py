@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from core.model_tasks._binding_config import normalize_fallbacks
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     TASK_DECISION,
@@ -42,7 +43,7 @@ from core.providers.accounts import compose_connection_id, validate_account_id
 from core.providers.providers import model_is_local
 from core.providers.wire_profile import WireProfile
 from core.providers.wire_profiles import standalone_wire_binding
-from core.utils.errors import ConfigError, VBotError
+from core.utils.errors import ConfigError, StorageError, VBotError
 
 JsonObject = dict[str, Any]
 TaskModelTargetKind = Literal["provider", "local"]
@@ -64,11 +65,13 @@ class TaskModelBinding:
     target: str
     options: Mapping[str, Any] = field(default_factory=dict)
 
+    fallbacks: tuple[TaskModelBinding, ...] = ()
+
     def to_dict(self) -> JsonObject:
-        return {
-            "target": self.target,
-            "options": dict(self.options),
-        }
+        result: JsonObject = {"target": self.target, "options": dict(self.options)}
+        if self.fallbacks:
+            result["fallbacks"] = [binding.to_dict() for binding in self.fallbacks]
+        return result
 
 
 @dataclass(frozen=True)
@@ -362,6 +365,15 @@ class TaskModelService:
             except TaskModelOptionValidationError as error:
                 raise TaskModelValidationError(str(error)) from error
 
+        try:
+            fallbacks = normalize_fallbacks(
+                normalized_task_type, raw_binding.get("fallbacks", []), primary_target=target
+            )
+        except StorageError as exc:
+            raise TaskModelValidationError(str(exc)) from exc
+        for fallback in fallbacks:
+            self.validate_binding(normalized_task_type, fallback)
+
         normalized_target = target.strip()
         self._validate_target(normalized_task_type, normalized_target)
         try:
@@ -385,7 +397,7 @@ class TaskModelService:
             task_type = validate_task_type(raw_task_type)
             if not isinstance(raw_binding, Mapping):
                 raise TaskModelValidationError(f"{task_type} binding must be an object")
-            unsupported = sorted(set(raw_binding) - {"target", "options"})
+            unsupported = sorted(set(raw_binding) - {"target", "options", "fallbacks"})
             if unsupported:
                 raise TaskModelValidationError(
                     f"Unsupported {task_type} binding fields: {', '.join(unsupported)}"
@@ -413,12 +425,49 @@ class TaskModelService:
             options: JsonObject = dict(raw_options)
             stored = previous.get("options") if isinstance(previous, Mapping) else None
             previous_options: Mapping[str, Any] = stored if isinstance(stored, Mapping) else {}
-            if not target_changed and settings_values_equal(options, previous_options):
+            try:
+                fallbacks = normalize_fallbacks(
+                    task_type,
+                    raw_binding.get("fallbacks", previous.get("fallbacks", [])),
+                    primary_target=target,
+                )
+            except StorageError as exc:
+                raise TaskModelValidationError(str(exc)) from exc
+            previous_fallbacks = previous.get("fallbacks", [])
+            if (
+                not target_changed
+                and settings_values_equal(options, previous_options)
+                and settings_values_equal(fallbacks, previous_fallbacks)
+            ):
                 continue
             if not target_changed:
                 options = self._without_stale_options(task_type, target, options, previous_options)
-            binding = {"target": target, "options": options}
-            self.validate_binding(task_type, binding)
+            binding: JsonObject = {"target": target, "options": options}
+            if "fallbacks" in raw_binding or "fallbacks" in previous:
+                binding["fallbacks"] = fallbacks
+            if target_changed or not settings_values_equal(options, previous_options):
+                self.validate_binding(task_type, {"target": target, "options": options})
+            for fallback in fallbacks:
+                previous_fallback = next(
+                    (
+                        old
+                        for old in previous_fallbacks
+                        if task_model_targets_equal(fallback["target"], old["target"])
+                    ),
+                    None,
+                )
+                if previous_fallback is not None:
+                    if settings_values_equal(
+                        fallback["options"], previous_fallback.get("options", {})
+                    ):
+                        continue
+                    fallback["options"] = self._without_stale_options(
+                        task_type,
+                        fallback["target"],
+                        fallback["options"],
+                        previous_fallback.get("options", {}),
+                    )
+                self.validate_binding(task_type, fallback)
             prepared[task_type] = binding
         return prepared
 
@@ -500,6 +549,12 @@ class TaskModelService:
             task_type=normalized_task_type,
             target=target,
             options=dict(options) if isinstance(options, Mapping) else {},
+            fallbacks=tuple(
+                TaskModelBinding(
+                    normalized_task_type, item["target"], dict(item.get("options", {}))
+                )
+                for item in binding.get("fallbacks", [])
+            ),
         )
 
     def list_targets(self, task_type: str) -> list[TaskModelTarget]:
@@ -515,15 +570,23 @@ class TaskModelService:
         """Return whether the configured binding has a live, executable target."""
 
         try:
-            binding = self.binding_for(task_type)
-            self.validate_execution_target(binding)
-            target_ref = parse_task_model_target_id(binding.target)
-            if target_ref.kind == "local":
-                self.validate_binding(task_type, binding.to_dict())
-                return self._local_targets.get(target_ref.local_id).can_execute()
-            return True
-        except VBotError, ValueError:
+            primary = self.binding_for(task_type)
+        except VBotError:
             return False
+        for binding in (primary, *primary.fallbacks):
+            try:
+                self.validate_execution_target(binding)
+                target_ref = parse_task_model_target_id(binding.target)
+                if target_ref.kind == "local":
+                    self.validate_binding(
+                        task_type, {"target": binding.target, "options": dict(binding.options)}
+                    )
+                    if not self._local_targets.get(target_ref.local_id).can_execute():
+                        continue
+                return True
+            except VBotError, ValueError:
+                continue
+        return False
 
     def validate_execution_target(self, binding: TaskModelBinding) -> None:
         """Validate the selected binding against live target and credential state.

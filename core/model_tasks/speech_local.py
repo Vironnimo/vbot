@@ -543,7 +543,9 @@ class LocalSpeechExecutor:
                 raise
             raise failure from error
 
-    def retain_transcription_model(self, local_id: str | None) -> None:
+    def retain_transcription_model(
+        self, local_id: str | None, *, fallback_ids: tuple[str, ...] = ()
+    ) -> None:
         """Keep the selected STT model warm and retire others after accepted work.
 
         A Provider or cleared binding passes ``None``. This changes residency,
@@ -557,10 +559,10 @@ class LocalSpeechExecutor:
                 continue
             state = self._states[name]
             with state.lifecycle_lock:
-                if name != local_id and not state.retired:
+                if name != local_id and name not in fallback_ids and not state.retired:
                     state.preparation_generation += 1
                     state.preparing_key = None
-                state.retired = name != local_id
+                state.retired = name != local_id and name not in fallback_ids
             self._release_retired_when_idle(state)
 
     def _release_retired_when_idle(self, state: _EngineState) -> None:

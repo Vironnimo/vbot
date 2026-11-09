@@ -346,16 +346,31 @@ def test_update_rejects_unknown_option_name(previous_value: int | None) -> None:
         ({"voice": "removed"}, None),
     ],
 )
+@pytest.mark.parametrize("fallback", [False, True], ids=["primary", "fallback"])
 def test_unchanged_stale_binding_does_not_block_other_updates(
-    stale_options: dict, saved_after_edit: dict | None
+    stale_options: dict, saved_after_edit: dict | None, fallback: bool
 ) -> None:
     stale = {"target": "openrouter/voice::api-key", "options": stale_options}
-    storage = _Storage({TASK_TEXT_TO_SPEECH: stale})
+
+    def binding(entry):
+        return (
+            {"target": "openrouter/primary::api-key", "options": {}, "fallbacks": [entry]}
+            if fallback
+            else entry
+        )
+
+    def selected(saved):
+        return (
+            saved[TASK_TEXT_TO_SPEECH]["fallbacks"][0] if fallback else saved[TASK_TEXT_TO_SPEECH]
+        )
+
+    storage = _Storage({TASK_TEXT_TO_SPEECH: binding(stale)})
     service = TaskModelService(
         _Providers(),
         _Models(
             [
                 _model("voice", (TASK_TEXT_TO_SPEECH,), supported_voices=("available",)),
+                _model("primary", (TASK_TEXT_TO_SPEECH,)),
                 _model("transcribe", (TASK_SPEECH_TO_TEXT,)),
             ]
         ),
@@ -363,24 +378,95 @@ def test_unchanged_stale_binding_does_not_block_other_updates(
         storage,
     )
     update = {
-        TASK_TEXT_TO_SPEECH: stale,
+        TASK_TEXT_TO_SPEECH: binding(stale),
         TASK_SPEECH_TO_TEXT: {"target": "openrouter/transcribe::api-key", "options": {}},
     }
     service.validate_update(update)
     saved = service.update(update)
-    assert saved[TASK_TEXT_TO_SPEECH] == stale
+    assert selected(saved) == stale
     assert saved[TASK_SPEECH_TO_TEXT] == update[TASK_SPEECH_TO_TEXT]
     with pytest.raises(TaskModelValidationError):
-        service.validate_binding(TASK_TEXT_TO_SPEECH, stale)
+        service.validate_binding(TASK_TEXT_TO_SPEECH, binding(stale))
     sibling_edit = {
-        TASK_TEXT_TO_SPEECH: {"options": {"voice": "available", **stale_options, "speed": 1.1}}
+        TASK_TEXT_TO_SPEECH: binding(
+            {**stale, "options": {"voice": "available", **stale_options, "speed": 1.1}}
+        )
     }
     if saved_after_edit is not None:
         saved = service.update(sibling_edit)
-        assert saved[TASK_TEXT_TO_SPEECH]["options"] == saved_after_edit
+        assert selected(saved)["options"] == saved_after_edit
     else:
         with pytest.raises(TaskModelValidationError):
             service.update(sibling_edit)
-    repaired = service.update({TASK_TEXT_TO_SPEECH: {"options": {"voice": "available"}}})
-    assert repaired[TASK_TEXT_TO_SPEECH]["target"] == stale["target"]
+    with pytest.raises(TaskModelValidationError):
+        service.update(
+            {
+                TASK_TEXT_TO_SPEECH: binding(
+                    {**stale, "options": {"voice": "available", "retired_option": False}}
+                )
+            }
+        )
+    repaired = service.update(
+        {TASK_TEXT_TO_SPEECH: binding({**stale, "options": {"voice": "available"}})}
+    )
+    assert selected(repaired)["target"] == stale["target"]
     assert service.binding_is_usable(TASK_TEXT_TO_SPEECH)
+
+
+def test_fallback_settings_preserve_options_and_allow_repairing_an_unavailable_primary():
+    models = _Models(
+        [_model("primary", (TASK_SPEECH_TO_TEXT,)), _model("backup", (TASK_SPEECH_TO_TEXT,))]
+    )
+    storage = _Storage()
+    service = TaskModelService(_Providers(), models, _Credentials(), storage)
+    service.update(
+        {
+            TASK_SPEECH_TO_TEXT: {
+                "target": "openrouter/primary::api-key",
+                "options": {"language": "de"},
+            }
+        }
+    )
+    models._models.pop(0)
+    service.update(
+        {
+            TASK_SPEECH_TO_TEXT: {
+                "fallbacks": [
+                    {"target": "openrouter/backup::api-key", "options": {"language": "en"}}
+                ]
+            }
+        }
+    )
+    binding = service.binding_for(TASK_SPEECH_TO_TEXT)
+    assert binding.options == {"language": "de"}
+    assert binding.fallbacks[0].options == {"language": "en"}
+    assert service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+    service.update({TASK_SPEECH_TO_TEXT: {"fallbacks": []}})
+    assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        [{"target": "local/primary"}],
+        [{"target": "local/backup"}, {"target": "local/backup"}],
+        [{"target": "local/backup", "options": {"unknown": True}}],
+        [{"target": "local/backup", "fallbacks": []}],
+    ],
+)
+def test_invalid_fallback_chains_are_rejected_atomically(fallbacks):
+    registry = LocalTaskTargetRegistry(
+        [
+            LocalTaskTargetDescriptor(
+                id=name, label=name, task_types=(TASK_SPEECH_TO_TEXT,), availability=lambda: True
+            )
+            for name in ("primary", "backup")
+        ]
+    )
+    storage = _Storage()
+    service = TaskModelService(
+        _Providers(), _Models([]), _Credentials(), storage, local_targets=registry
+    )
+    with pytest.raises(TaskModelValidationError):
+        service.update({TASK_SPEECH_TO_TEXT: {"target": "local/primary", "fallbacks": fallbacks}})
+    assert storage.load_model_task_settings() == {}

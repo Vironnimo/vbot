@@ -8,6 +8,7 @@ from core.json_documents import (
     OPAQUE,
     JsonShape,
     json_document,
+    json_list,
     json_map,
     json_object,
 )
@@ -177,7 +178,10 @@ SETTINGS_SHAPE: JsonShape = json_document(
         "model_tasks": json_object(
             SUPPORTED_TASK_TYPES,
             {
-                task_type: json_object(MODEL_TASK_BINDING_FIELDS)
+                task_type: json_object(
+                    MODEL_TASK_BINDING_FIELDS,
+                    {"fallbacks": json_list(json_object({"target", "options"}), key="target")},
+                )
                 for task_type in SUPPORTED_TASK_TYPES
             },
         ),

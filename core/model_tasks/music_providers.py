@@ -32,9 +32,10 @@ from core.providers.openai_compatible import (
     OPENAI_NATIVE_TRANSPORT_FINISH_REASONS,
 )
 from core.providers.task_client import (
+    NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,
-    classify_task_response,
-    content_refusal,
+    classify_task_response_for_retry_policy,
+    classify_task_transport_error,
     is_omittable_option,
     merge_extra_options,
 )
@@ -90,6 +91,7 @@ class ProviderMusicClient(ProviderTaskClient):
     async def _stream_response(
         self, payload: JsonObject, *, usage: JsonObject
     ) -> AsyncIterator[httpx.Response]:
+        operation_key = uuid4().hex
         async with self.http_client(MUSIC_REQUEST_TIMEOUT_SECONDS) as client:
             # Music has no Chat streaming clocks; keep the task's read timeout.
             request = client.build_request(
@@ -107,14 +109,20 @@ class ProviderMusicClient(ProviderTaskClient):
                 response = await client.send(request, stream=True)
                 if response.status_code >= 400:
                     await response.aread()
-                    refusal = content_refusal(response)
-                    if refusal is not None:
-                        raise refusal
-                    classify_task_response(response)
+                    classify_task_response_for_retry_policy(
+                        response,
+                        retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+                        operation_key=operation_key,
+                        extra_retryable_status_codes=frozenset(),
+                    )
                 yield response
             except httpx.TransportError as exc:
                 status = "failed"
-                failure = wrap_network_error(exc)
+                failure = classify_task_transport_error(
+                    exc,
+                    retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+                    operation_key=operation_key,
+                )
                 raise failure from exc
             except asyncio.CancelledError:
                 status = "cancelled"

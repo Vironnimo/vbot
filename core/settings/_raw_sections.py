@@ -11,6 +11,7 @@ from core.config_validation import child_path as _child_path
 from core.config_validation import validate_positive_integer as _validate_positive_integer
 from core.config_validation import warn_unknown_keys as _warn_unknown_keys
 from core.json_documents import json_object, strip_unknown_fields, warn_unknown_fields
+from core.model_tasks._binding_config import normalize_fallbacks
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -546,6 +547,16 @@ def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None
             MODEL_TASK_BINDING_FIELDS,
             "model task field",
         )
+        if "fallbacks" in binding:
+            try:
+                normalize_fallbacks(
+                    str(task_type),
+                    binding["fallbacks"],
+                    stored=True,
+                    primary_target=binding.get("target"),
+                )
+            except StorageError as error:
+                _error(diagnostics, _child_path(task_path, "fallbacks"), str(error))
         target = binding.get("target")
         if "target" in binding and (not isinstance(target, str) or not target.strip()):
             _error(diagnostics, _child_path(task_path, "target"), "must be a non-empty string")

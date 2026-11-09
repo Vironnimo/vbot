@@ -587,6 +587,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         description="Complete Task Model binding for one task type.",
     ),
     SettingDefinition(
+        pattern=("model_tasks", DynamicSegment("task"), "fallbacks"),
+        value_type="array",
+        description="Ordered Task Model fallback targets with their own options.",
+        default=[],
+    ),
+    SettingDefinition(
         pattern=("model_tasks", DynamicSegment("task"), "target"),
         value_type="string",
         description="Target bound to one specialized model task.",

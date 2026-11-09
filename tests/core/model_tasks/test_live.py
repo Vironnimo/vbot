@@ -1053,7 +1053,7 @@ class FakeModelTasks:
     def binding_for(self, task_type: str) -> SimpleNamespace:
         if not self.configured:
             raise TaskModelError("live_voice is not configured")
-        return SimpleNamespace(target=self.target)
+        return SimpleNamespace(task_type=task_type, target=self.target, options=self.options)
 
     def binding_is_usable(self, task_type: str) -> bool:
         return True
@@ -1446,3 +1446,52 @@ async def test_hangup_closes_media_before_draining_the_successful_request(
     assert saved and saved[0]["ok"] is True
     assert voice.finished == [None]
     assert backend.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["rate-limit", "missing-backend-model"])
+async def test_live_fallback_negotiates_new_media_only_before_the_call_starts(monkeypatch, failure):
+    from core.model_tasks import TaskModelBinding
+
+    bindings = FakeModelTasks()
+    primary = TaskModelBinding(
+        "live_voice",
+        OPENAI_TARGET,
+        {"voice": "cove", "backend": "vbot"},
+        (TaskModelBinding("live_voice", XAI_TARGET, {"voice": "eve", "backend": "none"}),),
+    )
+    monkeypatch.setattr(bindings, "binding_for", lambda task: primary)
+    monkeypatch.setattr(bindings, "options_with_defaults", lambda binding: dict(binding.options))
+    service, chat = _service(
+        bindings,
+        backend_agent_model="" if failure == "missing-backend-model" else "openai/gpt-6-sol",
+    )
+    opened = []
+
+    async def unavailable(*args, **kwargs):
+        opened.append("primary")
+        raise ProviderRateLimitError("busy")
+
+    wire = FakeWire()
+
+    async def backup(*args, **kwargs):
+        opened.append("backup")
+        return wire
+
+    monkeypatch.setattr(live_module, "open_openai_live_wire", unavailable)
+    monkeypatch.setattr(live_module, "open_xai_live_wire", backup)
+    with pytest.raises(LiveStartRejected) as caught:
+        await service.start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
+    assert caught.value.code == "media_mismatch"
+    assert service.status()["media"] == "relay"
+    assert service.status()["target"] == XAI_TARGET
+    call = await service.start_call(media="relay", host=FakeHost())
+    try:
+        if failure == "rate-limit":
+            assert opened == ["primary", "backup"]
+            assert chat.voices[0].discarded
+        else:
+            assert opened == ["backup"]
+            assert len(chat.voices) == 1
+    finally:
+        await call.close()

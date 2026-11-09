@@ -27,7 +27,9 @@ from core.model_tasks.image_profile import (
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import (
+    TaskAttempt,
     TaskBindingResolver,
+    TaskCandidateMismatchError,
     TaskUsage,
     TaskUsageContext,
     task_debug_context,
@@ -200,8 +202,7 @@ class VideoService:
         """Return what the configured video Model offers, without a request."""
 
         try:
-            binding = self._resolver.binding_for(TASK_VIDEO_GENERATION)
-            target_ref = self._resolver.parse_target(binding.target)
+            _binding, _options, target_ref = self._resolver.resolve(TASK_VIDEO_GENERATION)
         except VideoConfigurationError:
             return VideoProfile()
         if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
@@ -226,55 +227,61 @@ class VideoService:
         if not normalized_prompt:
             raise VideoOptionError("Prompt must not be empty")
 
-        try:
-            _binding, options, target_ref = await self._resolver.resolve_async(
-                TASK_VIDEO_GENERATION
-            )
-        except VideoConfigurationError as exc:
-            raise VideoConfigurationError("no Video generation model is chosen") from exc
-        model = self._validated_model(target_ref)
-        profile = build_video_profile(model)
-        requested = profile.validated_options(call_options or {})
-        merged_options = {**_shape_options(options, requested, profile), **requested}
-        frames = await self._load_frames(profile, frame_paths or {})
+        async def execute(attempt: TaskAttempt) -> VideoGenerationResult:
+            _binding, options, target_ref = attempt.binding, attempt.options, attempt.target
 
-        try:
-            client = await ProviderVideoClient.from_runtime_async(
-                self._runtime,
-                target_ref,
-                usage_observer=TaskUsage(
-                    self._usage_recorder, TASK_VIDEO_GENERATION, target_ref, context=usage_context
-                ),
-                debug_context=task_debug_context(usage_context, target_ref),
-            )
-        except (ConfigError, KeyError) as exc:
-            raise VideoConfigurationError(str(exc)) from exc
-        model_ref = f"{target_ref.provider_id}/{target_ref.model_id}"
+            try:
+                model = self._validated_model(target_ref)
+                profile = build_video_profile(model)
+                requested = profile.validated_options(call_options or {})
+                merged_options = {**_shape_options(options, requested, profile), **requested}
+                frames = await self._load_frames(profile, frame_paths or {})
 
-        def follow_cancelled_job(job_id: str, polling: asyncio.Task[JsonObject]) -> None:
-            job = asyncio.create_task(
-                _settle_cancelled_job(job_id, polling, model_ref), name="video-job-cost"
-            )
-            self._cancelled_jobs[job] = polling
-            job.add_done_callback(lambda finished: self._cancelled_jobs.pop(finished, None))
+            except (VideoConfigurationError, VideoOptionError) as exc:
+                raise TaskCandidateMismatchError(exc) from exc
 
-        try:
-            return await client.generate(
-                normalized_prompt,
-                options=merged_options,
-                frame_images=frames,
-                on_cancelled_job=follow_cancelled_job,
-            )
-        except ProviderContentRefusedError as exc:
-            raise VideoRefusedError(exc.reason) from exc
-        except VideoJobUnfinishedError as exc:
-            raise VideoOutcomeUnknownError(
-                exc.reason, operation_key=exc.operation_key, job_id=exc.job_id
-            ) from exc
-        except ProviderOutcomeUnknownError as exc:
-            raise VideoOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
-        except VBotError as exc:
-            raise VideoExecutionError(str(exc)) from exc
+            try:
+                client = await ProviderVideoClient.from_runtime_async(
+                    self._runtime,
+                    target_ref,
+                    usage_observer=TaskUsage(
+                        self._usage_recorder,
+                        TASK_VIDEO_GENERATION,
+                        target_ref,
+                        context=usage_context,
+                    ),
+                    debug_context=task_debug_context(usage_context, target_ref),
+                )
+            except (ConfigError, KeyError) as exc:
+                raise VideoConfigurationError(str(exc)) from exc
+            model_ref = f"{target_ref.provider_id}/{target_ref.model_id}"
+
+            def follow_cancelled_job(job_id: str, polling: asyncio.Task[JsonObject]) -> None:
+                job = asyncio.create_task(
+                    _settle_cancelled_job(job_id, polling, model_ref), name="video-job-cost"
+                )
+                self._cancelled_jobs[job] = polling
+                job.add_done_callback(lambda finished: self._cancelled_jobs.pop(finished, None))
+
+            try:
+                return await client.generate(
+                    normalized_prompt,
+                    options=merged_options,
+                    frame_images=frames,
+                    on_cancelled_job=follow_cancelled_job,
+                )
+            except ProviderContentRefusedError as exc:
+                raise VideoRefusedError(exc.reason) from exc
+            except VideoJobUnfinishedError as exc:
+                raise VideoOutcomeUnknownError(
+                    exc.reason, operation_key=exc.operation_key, job_id=exc.job_id
+                ) from exc
+            except ProviderOutcomeUnknownError as exc:
+                raise VideoOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
+            except VBotError as exc:
+                raise VideoExecutionError(str(exc)) from exc
+
+        return await self._resolver.execute(TASK_VIDEO_GENERATION, execute)
 
     async def generate_artifact(
         self,

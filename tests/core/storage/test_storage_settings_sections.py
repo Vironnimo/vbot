@@ -710,3 +710,52 @@ def test_multiple_sections_update_in_one_write(
         "recall": {"backend": "sqlite_fts"},
         "server_port": 8500,
     }
+
+
+def test_task_fallbacks_round_trip_sparse_updates_paths_and_unknown_fields(tmp_path):
+    from core.settings import SettingsValidationError, parse_settings_update
+    from core.settings.paths import parse_patch_operations
+
+    storage = StorageManager(tmp_path)
+    fallback = {"target": "local/backup", "options": {"voice": "second"}, "future": {"keep": True}}
+    storage.settings_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "model_tasks": {
+                    "text_to_speech": {
+                        "target": "local/primary",
+                        "options": {"voice": "first"},
+                        "fallbacks": [fallback],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    storage.update_settings_sections(
+        parse_settings_update(
+            {"model_tasks": {"text_to_speech": {"options": {"voice": "changed"}}}}
+        )
+    )
+    loaded = storage.load_model_task_settings()["text_to_speech"]
+    assert loaded["fallbacks"] == [{"target": "local/backup", "options": {"voice": "second"}}]
+    assert loaded["options"] == {"voice": "changed"}
+    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["model_tasks"][
+        "text_to_speech"
+    ]["fallbacks"][0]["future"] == {"keep": True}
+    with pytest.raises(StorageError, match="differ from the primary"):
+        storage.update_settings_sections(
+            parse_settings_update({"model_tasks": {"text_to_speech": {"target": "local/backup"}}})
+        )
+    assert storage.load_model_task_settings()["text_to_speech"] == loaded
+    storage.patch_settings(
+        parse_patch_operations(
+            [{"op": "set", "path": 'model_tasks["text_to_speech"].fallbacks', "value": []}]
+        )
+    )
+    assert storage.load_model_task_settings()["text_to_speech"]["fallbacks"] == []
+    with pytest.raises(SettingsValidationError):
+        parse_settings_update(
+            {"model_tasks": {"text_embedding": {"fallbacks": [{"target": "local/backup"}]}}}
+        )

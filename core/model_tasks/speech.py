@@ -33,13 +33,19 @@ from core.model_tasks.speech_playback import SpeechPlaybackStore
 from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import (
     SpeechAudioCallback,
+    SpeechAudioChunk,
     SpeechBusyError,
     SpeechError,
     SpeechProgress,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
+from core.model_tasks.task_execution import (
+    TaskAttempt,
+    TaskBindingResolver,
+    TaskUsage,
+    TaskUsageContext,
+)
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.settings import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
@@ -199,65 +205,68 @@ class SpeechService:
     async def _transcribe(
         self, audio: bytes, filename: str, media_type: str, progress: SpeechProgress | None
     ) -> SpeechTranscriptionResult:
+        async def execute(attempt: TaskAttempt) -> SpeechTranscriptionResult:
+            _binding, options, target_ref = attempt.binding, attempt.options, attempt.target
+
+            usage = TaskUsage(self._usage_recorder, TASK_SPEECH_TO_TEXT, target_ref)
+            if target_ref.kind == "local":
+                try:
+                    async with usage.attempt() as call_id:
+                        result = await self._local_executor.transcribe(
+                            target_ref.local_id,
+                            audio,
+                            filename=filename,
+                            media_type=media_type,
+                            options=options,
+                            progress=progress,
+                        )
+                        await usage.update(call_id, result.usage)
+                        return result
+                except LocalSpeechExecutionError as exc:
+                    raise SpeechExecutionError(str(exc)) from exc
+                except LocalSpeechError as exc:
+                    raise SpeechUnsupportedTargetError(str(exc)) from exc
+
+            try:
+                provider_client = await ProviderSpeechClient.from_runtime_async(
+                    self._runtime, target_ref, usage_observer=usage
+                )
+                if progress is not None:
+                    progress.update("preparing")
+                prepared = await self._prepare_input(
+                    audio, provider_client.transcription_input_policy()
+                )
+                if self._closed:
+                    raise SpeechConfigurationError("Speech service is closed")
+                if progress is not None:
+                    progress.update("transcribing")
+                return await provider_client.transcribe(
+                    prepared.audio,
+                    filename=prepared.filename,
+                    media_type=prepared.media_type,
+                    options=options,
+                )
+            except SpeechError:
+                raise
+            except VBotError as exc:
+                # ProviderError / NetworkError / ProviderAuthError / … are
+                # expected provider failures, not crashes.
+                _LOGGER.warning(
+                    "Speech transcription failed for target=%s: %s",
+                    target_ref.target,
+                    exc,
+                )
+                raise SpeechExecutionError(str(exc)) from exc
+
+            except Exception as exc:
+                _LOGGER.error("Speech transcription failed", exc_info=True)
+                raise SpeechExecutionError(str(exc)) from exc
+
         try:
-            _binding, options, target_ref = await self._resolver.resolve_async(TASK_SPEECH_TO_TEXT)
+            return await self._resolver.execute(TASK_SPEECH_TO_TEXT, execute)
         except SpeechConfigurationError as exc:
             _LOGGER.warning("Speech transcription unavailable: %s", exc)
             raise
-
-        usage = TaskUsage(self._usage_recorder, TASK_SPEECH_TO_TEXT, target_ref)
-        if target_ref.kind == "local":
-            try:
-                async with usage.attempt() as call_id:
-                    result = await self._local_executor.transcribe(
-                        target_ref.local_id,
-                        audio,
-                        filename=filename,
-                        media_type=media_type,
-                        options=options,
-                        progress=progress,
-                    )
-                    await usage.update(call_id, result.usage)
-                    return result
-            except LocalSpeechExecutionError as exc:
-                raise SpeechExecutionError(str(exc)) from exc
-            except LocalSpeechError as exc:
-                raise SpeechUnsupportedTargetError(str(exc)) from exc
-
-        try:
-            provider_client = await ProviderSpeechClient.from_runtime_async(
-                self._runtime, target_ref, usage_observer=usage
-            )
-            if progress is not None:
-                progress.update("preparing")
-            prepared = await self._prepare_input(
-                audio, provider_client.transcription_input_policy()
-            )
-            if self._closed:
-                raise SpeechConfigurationError("Speech service is closed")
-            if progress is not None:
-                progress.update("transcribing")
-            return await provider_client.transcribe(
-                prepared.audio,
-                filename=prepared.filename,
-                media_type=prepared.media_type,
-                options=options,
-            )
-        except SpeechError:
-            raise
-        except VBotError as exc:
-            # ProviderError / NetworkError / ProviderAuthError / … are
-            # expected provider failures, not crashes.
-            _LOGGER.warning(
-                "Speech transcription failed for target=%s: %s",
-                target_ref.target,
-                exc,
-            )
-            raise SpeechExecutionError(str(exc)) from exc
-
-        except Exception as exc:
-            _LOGGER.error("Speech transcription failed", exc_info=True)
-            raise SpeechExecutionError(str(exc)) from exc
 
     async def _prepare_input(
         self, audio: bytes, policy: TranscriptionInputPolicy
@@ -312,23 +321,32 @@ class SpeechService:
         """
         for task_type in task_types:
             try:
-                _binding, options, target_ref = self._resolver.resolve(task_type)
+                primary = self._resolver.binding_for(task_type)
             except SpeechConfigurationError:
                 continue
-            if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
-                self._local_executor.prepare(target_ref.local_id, options)
+            for binding in (primary, *getattr(primary, "fallbacks", ())):
+                try:
+                    _binding, options, target_ref = self._resolver.resolve_binding(binding)
+                except SpeechConfigurationError:
+                    continue
+                if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
+                    self._local_executor.prepare(target_ref.local_id, options)
 
     def transcription_binding_changed(self) -> None:
-        """Retain only the selected local STT model after a Settings change."""
-        local_id = None
+        """Retain every local STT engine selected in the configured chain."""
+        local_ids: list[str] = []
         try:
-            binding = self._resolver.binding_for(TASK_SPEECH_TO_TEXT)
-            target = self._resolver.parse_target(binding.target)
-            if target.kind == "local":
-                local_id = target.local_id
+            primary = self._resolver.binding_for(TASK_SPEECH_TO_TEXT)
+            for binding in (primary, *getattr(primary, "fallbacks", ())):
+                target = self._resolver.parse_target(binding.target)
+                if target.kind == "local":
+                    local_ids.append(target.local_id)
         except SpeechConfigurationError:
-            pass  # Removing the binding retires every local STT model.
-        self._local_executor.retain_transcription_model(local_id)
+            pass
+        self._local_executor.retain_transcription_model(
+            local_ids[0] if local_ids else None,
+            **({"fallback_ids": tuple(local_ids[1:])} if len(local_ids) > 1 else {}),
+        )
 
     def local_setup_for(self, target: str) -> LocalSpeechSetup:
         return self._local_executor.setup_for(target)
@@ -368,61 +386,72 @@ class SpeechService:
         if not normalized_text:
             raise SpeechConfigurationError("Text to synthesize must not be empty")
 
-        _binding, options, target_ref = await self._resolver.resolve_async(TASK_TEXT_TO_SPEECH)
+        async def execute(attempt: TaskAttempt) -> SpeechSynthesisResult:
+            _binding, options, target_ref = attempt.binding, attempt.options, attempt.target
 
-        usage = TaskUsage(
-            self._usage_recorder, TASK_TEXT_TO_SPEECH, target_ref, context=usage_context
-        )
-        if target_ref.kind == "local":
+            async def deliver_audio(chunk: SpeechAudioChunk) -> None:
+                if chunk.audio:
+                    attempt.seal()
+                if on_audio is not None:
+                    await on_audio(chunk)
+
+            callback = deliver_audio if on_audio is not None else None
+
+            usage = TaskUsage(
+                self._usage_recorder, TASK_TEXT_TO_SPEECH, target_ref, context=usage_context
+            )
+            if target_ref.kind == "local":
+                try:
+                    async with usage.attempt():
+                        return await self._local_executor.synthesize(
+                            target_ref.local_id,
+                            normalized_text,
+                            options=options,
+                            progress=progress,
+                            **({"on_audio": callback} if callback is not None else {}),
+                        )
+                except LocalSpeechExecutionError as exc:
+                    raise SpeechExecutionError(str(exc)) from exc
+                except LocalSpeechError as exc:
+                    raise SpeechUnsupportedTargetError(str(exc)) from exc
+
+            if progress is not None:
+                progress.update("synthesizing")
             try:
-                async with usage.attempt():
-                    return await self._local_executor.synthesize(
-                        target_ref.local_id,
-                        normalized_text,
-                        options=options,
-                        progress=progress,
-                        **({"on_audio": on_audio} if on_audio is not None else {}),
-                    )
-            except LocalSpeechExecutionError as exc:
+                provider_client = await ProviderSpeechClient.from_runtime_async(
+                    self._runtime, target_ref, usage_observer=usage
+                )
+                return await provider_client.synthesize(
+                    normalized_text,
+                    options=options,
+                    **({"on_audio": callback} if callback is not None else {}),
+                )
+            except SpeechError:
+                raise
+            except ProviderOutcomeUnknownError as exc:
+                _LOGGER.warning(
+                    "Speech synthesis failed for target=%s: %s",
+                    target_ref.target,
+                    exc,
+                )
+                raise SpeechOutcomeUnknownError(
+                    str(exc),
+                    operation_key=exc.operation_key,
+                ) from exc
+            except VBotError as exc:
+                # ProviderError / NetworkError / ProviderAuthError / … are
+                # expected provider failures, not crashes.
+                _LOGGER.warning(
+                    "Speech synthesis failed for target=%s: %s",
+                    target_ref.target,
+                    exc,
+                )
                 raise SpeechExecutionError(str(exc)) from exc
-            except LocalSpeechError as exc:
-                raise SpeechUnsupportedTargetError(str(exc)) from exc
+            except Exception as exc:
+                _LOGGER.error("Speech synthesis failed", exc_info=True)
+                raise SpeechExecutionError(str(exc)) from exc
 
-        if progress is not None:
-            progress.update("synthesizing")
-        try:
-            provider_client = await ProviderSpeechClient.from_runtime_async(
-                self._runtime, target_ref, usage_observer=usage
-            )
-            return await provider_client.synthesize(
-                normalized_text,
-                options=options,
-                **({"on_audio": on_audio} if on_audio is not None else {}),
-            )
-        except SpeechError:
-            raise
-        except ProviderOutcomeUnknownError as exc:
-            _LOGGER.warning(
-                "Speech synthesis failed for target=%s: %s",
-                target_ref.target,
-                exc,
-            )
-            raise SpeechOutcomeUnknownError(
-                str(exc),
-                operation_key=exc.operation_key,
-            ) from exc
-        except VBotError as exc:
-            # ProviderError / NetworkError / ProviderAuthError / … are
-            # expected provider failures, not crashes.
-            _LOGGER.warning(
-                "Speech synthesis failed for target=%s: %s",
-                target_ref.target,
-                exc,
-            )
-            raise SpeechExecutionError(str(exc)) from exc
-        except Exception as exc:
-            _LOGGER.error("Speech synthesis failed", exc_info=True)
-            raise SpeechExecutionError(str(exc)) from exc
+        return await self._resolver.execute(TASK_TEXT_TO_SPEECH, execute)
 
     async def synthesize_artifact(
         self,

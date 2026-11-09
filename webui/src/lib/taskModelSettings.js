@@ -307,6 +307,12 @@ export function createTaskModelUpdatePayload(bindings, previous) {
       target: binding.target,
       options: normalizeOptionsForPayload(binding.options),
     };
+    if (binding.fallbacks !== undefined) {
+      payload[row.taskType].fallbacks = binding.fallbacks.map((entry) => ({
+        target: entry.target,
+        options: normalizeOptionsForPayload(entry.options),
+      }));
+    }
     if (
       baseline &&
       JSON.stringify(payload[row.taskType]) ===
@@ -328,6 +334,14 @@ export function taskModelBindingsMatch(left, right) {
 function normalizeBinding(binding) {
   const source = binding && typeof binding === 'object' ? binding : {};
   return {
+    ...(Array.isArray(source.fallbacks)
+      ? {
+          fallbacks: source.fallbacks.map((entry) => ({
+            target: textOrEmpty(entry.target),
+            options: plainCopy(entry.options),
+          })),
+        }
+      : {}),
     target: textOrEmpty(source.target),
     options:
       source.options && typeof source.options === 'object'

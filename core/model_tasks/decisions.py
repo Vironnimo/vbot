@@ -13,12 +13,21 @@ from core.model_tasks.decision_types import (
     json_copy,
     validate_questions,
 )
-from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
-from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
+from core.model_tasks.model_tasks import (
+    TaskModelBinding,
+    TaskModelService,
+    parse_task_model_target_id,
+)
+from core.model_tasks.task_execution import (
+    TaskAttempt,
+    TaskBindingResolver,
+    TaskUsage,
+    TaskUsageContext,
+)
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.errors import ConfigError, VBotError
+from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.tokens import estimate_json_tokens
 from core.utils.workers import BoundedWorkerPool
 
@@ -50,6 +59,7 @@ class DecisionService:
         self._model_tasks = model_tasks
         self._runtime = runtime
         self._usage_recorder = usage_recorder
+        self._resolver = TaskBindingResolver(model_tasks, configuration_error=DecisionError)
 
     def available(self) -> bool:
         try:
@@ -58,11 +68,12 @@ class DecisionService:
             return False
         return True
 
-    def _target(self) -> _Target:
+    def _target(self, binding: TaskModelBinding | None = None) -> _Target:
         try:
-            binding = self._model_tasks.binding_for("decision")
-            self._model_tasks.validate_execution_target(binding)
-            ref = parse_task_model_target_id(binding.target)
+            if binding is None:
+                binding, _options, ref = self._resolver.resolve("decision")
+            else:
+                binding, _options, ref = self._resolver.resolve_binding(binding)
             profile = self._model_tasks.decision_profile(ref)
             options = json_copy(self._model_tasks.options_with_defaults(binding))
         except (VBotError, ValueError) as exc:
@@ -70,6 +81,30 @@ class DecisionService:
         if not profile.supported:
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
         return _Target(binding.target, profile.max_input_tokens, profile, options)
+
+    def _targets(
+        self, questions: list[dict[str, Any]]
+    ) -> tuple[tuple[TaskModelBinding, ...], dict[str, _Target]]:
+        try:
+            primary = self._resolver.binding_for("decision")
+        except TaskError as exc:
+            raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured") from exc
+        bindings = []
+        targets = {}
+        last: DecisionError | None = None
+        for binding in (primary, *getattr(primary, "fallbacks", ())):
+            try:
+                target = self._target(binding)
+                target.profile.validate_questions(questions)
+            except DecisionError as exc:
+                last = exc
+                continue
+            bindings.append(binding)
+            targets[binding.target] = target
+        if not bindings:
+            assert last is not None
+            raise last
+        return tuple(bindings), targets
 
     async def classify(
         self,
@@ -101,22 +136,23 @@ class DecisionService:
             if not isinstance(item, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
         states = [item if context is None else {"context": context, "item": item} for item in items]
-        resolved = await _DECISION_SETUP_WORKERS.run(self._target)
-        resolved.profile.validate_questions(questions)
+        bindings, targets = await _DECISION_SETUP_WORKERS.run(self._targets, questions)
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
         async def judge(state: Any) -> dict[str, Any] | DecisionError:
             try:
-                # Copying and counting an item of up to 1 MB must not block the Event Loop.
-                state = await _DECISION_SETUP_WORKERS.run(_sized_state, state, questions, resolved)
-                async with slots:
-                    result = await self._evaluate(
-                        resolved,
-                        state,
-                        questions,
-                        usage_context=usage_context,
+
+                async def execute(attempt: TaskAttempt) -> dict[str, Any]:
+                    target = targets[attempt.binding.target]
+                    sized = await _DECISION_SETUP_WORKERS.run(
+                        _sized_state, state, questions, target
                     )
-                return result
+                    return await self._evaluate(
+                        target, sized, questions, usage_context=usage_context
+                    )
+
+                async with slots:
+                    return await self._resolver.execute("decision", execute, bindings=bindings)
             except DecisionError as exc:
                 return exc
 

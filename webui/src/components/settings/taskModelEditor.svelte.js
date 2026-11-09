@@ -37,6 +37,7 @@ import {
   visibleFieldOptions,
 } from '$lib/taskModelSettings.js';
 
+const FALLBACK_KEY = '::fallback::';
 const EMPTY_BINDING = Object.freeze({ target: '', options: {} });
 
 /**
@@ -215,6 +216,12 @@ export function createTaskModelEditor({
         const target = bindings[row.taskType]?.target ?? '';
         if (target) {
           await loadSchema(row.taskType, target);
+          for (const entry of bindings[row.taskType].fallbacks ?? []) {
+            await loadSchema(
+              fallbackKey(row.taskType, entry.target),
+              entry.target,
+            );
+          }
         }
       }
     } catch (error) {
@@ -239,7 +246,7 @@ export function createTaskModelEditor({
     const isCurrentRequest = () =>
       !destroyed &&
       schemaRequestIds[taskType] === requestId &&
-      (bindings[taskType]?.target ?? '') === target;
+      binding(taskType).target === target;
 
     if (!target) {
       if (!isCurrentRequest()) {
@@ -252,7 +259,10 @@ export function createTaskModelEditor({
 
     let result;
     try {
-      result = await getTaskModelOptions(taskType, target);
+      result = await getTaskModelOptions(
+        taskType.split(FALLBACK_KEY)[0],
+        target,
+      );
     } catch (error) {
       if (!isCurrentRequest()) {
         return false;
@@ -299,6 +309,15 @@ export function createTaskModelEditor({
     const previous = bindings;
     bindings = next;
     for (const row of rows) {
+      for (const entry of next[row.taskType]?.fallbacks ?? []) {
+        const key = fallbackKey(row.taskType, entry.target);
+        if (!schemasByType[key])
+          void loadSchema(key, entry.target).catch((error) =>
+            onError(error.message),
+          );
+      }
+    }
+    for (const row of rows) {
       const target = next[row.taskType]?.target ?? '';
       if (target !== (previous[row.taskType]?.target ?? '')) {
         loadSchema(row.taskType, target).catch((error) => {
@@ -321,7 +340,20 @@ export function createTaskModelEditor({
     onError('');
     markEdit();
     const previousOptions = binding(taskType).options;
-    bindings = { ...bindings, [taskType]: { target, options: {} } };
+    writeBinding(taskType, {
+      ...binding(taskType),
+      target,
+      options: {},
+      ...(binding(taskType).fallbacks
+        ? {
+            fallbacks: target
+              ? binding(taskType).fallbacks.filter(
+                  (entry) => entry.target !== target,
+                )
+              : [],
+          }
+        : {}),
+    });
 
     const change = loadSchema(taskType, target)
       .then((current) => {
@@ -338,7 +370,7 @@ export function createTaskModelEditor({
   }
 
   function carryOptions(taskType, target, previousOptions) {
-    const current = bindings[taskType] ?? EMPTY_BINDING;
+    const current = binding(taskType);
     // An option set while the schema loaded wins over the carried ones.
     if (current.target !== target || Object.keys(current.options).length > 0) {
       return;
@@ -348,7 +380,7 @@ export function createTaskModelEditor({
       previousOptions,
     );
     if (Object.keys(options).length > 0) {
-      bindings = { ...bindings, [taskType]: { ...current, options } };
+      writeBinding(taskType, { ...current, options });
     }
   }
 
@@ -370,7 +402,7 @@ export function createTaskModelEditor({
 
   // `undefined` removes the option, so the target's default applies.
   function setOption(taskType, field, value) {
-    const currentBinding = bindings[taskType] ?? EMPTY_BINDING;
+    const currentBinding = binding(taskType);
     const nextOptions = { ...(currentBinding.options ?? {}) };
     if (value === undefined) {
       delete nextOptions[field.name];
@@ -383,16 +415,13 @@ export function createTaskModelEditor({
       nextOptions,
       field.name,
     );
-    bindings = { ...bindings, [taskType]: { ...currentBinding, options } };
+    writeBinding(taskType, { ...currentBinding, options });
     onError('');
     markEdit();
   }
 
   function resetOptions(taskType) {
-    bindings = {
-      ...bindings,
-      [taskType]: { ...bindings[taskType], options: {} },
-    };
+    writeBinding(taskType, { ...binding(taskType), options: {} });
     clearJsonEdits(taskType);
     onError('');
     markEdit();
@@ -414,11 +443,84 @@ export function createTaskModelEditor({
   }
 
   function binding(taskType) {
-    return bindings[taskType] ?? EMPTY_BINDING;
+    const [task, target] = taskType.split(FALLBACK_KEY);
+    return target
+      ? (bindings[task]?.fallbacks?.find((entry) => entry.target === target) ??
+          EMPTY_BINDING)
+      : (bindings[task] ?? EMPTY_BINDING);
+  }
+
+  function writeBinding(key, value) {
+    const [task, target] = key.split(FALLBACK_KEY);
+    if (target) {
+      const current = bindings[task];
+      if (!current?.fallbacks?.some((entry) => entry.target === target)) return;
+      bindings = {
+        ...bindings,
+        [task]: {
+          ...current,
+          fallbacks: current.fallbacks.map((entry) =>
+            entry.target === target ? value : entry,
+          ),
+        },
+      };
+    } else bindings = { ...bindings, [task]: value };
+  }
+
+  function fallbackKey(task, target) {
+    return `${task}${FALLBACK_KEY}${target}`;
+  }
+
+  function fallbackOptions(task) {
+    const used = [
+      binding(task).target,
+      ...(binding(task).fallbacks ?? []).map((entry) => entry.target),
+    ];
+    return targetOptions(task).filter(
+      (entry) => entry.value && !used.includes(entry.value),
+    );
+  }
+
+  function addFallback(task, target) {
+    const current = binding(task);
+    if (
+      !target ||
+      !current.target ||
+      (current.fallbacks?.length ?? 0) >= 8 ||
+      !fallbackOptions(task).some((entry) => entry.value === target)
+    )
+      return;
+    writeBinding(task, {
+      ...current,
+      fallbacks: [...(current.fallbacks ?? []), { target, options: {} }],
+    });
+    markEdit();
+    const change = loadSchema(fallbackKey(task, target), target)
+      .catch((error) => onError(error.message))
+      .finally(() => targetChanges.delete(change));
+    targetChanges.add(change);
+  }
+
+  function removeFallback(task, target) {
+    writeBinding(task, {
+      ...binding(task),
+      fallbacks: (binding(task).fallbacks ?? []).filter(
+        (entry) => entry.target !== target,
+      ),
+    });
+    clearJsonEdits(fallbackKey(task, target));
+    markEdit();
+  }
+
+  function reorderFallback(task, from, to) {
+    const entries = [...(binding(task).fallbacks ?? [])];
+    entries.splice(to, 0, entries.splice(from, 1)[0]);
+    writeBinding(task, { ...binding(task), fallbacks: entries });
+    markEdit();
   }
 
   function targets(taskType) {
-    return targetsByType[taskType] ?? [];
+    return targetsByType[taskType.split(FALLBACK_KEY)[0]] ?? [];
   }
 
   // The searchable picker's choices: "Not configured", every target with the
@@ -578,6 +680,11 @@ export function createTaskModelEditor({
       return surfaceBusy;
     },
     binding,
+    fallbackKey,
+    fallbackOptions,
+    addFallback,
+    removeFallback,
+    reorderFallback,
     targets,
     targetOptions,
     visibleFields,

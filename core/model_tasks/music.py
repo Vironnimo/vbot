@@ -23,7 +23,9 @@ from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.music_providers import ProviderMusicClient
 from core.model_tasks.music_types import MusicGenerationResult
 from core.model_tasks.task_execution import (
+    TaskAttempt,
     TaskBindingResolver,
+    TaskCandidateMismatchError,
     TaskUsage,
     TaskUsageContext,
     task_debug_context,
@@ -125,43 +127,49 @@ class MusicService:
         if not normalized_prompt:
             raise MusicConfigurationError("Prompt must not be empty")
 
-        try:
-            _binding, options, target_ref = await self._resolver.resolve_async(
-                TASK_MUSIC_GENERATION
-            )
-        except MusicConfigurationError as exc:
-            raise MusicConfigurationError("no Music generation model is chosen") from exc
-        model = self._validated_model(target_ref)
-        if source_paths and "image" not in model.capabilities.input_modalities:
-            raise MusicOptionError(
-                "Nothing was generated. The configured music model does not accept "
-                "source_images. Repeat the call without source_images."
-            )
-        images = await asyncio.to_thread(load_image_inputs, source_paths)
+        async def execute(attempt: TaskAttempt) -> MusicGenerationResult:
+            _binding, options, target_ref = attempt.binding, attempt.options, attempt.target
 
-        try:
-            client = await ProviderMusicClient.from_runtime_async(
-                self._runtime,
-                target_ref,
-                usage_observer=TaskUsage(
-                    self._usage_recorder, TASK_MUSIC_GENERATION, target_ref, context=usage_context
-                ),
-                debug_context=task_debug_context(usage_context, target_ref, streaming=True),
-            )
-        except (ConfigError, KeyError) as exc:
-            raise MusicConfigurationError(str(exc)) from exc
-        try:
-            return await client.generate(
-                normalized_prompt,
-                options=options,
-                input_images=images,
-            )
-        except ProviderContentRefusedError as exc:
-            raise MusicRefusedError(exc.reason) from exc
-        except ProviderOutcomeUnknownError as exc:
-            raise MusicOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
-        except VBotError as exc:
-            raise MusicExecutionError(str(exc)) from exc
+            try:
+                model = self._validated_model(target_ref)
+                if source_paths and "image" not in model.capabilities.input_modalities:
+                    raise MusicOptionError(
+                        "Nothing was generated. The configured music model does not accept "
+                        "source_images. Repeat the call without source_images."
+                    )
+            except (MusicConfigurationError, MusicOptionError) as exc:
+                raise TaskCandidateMismatchError(exc) from exc
+
+            images = await asyncio.to_thread(load_image_inputs, source_paths)
+
+            try:
+                client = await ProviderMusicClient.from_runtime_async(
+                    self._runtime,
+                    target_ref,
+                    usage_observer=TaskUsage(
+                        self._usage_recorder,
+                        TASK_MUSIC_GENERATION,
+                        target_ref,
+                        context=usage_context,
+                    ),
+                    debug_context=task_debug_context(usage_context, target_ref, streaming=True),
+                )
+            except (ConfigError, KeyError) as exc:
+                raise MusicConfigurationError(str(exc)) from exc
+            try:
+                return await client.generate(
+                    normalized_prompt,
+                    options=options,
+                    input_images=images,
+                )
+            except ProviderContentRefusedError as exc:
+                raise MusicRefusedError(exc.reason) from exc
+            except ProviderOutcomeUnknownError as exc:
+                raise MusicOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
+            except VBotError as exc:
+                raise MusicExecutionError(str(exc)) from exc
+
+        return await self._resolver.execute(TASK_MUSIC_GENERATION, execute)
 
     async def generate_artifact(
         self,
@@ -212,8 +220,7 @@ class MusicService:
 
     def _configured_model(self) -> Any | None:
         try:
-            binding = self._resolver.binding_for(TASK_MUSIC_GENERATION)
-            target_ref = self._resolver.parse_target(binding.target)
+            _binding, _options, target_ref = self._resolver.resolve(TASK_MUSIC_GENERATION)
         except MusicConfigurationError:
             return None
         if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":

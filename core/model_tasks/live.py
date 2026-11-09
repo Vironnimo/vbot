@@ -80,7 +80,12 @@ from core.model_tasks.model_tasks import (
     parse_task_model_target_id,
     public_provider_target_id,
 )
-from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
+from core.model_tasks.task_execution import (
+    TaskAttempt,
+    TaskBindingResolver,
+    TaskCandidateMismatchError,
+    TaskUsage,
+)
 from core.providers.errors import (
     ProviderAuthError,
     ProviderOutcomeUnknownError,
@@ -380,21 +385,28 @@ class LiveVoiceService:
         self._hosts = hosts
         self._usage_recorder = usage_recorder
         self._clock = clock
+        self._resolver = TaskBindingResolver(model_tasks, configuration_error=LiveVoiceError)
 
     def status(self) -> JsonObject:
         """Return ``{"configured", "usable", "target", "media"}``.
 
-        ``usable`` proves credentials only. ``media`` is the media kind a start
-        must request (``"webrtc"`` or ``"relay"``), or ``None`` when the bound
-        Provider has no Live wire.
+        ``usable`` checks credentials and the same local call-plan requirements
+        as startup. ``media`` belongs to that selected candidate, including its
+        recovery cooldown, so an accessor prepares the matching transport.
         """
         try:
-            binding = self._model_tasks.binding_for(TASK_LIVE_VOICE)
-        except TaskModelError:
+            primary = self._resolver.binding_for(TASK_LIVE_VOICE)
+        except LiveVoiceError:
             return {"configured": False, "usable": False, "target": None, "media": None}
+        try:
+            binding, _options, _target = self._resolver.resolve(
+                TASK_LIVE_VOICE, validate=self._resolve_target
+            )
+        except LiveVoiceError:
+            return {"configured": True, "usable": False, "target": primary.target, "media": None}
         return {
             "configured": True,
-            "usable": bool(self._model_tasks.binding_is_usable(TASK_LIVE_VOICE)),
+            "usable": True,
             "target": binding.target,
             "media": _target_media(binding.target),
         }
@@ -415,87 +427,101 @@ class LiveVoiceService:
 
         if media == MEDIA_WEBRTC and not _valid_offer(offer_sdp):
             raise LiveStartRejected("invalid_offer")
-        plan = self._resolve_target()
-        target_ref = plan.target_ref
-        if media != plan.wire.media:
-            raise LiveStartRejected(
-                "media_mismatch", f"Live voice for {target_ref.provider_id} needs {plan.wire.media}"
-            )
-        # Log label without a Provider Account id.
-        label = public_provider_target_id(
-            target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
-        )
-        chat = self._runtime.chat_loop
-        started_at = self._clock().astimezone(ZoneInfo(self._runtime.timezone_name()))
-        title = f"Live call · {started_at:%Y-%m-%d %H:%M}"
-        call: LiveCallSession | None = None
-        starting_task = asyncio.current_task()
 
-        def end_call() -> None:
-            # The user stopped the voice Run in the app.
-            if call is not None:
-                call.abort_soon()
-            elif starting_task is not None:
-                # The voice Run exists while its Provider wire is opening.
-                # Stop must cancel that work before a call can become live.
-                starting_task.cancel()
-
-        try:
-            voice = await chat.start_external_run(
-                LIVE_VOICE_AGENT_ID,
-                model=label,
-                title=title,
-                extra_tools=[TOOL_VBOT_REQUEST] if plan.backend == LIVE_BACKEND_VBOT else [],
-                on_cancel=end_call,
-            )
-        except VBotError as exc:
-            _LOGGER.warning(
-                "Live call Session could not start (target=%s error_type=%s)",
-                label,
-                type(exc).__name__,
-            )
-            raise LiveStartRejected("not_configured", str(exc)) from exc
-        try:
-            setup = self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
-            wire = await self._open_wire(plan, label, offer_sdp, setup)
-        except BaseException:
-            await settle_before_cancelling(voice.discard())
-            raise
-        log_id = new_id("live")
-        call = LiveCallSession(
-            wire=wire.wire,
-            voice=voice,
-            backend_factory=(
-                (
-                    lambda session_host, on_session: LiveBackend(
-                        chat=chat,
-                        sessions=self._runtime.chat_sessions,
-                        hosts=self._hosts,
-                        host=session_host,
-                        title=title,
-                        voice_session_id=voice.session_id,
-                        on_session=on_session,
-                    )
+        async def execute(attempt: TaskAttempt) -> LiveCall:
+            try:
+                plan = self._resolve_target(attempt)
+            except LiveStartRejected as exc:
+                raise TaskCandidateMismatchError(exc) from exc
+            target_ref = plan.target_ref
+            if media != plan.wire.media:
+                raise LiveStartRejected(
+                    "media_mismatch",
+                    f"Live voice for {target_ref.provider_id} needs {plan.wire.media}",
                 )
-                if plan.backend == LIVE_BACKEND_VBOT
-                else None
-            ),
-            host=host,
-            hosts=self._hosts,
-            target=label,
-            log_id=log_id,
-            usage_accounting=wire.accounting,
-            usage_call_id=wire.usage_call_id,
-        )
-        call.start()
-        _LOGGER.info(
-            "Live call started (call=%s target=%s media=%s backend=%s)",
-            call.log_id,
-            label,
-            plan.wire.media,
-            plan.backend,
-        )
-        return call
+            # Log label without a Provider Account id.
+            label = public_provider_target_id(
+                target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
+            )
+            chat = self._runtime.chat_loop
+            started_at = self._clock().astimezone(ZoneInfo(self._runtime.timezone_name()))
+            title = f"Live call · {started_at:%Y-%m-%d %H:%M}"
+            call: LiveCallSession | None = None
+            starting_task = asyncio.current_task()
+
+            def end_call() -> None:
+                # The user stopped the voice Run in the app.
+                if call is not None:
+                    call.abort_soon()
+                elif starting_task is not None:
+                    # The voice Run exists while its Provider wire is opening.
+                    # Stop must cancel that work before a call can become live.
+                    starting_task.cancel()
+
+            try:
+                voice = await chat.start_external_run(
+                    LIVE_VOICE_AGENT_ID,
+                    model=label,
+                    title=title,
+                    extra_tools=[TOOL_VBOT_REQUEST] if plan.backend == LIVE_BACKEND_VBOT else [],
+                    on_cancel=end_call,
+                )
+            except VBotError as exc:
+                _LOGGER.warning(
+                    "Live call Session could not start (target=%s error_type=%s)",
+                    label,
+                    type(exc).__name__,
+                )
+                raise LiveStartRejected("not_configured", str(exc)) from exc
+            try:
+                setup = self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
+                wire = await self._open_wire(plan, label, offer_sdp, setup)
+                attempt.seal()
+            except BaseException:
+                await settle_before_cancelling(voice.discard())
+                raise
+            log_id = new_id("live")
+            call = LiveCallSession(
+                wire=wire.wire,
+                voice=voice,
+                backend_factory=(
+                    (
+                        lambda session_host, on_session: LiveBackend(
+                            chat=chat,
+                            sessions=self._runtime.chat_sessions,
+                            hosts=self._hosts,
+                            host=session_host,
+                            title=title,
+                            voice_session_id=voice.session_id,
+                            on_session=on_session,
+                        )
+                    )
+                    if plan.backend == LIVE_BACKEND_VBOT
+                    else None
+                ),
+                host=host,
+                hosts=self._hosts,
+                target=label,
+                log_id=log_id,
+                usage_accounting=wire.accounting,
+                usage_call_id=wire.usage_call_id,
+            )
+            call.start()
+            _LOGGER.info(
+                "Live call started (call=%s target=%s media=%s backend=%s)",
+                call.log_id,
+                label,
+                plan.wire.media,
+                plan.backend,
+            )
+            return call
+
+        try:
+            return await self._resolver.execute(TASK_LIVE_VOICE, execute)
+        except LiveStartRejected:
+            raise
+        except LiveVoiceError as exc:
+            raise LiveStartRejected("not_configured", str(exc)) from exc
 
     def _voice_setup(
         self, plan: _CallPlan, voice_tools: Sequence[JsonObject], wake_phrases: Sequence[str]
@@ -576,12 +602,8 @@ class LiveVoiceService:
                 await accounting.finish(usage_call_id, status=status, failure=failure)
         return _OpenedWire(wire=wire, accounting=accounting, usage_call_id=usage_call_id)
 
-    def _resolve_target(self) -> _CallPlan:
-        resolver = TaskBindingResolver(self._model_tasks, configuration_error=LiveVoiceError)
-        try:
-            _binding, options, target_ref = resolver.resolve(TASK_LIVE_VOICE)
-        except LiveVoiceError as exc:
-            raise LiveStartRejected("not_configured", str(exc)) from exc
+    def _resolve_target(self, attempt: TaskAttempt) -> _CallPlan:
+        options, target_ref = attempt.options, attempt.target
         provider_wire = _PROVIDER_WIRES.get(target_ref.provider_id)
         if provider_wire is None:
             raise LiveStartRejected(

@@ -5,19 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import override
 
 import httpx
 import pytest
 import respx
 
-from core.model_tasks.model_tasks import parse_task_model_target_id
+from core.model_tasks.model_tasks import TaskModelBinding, parse_task_model_target_id
+from core.model_tasks.music import MusicConfigurationError
 from core.model_tasks.music_providers import ProviderMusicClient
-from core.model_tasks.task_execution import TaskUsage
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
-    ProviderTimeoutError,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.usage import UsageRecorder
@@ -179,10 +180,41 @@ async def test_failed_or_cancelled_body_read_closes_response(
         status, stream=stream
     )
 
-    # A broken accepted stream may have produced a billed track; a broken error body not.
-    accepted_failure = ProviderOutcomeUnknownError if status == 200 else ProviderTimeoutError
-    with pytest.raises(asyncio.CancelledError if cancel else accepted_failure):
+    # A failed body read has no complete response proving safe replay.
+    with pytest.raises(asyncio.CancelledError if cancel else ProviderOutcomeUnknownError):
         await client.generate("Music", options={})
 
     assert stream.closed
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["read-timeout", "write-error", "http-500", "http-503"])
+@respx.mock
+async def test_ambiguous_music_start_never_replays_across_fallbacks(
+    client: ProviderMusicClient, failure: str
+) -> None:
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions")
+    if failure.startswith("http-"):
+        route.respond(int(failure[5:]), json={"error": {"message": "upstream failed"}})
+    else:
+        route.mock(
+            side_effect=(
+                httpx.ReadTimeout("no response headers")
+                if failure == "read-timeout"
+                else httpx.WriteError("request interrupted")
+            )
+        )
+    backup = TaskModelBinding("music_generation", "openrouter/backup::key", {})
+    primary = TaskModelBinding("music_generation", "openrouter/primary::key", {}, (backup,))
+    model_tasks = SimpleNamespace(
+        binding_for=lambda task_type: primary,
+        validate_execution_target=lambda binding: None,
+        options_with_defaults=lambda binding: {},
+    )
+    resolver = TaskBindingResolver(model_tasks, configuration_error=MusicConfigurationError)
+    with pytest.raises(ProviderOutcomeUnknownError):
+        await resolver.execute(
+            "music_generation", lambda attempt: client.generate("Music", options={})
+        )
     assert route.call_count == 1

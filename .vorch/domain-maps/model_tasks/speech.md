@@ -12,7 +12,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 - `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` - validates non-empty bytes and the configured input-size limit, resolves the `speech_to_text` binding, and prepares audio for that target (Transcription input below). Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber for incoming audio attachments before the user message persists (see `chat/request-building.md` -> Content Blocks).
 - Runtime injects the Debug-owned speech recorder into this admission boundary. When Debug is enabled it captures the original input before conversion, then the transcript/error, independently of local or Provider execution. Background storage, retention and inspection are owned by `debug.md` -> Speech recognition recordings; diagnostics never alter speech outcomes.
-- `SpeechService.synthesize(text) -> SpeechSynthesisResult` - trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
+- `SpeechService.synthesize(text) -> SpeechSynthesisResult` - trims and validates text, executes the `text_to_speech` chain, then returns raw synthesized audio. `transcribe` also executes its chain; input preparation uses each candidate target and the original recording. Recovery is shared (`model_tasks.md` -> Execution recovery).
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` - calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
 - Both synthesis methods accept an optional async `on_audio(SpeechAudioChunk)` callback. Chunks contain mono PCM16 little-endian `audio` bytes and `sample_rate_hz`; they arrive before the complete result and do not replace the final result/artifact. Playback consumers own presentation and cancellation.
 - `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` - accepts bounded safe opaque IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
@@ -126,7 +126,7 @@ Each engine has its own cached model and bounded worker, serializing its loading
 inference and unloading outside the Event Loop. Other engines remain independent:
 STT can be unloaded while TTS is busy. Changing load options replaces only that
 engine's model. After a server STT binding change, `SpeechService.transcription_binding_changed`
-passes the selected local id (or none for a Provider or removed binding) to
+passes every selected local id in the primary/fallback chain (or none for Provider-only or removed bindings) to
 `LocalSpeechExecutor.retain_transcription_model`. Unselected STT-only engines unload
 on their own worker once accepted work finishes; changing the binding never cancels
 an active transcription or load. Queued obsolete preloads are skipped, including
@@ -151,7 +151,7 @@ Preloading avoids the cold load on the first transcription or synthesis (tens of
 seconds for a packaged engine). Every local STT and TTS engine has the boolean option
 `preload` ("Load at server start", `PRELOAD_OPTION`, default off). It is not a load
 option, so toggling it never reloads and turning it off unloads nothing.
-`SpeechService.preload_configured(task_types)` starts a background load of each bound
+`SpeechService.preload_configured(task_types)` starts a background load of each primary or fallback
 engine whose option is on; the server lifespan calls it for both bindings after startup
 (not in a safe startup mode) and `Runtime.apply_settings_change` for each of
 `model_tasks.speech_to_text` and `text_to_speech` whose binding changed.

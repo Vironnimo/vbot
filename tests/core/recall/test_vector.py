@@ -293,17 +293,19 @@ class _FailingEmbeddings(StubEmbeddings):
     [None, _UnconfiguredEmbeddings(), _FailingEmbeddings()],
     ids=["no-binding", "binding-raises", "embed-fails"],
 )
-async def test_search_without_working_embeddings_is_semantic_unavailable(
+async def test_search_without_working_embeddings_returns_keyword_results(
     sessions: ChatSessionManager, vector_backend: VectorBackendFactory, embeddings: Any
 ) -> None:
     sessions.create("coder", session_id="carrots").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
 
-    with pytest.raises(RecallSearchError, match="Semantic search") as error:
-        await vector_backend(embeddings=embeddings).search_page(request("carrot"))
-
-    assert error.value.code == "semantic_unavailable"
+    backend = vector_backend(embeddings=embeddings)
+    page = await backend.search_page(request("carrot"))
+    assert page.degraded
+    assert [hit.session_id for hit in page.hits] == ["carrots"]
+    assert page.hits[0].sources == ("literal",)
+    assert page.snapshot_id.startswith("literal:")
 
 
 async def test_search_cancellation_reaches_the_embedding_call(
@@ -418,3 +420,32 @@ async def test_embedding_space_change_invalidates_continuations_and_requeues_eve
         "banana fruit one",
         "banana fruit two",
     ]
+
+
+async def test_embedding_outage_keeps_vectors_and_keyword_continuations(
+    sessions, vector_backend, monkeypatch
+):
+    sessions.create("coder", session_id="carrots").append(
+        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
+    )
+    embeddings = StubEmbeddings()
+    backend = vector_backend(embeddings=embeddings)
+    await embed_documents(backend.index, sessions, embeddings)
+    header = await backend.index.read_header()
+    embed = embeddings.embed
+
+    async def fail(*args, **kwargs):
+        raise EmbeddingError("offline")
+
+    monkeypatch.setattr(embeddings, "embed", fail)
+    first = await backend.search_page(request("carrot", limit=1))
+    assert first.hits and first.degraded
+    assert await backend.index.read_header() == header
+    monkeypatch.setattr(embeddings, "embed", embed)
+    continued = await backend.search_page(
+        request("carrot", offset=1, limit=1, snapshot_id=first.snapshot_id)
+    )
+    assert continued.snapshot_id == first.snapshot_id
+    assert continued.degraded
+    assert not continued.hits
+    assert not (await backend.search_page(request("carrot"))).degraded

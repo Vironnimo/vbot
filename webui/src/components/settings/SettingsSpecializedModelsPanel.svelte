@@ -4,6 +4,7 @@
 
   import LocalSpeechSupport from './LocalSpeechSupport.svelte';
   import TaskModelOptions from './TaskModelOptions.svelte';
+  import TaskModelFallbacks from './TaskModelFallbacks.svelte';
   import { createTaskModelEditor } from './taskModelEditor.svelte.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -48,7 +49,12 @@
   let speechMemoryRequest = 0;
   let selectedSpeechTargets = $derived(
     ['speech_to_text', 'text_to_speech']
-      .map((task) => editor.bindings[task]?.target)
+      .flatMap((task) => [
+        editor.bindings[task]?.target,
+        ...(editor.bindings[task]?.fallbacks ?? []).map(
+          (entry) => entry.target,
+        ),
+      ])
       .filter((target) => target?.startsWith('local/')),
   );
   let speechMemoryModels = $derived(
@@ -206,6 +212,14 @@
           {/key}
         {/if}
       </div>
+    {/if}
+    {#if binding.target && row.taskType !== 'text_embedding'}
+      <TaskModelFallbacks
+        {editor}
+        taskType={row.taskType}
+        title={row.title()}
+        {active}
+      />
     {/if}
   {/each}
 </div>

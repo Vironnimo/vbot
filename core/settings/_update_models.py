@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from core.model_tasks._binding_config import normalize_fallbacks
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -349,6 +350,14 @@ def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
             try:
                 parsed_binding["options"] = normalize_json_object(
                     options, f"params.model_tasks.{task_type}.options"
+                )
+            except StorageError as error:
+                raise SettingsValidationError(str(error)) from error
+
+        if "fallbacks" in raw_binding:
+            try:
+                parsed_binding["fallbacks"] = normalize_fallbacks(
+                    task_type, raw_binding["fallbacks"]
                 )
             except StorageError as error:
                 raise SettingsValidationError(str(error)) from error

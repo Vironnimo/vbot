@@ -41,7 +41,9 @@ from core.model_tasks.image_types import (
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import (
+    TaskAttempt,
     TaskBindingResolver,
+    TaskCandidateMismatchError,
     TaskUsage,
     TaskUsageContext,
     task_debug_context,
@@ -272,8 +274,7 @@ class ImageService:
         per-call options. The image Tool selects its Definition Profile from it.
         """
         try:
-            binding = self._resolver.binding_for(TASK_IMAGE_GENERATION)
-            target_ref = self._resolver.parse_target(binding.target)
+            _binding, _options, target_ref = self._resolver.resolve(TASK_IMAGE_GENERATION)
         except ImageConfigurationError:
             return ImageProfile(wire="unsupported")
         return cast(ImageProfile, self._model_tasks.image_profile(target_ref))
@@ -286,23 +287,31 @@ class ImageService:
         ):
             return False
 
-        adapter = None
-        target_ref = None
         try:
-            binding = await _IMAGE_SETUP_WORKERS.run(
+            primary = await _IMAGE_SETUP_WORKERS.run(
                 self._resolver.binding_for, TASK_IMAGE_UNDERSTANDING
             )
-            target_ref = self._resolver.parse_target(binding.target)
-            if target_ref.kind == "local":
-                return False
-            adapter = await self._analysis_adapter(target_ref)
-            wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
-            return any(media_type.startswith("image/") for media_type in wire_media_types)
-        except ImageConfigurationError, VBotError, KeyError, RuntimeError:
+        except ImageConfigurationError:
             return False
-        finally:
-            if adapter is not None and target_ref is not None:
-                await _close_adapter_safely(adapter, target_ref)
+        for binding in (primary, *getattr(primary, "fallbacks", ())):
+            adapter = None
+            target_ref = None
+            try:
+                _binding, _options, target_ref = await _IMAGE_SETUP_WORKERS.run(
+                    self._resolver.resolve_binding, binding
+                )
+                if target_ref.kind == "local":
+                    continue
+                adapter = await self._analysis_adapter(target_ref)
+                wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
+                if any(media_type.startswith("image/") for media_type in wire_media_types):
+                    return True
+            except ImageConfigurationError, VBotError, KeyError, RuntimeError:
+                continue
+            finally:
+                if adapter is not None and target_ref is not None:
+                    await _close_adapter_safely(adapter, target_ref)
+        return False
 
     async def generate(
         self,
@@ -330,97 +339,107 @@ class ImageService:
         if not normalized_prompt:
             raise ImageConfigurationError("Prompt must not be empty")
 
-        _binding, options, target_ref = await self._resolver.resolve_async(TASK_IMAGE_GENERATION)
+        async def execute(attempt: TaskAttempt) -> ImageGenerationResult:
+            _binding, options, target_ref = attempt.binding, attempt.options, attempt.target
 
-        if target_ref.kind == "local":
-            raise ImageUnsupportedTargetError(
-                f"Image generation does not support local targets: {_safe_target_label(target_ref)}"
-            )
-
-        profile: ImageProfile = self._model_tasks.image_profile(target_ref)
-        if source_paths:
-            if not profile.accepts_source_images:
-                raise ImageUnsupportedTargetError(
-                    "Configured image model does not support source images: "
-                    f"{_safe_target_label(target_ref)}"
-                )
-            limit = profile.max_source_images
-            if limit is not None and len(source_paths) > limit:
-                raise ImageTooLargeError(
-                    f"Nothing was generated. The configured image model accepts at most {limit} "
-                    f"source images, but received {len(source_paths)}. Pass at most {limit} "
-                    "source_images."
-                )
-        try:
-            wire_options = profile.wire_options(call_options or {}, options)
-        except ImageCallOptionError as exc:
-            raise ImageOptionError(str(exc)) from exc
-        merged_options = {**options, **profile.fixed_options, **wire_options}
-        input_images = await asyncio.to_thread(
-            _load_image_inputs,
-            source_paths or (),
-            max_size_bytes=self._max_input_bytes,
-        )
-
-        try:
             try:
-                provider_client = await ProviderImageClient.from_runtime_async(
-                    self._runtime,
-                    target_ref,
-                    usage_observer=TaskUsage(
-                        self._usage_recorder,
-                        TASK_IMAGE_GENERATION,
+                if target_ref.kind == "local":
+                    raise ImageUnsupportedTargetError(
+                        "Image generation does not support local targets: "
+                        f"{_safe_target_label(target_ref)}"
+                    )
+
+                profile: ImageProfile = self._model_tasks.image_profile(target_ref)
+                if source_paths:
+                    if not profile.accepts_source_images:
+                        raise ImageUnsupportedTargetError(
+                            "Configured image model does not support source images: "
+                            f"{_safe_target_label(target_ref)}"
+                        )
+                    limit = profile.max_source_images
+                    if limit is not None and len(source_paths) > limit:
+                        raise ImageTooLargeError(
+                            "Nothing was generated. The configured image model accepts "
+                            f"at most {limit} "
+                            f"source images, but received {len(source_paths)}. "
+                            f"Pass at most {limit} "
+                            "source_images."
+                        )
+                try:
+                    wire_options = profile.wire_options(call_options or {}, options)
+                except ImageCallOptionError as exc:
+                    raise ImageOptionError(str(exc)) from exc
+                merged_options = {**options, **profile.fixed_options, **wire_options}
+            except (ImageUnsupportedTargetError, ImageTooLargeError, ImageOptionError) as exc:
+                raise TaskCandidateMismatchError(exc) from exc
+
+            input_images = await asyncio.to_thread(
+                _load_image_inputs,
+                source_paths or (),
+                max_size_bytes=self._max_input_bytes,
+            )
+
+            try:
+                try:
+                    provider_client = await ProviderImageClient.from_runtime_async(
+                        self._runtime,
                         target_ref,
-                        context=usage_context,
-                    ),
-                    debug_context=task_debug_context(usage_context, target_ref),
+                        usage_observer=TaskUsage(
+                            self._usage_recorder,
+                            TASK_IMAGE_GENERATION,
+                            target_ref,
+                            context=usage_context,
+                        ),
+                        debug_context=task_debug_context(usage_context, target_ref),
+                    )
+                except (ConfigError, KeyError) as exc:
+                    raise ImageConfigurationError(_safe_error_text(exc, target_ref)) from exc
+                result = await provider_client.generate(
+                    normalized_prompt,
+                    options=merged_options,
+                    input_images=input_images,
                 )
-            except (ConfigError, KeyError) as exc:
-                raise ImageConfigurationError(_safe_error_text(exc, target_ref)) from exc
-            result = await provider_client.generate(
-                normalized_prompt,
-                options=merged_options,
-                input_images=input_images,
-            )
-            return _without_unchanged_revision(result, normalized_prompt)
-        except ImageError:
-            raise
-        except ProviderContentRefusedError as exc:
-            _LOGGER.warning(
-                "Image generation refused by the provider for target=%s",
-                _safe_target_label(target_ref),
-            )
-            raise ImageRefusedError(exc.reason) from exc
-        except ProviderOutcomeUnknownError as exc:
-            safe_error = _safe_error_text(exc, target_ref)
-            _LOGGER.warning(
-                "Image generation failed for target=%s: %s",
-                _safe_target_label(target_ref),
-                safe_error,
-            )
-            raise ImageOutcomeUnknownError(
-                safe_error,
-                operation_key=exc.operation_key,
-            ) from exc
-        except VBotError as exc:
-            # ProviderError / NetworkError / ProviderAuthError / … are
-            # expected provider failures, not crashes.
-            safe_error = _safe_error_text(exc, target_ref)
-            _LOGGER.warning(
-                "Image generation failed for target=%s: %s",
-                _safe_target_label(target_ref),
-                safe_error,
-            )
-            raise ImageExecutionError(safe_error) from exc
-        except Exception as exc:
-            safe_error = _safe_error_text(exc, target_ref)
-            _LOGGER.error(
-                "Image generation failed for target=%s error_type=%s: %s",
-                _safe_target_label(target_ref),
-                type(exc).__name__,
-                safe_error,
-            )
-            raise ImageExecutionError(safe_error) from exc
+                return _without_unchanged_revision(result, normalized_prompt)
+            except ImageError:
+                raise
+            except ProviderContentRefusedError as exc:
+                _LOGGER.warning(
+                    "Image generation refused by the provider for target=%s",
+                    _safe_target_label(target_ref),
+                )
+                raise ImageRefusedError(exc.reason) from exc
+            except ProviderOutcomeUnknownError as exc:
+                safe_error = _safe_error_text(exc, target_ref)
+                _LOGGER.warning(
+                    "Image generation failed for target=%s: %s",
+                    _safe_target_label(target_ref),
+                    safe_error,
+                )
+                raise ImageOutcomeUnknownError(
+                    safe_error,
+                    operation_key=exc.operation_key,
+                ) from exc
+            except VBotError as exc:
+                # ProviderError / NetworkError / ProviderAuthError / … are
+                # expected provider failures, not crashes.
+                safe_error = _safe_error_text(exc, target_ref)
+                _LOGGER.warning(
+                    "Image generation failed for target=%s: %s",
+                    _safe_target_label(target_ref),
+                    safe_error,
+                )
+                raise ImageExecutionError(safe_error) from exc
+            except Exception as exc:
+                safe_error = _safe_error_text(exc, target_ref)
+                _LOGGER.error(
+                    "Image generation failed for target=%s error_type=%s: %s",
+                    _safe_target_label(target_ref),
+                    type(exc).__name__,
+                    safe_error,
+                )
+                raise ImageExecutionError(safe_error) from exc
+
+        return await self._resolver.execute(TASK_IMAGE_GENERATION, execute)
 
     async def analyze(
         self,
@@ -467,130 +486,145 @@ class ImageService:
     ) -> ImageUnderstandingResult:
         """Execute one bounded image-understanding request."""
 
-        try:
-            _binding, _options, target_ref = await self._resolver.resolve_async(
-                TASK_IMAGE_UNDERSTANDING
-            )
-        except ImageConfigurationError as exc:
-            raise ImageUnderstandingUnavailableError(str(exc)) from exc
-        if target_ref.kind == "local":
-            raise ImageUnderstandingUnavailableError(
-                "Image understanding does not support local targets: "
-                f"{_safe_target_label(target_ref)}"
-            )
+        async def execute(attempt: TaskAttempt) -> ImageUnderstandingResult:
+            target_ref = attempt.target
 
-        model = self._model_tasks.model_for_target(target_ref)
-        if model is None or not model_supports_task(model, TASK_IMAGE_UNDERSTANDING):
-            raise ImageUnderstandingUnavailableError(
-                "Configured target is not an image-understanding model: "
-                f"{_safe_target_label(target_ref)}"
-            )
+            if target_ref.kind == "local":
+                raise TaskCandidateMismatchError(
+                    ImageUnderstandingUnavailableError(
+                        "Image understanding does not support local targets: "
+                        f"{_safe_target_label(target_ref)}"
+                    )
+                )
 
-        input_images = await asyncio.to_thread(
-            _load_image_inputs,
-            image_paths,
-            max_size_bytes=self._max_input_bytes,
-            max_total_bytes=DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
-            allow_conversion=True,
-        )
-        adapter = None
-        try:
+            model = self._model_tasks.model_for_target(target_ref)
+            if model is None or not model_supports_task(model, TASK_IMAGE_UNDERSTANDING):
+                raise TaskCandidateMismatchError(
+                    ImageUnderstandingUnavailableError(
+                        "Configured target is not an image-understanding model: "
+                        f"{_safe_target_label(target_ref)}"
+                    )
+                )
+
+            input_images = await asyncio.to_thread(
+                _load_image_inputs,
+                image_paths,
+                max_size_bytes=self._max_input_bytes,
+                max_total_bytes=DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
+                allow_conversion=True,
+            )
+            adapter = None
             try:
-                adapter = await self._analysis_adapter(target_ref)
-            except (ConfigError, KeyError) as exc:
+                try:
+                    adapter = await self._analysis_adapter(target_ref)
+                except (ConfigError, KeyError) as exc:
+                    safe_error = _safe_error_text(exc, target_ref)
+                    _LOGGER.warning(
+                        "Image understanding target became unavailable for target=%s: %s",
+                        _safe_target_label(target_ref),
+                        safe_error,
+                    )
+                    raise ImageUnderstandingUnavailableError(safe_error) from exc
+                wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
+                wire_limit = adapter.image_size_limit(target_ref.model_id)
+                max_image_bytes = self._max_input_bytes
+                if (
+                    isinstance(wire_limit, int)
+                    and not isinstance(wire_limit, bool)
+                    and wire_limit > 0
+                ):
+                    max_image_bytes = min(max_image_bytes, wire_limit)
+                try:
+                    input_images, preparation_notes = await self._prepare_analysis_images(
+                        input_images, wire_media_types, max_image_bytes
+                    )
+                except (ImageUnderstandingUnavailableError, ImageTooLargeError) as exc:
+                    raise TaskCandidateMismatchError(exc) from exc
+
+                content = await asyncio.to_thread(
+                    _analysis_content,
+                    normalized_prompt,
+                    input_images,
+                    preparation_notes,
+                )
+                _set_analysis_debug_context(adapter, target_ref, run_context)
+                accounting = TaskUsage(
+                    self._usage_recorder,
+                    TASK_IMAGE_UNDERSTANDING,
+                    target_ref,
+                    context=TaskUsageContext(
+                        agent_id=run_context.agent_id,
+                        session_id=run_context.session_id,
+                        run_id=run_context.run_id,
+                        project_id=run_context.project_id,
+                        owner_name=run_context.owner_name,
+                        group_id=run_context.group_id,
+                    )
+                    if run_context is not None
+                    else None,
+                )
+                # Deferred: core.chat.streaming imports core.tools, whose image Tool
+                # imports this module.
+                from core.chat.streaming import stream_model_response
+
+                reported: dict[str, Any] = {}
+                async with accounting.attempt(reported) as call_id:
+                    normalized = await stream_model_response(
+                        adapter,
+                        [
+                            {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
+                            {"role": "user", "content": content},
+                        ],
+                        model_id=target_ref.model_id,
+                        tools=[],
+                        on_usage=reported.update,
+                    )
+                    usage = normalized.get("usage")
+                    await accounting.update(call_id, usage)
+                    analysis = normalized.get("content")
+                    outcome = terminal_outcome_from_response(normalized)
+                    if not isinstance(analysis, str) or not analysis.strip():
+                        if outcome == TERMINAL_OUTCOME_CONTENT_FILTERED:
+                            raise ImageAnalysisFilteredError()
+                        raise ImageAnalysisEmptyError(
+                            output_truncated=outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+                        )
+                    text = "\n".join([*preparation_notes, analysis.strip()])
+                    if incomplete := _INCOMPLETE_ANALYSIS_NOTES.get(outcome):
+                        text = f"{text}\n\n{incomplete}"
+                return ImageUnderstandingResult(
+                    content=text,
+                    model=target_ref.model_id,
+                    image_count=len(input_images),
+                    usage=dict(usage) if isinstance(usage, Mapping) else None,
+                )
+            except ImageUnderstandingUnavailableError as exc:
+                raise TaskCandidateMismatchError(exc) from exc
+            except ImageError:
+                raise
+            except VBotError as exc:
                 safe_error = _safe_error_text(exc, target_ref)
                 _LOGGER.warning(
-                    "Image understanding target became unavailable for target=%s: %s",
+                    "Image understanding failed for target=%s: %s",
                     _safe_target_label(target_ref),
                     safe_error,
                 )
-                raise ImageUnderstandingUnavailableError(safe_error) from exc
-            wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
-            wire_limit = adapter.image_size_limit(target_ref.model_id)
-            max_image_bytes = self._max_input_bytes
-            if isinstance(wire_limit, int) and not isinstance(wire_limit, bool) and wire_limit > 0:
-                max_image_bytes = min(max_image_bytes, wire_limit)
-            input_images, preparation_notes = await self._prepare_analysis_images(
-                input_images, wire_media_types, max_image_bytes
-            )
+                if isinstance(exc, ProviderContentRefusedError):
+                    reason = _safe_error_text(exc.reason, target_ref) if exc.reason else None
+                    raise ImageAnalysisRefusedError(reason) from exc
+                raise ImageExecutionError(
+                    safe_error,
+                    retryable=bool(getattr(exc, "retryable", False)),
+                    attempts_made=_attempts_made(exc),
+                ) from exc
+            finally:
+                if adapter is not None:
+                    await _close_adapter_safely(adapter, target_ref)
 
-            content = await asyncio.to_thread(
-                _analysis_content,
-                normalized_prompt,
-                input_images,
-                preparation_notes,
-            )
-            _set_analysis_debug_context(adapter, target_ref, run_context)
-            accounting = TaskUsage(
-                self._usage_recorder,
-                TASK_IMAGE_UNDERSTANDING,
-                target_ref,
-                context=TaskUsageContext(
-                    agent_id=run_context.agent_id,
-                    session_id=run_context.session_id,
-                    run_id=run_context.run_id,
-                    project_id=run_context.project_id,
-                    owner_name=run_context.owner_name,
-                    group_id=run_context.group_id,
-                )
-                if run_context is not None
-                else None,
-            )
-            # Deferred: core.chat.streaming imports core.tools, whose image Tool
-            # imports this module.
-            from core.chat.streaming import stream_model_response
-
-            reported: dict[str, Any] = {}
-            async with accounting.attempt(reported) as call_id:
-                normalized = await stream_model_response(
-                    adapter,
-                    [
-                        {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
-                        {"role": "user", "content": content},
-                    ],
-                    model_id=target_ref.model_id,
-                    tools=[],
-                    on_usage=reported.update,
-                )
-                usage = normalized.get("usage")
-                await accounting.update(call_id, usage)
-                analysis = normalized.get("content")
-                outcome = terminal_outcome_from_response(normalized)
-                if not isinstance(analysis, str) or not analysis.strip():
-                    if outcome == TERMINAL_OUTCOME_CONTENT_FILTERED:
-                        raise ImageAnalysisFilteredError()
-                    raise ImageAnalysisEmptyError(
-                        output_truncated=outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-                    )
-                text = "\n".join([*preparation_notes, analysis.strip()])
-                if incomplete := _INCOMPLETE_ANALYSIS_NOTES.get(outcome):
-                    text = f"{text}\n\n{incomplete}"
-            return ImageUnderstandingResult(
-                content=text,
-                model=target_ref.model_id,
-                image_count=len(input_images),
-                usage=dict(usage) if isinstance(usage, Mapping) else None,
-            )
-        except ImageError:
-            raise
-        except VBotError as exc:
-            safe_error = _safe_error_text(exc, target_ref)
-            _LOGGER.warning(
-                "Image understanding failed for target=%s: %s",
-                _safe_target_label(target_ref),
-                safe_error,
-            )
-            if isinstance(exc, ProviderContentRefusedError):
-                reason = _safe_error_text(exc.reason, target_ref) if exc.reason else None
-                raise ImageAnalysisRefusedError(reason) from exc
-            raise ImageExecutionError(
-                safe_error,
-                retryable=bool(getattr(exc, "retryable", False)),
-                attempts_made=_attempts_made(exc),
-            ) from exc
-        finally:
-            if adapter is not None:
-                await _close_adapter_safely(adapter, target_ref)
+        try:
+            return await self._resolver.execute(TASK_IMAGE_UNDERSTANDING, execute)
+        except ImageConfigurationError as exc:
+            raise ImageUnderstandingUnavailableError(str(exc)) from exc
 
     async def _analysis_adapter(self, target: TaskModelTargetRef) -> Any:
         adapter: Any = None
