@@ -60,6 +60,12 @@ async def test_session_tree_usage_splits_own_and_subagent_runs_without_pruning(
     assert usage["subagents"]["input_tokens"] == 12
     assert usage["total"]["input_tokens"] == 22
     assert usage["total"]["calls"] == 3
+    batch = await service.session_usages_async([(root, [child, owned]), (child, [])])
+    assert [row["total"]["input_tokens"] for row in batch["sessions"]] == [22, 5]
+    assert batch["total"]["input_tokens"] == 22
+    assert batch["total"]["calls"] == 3
+    assert batch["session_count"] == 3
+
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         indexed = dict(connection.execute("SELECT session_id, owner_name FROM stat_sessions"))
     assert indexed[unrelated.id] == ""

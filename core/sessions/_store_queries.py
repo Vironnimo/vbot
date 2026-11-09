@@ -377,7 +377,7 @@ def list_summaries(
 
 def list_summaries_page(
     connection: sqlite3.Connection,
-    scopes: Sequence[tuple[str | None, str]],
+    scopes: Sequence[tuple[str | None, str]] | None,
     *,
     limit: int,
     cursor: SessionListCursor | None,
@@ -393,14 +393,20 @@ def list_summaries_page(
     if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
         raise ChatSessionError("Session list limit must be a positive integer")
     normalized_scopes = tuple(
-        dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in scopes)
+        dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in (scopes or ()))
     )
-    if not normalized_scopes:
+    if scopes is not None and not normalized_scopes:
         return lambda: SessionListPage(sessions=(), next_cursor=None, total_count=0)
     scope_sql = (
-        "(" + " OR ".join("(s.project_id = ? AND s.agent_id = ?)" for _ in normalized_scopes) + ")"
+        (
+            "("
+            + " OR ".join("(s.project_id = ? AND s.agent_id = ?)" for _ in normalized_scopes)
+            + ")"
+        )
+        if scopes is not None
+        else "1"
     )
-    scope_params = [value for scope in normalized_scopes for value in scope]
+    scope_params: list[Any] = [value for scope in normalized_scopes for value in scope]
     visibility_sql, visibility_params = _store_values._session_list_visibility_sql(
         include_subagents=filters.include_subagents,
         include_memory_reflections=filters.include_memory_reflections,
@@ -409,6 +415,18 @@ def list_summaries_page(
         include_channels=filters.include_channels,
     )
     live_scope_sql = f"s.state = 'live' AND {scope_sql}"
+    if filters.parent is not None:
+        parent = filters.parent
+        parent_state = _store_values._require_live(connection, parent)
+        live_scope_sql += (
+            " AND s.subagent_parent_agent_id = ? AND s.subagent_parent_session_id = ?"
+            " AND s.subagent_parent_project_id IS ?"
+            " AND (COALESCE(s.subagent_parent_generation_id, '') = ''"
+            " OR s.subagent_parent_generation_id = ?)"
+        )
+        scope_params.extend(
+            (parent.agent_id, parent.session_id, parent.project_id, parent_state["generation_id"])
+        )
     rows, total, has_more = _ordered_page(
         connection,
         f"{live_scope_sql} AND {visibility_sql}{_unpinned_sql(filters)}",
@@ -425,7 +443,7 @@ def list_summaries_page(
     required_row: sqlite3.Row | None = None
     if required_address is not None:
         required_scope = _store_values._scope(required_address)
-        if (required_scope[0], required_scope[1]) in normalized_scopes:
+        if scopes is None or (required_scope[0], required_scope[1]) in normalized_scopes:
             required_row = connection.execute(
                 f"SELECT {_store_values._SESSION_LIST_COLUMNS}, "
                 f"CASE WHEN {visibility_sql} THEN 1 ELSE 0 END AS list_visible "

@@ -38,6 +38,14 @@ Each message also projects stored sender role, originating Run id/kind and Sched
 
 Each `SessionConversationMessage` retains the entry's stamped `subagent_reply_target` as well as sender kind/id. Consumers evaluating human authority can therefore distinguish Parent-generated input in a Sub-Agent from actual user input even when the former has no MessageSender (`extensions/shell-review.md` -> Execution integration).
 
+## Operator inspection
+
+`ChatSessionManager.inspection_page` (`_store_inspection.py`) projects bounded transcript or compact activity entries from the current lineage, including original Messages before Compaction, without loading full history, Reasoning or internal Notes. Text/argument slices are bounded in SQL. Compact Tool rows use stored display summaries, result status/errors and file-change facts; declarations without visible Results remain explicit. A call in frozen inherited history is unresolved when its Result is outside that view, regardless of the Parent's later completion; own resultless calls retain pending/cancelled/interrupted status. The initial task and latest Assistant text cover the selected history independently of the page. Exact Run filters use stored membership. Exact entry reads page content and arguments by character offset; sequence references belong to the current history, not a durable cross-edit bookmark.
+
+The older-page cursor binds generation, view floor, history revision and the summary/Run selection; appends can continue, edits/replacements require a fresh read. The RPC additionally binds the Session history continuity id against restore. `addresses_by_id` uses an additive live-id index and returns exact live owner addresses; the RPC refuses ambiguity rather than choosing an Agent. Tests: `test_session_inspection.py`.
+
+Compact Tool rows retain recorded result status and Command ids, separately from invocation completion: a completed shell Tool can return a still-running command. These are historical facts, not a live process query.
+
 ## Compaction commit
 
 `commit_compaction(checkpoint, *, since, epoch: PromptEpoch)` appends a `compaction_checkpoint` only while `since` still names the newest entry (same generation, at or above the cursor floor, same `next_seq` and last entry id); otherwise it writes nothing and returns `None`. In the same transaction it replaces the named prompt pins (`epoch.pins`; `None` removes a slot), replaces the seen Skills when `epoch.seen_skills` is given, and leaves the prompt-cache affinity id unchanged; it returns the delta after `since` as a `SessionReadBatch`.

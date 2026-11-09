@@ -601,6 +601,7 @@ class SessionListFilters:
     include_cron: bool = True
     include_channels: bool = True
     split_pinned: bool = False
+    parent: SessionAddress | None = None
 
 
 @dataclass(frozen=True)

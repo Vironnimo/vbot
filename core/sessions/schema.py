@@ -107,6 +107,10 @@ CREATE UNIQUE INDEX sessions_one_live_address
   ON sessions (project_id, agent_id, session_id)
   WHERE state = 'live';
 
+-- Exact cross-Agent Session-id reads.
+CREATE INDEX sessions_live_id ON sessions (session_id, project_id, agent_id)
+  WHERE state = 'live';
+
 -- Archived generations of one address (id allocation).
 CREATE INDEX sessions_archived_address
   ON sessions (project_id, agent_id, session_id)

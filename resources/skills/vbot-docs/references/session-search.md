@@ -2,11 +2,30 @@
 
 This covers what `session_search` cannot give you: a list of Sessions, the complete wording of a Message, a Session's whole transcript, Messages before a Compaction, and exact Tool Results. Answer from `session_search` excerpts when they hold the evidence. Narrowing a search finds other excerpts; it does not expand one excerpt into a full Message. A later Message can revise an earlier decision.
 
-## Find the Session
+## List, inspect and measure Sessions
 
-`vbot session list <agent-id>` lists one page of an Agent's Sessions with ids, title previews and last activity; use `<agent-id>@<project-id>` for a Project Agent. Follow its `Next:` command when the Session you need is not on that page.
+Replace `<session-id>` with an exact id from `session list` or a Summary's Sub-Agent list. These commands call the server and need no data-directory access.
 
-## Read it with the script
+```bash
+vbot session list --limit 5
+vbot session list --agent coder@my-repo
+vbot session usage <session-id> <another-session-id>
+vbot session show <session-id> --summary
+vbot session show <session-id>
+vbot session show <session-id> --entry <seq>
+```
+
+- `list` spans Agents and includes Sub-Agents and Cron, newest activity first. It names each Session's owner, type and activity state. `--agent <agent-or-agent@project>` filters by owner; `--parent <session-id>` lists direct Sub-Agent Sessions. Follow `Next:` when the target is on another page.
+- `usage` accepts 1 to 20 ids and reports own consumption, Sub-Agents at every depth and tree totals. The combined total counts each Session once, even when you select both a Parent and its child. It covers requests assigned to the Sessions' own Runs, including failed attempts; inherited history is excluded. Reported USD costs and API-equivalent estimates stay separate; unknown costs are not zero or subscription charges. `--json` carries all counters and cost provenance.
+- `show --summary` is a deterministic compact activity view: the initial task, latest Assistant text, chronological activity with Tool outcomes, and direct Sub-Agent Sessions with ids, titles and activity states. It makes no Model request. Summarize its evidence in your own words; a pending call is not a completed effect. `recorded-result=running` with a Command id means the Tool returned while that command continued; it is the recorded result, not a live process check.
+- `show` without `--summary` reads transcript text, Tool arguments and Results. Both views start with the newest bounded page and print `Next:` for older entries. `--run <run-id>` limits the view to a Run named in the output. Follow `Next:` when the requested work spans older entries; the initial task and latest Assistant text in a Summary cover its whole selected history.
+- `[seq]` identifies an entry in this Session's current history. `show --entry <seq>` reads its text and, for a Tool Result, its arguments. Follow `Next:` for remaining characters. Shortened text is marked; it is not a complete quotation. Both views exclude Reasoning and internal Notes and retain original conversation before Compaction.
+- Session ids need no Agent argument. When an id matches several live Sessions, the error names their owners; repeat with `--agent <owner>` for the intended one. For an ambiguous `list --parent` target, use `--parent-agent <owner>`.
+- A Summary lists up to 10 direct children and prints a `session list --parent` command when more exist. Read a child's own Summary for its work and descendants. Archived Sessions are accessed through `vbot archive list` and `vbot archive show <entry-id>`.
+
+## Extended search script
+
+Use the script below for substring searches, generation-bound exact Results from its search hits, or all resultless Tool declarations. Normal transcripts and activity reads use the CLI above.
 
 The script `scripts/sessions.py` of this Skill reads the Session database read-only on the server's computer. Run it with `python`; replace `<skill-directory>` with the directory the `skill` Tool reported when it loaded this Skill. Its first output line is a summary; each further line is one JSON object.
 

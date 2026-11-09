@@ -53,6 +53,7 @@ from cli.session_management import (
     session_rename,
     session_set_compaction_policy,
 )
+from cli.session_reads import session_show, session_usage
 
 
 def dispatch_agent_command(
@@ -371,7 +372,7 @@ def dispatch_session_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    list_sessions_fn: Callable[[ServerInstance, str], CommandResult] = session_list,
+    list_sessions_fn: Callable[[ServerInstance, str | None], CommandResult] = session_list,
     create_session_fn: Callable[
         [ServerInstance, str, str | None, bool], CommandResult
     ] = session_create,
@@ -389,17 +390,53 @@ def dispatch_session_command(
 ) -> CommandResult:
     """Dispatch one parsed session command against the server RPC client."""
 
+    if args.command == "show":
+        return session_show(
+            instance,
+            args.session,
+            agent_id=args.agent,
+            summary=args.summary,
+            limit=args.limit,
+            cursor=args.cursor,
+            run_id=args.run,
+            entry=args.entry,
+            offset=args.offset,
+            json_output=args.json,
+        )
+    if args.command == "usage":
+        return session_usage(instance, args.sessions, agent_id=args.agent, json_output=args.json)
     if args.command == "list":
-        if args.limit != 40 or args.cursor is not None or args.all or args.json:
+        if (
+            args.agent is not None
+            and args.agent_filter is not None
+            and args.agent != args.agent_filter
+        ):
+            return CommandResult(
+                ok=False,
+                message="Conflicting Agent filters; use one --agent",
+                instance=instance,
+                refused=True,
+            )
+        agent = args.agent_filter if args.agent_filter is not None else args.agent
+        if (
+            args.limit != 40
+            or args.cursor is not None
+            or args.all
+            or args.json
+            or args.parent
+            or args.parent_agent
+        ):
             return session_list(
                 instance,
-                args.agent,
+                agent,
                 limit=args.limit,
                 cursor=args.cursor,
                 all_pages=args.all,
                 json_output=args.json,
+                parent=args.parent,
+                parent_agent=args.parent_agent,
             )
-        return list_sessions_fn(instance, args.agent)
+        return list_sessions_fn(instance, agent)
     if args.command == "create":
         return create_session_fn(instance, args.agent, args.id, args.make_current)
     if args.command == "delete":

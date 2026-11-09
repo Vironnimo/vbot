@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, cast
 
+from core.projects import format_agent_address
 from core.sessions import SessionAddress
 from core.sessions.errors import SessionNotFoundError
 from core.settings.settings import SettingsValidationError, validate_timezone_name
@@ -25,11 +26,18 @@ from core.statistics import REPORT_SECTIONS, StatisticsService
 from core.subagents.links import descendants
 from core.utils.timestamps import parse_timestamp
 from server.rpc._mutations import serialized_mutation, serialized_read
+from server.rpc._session_reads import resolve_session
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported, _required_agent_address, _required_string
+from server.rpc.validation import (
+    _optional_string,
+    _reject_unsupported,
+    _required_agent_address,
+    _required_string,
+    _validate_string_list,
+)
 
 JsonObject = dict[str, Any]
 
@@ -205,6 +213,8 @@ async def _statistics_session_usage(state: Any, params: JsonObject) -> JsonObjec
     Sub-Agents at every depth, and ``subagent_count`` how many Sub-Agent
     Sessions that is.
     """
+    if "session_ids" in params or "agent_id" not in params:
+        return await _statistics_session_usages(state, params)
     _reject_unsupported(params, {"agent_id", "session_id"}, "statistics.session_usage")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -222,6 +232,40 @@ async def _statistics_session_usage(state: Any, params: JsonObject) -> JsonObjec
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {**usage, "subagent_count": len(subagents)}
+
+
+async def _statistics_session_usages(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "session_ids"}, "statistics.session_usage"
+    )
+    if ("session_id" in params) == ("session_ids" in params):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Pass session_id or session_ids")
+    ids = (
+        [_required_string(params, "session_id")]
+        if "session_id" in params
+        else _validate_string_list("session_ids", params["session_ids"])
+    )
+    if not 1 <= len(ids) <= 20:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Select 1 to 20 Session ids")
+    agent = _optional_string(params, "agent_id")
+    sessions = state.runtime.chat_sessions
+
+    def select() -> list[tuple[SessionAddress, list[SessionAddress]]]:
+        roots = list(dict.fromkeys(resolve_session(state, id_, agent) for id_ in ids))
+        return [(root, [link.session for link in descendants(sessions, root)]) for root in roots]
+
+    try:
+        trees = await sessions.run_async(select)
+        report = await statistics_service(state).session_usages_async(trees)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    for row, (root, children) in zip(report["sessions"], trees, strict=True):
+        row.update(
+            session_id=root.session_id,
+            agent_address=format_agent_address(root.agent_id, root.project_id),
+            subagent_count=len(children),
+        )
+    return report
 
 
 def statistics_service(state: Any) -> StatisticsService:

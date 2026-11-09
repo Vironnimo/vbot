@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
@@ -474,21 +474,45 @@ class StatisticsService:
     def _session_tree_usage(
         self, session: SessionAddress, subagents: tuple[SessionAddress, ...]
     ) -> JsonObject:
+        return cast(JsonObject, self._session_usages(((session, subagents),))["sessions"][0])
+
+    async def session_usages_async(
+        self, trees: Sequence[tuple[SessionAddress, Sequence[SessionAddress]]]
+    ) -> JsonObject:
+        """Read selected trees once, with a deduplicated combined total."""
+        return await self._index.run_async(
+            self._session_usages, tuple((root, tuple(children)) for root, children in trees)
+        )
+
+    def _session_usages(
+        self, trees: tuple[tuple[SessionAddress, tuple[SessionAddress, ...]], ...]
+    ) -> JsonObject:
         self._import_session_usage()
-        addresses = (session, *subagents)
+        addresses = tuple(
+            dict.fromkeys(address for root, children in trees for address in (root, *children))
+        )
         owned = self._owned_sessions(addresses)
 
         def consume(view: IndexView) -> JsonObject:
-            keys = [
-                indexed.session_key if indexed is not None else None
-                for indexed in (
+            keys = {
+                address: indexed.session_key if indexed is not None else None
+                for address in addresses
+                for indexed in [
                     view.session(address.project_id, address.agent_id, address.session_id)
-                    for address in addresses
+                ]
+            }
+            rows = [
+                session_tree_usage(
+                    view.connection,
+                    keys[root],
+                    [key for child in children if (key := keys[child]) is not None],
                 )
+                for root, children in trees
             ]
-            return session_tree_usage(
-                view.connection, keys[0], [key for key in keys[1:] if key is not None]
+            combined = session_tree_usage(
+                view.connection, None, [key for key in keys.values() if key is not None]
             )
+            return {"sessions": rows, "total": combined["total"], "session_count": len(addresses)}
 
         return self._index.read(
             self._sessions,

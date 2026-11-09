@@ -9,6 +9,7 @@ resolution uses the resolver's own async API.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 from core.activity import IDLE
@@ -43,6 +44,7 @@ from server.events import (
     RESOURCE_KIND_PROJECTS,
 )
 from server.rpc._session_execution import optional_execution, set_session_execution
+from server.rpc._session_reads import resolve_session, show_session
 from server.rpc.agent_refs import _agent_reference_lock, _guard_agent_lifecycle
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
@@ -450,6 +452,8 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         {
             "agent_id",
             "agent_ids",
+            "parent_session_id",
+            "parent_agent_id",
             "working_project_id",
             "limit",
             "cursor",
@@ -458,10 +462,10 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         },
         "session.list",
     )
-    if sum(key in params for key in ("agent_id", "agent_ids", "working_project_id")) != 1:
+    if sum(key in params for key in ("agent_id", "agent_ids", "working_project_id")) > 1:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            "session.list requires exactly one of params.agent_id, params.agent_ids "
+            "session.list accepts at most one of params.agent_id, params.agent_ids "
             "or params.working_project_id",
         )
     limit = (
@@ -471,20 +475,26 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     cursor = _session_list_cursor(params.get("cursor"))
     filters = _session_list_filters(params)
     if "working_project_id" in params:
+        if "parent_session_id" in params or "parent_agent_id" in params:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "Parent and Working Project filters cannot be combined"
+            )
         return await _list_project_sessions(state, params, limit, cursor, filters)
     requested_addresses = (
         [_required_string(params, "agent_id")]
         if "agent_id" in params
-        else _validate_string_list("agent_ids", params.get("agent_ids"))
+        else _validate_string_list("agent_ids", params["agent_ids"])
+        if "agent_ids" in params
+        else None
     )
-    if len(requested_addresses) > SESSION_LIST_MAX_AGENT_BATCH:
+    if requested_addresses is not None and len(requested_addresses) > SESSION_LIST_MAX_AGENT_BATCH:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.agent_ids must contain at most {SESSION_LIST_MAX_AGENT_BATCH} addresses",
         )
     parsed_addresses: list[tuple[str, str, str | None]] = []
     seen_addresses: set[str] = set()
-    for requested_address in requested_addresses:
+    for requested_address in requested_addresses or ():
         agent_id, project_id = _required_agent_address({"agent_id": requested_address}, "agent_id")
         canonical_address = format_agent_address(agent_id, project_id)
         if canonical_address in seen_addresses:
@@ -497,18 +507,37 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         required_owner = format_agent_address(
             required_address.agent_id, required_address.project_id
         )
-        if required_owner not in seen_addresses:
+        if requested_addresses is not None and required_owner not in seen_addresses:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
                 "params.required_session must belong to one of the listed Agent addresses",
             )
 
+    parent_id = _optional_string(params, "parent_session_id")
+    parent_agent = _optional_string(params, "parent_agent_id")
+    if parent_agent is not None and parent_id is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "parent_agent_id requires parent_session_id")
+    if parent_id is not None and required_address is not None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "parent_session_id excludes required_session")
+
     def load_sessions() -> JsonObject:
+        selected_filters = filters
+        if parent_id is not None:
+            selected_filters = replace(
+                filters,
+                parent=resolve_session(
+                    state, parent_id, parent_agent, agent_option="--parent-agent"
+                ),
+            )
         page = state.runtime.chat_sessions.list_summaries_page(
-            [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses],
+            (
+                [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses]
+                if requested_addresses is not None
+                else None
+            ),
             limit=limit,
             cursor=cursor,
-            filters=filters,
+            filters=selected_filters,
             required_address=required_address,
         )
         return _session_list_page_payload(state, page, _listed_agent_policies(state))
@@ -1082,6 +1111,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.create": _create_session,
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
+        "session.show": show_session,
         "session.project_groups": _list_session_project_groups,
         "session.get": _get_session,
         "session.change_stats": _session_change_stats,

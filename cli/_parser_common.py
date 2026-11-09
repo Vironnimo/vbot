@@ -181,7 +181,9 @@ PROJECT_HELP = {
 
 
 SESSION_HELP = {
-    "list": "List one agent's chat sessions",
+    "list": "List Sessions across Agents, newest activity first (read-only)",
+    "show": "Read a Session transcript; --summary gives compact activity (read-only)",
+    "usage": "Read tokens and USD costs for selected Session ids (read-only)",
     "create": "Create a new chat session for one agent",
     "delete": "Archive one agent's chat session, or delete it permanently",
     "fork": "Fork a session, optionally to another agent",

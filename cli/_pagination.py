@@ -37,5 +37,5 @@ def decode_cursor(raw: str) -> dict[str, object]:
         return value
     except ValueError as error:
         raise argparse.ArgumentTypeError(
-            "Use the exact cursor from the previous Session list; a JSON object is also accepted"
+            "Use the exact cursor from the previous Session page; a JSON object is also accepted"
         ) from error

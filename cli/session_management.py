@@ -23,8 +23,10 @@ _TITLE_PREVIEW_CHARS = 120
 
 def session_list(
     instance: ServerInstance,
-    agent_id: str,
+    agent_id: str | None = None,
     *,
+    parent: str | None = None,
+    parent_agent: str | None = None,
     limit: int = 40,
     cursor: dict[str, object] | None = None,
     all_pages: bool = False,
@@ -37,13 +39,18 @@ def session_list(
     requested_limit = limit
     while True:
         params: dict[str, object] = {
-            "agent_id": agent_id,
             "limit": limit,
             "include_subagents": True,
             "include_memory_reflections": True,
             "include_skill_reflections": True,
             "include_cron": True,
         }
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if parent is not None:
+            params["parent_session_id"] = parent
+        if parent_agent is not None:
+            params["parent_agent_id"] = parent_agent
         if cursor is not None:
             params["cursor"] = cursor
         payload = _rpc_call(instance, "session.list", params)
@@ -93,6 +100,8 @@ def session_list(
                 next_cursor,
                 limit,
                 reduced=limit != requested_limit,
+                parent=parent,
+                parent_agent=parent_agent,
             )
             if len(message) + 1 > SESSION_TEXT_BUDGET:
                 if limit <= 1:
@@ -129,7 +138,16 @@ def session_list(
             ensure_ascii=True,
         )
     else:
-        message = _format_session_rows(instance, agent_id, sessions, total_count, cursor, limit)
+        message = _format_session_rows(
+            instance,
+            agent_id,
+            sessions,
+            total_count,
+            cursor,
+            limit,
+            parent=parent,
+            parent_agent=parent_agent,
+        )
     return CommandResult(ok=True, message=message, instance=instance)
 
 
@@ -331,17 +349,22 @@ def session_set_compaction_policy(
 
 def _format_session_rows(
     instance: ServerInstance,
-    agent_id: str,
+    agent_id: str | None,
     sessions: Sequence[object],
     total_count: int | None,
     cursor: dict[str, object] | None,
     limit: int,
     *,
     reduced: bool = False,
+    parent: str | None = None,
+    parent_agent: str | None = None,
 ) -> str:
     count = len(sessions)
     total = f" of {total_count}" if total_count is not None and total_count >= count else ""
-    lines = [f"sessions for {inline_text(agent_id)}: showing {count}{total}, newest activity first"]
+    scope = f" for {inline_text(agent_id)}" if agent_id is not None else " across Agents"
+    if parent is not None:
+        scope += f"; direct Sub-Agents of {inline_text(parent)}"
+    lines = [f"sessions{scope}: showing {count}{total}, newest activity first"]
     if total_count is not None and total_count < count:
         lines.append(
             f"Note: the Session count changed while paging; the server now reports {total_count}."
@@ -365,7 +388,9 @@ def _format_session_rows(
             "vbot",
             "session",
             "list",
-            agent_id,
+            *(("--agent", agent_id) if agent_id is not None else ()),
+            *(("--parent", parent) if parent is not None else ()),
+            *(("--parent-agent", parent_agent) if parent_agent is not None else ()),
             "--limit",
             str(limit),
             "--cursor",
@@ -383,6 +408,18 @@ def _format_session_row(session: object) -> str:
     session_id = _string_or_default(session.get("id"), "?")
     last_active_at = _string_or_default(session.get("last_active_at"), "-")
     fields = [f"- id={inline_text(session_id)}", f"last_active_at={inline_text(last_active_at)}"]
+    owner = session.get("agent_address")
+    if isinstance(owner, str):
+        fields.append(f"agent={inline_text(owner)}")
+    kinds = session.get("run_kinds")
+    kind = (
+        "subagent"
+        if session.get("is_subagent_session") or session.get("subagent_parent")
+        else ",".join(str(k) for k in kinds)
+        if isinstance(kinds, list) and kinds
+        else "conversation"
+    )
+    fields.append(f"type={inline_text(kind)}")
     activity = session.get("activity_state")
     if isinstance(activity, str) and activity:
         fields.append(f"activity={inline_text(activity)}")

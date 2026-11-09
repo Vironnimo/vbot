@@ -691,11 +691,9 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     session_subparsers = session_parser.add_subparsers(dest="command", required=True)
 
     list_parser = _add_command_parser(
-        session_subparsers, "list", SESSION_HELP["list"], example="session list orchestrator@vbot"
+        session_subparsers, "list", SESSION_HELP["list"], example="session list --limit 5"
     )
-    list_parser.add_argument(
-        "agent", metavar="<agent>", help="Agent whose sessions to list, as agent or agent@project"
-    )
+    list_parser.add_argument("agent", nargs="?", help=argparse.SUPPRESS)
 
     list_parser.add_argument(
         "--limit",
@@ -719,6 +717,103 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     list_parser.add_argument(
         "--all", action="store_true", help="Fetch every page; output may be large"
     )
+    list_parser.add_argument(
+        "--agent", dest="agent_filter", help="Filter by agent or agent@project. Omit for all Agents"
+    )
+    list_parser.add_argument(
+        "--parent",
+        help="List direct Sub-Agent Sessions of this Session id. Omit for every Session type",
+    )
+    list_parser.add_argument(
+        "--parent-agent",
+        help="Resolve an ambiguous Parent Session id by its owner. Omit when its id is unique",
+    )
+    show_parser = _add_command_parser(
+        session_subparsers,
+        "show",
+        SESSION_HELP["show"],
+        example="session show <session-id> --summary",
+    )
+    show_parser.add_argument(
+        "session",
+        metavar="<session-id>",
+        help="Exact id from session list or a Summary's Sub-Agent list",
+    )
+    show_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help=(
+            "Show task, latest answer and compact Tool actions/outcomes. "
+            "Omit for transcript text and Tool Results"
+        ),
+    )
+    show_parser.add_argument(
+        "--agent",
+        help=(
+            "Resolve an ambiguous id by agent or agent@project. Omit when the Session id is unique"
+        ),
+    )
+    show_parser.add_argument(
+        "--run",
+        help=("Read only this Run id. Omit for current history, including inherited history"),
+    )
+    show_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Entries per page, 1 to 100. Omit for 20; text output can use a smaller page",
+    )
+    show_parser.add_argument(
+        "--cursor",
+        type=decode_cursor,
+        help="Read older entries using the returned cursor. Omit for the newest page",
+    )
+    show_parser.add_argument(
+        "--entry",
+        type=int,
+        help="Read one exact entry sequence from the output. Omit to read a page",
+    )
+    show_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Character offset in an exact entry. Omit to start at 0; follow Next for remaining text"
+        ),
+    )
+    show_parser.add_argument(
+        "--json", action="store_true", help="Return structured data and paging as one JSON object"
+    )
+    usage_parser = _add_command_parser(
+        session_subparsers,
+        "usage",
+        SESSION_HELP["usage"],
+        example="session usage <session-id>",
+    )
+    usage_parser.add_argument(
+        "sessions",
+        nargs="+",
+        metavar="<session-id>",
+        help=(
+            "1 to 20 exact ids from session list; "
+            "the combined total counts overlapping Sub-Agent trees once"
+        ),
+    )
+    usage_parser.add_argument(
+        "--agent",
+        help=(
+            "Resolve ambiguous ids by agent or agent@project. Omit when the Session ids are unique"
+        ),
+    )
+    usage_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Return detailed counters, cost provenance and totals as one JSON object",
+    )
+    for reader in (show_parser, usage_parser):
+        reader.epilog = (
+            "Exit codes: 0 success, 1 read/RPC failure, 2 usage error. Nothing is changed."
+        )
     create_parser = _add_command_parser(
         session_subparsers,
         "create",

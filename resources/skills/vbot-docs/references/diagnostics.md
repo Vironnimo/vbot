@@ -46,6 +46,8 @@ vbot performance recordings [--limit <count>]
 
 Reports summarize stored Session activity. Request the section the question needs.
 
+For consumption of specific Sessions, use `vbot session usage <session-id>...` with ids from `vbot session list`; the Statistics commands below cover instance-wide time windows.
+
 For Model response speed and waiting time, use `vbot statistics usage`; its Model and Provider rows show rates by measurement basis and first-token median, p95, and average.
 
 For why Model requests fail, use `vbot statistics failures`: it counts failed requests by failure class (such as `rate_limit`, `auth`, `timeout`, `server`) with the average time to failure, HTTP statuses, Providers, and Models, and lists the hours with the most failures.

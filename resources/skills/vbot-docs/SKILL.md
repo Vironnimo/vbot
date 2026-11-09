@@ -11,12 +11,14 @@ Commands read `vbot <area> <action> [target] [options]`: ids are positional, eve
 
 ## Do the task
 
-1. Read the reference for the task from the table below. Done when you know its commands and which flags replace a whole value.
+1. Use the Session recipes below, or read the reference for the task from the table. Done when you know its commands and which flags replace a whole value.
 2. When you need a target's id or current values, inspect it with its `list` or `show` command and reuse the exact ids it prints. Before you replace a Skill, a prompt block or an automation prompt, read its complete content; list output shortens it.
 3. Change only what the request names. Omitted update flags leave a field unchanged; list and policy flags, such as `--allow`, `--tool-allow` or `--sources`, replace the whole value, so repeat every entry to keep. The references name the commands that clear omitted options.
 4. Read the result before you report. `[OK]` means the command finished, `[WARN]` names pending work or a limit, `[ERROR]` a failure. A saved setting is not yet working behavior: an Agent without an effective Model cannot run, an enabled Channel can fail to connect, an accepted update or restart has not finished. Report what the output shows.
 
-For a question about a past conversation, use `session_search` first; read `references/session-search.md` only when its excerpts lack the evidence or you need exact wording, a Session list or a Tool Result.
+Find recent Sessions with `vbot session list --limit 5`. Pass the returned ids to `vbot session usage <session-id>...` for tokens and costs, or to `vbot session show <session-id> --summary` for compact activity. Summaries name their Sub-Agent Sessions; read those by id when the task needs them.
+
+For finding past conversations by content, use `session_search` first. Read `references/session-search.md` for Session filters, transcripts, exact Tool Results, or when search excerpts lack the evidence.
 
 | Task | Read |
 |---|---|
@@ -24,7 +26,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Write or revise an Agent's SOUL.md: its role, how it works, its voice, its boundaries | `references/soul.md` |
 | Projects and their Agents, Sessions (create, fork, rename, delete), archived Agents, Projects and Sessions | `references/projects-sessions.md` |
 | Send a message to an Agent and read its answer, with files or in a throwaway Session, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
-| Past conversations beyond `session_search`: listing Sessions, full transcripts, exact Tool Results | `references/session-search.md` |
+| Session lists, consumption, compact activity, transcripts, exact Tool Results and extended conversation search | `references/session-search.md` |
 | Provider keys, logins and limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
@@ -35,7 +37,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
-| Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
+| Logs, Provider traces, instance-wide usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, version selection, rollback, uninstall, Autostart, Desktop, Doctor, access mode, paired devices and user permission approvals, reaching another vBot server and signing in to it | `references/server.md` |
 | Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
 | Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |

@@ -21,6 +21,7 @@ from core.sessions import (
     _store_external_notes,
     _store_fts,
     _store_history,
+    _store_inspection,
     _store_mutations,
     _store_operations,
     _store_prompts,
@@ -869,7 +870,7 @@ class SessionStore:
 
     def list_summaries_page(
         self,
-        scopes: Sequence[tuple[str | None, str]],
+        scopes: Sequence[tuple[str | None, str]] | None,
         *,
         limit: int,
         cursor: SessionListCursor | None,
@@ -953,6 +954,44 @@ class SessionStore:
         )
 
     # -- Search -------------------------------------------------------------------------
+
+    def addresses_by_id(self, session_id: str) -> list[SessionAddress]:
+        """Find live exact-id matches without guessing an Agent."""
+        return self._read(
+            lambda connection: [
+                _store_values._address(row)
+                for row in connection.execute(
+                    "SELECT project_id, agent_id, session_id FROM sessions "
+                    "WHERE state = 'live' AND session_id = ? ORDER BY project_id, agent_id",
+                    (session_id,),
+                )
+            ]
+        )
+
+    def inspection_page(
+        self,
+        address: SessionAddress,
+        *,
+        summary: bool = False,
+        limit: int = 20,
+        cursor: JsonObject | None = None,
+        run_id: str | None = None,
+        entry: int | None = None,
+        offset: int = 0,
+    ) -> JsonObject:
+        """Read a bounded transcript or compact activity page in one transaction."""
+        return self._read(
+            lambda connection: _store_inspection.read(
+                connection,
+                address,
+                summary=summary,
+                limit=limit,
+                cursor=cursor,
+                run_id=run_id,
+                entry=entry,
+                offset=offset,
+            )
+        )
 
     def conversation_page(
         self,
