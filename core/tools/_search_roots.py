@@ -11,11 +11,18 @@ import json
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from core.permissions import PermissionBoundary, PermissionDenied, PermissionGrant
+from core.permissions import (
+    PermissionBoundary,
+    PermissionDenied,
+    PermissionGrant,
+    run_permission_decision,
+)
 from core.tools._path_suggestions import corrected_paths, refused_note
+from core.tools._permission_preflight import authorize_paths
+from core.tools._search_arguments import interpret_search_call
 from core.tools._search_query import (
     SearchArgumentError,
     SearchQuery,
@@ -25,7 +32,9 @@ from core.tools._search_results import (
     path_label,
 )
 from core.tools._swarm_references import wiki_page_call
-from core.tools._tool_context import _path_argument
+from core.tools._tool_context import ToolContext, _path_argument
+from core.tools.contracts import JsonObject, ToolContractError
+from core.tools.edit import offered_edit_tool
 from core.tools.search import _expand_brace_alternations
 from core.utils.file_status import exists_strict, is_dir_strict
 
@@ -55,6 +64,8 @@ def _resolve_roots(
     cwd: Path,
     permissions: PermissionBoundary,
     grant: PermissionGrant | None = None,
+    *,
+    context: ToolContext,
 ) -> _Roots:
     """Resolve the requested roots; a missing path is reported, never replaced.
 
@@ -73,25 +84,33 @@ def _resolve_roots(
                 f'path must name a file or directory; received "{raw}". Omit path to search '
                 "the working directory."
             )
-        candidate = _absolute(text, cwd)
-        # A glob or list has no literal-root grant when preflight interpreted its
-        # explicit component roots. Do not probe that ungranted spelling.
-        interpreted = bool(_GLOB_CHARACTERS.search(text) or "{" in text or "," in text)
-        allowed = (grant or permissions).check_path(candidate, "read") is None
-        if allowed or not interpreted:
+        literal_error = None
+        try:
+            candidate = _search_path(text, context)
+        except ToolContractError as error:
+            # A list of absolute Windows paths cannot be a literal filename:
+            # the second drive colon is invalid there, but valid after splitting.
+            literal_error = error
+            candidate = None
+        # Windows cannot store * or ? in names. Every other spelling gets its
+        # literal approval and existence check before any list/glob interpretation.
+        impossible_literal = os.name == "nt" and any(c in str(candidate) for c in "*?")
+        resolved = candidate
+        if candidate is not None and not impossible_literal:
             resolved = _checked(candidate, permissions, grant)
             if _exists(resolved):
-                roots.add(resolved)
+                roots.add(_actual_case(resolved))
                 continue
-        else:
-            resolved = candidate
-        alternatives = _existing_alternatives(text, cwd, permissions, grant)
+        alternatives = _existing_alternatives(text, cwd, permissions, grant, context=context)
         if alternatives:
             for path in alternatives:
                 roots.add(path)
             shown = ", ".join(path_label(path, cwd) for path in alternatives)
             query.notes.append(f'path "{raw}" names several paths, so {shown} were searched.')
             continue
+        if literal_error is not None:
+            raise literal_error
+        assert candidate is not None and resolved is not None
         if text.startswith("!") and len(text) > 1:
             query.globs.append(text)
             query.notes.append(
@@ -99,7 +118,11 @@ def _resolve_roots(
             )
             excluded = True
             continue
-        selected = _glob_root(text, cwd, query, permissions, grant)
+        # The cwd is literal filesystem context, never part of the Agent's glob.
+        glob_text = (
+            str(candidate.relative_to(cwd)) if candidate.is_relative_to(cwd) else str(candidate)
+        )
+        selected = _glob_root(glob_text, cwd, query, permissions, grant)
         if selected is not None:
             roots.add(*selected)
             continue
@@ -116,18 +139,37 @@ def _missing_warnings(
     offers: Callable[[str], bool],
     permissions: PermissionBoundary,
     args: object = None,
+    grant: PermissionGrant | None = None,
 ) -> list[str]:
     """Name each missing root, and how args operands that were meant otherwise work.
 
     *args* is the call's args as sent, for a suggestion that keeps its other items.
     """
+
+    def readable(path: Path) -> bool:
+        return (grant or permissions).check_path(path, "read") is None or (
+            grant is not None and any(grant.search_read_allowed(path, root) for root in roots.paths)
+        )
+
     warnings = [
-        _missing_root_message(raw, path, cwd, query, offers, permissions)
+        _missing_root_message(raw, path, cwd, query, offers, permissions, readable)
         for raw, path in roots.missing
     ]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
     if missing_operands and query.searches_contents and not query.pattern_operand:
-        warnings.extend(_operand_pattern_warning(roots, query, cwd, args, permissions))
+        warnings.extend(_operand_pattern_warning(roots, query, cwd, args, permissions, readable))
+    if (
+        missing_operands
+        and isinstance(args, list)
+        and any(
+            isinstance(item, str) and re.fullmatch(r"-[A-Za-z]*[rR][A-Za-z]*", item)
+            for item in args
+        )
+    ):
+        warnings.append(
+            "-r and -R mean recursive search here and take no value; replacement is not "
+            "available. The following operand was read as a path."
+        )
     if missing_operands and query.mode == "list_files":
         warnings.append(
             "--files lists files by name, so every args operand is a path. To list the files "
@@ -153,7 +195,12 @@ def _missing_warnings(
 
 
 def _operand_pattern_warning(
-    roots: _Roots, query: SearchQuery, cwd: Path, args: object, permissions: PermissionBoundary
+    roots: _Roots,
+    query: SearchQuery,
+    cwd: Path,
+    args: object,
+    permissions: PermissionBoundary,
+    readable: Callable[[Path], bool],
 ) -> list[str]:
     """Say how to search args items that were read as paths as further patterns.
 
@@ -168,7 +215,7 @@ def _operand_pattern_warning(
         if raw in query.operand_roots
         and "/" not in raw
         and "\\" not in raw
-        and not corrected_paths(path, cwd, permissions=permissions)
+        and not corrected_paths(path, cwd, permissions=permissions, readable=readable)
     ]
     if not words:
         return []
@@ -218,11 +265,22 @@ def _local_globs(
     """
     globs: list[str] = []
     outside: Path | None = None
+    missing: PermissionDenied | None = None
     for glob in query.globs:
         negated = glob.startswith("!")
-        split = _absolute_glob(
-            glob_separators(glob[1:] if negated else glob), cwd, permissions, grant
-        )
+        try:
+            split = _absolute_glob(
+                glob_separators(glob[1:] if negated else glob),
+                cwd,
+                permissions,
+                grant,
+                required=not negated and not query.roots,
+            )
+        except PermissionDenied as error:
+            if error.refusal.reason != "not_permitted":
+                raise
+            missing = missing or error
+            continue
         if split is None:
             globs.append(glob)
             continue
@@ -240,13 +298,20 @@ def _local_globs(
             )
         else:
             globs.append(glob)
+    if missing is not None:
+        raise missing
     query.globs = globs
     if outside is not None:
         query.roots = [str(outside)]
 
 
 def _absolute_glob(
-    glob: str, cwd: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
+    glob: str,
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
+    *,
+    required: bool = False,
 ) -> tuple[Path, str] | None:
     """Split an absolute glob into its existing fixed directory and the glob below it.
 
@@ -267,6 +332,8 @@ def _absolute_glob(
     anchored = cwd.joinpath(*parts[1:fixed])
     if os.name != "nt" and _readable_dir(anchored, permissions):
         return None
+    if required:
+        _checked(base, permissions, grant)
     if not _readable_dir(base, permissions, grant):
         return None
     return base, "/".join(parts[fixed:])
@@ -280,6 +347,32 @@ def _readable_dir(
 
 def _absolute(text: str, cwd: Path) -> Path:
     return Path(os.path.abspath(cwd / Path(text).expanduser()))
+
+
+def _search_path(text: str, context: ToolContext) -> Path:
+    """Use the shared file-Tool resolver before interpreting glob punctuation."""
+    path = context.path_target(text, access="read")
+    if os.name == "nt":
+        spelling = str(path).replace("\\", "/")
+        if spelling[:8].casefold() == "//?/unc/":
+            path = Path("//" + spelling[8:])
+        elif re.match(r"^//\?/[A-Za-z]:/", spelling):
+            path = Path(spelling[4:])
+        elif spelling.startswith("//?/"):
+            raise SearchArgumentError(
+                f'Nothing was searched. Device path "{text}" is not a local file path. '
+                "Send a drive-letter path or a UNC file path."
+            )
+    return Path(os.path.abspath(path))
+
+
+def _actual_case(path: Path) -> Path:
+    # realpath asks Windows for stored spelling; preserve explicit link identity.
+    if os.name == "nt":
+        actual = Path(os.path.realpath(path))
+        if os.path.normcase(actual) == os.path.normcase(path):
+            return actual
+    return path
 
 
 def _checked(
@@ -308,7 +401,12 @@ def _add(paths: list[Path], path: Path) -> None:
 
 
 def _existing_alternatives(
-    text: str, cwd: Path, permissions: PermissionBoundary, grant: PermissionGrant | None = None
+    text: str,
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
+    *,
+    context: ToolContext,
 ) -> list[Path]:
     """Return the paths a brace or comma list names, when every one of them exists."""
     if "{" in text:
@@ -319,9 +417,16 @@ def _existing_alternatives(
         return []
     if len(alternatives) < 2 or not all(alternatives):
         return []
-    paths = [
-        _checked(_absolute(alternative, cwd), permissions, grant) for alternative in alternatives
-    ]
+    paths = [_search_path(alternative, context) for alternative in alternatives]
+    missing = None
+    for path in paths:
+        refusal = (grant or permissions).check_path(path, "read")
+        if refusal is not None:
+            if refusal.reason != "not_permitted":
+                raise PermissionDenied(refusal)
+            missing = missing or refusal
+    if missing is not None:
+        raise PermissionDenied(missing)
     return paths if all(_exists(path) for path in paths) else []
 
 
@@ -337,12 +442,37 @@ def _glob_root(
         return None
     parts = Path(text).parts
     fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
+    if fixed == 0 and Path(text).is_absolute():
+        raise SearchArgumentError(
+            f'Nothing was searched. Invalid path "{text}". '
+            "Send a local path without a device prefix."
+        )
+    while fixed < len(parts):
+        if os.name == "nt" and any(char in parts[fixed] for char in "*?"):
+            break
+        literal = _checked(_absolute(str(Path(*parts[: fixed + 1])), cwd), permissions, grant)
+        if not is_dir_strict(literal):
+            break
+        fixed = next(
+            (
+                index
+                for index in range(fixed + 1, len(parts))
+                if _GLOB_CHARACTERS.search(parts[index])
+            ),
+            len(parts),
+        )
+    if fixed == len(parts):
+        return None
     base = _checked(_absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd), permissions, grant)
     if not is_dir_strict(base):
         return None
     remainder = "/".join(parts[fixed:])
     try:
-        glob = "/".join(("", *base.relative_to(cwd).parts, remainder))
+        prefix = [
+            re.sub(r"[\[\]{}*?]", lambda match: f"[{match[0]}]", part)
+            for part in base.relative_to(cwd).parts
+        ]
+        glob = "/".join(("", *prefix, remainder))
     except ValueError:
         glob = "/" + remainder
     query.notes.append(
@@ -356,8 +486,57 @@ _GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
 _REGEX_SYNTAX = re.compile(r"[.^$*+?()\[\]{}|\\]")
 
 
+def split_glob_lists(query: SearchQuery) -> list[str] | None:
+    """Repair separate wildcard filters only after the written selection was empty.
+
+    Braces and character classes own their separators. Literal spaces/commas
+    keep their meaning whenever the original glob selects a file.
+    """
+    changed = False
+    globs: list[str] = []
+    for glob in query.globs:
+        pieces: list[str] = []
+        start = depth = 0
+        escaped = False
+        for index, char in enumerate(glob):
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+            elif char in "[{":
+                depth += 1
+            elif char in "]}":
+                depth = max(0, depth - 1)
+            elif not depth and (char == "," or char.isspace()):
+                if glob[start:index].strip():
+                    pieces.append(glob[start:index].strip())
+                start = index + 1
+        if glob[start:].strip():
+            pieces.append(glob[start:].strip())
+        if (
+            len(pieces) > 1
+            and all(
+                _GLOB_CHARACTERS.search(piece)
+                and not piece.startswith("!")
+                and not Path(piece).is_absolute()
+                for piece in pieces
+            )
+            and not glob.startswith("!")
+        ):
+            globs.extend(pieces)
+            changed = True
+        else:
+            globs.append(glob)
+    return globs if changed else None
+
+
 def _directory_globs(
-    query: SearchQuery, roots: list[Path], cwd: Path, permissions: PermissionBoundary
+    query: SearchQuery,
+    roots: list[Path],
+    cwd: Path,
+    permissions: PermissionBoundary,
+    grant: PermissionGrant | None = None,
 ) -> None:
     """Also match the files below a directory that a glob names exactly.
 
@@ -378,7 +557,11 @@ def _directory_globs(
         if Path(name).is_absolute() or {"", ".", ".."} & set(name.split("/")):
             continue
         if not any(
-            permissions.check_path(base / name, "read") is None and (base / name).is_dir()
+            (
+                (grant or permissions).check_path(base / name, "read") is None
+                or (grant is not None and grant.search_read_allowed(base / name, base))
+            )
+            and is_dir_strict(base / name)
             for base in bases
         ):
             continue
@@ -397,13 +580,14 @@ def _missing_root_message(
     query: SearchQuery,
     offers: Callable[[str], bool],
     permissions: PermissionBoundary,
+    readable: Callable[[Path], bool],
 ) -> str:
     # A Swarm Wiki page searched for one plain text reads with the lines holding it.
     patterns = query.patterns
     plain = len(patterns) == 1 and (query.literal or not _REGEX_SYNTAX.search(patterns[0]))
     page = wiki_page_call(root, cwd, offers, fields={"query": patterns[0]} if plain else None)
     message = f"Path not found: {path_label(root, cwd)}"
-    suggestions = corrected_paths(root, cwd, permissions=permissions)
+    suggestions = corrected_paths(root, cwd, permissions=permissions, readable=readable)
     refused = refused_note(root, cwd, permissions, also=bool(suggestions))
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
@@ -413,3 +597,60 @@ def _missing_root_message(
         # Agents pass paths relative to another directory than the one search_files uses.
         message += f" (relative to the working directory {cwd.as_posix()})"
     return f"{message}.{refused} {page}" if page else f"{message}.{refused}"
+
+
+async def _preflight_search(context: ToolContext, arguments: JsonObject) -> None:
+    if not context.permissions.restricted:
+        return
+    try:
+        query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
+    except SearchArgumentError, ToolContractError:
+        return
+    if query.mode in {"help", "reference"}:
+        return
+    cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
+    flags = [
+        value
+        for item in query.rg_args
+        for name, sep, value in [item.partition("=")]
+        if sep and name in {"--file", "--ignore-file"}
+    ]
+    checked: set[Path] = set()
+
+    def prepare() -> list[Path]:
+        paths: list[Path] = []
+        requested: list[str | None] = list(query.roots) if query.roots else [None]
+        for raw in requested:
+            candidate = replace(
+                query, roots=[raw] if raw is not None else [], globs=list(query.globs), notes=[]
+            )
+            try:
+                resolved = _resolve_roots(
+                    candidate, cwd, context.permissions, context.permission_access, context=context
+                )
+                paths.extend(resolved.paths)
+            except PermissionDenied as error:
+                if error.refusal.reason != "not_permitted":
+                    raise
+                paths.append(Path(error.refusal.target))
+        return list(dict.fromkeys(path for path in paths if path not in checked))
+
+    while True:
+        try:
+            roots = await run_permission_decision(prepare)
+        except SearchArgumentError, ToolContractError, OSError:
+            # The handler owns argument and filesystem failure envelopes. No
+            # approval is useful for a call that cannot reach the search phase.
+            return
+        if not roots and not flags:
+            return
+        await authorize_paths(
+            context,
+            [
+                *((path, "read", {"filtered": True}) for path in roots),
+                *((path, "read", {}) for path in flags),
+            ],
+            arguments=arguments,
+        )
+        checked.update(roots)
+        flags = []

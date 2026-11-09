@@ -132,9 +132,3 @@ def scope_confinement(scope: Scope, permissions: PermissionBoundary) -> Confinem
             if pattern != "**" and "\\" not in glob:
                 globs.append(f"{flag}={glob}")
     return Confinement(list(dict.fromkeys(globs)), filtered, case_sensitive=not windows)
-
-
-def permitted(permissions: PermissionBoundary, scope: Scope, reported: str | bytes) -> bool:
-    """Whether a path a run reported, relative to its scope, may be read."""
-    name = os.fsdecode(reported)
-    return permissions.check_path(os.path.normpath(scope.cwd / name), "read") is None
