@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from core.permissions.commands import _git_files, _paths
+from core.permissions.commands._docker import handle_docker
 from core.permissions.commands._specs import (
     ATTACHED_OUTPUT_OPTIONS,
     OUTPUT_OPTIONS,
@@ -950,6 +951,7 @@ def _handle_forfiles(
 
 
 HANDLERS: Mapping[str, Handler] = {
+    "docker": handle_docker,
     "forfiles": _handle_forfiles,
     "ln": _handle_ln,
     "perl": _handle_script_editor,

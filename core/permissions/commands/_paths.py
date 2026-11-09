@@ -259,8 +259,13 @@ def is_clearly_path(text: str, *, windows_switches: bool) -> bool:
         return False
     if text == "~" or text.startswith(("~/", "~\\")):
         return True
-    if WINDOWS and (_DRIVE.match(text) or text.startswith(("\\\\", "//", "\\"))):
-        return True
+    if WINDOWS:
+        if _DRIVE.match(text) or text.startswith(("\\\\", "//")):
+            return True
+        if windows_switches and text.startswith(("/", "\\")):
+            # Unknown programs use these for routes, regexes and container
+            # paths too. Mentions still enforce denies and protected locations.
+            return False
     if text.startswith("/"):
         if not windows_switches:
             return True

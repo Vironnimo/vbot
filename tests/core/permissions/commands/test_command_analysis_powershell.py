@@ -54,6 +54,131 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
     [
         case("Get-ChildItem", id="listing reads the cwd", paths=("read w/p",)),
         case(
+            "foreach ($f in 'src/a.rs','src/b.rs') { Select-String -Path $f -Pattern x }",
+            id="bounded loop literal paths are read individually",
+            paths=("read w/p/src/a.rs", "read w/p/src/b.rs"),
+        ),
+        case(
+            "foreach ($f in 'src/a.rs','C:/outside/b.rs') { Set-Content -Path $f -Value x }",
+            id="bounded loop writes include every literal target outside cwd",
+            paths=("read outside/b.rs", "write w/p/src/a.rs/**", "write outside/b.rs/**"),
+        ),
+        case(
+            "Get-ChildItem tests -Recurse -Filter stderr.txt | "
+            "ForEach-Object { Get-Content $_.FullName -Raw }",
+            id="bounded loop recursive item properties keep the subtree",
+            paths=("read w/p/tests/**",),
+        ),
+        case(
+            "foreach ($f in Get-ChildItem src -Filter *.py) { "
+            "Get-Content $f.FullName | Select-Object -First 1 }",
+            id="bounded loop foreach resolves listing properties",
+            paths=("read w/p/src", "read w/p/src/*"),
+        ),
+        case(
+            "foreach ($f in @(Get-Item src/*.py)) { Get-Content $f.FullName }; "
+            "foreach ($p in @('docs/a','docs/b')) { Get-Content $p }",
+            id="bounded loop array expressions keep literal and listing targets",
+            paths=("read w/p/src/*.py", "read w/p/docs/a", "read w/p/docs/b"),
+        ),
+        case(
+            "foreach ($f in Get-Item src/*.py | Where-Object { $_.Length -gt 0 }) { "
+            "Remove-Item $f.FullName }",
+            id="bounded loop preserving filters retain glob write bounds",
+            paths=("read w/p/src/*.py", "write w/p/src/*.py/**"),
+        ),
+        case(
+            "Get-Item src/*.py | ForEach-Object { Set-Content $_.FullName x }; "
+            "Resolve-Path docs/*.md | ForEach-Object { Get-Content $_.Path }; "
+            "Select-String -Path tests/*.py -Pattern x | ForEach-Object { Get-Content $_.Path }",
+            id="bounded loop item path and match objects keep their source paths",
+            paths=(
+                "read w/p/src/*.py",
+                "write w/p/src/*.py/**",
+                "read w/p/docs/*.md",
+                "read w/p/tests/*.py",
+            ),
+        ),
+        case(
+            "Get-ChildItem src | Select-String -Pattern x | ForEach-Object { Get-Content $_.Path }",
+            id="bounded loop matches from FileInfo input retain source bounds",
+            paths=("read w/p/src", "read w/p/src/*"),
+        ),
+        case(
+            "$files = git diff --name-only; foreach ($f in $files) { Get-Content $f }; "
+            "rg x src | ForEach-Object { Get-Content $_ }",
+            id="bounded loop arbitrary program output stays unresolved",
+            paths=("read w/p/src/**",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem src | ForEach-Object { $_ = 'elsewhere'; Get-Content $_ }",
+            id="bounded loop reassignment invalidates processing item bounds",
+            paths=("read w/p/src",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "foreach ($f in 'src/a') { Set-Variable f 'elsewhere'; Get-Content $f }",
+            id="bounded loop variable cmdlets invalidate literal element bounds",
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem docs | ForEach-Object { "
+            "Set-Variable PSItem 'elsewhere'; Get-Content $_.FullName }",
+            id="bounded loop PSItem alias mutation invalidates underscore bounds",
+            paths=("read w/p/docs",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem src | ForEach-Object { "
+            "try { throw 'x' } catch { Get-Content $_ } }; "
+            "Get-ChildItem docs | ForEach-Object -Begin { Get-Content $_.FullName } "
+            "-Process { $_ }",
+            id="bounded loop catch and begin blocks do not inherit processing items",
+            paths=("read w/p/src", "read w/p/docs"),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem src | ForEach-Object { Write-Output elsewhere | "
+            "ForEach-Object { Get-Content $_ } }; Get-Content $_",
+            id="bounded loop nested and out of scope input stays unresolved",
+            paths=("read w/p/src",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "foreach ($f in 'src/a','src/b') { Get-Content $f.FullName }",
+            id="bounded loop literal strings do not acquire file object properties",
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-Item a.txt | % { $_.IsReadOnly = $true }; "
+            "foreach ($f in Get-Item b.txt) { $f.Attributes = 'Normal' }",
+            id="bounded loop metadata property writes preserve the item identity",
+            paths=("read w/p/a.txt", "write w/p/a.txt/**", "read w/p/b.txt", "write w/p/b.txt/**"),
+        ),
+        case(
+            "Select-String -Path a.txt -Pattern x | % { $_.Path = 'elsewhere'; "
+            "Get-Content $_.Path }",
+            id="bounded loop mutable path properties invalidate the item bounds",
+            paths=("read w/p/a.txt",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem src/*.log | & { process { Get-Content $_.FullName } }; "
+            "Get-ChildItem docs/*.md | & { end { Get-Content $_.FullName } }",
+            id="bounded loop inline scriptblocks expose input only in process blocks",
+            paths=("read w/p/src/*.log", "read w/p/docs/*.md"),
+            unresolved=("path_read",),
+        ),
+        case(
+            "Get-ChildItem src -Name | ForEach-Object { Set-Content $_ x }; "
+            "Resolve-Path docs -Relative | ForEach-Object { Set-Content $_ x }; "
+            "Select-String -Path tests/*.py -Raw x | ForEach-Object { Set-Content $_ x }",
+            id="bounded loop relative names and raw matches cannot retain item bounds",
+            paths=("read w/p/src", "read w/p/docs", "read w/p/tests/*.py"),
+            unresolved=("path_write",),
+        ),
+        case(
             "rm -Recurse build; del *.tmp",
             id="aliases resolve and bind",
             commands=("Remove-Item -Recurse build", "Remove-Item *.tmp"),
@@ -119,6 +244,86 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "$p = 'x'; $p = 'y'; Remove-Item $p",
             id="reassigned variable stays unknown",
             unresolved=("path_write",),
+        ),
+        case(
+            "$p = 'x'; if (Test-Path $p) { Get-Content $p }; "
+            "while ($false) { Get-Content $p }; & { Get-Content $p }",
+            id="immutable outer paths survive conditional loop and invoked blocks",
+            paths=("read w/p/x",),
+        ),
+        case(
+            "$p = 'x'; if ($true) { $p = 'y' }; Get-Content $p",
+            id="a conditional reassignment invalidates the outer path",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$dir = 'tmp'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; "
+            "$out = Join-Path $dir a.txt; 'x' | Set-Content $out",
+            id="join-path establishes a constant without invalidating its inputs",
+            paths=("read w/p/tmp", "write w/p/tmp", "write w/p/tmp/a.txt"),
+        ),
+        case(
+            "$out = Join-Path $env:USERPROFILE x.txt; 'hi' | Set-Content $out",
+            id="join-path resolves an environment parent",
+            paths=("read h", "write h/x.txt"),
+        ),
+        case(
+            "$out = Join-Path -Path C:/outside -ChildPath sub -AdditionalChildPath a.txt; "
+            "Set-Content $out hi",
+            id="join-path outside the work area remains a checked write",
+            paths=("read outside", "write outside/sub/a.txt"),
+        ),
+        case(
+            "$out = Join-Path $PWD a.txt; Set-Content $out hi",
+            id="join-path does not freeze the mutable location",
+            unresolved=("path_read", "path_write"),
+        ),
+        case(
+            "$out = Join-Path src *.txt -Resolve; Get-Content $out",
+            id="join-path filesystem expansion stays unresolved",
+            paths=("read w/p/src",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "$py = 'C:/Python314/python.exe'; & $py --version; & $py --version",
+            id="a constant executable resolves without making later invocations dynamic",
+            commands=("python --version", "python --version"),
+            paths=("read Python314/python.exe",),
+            mentions=("read Python314/python.exe",),
+        ),
+        case(
+            "$reader = 'Get-Content'; $p = 'x'; & $reader $p; "
+            "$writer = 'rm'; & $writer C:/outside/x",
+            id="constant cmdlet names bind parameters and resolve aliases",
+            commands=("Get-Content x", "Remove-Item C:/outside/x"),
+            paths=("read w/p/x", "write outside/x/**"),
+        ),
+        case(
+            "$script = 'C:/outside/script.ps1'; . $script",
+            id="a constant dot-sourced script is a named script read",
+            commands=("script.ps1",),
+            paths=("read outside/script.ps1",),
+        ),
+        case(
+            "$script = 'setup.ps1'; $p = 'x'; . $script; Get-Content $p",
+            id="opaque dot-sourced scripts invalidate later constant uses",
+            paths=("read w/p/setup.ps1",),
+            unresolved=("path_read",),
+        ),
+        case(
+            "$setter = 'Set-Variable'; $p = 'x'; & $setter p y; Get-Content $p",
+            id="constant invocation names still invalidate mutated variables",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$setter = 'Set-Item'; $p = 'x'; & $setter variable:p y; Get-Content $p",
+            id="constant invocation names still invalidate provider targets",
+            unresolved=("path_read",),
+        ),
+        case(
+            "$function = 'f'; $p = 'x'; function f { 'opaque' }; & $function; Get-Content $p",
+            id="constant function names do not hide opaque variable mutations",
+            unresolved=("command", "path_read"),
         ),
         case(
             "Get-Content $p; $p = 'x'",
@@ -456,6 +661,145 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "Invoke-Thing secrets/x -Mode fast",
             id="words of unknown cmdlets are mentions",
             mentions=("read w/p/secrets/x", "read w/p/fast"),
+        ),
+        case(
+            "playwright-cli -s=x snapshot 2>&1 | Select-String -Pattern option; "
+            "npx playwright test --reporter=line 2>&1 | Select-String 'passed|failed'; "
+            "flutter build web --help 2>&1 | Select-String canvaskit; "
+            "pytest -q 2>&1 | Select-String passed",
+            id="external program output is text without a per-program spec",
+        ),
+        case(
+            "unknown-command | Remove-Item; $objects | Select-String x",
+            id="text classification never invents file targets",
+            unresolved=("path_write", "path_read"),
+        ),
+        case(
+            "$s = Get-Content -Raw a.txt; $s.Replace('C:/outside/', '') | Set-Content a.txt; "
+            "$t = [IO.File]::ReadAllText('b.txt'); $t = $t.Replace('a', 'b'); "
+            "[IO.File]::WriteAllText('b.txt', $t.Replace('C:/outside/', ''))",
+            id="proven string variables and self replacement preserve file accesses",
+            paths=("read w/p/a.txt", "write w/p/a.txt", "read w/p/b.txt", "write w/p/b.txt"),
+        ),
+        case(
+            "(Get-Content a.txt -Raw).Replace('C:/outside/', ''); "
+            "(Get-ChildItem | Out-String).Replace('C:/outside/', ''); "
+            "('literal').Replace('C:/outside/', ''); ([string]$value).Replace('a', 'b'); "
+            "foreach ($piece in 'a', 'b') { $piece.Replace('C:/outside/', '') }",
+            id="direct string receivers do not turn replacement text into paths",
+            paths=("read w/p/a.txt", "read w/p"),
+        ),
+        case(
+            "Get-ChildItem src -Filter *.py | Select-String x | ForEach-Object { "
+            "\"$($_.Path.Replace('C:\\outside\\', '')):$($_.LineNumber)\""
+            " }; Get-ChildItem src -Recurse | ForEach-Object { "
+            "$_.FullName.Replace('C:/outside/', '') }",
+            id="listing and match string properties do not write files",
+            paths=("read w/p/src", "read w/p/src/*", "read w/p/src/**"),
+        ),
+        case(
+            "([IO.FileInfo]::new('a.txt')).FullName.Replace('C:/outside/', ''); "
+            "(Get-Item b.txt).Replace('C:/target', 'C:/backup'); "
+            "$unknown.Replace('C:/target', 'C:/backup')",
+            id="file replacement still writes its source destination and backup",
+            paths=(
+                "read w/p/a.txt",
+                "read w/p/b.txt",
+                "write w/p/b.txt/**",
+                "write target",
+                "write backup",
+            ),
+            unresolved=("path_write",),
+        ),
+        case(
+            "function files { Get-Item a.txt }; (files).Replace('C:/target', 'C:/backup')",
+            id="unfollowable command objects cannot claim to be strings",
+            paths=("read w/p/a.txt",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "$s = 'text'; $s = Get-Item a.txt; $s.Replace('C:/target', 'C:/backup'); "
+            "$t = 'text'; Set-Variable t (Get-Item b.txt); $t.Replace('C:/target', 'C:/backup')",
+            id="a changed receiver cannot retain string provenance",
+            paths=("read w/p/a.txt", "read w/p/b.txt"),
+            unresolved=("path_write",),
+        ),
+        case(
+            "foreach ($f in 'a') { Set-Variable f (Get-Item secret); "
+            "$f.Replace('C:/target', 'C:/backup') }",
+            id="mutated literal-loop variables cannot retain string provenance",
+            paths=("read w/p/secret",),
+            unresolved=("path_write",),
+        ),
+        case(
+            r"'a b' -split '\s+'; (Get-Content README.md -Raw) -replace '\{(\w+)\}', '$1'; "
+            "'x' -match ('C:/pattern'); 'x' -notlike 'C:/pattern'; -split 'C:/pattern'; "
+            "(([System.Xml.XmlDocument]::new()).Load('C:/outside/x.xml')) -match 'x'",
+            id="regex and pattern operands are text even through parentheses",
+            paths=("read w/p/README.md", "read outside/x.xml"),
+        ),
+        case(
+            "rg -n '/api/rpc' server; rg '/api/rpc'; rg -e '/api/rpc' server; "
+            "rg -f patterns.txt server",
+            id="ripgrep positional and option patterns are not file paths",
+            paths=("read w/p/server/**", "read w/p/**", "read w/p/patterns.txt/**"),
+        ),
+        case(
+            "gh api /repos/owner/repo/pulls; playwright-cli find --regex '/Ask this agent/'; "
+            r"'\tvar n := 1'",
+            id="root-relative routes and literal text are not absolute host reads",
+            mentions=(
+                "read w/p/api",
+                "read repos/owner/repo/pulls",
+                "read w/p/find",
+                "read Ask this agent",
+            ),
+        ),
+        case(
+            r"tool C:/outside/file ../parent \\server\share\file ~/home /api/route \root\word",
+            id="clear paths stay reads while root-relative words remain deny-checked mentions",
+            paths=("read outside/file", "read w/parent", "read //server/share/file", "read h/home"),
+            mentions=("read api/route", "read root/word"),
+        ),
+        case(
+            "docker run --rm -v /data:/data alpine ls /data; docker run -v named:/data alpine",
+            id="container destinations and named volumes are not Windows host reads",
+            mentions=("read data", "read w/p/run", "read w/p/alpine", "read w/p/ls"),
+        ),
+        case(
+            "docker run --rm -v C:/outside:/data alpine; "
+            "docker run -itvC:/readonly:/data:ro alpine; "
+            "docker run --volume=C:/other:/data:rw alpine; "
+            "docker run -v=C:/equal:/data alpine; "
+            "docker container create --mount "
+            "type=bind,source=C:/bound,target=/data,readonly alpine",
+            id="Docker bind sources retain read or write subtree checks",
+            paths=(
+                "write outside/**",
+                "write readonly",
+                "read readonly/**",
+                "write other/**",
+                "write equal/**",
+                "read bound/**",
+            ),
+        ),
+        case(
+            "docker run --mount type=bind,source=C:/first,src=C:/second,target=/data,"
+            "readonly,ro=false alpine; "
+            "docker run --mount TYPE=BIND,SRC=C:/zero,target=/data,ro=0 alpine; "
+            "docker run --mount type=bind,src=C:/create,target=/data,ro,bind-create-src alpine; "
+            "docker run -v C:/labels:/data:ro,z alpine; "
+            "docker run --mount type=bind,src=C:/nested,target=/data,readonly,"
+            "bind-recursive=writable alpine",
+            id="Docker writable mount options override read-only appearances",
+            paths=(
+                "write second/**",
+                "write zero/**",
+                "write create",
+                "read create/**",
+                "write labels/**",
+                "write nested/**",
+            ),
         ),
         case("Remove-Item (", id="parse error is unresolved", unresolved=("command",)),
     ],

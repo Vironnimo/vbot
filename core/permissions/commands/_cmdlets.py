@@ -69,10 +69,14 @@ def prepare(analysis: Analysis, context: Context, script: Script) -> None:
     for command in script.commands:
         name = (command.resolved or "").lower()
         called = literal(command.words[0]) if command.words else None
+        if command.invocation == "." and command.words and not command.words[0].block:
+            context.value_limit = (
+                command.offset
+                if context.value_limit is None
+                else min(context.value_limit, command.offset)
+            )
         if (
             command.script_function
-            or command.invocation == "."
-            or (command.invocation == "&" and called is None)
             or (called and called.lower().endswith(".ps1"))
             or name == "invoke-expression"
         ):
@@ -146,8 +150,24 @@ def resolve_mutations(analysis: Analysis, context: Context, script: Script) -> b
         len(analysis.environment_dynamic),
         context.values_unknown,
         context.environment_changed,
+        context.value_limit,
     )
     for raw in script.commands:
+        context.value_scope = raw.top_level
+        context.value_offset = raw.offset
+        if raw.words and literal(raw.words[0]) is None and not raw.words[0].block:
+            called = analysis.literal_of(context, raw, raw.words[0])
+            if called is not None:
+                raw = analysis.bind_powershell(raw, called)
+                if called.lower() in context.functions:
+                    context.values_unknown = True
+                prepare(analysis, context, Script(commands=[raw]))
+            if called is not None and called.lower().endswith((".ps1", ".psm1")):
+                context.value_limit = (
+                    raw.offset
+                    if context.value_limit is None
+                    else min(context.value_limit, raw.offset)
+                )
         binding = raw.binding
         name = (raw.resolved or "").lower()
         parameters = cmdlet_parameters(name)
@@ -159,6 +179,10 @@ def resolve_mutations(analysis: Analysis, context: Context, script: Script) -> b
             if spec.kind != "write":
                 continue
             for value in items(binding.bound.get(parameter)):
+                if value.target is not None:
+                    # Bounded iteration targets are checked as filesystem
+                    # accesses during the walk; an unknown one still refuses.
+                    continue
                 if name == "new-item" and parameter in ("Path", "LiteralPath"):
                     value = joined_path(value, binding.bound.get("Name"))
                 text = analysis.literal_of(context, raw, value)
@@ -181,6 +205,7 @@ def resolve_mutations(analysis: Analysis, context: Context, script: Script) -> b
         len(analysis.environment_dynamic),
         context.values_unknown,
         context.environment_changed,
+        context.value_limit,
     )
     return after != before
 
@@ -194,6 +219,8 @@ def powershell_command(analysis: Analysis, context: Context, raw: RawCommand) ->
     if name is None:
         analysis.unresolve("command", raw.source, "the command name is computed when it runs")
         return
+    if literal(name_word) is None:
+        raw = analysis.bind_powershell(raw, name)
     if raw.stop_parsing:
         analysis.emit(context, raw.resolved or _paths.program_name(name), raw.words[1:], raw)
         analysis.unresolve(
@@ -397,10 +424,28 @@ def _register_listing(
     analysis: Analysis, context: Context, raw: RawCommand, lowered: str, binding: Binding
 ) -> None:
     """What a listing cmdlet hands on, to the next pipeline element and to method calls."""
+    string_output = (
+        (lowered == "get-childitem" and "Name" in binding.bound)
+        or (lowered == "resolve-path" and "Relative" in binding.bound)
+        or (lowered == "select-string" and "Raw" in binding.bound)
+    )
+    if string_output or (lowered == "select-string" and "Quiet" in binding.bound):
+        # Relative names resolve from the consumer's cwd, and raw matches can
+        # contain arbitrary paths. Neither carries the listed items' bounds.
+        listing = Listing(text=string_output)
+        context.produced[raw.offset] = listing
+        if raw.pipeline is not None:
+            context.listings[(raw.pipeline.id, raw.pipeline.index)] = listing
+        return
     values = [value for name in ("Path", "LiteralPath") for value in items(binding.bound.get(name))]
     if not values:
         if raw.pipeline is not None and raw.pipeline.index > 0:
-            return  # its paths come from its input
+            incoming = analysis.listing_before(context, raw.pipeline)
+            if lowered != "select-string" or incoming is None or incoming.text:
+                return  # its paths come from unknown input, or matches are text-only
+            context.produced[raw.offset] = incoming
+            context.listings[(raw.pipeline.id, raw.pipeline.index)] = incoming
+            return
         values = [Word.literal(".", source=raw.source)]
     listing = analysis.resolve_listing(
         context,
@@ -409,6 +454,7 @@ def _register_listing(
         recursive=_recursive(lowered, binding),
         children=lowered == "get-childitem",
     )
+    listing.filesystem_items = True
     context.produced[raw.offset] = listing
     if raw.pipeline is not None:
         context.listings[(raw.pipeline.id, raw.pipeline.index)] = listing
@@ -496,6 +542,7 @@ def _new_object(analysis: Analysis, context: Context, raw: RawCommand, binding: 
     context.produced[raw.offset] = analysis.resolve_listing(
         context, raw, arguments[:1], recursive=False
     )
+    context.produced[raw.offset].filesystem_items = True
 
 
 def _web_address(analysis: Analysis, context: Context, raw: RawCommand, binding: Binding) -> None:

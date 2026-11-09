@@ -63,6 +63,9 @@ class Listing:
     # Text output can still name bounded targets (for example rg --files).
     # Select-String searches text itself; other consumers may treat it as paths.
     text: bool = False
+    # FileSystem items or match/path objects, distinct from native programs'
+    # textual output which can contain arbitrary paths in file content.
+    filesystem_items: bool = False
 
 
 @dataclass(slots=True)
@@ -92,6 +95,8 @@ class Context:
     values_unknown: bool = False
     value_offset: int = -1
     value_scope: bool = False
+    value_limit: int | None = None
+    functions: frozenset[str] = frozenset()
 
     def locations(self, scope: tuple[int, ...]) -> tuple[Location, ...]:
         for length in range(len(scope), -1, -1):
