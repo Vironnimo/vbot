@@ -381,6 +381,7 @@ class CommandManager:
         request: bytes | None = None,
         warm: bool = True,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
+        consumed_once_secrets: tuple[str, ...] = (),
     ) -> CommandHandle:
         """Start one command in the foreground and return its handle.
 
@@ -393,6 +394,8 @@ class CommandManager:
         *not_run_codes* are exit codes by which the shell says that it ran
         nothing of the command, and why: the report names the reason
         (``CommandReport.not_run``) once the shell exited with one of them.
+        *consumed_once_secrets* names one-time Secrets consumed for this launch;
+        only their names survive in reports and background checkpoints.
         *formatter* builds the body of the result delivery from the final
         report. *permissions* is the boundary of the Session the command runs
         for: its checkpoint keeps it, so a delivery that restart recovery
@@ -433,6 +436,7 @@ class CommandManager:
                 request=request,
                 warm=warm,
                 not_run_codes=dict(not_run_codes or {}),
+                consumed_once_secrets=consumed_once_secrets,
             )
         )
         self._pending[task] = _PendingLaunch(owner, origin_run_id, execution_owner)
@@ -801,6 +805,7 @@ class CommandManager:
         request: bytes | None,
         warm: bool,
         not_run_codes: dict[int, NotRunReason],
+        consumed_once_secrets: tuple[str, ...],
     ) -> CommandRecord:
         lease: TemporaryFileLease | None = None
         log_fd: int | None = None
@@ -861,6 +866,7 @@ class CommandManager:
             log_lease=lease,
             services=self._services,
             not_run_codes=not_run_codes,
+            consumed_once_secrets=consumed_once_secrets,
         )
         self._records[command_id] = record
         record.start()

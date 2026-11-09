@@ -574,23 +574,29 @@ def _windows_login_environment() -> dict[str, str]:
         if not userenv.CreateEnvironmentBlock(ctypes.byref(block), token, False):
             raise native.WinError(native.get_last_error())
         try:
-            environment: dict[str, str] = {}
-            address = block.value or 0
-            while True:
-                entry = ctypes.wstring_at(address)
-                if not entry:
-                    break
-                address += (len(entry) + 1) * ctypes.sizeof(ctypes.c_wchar)
-                name, separator, value = entry.partition("=")
-                # Entries such as ``=C:=C:\\`` hold per-drive directories, not
-                # variables. Names are upper case, as in ``os.environ`` on Windows.
-                if separator and name:
-                    environment[name.upper()] = value
-            return environment
+            return _windows_environment_block(block.value or 0)
         finally:
             userenv.DestroyEnvironmentBlock(block)
     finally:
         kernel32.CloseHandle(token)
+
+
+def _windows_environment_block(address: int) -> dict[str, str]:
+    """Read the NUL-separated UTF-16 entries of a Windows environment block."""
+    import ctypes
+
+    environment: dict[str, str] = {}
+    while True:
+        entry = ctypes.wstring_at(address)
+        if not entry:
+            return environment
+        # wstring_at combines surrogate pairs into one Python character; the
+        # block still contains two UTF-16 units for each non-BMP character.
+        address += len(entry.encode("utf-16-le", errors="surrogatepass")) + 2
+        name, separator, value = entry.partition("=")
+        # Per-drive directories such as =C:=C:\ are not environment variables.
+        if separator and name:
+            environment[name.upper()] = value
 
 
 __all__ = [

@@ -171,6 +171,7 @@ class CommandCheckpoints:
             "exit_code": report.exit_code,
             "stop_reason": report.stop_reason,
             "not_run": report.not_run,
+            "consumed_once_secrets": list(report.consumed_once_secrets),
             "transcript": asdict(report.transcript),
             "log_path": str(report.log_path) if report.log_path is not None else None,
             "failed_programs": list(report.failed_programs),
@@ -596,6 +597,7 @@ def _report(row: dict[str, Any]) -> CommandReport:
             int(transcript["total_lines"]),
             int(transcript["head_cut"]),
             int(transcript["tail_cut"]),
+            inferred_encoding=transcript.get("inferred_encoding"),
         ),
         log_path=Path(state["log_path"]) if state["log_path"] else None,
         failed_programs=tuple(state["failed_programs"]),
@@ -603,6 +605,7 @@ def _report(row: dict[str, Any]) -> CommandReport:
         background=True,
         elapsed_seconds=float(state["elapsed_seconds"]),
         not_run=cast(NotRunReason | None, state.get("not_run")),
+        consumed_once_secrets=tuple(state.get("consumed_once_secrets", ())),
         log_loss=(
             LogLoss(
                 RuntimeError("output logging failed before restart"),

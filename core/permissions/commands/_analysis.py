@@ -93,6 +93,12 @@ _PRUNED_NAME = re.compile(r"^[^\\/*?\[\]{}!]+/?$")
 type PowerShellParse = Callable[[str], Mapping[str, Any]]
 
 
+def _location_dependent(word: Word) -> bool:
+    return any(
+        part.kind == "variable" and part.value.rsplit(":", 1)[-1] == "pwd" for part in word.parts
+    ) or any(_location_dependent(child) for child in (word.join or word.items or ()))
+
+
 def _every_depth(text: str, pattern: str | None) -> tuple[str, str | None]:
     """The folder and the ``**/name`` glob of a path whose name matches at every depth."""
     if pattern is None:
@@ -123,6 +129,7 @@ class Analysis:
         self._unresolved: dict[tuple[str, str, str], UnresolvedElement] = {}
         self._urls: dict[str, None] = {}
         self._hosts: dict[str, None] = {}
+        self._bound_commands: dict[tuple[str, str], RawCommand] = {}
 
     @property
     def has_powershell(self) -> bool:
@@ -170,6 +177,7 @@ class Analysis:
             states={(): start},
             delayed_expansion=delayed_expansion,
             start=start,
+            functions=script.functions,
         )
         self._prepare(context, script)
         for command in script.commands:
@@ -205,6 +213,39 @@ class Analysis:
 
         return lower(dict(self._powershell(text)))
 
+    def bind_powershell(self, raw: RawCommand, name: str) -> RawCommand:
+        """Bind a constant invocation name with the same parser as a literal one."""
+        key = (raw.source, name)
+        rebound = self._bound_commands.get(key)
+        if rebound is None:
+            script = self._parse(
+                "& '" + name.replace("'", "''") + "' " + " ".join(w.source for w in raw.words[1:]),
+                "powershell",
+                False,
+            )
+            if script is None or script.error:
+                return raw
+            rebound = next((command for command in script.commands if command.words), None)
+            if rebound is None:
+                return raw
+            self._bound_commands[key] = rebound
+        binding = rebound.binding
+        if binding is not None:
+            # Preserve the original enclosing loop/pipeline provenance.
+            words = {
+                value.source: value
+                for word in raw.words[1:]
+                for value in (word, *items(word), *items(word.argument))
+            }
+            binding = replace(
+                binding,
+                bound={
+                    key: words.get(value.source, value) if value is not None else None
+                    for key, value in binding.bound.items()
+                },
+            )
+        return replace(raw, resolved=rebound.resolved, binding=binding)
+
     def _prepare(self, context: Context, script: Script) -> None:
         """Variables and environment the script itself changes, before it is read."""
         for name in script.assigned:
@@ -231,10 +272,7 @@ class Analysis:
                 word = assignment.value
                 if word is not None and word.items is None:
                     # Location-dependent values cannot be frozen before the walk.
-                    if any(
-                        part.kind == "variable" and part.value.rsplit(":", 1)[-1] == "pwd"
-                        for part in word.parts
-                    ):
+                    if _location_dependent(word):
                         continue
                     value = self.value(context, word, context.locations(())[0])
                     if value.text is not None:
@@ -242,6 +280,7 @@ class Analysis:
                         context.text_variables[assignment.name] = assignment.offset
                 if assignment.text:
                     context.text_variables[assignment.name] = assignment.offset
+            self._text_values(context, script)
             # A constant can name a variable-provider target. Invalidate those
             # mutations and their dependants before using any derived value.
             if not _cmdlets.resolve_mutations(self, context, script):
@@ -249,12 +288,40 @@ class Analysis:
         context.value_scope = False
         context.value_offset = -1
 
+    def _text_values(self, context: Context, script: Script) -> None:
+        """Prove every assignment of a text variable, including self Replace chains."""
+        invalid = set(context.invalid_values)
+        if context.values_unknown or context.environment_changed:
+            context.text_variables.clear()
+            return
+        while True:
+            proven: dict[str, int] = {}
+            failed = set(invalid)
+            for assignment in script.assignments:
+                if assignment.name in invalid or (
+                    context.value_limit is not None and assignment.offset > context.value_limit
+                ):
+                    continue
+                constant = context.constants.get(assignment.name)
+                if assignment.text or constant is not None or assignment.text_from in proven:
+                    proven.setdefault(assignment.name, assignment.offset)
+                else:
+                    failed.add(assignment.name)
+            if failed == invalid:
+                context.text_variables = proven
+                return
+            invalid = failed
+
     # Commands ---------------------------------------------------------------
 
     def _command(self, context: Context, raw: RawCommand) -> None:
         context.value_scope = raw.top_level
         context.value_offset = raw.offset
-        if raw.output_variable is not None and raw.top_level:
+        if (
+            raw.output_variable is not None
+            and context.value_scope
+            and (context.value_limit is None or raw.offset <= context.value_limit)
+        ):
             defined_at = context.text_variables.get(raw.output_variable)
             raw.output_text |= defined_at is not None and defined_at < raw.offset
         if raw.output_text:
@@ -445,20 +512,13 @@ class Analysis:
             )
 
     def native_text_output(self, name: str) -> bool:
-        """Known native programs emit text; unknown PowerShell commands may return file objects."""
+        """External programs emit strings; explicit PowerShell scripts remain unknown."""
         lowered = name.lower()
         program = _paths.program_name(lowered)
-        if program in POWERSHELLS or lowered.endswith((".ps1", ".psm1")):
-            return False
-        return bool(
-            lowered.endswith((".exe", ".com"))
-            or program in PROGRAMS
-            or program in HANDLERS
-            or program in GLOBAL_OPTIONS
-            or program in RUNNERS
-            or PYTHONS.fullmatch(program)
-            or program == "godot"
-        )
+        # Cmdlets, aliases and functions are dispatched before reaching here.
+        # An unqualified PATH command could be a script, whose contents are
+        # outside this analysis just like any other external program's internals.
+        return program not in POWERSHELLS and not lowered.endswith((".ps1", ".psm1"))
 
     def program(
         self,
@@ -780,7 +840,9 @@ class Analysis:
                 context.listings[(raw.pipeline.id, raw.pipeline.index)] = listing
             elif spec.filter and raw.pipeline.index > 0 and not paths:
                 context.listings[(raw.pipeline.id, raw.pipeline.index)] = Listing(filter=True)
-        consumed = {id(word) for word in paths} | {id(value) for _, value, _ in values}
+        # Skipped operands are syntax (grep/rg patterns, sed expressions), not
+        # unclassified paths. Do not rediscover them through tier B.
+        consumed = {id(word) for word in operands} | {id(value) for _, value, _ in values}
         self.tier_b(context, raw, [word for word in arguments if id(word) not in consumed])
 
     def _pruned(
@@ -831,6 +893,9 @@ class Analysis:
 
     def text_output(self, context: Context, raw: RawCommand) -> None:
         """Record output that Select-String searches as text, independently of target bounds."""
+        context.produced[raw.offset] = replace(
+            context.produced.get(raw.offset, Listing()), text=True
+        )
         if raw.pipeline is not None:
             key = (raw.pipeline.id, raw.pipeline.index)
             context.listings[key] = replace(context.listings.get(key, Listing()), text=True)
@@ -864,7 +929,9 @@ class Analysis:
             return
         self.listed_targets(listing, kind)
 
-    def listed_targets(self, listing: Listing, kind: AccessKind, *, subtree: bool = False) -> None:
+    def listed_targets(
+        self, listing: Listing, kind: PathAccessKind, *, subtree: bool = False
+    ) -> None:
         """Record *kind* for each entry *listing* names; changing a folder reaches below it."""
         for path, source, glob in listing.roots or ():
             below = subtree or listing.recursive or kind == "write"
@@ -876,6 +943,20 @@ class Analysis:
         return context.locations(raw.scope)[0]
 
     def value(self, context: Context, word: Word, location: Location) -> Value:
+        if word.join is not None:
+            parts = [self.value(context, part, location).text for part in word.join]
+            if any(part is None for part in parts) or any(part.items for part in word.join):
+                return Value(None, word.source)
+            # Join-Path combines provider paths without interpreting the child
+            # as a new root. Resolve the resulting path only at its consumer.
+            separator = "\\" if _paths.WINDOWS else "/"
+            return Value(
+                separator.join(
+                    (part or "").rstrip("\\/") if index == 0 else (part or "").strip("\\/")
+                    for index, part in enumerate(parts)
+                ),
+                word.source,
+            )
         if word.parameter is not None:
             if word.argument is None:
                 return Value(word.source, word.source)
@@ -913,16 +994,26 @@ class Analysis:
                 return self.env.get("HOME") or str(self.home)
             return self.environment(name)
         scoped = False
-        if context.shell == "powershell" and name.partition(":")[0] in {
-            "global",
-            "script",
-            "local",
-            "private",
-            "using",
-        }:
+        if (
+            context.shell == "powershell"
+            and ":" in name
+            and name.partition(":")[0]
+            in {
+                "global",
+                "script",
+                "local",
+                "private",
+                "using",
+            }
+        ):
             scoped = True
             name = name.partition(":")[2]
-        if context.shell == "powershell" and context.value_scope and not scoped:
+        if (
+            context.shell == "powershell"
+            and context.value_scope
+            and not scoped
+            and (context.value_limit is None or context.value_offset <= context.value_limit)
+        ):
             constant = context.constants.get(name)
             if constant is not None and constant[0] < context.value_offset:
                 return constant[1]
@@ -1041,6 +1132,11 @@ class Analysis:
         brace = context.shell == "bash"
         windows_switches = context.shell != "bash"
         for item in items(word):
+            if tier == "a" and item.target is not None:
+                listing = _dotnet.target_listing(self, context, raw, item.target)
+                if listing is not None and listing.roots is not None:
+                    self.listed_targets(listing, kind, subtree=subtree)
+                    continue
             for location in context.locations(raw.scope):
                 value = self.value(context, item, location)
                 self.collect_urls(value)

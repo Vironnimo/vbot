@@ -365,6 +365,7 @@ def lower(result: dict[str, Any]) -> Script:
         return Script(error=reason)
     script = Script(
         assigned={str(name) for name in result.get("assigned") or []},
+        functions=frozenset(str(name).lower() for name in result.get("functions") or []),
         environment_changed=bool(result.get("environment_changed")),
         assignments=[
             Assignment(
@@ -372,17 +373,16 @@ def lower(result: dict[str, Any]) -> Script:
                 int(entry["offset"]),
                 None if entry.get("value") is None else _word(entry["value"]),
                 bool(entry.get("text")),
+                entry.get("text_from"),
             )
             for entry in result.get("assignments") or []
         ],
     )
-    pipelines: dict[int, int] = {}
 
     def pipeline_of(raw: object) -> Pipeline | None:
         if not isinstance(raw, dict):
             return None
-        identity = pipelines.setdefault(int(raw["id"]), len(pipelines) + 1)
-        return Pipeline(identity, int(raw["index"]))
+        return Pipeline(int(raw["id"]), int(raw["index"]))
 
     entries: list[RawCommand] = [
         _command(entry, pipeline_of(entry.get("pipeline")))
@@ -399,13 +399,7 @@ def lower(result: dict[str, Any]) -> Script:
                 call=MemberCall(
                     member=None if entry.get("member") is None else str(entry["member"]),
                     static=bool(entry.get("static")),
-                    target=CallTarget(
-                        kind=_TARGET_KINDS.get(str(target.get("kind")), "other"),
-                        type_name=_type_name(target.get("type")),
-                        arguments=tuple(_word(word) for word in target.get("arguments") or []),
-                        offset=None if target.get("offset") is None else int(target["offset"]),
-                        feed=pipeline_of(target.get("feed")),
-                    ),
+                    target=_target(target),
                     arguments=tuple(_word(word) for word in entry.get("arguments") or []),
                 ),
             )
@@ -413,7 +407,13 @@ def lower(result: dict[str, Any]) -> Script:
     for entry in result.get("strings") or []:
         word = _word(entry["word"])
         entries.append(
-            RawCommand([], word.source, offset=int(entry.get("offset", -1)), expression=word)
+            RawCommand(
+                [],
+                word.source,
+                offset=int(entry.get("offset", -1)),
+                expression=word,
+                expression_argument=bool(entry.get("argument")),
+            )
         )
     for entry in result.get("items") or []:
         source = str(entry.get("source", ""))
@@ -490,8 +490,24 @@ _TARGET_KINDS: dict[str, CallTargetKind] = {
     "command": "command",
     "item": "item",
     "text": "text",
+    "variable": "variable",
+    "property": "property",
+    "paths": "paths",
 }
 _PART_KINDS = {"s": "text", "v": "variable", "d": "dynamic"}
+
+
+def _target(raw: dict[str, Any]) -> CallTarget:
+    feed = raw.get("feed")
+    return CallTarget(
+        kind=_TARGET_KINDS.get(str(raw.get("kind")), "other"),
+        type_name=_type_name(raw.get("type")),
+        arguments=tuple(_word(word) for word in raw.get("arguments") or []),
+        offset=None if raw.get("offset") is None else int(raw["offset"]),
+        feed=Pipeline(int(feed["id"]), int(feed["index"])) if feed else None,
+        variable=raw.get("variable"),
+        receiver=_target(raw["receiver"]) if raw.get("receiver") else None,
+    )
 
 
 def _word(raw: dict[str, Any], *, expands: bool = False, element: bool = False) -> Word:
@@ -520,4 +536,6 @@ def _word(raw: dict[str, Any], *, expands: bool = False, element: bool = False) 
         splat=bool(raw.get("splat")),
         parameter=raw.get("parameter"),
         argument=_word(argument, expands=expands) if isinstance(argument, dict) else None,
+        target=_target(raw["target"]) if raw.get("target") else None,
+        join=tuple(_word(part) for part in raw["join"]) if raw.get("join") else None,
     )

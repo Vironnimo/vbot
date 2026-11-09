@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import shutil
@@ -227,6 +228,19 @@ def test_checkout_server_leads_shell_path_with_a_vbot_for_itself(
             env={**os.environ, "PATH": str(directory)},
         ).stdout.splitlines()
         assert json.loads(direct[0]) == [arguments, str(data_dir), "22333"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows login environment")
+def test_windows_environment_block_preserves_entries_after_surrogate_pairs() -> None:
+    block = ctypes.create_unicode_buffer(
+        "=C:=C:\\\0A=x\U0001f600y\0B=\U0001f600\U00020000\0Path=C:/bin\0\0"
+    )
+
+    assert shell_environment._windows_environment_block(ctypes.addressof(block)) == {
+        "A": "x\U0001f600y",
+        "B": "\U0001f600\U00020000",
+        "PATH": "C:/bin",
+    }
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows login environment")

@@ -287,6 +287,68 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
             "bash", "../data/viewer.exe --version", "protected_location", id="native-protected"
         ),
         pytest.param("bash", "../tools/run.sh", "not_permitted", id="script-outside"),
+        *[
+            pytest.param(
+                "powershell",
+                line,
+                reason,
+                id=id,
+                marks=pytest.mark.skipif(
+                    sys.platform != "win32" or _PWSH is None, reason="PowerShell's own parser"
+                ),
+            )
+            for line, reason, id in (
+                ("pytest -q | Select-String passed", None, "native-output-is-text"),
+                ("pytest -q | Remove-Item", "unanalyzable", "native-output-is-not-a-file-list"),
+                (
+                    "$s=Get-Content a.txt -Raw; $s=$s.Replace('a','b'); Set-Content a.txt $s",
+                    None,
+                    "string-replacement-inside",
+                ),
+                (
+                    "(Get-Item a.txt).Replace('../outside.txt', 'backup.txt')",
+                    "not_permitted",
+                    "file-replacement-outside",
+                ),
+                ("gh api /repos/owner/repo/pulls", None, "route-is-not-a-host-read"),
+                ("rg '/api/rpc' src", None, "search-pattern-is-not-a-file"),
+                (
+                    "$p='src/a.txt'; if (Test-Path $p) { Get-Content $p }",
+                    None,
+                    "conditional-constant-inside",
+                ),
+                (
+                    "$p='../outside.txt'; if (Test-Path $p) { Get-Content $p }",
+                    "not_permitted",
+                    "conditional-constant-outside",
+                ),
+                (
+                    "$p=Join-Path .. outside.txt; Set-Content $p x",
+                    "not_permitted",
+                    "joined-path-outside",
+                ),
+                (
+                    "$c='Remove-Item'; & $c ../outside.txt",
+                    "not_permitted",
+                    "constant-cmdlet-outside",
+                ),
+                (
+                    "foreach ($p in 'src/a','../outside.txt') { Set-Content $p x }",
+                    "not_permitted",
+                    "literal-loop-outside",
+                ),
+                (
+                    "Get-ChildItem src | ForEach-Object { Get-Content $_.FullName }",
+                    None,
+                    "listing-loop-inside",
+                ),
+                (
+                    "Get-ChildItem secrets | ForEach-Object { Get-Content $_.FullName }",
+                    "deny_rule",
+                    "listing-loop-denied",
+                ),
+            )
+        ],
         # curl.exe on Windows requests fass.at for this name, other programs xn--fa-hia.at.
         pytest.param("bash", "curl -s https://faß.at/", "deny_rule", id="host-a-program-reads"),
         pytest.param(

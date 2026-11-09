@@ -222,6 +222,7 @@ class CommandOutput:
                 self._uncleaned.end()
                 raise
             self._lines.apply(update)
+            self._decoder_state = update.decoder_state
             return
         self._uncleaned.end()
 
@@ -236,8 +237,16 @@ class CommandOutput:
     def transcript(self) -> CommandTranscript:
         """The first and the last lines; the line still being written is the last."""
         head, head_cut, tail, tail_cut, total = self._lines.snapshot()
+        decoding = (
+            self._uncleaned.decoder_state() if self._uncleaned is not None else self._decoder_state
+        )
         return CommandTranscript(
-            head=head, tail=tail, total_lines=total, head_cut=head_cut, tail_cut=tail_cut
+            head=head,
+            tail=tail,
+            total_lines=total,
+            head_cut=head_cut,
+            tail_cut=tail_cut,
+            inferred_encoding=None if decoding is None else decoding.inferred_encoding,
         )
 
     def latest(self, lines: int) -> str:
@@ -298,6 +307,7 @@ async def read_log(
                 total_lines=max(lines, len(head.head) + len(tail.tail) + 1),
                 head_cut=head.head_cut,
                 tail_cut=tail.tail_cut,
+                inferred_encoding=head.inferred_encoding or tail.inferred_encoding,
             )
     except OSError, RuntimeError:
         return None
@@ -361,10 +371,13 @@ class _Uncleaned:
     """
 
     def __init__(self, lines: OutputLines, decoder_state: DecoderState | None) -> None:
-        self._decoder = CommandOutputDecoder(track_lines=False)
+        self._decoder = CommandOutputDecoder(track_lines=False, ansi_fallback=True)
         if decoder_state is not None:
             self._decoder.setstate(decoder_state)
         self._lines = lines
+
+    def decoder_state(self) -> DecoderState:
+        return self._decoder.getstate()
 
     def feed(self, data: bytes) -> None:
         self._add(self._decoder.decode(data).decode("utf-8"))

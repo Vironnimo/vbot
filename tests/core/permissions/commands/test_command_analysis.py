@@ -304,6 +304,28 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             paths=("write w/p/f.txt", "write w/p/g.txt"),
             mentions=("read w/p/h.txt",),
         ),
+        case(
+            "docker run --rm -itv./source:/app:ro image; "
+            "docker container create --mount type=bind,source=./read,target=/app,ro image; "
+            "docker run --mount type=bind,src=./write,target=/app,readonly=false image",
+            id="Docker bind sources are checked on every host",
+            paths=(
+                "write w/p/source",
+                "read w/p/source/**",
+                "read w/p/read/**",
+                "write w/p/write/**",
+            ),
+        ),
+        case(
+            "docker run --name app image tool -v ./inside:/app; "
+            "docker run --mount type=volume,source=named,target=/app image",
+            id="Docker image arguments and named volumes are not host bind mounts",
+        ),
+        case(
+            'docker run -v "$mount" image; docker run --mount "$mount" image',
+            id="computed Docker mount sources stay unresolved",
+            unresolved=("path_write",),
+        ),
         case("rm (", id="parse error is unresolved", unresolved=("command",)),
         case(
             "cd /etc && cat passwd",

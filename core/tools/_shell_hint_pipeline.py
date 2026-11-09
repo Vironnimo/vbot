@@ -17,6 +17,7 @@ from ._shell_hint_code import (
     _RUN_START,
     _calls,
     _element_program,
+    _exit_status_reads,
     _powershell_code,
     _program_at,
     _program_name,
@@ -33,7 +34,7 @@ from ._shell_hint_common import (
     _Failure,
     _scan_window,
 )
-from ._shell_hint_programs import _hint_powershell_command_not_found
+from ._shell_hint_programs import _hint_powershell_command_not_found, _hint_powershell_prompt
 
 _FIRST_COUNT = re.compile(
     r"(?:^|[ \t])-f(?:i(?:r(?:st?)?)?)?(?:[ \t]*+:[ \t]*+|[ \t]++)(\d+)", re.I
@@ -72,7 +73,7 @@ _ERROR_SOURCE = re.compile(r"\s*\nLine \|\r?\n[ \t]*(\d+) \|[ \t]*(.+)\r?\n[ \t]
 _MISSING_PATH = re.compile(r"Cannot find path ['\"]([^'\"]+)['\"] because it does not exist\.")
 
 
-def _invocations(command: str) -> list[tuple[str, str]]:
+def _invocations(command: str) -> list[tuple[str, str, int]]:
     """Read command names and unquoted arguments, excluding printed source.
 
     Resolve only an earlier, single literal assignment used with PowerShell's
@@ -82,7 +83,7 @@ def _invocations(command: str) -> list[tuple[str, str]]:
     flat = _powershell_code(command).flat
     writes = Counter(match[1].casefold() for match in _VARIABLE_WRITE.finditer(flat))
     variables: dict[str, str] = {}
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, str, int]] = []
     for left, right in _top_level_statements(flat):
         assignment = _LITERAL_ASSIGNMENT.fullmatch(command[left:right].strip())
         if assignment and flat[left:right].lstrip().startswith("$"):
@@ -94,6 +95,9 @@ def _invocations(command: str) -> list[tuple[str, str]]:
         for start, end in zip([left, *(at + 1 for at in pipes)], [*pipes, right], strict=True):
             if not flat[start:end].strip():
                 continue
+            assigned = _ASSIGNMENT.match(flat, start, end)
+            if assigned is not None:
+                start = assigned.end()
             first = _PIPELINE_PROGRAM.match(command, start, end)
             if first is None:
                 continue
@@ -106,10 +110,36 @@ def _invocations(command: str) -> list[tuple[str, str]]:
                 if _common._POWERSHELL and not flat[start:right].lstrip().startswith("&"):
                     continue
                 word = word[1:-1]
-            name = re.split(r"[/\\]", word)[-1].casefold().removesuffix(".exe")
+            name = re.sub(r"\.(exe|com|cmd|bat)$", "", re.split(r"[/\\]", word)[-1].casefold())
             if name:
-                found.append((name, flat[first.end() : end]))
+                found.append((name, flat[first.end() : end], end))
     return found
+
+
+def reads_failed_status(command: str, failed_programs: Sequence[str]) -> bool:
+    """Whether the command explicitly reads status after each named failed program.
+
+    This suppresses only the generic retry hint. Recorded failures and more
+    specific diagnostics still describe exactly what happened.
+    """
+    if not _common._POWERSHELL:
+        return False
+    reads = _exit_status_reads(command)
+    if not reads:
+        return False
+    failed: set[str] = set()
+    for entry in failed_programs:
+        name = entry.partition(" exited with code ")[0].casefold().removesuffix(".exe")
+        # npm/npx are Node scripts; the recorded selector identifies the
+        # command the Agent actually invoked, without examining program output.
+        selector = re.search(r"\((npm|npx)(?: |\))", entry) if name == "node" else None
+        failed.add(selector[1] if selector is not None else name)
+    invocations = _invocations(command)
+    for name in failed:
+        ends = [end for called, _, end in invocations if called == name]
+        if not ends or max(ends) > reads[-1]:
+            return False
+    return True
 
 
 def _own_cmdlet_error(command: str, output: str, error: re.Match[str]) -> bool:
@@ -148,7 +178,7 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
     invocations = _invocations(command)
     for error in cmdlets:
         name = error[1]
-        if any(called == name.casefold() for called, _ in invocations) and _own_cmdlet_error(
+        if any(called == name.casefold() for called, _, _ in invocations) and _own_cmdlet_error(
             command, window, error
         ):
             return (
@@ -160,7 +190,7 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
     if (
         traceback is not None
         and _PYTHON_EXCEPTION.search(window, traceback.end())
-        and any(name == "blender" and _blender_exits_zero(args) for name, args in invocations)
+        and any(name == "blender" and _blender_exits_zero(args) for name, args, _ in invocations)
     ):
         return (
             "The output contains a Python traceback despite exit code 0. Blender defaults to "
@@ -298,7 +328,7 @@ _LOCATION_CHANGE = re.compile(
     r"(?:cd|chdir|sl|Set-Location|Push-Location|pushd|Pop-Location|popd)(?:[ \t]+[^|&(){}]*+)?",
     re.IGNORECASE,
 )
-_ASSIGNMENT = re.compile(r"\$[\w:]+[ \t]*+[-+*/]?=(?!=)")
+_ASSIGNMENT = re.compile(r"[ \t]*+\$[\w:]+[ \t]*+[-+*/]?=(?!=)")
 # A statement that prints one literal string.
 _LITERAL_PRINT = re.compile(
     r"(?:(?:Write-Output|Write-Host|echo|write)[ \t]+)?(?:'[^']*+'|\"[^\"`]*+\")", re.IGNORECASE
@@ -537,6 +567,16 @@ def _hint_hidden_failure(
     if not _common._POWERSHELL or exit_code != 0:
         return None
     window = _scan_window(output)
+    prompt = _hint_powershell_prompt(
+        _Failure(command, window, None, offers, permissions=permissions)
+    )
+    if prompt is not None and (
+        any(name in ("read-host", "get-credential") for name, _, _ in _invocations(command))
+        or any(
+            _own_cmdlet_error(command, window, error) for error in _CMDLET_ERROR.finditer(window)
+        )
+    ):
+        return prompt
     missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
     if missing is not None and _calls(command, missing[1]):
         # The hint names the statement or the pipeline part that did not run.

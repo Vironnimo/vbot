@@ -13,7 +13,9 @@ from typing import Literal
 
 type PartKind = Literal["text", "variable", "dynamic"]
 type RedirectKind = Literal["read", "write"]
-type CallTargetKind = Literal["type", "new", "command", "item", "text", "other"]
+type CallTargetKind = Literal[
+    "type", "new", "command", "item", "text", "variable", "property", "paths", "other"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +37,8 @@ class Word:
     native program receives as separate arguments. ``block``: a PowerShell
     script block, whose commands are part of the same lowered script.
     ``parameter``: a PowerShell parameter token (``-Path``), with its attached
-    ``argument`` (``-Path:x``).
+    ``argument`` (``-Path:x``). ``target`` traces a bounded iteration item;
+    ``join`` is the unevaluated sequence of a constant Join-Path assignment.
     """
 
     parts: tuple[Part, ...]
@@ -47,6 +50,8 @@ class Word:
     splat: bool = False
     parameter: str | None = None
     argument: Word | None = None
+    target: CallTarget | None = None
+    join: tuple[Word, ...] | None = None
 
     @classmethod
     def literal(cls, text: str, *, source: str | None = None, glob: bool = False) -> Word:
@@ -103,6 +108,8 @@ class CallTarget:
     arguments: tuple[Word, ...] = ()
     offset: int | None = None
     feed: Pipeline | None = None
+    variable: str | None = None
+    receiver: CallTarget | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,9 +137,12 @@ class RawCommand:
     an expression names, not a command word) and an ``item``, the content of
     a provider item a variable path names (``${C:/x}``; a write when assigned
     to). ``offset`` is the PowerShell source position an entry is ordered by.
-    ``top_level`` includes eager subexpressions, but excludes conditional and
-    deferred bodies. ``output_text`` and ``output_variable`` describe expression
+    ``top_level`` says outer constants can be used here, including conditional
+    and loop bodies but excluding deferred functions and traps.
+    ``output_text`` and ``output_variable`` describe expression
     pipeline output without executing the expression.
+    ``expression_argument`` distinguishes strings passed to .NET methods
+    from standalone text when interpreting root-relative Windows paths.
     """
 
     words: list[Word]
@@ -148,6 +158,7 @@ class RawCommand:
     offset: int = -1
     call: MemberCall | None = None
     expression: Word | None = None
+    expression_argument: bool = False
     item: Redirect | None = None
     top_level: bool = False
     output_text: bool = False
@@ -156,12 +167,16 @@ class RawCommand:
 
 @dataclass(frozen=True, slots=True)
 class Assignment:
-    """One untyped, once-assigned top-level PowerShell variable, after its RHS."""
+    """A top-level assignment, after its RHS; only unique writes carry scalar values.
+
+    Text proofs also cover repeated assignments when every write stays text.
+    """
 
     name: str
     offset: int
     value: Word | None = None
     text: bool = False
+    text_from: str | None = None
 
 
 @dataclass(slots=True)
@@ -173,3 +188,4 @@ class Script:
     environment_changed: bool = False
     error: str | None = None
     assignments: list[Assignment] = field(default_factory=list)
+    functions: frozenset[str] = frozenset()

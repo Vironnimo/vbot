@@ -18,8 +18,9 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from core.permissions.commands import _paths
 from core.permissions.commands._specs import AccessKind
-from core.permissions.commands._state import Context, Listing
+from core.permissions.commands._state import Context, Listing, items
 from core.permissions.commands._syntax import CallTarget, MemberCall, RawCommand, Word
 
 if TYPE_CHECKING:
@@ -206,16 +207,12 @@ def member_call(analysis: Analysis, context: Context, raw: RawCommand) -> None:
             items = analysis.resolve_listing(context, raw, target.arguments[:1], recursive=False)
             _on_items(analysis, context, raw, call, method, items)
         return
-    listing: Listing | None = None
-    if target.kind == "command" and target.offset is not None:
-        listing = context.produced.get(target.offset)
-    elif target.kind == "item" and target.feed is not None:
-        listing = analysis.listing_before(context, target.feed)
+    if target_is_text(analysis, context, raw, target):
+        return
+    listing = target_listing(analysis, context, raw, target)
     if method is not None and listing is not None and listing.roots is not None:
         _on_items(analysis, context, raw, call, method, listing)
-    elif member in _FILE_ONLY or (
-        member in _ITEM and not _other_use(member, target, listing, call.arguments)
-    ):
+    elif member in _FILE_ONLY or (member in _ITEM and not _other_use(member, call.arguments)):
         analysis.unresolve(
             "path_write",
             raw.source,
@@ -223,18 +220,84 @@ def member_call(analysis: Analysis, context: Context, raw: RawCommand) -> None:
         )
 
 
-def _other_use(
-    member: str, target: CallTarget, listing: Listing | None, arguments: Sequence[Word]
+def target_listing(
+    analysis: Analysis, context: Context, raw: RawCommand, target: CallTarget
+) -> Listing | None:
+    """The bounded filesystem items a command, pipeline or literal loop supplies."""
+    if target.variable is not None:
+        names = {target.variable}
+        if target.variable in ("_", "psitem"):
+            names.update(("_", "psitem"))
+        if (
+            context.values_unknown
+            or bool(names & context.invalid_values)
+            or (context.value_limit is not None and raw.offset > context.value_limit)
+        ):
+            return None
+    if target.kind == "command" and target.offset is not None:
+        listing = context.produced.get(target.offset)
+        return listing if listing is not None and listing.filesystem_items else None
+    if target.kind == "item" and target.feed is not None:
+        listing = analysis.listing_before(context, target.feed)
+        return listing if listing is not None and listing.filesystem_items else None
+    if target.kind == "paths":
+        from core.permissions.commands._state import items
+
+        listing = analysis.resolve_listing(
+            context,
+            raw,
+            [item for word in target.arguments for item in items(word)],
+            recursive=False,
+        )
+        listing.filesystem_items = True
+        return listing
+    return None
+
+
+def target_is_text(
+    analysis: Analysis, context: Context, raw: RawCommand, target: CallTarget
 ) -> bool:
+    if target.kind == "text":
+        return True
+    if target.kind == "new" and target.type_name in ("string", "string[]"):
+        return True
+    if target.kind == "command" and target.offset is not None:
+        listing = context.produced.get(target.offset)
+        return listing is not None and listing.text
+    if target.kind == "paths":
+        return target_listing(analysis, context, raw, target) is not None and all(
+            analysis.literal_of(context, raw, item) is not None
+            for word in target.arguments
+            for item in items(word)
+        )
+    if (
+        target.kind == "variable"
+        and target.variable is not None
+        and context.value_scope
+        and (context.value_limit is None or raw.offset <= context.value_limit)
+    ):
+        offset = context.text_variables.get(target.variable)
+        return offset is not None and offset < raw.offset
+    if target.kind == "property" and target.receiver is not None:
+        if target.receiver.kind == "paths":
+            return False
+        if target.receiver.kind == "new" and target.receiver.type_name in (
+            "io.fileinfo",
+            "io.directoryinfo",
+        ):
+            return True
+        listing = target_listing(analysis, context, raw, target.receiver)
+        return listing is not None and listing.roots is not None
+    return False
+
+
+def _other_use(member: str, arguments: Sequence[Word]) -> bool:
     """Whether a FileInfo or DirectoryInfo method name is called on another type.
 
-    ``'a.b'.Replace('.', '/')`` on a string, ``(Get-Content f).Replace(...)``
-    on the output of a command that lists no items, ``$connection.Open()``
-    without the FileMode a file needs. ``$x.CopyTo($y, 1)`` stays a file copy:
+    ``$connection.Open()`` without the FileMode a file needs.
+    ``$x.CopyTo($y, 1)`` stays a file copy:
     PowerShell passes 1 as FileInfo.CopyTo's overwrite flag.
     """
-    if target.kind == "text" or (target.kind == "command" and listing is None):
-        return True
     return member == "open" and not arguments
 
 
@@ -252,6 +315,18 @@ def _recursive_option(arguments: Sequence[Word], index: int) -> bool:
 def expression_string(analysis: Analysis, context: Context, raw: RawCommand) -> None:
     """A string an expression names: a clear path is a read, a URL a fetch (tier B)."""
     assert raw.expression is not None
+    if raw.expression_argument and _paths.WINDOWS:
+        text = analysis.literal_of(context, raw, raw.expression)
+        root_relative = text is not None and (
+            text.startswith("\\")
+            or (text.startswith("/") and any(s in text[1:] for s in ("/", "\\")))
+        )
+        if root_relative and text is not None and "\n" not in text:
+            # Root-relative .NET arguments still name host paths. Only plain
+            # text and unknown programs get the route/regex interpretation;
+            # a lone /word keeps its existing Windows-switch interpretation.
+            analysis.access(context, raw, "read", raw.expression, glob=True, tier="a")
+            return
     analysis.tier_b(context, raw, [raw.expression])
 
 

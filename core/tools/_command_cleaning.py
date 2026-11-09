@@ -468,7 +468,7 @@ class OutputCleaner:
             self._ended = True
             self._apply(self._filter.decode(b"", final=True))
             self._lines.end()
-        return self._lines.take_update()
+        return self._lines.take_update(self._filter.decoder_state())
 
     def _apply(self, text: str) -> None:
         if not text:
@@ -512,7 +512,7 @@ class _EscapeFilter:
     """Incremental command decoding with terminal controls removed (bounded state)."""
 
     def __init__(self) -> None:
-        self._decoder = CommandOutputDecoder(track_lines=False)
+        self._decoder = CommandOutputDecoder(track_lines=False, ansi_fallback=True)
         self._state = "text"
         self._osc = False
         self._length = 0

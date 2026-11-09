@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ import pytest_asyncio
 import core.tools.shell_environment as shell_environment
 from core.permissions.commands.commands import UnresolvedElement
 from core.tools import _shell_arguments, _workdir
+from core.tools import shell as shell_module
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.update_handoff import UpdateHandoffs
 from tests.core.permissions.command_check_support import (
@@ -301,9 +303,33 @@ async def test_a_restricted_shell_starts_only_in_its_area_without_vbot_control_o
 
 
 @pytest.mark.asyncio
-async def test_full_access_runs_commands_without_analyzing_them(shell: Shell) -> None:
-    call = shell.call({"command": "vbot agent list"})
+async def test_full_access_runs_commands_without_analyzing_them(
+    shell: Shell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop_thread = threading.get_ident()
+    confined_environments: list[bool] = []
+    environment = shell_module.command_environment
+    directory = _shell_arguments.is_dir_strict
+
+    def build_environment(*args: Any, **kwargs: Any) -> Any:
+        assert threading.get_ident() != loop_thread
+        confined_environments.append(kwargs.get("confined", False))
+        return environment(*args, **kwargs)
+
+    def check_directory(path: Path) -> bool:
+        assert threading.get_ident() != loop_thread
+        return directory(path)
+
+    def inherited(name: str) -> str:
+        assert threading.get_ident() != loop_thread
+        return "public-value"
+
+    monkeypatch.setattr(shell_module, "command_environment", build_environment)
+    monkeypatch.setattr(_shell_arguments, "is_dir_strict", check_directory)
+    monkeypatch.setattr(_shell_arguments, "inherited_value", inherited)
+    call = shell.call({"command": "vbot agent list", "env_keys": ["PUBLIC"]})
     (await shell.started()).exit(0)
     assert data(await shell.returned(call))["status"] == "exited"
 
     assert shell.checker.analyzer_started is False
+    assert confined_environments == [False]

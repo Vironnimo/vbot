@@ -176,6 +176,18 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
         ("win32", ["bash", "-lc", "ls -la"], "bash -lc 'ls -la'"),
         ("win32", ["powershell", "-Command", "Get-Date"], "powershell -Command Get-Date"),
         ("win32", ["python", "-c", "print(1)"], "python -c 'print(1)'"),
+        (
+            "win32",
+            [
+                "mvn",
+                "-Dmaven.test.skip=true",
+                "-foo.bar",
+                "--foo.bar=1",
+                "-p:Configuration=Release",
+            ],
+            "mvn '-Dmaven.test.skip=true' '-foo.bar' --foo.bar=1 -p:Configuration=Release",
+        ),
+        ("win32", ["Get-Content", "-Path", "a.txt"], "Get-Content -Path a.txt"),
         ("win32", ["git", "log", "-n", "3", "--oneline"], "git log -n '3' --oneline"),
         ("win32", ["echo", "0x10", "it's"], "echo '0x10' 'it''s'"),
         # PowerShell also ends a single-quoted string at a typographic single quote.

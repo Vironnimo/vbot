@@ -30,9 +30,11 @@ from core.permissions import PermissionBoundary
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.temp_files import TemporaryFileManager, artifact_owner
+from core.tools import _command_decoding as command_decoding_module
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._interpreter_host import InterpreterHost
+from core.tools._shell_results import not_run_problem
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
     COMMAND_RETENTION_SECONDS,
@@ -141,8 +143,9 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
     ],
 )
 async def test_output_is_clean_text(
-    harness: Harness, chunks: list[bytes], lines: list[str]
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, chunks: list[bytes], lines: list[str]
 ) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: None)
     command_id, process = await harness.launch()
     assert re.fullmatch(r"cmd_[0-9a-hjkmnp-tv-z]{12}", command_id)
     for chunk in chunks:
@@ -159,10 +162,55 @@ async def test_output_is_clean_text(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ansi", [None, "cp1252"])
+@pytest.mark.parametrize("chunk_size", [1, 4096], ids=["bytewise", "whole"])
+@pytest.mark.parametrize(
+    "ansi_output", [b"pg_ctl: kein Server l\xe4uft\n", b"l\xe4"], ids=["line", "eof"]
+)
+async def test_invalid_utf8_can_use_windows_ansi_without_changing_utf_or_raw_logs(
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    ansi: str | None,
+    chunk_size: int,
+    ansi_output: bytes,
+) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: ansi)
+    raw = (
+        "utf8 ä € 😀\n".encode()
+        + b"\xff\xfe"
+        + "utf16 東京 😀\n".encode("utf-16-le")
+        + "utf8 ä € 😀\n".encode()
+        + ansi_output
+    )
+    command_id, process = await harness.launch()
+    for offset in range(0, len(raw), chunk_size):
+        process.write(raw[offset : offset + chunk_size])
+    process.exit(0)
+    report = await harness.finish(command_id)
+    assert report.transcript.head == (
+        "utf8 ä € 😀",
+        "utf16 東京 😀",
+        "utf8 ä € 😀",
+        ansi_output.decode(ansi or "utf-8", errors="replace").rstrip("\n"),
+    )
+    assert report.transcript.inferred_encoding == ansi
+    assert report.log_path is not None and report.log_path.read_bytes() == raw
+    host = InterpreterHost.in_process()
+    try:
+        recovered = await command_output_module.read_log(
+            host, report.log_path, run_blocking=run_inline
+        )
+        assert recovered is not None and recovered.transcript == report.transcript
+    finally:
+        host.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be"])
 async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
-    harness: Harness, encoding: str
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, encoding: str
 ) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: None)
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
     # The log lies in its Session's own folder, which only that Session may read.
@@ -204,7 +252,7 @@ async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be"])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be", "cp1252"])
 @pytest.mark.parametrize("advanced", [False, True], ids=["before-update", "after-update"])
 async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     harness: Harness,
@@ -213,11 +261,12 @@ async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     encoding: str,
     advanced: bool,
 ) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: "cp1252")
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
     # The first chunk ends inside a character in the current encoding. Both
     # the encoding choice and its unfinished character must survive failure.
-    mark = {"utf-8": b"", "utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}[encoding]
+    mark = {"utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}.get(encoding, b"")
     first = mark + "\x1b[1mcollected\x1b[0m 3 items\nGr".encode(encoding) + "ü".encode(encoding)[:1]
     process.write(first)
     await turns()
@@ -257,6 +306,7 @@ async def test_output_that_cannot_be_cleaned_is_kept_uncleaned_and_logged_whole(
     )
     assert log_path is not None and report.log_path == log_path
     assert log_path.read_bytes() == first + b"".join(later)
+    assert report.transcript.inferred_encoding == ("cp1252" if encoding == "cp1252" else None)
     errors = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(errors) == 1
 
@@ -843,6 +893,7 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "owned_running",
         "owned_ended",
         "owned_delivered",
+        "not_run_once",
     ],
 )
 async def test_background_checkpoint_recovers_once_after_restart(
@@ -866,7 +917,11 @@ async def test_background_checkpoint_recovers_once_after_restart(
     try:
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
-            command_id, process = await harness.launch(execution_owner=execution_owner)
+            command_id, process = await harness.launch(
+                execution_owner=execution_owner,
+                not_run_codes={9101: "request_unreadable"},
+                consumed_once_secrets=("ONE_TIME",) if outcome == "not_run_once" else (),
+            )
             if outcome == "moved_before_handoff":
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                 await sessions.move(OWNER, restored_owner)
@@ -876,7 +931,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 process.write("compiled 3 files\n")
                 await turns()
             if outcome not in running_outcomes:
-                process.exit(0)
+                process.exit(9101 if outcome == "not_run_once" else 0)
                 await harness.finish(command_id)
                 await eventually(lambda: bool(harness.sink.submissions))
             if outcome in {"delivered", "owned_delivered"}:
@@ -887,6 +942,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 harness.manager.acknowledge(command_id)
             await harness.manager.flush()
             checkpoint = sessions.background_command_read()[0]["checkpoint"]
+            if outcome == "not_run_once":
+                assert checkpoint["consumed_once_secrets"] == ["ONE_TIME"]
+                # Rebuild the delivery from durable metadata after restart.
+                checkpoint["body"] = None
         # The harness closes fake processes; restore the exact durable crash
         # boundary rather than running an actual server/process crash.
         if outcome == "running":
@@ -930,6 +989,9 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     body = restored.sink.bodies[0]
                     assert "was stopped after at least 2 minutes 5 seconds: " in body
                     assert "compiled 3 files" in body
+                if outcome == "not_run_once":
+                    body = restored.sink.bodies[0]
+                    assert "ONE_TIME" in body and "provide them again before retrying" in body
                 if outcome == "stop_after_restart":
                     assert await restored.manager.close_scope(restored_owner) == 0
                     assert restored.sink.futures[0].cancelled()
@@ -965,7 +1027,18 @@ async def test_background_checkpoint_recovers_once_after_restart(
             report = restored.manager.report(command_id)
             assert report.finished
             assert report.owner == restored_owner
-            assert report.status == ("stopped" if outcome in running_outcomes else "completed")
+            assert report.status == (
+                "stopped"
+                if outcome in running_outcomes
+                else "failed"
+                if outcome == "not_run_once"
+                else "completed"
+            )
+            if outcome == "not_run_once":
+                assert report.consumed_once_secrets == ("ONE_TIME",)
+                problem = not_run_problem(report)
+                assert problem is not None and problem[1] is False
+                assert "ONE_TIME" in problem[0]
             assert restored.manager.busy_addresses() == set()
             assert restored.launcher.processes == []
             assert not sessions.background_command_read()[0]["checkpoint"]["pending"]
