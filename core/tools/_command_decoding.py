@@ -8,7 +8,9 @@ records the lines where it interpreted UTF-16, omitted NULs or inferred a switch
 from __future__ import annotations
 
 import codecs
+import locale
 import re
+import sys
 from typing import Literal, NamedTuple
 
 # UTF-16LE text without a byte order mark counts from this many characters
@@ -27,6 +29,20 @@ _UTF16_LINE_END = {
 _RESUME_WINDOW = 256
 # What a decision reads past its position; a chunk holds it back for the next one.
 _LOOKAHEAD = _RESUME_WINDOW + 8
+_INVALID_UTF8 = re.compile(r"[\udc80-\udcff]+")
+_SINGLE_BYTE_ANSI = frozenset({"cp874", *(f"cp{number}" for number in range(1250, 1259))})
+
+
+def windows_ansi_encoding() -> str | None:
+    """The host's single-byte ANSI codec, when invalid UTF-8 can use it bytewise.
+
+    Multi-byte ANSI encodings can consume ASCII and valid UTF-8 bytes too, so
+    the invalid-byte fallback cannot distinguish their character boundaries.
+    """
+    if sys.platform != "win32":
+        return None
+    encoding = codecs.lookup(locale.getencoding()).name
+    return encoding if encoding in _SINGLE_BYTE_ANSI else None
 
 
 class DecoderState(NamedTuple):
@@ -45,6 +61,8 @@ class DecoderState(NamedTuple):
     emitted_ascii: bytes
     line: int
     after_cr: bool
+    ansi_encoding: str | None = None
+    inferred_encoding: str | None = None
 
 
 class CommandOutputDecoder:
@@ -59,13 +77,15 @@ class CommandOutputDecoder:
     ends, a complete, NUL-free UTF-8 line can start the next run. This inference
     is named in the result; an unterminated or long ambiguous suffix keeps the
     BOM's encoding. Unframed encoding switches cannot always be distinguished
-    from ordinary Unicode characters.
+    from ordinary Unicode characters. The optional ANSI fallback reads only
+    invalid UTF-8 bytes using the Windows single-byte ANSI code page, and records
+    that inference separately; valid UTF-8 and UTF-16 remain unchanged.
     Other NUL bytes are left out. ``utf16_lines`` and ``nul_lines`` record the
     lines, numbered as the renderer splits them, that held text decoded as UTF-16
     and NUL bytes left out, as ranges in ascending order.
     """
 
-    def __init__(self, *, track_lines: bool = True) -> None:
+    def __init__(self, *, track_lines: bool = True, ansi_fallback: bool = False) -> None:
         self._track_lines = track_lines
         self._buffer = b""
         # One ASCII byte already shown: it can also start a later UTF-16LE run,
@@ -84,6 +104,9 @@ class CommandOutputDecoder:
         self.utf16_lines: list[list[int]] = []
         self.nul_lines: list[list[int]] = []
         self.inferred_utf8_lines: list[list[int]] = []
+        self.ansi_lines: list[list[int]] = []
+        self._ansi_encoding = windows_ansi_encoding() if ansi_fallback else None
+        self.inferred_encoding: str | None = None
 
     def getstate(self) -> DecoderState:
         return DecoderState(
@@ -96,6 +119,8 @@ class CommandOutputDecoder:
             self._emitted_ascii,
             self.line,
             self._after_cr,
+            self._ansi_encoding,
+            self.inferred_encoding,
         )
 
     def setstate(self, state: DecoderState) -> None:
@@ -109,6 +134,8 @@ class CommandOutputDecoder:
         self._emitted_ascii = state.emitted_ascii
         self.line = state.line
         self._after_cr = state.after_cr
+        self._ansi_encoding = state.ansi_encoding
+        self.inferred_encoding = state.inferred_encoding
 
     def decode(self, data: bytes, *, final: bool = False) -> bytes:
         """Return the UTF-8 for *data*, holding back what the next bytes decide."""
@@ -219,6 +246,20 @@ class CommandOutputDecoder:
 
     def _emit_utf8(self, data: bytes, out: list[bytes]) -> None:
         if not data.isascii():
+            if self._ansi_encoding is not None:
+                text = data.decode("utf-8", errors="surrogateescape")
+                start = 0
+                for match in _INVALID_UTF8.finditer(text):
+                    self._emit(text[start : match.start()].encode(), out, utf16=False)
+                    raw = match[0].encode("utf-8", errors="surrogateescape")
+                    fallback = raw.decode(self._ansi_encoding, errors="replace")
+                    inferred = fallback != "\ufffd" * len(raw)
+                    if inferred:
+                        self.inferred_encoding = self._ansi_encoding
+                    self._emit(fallback.encode(), out, utf16=False, ansi=inferred)
+                    start = match.end()
+                self._emit(text[start:].encode(), out, utf16=False)
+                return
             data = data.decode("utf-8", errors="replace").encode()
         self._emit(data, out, utf16=False)
 
@@ -233,7 +274,7 @@ class CommandOutputDecoder:
                 add_line_range(self.nul_lines, self.line, self.line)
             self._emit(part.encode(), out, utf16=True)
 
-    def _emit(self, data: bytes, out: list[bytes], *, utf16: bool) -> None:
+    def _emit(self, data: bytes, out: list[bytes], *, utf16: bool, ansi: bool = False) -> None:
         """Append *data* and count its lines as the renderer splits them."""
         if not data:
             return
@@ -258,6 +299,9 @@ class CommandOutputDecoder:
         elif self._inferred_utf8:
             last = self.line - 1 if data.endswith((b"\n", b"\r")) else self.line
             add_line_range(self.inferred_utf8_lines, first, last)
+        if ansi:
+            last = self.line - 1 if data.endswith((b"\n", b"\r")) else self.line
+            add_line_range(self.ansi_lines, first, last)
         self._after_cr = data.endswith(b"\r")
         out.append(data)
 

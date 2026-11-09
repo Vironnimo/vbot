@@ -64,7 +64,7 @@ Shell environment (`core/tools/_shell_arguments.py`, `shell.py`):
 - `env_keys` accepts the caller's Secret names and field variables (`environment_names`): a Secret name sets every field, as `NAME` for a one-field Secret and `NAME_<FIELD>` otherwise; one field's variable (`GITHUB_PASSWORD`) sets that field. A granted credential keeps precedence over a Secret name.
 - An `env` value that is exactly one reference becomes that value.
 - A reference in `command`, or inside an `env` value with other text, refuses the call before it runs (`invalid_arguments`, naming both ways): command lines reach process listings and shell history. An escaped reference there runs as the reference text.
-- Resolution runs on a worker after the call is parsed; a refusal is `secret_unavailable`. A granted credential a command received through `env_keys` is remembered for masking.
+- Resolution runs on a worker after the call is parsed, without consumption; a refusal is `secret_unavailable`. The shell consumes only after environment/PATH preparation and workdir validation; it rechecks dynamic source/TOTP values, then fresh Permission Rules after worker admission, immediately before launch. A later launch failure names any spent one-time Secrets and disables an automatic retry until renewed. Reports and background checkpoints retain only the consumed Secret names, so shell bootstrap refusals keep that guidance in foreground results, background status and recovered deliveries. A granted credential a command received through `env_keys` is remembered for masking.
 
 ## Masking
 

@@ -40,6 +40,7 @@ from core.tools.shell_hints import (
     HINT_TOOL_NAMES,
     annotate_failure,
     ended_jobs_hint,
+    reads_failed_status,
     without_closed_pipes,
 )
 from core.tools.tools import (
@@ -52,6 +53,7 @@ from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 from ._shell_arguments import _missing_workdir, _ShellCall
+from ._shell_hint_code import _pipeline_code, _top_level_split, _top_level_statements
 
 _LOGGER = get_logger("tools.shell")
 
@@ -86,6 +88,8 @@ _HOLDING_STAGE = re.compile(
     r"|Out-String(?=[ \t);}]|$)(?![^|;\n]*-Stream)[^|;\n]*)",
     re.IGNORECASE | re.MULTILINE,
 )
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+_PIPELINE_BREAK = re.compile(r"&&|\|\||(?<![&<>])&(?![&>])")
 
 
 # Tools a text may name
@@ -305,8 +309,26 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     Only the shell's own report counts (``CommandReport.not_run``): an exit code
     alone, such as a reserved one, can be the command's.
     """
+    problem = _not_run_problem(report)
+    if problem is None or not report.consumed_once_secrets:
+        return problem
+    return f"{problem[0]} {consumed_secrets_note(report.consumed_once_secrets)}", False
+
+
+def consumed_secrets_note(names: tuple[str, ...]) -> str:
+    """Why a failed launch needs fresh one-time Secrets before a retry."""
+    return (
+        f"One-time Secrets {', '.join(names)} were used up while preparing this launch. "
+        "Ask the user to provide them again before retrying."
+    )
+
+
+def _not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     if report.not_run == "request_unreadable":
-        return f"vBot could not pass the command to the shell. {RUN_AGAIN}", True
+        problem = "vBot could not pass the command to the shell."
+        if not report.consumed_once_secrets:
+            problem += f" {RUN_AGAIN}"
+        return problem, True
     if report.not_run == "language_mode_unavailable":
         return (
             "PowerShell's language mode prevents vBot from starting the command. Tell the user.",
@@ -371,6 +393,8 @@ def ended_result(
     output = command_output_text(report)
     if output:
         data["output"] = output
+    if encoding := output_encoding_note(report):
+        data["notes"] = [encoding]
     failed = failed_programs(report)
     if failed:
         data["failed_programs"] = list(failed)
@@ -422,6 +446,17 @@ def counted_failures(report: CommandReport) -> tuple[str, ...]:
     return without_closed_pipes(report.command, report.failed_programs)
 
 
+def output_encoding_note(report: CommandReport) -> str | None:
+    """Name inferred decoding without changing or describing the raw log's completeness."""
+    encoding = report.transcript.inferred_encoding
+    if encoding is None:
+        return None
+    return (
+        f"Some output bytes were not valid UTF-8 and were read as {encoding}; "
+        "this encoding is inferred."
+    )
+
+
 def failure_hint(
     report: CommandReport,
     output: str,
@@ -457,7 +492,12 @@ def failure_hint(
         output_lines=report.transcript.total_lines,
         permissions=permissions,
     )
-    if hint is None and report.exit_code == 0 and failed:
+    if (
+        hint is None
+        and report.exit_code == 0
+        and failed
+        and not reads_failed_status(report.command, failed)
+    ):
         # The shell's success does not establish the outcome of its programs.
         hint = (
             "The shell exited with code 0, but the listed programs exited with errors. "
@@ -568,17 +608,36 @@ def _omission(lines: int, chars: int, *, earlier: bool = False) -> str:
 
 
 def holding_stage(command: str) -> str | None:
-    """The last pipeline stage of *command* that holds its input until it ends.
+    """A holding stage in the final top-level pipeline of *command*.
 
     Agents piped test runs into ``Select-Object -Last 25``: running in the
     background or stopped, the result showed no output, and they stopped
     commands that worked. The last such stage, since commands run their long
     step last, after quick preparations.
     """
-    stages = [match["stage"] for match in _HOLDING_STAGE.finditer(command)]
+    flat = _pipeline_code(command, powershell=_WINDOWS)
+    if not _WINDOWS and "<<" in flat:
+        return None  # heredoc payloads cannot establish a pipeline stage
+    statements = _top_level_statements(flat)
+    if not statements:
+        return None
+    start, end = statements[-1]
+    for position in _top_level_split(flat, start, end, _PIPELINE_BREAK):
+        if flat[position : position + 2] in ("&&", "||"):
+            start = position + 2
+            continue
+        before = flat[start:position].rstrip()
+        if before.endswith("|") or (_WINDOWS and (not before or before.endswith("="))):
+            continue  # a call operator, or POSIX's |& pipeline
+        start = position + 1  # the preceding pipeline runs in the background
+    stages = [
+        command[match.start("stage") : match.end("stage")]
+        for position in _top_level_split(flat, start, end, _PIPE)
+        if (match := _HOLDING_STAGE.match(flat, position, end)) is not None
+    ]
     if not stages:
         return None
-    stage = stages[-1].split(")", 1)[0].split("}", 1)[0].strip()
+    stage = stages[-1].strip()
     return stage if len(stage) <= 60 else f"{stage[:57]}..."
 
 
@@ -665,7 +724,7 @@ def format_command_delivery(
     """
     not_run = not_run_problem(report)
     if not_run is not None:
-        return (
+        return _delivery_text(
             f"{COMMAND_STATUS_NOTE_MARKER}{report.command_id} ({report.label}) did not run: "
             f"{not_run[0]}"
         )
@@ -690,26 +749,46 @@ def format_command_delivery(
         lines.append(f"Exit code (hex): {hexadecimal}")
     if report.description:
         # The label names the purpose; the Agent needs the exact command too.
-        lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
+        lines.extend(
+            ("Command:", *_fenced_delivery_text(_capped(report.command, _DELIVERY_COMMAND_CHARS)))
+        )
     output = command_output_text(report)
     hint = failure_hint(report, output, names, permissions=permissions)
     if hint is not None:
-        lines.append(f"Hint: {hint}")
+        lines.append(_delivery_text(f"Hint: {hint}"))
     failed = failed_programs(report)
     if failed:
-        lines.append(f"Failed programs: {'; '.join(failed)}.")
+        lines.append(_delivery_text(f"Failed programs: {'; '.join(failed)}."))
+    if encoding := output_encoding_note(report):
+        lines.append(_delivery_text(f"Note: {encoding}"))
     if report.still_running:
         lines.append(
-            f"Processes it started still run: {processes_text(report.still_running)}. "
-            f"{leftovers_stop(report, names)}"
+            _delivery_text(
+                f"Processes it started still run: {processes_text(report.still_running)}. "
+                f"{leftovers_stop(report, names)}"
+            )
         )
-    lines.append("Output:" if output else "Output: (none)")
+    lines.append("Command output:" if output else "Command output: (none)")
     if output:
-        lines.append(output)
+        lines.extend(_fenced_delivery_text(output))
     location = output_location(report, output)
     if location is not None:
-        lines.append(location)
+        lines.append(_delivery_text(location))
     return "\n".join(lines)
+
+
+def _fenced_delivery_text(text: str) -> tuple[str, str, str]:
+    # Source and output remain exact. A longer fence than any backtick run
+    # means neither can introduce a section marker or a completion header.
+    longest = max((len(run[0]) for run in re.finditer(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return fence, text, fence
+
+
+def _delivery_text(text: str) -> str:
+    # Other metadata keeps its prose, with continuation lines visibly nested
+    # under their field instead of becoming section markers or headers.
+    return "\n  ".join(text.splitlines())
 
 
 def _capped(text: str, limit: int) -> str:
@@ -723,10 +802,10 @@ def _capped(text: str, limit: int) -> str:
 COMMAND_STATUS_TOOL_NAMES = (SHELL_TOOL_NAME, BACKGROUND_TASKS_TOOL_NAME)
 COMMAND_STATUS_NOTE_MARKER = "The background command "
 _DELIVERY_STATUS = re.compile(
-    r"The background command (?P<command>cmd_[a-z0-9]+) \(.*?\) "
+    r"The background command (?P<command>cmd_[a-z0-9]+) \(.*\) "
     r"(?:exited with code (?P<code>-?\d+) after [^.]*\."
     r"|exited after [^;]*; its exit code is unknown\."
-    r"|did not run:"
+    r"|(?P<not_run>did not run:)"
     r"|(?P<stopped>was stopped) after [^:]*:)"
 )
 
@@ -747,9 +826,43 @@ def background_command_statuses(records: Sequence[Any]) -> JsonObject:
         if role == "tool" and getattr(record, "name", None) in COMMAND_STATUS_TOOL_NAMES:
             _fold_result(statuses, content)
         elif role == "note":
-            for match in _DELIVERY_STATUS.finditer(content):
-                statuses[match["command"]] = _delivered_status(match)
+            _fold_delivery(statuses, content)
     return statuses
+
+
+def _fold_delivery(statuses: JsonObject, content: str) -> None:
+    """Read framed deliveries, never headers a command printed in its output.
+
+    Older bodies did not delimit source or output. After either field there
+    is no reliable way to distinguish more deliveries from literal text, so
+    the remainder cannot establish another status.
+    """
+    lines = iter(content.splitlines())
+    in_delivery = False
+    fence: str | None = None
+    fence_ends_delivery = False
+    for line in lines:
+        if fence is not None:
+            if line == fence:
+                fence = None
+                in_delivery = not fence_ends_delivery
+            continue
+        if in_delivery:
+            if line in ("Output: (none)", "Command output: (none)"):
+                in_delivery = False
+            elif line in ("Command:", "Command output:"):
+                opener = next(lines, "")
+                if re.fullmatch(r"`{3,}", opener) is None:
+                    return
+                fence = opener
+                fence_ends_delivery = line == "Command output:"
+            elif line == "Output:" or line.startswith("Command:"):
+                return
+            continue
+        match = _DELIVERY_STATUS.match(line)
+        if match is not None:
+            statuses[match["command"]] = _delivered_status(match)
+            in_delivery = not bool(match["not_run"])
 
 
 def _delivered_status(match: re.Match[str]) -> str:
@@ -792,6 +905,7 @@ __all__ = [
     "ToolNames",
     "background_command_statuses",
     "command_output_text",
+    "consumed_secrets_note",
     "delivery_names",
     "duration",
     "ended_result",
@@ -807,6 +921,7 @@ __all__ = [
     "named_tools",
     "not_run_problem",
     "output_location",
+    "output_encoding_note",
     "process_text",
     "processes_text",
     "running_output_note",

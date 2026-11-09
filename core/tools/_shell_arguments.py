@@ -234,7 +234,13 @@ def _host_shell_script(argv: list[str]) -> str | None:
 def _powershell_command_line(argv: list[str]) -> str:
     """Quote argv for PowerShell 7, which passes each quoted token as one argument."""
     tokens = [
-        item if _PWSH_BARE_ARGUMENT.fullmatch(item) else powershell_literal(item) for item in argv
+        item
+        if _PWSH_BARE_ARGUMENT.fullmatch(item)
+        # A single-dash token with a dot becomes two PowerShell arguments:
+        # -Dkey.name=value is parsed as -Dkey and .name=value.
+        and not (item.startswith("-") and not item.startswith("--") and "." in item)
+        else powershell_literal(item)
+        for item in argv
     ]
     if tokens[0].startswith("'"):
         tokens.insert(0, "&")

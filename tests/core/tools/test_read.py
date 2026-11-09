@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import core.tools._command_decoding as command_decoding_module
 import core.tools._read_text as read_text_module
 import core.tools.read as read_module
 import core.tools.read_extract as read_extract_module
@@ -579,6 +580,7 @@ async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     utf16_lines: str | None,
     nul: bool,
 ) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: None)
     # The data directory is beside the workspace.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -620,6 +622,33 @@ async def test_a_command_log_reads_as_the_text_its_programs_wrote(
     assert f"\n{selected}| {lines[selected - 1]}" in found
     assert ("decoded as UTF-16" in found) == (selected in utf16_numbers)
     assert log.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+async def test_command_log_ansi_inference_is_scoped_to_shown_lines_and_command_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(command_decoding_module, "windows_ansi_encoding", lambda: "cp1252")
+    monkeypatch.setattr(read_text_module, "_DECODING_CHUNK_BYTES", 1)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    logs = make_context(workspace).data_root / "artifacts" / "temp" / "commands"
+    logs.mkdir(parents=True)
+    path = logs / "output.log"
+    raw = "utf8 ä\n".encode() + b"pg_ctl: kein Server l\xe4uft\n" + b"last\n"
+    path.write_bytes(raw)
+    for window in ({}, {"offset": 2, "limit": 1}, {"pattern": "läuft"}):
+        shown = content(await read(workspace, {"path": str(path), **window}))
+        assert "cp1252" in shown.splitlines()[0]
+        assert "2| pg_ctl: kein Server läuft" in shown
+    for window in ({"offset": -1}, {"limit": 1}):
+        assert "cp1252" not in content(await read(workspace, {"path": str(path), **window}))
+    explicit = content(await read(workspace, {"path": str(path), "encoding": "utf-8"}))
+    assert "cp1252" not in explicit and "2| pg_ctl: kein Server l\ufffduft" in explicit
+    ordinary = workspace / "ordinary.txt"
+    ordinary.write_bytes(raw)
+    assert content(await read(workspace, {"path": str(ordinary)})) == explicit
+    assert path.read_bytes() == raw
 
 
 @pytest.mark.asyncio

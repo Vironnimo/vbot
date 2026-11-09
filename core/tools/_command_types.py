@@ -99,6 +99,8 @@ class CommandTranscript:
     total_lines: int
     head_cut: int = 0
     tail_cut: int = 0
+    # A non-UTF encoding inferred for invalid UTF-8 bytes in this text view.
+    inferred_encoding: str | None = None
 
     @property
     def omitted_lines(self) -> int:
@@ -169,6 +171,9 @@ class CommandReport:
     # PowerShell background jobs (``&``, ``Start-Job``) the shell ended as it
     # exited; their hosts are no failed programs (Windows only).
     jobs_ended: bool = False
+    # Names only: one-time Secrets consumed for this launch, including a shell
+    # bootstrap that never ran the command. Kept for honest retry guidance.
+    consumed_once_secrets: tuple[str, ...] = ()
 
     @property
     def status(self) -> CommandStatus:

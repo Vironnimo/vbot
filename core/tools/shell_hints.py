@@ -26,6 +26,7 @@ from ._shell_hint_pipeline import (
     _hint_waiting_for_background,
 )
 from ._shell_hint_pipeline import ended_jobs_hint as ended_jobs_hint
+from ._shell_hint_pipeline import reads_failed_status as reads_failed_status
 from ._shell_hint_pipeline import sleeps as sleeps
 from ._shell_hint_pipeline import without_closed_pipes as without_closed_pipes
 from ._shell_hint_programs import (
@@ -191,6 +192,7 @@ __all__ = [
     "HINT_TOOL_NAMES",
     "annotate_failure",
     "ended_jobs_hint",
+    "reads_failed_status",
     "sleeps",
     "without_closed_pipes",
 ]

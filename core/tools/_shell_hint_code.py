@@ -55,6 +55,7 @@ class _PowerShellCode:
     escaped_ends: tuple[int, ...] = ()
     flat: str = ""
     double_strings: tuple[tuple[int, int], ...] = ()
+    expandable_strings: tuple[tuple[int, int], ...] = ()
 
     @property
     def escaped_end(self) -> int | None:
@@ -76,6 +77,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
     escaped_ends: list[int] = []
     end = len(command)
     double_strings: list[tuple[int, int]] = []
+    expandable_strings: list[tuple[int, int]] = []
 
     def blank(start: int, stop: int) -> None:
         for index in range(start, min(stop, end)):
@@ -114,6 +116,8 @@ def _powershell_code(command: str) -> _PowerShellCode:
             close = re.compile(rf"\n[{kind}]@").search(command, opener.end())
             stop = end if close is None else close.start()
             blank(opener.end(), stop)
+            if opener[1] in _DOUBLE_QUOTES:
+                expandable_strings.append((opener.end(), stop))
             position = end if close is None else close.end()
         else:
             single = char in _SINGLE_QUOTES
@@ -131,6 +135,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
             blank(start + 1, stop)
             if not single and stop < end:
                 double_strings.append((start, stop))
+                expandable_strings.append((start + 1, stop))
             if early_end is None and stop < end and char in "'\"" and command[stop] != char:
                 early_end = (start, stop)
             if (
@@ -143,8 +148,74 @@ def _powershell_code(command: str) -> _PowerShellCode:
                 escaped_ends.append(stop)
             position = stop + 1
     return _PowerShellCode(
-        "".join(code), early_end, tuple(escaped_ends), "".join(flat), tuple(double_strings)
+        "".join(code),
+        early_end,
+        tuple(escaped_ends),
+        "".join(flat),
+        tuple(double_strings),
+        tuple(expandable_strings),
     )
+
+
+_EXIT_STATUS_VARIABLE = re.compile(r"\$(?:LASTEXITCODE\b|\?|\{(?:LASTEXITCODE|\?)\})", re.I)
+_EXIT_STATUS_ASSIGNMENT = re.compile(r"[ \t]*=(?!=)")
+
+
+def _exit_status_reads(command: str) -> list[int]:
+    """Offsets of PowerShell exit-status reads, including expandable strings."""
+    code = _powershell_code(command)
+    spans = iter(code.expandable_strings)
+    span = next(spans, None)
+    found: list[int] = []
+    for match in _EXIT_STATUS_VARIABLE.finditer(command):
+        offset = match.start()
+        while span is not None and span[1] <= offset:
+            span = next(spans, None)
+        in_string = span is not None and span[0] <= offset < span[1]
+        if not in_string and code.flat[offset] != "$":
+            continue
+        escaped = offset
+        while escaped and command[escaped - 1] == "`":
+            escaped -= 1
+        if (offset - escaped) % 2:
+            continue
+        if not in_string and _EXIT_STATUS_ASSIGNMENT.match(code.flat, match.end()):
+            continue  # setting a status is not reading the program's outcome
+        found.append(offset)
+    return found
+
+
+def _pipeline_code(command: str, *, powershell: bool) -> str:
+    """Code only for a pipeline diagnostic, preserving offsets in both host shells."""
+    if powershell:
+        flat = list(_powershell_code(command).flat)
+        for escape in re.finditer(r"`[\s\S]", "".join(flat)):
+            flat[escape.start() : escape.end()] = "  "
+        return "".join(flat)
+    flat = list(command)
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'":
+            flat[index : index + 2] = " " * len(flat[index : index + 2])
+            index += 2
+            continue
+        if quote is not None:
+            flat[index] = " "
+            if char == quote:
+                quote = None
+        elif char in "'\"`":
+            quote = char
+            flat[index] = " "
+        elif char == "#" and (not index or command[index - 1] in _TOKEN_BOUNDARY):
+            stop = command.find("\n", index)
+            stop = len(command) if stop < 0 else stop
+            flat[index:stop] = " " * (stop - index)
+            index = stop
+            continue
+        index += 1
+    return "".join(flat)
 
 
 # A stage that closes the output of the commands before it in its pipeline once

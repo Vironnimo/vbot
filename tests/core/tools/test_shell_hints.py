@@ -1290,6 +1290,18 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         ),
         # An error read from a log is data, even when it names the reading cmdlet.
         (
+            "$answer = read-host 'Name'; 'continued'",
+            "Read-Host: PowerShell is in NonInteractive mode. Read and Prompt functionality "
+            "is not available.\ncontinued",
+            (),
+        ),
+        (
+            "Get-Content 'errors.log'",
+            "Read-Host: PowerShell is in NonInteractive mode. Read and Prompt functionality "
+            "is not available.",
+            None,
+        ),
+        (
             "Get-Content 'errors.log'",
             "Get-Content: Cannot find path 'C:\\work\\missing.txt' because it does not exist.",
             None,

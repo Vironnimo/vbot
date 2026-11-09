@@ -42,6 +42,7 @@ from core.tools._shell_results import (
     _start_failure,
     background_command_statuses,
     command_output_text,
+    consumed_secrets_note,
     delivery_names,
     duration,
     ended_result,
@@ -50,12 +51,15 @@ from core.tools._shell_results import (
     holding_stage,
     named_tools,
     not_run_problem,
+    output_encoding_note,
     running_output_note,
     running_output_text,
     silence_note,
     stop_with,
 )
+from core.tools._tool_context import ToolApprovalCancelledError
 from core.tools._tool_display import display_notice, display_text
+from core.tools._tool_workers import run_tool_worker, run_tool_worker_guarded
 from core.tools.command_manager import (
     CommandCheckpointError,
     CommandManager,
@@ -261,7 +265,8 @@ class ShellTool:
         confined = context.permissions.restricted
         # A confined command gets a credential vBot knows only as a granted one.
         withheld = self._credential_names() if confined else frozenset[str]()
-        call = _parse_call(
+        call = await run_tool_worker(
+            _parse_call,
             context,
             arguments,
             self._projects,
@@ -277,12 +282,12 @@ class ShellTool:
             ),
         )
         scratch = await self._scratch(context)
-        if confined or self._checker is not None:
+        if confined:
             # Before any Agent Secret is used and before the handoff token exists.
             await self._check_permissions(context, call, scratch, withheld, arguments)
-        validate_workdir(context, arguments, call.workdir)
+        await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         if self._review_shell is not None:
-            reviewed_cwd = call.workdir.resolve()
+            reviewed_cwd = await run_tool_worker(call.workdir.resolve)
             public_environment = {**call.variables, **dict(call.secret_variables)}
             approved = await self._review_shell(
                 context,
@@ -298,7 +303,7 @@ class ShellTool:
                     f"{SHELL_MODEL_NAME} was not run: the command was not approved.",
                 )
             await context.revalidate_permissions()
-            if call.workdir.resolve() != reviewed_cwd:
+            if await run_tool_worker(call.workdir.resolve) != reviewed_cwd:
                 raise ToolContractError(
                     "The command's paths changed while the Tool was waiting. Call it again."
                 )
@@ -306,9 +311,9 @@ class ShellTool:
                 raise ToolContractError(
                     "Permission Rules changed while the command was prepared. Call it again."
                 )
-            validate_workdir(context, arguments, call.workdir)
+            await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         try:
-            secret_environment = await self._secret_environment(context, call)
+            secret_environment, secret_uses = await self._secret_environment(context, call)
         except SecretUseError as error:
             return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
         await context.revalidate_permissions()
@@ -316,12 +321,19 @@ class ShellTool:
             raise ToolContractError(
                 "Permission Rules changed while the command was prepared. Call it again."
             )
-        validate_workdir(context, arguments, call.workdir)
         # A restricted Session cannot reach the server to use an update handoff.
         handoff = None if confined else _issue_update_handoff(self._update_handoffs, context)
         try:
             command_id = await self._start(
-                context, call, handoff, names, secret_environment, scratch, withheld
+                context,
+                arguments,
+                call,
+                handoff,
+                names,
+                secret_environment,
+                secret_uses,
+                scratch,
+                withheld,
             )
         except _NotStartedError as failure:
             if handoff is not None:
@@ -360,6 +372,8 @@ class ShellTool:
     ) -> None:
         """Authorize the whole command before secrets or launch."""
         boundary = context.permissions
+        if not boundary.restricted:
+            return
         if self._checker is None:
             raise PermissionDenied(
                 boundary.refusal(
@@ -369,7 +383,7 @@ class ShellTool:
                     detail="this vBot cannot analyze commands to check them",
                 )
             )
-        environment = await asyncio.to_thread(
+        environment = await run_tool_worker(
             partial(
                 command_environment,
                 None,
@@ -390,11 +404,13 @@ class ShellTool:
             workdir_parameter=True,
         )
 
-    async def _secret_environment(self, context: ToolContext, call: _ShellCall) -> dict[str, str]:
-        """The variables of the Agent Secrets this call names; blocking sources run off-loop."""
+    async def _secret_environment(
+        self, context: ToolContext, call: _ShellCall
+    ) -> tuple[dict[str, str], list[SecretUse]]:
+        """Resolve Secret variables without spending them; blocking sources run off-loop."""
         secrets = self._secrets
         if secrets is None or not (call.secret_keys or call.secret_variables):
-            return {}
+            return {}, []
 
         passed_only = context.subagent_session
 
@@ -420,17 +436,9 @@ class ShellTool:
                     consume=False,
                 )
                 uses.extend(found_uses)
-            secrets.consume(
-                SessionAddress(context.project_id, context.agent_id, context.session_id),
-                uses,
-                passed_only=passed_only,
-            )
             return variables, uses
 
-        variables, uses = await asyncio.to_thread(resolve)
-        if uses:
-            context.record_secret_uses(describe_uses(uses))
-        return variables
+        return await run_tool_worker(resolve)
 
     async def _background_result(
         self,
@@ -467,10 +475,12 @@ class ShellTool:
     async def _start(
         self,
         context: ToolContext,
+        arguments: JsonObject,
         call: _ShellCall,
         handoff: UpdateHandoffGrant | None,
         names: ToolNames,
         secret_environment: dict[str, str],
+        secret_uses: list[SecretUse],
         scratch: ScratchFolder | None,
         withheld: Container[str],
     ) -> str:
@@ -499,12 +509,17 @@ class ShellTool:
             return _shell_start(call, environment)
 
         confined = context.permissions.restricted
-        start = await asyncio.to_thread(prepare)
-        await context.revalidate_permissions()
-        if context.permissions.restricted != confined:
-            raise ToolContractError(
-                "Permission Rules changed while the command was prepared. Call it again."
-            )
+        start = await run_tool_worker(prepare)
+
+        async def authorize_launch() -> None:
+            await context.revalidate_permissions()
+            if context.permissions.restricted != confined:
+                raise ToolContractError(
+                    "Permission Rules changed while the command was prepared. Call it again."
+                )
+
+        await authorize_launch()
+        await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         # Output can arrive before the launch returns the command's id.
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
@@ -517,6 +532,41 @@ class ShellTool:
                 {"tool_call_id": context.tool_call_id, "command_id": command_id, "output": output},
             )
 
+        if self._secrets is not None and secret_uses:
+            secrets = self._secrets
+
+            def consume() -> None:
+                if context.is_cancelled():
+                    raise asyncio.CancelledError
+                if context.was_cancelled_by_user():
+                    raise ToolApprovalCancelledError
+                secrets.consume(
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
+                    secret_uses,
+                    passed_only=context.subagent_session,
+                )
+
+            try:
+                await run_tool_worker(secrets.validate_prepared_values, secret_uses)
+                await run_tool_worker_guarded(authorize_launch, consume)
+            except SecretUseError as error:
+                started.cancel()
+                raise _NotStartedError(
+                    tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
+                ) from error
+            except BaseException:
+                started.cancel()
+                raise
+            context.record_secret_uses(describe_uses(secret_uses))
+        else:
+            await authorize_launch()
+        spent = tuple(
+            dict.fromkeys(
+                use.name
+                for use in secret_uses
+                if use.secret is not None and use.secret.lifetime == "once"
+            )
+        )
         try:
             handle = await self._commands.launch(
                 CommandOwner(context.project_id, context.agent_id, context.session_id),
@@ -538,10 +588,15 @@ class ShellTool:
                 request=start.request.data if start.request is not None else None,
                 warm=start.warm,
                 not_run_codes=start.request.not_run_codes if start.request is not None else None,
+                consumed_once_secrets=spent,
             )
         except (OSError, CommandManagerError) as error:
             started.cancel()
-            raise _NotStartedError(_start_failure(error, call, context, names)) from error
+            result = await run_tool_worker(_start_failure, error, call, context, names)
+            if spent:
+                result["error"]["message"] += f" {consumed_secrets_note(spent)}"
+                result["error"]["retryable"] = False
+            raise _NotStartedError(result) from error
         except BaseException:
             started.cancel()
             raise
@@ -709,7 +764,9 @@ def _result(
             report, names, reason=reason, wait_seconds=call.wait_seconds, idle=idle
         )
     if call.notes:
-        data["notes"] = list(call.notes)
+        data.setdefault("notes", []).extend(call.notes)
+    if not report.ended and (encoding_note := output_encoding_note(report)) is not None:
+        data.setdefault("notes", []).append(encoding_note)
     if recovery_failed:
         data.setdefault("notes", []).append(
             "vBot could not save recovery state for this command. The command has already "

@@ -127,7 +127,7 @@ class _LogDecoding:
         self._decoders: list[CommandOutputDecoder] = []
 
     def open(self, resolved: Path) -> _LogBytes:
-        decoder = CommandOutputDecoder()
+        decoder = CommandOutputDecoder(ansi_fallback=True)
         self._decoders.append(decoder)
         return _LogBytes(resolved.open("rb", buffering=0), decoder)
 
@@ -140,6 +140,7 @@ class _LogDecoding:
         utf16 = _lines_in(decoder.utf16_lines, shown)
         nul = _lines_in(decoder.nul_lines, shown)
         inferred = _lines_in(decoder.inferred_utf8_lines, shown)
+        ansi = _lines_in(decoder.ansi_lines, shown)
         sentences = []
         if utf16:
             subject, plural = _name_lines(utf16, "Line")
@@ -154,6 +155,13 @@ class _LogDecoding:
             sentences.append(
                 f"{subject} {verb} read as UTF-8 after UTF-16; this encoding change is inferred. "
                 'For a single UTF-16 stream, pass encoding="utf-16".'
+            )
+        if ansi:
+            subject, plural = _name_lines(ansi, "Line")
+            verb = "contain" if plural else "contains"
+            sentences.append(
+                f"{subject} {verb} bytes read as {decoder.inferred_encoding} because they "
+                "were not valid UTF-8; this encoding is inferred."
             )
         return f"[{' '.join(sentences)}]" if sentences else None
 

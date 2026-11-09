@@ -121,6 +121,7 @@ class CommandRecord:
         log_lease: TemporaryFileLease | None,
         services: CommandServices,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
+        consumed_once_secrets: tuple[str, ...] = (),
     ) -> None:
         self.command_id = command_id
         self.owner = owner
@@ -139,6 +140,7 @@ class CommandRecord:
         self._log_lease = log_lease
         self._services = services
         self._not_run_codes = dict(not_run_codes or {})
+        self._consumed_once_secrets = consumed_once_secrets
         self.started_at = services.monotonic()
         # When the last output arrived; None before the first.
         self._output_at: float | None = None
@@ -297,6 +299,7 @@ class CommandRecord:
             ),
             log_loss=log_loss,
             jobs_ended=facts is not None and facts.jobs_ended > 0,
+            consumed_once_secrets=self._consumed_once_secrets,
         )
 
     def latest(self, lines: int) -> str:

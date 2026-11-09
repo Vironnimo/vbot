@@ -49,6 +49,7 @@ from core.tools._shell_results import (
     exit_code_text,
     lost_output,
     named_tools,
+    output_encoding_note,
     output_location,
     process_text,
     processes_text,
@@ -343,6 +344,8 @@ class BackgroundTasksTool:
         output = running_output_text(report)
         if output:
             data["output"] = output
+        if encoding := output_encoding_note(report):
+            data["notes"] = [encoding]
         checks = self._count_check(report.command_id)
         if subagent is None and checks >= _CHECKS_NAMED:
             # Agents checked one command dozens of times, seconds apart.
@@ -426,7 +429,7 @@ class BackgroundTasksTool:
                     )
             context.add_display_notice("info", f"Stopped {report.label}.")
         if notes:
-            data["notes"] = notes
+            data["notes"] = [*notes, *data.get("notes", [])]
         return data
 
     def _acknowledge_when_persisted(self, context: ToolContext, command_id: str) -> None:
