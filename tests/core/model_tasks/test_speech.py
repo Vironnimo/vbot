@@ -697,3 +697,47 @@ def _webm_audio_bytes() -> bytes:
         source.close()
         target.close()
     return output.getvalue()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivered", [False, True])
+async def test_synthesis_falls_back_only_before_delivering_audio(tmp_path, delivered):
+    from core.model_tasks import TaskModelBinding
+    from tests.core.model_tasks.test_task_execution import _StubModelTasks
+
+    backup = TaskModelBinding(TASK_TEXT_TO_SPEECH, "local/backup", {"voice": "backup"})
+    primary = TaskModelBinding(
+        TASK_TEXT_TO_SPEECH, "local/primary", {"voice": "primary"}, (backup,)
+    )
+    executor = LocalSpeechExecutor(engines=[])
+    calls, chunks = [], []
+
+    async def synthesize(local_id, text, *, options, progress=None, on_audio=None):
+        calls.append((local_id, options["voice"]))
+        if local_id == "primary":
+            if delivered:
+                await on_audio(SpeechAudioChunk(b"\0\0", 24000))
+            raise LocalSpeechExecutionError("engine failed")
+        await on_audio(SpeechAudioChunk(b"\1\0", 24000))
+        return SpeechSynthesisResult(b"audio", "audio/wav", "wav")
+
+    executor.synthesize = synthesize
+
+    async def on_audio(chunk):
+        chunks.append(chunk.audio)
+
+    service = SpeechService(
+        _StubModelTasks(primary), cast(Any, None), tmp_path, local_executor=executor
+    )
+    try:
+        if delivered:
+            with pytest.raises(SpeechExecutionError):
+                await service.synthesize("hello", on_audio=on_audio)
+            assert calls == [("primary", "primary")]
+            assert chunks == [b"\0\0"]
+        else:
+            assert (await service.synthesize("hello", on_audio=on_audio)).audio == b"audio"
+            assert calls == [("primary", "primary"), ("backup", "backup")]
+            assert chunks == [b"\1\0"]
+    finally:
+        await service.aclose()

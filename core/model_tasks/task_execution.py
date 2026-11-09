@@ -10,7 +10,9 @@ every ``TaskModelError`` to the task's own configuration-error class.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+import json
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -23,12 +25,66 @@ from core.model_tasks.model_tasks import (
     TaskModelTargetRef,
     parse_task_model_target_id,
 )
+from core.providers.errors import NetworkError, ProviderError, ProviderRateLimitError
 from core.usage import UsageRecorder
-from core.utils.errors import FailureClass, TaskError
+from core.utils.errors import ConfigError, FailureClass, TaskError
+from core.utils.logging import get_logger
+from core.utils.retry import caller_owns_retries, compute_retry_delay
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 _TASK_BINDING_WORKERS = BoundedWorkerPool(name="task-binding", max_workers=4)
+_LOGGER = get_logger("model_tasks.recovery")
+_sleep = asyncio.sleep
+_clock = time.monotonic
+
+
+@dataclass
+class TaskAttempt:
+    """One resolved execution. Seal it as soon as output or a job escapes."""
+
+    binding: TaskModelBinding
+    options: JsonObject
+    target: TaskModelTargetRef
+    sealed: bool = False
+
+    def seal(self) -> None:
+        self.sealed = True
+
+
+class TaskCandidateMismatchError(Exception):
+    """A candidate cannot honor this call, before any request was sent."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        super().__init__(str(error))
+
+
+def _recoverable(error: BaseException) -> tuple[bool, BaseException]:
+    """Inspect explicit causes; a wrapper must not erase an unsafe outcome."""
+    from core.model_tasks._speech_context import LocalSpeechError
+
+    causes: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and current not in causes:
+        causes.append(current)
+        current = current.__cause__
+    if any(
+        getattr(cause, "failure_class", None) in {"refused", "outcome_unknown"}
+        or getattr(cause, "code", None) in {"generation_refused", "provider_outcome_unknown"}
+        for cause in causes
+    ):
+        return False, error
+    for cause in reversed(causes):
+        if isinstance(cause, ProviderError):
+            return (
+                bool(cause.retryable)
+                or cause.failure_class in {"auth", "usage_limit"}
+                or cause.status_code in {401, 402, 403, 404}
+            ), cause
+        if isinstance(cause, NetworkError | ConfigError | TaskModelError | LocalSpeechError):
+            return True, cause
+    return False, error
 
 
 @dataclass(frozen=True)
@@ -235,16 +291,143 @@ class TaskBindingResolver:
     def __init__(self, model_tasks: Any, *, configuration_error: type[TaskError]) -> None:
         self._model_tasks = model_tasks
         self._configuration_error = configuration_error
+        self._failures: dict[str, tuple[float, float]] = {}
 
-    def resolve(self, task_type: str) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
-        """Return the configured binding, merged options, and parsed target ref."""
-        binding = self.binding_for(task_type)
+    async def execute[T](
+        self,
+        task_type: str,
+        operation: Callable[[TaskAttempt], Awaitable[T]],
+        *,
+        bindings: tuple[TaskModelBinding, ...] | None = None,
+    ) -> T:
+        """Run one task against its configured chain, without nested HTTP retries.
+
+        Every candidate keeps its own options and Usage. Cancellation, invalid
+        input, refusals, ambiguous outcomes and sealed attempts never replay.
+        A settings snapshot applies for the whole operation.
+        """
+        if bindings is None:
+            primary = await _TASK_BINDING_WORKERS.run(self.binding_for, task_type)
+            bindings = (primary, *getattr(primary, "fallbacks", ()))
+        if len(bindings) == 1:
+            resolved = await _TASK_BINDING_WORKERS.run(self.resolve_binding, bindings[0])
+            try:
+                return await operation(TaskAttempt(*resolved))
+            except TaskCandidateMismatchError as exc:
+                raise exc.error from exc
+        candidates = self._candidates(bindings)
+        last: Exception | None = None
+        for index, (binding, key) in enumerate(candidates):
+            incompatible = False
+            follows = index + 1 < len(candidates)
+            speech = task_type in {"speech_to_text", "text_to_speech", "live_voice"}
+            attempts = (2 if follows else 3) if speech else (3 if follows else 4)
+            if key in self._failures:
+                attempts = min(attempts, 2)
+            deadline = _clock() + (15 if speech else 60)
+            for number in range(attempts):
+                attempt = None
+                try:
+                    resolved = await _TASK_BINDING_WORKERS.run(self.resolve_binding, binding)
+                    attempt = TaskAttempt(*resolved)
+                    with caller_owns_retries():
+                        result = await operation(attempt)
+                    if self._failures.pop(key, None) is not None:
+                        _LOGGER.info(
+                            "Task Model route recovered (task=%s candidate=%s)", task_type, index
+                        )
+                    return result
+                except TaskCandidateMismatchError as exc:
+                    last = exc.error
+                    incompatible = True
+                    break
+                except Exception as exc:
+                    allowed, cause = _recoverable(exc)
+                    if (attempt is not None and attempt.sealed) or not allowed:
+                        raise
+                    last = exc
+                    retryable = bool(getattr(cause, "retryable", False))
+                    if (
+                        not retryable
+                        or (follows and isinstance(cause, ProviderRateLimitError))
+                        or number + 1 == attempts
+                    ):
+                        break
+                    delay, _ = compute_retry_delay(
+                        number, retry_after=getattr(cause, "retry_after", None)
+                    )
+                    if _clock() + delay >= deadline:
+                        break
+                    _LOGGER.debug(
+                        "Task Model retry scheduled (task=%s candidate=%s attempt=%s)",
+                        task_type,
+                        index,
+                        number + 2,
+                    )
+                    await _sleep(delay)
+            if incompatible:
+                continue
+            pause = min(self._failures.get(key, (0, 450))[1] * 2, 3600)
+            if key not in self._failures:
+                _LOGGER.warning(
+                    "Task Model route unavailable (task=%s candidate=%s)", task_type, index
+                )
+            self._failures[key] = (_clock() + pause, pause)
+            # Bound process-local history across configuration edits.
+            while len(self._failures) > 128:
+                self._failures.pop(next(iter(self._failures)))
+        assert last is not None
+        raise last
+
+    def resolve_binding(
+        self, binding: TaskModelBinding
+    ) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
         try:
             self._model_tasks.validate_execution_target(binding)
             options = self._model_tasks.options_with_defaults(binding)
             return binding, options, self.parse_target(binding.target)
         except TaskModelError as exc:
             raise self._configuration_error(str(exc)) from exc
+
+    def _candidates(
+        self, bindings: tuple[TaskModelBinding, ...]
+    ) -> list[tuple[TaskModelBinding, str]]:
+        candidates = []
+        for binding in bindings:
+            try:
+                ref = self.parse_target(binding.target)
+                identity: tuple[str, ...] = (
+                    ref.kind,
+                    ref.provider_id,
+                    ref.model_id,
+                    ref.connection_id,
+                    ref.local_id,
+                )
+            except TaskError:
+                identity = (binding.target,)
+            key = json.dumps(
+                [getattr(binding, "task_type", ""), identity, dict(binding.options)], sort_keys=True
+            )
+            candidates.append((binding, key))
+        ready = [item for item in candidates if self._failures.get(item[1], (0, 0))[0] <= _clock()]
+        return ready or [min(candidates, key=lambda item: self._failures[item[1]][0])]
+
+    def resolve(
+        self, task_type: str, *, validate: Callable[[TaskAttempt], object] | None = None
+    ) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
+        """Select a ready candidate, including the owning service's preflight."""
+        primary = self.binding_for(task_type)
+        last: TaskError | None = None
+        for binding, _key in self._candidates((primary, *getattr(primary, "fallbacks", ()))):
+            try:
+                resolved = self.resolve_binding(binding)
+                if validate is not None:
+                    validate(TaskAttempt(*resolved))
+                return resolved
+            except TaskError as exc:
+                last = exc
+        assert last is not None
+        raise last
 
     async def resolve_async(
         self, task_type: str

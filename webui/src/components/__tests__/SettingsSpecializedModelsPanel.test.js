@@ -47,6 +47,90 @@ describe('SettingsSpecializedModelsPanel', () => {
     await cleanupSpecializedModelsHarness();
   });
 
+  it('adds, edits, reorders and removes fallbacks while preserving each model options', async () => {
+    const primary = 'test/primary::key';
+    const backup = 'test/backup::key';
+    const last = 'test/last::key';
+    targetsFor('text_to_speech', [
+      { id: primary, label: 'Primary' },
+      { id: backup, label: 'Backup' },
+      { id: last, label: 'Last' },
+    ]);
+    api.getTaskModelOptions.mockResolvedValue({
+      fields: [{ name: 'voice', type: 'text', label: 'Voice' }],
+    });
+    echoSavedModelTasks();
+    const props = committingProps({
+      taskTypes: ['text_to_speech'],
+      settings: {
+        model_tasks: {
+          text_to_speech: {
+            target: primary,
+            options: { voice: 'first' },
+            fallbacks: [{ target: backup, options: { voice: 'second' } }],
+          },
+        },
+      },
+    });
+    mountPanel(props);
+    await waitForCondition(() =>
+      document.getElementById(
+        `task-model-text_to_speech::fallback::${backup}-voice`,
+      ),
+    );
+    expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
+    document.getElementById('settings-fallback-text_to_speech').click();
+    flushSync();
+    expect(optionLabels()).toEqual(['Last']);
+    document.querySelector('[role="option"]').click();
+    await waitForCondition(() =>
+      document.getElementById(
+        `task-model-text_to_speech::fallback::${last}-voice`,
+      ),
+    );
+    const input = document.getElementById(
+      `task-model-text_to_speech::fallback::${last}-voice`,
+    );
+    input.value = 'third';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const row = [...document.querySelectorAll('[data-sortable-key]')].find(
+      (element) => element.dataset.sortableKey === last,
+    );
+    row.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowUp',
+        altKey: true,
+        bubbles: true,
+      }),
+    );
+    await settle();
+    button('Save').click();
+    await waitForCondition(
+      () => api.updateTaskModelSettings.mock.calls.length === 1,
+    );
+    expect(api.updateTaskModelSettings.mock.calls[0][0].text_to_speech).toEqual(
+      {
+        target: primary,
+        options: { voice: 'first' },
+        fallbacks: [
+          { target: last, options: { voice: 'third' } },
+          { target: backup, options: { voice: 'second' } },
+        ],
+      },
+    );
+    await settle();
+    document.querySelector('[aria-label="Remove fallback Backup"]').click();
+    flushSync();
+    button('Save').click();
+    await waitForCondition(
+      () => api.updateTaskModelSettings.mock.calls.length === 2,
+    );
+    expect(
+      api.updateTaskModelSettings.mock.calls[1][0].text_to_speech.fallbacks,
+    ).toEqual([{ target: last, options: { voice: 'third' } }]);
+  });
+
   it('updates known Decision Model facts when the selection changes', async () => {
     const clef = 'ollama-cloud/clef:27b::api-key';
     const luna = 'openai/gpt-6-luna::api-key';

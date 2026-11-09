@@ -16,16 +16,13 @@ import hashlib
 from collections.abc import Callable
 from typing import Protocol, override
 
-from core.recall._passage_catalog import Candidates, StoredPassage
+from core.recall._literal_search import LITERAL_ONLY_REASON, PreparedLiteralSearch
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     RecallScope,
-    first_match_span,
 )
 from core.recall.passage_index import (
     KNN_MAX_K,
-    TRIGRAM_RANKING,
-    LiteralQuery,
     PassageIndex,
     literal_query,
 )
@@ -67,11 +64,6 @@ _SEMANTIC_ONLY_PARTIAL_REASON = (
     "Only semantic search succeeded, and it has not finished indexing the eligible Sessions; "
     "results are incomplete. Repeat the search later, and do not treat these results as an "
     "exhaustive keyword search."
-)
-_LITERAL_ONLY_REASON = (
-    "Only keyword search succeeded; paraphrases may be missing. "
-    "Use words likely to appear in the conversation; rephrasing cannot "
-    "restore semantic search."
 )
 _SEMANTIC_PARTIAL_REASON = (
     "Semantic search has not finished indexing the eligible Sessions and continues in the "
@@ -198,7 +190,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
 
     def _prepare_literal(self, request: RecallSearchRequest, scope: RecallScope) -> _PreparedArm:
         """The literal arm over the catalog this search refreshed."""
-        return _PreparedLiteralSearch(self.index, request, scope, literal_query(request))
+        return PreparedLiteralSearch(self.index, request, scope, literal_query(request))
 
     async def _refresh(self, request: RecallSearchRequest, scope: RecallScope) -> None:
         """Bring the candidates' Passages up to date for both arms.
@@ -232,77 +224,6 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             self.logger.warning(message, *args)
 
 
-class _PreparedLiteralSearch:
-    """Literal Passage ranking over a catalog refreshed once for one search."""
-
-    def __init__(
-        self,
-        index: PassageIndex,
-        request: RecallSearchRequest,
-        scope: RecallScope,
-        query: LiteralQuery | None,
-    ) -> None:
-        self._index = index
-        self._request = request
-        self._scope = scope
-        self._query = query
-
-    async def page(self, offset: int, limit: int) -> RecallSearchPage:
-        query = self._query
-        if query is None or not self._scope.candidates:
-            return RecallSearchPage(
-                hits=(),
-                result_type="passage",
-                ranking=TRIGRAM_RANKING if query is None else query.ranking,
-                snapshot_id=self._scope.snapshot_id,
-                has_more=False,
-                total_candidate_sessions=len(self._scope.candidates),
-            )
-        request = self._request
-        candidates = Candidates.of(request.agent_id, request.project_id, self._scope)
-        try:
-            matches = await self._index.literal_search(
-                request, candidates, query, offset + limit + 1
-            )
-        except Exception as error:
-            await self._index.discard_if_damaged(error)
-            raise
-        hits = tuple(
-            _literal_hit(passage, session_id, rank, request)
-            for passage, session_id, rank in matches[offset : offset + limit]
-        )
-        return RecallSearchPage(
-            hits=hits,
-            result_type="passage",
-            ranking=query.ranking,
-            snapshot_id=self._scope.snapshot_id,
-            has_more=len(matches) > offset + limit,
-            total_candidate_sessions=len(self._scope.candidates),
-        )
-
-
-def _literal_hit(
-    passage: StoredPassage, session_id: str, rank: float, request: RecallSearchRequest
-) -> RecallSearchHit:
-    start, end = first_match_span(passage.text, request.query, request.match_mode)
-    return RecallSearchHit(
-        result_type="passage",
-        session_id=session_id,
-        message_id=passage.start_message_id,
-        role=passage.start_role,
-        timestamp=passage.start_timestamp,
-        text=passage.text,
-        score=rank,
-        passage_id=passage.passage_id,
-        start_message_id=passage.start_message_id,
-        end_message_id=passage.end_message_id,
-        end_timestamp=passage.end_timestamp,
-        match_start=start,
-        match_end=end,
-        sources=("literal",),
-    )
-
-
 class _PreparedArm(Protocol):
     """One retrieval arm whose freshness work is done; it only ranks."""
 
@@ -323,7 +244,7 @@ def _degradation_reason(
     if literal_page is None:
         return _SEMANTIC_ONLY_PARTIAL_REASON if semantic_partial else _SEMANTIC_ONLY_REASON
     if semantic_page is None:
-        return _LITERAL_ONLY_REASON
+        return LITERAL_ONLY_REASON
     return _SEMANTIC_PARTIAL_REASON if semantic_partial else None
 
 

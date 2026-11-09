@@ -1,0 +1,17 @@
+# Task Model Fallbacks
+
+Binding persistence and recovery for configured Task Model chains.
+
+## Binding format
+
+Bindings persist under `model_tasks` keyed by task type: non-empty `target` + options object, with an optional ordered `fallbacks` list of up to eight `{target, options}` entries. Each entry owns its options; duplicate targets (including equivalent Connection spellings) and nested chains are refused. `text_embedding` has no Model fallbacks: Recall degrades to keyword search. Omitting `fallbacks` preserves it on sparse updates; `[]` clears it. The Generation 1 shape preserves unknown fields on retained entries by target identity. Public updates are sparse (options-only updates keep the existing target; empty target removes; Storage drops the section when empty); validation runs on each changed complete resulting binding before persistence; unchanged bindings are no-ops even if live catalog changes have made their options stale; editing any retained primary or fallback drops unchanged option names removed from its schema, while changed unknown names and invalid values still fail, and a changed target starts options at `{}` rather than inheriting incompatible ones. Settings' JSON equality distinguishes booleans from numbers, including stale options. Storage's section merge follows the same target-change rule, so `settings.update` persists the binding that Task Model validation checked.
+
+## Execution recovery
+
+`TaskBindingResolver.execute` owns configured-chain recovery in `task_execution.py`. Each operation snapshots the chain, resolves each candidate with its own options on bounded workers, and keeps Provider wires and Usage in the task service. With no fallback configured, the existing single-target request/retry policy stays intact. Chain attempts suppress nested HTTP retries with `caller_owns_retries`. Speech and Live startup permit two attempts before another candidate, three on the last; other tasks permit three/four. Retry waits must fit a 15-second speech/Live or 60-second other-task recovery window; this does not shorten a running request's timeout. Rate limits switch immediately while another candidate follows. Cancellation, invalid inputs, unexpected failures, refusals and ambiguous outcomes never replay. A `TaskCandidateMismatchError` skips a target that cannot honor per-call choices before sending, without marking it unhealthy.
+
+A failed route cools down for 15 minutes, doubling to one hour after further failures, with a two-attempt probe after expiry; success clears it. Route identity includes task, target/Connection/Account and options. State is process-local and bounded. If all routes cool down, one probe uses the route due back first. Selection never rewrites Settings. TTS seals an attempt before delivering its first non-empty audio chunk; a Live call seals after its wire opens. Video/Music/image ambiguous-outcome errors retain their existing no-resubmission boundary. Decision items fall back independently using the call's snapshotted native profiles/options, never replaying completed siblings.
+
+## Coverage
+
+`tests/core/model_tasks/test_task_execution.py`, `test_model_tasks.py`, `test_speech.py`, and `test_live.py` cover recovery, validation, partial audio and startup. Settings round trips are covered by `tests/core/storage/test_storage_settings_sections.py`; the Settings editor by `webui/src/components/__tests__/SettingsSpecializedModelsPanel.test.js`.

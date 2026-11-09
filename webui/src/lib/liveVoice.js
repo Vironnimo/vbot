@@ -863,7 +863,9 @@ export function createLiveVoice({
       }
 
       // The binding may change between status and start; the server then
-      // answers `media_mismatch` and the page retries once with fresh status.
+      // answers `media_mismatch`. Fallbacks may also change the required media
+      // before a call starts; re-prepare it once per new target, never a live call.
+      const preparedTargets = new Set();
       for (let attempt = 1; ; attempt += 1) {
         const media = mediaKind(status);
         const result = await (media === MEDIA_RELAY
@@ -873,7 +875,13 @@ export function createLiveVoice({
           abandonLateCall(result);
           return;
         }
-        if (result?.error === 'media_mismatch' && attempt === 1) {
+        const identity = `${status.target ?? ''}:${media}`;
+        if (
+          result?.error === 'media_mismatch' &&
+          attempt < 9 &&
+          !preparedTargets.has(identity)
+        ) {
+          preparedTargets.add(identity);
           releasePeer(call);
           releaseRelayAudio(call);
           status = await api.getLiveVoiceStatus();

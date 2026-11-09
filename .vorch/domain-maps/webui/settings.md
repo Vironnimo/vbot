@@ -4,6 +4,8 @@ Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, 
 
 `settingsView.js` retains the public pure-helper interface. Internal `lib/settingsView/` modules own appearance/audio, Agent defaults, Recall (`recall.js`), web search/fetch (`retrieval.js`), Channels, Extensions and Provider/account projections; forms keep their existing payload and normalization contracts.
 
+Task Model editors include a `SortableList` of fallback targets with independent option controls and local setup. The same autosave participant saves the primary and list as one binding; reorder, removal and edits retain target-owned options. Embedding Settings keep a single Model, since Recall falls back to keyword search.
+
 ## Settings shell
 
 Client-presence refreshes apply only the newest response. Provider connection dialogs retire their completion callbacks on close or destruction, so a delayed OAuth refresh cannot close a later dialog (`SettingsGeneralPanel.test.js`, `SettingsView.provider-credentials.test.js`).

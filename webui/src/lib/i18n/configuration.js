@@ -850,6 +850,13 @@ export default Object.freeze({
   'settings.specializedModels.embeddingModel': 'Embedding model',
   'settings.specializedModels.embeddingModelHelp':
     'Turns conversation text into the search index for searching by meaning, and embeds each search query. Models on this computer are listed first, then the embedding models your Providers offer; recommended ones come first in each group. A model on this computer that is not installed yet is installed once when you choose it.\n\nChanging the model rebuilds the index from all stored conversations. That takes a while and, with a cloud model, adds Provider usage.',
+  'settings.specializedModels.fallbacks': 'Fallback models',
+  'settings.specializedModels.fallbacksHelp':
+    'Tried in this order when a model is unavailable. Each model keeps its own options. Drag to reorder, or use Alt+Arrow keys.',
+  'settings.specializedModels.addFallback': 'Add fallback model…',
+  'settings.specializedModels.addFallbackAria': 'Add fallback for {name}',
+  'settings.specializedModels.removeFallback': 'Remove',
+  'settings.specializedModels.removeFallbackAria': 'Remove fallback {name}',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.aboutAria': 'About {name}',

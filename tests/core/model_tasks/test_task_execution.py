@@ -173,3 +173,123 @@ def test_execution_rejects_disabled_connection_even_while_credential_remains() -
     assert credentials.has_credentials("openrouter", "openrouter:api-key")
     with pytest.raises(_StubConfigurationError):
         resolver.resolve(TASK_SPEECH_TO_TEXT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["rate_limit", "network", "unavailable"])
+async def test_fallbacks_use_their_options_and_remember_failed_routes(monkeypatch, failure):
+    from core.model_tasks import task_execution
+    from core.providers.errors import NetworkError, ProviderRateLimitError
+
+    now = [0.0]
+    monkeypatch.setattr(task_execution, "_clock", lambda: now[0])
+    backup = TaskModelBinding("text_to_speech", "local/backup", {"voice": "backup"})
+    primary = TaskModelBinding("text_to_speech", "local/primary", {"voice": "primary"}, (backup,))
+    service = _StubModelTasks(primary)
+    resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
+    calls = []
+    recovered = False
+
+    async def execute(attempt):
+        calls.append((attempt.target.local_id, attempt.options["voice"]))
+        if attempt.target.local_id == "primary" and not recovered:
+            if failure == "rate_limit":
+                raise ProviderRateLimitError("busy")
+            if failure == "unavailable":
+                raise TaskModelError("removed")
+            raise NetworkError("unreachable")
+        return attempt.options["voice"]
+
+    assert await resolver.execute("text_to_speech", execute) == "backup"
+    assert calls == [("primary", "primary")] * (2 if failure == "network" else 1) + [
+        ("backup", "backup")
+    ]
+    calls.clear()
+    assert await resolver.execute("text_to_speech", execute) == "backup"
+    assert calls == [("backup", "backup")]
+    assert service._binding is primary
+    now[0] = 901
+    recovered = True
+    assert await resolver.execute("text_to_speech", execute) == "primary"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", ["ambiguous", "refused", "input", "cancelled", "sealed", "unexpected"]
+)
+async def test_fallback_never_replays_an_unsafe_or_unrelated_failure(failure):
+    import asyncio
+
+    from core.providers.errors import (
+        NetworkError,
+        ProviderContentRefusedError,
+        ProviderOutcomeUnknownError,
+    )
+
+    primary = TaskModelBinding(
+        "text_to_speech", "local/primary", {}, (TaskModelBinding("text_to_speech", "local/backup"),)
+    )
+    resolver = TaskBindingResolver(
+        _StubModelTasks(primary), configuration_error=_StubConfigurationError
+    )
+    calls = []
+
+    async def execute(attempt):
+        calls.append(attempt.target.local_id)
+        if failure == "sealed":
+            attempt.seal()
+            raise NetworkError("stream lost")
+        if failure == "cancelled":
+            raise asyncio.CancelledError()
+        if failure == "input":
+            raise ValueError("bad input")
+        if failure == "unexpected":
+            raise RuntimeError("bug")
+        cause = (
+            ProviderOutcomeUnknownError("accepted", operation_key="test")
+            if failure == "ambiguous"
+            else ProviderContentRefusedError("refused")
+        )
+        try:
+            raise cause
+        except Exception as exc:
+            raise NetworkError("outer wrapper") from exc
+
+    expected = {
+        "cancelled": asyncio.CancelledError,
+        "input": ValueError,
+        "unexpected": RuntimeError,
+    }.get(failure, NetworkError)
+    with pytest.raises(expected):
+        await resolver.execute("text_to_speech", execute)
+    assert calls == ["primary"]
+
+
+@pytest.mark.asyncio
+async def test_unusable_and_incompatible_candidates_do_not_block_later_candidates(monkeypatch):
+    from core.model_tasks.task_execution import TaskCandidateMismatchError
+
+    bindings = tuple(
+        TaskModelBinding("image_generation", f"local/{name}")
+        for name in ("missing", "incompatible", "ready")
+    )
+    primary = TaskModelBinding("image_generation", bindings[0].target, {}, bindings[1:])
+    service = _StubModelTasks(primary)
+
+    def validate(binding):
+        if binding.target == "local/missing":
+            raise TaskModelError("removed")
+
+    monkeypatch.setattr(service, "validate_execution_target", validate)
+    resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
+    calls = []
+
+    async def execute(attempt):
+        calls.append(attempt.target.local_id)
+        if attempt.target.local_id == "incompatible":
+            raise TaskCandidateMismatchError(ValueError("unsupported size"))
+        return "image"
+
+    assert await resolver.execute("image_generation", execute) == "image"
+    assert calls == ["incompatible", "ready"]
+    assert resolver.resolve("image_generation")[2].local_id == "incompatible"

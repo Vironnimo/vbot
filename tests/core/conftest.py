@@ -30,6 +30,7 @@ def _no_retry_backoff_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     A test that observes the waits patches ``core.utils.retry._sleep`` itself.
     """
     monkeypatch.setattr("core.utils.retry._sleep", _skip_backoff_wait)
+    monkeypatch.setattr("core.model_tasks.task_execution._sleep", _skip_backoff_wait)
 
 
 @pytest.fixture

@@ -7,3 +7,5 @@ Why each sentence of the vector backend's partial-coverage degradation reason (`
 | `SEMANTIC_PARTIAL_REASON`: `Semantic search has not finished indexing the eligible Sessions and continues in the background.` | Agents read a page with missing vectors as complete; the sentence says coverage is partial and still improving. |
 | `Results are incomplete: repeat the search later for complete results.` | Names the one action that helps. Searches embed no documents, so narrowing `period` or `session_id` does not speed indexing. |
 | `An empty result does not establish that no related conversation exists.` | Prevents an empty partial page from being reported as proof of absence. |
+| `LITERAL_ONLY_REASON` in `_literal_search.py`: `Only keyword search succeeded; paraphrases may be missing.` | Vector and Hybrid fallback results must not be presented as complete semantic matches when embeddings fail. |
+| `Use words likely to appear in the conversation; rephrasing cannot restore semantic search.` | Gives an actionable query strategy for a degraded page without inviting repeated attempts to restore an unavailable embedding service. |

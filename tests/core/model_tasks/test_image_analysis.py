@@ -31,6 +31,7 @@ from core.model_tasks import (
     ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
+    TaskModelBinding,
     TaskModelError,
 )
 from core.model_tasks import image as image_module
@@ -62,8 +63,10 @@ class _UnderstandingModelTasks:
         output_modalities: tuple[str, ...] = ("text",),
         task_types: tuple[str, ...] = (TASK_IMAGE_UNDERSTANDING,),
         binding_usable: bool = True,
+        fallbacks: tuple[TaskModelBinding, ...] = (),
     ) -> None:
         self._target = target
+        self._fallbacks = fallbacks
         self._binding_usable = binding_usable
         self._model = SimpleNamespace(
             capabilities=SimpleNamespace(
@@ -75,7 +78,7 @@ class _UnderstandingModelTasks:
 
     def binding_for(self, task_type: str) -> object:
         assert task_type == TASK_IMAGE_UNDERSTANDING
-        return SimpleNamespace(task_type=task_type, target=self._target, options={})
+        return TaskModelBinding(task_type, self._target, {}, self._fallbacks)
 
     def binding_is_usable(self, task_type: str) -> bool:
         assert task_type == TASK_IMAGE_UNDERSTANDING
@@ -85,7 +88,7 @@ class _UnderstandingModelTasks:
         return self._model
 
     def validate_execution_target(self, binding: Any) -> None:
-        assert binding.target == self._target
+        assert binding.target in {self._target, *(item.target for item in self._fallbacks)}
         if not self._binding_usable:
             raise TaskModelError("The selected target is no longer usable")
 
@@ -291,6 +294,39 @@ async def test_analysis_availability_requires_an_adapter_with_an_image_wire(
         assert adapter.wire_media_models == ["vision-model"]
         assert adapter.closed is True
     assert ("adapter cleanup failed" in caplog.text) is (close_error is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incompatibility", ["image-wire", "image-capacity"])
+async def test_analysis_uses_compatible_fallback_before_sending(
+    tmp_path: Path, incompatibility: str
+) -> None:
+    primary = _UnderstandingAdapter(
+        wire_media_types=frozenset()
+        if incompatibility == "image-wire"
+        else frozenset({"image/png"}),
+        max_image_bytes=1 if incompatibility == "image-capacity" else None,
+    )
+    backup = _UnderstandingAdapter()
+    runtime = SimpleNamespace(
+        get_adapter=lambda connection: (
+            primary if connection.connection_id == "openrouter:api-key" else backup
+        )
+    )
+    service = ImageService(
+        _UnderstandingModelTasks(
+            fallbacks=(
+                TaskModelBinding(TASK_IMAGE_UNDERSTANDING, "openrouter/backup::second-key", {}),
+            )
+        ),
+        cast(Any, runtime),
+    )
+    assert await service.analysis_is_available()
+    result = await service.analyze("Describe", image_paths=[_png(tmp_path / "test.png")])
+    assert result.model == "backup"
+    assert primary.requests == []
+    assert len(backup.requests) == 1
+    assert primary.closed and backup.closed
 
 
 @pytest.mark.asyncio

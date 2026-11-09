@@ -7,6 +7,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
 from core.fetch_config import parse_web_fetch_settings
+from core.model_tasks._binding_config import normalize_fallbacks
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
     SUPPORTED_TASK_TYPES,
@@ -661,6 +662,10 @@ def normalize_model_task_settings(model_tasks: Any) -> dict[str, dict[str, Any]]
                 f"settings.model_tasks.{task_type}.options",
             ),
         }
+        if "fallbacks" in raw_binding:
+            normalized[task_type]["fallbacks"] = normalize_fallbacks(
+                task_type, raw_binding["fallbacks"], primary_target=target
+            )
     return normalized
 
 

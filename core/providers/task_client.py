@@ -387,7 +387,7 @@ class ProviderTaskClient:
                                 request_headers,
                                 response.text if response.status_code >= 400 else "",
                             )
-                            _classify_task_response_for_retry_policy(
+                            classify_task_response_for_retry_policy(
                                 response,
                                 retry_policy=retry_policy,
                                 operation_key=operation_key,
@@ -422,7 +422,7 @@ class ProviderTaskClient:
                                     else:
                                         usage = await self._observe_response_usage(response)
                     except httpx.TransportError as exc:
-                        raise _task_transport_error(
+                        raise classify_task_transport_error(
                             exc,
                             retry_policy=retry_policy,
                             operation_key=operation_key,
@@ -509,7 +509,7 @@ def _response_usage(response: httpx.Response) -> Mapping[str, Any] | None:
     return usage if isinstance(usage, Mapping) else None
 
 
-def _task_transport_error(
+def classify_task_transport_error(
     error: httpx.TransportError,
     *,
     retry_policy: TaskRequestRetryPolicy,
@@ -529,7 +529,7 @@ def _task_transport_error(
     )
 
 
-def _classify_task_response_for_retry_policy(
+def classify_task_response_for_retry_policy(
     response: httpx.Response,
     *,
     retry_policy: TaskRequestRetryPolicy,

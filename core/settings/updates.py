@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
+from core.model_tasks._binding_config import normalize_fallbacks
 from core.settings._json_settings import settings_values_equal
 from core.settings._rules import (
     APPEARANCE_FIELDS,
@@ -470,6 +471,11 @@ def apply_model_task_settings(
             "target": target,
             "options": options,
         }
+
+        if "fallbacks" in raw_binding or "fallbacks" in current_binding:
+            merged_model_tasks[task_type]["fallbacks"] = normalize_fallbacks(
+                task_type, raw_binding.get("fallbacks", current_binding.get("fallbacks", []))
+            )
 
     # Removing one binding does not remove unknown sibling task bindings.
     if merged_model_tasks or "model_tasks" in settings:

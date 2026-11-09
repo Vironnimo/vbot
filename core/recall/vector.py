@@ -2,7 +2,8 @@
 
 Search builds source-derived Passages, applies scope/Session/time filters inside
 KNN, and returns pure semantic top-K Passages without Session deduplication,
-a universal distance cutoff, or literal fallback. Each Passage is reported for
+a universal distance cutoff. Unavailable embeddings fall back to literal Passage
+search. Each Passage is reported for
 one candidate Session, so a fork and its origin never both return the history
 they share.
 
@@ -19,17 +20,19 @@ import asyncio
 import hashlib
 import sqlite3
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import override
 
 from core.database import DatabaseError
 from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingUsage
+from core.recall._literal_search import LITERAL_ONLY_REASON, PreparedLiteralSearch
 from core.recall._passage_catalog import Candidates
 from core.recall.canonical import CanonicalSessionRecallBackend, RecallScope
 from core.recall.passage_index import (
     PassageIndex,
     PassageIndexError,
     VectorHeader,
+    literal_query,
     space_change_reason,
 )
 from core.recall.recall import (
@@ -131,8 +134,29 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
 
     @override
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        prepared = await self.prepare_search(request)
-        return await prepared.page(request.offset, request.limit)
+        if request.snapshot_id is not None and request.snapshot_id.startswith("literal:"):
+            return await self._keyword_fallback(request)
+        try:
+            prepared = await self.prepare_search(request)
+            return await prepared.page(request.offset, request.limit)
+        except RecallSearchError as exc:
+            if exc.code != "semantic_unavailable":
+                raise
+            return await self._keyword_fallback(request)
+
+    async def _keyword_fallback(self, request: RecallSearchRequest) -> RecallSearchPage:
+        scope = await self.sessions.run_async(self._read_scope, request)
+        snapshot_id = "literal:" + scope.snapshot_id
+        self._check_snapshot(request, snapshot_id)
+        await self.index.recovering(
+            lambda: self.index.refresh(self.sessions, request.agent_id, request.project_id, scope),
+            warning=lambda error: self._warning("Keyword recall index failed: %s", error),
+        )
+        prepared = PreparedLiteralSearch(self.index, request, scope, literal_query(request))
+        page = await prepared.page(request.offset, request.limit)
+        return replace(
+            page, snapshot_id=snapshot_id, degraded=True, degradation_reason=LITERAL_ONLY_REASON
+        )
 
     async def prepare_search(
         self,
