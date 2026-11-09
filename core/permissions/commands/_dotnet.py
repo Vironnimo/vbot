@@ -18,6 +18,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from core.permissions.commands import _paths
 from core.permissions.commands._specs import AccessKind
 from core.permissions.commands._state import Context, Listing, items
 from core.permissions.commands._syntax import CallTarget, MemberCall, RawCommand, Word
@@ -314,6 +315,18 @@ def _recursive_option(arguments: Sequence[Word], index: int) -> bool:
 def expression_string(analysis: Analysis, context: Context, raw: RawCommand) -> None:
     """A string an expression names: a clear path is a read, a URL a fetch (tier B)."""
     assert raw.expression is not None
+    if raw.expression_argument and _paths.WINDOWS:
+        text = analysis.literal_of(context, raw, raw.expression)
+        root_relative = text is not None and (
+            text.startswith("\\")
+            or (text.startswith("/") and any(s in text[1:] for s in ("/", "\\")))
+        )
+        if root_relative and text is not None and "\n" not in text:
+            # Root-relative .NET arguments still name host paths. Only plain
+            # text and unknown programs get the route/regex interpretation;
+            # a lone /word keeps its existing Windows-switch interpretation.
+            analysis.access(context, raw, "read", raw.expression, glob=True, tier="a")
+            return
     analysis.tier_b(context, raw, [raw.expression])
 
 

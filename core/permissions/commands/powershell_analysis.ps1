@@ -396,6 +396,23 @@ function Test-ExpressionString($Node) {
     return $true
 }
 
+function Test-MethodArgumentString($Node) {
+    for ($ancestor = $Node.Parent; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
+        if ($ancestor -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
+            foreach ($argument in @($ancestor.Arguments)) {
+                if ($null -ne $argument -and
+                    $argument.Extent.StartOffset -le $Node.Extent.StartOffset -and
+                    $argument.Extent.EndOffset -ge $Node.Extent.EndOffset) { return $true }
+            }
+            return $false
+        }
+        if ($ancestor -is [System.Management.Automation.Language.CommandAst] -or
+            $ancestor -is [System.Management.Automation.Language.AssignmentStatementAst] -or
+            $ancestor -is [System.Management.Automation.Language.ScriptBlockAst]) { return $false }
+    }
+    return $false
+}
+
 function Get-Pipeline($CommandAst) {
     $parent = $CommandAst.Parent
     if ($parent -is [System.Management.Automation.Language.PipelineAst] -and $parent.PipelineElements.Count -gt 1) {
@@ -614,7 +631,9 @@ function Get-Analysis([string]$Text) {
                 $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]
             }, $true)) {
         if (Test-ExpressionString $node) {
-            $result.strings.Add(@{ offset = $node.Extent.StartOffset; word = (ConvertTo-Word $node) })
+            $string = @{ offset = $node.Extent.StartOffset; word = (ConvertTo-Word $node) }
+            if (Test-MethodArgumentString $node) { $string.argument = $true }
+            $result.strings.Add($string)
         }
     }
     # ${C:\x} and $c:x name an item of a provider drive: its content is read, or

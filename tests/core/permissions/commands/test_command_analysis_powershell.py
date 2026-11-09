@@ -734,9 +734,16 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
         case(
             r"'a b' -split '\s+'; (Get-Content README.md -Raw) -replace '\{(\w+)\}', '$1'; "
             "'x' -match ('C:/pattern'); 'x' -notlike 'C:/pattern'; -split 'C:/pattern'; "
-            "(([System.Xml.XmlDocument]::new()).Load('C:/outside/x.xml')) -match 'x'",
+            "(([System.Xml.XmlDocument]::new()).Load('C:/outside/x.xml')) -match 'x'; "
+            r"([System.Xml.XmlDocument]::new()).Load('\outside\direct.xml'); "
+            r"(([System.Xml.XmlDocument]::new()).Load(('\outside\wrapped.xml'))) -match 'x'",
             id="regex and pattern operands are text even through parentheses",
-            paths=("read w/p/README.md", "read outside/x.xml"),
+            paths=(
+                "read w/p/README.md",
+                "read outside/x.xml",
+                "read outside/direct.xml",
+                "read outside/wrapped.xml",
+            ),
         ),
         case(
             "rg -n '/api/rpc' server; rg '/api/rpc'; rg -e '/api/rpc' server; "
@@ -746,7 +753,7 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
         ),
         case(
             "gh api /repos/owner/repo/pulls; playwright-cli find --regex '/Ask this agent/'; "
-            r"'\tvar n := 1'",
+            "'abc'.StartsWith('/api'); '\\tvar n := 1'; @'\n\\tvar n := 2\n'@",
             id="root-relative routes and literal text are not absolute host reads",
             mentions=(
                 "read w/p/api",

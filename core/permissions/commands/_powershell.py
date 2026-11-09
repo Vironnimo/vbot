@@ -407,7 +407,13 @@ def lower(result: dict[str, Any]) -> Script:
     for entry in result.get("strings") or []:
         word = _word(entry["word"])
         entries.append(
-            RawCommand([], word.source, offset=int(entry.get("offset", -1)), expression=word)
+            RawCommand(
+                [],
+                word.source,
+                offset=int(entry.get("offset", -1)),
+                expression=word,
+                expression_argument=bool(entry.get("argument")),
+            )
         )
     for entry in result.get("items") or []:
         source = str(entry.get("source", ""))

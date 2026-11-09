@@ -141,6 +141,8 @@ class RawCommand:
     and loop bodies but excluding deferred functions and traps.
     ``output_text`` and ``output_variable`` describe expression
     pipeline output without executing the expression.
+    ``expression_argument`` distinguishes strings passed to .NET methods
+    from standalone text when interpreting root-relative Windows paths.
     """
 
     words: list[Word]
@@ -156,6 +158,7 @@ class RawCommand:
     offset: int = -1
     call: MemberCall | None = None
     expression: Word | None = None
+    expression_argument: bool = False
     item: Redirect | None = None
     top_level: bool = False
     output_text: bool = False
