@@ -32,6 +32,8 @@ class Passage:
     end_role: str
     start_offset: int
     end_offset: int
+    source_length: int
+    message_index: int | None = None
 
 
 def build_session_passages(
@@ -74,6 +76,7 @@ def build_session_passages(
                     end_role=str(message.role),
                     start_offset=start,
                     end_offset=end,
+                    source_length=len(text),
                 )
             )
             if end == len(text):

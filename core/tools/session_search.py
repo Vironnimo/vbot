@@ -13,6 +13,8 @@ from datetime import time as datetime_time
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from jsonschema import Draft202012Validator
+
 from core.recall import (
     RECALL_BACKEND_CANONICAL_SCAN,
     CanonicalSessionRecallBackend,
@@ -29,7 +31,7 @@ from core.sessions import (
     ChatSessionManager,
     SessionAddress,
 )
-from core.tools._argument_repair import load_json_value
+from core.tools._argument_repair import load_json_value, normalize_schema_value
 from core.tools._session_recall_results import (
     SESSION_SEARCH_DEFAULT_LIMIT as SESSION_SEARCH_DEFAULT_LIMIT,
 )
@@ -62,6 +64,10 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("tools.session_search")
 
 SESSION_SEARCH_TOOL_NAME = "session_search"
+_TOLERATED_VALUE_SCHEMAS = {
+    "limit": {"type": "integer"},
+    "include_subagents": {"type": "boolean"},
+}
 _SEARCH_INCLUDE_SUBAGENTS_DESCRIPTION = (
     "Include delegated Sessions owned by the selected Agent. To search another Agent, "
     "set agent_id too. Omit to exclude delegated Sessions."
@@ -297,6 +303,7 @@ def register_session_search_tool(
             "required": ["items", "has_more"],
         },
         parallel_safe=True,
+        announce_changes=("description", "parameters.query"),
         display=ToolDisplay(
             parts_builder=_display_search_parts,
             fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
@@ -343,7 +350,7 @@ async def _search_sessions(
             "session_id or use a past Session id.",
         )
     roles = SESSION_RECALL_DEFAULT_ROLES
-    match_mode = "all_terms"
+    match_mode = capabilities.default_match
     raw_order = capabilities.default_order
     period = _parse_period(arguments.get("period"), zone)
     since, until = (period.since, period.until) if period is not None else (None, None)
@@ -667,13 +674,11 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
         field = spellings.get(spelling)
         if field is None:
             field = str(key)
-        if field == "include_subagents":
-            if isinstance(value, str):
-                value = value.strip().casefold()
-            if value in (True, "true", "yes", "1"):
-                value = True
-            elif value in (False, "false", "no", "0"):
-                value = False
+        if field in _TOLERATED_VALUE_SCHEMAS:
+            schema = _TOLERATED_VALUE_SCHEMAS[field]
+            value = normalize_schema_value(
+                value, schema, root_schema=schema, root_validator=Draft202012Validator(schema)
+            )
         if (
             field in {"query", "agent_id", "session_id"}
             and isinstance(value, int)
@@ -682,8 +687,6 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
             value = str(value)
         if field in {"query", "agent_id", "session_id"} and isinstance(value, str):
             value = value.strip()
-        if field == "limit" and isinstance(value, str) and value.strip().isdecimal():
-            value = int(value.strip())
         if field in normalized and normalized[field] != value:
             raise _SessionSearchError(
                 "invalid_arguments",
@@ -906,7 +909,7 @@ def _session_search_details(arguments: JsonObject, result: JsonObject | None) ->
         }
         blocks.append(display_results([_match_display(item, titles) for item in items]))
     if data.get("has_more") is True:
-        blocks.append(display_notice("info", "More matches exist than are shown."))
+        blocks.append(display_notice("info", "Additional search candidates are not shown."))
     if data.get("degraded") is True:
         blocks.append(
             display_notice("warning", "The search ran in a reduced mode; matches may be missing.")
@@ -921,6 +924,8 @@ def _match_display(item: JsonObject, titles: dict[Any, Any]) -> dict[str, str | 
     )
     if item.get("include_subagents") is True:
         kind = f"{kind} · Sub-Agent" if kind else "Sub-Agent"
+    if item.get("match_kind") == "semantic_candidate":
+        kind = f"{kind} · Semantic candidate" if kind else "Semantic candidate"
     excerpt = item.get("excerpt")
     text = None
     if isinstance(excerpt, dict) and isinstance(excerpt.get("text"), str):

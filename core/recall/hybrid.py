@@ -47,9 +47,9 @@ assert _RRF_MAX_DEPTH < KNN_MAX_K
 # Static capability text — actual semantic availability is surfaced per-call via
 # the notice propagated from the vector arm.
 _HYBRID_SEARCH_GUIDANCE = (
-    "Literal terms or a short topic description. Every whitespace-separated term is required "
-    "by literal search; the same query is also searched by meaning. "
-    "Matches combine both rankings by relevance."
+    "Keywords or a short topic description. Keyword search matches any query term; "
+    "semantic search also finds related wording. Results are ranked by combined relevance, "
+    "not time."
 )
 _HYBRID_TOOL_SUMMARY = (
     "Find past conversations using both keywords and meaning, ranked by combined relevance."
@@ -104,6 +104,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             match_modes=("all_terms", "any_term", "phrase"),
             order_modes=("relevance",),
             default_order="relevance",
+            default_match="any_term",
         )
 
     @override
@@ -265,8 +266,12 @@ def _fuse_rrf(
     for source, page in (("literal", literal_page), ("semantic", semantic_page)):
         if page is None:
             continue
+        seen: set[tuple[str, str]] = set()
         for rank, hit in enumerate(page.hits, start=1):
             key = (hit.session_id, hit.passage_id or hit.message_id)
+            if key in seen:
+                continue
+            seen.add(key)
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_RANK_CONSTANT + rank)
             if key not in hits_by_key or source == "literal":
                 hits_by_key[key] = hit

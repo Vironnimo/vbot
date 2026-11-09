@@ -30,7 +30,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -59,8 +59,8 @@ SessionVersion = tuple[str, int]
 GLOBAL_SCOPE = ""
 # A Recall write waits this long for the database before failing as busy.
 WRITE_PATIENCE_S = 5.0
-# Reconcile old ownership flags once without discarding already-paid vectors.
-_OWNERSHIP_POLICY_VERSION = 2
+# Refresh derived metadata once without discarding already-paid vectors.
+_CATALOG_POLICY_VERSION = 3
 
 CATALOG_SCHEMA = """
 CREATE TABLE indexed_sessions (
@@ -89,6 +89,9 @@ CREATE TABLE passages (
   end_timestamp TEXT NOT NULL,
   start_role TEXT NOT NULL,
   end_role TEXT NOT NULL,
+  start_offset INTEGER,
+  source_length INTEGER,
+  message_index INTEGER,
   UNIQUE (project_id, agent_id, passage_key)
 ) STRICT;
 
@@ -116,7 +119,8 @@ VIEWED_BY_SESSIONS = (
 
 _PASSAGE_COLUMNS = (
     "passage_ref, passage_id, text, start_message_id, end_message_id, "
-    "start_timestamp, end_timestamp, start_role, end_role"
+    "start_timestamp, end_timestamp, start_role, end_role, start_offset, source_length, "
+    "message_index, passage_key"
 )
 
 
@@ -153,6 +157,9 @@ def passage_key(passage: Passage) -> str:
         passage.end_timestamp,
         passage.start_role,
         passage.end_role,
+        str(passage.start_offset),
+        str(passage.source_length),
+        str(passage.message_index),
     )
     return hashlib.sha256("\0".join(fields).encode("utf-8")).hexdigest()
 
@@ -170,13 +177,16 @@ class StoredPassage:
     end_timestamp: str
     start_role: str
     end_role: str
+    start_offset: int
+    source_length: int
+    message_index: int | None
 
 
 def stored_passage(row: sqlite3.Row) -> StoredPassage:
     """Read a row that selected the catalog's Passage columns by name."""
     return StoredPassage(
         passage_ref=int(row["passage_ref"]),
-        passage_id=str(row["passage_id"]),
+        passage_id=str(row["passage_key"]),
         text=str(row["text"]),
         start_message_id=str(row["start_message_id"]),
         end_message_id=str(row["end_message_id"]),
@@ -184,6 +194,9 @@ def stored_passage(row: sqlite3.Row) -> StoredPassage:
         end_timestamp=str(row["end_timestamp"]),
         start_role=str(row["start_role"]),
         end_role=str(row["end_role"]),
+        start_offset=int(row["start_offset"]),
+        source_length=int(row["source_length"]),
+        message_index=row["message_index"],
     )
 
 
@@ -300,8 +313,8 @@ def follows_history(connection: sqlite3.Connection, history_id: str) -> bool:
 
 
 def _history_token(history_id: str) -> str:
-    """Bind catalog freshness to canonical history and its ownership projection."""
-    return f"{history_id}:ownership-{_OWNERSHIP_POLICY_VERSION}"
+    """Bind catalog freshness to canonical history and derived source metadata."""
+    return f"{history_id}:catalog-{_CATALOG_POLICY_VERSION}"
 
 
 def follow_history(connection: sqlite3.Connection, history_id: str) -> None:
@@ -385,8 +398,12 @@ def _session_passages(
 ) -> SessionPassages:
     passages: list[Passage] = []
     owned: list[bool] = []
-    for message, stored_here in zip(batch.active_messages, batch.active_owned, strict=True):
-        windows = build_session_passages([message])
+    for message, stored_here, sequence in zip(
+        batch.active_messages, batch.active_owned, batch.active_sequences, strict=True
+    ):
+        windows = [
+            replace(window, message_index=sequence) for window in build_session_passages([message])
+        ]
         passages.extend(windows)
         # Materialized copies belong to this storing Session for attribution,
         # while remaining before its audit fork point. Public ids may repeat.
@@ -402,7 +419,12 @@ def _session_passages(
     )
 
 
-def apply_plan(connection: sqlite3.Connection, plan: CatalogPlan) -> list[int]:
+def apply_plan(
+    connection: sqlite3.Connection,
+    plan: CatalogPlan,
+    *,
+    after_add: Callable[[sqlite3.Connection, list[int]], None] | None = None,
+) -> list[int]:
     """Write *plan* in the caller's write transaction; return the Passages it added.
 
     A Session whose stamp moved since planning was refreshed by another writer
@@ -417,6 +439,9 @@ def apply_plan(connection: sqlite3.Connection, plan: CatalogPlan) -> list[int]:
     added: list[int] = []
     for change in plan.changes:
         added.extend(_apply_change(connection, plan, change, released))
+    # Reuse vectors for unchanged text before old identity rows are removed.
+    if added and after_add is not None:
+        after_add(connection, added)
     _delete_unviewed(connection, released)
     return added
 
@@ -487,6 +512,11 @@ def _apply_change(
     for key, (passage, owned) in target.items():
         stored = existing.get(key)
         if stored is not None:
+            connection.execute(
+                "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
+                "WHERE passage_ref = ?",
+                (passage.start_offset, passage.source_length, passage.message_index, stored[0]),
+            )
             if stored[1] != owned:
                 connection.execute(
                     "UPDATE passage_views SET owned = ? WHERE session_ref = ? AND passage_ref = ?",
@@ -516,8 +546,8 @@ def _insert_passage(
         INSERT INTO passages (
           project_id, agent_id, passage_key, passage_id, text_hash, text,
           start_message_id, end_message_id, start_timestamp, end_timestamp,
-          start_role, end_role
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          start_role, end_role, start_offset, source_length, message_index
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, agent_id, passage_key) DO NOTHING
         RETURNING passage_ref
         """,
@@ -534,6 +564,9 @@ def _insert_passage(
             passage.end_timestamp,
             passage.start_role,
             passage.end_role,
+            passage.start_offset,
+            passage.source_length,
+            passage.message_index,
         ),
     ).fetchall()
     if inserted:
@@ -544,6 +577,11 @@ def _insert_passage(
         "WHERE project_id = ? AND agent_id = ? AND passage_key = ?",
         (plan.project, plan.agent_id, key),
     ).fetchone()
+    connection.execute(
+        "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
+        "WHERE passage_ref = ?",
+        (passage.start_offset, passage.source_length, passage.message_index, int(row[0])),
+    )
     return int(row[0])
 
 
@@ -829,9 +867,7 @@ class PassageCatalog:
             await self.write(lambda connection: self._apply(connection, plan))
 
     def _apply(self, connection: sqlite3.Connection, plan: CatalogPlan) -> None:
-        added = apply_plan(connection, plan)
-        if added:
-            self._after_add(connection, added)
+        apply_plan(connection, plan, after_add=self._after_add)
 
     def _after_add(self, connection: sqlite3.Connection, passage_refs: list[int]) -> None:
         """Complete state a subclass keeps for newly stored Passages."""

@@ -75,7 +75,7 @@ Temporary Session bindings, delivery receipts, Run execution owners and group ti
 
 - Chat owns `ChatMessage`, request assembly, Run execution, Compaction behavior, and when Stream drafts are written. Sessions owns canonical persistence, ordering, views, metadata and prompt-state transactionality, validation, and storage lifecycle.
 - Agents and Projects must share the Runtime Session manager when started by Runtime. Their standalone stores may lazily own one and must close owned resources. Changes that span Session rows and Agent or Project files compensate a failed half (`sessions/ownership.md` -> Paired changes). These pairs, the `/agent` takeover (Session move plus both current-Session pointers) and a Session archive (archive plus current-pointer re-aim) hold the snapshot barrier, so an online data snapshot never captures one half (`database.md` -> Snapshot consistency).
-- Recall and Statistics are disposable projections. Both include the Session generation in freshness state. Recall reads the current view; Statistics appends each Session's own audit through `load_since`, and ordinary appends must not rebuild a complete Session projection.
+- Recall and Statistics are disposable projections. Both include the Session generation in freshness state. Recall reads the current view with canonical sequence positions for exact hit/context attribution (`sessions/search.md`); Statistics appends each Session's own audit through `load_since`, and ordinary appends must not rebuild a complete Session projection.
 
 ## Constraints & Gotchas
 

@@ -53,6 +53,7 @@ class RecallSearchCapabilities:
     order_modes: tuple[RecallOrder, ...] = ("relevance",)
     default_order: RecallOrder = "relevance"
     supports_roles: bool = False
+    default_match: RecallMatchMode = "all_terms"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,9 @@ class RecallSearchHit:
     match_start: int | None = None
     match_end: int | None = None
     sources: tuple[str, ...] = ()
+    source_start: int = 0
+    source_length: int | None = None
+    message_index: int | None = None
 
 
 @dataclass(frozen=True)

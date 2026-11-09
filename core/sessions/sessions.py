@@ -1155,9 +1155,11 @@ class ChatSessionManager:
     def fts_health(self) -> FtsHealth:
         return self._store.fts_health()
 
-    def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
+    def recall_context(
+        self, address: SessionAddress, message_id: str, *, message_index: int | None = None
+    ) -> builtins.list[JsonObject]:
         """Return the bounded question/final-answer context for a past Message."""
-        return self._store.recall_context(address, message_id)
+        return self._store.recall_context(address, message_id, message_index=message_index)
 
     def search_messages(
         self,

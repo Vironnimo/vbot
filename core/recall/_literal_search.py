@@ -80,4 +80,7 @@ def _literal_hit(
         match_start=start,
         match_end=end,
         sources=("literal",),
+        source_start=passage.start_offset,
+        source_length=passage.source_length,
+        message_index=passage.message_index,
     )

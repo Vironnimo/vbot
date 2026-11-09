@@ -358,7 +358,9 @@ async def _search_recorded(
     return data, backend.requests[0]
 
 
-@pytest.mark.parametrize(("limit", "expected"), [(3, 3), ("5", 5), (10, 10), (None, 10)], ids=str)
+@pytest.mark.parametrize(
+    ("limit", "expected"), [(3, 3), ("5", 5), (5.0, 5), (10, 10), (None, 10)], ids=str
+)
 async def test_limit_up_to_ten_sets_the_hit_count(
     tmp_path: Path, limit: object, expected: int
 ) -> None:
@@ -375,14 +377,6 @@ async def test_limit_above_ten_is_capped_with_a_note(tmp_path: Path) -> None:
     assert data["guidance"].startswith(
         "limit is at most 10; this search returned up to 10 matches."
     )
-
-
-async def test_more_matches_under_a_small_limit_point_to_omitting_it(tmp_path: Path) -> None:
-    data, _request = await _search_recorded(
-        tmp_path, {"query": "needle", "limit": 2}, has_more=True
-    )
-
-    assert "More matches exist. Omit limit for up to 10 matches, or refine" in data["guidance"]
 
 
 @pytest.mark.parametrize(

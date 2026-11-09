@@ -377,7 +377,8 @@ class SessionReadBatch:
     Messages precede the Session's fork point, so a fork's own conversation is
     ``active_messages[inherited_count:]``. ``active_owned`` marks entries stored
     by this Session rather than read through lineage, including materialized
-    copies; those copies still precede the audit fork point.
+    copies; those copies still precede the audit fork point. ``active_sequences``
+    gives their canonical positions in the current view, not array indices.
     """
 
     messages: tuple[ChatMessage, ...]
@@ -385,6 +386,7 @@ class SessionReadBatch:
     active_messages: tuple[ChatMessage, ...] = ()
     inherited_count: int = 0
     active_owned: tuple[bool, ...] = ()
+    active_sequences: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -563,6 +565,7 @@ class SessionSearchHit:
     timestamp: str
     text: str
     rank: float
+    message_index: int | None = None
 
 
 @dataclass(frozen=True)

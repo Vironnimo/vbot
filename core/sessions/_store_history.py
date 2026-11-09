@@ -455,6 +455,7 @@ def read_batch(delta: HistoryDelta) -> SessionReadBatch:
         tuple(delta.batch.message(row) for row in delta.view_rows),
         delta.inherited_count,
         delta.active_owned,
+        tuple(int(row["seq"]) for row in delta.view_rows),
     )
 
 
@@ -647,12 +648,17 @@ _RECALL_HAS_TEXT = (
 
 
 def recall_context(
-    connection: sqlite3.Connection, address: SessionAddress, message_id: str
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    message_id: str,
+    *,
+    message_index: int | None = None,
 ) -> list[JsonObject]:
     """Read the enclosing question and final answer of one current hit.
 
     Only current conversation text is projected; the caller already has the
-    hit. An anchor an edit replaced returns no context.
+    hit. An anchor an edit replaced returns no context. Public ids may repeat;
+    without a sequence, an ambiguous id returns no context.
     """
     state = _store_values._find_live(connection, address)
     if state is None:
@@ -664,10 +670,12 @@ def recall_context(
         columns="e.seq, e.role",
         where="e.entry_id = ? AND e.searchable = 1",
         params=(message_id,),
+        lower=0 if message_index is None else message_index,
+        upper=_store_lineage.MAX_SEQ if message_index is None else message_index + 1,
         descending=True,
-        limit=1,
+        limit=2,
     )
-    if not anchor or anchor[0]["role"] not in {"user", "assistant"}:
+    if len(anchor) != 1 or anchor[0]["role"] not in {"user", "assistant"}:
         return []
     seq = int(anchor[0]["seq"])
     first = view_seq(connection, ranges, where="e.role = 'user'", upper=seq + 1)

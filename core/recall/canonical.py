@@ -275,6 +275,8 @@ def message_hit(hit: SessionSearchHit, request: RecallSearchRequest) -> RecallSe
         score=hit.rank,
         match_start=match_start,
         match_end=match_end,
+        sources=("literal",),
+        message_index=hit.message_index,
     )
 
 

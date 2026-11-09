@@ -49,6 +49,7 @@ def test_passage_ids_and_boundaries_are_deterministic(
             assert passage.start_timestamp == passage.end_timestamp == str(message.timestamp)
             assert passage.start_role == passage.end_role == message.role
             assert passage.text == message.content[passage.start_offset : passage.end_offset]
+            assert passage.source_length == len(message.content)
             assert 0 < len(passage.text) <= target_chars
         expected.extend(own)
     messages.insert(1, ChatMessage.user("", timestamp=timestamp(1)))

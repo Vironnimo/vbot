@@ -61,7 +61,7 @@ class _RequestEcho:
 @dataclass(frozen=True)
 class _SearchSessionContext:
     descriptor: JsonObject
-    conversations: dict[str, list[JsonObject]]
+    conversations: dict[tuple[str, int | None], list[JsonObject]]
     is_subagent: bool
 
 
@@ -135,7 +135,9 @@ def _render_search_page(
                 index + 1,
                 excerpt_chars=0,
                 target=targets[index],
-                context=session_contexts[hit.session_id].conversations.get(hit.message_id, []),
+                context=session_contexts[hit.session_id].conversations.get(
+                    (hit.message_id, hit.message_index), []
+                ),
             )
             for index, hit in enumerate(hits[:count])
         ]
@@ -182,7 +184,9 @@ def _render_search_page(
                 index + 1,
                 excerpt_chars=excerpt_chars,
                 target=targets[index],
-                context=session_contexts[hit.session_id].conversations.get(hit.message_id, []),
+                context=session_contexts[hit.session_id].conversations.get(
+                    (hit.message_id, hit.message_index), []
+                ),
             )
             for index, hit in enumerate(selected)
         ]
@@ -234,8 +238,22 @@ def _search_data(
         guidance.extend(_no_match_guidance(request, searched=page.total_candidate_sessions))
     else:
         guidance.append(
-            "These are selected excerpts and context, not a full transcript, and a later "
-            "Message can revise them."
+            "These are selected excerpts, not a full transcript. Context contains the "
+            "enclosing User Message and the last Assistant answer before the next User "
+            "Message, when available. It is partial; later Messages can revise it. "
+            "Within a Session, message_index gives conversation order. "
+            "When supplied, excerpt start_char and end_char are zero-based character positions "
+            "in the source Message; end_char is exclusive."
+        )
+    if any(item["excerpt"].get("source_boundaries_unknown") for item in items):
+        guidance.append(
+            "Source-Message boundaries are unknown for some excerpts; omitted positions or "
+            "truncation flags do not mean the source is complete."
+        )
+    if any(item.get("match_kind") == "semantic_candidate" for item in items):
+        guidance.append(
+            "Semantic candidates can be unrelated to the query. Use an excerpt as evidence "
+            "only when its text supports the answer."
         )
     if has_more:
         wider = (
@@ -244,11 +262,11 @@ def _search_data(
             else " Refine"
         )
         guidance.append(
-            f"More matches exist.{wider} query, period or session_id; there is no "
-            "next-page parameter."
+            f"Additional search candidates are not shown.{wider} query, period or session_id; "
+            "there is no next-page parameter."
         )
     if any(
-        item["excerpt"]["leading_truncated"] or item["excerpt"]["trailing_truncated"]
+        item["excerpt"].get("leading_truncated") or item["excerpt"].get("trailing_truncated")
         for item in items
     ):
         guidance.append(
@@ -278,6 +296,26 @@ def _hit_item(
     context: list[JsonObject],
 ) -> JsonObject:
     start, end = _excerpt_bounds(hit, excerpt_chars)
+    single_message = hit.end_message_id in (None, hit.message_id)
+    known_boundaries = hit.result_type == "message" or (
+        single_message and hit.source_length is not None
+    )
+    source_length = hit.source_length if hit.source_length is not None else len(hit.text)
+    source_start, source_end = hit.source_start + start, hit.source_start + end
+    excerpt: JsonObject = {"text": hit.text[start:end]}
+    if known_boundaries:
+        excerpt |= {
+            "start_char": source_start,
+            "end_char": source_end,
+            "leading_truncated": source_start > 0,
+            "trailing_truncated": source_end < source_length,
+        }
+    else:
+        excerpt["source_boundaries_unknown"] = True
+        if start > 0:
+            excerpt["leading_truncated"] = True
+        if end < len(hit.text):
+            excerpt["trailing_truncated"] = True
     item: JsonObject = {
         "rank": rank,
         "agent_id": target["agent_id"],
@@ -287,12 +325,14 @@ def _hit_item(
         "timestamp": hit.timestamp,
         "context": context,
         "context_is_partial": True,
-        "excerpt": {
-            "text": hit.text[start:end],
-            "leading_truncated": start > 0,
-            "trailing_truncated": end < len(hit.text),
-        },
+        "excerpt": excerpt,
     }
+    if "literal" in hit.sources:
+        item["match_kind"] = "keyword_match"
+    elif "semantic" in hit.sources:
+        item["match_kind"] = "semantic_candidate"
+    if hit.message_index is not None:
+        item["message_index"] = hit.message_index
     if hit.result_type == "passage":
         item["end_message_id"] = hit.end_message_id
         if hit.end_message_id is not None and hit.end_message_id != hit.message_id:
@@ -360,9 +400,10 @@ def _search_context_for_hits(
         target: JsonObject = {"agent_id": agent_id}
         if include_subagents and context.is_subagent:
             target["include_subagents"] = True
-        if sessions is not None and hit.message_id not in context.conversations:
-            context.conversations[hit.message_id] = sessions.recall_context(
-                addresses[hit.session_id], hit.message_id
+        anchor = (hit.message_id, hit.message_index)
+        if sessions is not None and anchor not in context.conversations:
+            context.conversations[anchor] = sessions.recall_context(
+                addresses[hit.session_id], hit.message_id, message_index=hit.message_index
             )
         kept.append(hit)
         targets.append(target)

@@ -295,6 +295,9 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
                 end_message_id=passage.end_message_id,
                 end_timestamp=passage.end_timestamp,
                 sources=("semantic",),
+                source_start=passage.start_offset,
+                source_length=passage.source_length,
+                message_index=passage.message_index,
             )
             for passage, session_id, distance in result.matches
         ]

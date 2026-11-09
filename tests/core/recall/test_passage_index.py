@@ -81,6 +81,7 @@ def _passage(
         end_role="user",
         start_offset=0,
         end_offset=len(text),
+        source_length=len(text),
     )
 
 
@@ -1086,11 +1087,14 @@ async def test_literal_search_reports_shared_fork_history_once(
     await recall.index.store_vectors(HEADER, {key: [1.0, 0.0, 0.0] for key, _text in waiting})
     before_reconcile = _refs(recall.index.path)
     if old_ownership_policy:
-        # Older catalogs used the audit fork point for ownership and wrote the
-        # canonical history id without a policy token. Reconcile those flags
-        # while retaining identical Passage rows and their paid embeddings.
+        # Older catalogs lack source metadata in their keys and use the audit
+        # fork point for ownership. Refresh both without re-embedding text.
         with closing(connect_store(recall.index.path)) as connection:
             connection.execute("UPDATE passage_views SET owned = 0")
+            connection.execute(
+                "UPDATE passages SET start_offset = NULL, source_length = NULL, "
+                "message_index = NULL, passage_key = 'legacy-' || passage_ref"
+            )
             connection.execute("DELETE FROM catalog_history")
             connection.execute(
                 "INSERT INTO catalog_history (history_id) VALUES (?)", (sessions.history_id,)
@@ -1098,8 +1102,11 @@ async def test_literal_search_reports_shared_fork_history_once(
             connection.commit()
     after_fork = await recall.search_page(request("needle", limit=20))
     assert {hit.session_id for hit in after_fork.hits} == {newer.id}
-    assert _refs(recall.index.path) == before_reconcile
+    if not old_ownership_policy:
+        assert _refs(recall.index.path) == before_reconcile
     assert await recall.index.pending_texts(limit=100) == []
+    assert all(hit.source_length is not None for hit in after_fork.hits)
+    assert all(hit.source_start >= 0 for hit in after_fork.hits)
 
 
 async def test_literal_search_attributes_own_fork_content_to_the_fork(

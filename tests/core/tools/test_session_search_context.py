@@ -1,5 +1,6 @@
 """Session search: conversation-only hits, bounded context and visibility."""
 
+from dataclasses import replace
 from pathlib import Path
 from typing import override
 
@@ -11,6 +12,7 @@ from core.recall import (
     HybridRecallBackend,
     RecallBackendContext,
     RecallSearchError,
+    RecallSearchHit,
     RecallSearchPage,
     SqliteFtsRecallBackend,
     VectorRecallBackend,
@@ -18,7 +20,7 @@ from core.recall import (
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
-from tests.core.recall.recall_test_support import embed_documents
+from tests.core.recall.recall_test_support import StubEmbeddings, embed_documents
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_test_support import search, success
 
@@ -198,6 +200,75 @@ async def test_empty_filtered_page_keeps_more_matches_signal(tmp_path: Path) -> 
     assert data["has_more"] is True
 
 
+@pytest.mark.parametrize("backend_type", [HybridRecallBackend, VectorRecallBackend])
+@pytest.mark.parametrize("semantic_available", [True, False])
+async def test_passage_excerpts_keep_source_positions_and_truncation(
+    tmp_path: Path,
+    backend_type: type[HybridRecallBackend | VectorRecallBackend],
+    semantic_available: bool,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="long-message")
+    source = "  needle ä😀\n" * 340 + "last words"
+    message = ChatMessage.user(source)
+    session.append(message)
+    embeddings = StubEmbeddings()
+    backend = backend_type(
+        RecallBackendContext(
+            tmp_path, sessions, embeddings=embeddings if semantic_available else None
+        )
+    )
+    try:
+        if semantic_available:
+            await embed_documents(backend.index, sessions, embeddings)
+        data = success(await search(tmp_path, {"query": "needle"}, backend))
+    finally:
+        backend.close()
+    excerpts = [item["excerpt"] for item in data["items"]]
+    assert len(excerpts) > 2
+    assert len({item["start_char"] for item in excerpts}) == len(excerpts)
+    assert all(item["message_id"] == message.id for item in data["items"])
+    assert all(item["message_index"] == 0 for item in data["items"])
+    for excerpt in excerpts:
+        start, end = excerpt["start_char"], excerpt["end_char"]
+        assert excerpt["text"] == source[start:end]
+        assert excerpt["leading_truncated"] is (start > 0)
+        assert excerpt["trailing_truncated"] is (end < len(source))
+    assert any(not item["leading_truncated"] for item in excerpts)
+    assert any(not item["trailing_truncated"] for item in excerpts)
+    assert any(item["leading_truncated"] and item["trailing_truncated"] for item in excerpts)
+
+
+async def test_hybrid_query_keeps_partial_keyword_evidence_ahead_of_semantic_only_hits(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="evidence")
+    keyword = ChatMessage.user("The vehicle maintenance plan covers inspections.")
+    semantic = ChatMessage.user("Driving on the motorway.")
+    session.append_many([keyword, semantic])
+    embeddings = StubEmbeddings()
+    backend = HybridRecallBackend(RecallBackendContext(tmp_path, sessions, embeddings=embeddings))
+    try:
+        await embed_documents(backend.index, sessions, embeddings)
+        data = success(await search(tmp_path, {"query": "vehicle maintenance budget"}, backend))
+        exact = success(await search(tmp_path, {"query": "vehicle"}, backend))
+    finally:
+        backend.close()
+    assert data["items"][0]["message_id"] == keyword.id
+    assert data["items"][0]["match_kind"] == "keyword_match"
+    assert (
+        next(item for item in data["items"] if item["message_id"] == semantic.id)["match_kind"]
+        == "semantic_candidate"
+    )
+    assert exact["items"][0]["message_id"] == keyword.id
+    literal = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
+    assert (
+        success(await search(tmp_path, {"query": "vehicle maintenance budget"}, literal))["items"]
+        == []
+    )
+
+
 @pytest.mark.parametrize(
     "code", ["semantic_unavailable", "hybrid_unavailable", "stale_cursor", "extension_failed"]
 )
@@ -217,3 +288,102 @@ async def test_backend_failures_keep_code_without_leaking_internal_diagnostics(
     assert result["ok"] is False
     assert result["error"]["code"] == code
     assert "private-database-path-and-provider-detail" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "backend_type", [SqliteFtsRecallBackend, HybridRecallBackend, VectorRecallBackend]
+)
+@pytest.mark.parametrize("lineage", ["own", "inherited", "materialized"])
+async def test_repeated_ids_keep_each_hit_and_its_own_context(
+    tmp_path: Path, backend_type, lineage: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    source = sessions.create("coder", session_id="repeated")
+    messages = []
+    for topic in ("apples", "banana"):
+        messages.append(ChatMessage.user(f"Question about {topic}"))
+        answer = ChatMessage.assistant(model="fixture", content=f"anchor {topic} 123")
+        answer = replace(answer, id="repeated", timestamp="2026-11-01T12:00:00.000000Z")
+        messages.append(answer)
+    source.append_many(messages)
+    session = source
+    if lineage != "own":
+        session = await sessions.fork(source.address)
+    if lineage == "materialized":
+        sessions.delete(source.address)
+    embeddings = StubEmbeddings()
+    backend = backend_type(RecallBackendContext(tmp_path, sessions, embeddings=embeddings))
+    try:
+        if isinstance(backend, (HybridRecallBackend, VectorRecallBackend)):
+            await embed_documents(backend.index, sessions, embeddings)
+        data = success(
+            await search(tmp_path, {"query": "anchor", "session_id": session.id}, backend)
+        )
+    finally:
+        if isinstance(backend, (HybridRecallBackend, VectorRecallBackend)):
+            backend.close()
+    hits = sorted(
+        (hit for hit in data["items"] if hit["message_id"] == "repeated"),
+        key=lambda hit: hit["message_index"],
+    )
+    assert len(hits) == 2
+    assert [hit["message_index"] for hit in hits] == [1, 3]
+    for hit, topic in zip(hits, ("apples", "banana"), strict=True):
+        assert hit["excerpt"]["text"] == f"anchor {topic} 123"
+        assert [item["text"] for item in hit["context"]] == [f"Question about {topic}"]
+    assert sessions.recall_context(session.address, "repeated") == []
+
+
+async def test_shared_passage_keeps_each_sources_truncation(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    prefix = "needle " + "x" * 1493
+    for name, text in (("short", prefix), ("long", prefix + "y" * 500)):
+        session = sessions.create("coder", session_id=name)
+        message = ChatMessage.user(text)
+        message = replace(message, id="shared", timestamp="2026-11-01T12:00:00.000000Z")
+        session.append(message)
+    backend = HybridRecallBackend(RecallBackendContext(tmp_path, sessions))
+    try:
+        for name in ("short", "long", "short"):
+            data = success(await search(tmp_path, {"query": "needle", "session_id": name}, backend))
+            excerpt = data["items"][0]["excerpt"]
+            assert excerpt["text"] == prefix
+            assert excerpt["trailing_truncated"] is (name == "long")
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("multi_message", [False, True])
+async def test_extension_passage_without_source_bounds_does_not_claim_completeness(
+    tmp_path: Path, multi_message: bool
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="extension")
+    message = ChatMessage.user("before needle after")
+    session.append(message)
+
+    class Backend(SqliteFtsRecallBackend):
+        @override
+        async def search_page(self, request):
+            hit = RecallSearchHit(
+                "passage",
+                session.id,
+                message.id,
+                "user",
+                message.timestamp,
+                "needle",
+                1.0,
+                end_message_id="another-message" if multi_message else message.id,
+                source_length=50 if multi_message else None,
+                sources=("extension",),
+            )
+            return RecallSearchPage((hit,), "passage", "relevance", "snapshot", False, 1)
+
+    data = success(
+        await search(
+            tmp_path, {"query": "needle"}, Backend(RecallBackendContext(tmp_path, sessions))
+        )
+    )
+    hit = data["items"][0]
+    assert hit["excerpt"] == {"text": "needle", "source_boundaries_unknown": True}
+    assert "match_kind" not in hit

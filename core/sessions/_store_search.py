@@ -303,6 +303,7 @@ class _Check:
                             timestamp=str(row["created_at"]),
                             text=text,
                             rank=ranks[key],
+                            message_index=int(row["seq"]),
                         )
                     )
                     if len(hits) == self._limit:
@@ -317,7 +318,7 @@ class _Check:
                 f"WITH {self._filter.eligible_sql}, "
                 f"candidates (entry_key, reported_key) AS (SELECT e.entry_key, {_REPORTED_SESSION} "
                 "FROM entries AS e WHERE e.entry_key IN (SELECT value FROM json_each(?))) "
-                "SELECT e.entry_key, e.entry_id, e.role, e.created_at, "
+                "SELECT e.entry_key, e.entry_id, e.seq, e.role, e.created_at, "
                 "COALESCE(t.content, t.search_text) AS text, c.name AS tool_name, "
                 "s.project_id, s.agent_id, s.session_id "
                 "FROM candidates AS k JOIN entries AS e ON e.entry_key = k.entry_key "
