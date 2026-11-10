@@ -171,6 +171,8 @@ def normalize_read_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
+    if isinstance(normalized.get("path"), str) and not normalized["path"].strip():
+        normalized["path"] = ""
     _reject_search_fields(normalized)
     return _translate_line_window(normalized)
 
