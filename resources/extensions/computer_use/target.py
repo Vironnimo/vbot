@@ -111,11 +111,8 @@ class DesktopSnapshot:
 
 
 class CaptureChangedError(TargetError):
-    def __init__(self) -> None:
-        super().__init__(
-            "The screen changed during capture.",
-            "screen_changed",
-        )
+    def __init__(self, message: str = "The screen changed during capture.") -> None:
+        super().__init__(message, "screen_changed")
 
 
 class DesktopTarget(Protocol):

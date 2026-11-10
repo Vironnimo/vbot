@@ -65,6 +65,8 @@ class Desktop:
         self.context = context
         # Set right before the first input method runs: from then on, input may have been sent.
         self.input_started = False
+        # A completed single action remains visible if its following screenshot fails.
+        self.completed_action: str | None = None
         # The text of the screenshot taken after a failure that followed input.
         self.failure_screen: str | None = None
         # The app this call's last mouse button press went into; keys must reach it.

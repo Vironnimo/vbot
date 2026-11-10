@@ -780,11 +780,20 @@ class ComputerUseService:
                 lines.append(await self._capture_image(desktop.screenshot))
             else:
                 self._check_stop()
-                lines.append(f"Done: {await self._act(context, desktop, action, frame)}.")
+                desktop.completed_action = (
+                    f"Done: {await self._act(context, desktop, action, frame)}."
+                )
+                lines.append(desktop.completed_action)
                 if action.name != "left_mouse_down":
                     await self._pause(SETTLE_SECONDS)
                     lines.append(await self._capture_image(desktop.screenshot))
         except InputInterrupted:
+            if desktop.completed_action is not None:
+                raise TargetError(
+                    f"{self._stopped_text()} before the following screenshot. "
+                    f"Held keys and buttons were released. {_STOPPED_ADVICE}",
+                    "computer_use_interrupted",
+                ) from None
             sent = desktop.input_started and action.sends_input
             raise TargetError(
                 f"{self._stopped_text()} during {action.describe()}"
@@ -804,10 +813,9 @@ class ComputerUseService:
                 return await self._on_worker(capture, *args)
             except CaptureChangedError:
                 if attempt == 2:
-                    raise TargetError(
+                    raise CaptureChangedError(
                         "No image was returned: the screen kept changing across three capture "
                         "attempts. Let the windows stop moving before continuing.",
-                        "screen_changed",
                     ) from None
                 await self._pause(CAPTURE_RETRY_SECONDS)
         raise AssertionError("unreachable")
@@ -818,7 +826,7 @@ class ComputerUseService:
         The Agent sees what the input did without another call; the screenshot's
         text goes to ``desktop.failure_screen``. Without input nothing is taken.
         """
-        if not desktop.input_started:
+        if not desktop.input_started or desktop.completed_action is not None:
             return
         try:
             await self._pause(SETTLE_SECONDS)
@@ -834,11 +842,13 @@ class ComputerUseService:
             self._held_run = None
 
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
+        failed = False
         try:
             done = await self._on_worker(desktop.act, action, frame, interrupt_on_cancel=True)
             if action.name == "hold_key":
                 await self._pause(action.seconds)
         except BaseException as error:
+            failed = True
             if isinstance(error, asyncio.CancelledError):
                 self.interrupt(source="run_cancel")
             if action.name == "left_mouse_up":
@@ -846,9 +856,14 @@ class ComputerUseService:
             raise
         finally:
             if action.name == "hold_key" and self._executor is not None:
-                await settle_before_cancelling(
-                    asyncio.wrap_future(self._executor.submit(desktop.target.end_hold))
-                )
+                try:
+                    await settle_before_cancelling(
+                        asyncio.wrap_future(self._executor.submit(desktop.target.end_hold))
+                    )
+                except Exception:
+                    if not failed:
+                        raise
+                    self.api.logger.exception("Computer Use could not release keys after failure")
         with self._control_lock:
             if action.name == "left_mouse_down" and not self._stop.is_set():
                 self._held_run = context.run_id or ""
@@ -906,7 +921,7 @@ class ComputerUseService:
                 lines.extend(f"   {note}" for note in action.notes)
                 sent = sent or action.sends_input
         except (CallRefusedError, TargetError) as error:
-            if not isinstance(error, InputInterrupted):
+            if not isinstance(error, InputInterrupted | CaptureChangedError):
                 await self._screen_after_failure(desktop)
             raise _batch_error(
                 error,
@@ -1102,24 +1117,33 @@ class ComputerUseService:
             try:
                 desktop.input_started = True
                 started = await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
+                if started:
+                    desktop.completed_action = f"Started {match.name}, which had no open window."
+                else:
+                    desktop.completed_action = (
+                        f"Brought the open window of {match.name} to the front; "
+                        "no new instance was started."
+                    )
                 await self._pause(OPEN_SETTLE_SECONDS)
                 shot = await self._capture_image(desktop.screenshot)
             except InputInterrupted:
+                stage = (
+                    "before the following screenshot"
+                    if desktop.completed_action is not None
+                    else f"while {match.name} was opening"
+                )
                 raise TargetError(
-                    f"{self._stopped_text()} while {match.name} was opening. {_STOPPED_ADVICE}",
+                    f"{self._stopped_text()} {stage}. {_STOPPED_ADVICE}",
                     "computer_use_interrupted",
                 ) from None
-        if not started:
-            return (
-                f"Brought the open window of {match.name} to the front; no new instance was "
-                f"started.\n{shot}"
+        completion = desktop.completed_action
+        if started:
+            completion += (
+                " A starting app can take a few seconds to show its window: if the screenshot "
+                'does not show it yet, wait with computer {"action":"wait","duration":3} '
+                "instead of opening it again."
             )
-        return (
-            f"Started {match.name}, which had no open window. A starting app can take a few "
-            "seconds to show its window: if the screenshot does not show it yet, wait with "
-            'computer {"action":"wait","duration":3} instead of opening it again.\n'
-            f"{shot}"
-        )
+        return f"{completion}\n{shot}"
 
 
 __all__ = ["ComputerUseService", "register"]
