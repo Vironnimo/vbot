@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat._queued_input import QueuedChatInput
 from core.chat._run_state import _RunRequest
+from core.chat._secret_capture import capture_user_input
 from core.chat.content_blocks import ContentBlock, masked_content
 from core.chat.errors import ChatError
 from core.chat.messages import (
@@ -232,28 +233,6 @@ class AccessorInputs:
             _reject_live_input(agent, run_kind)
             provider_id, _ = _resolve_agent_connection(deps, agent)
             _ensure_provider_exists(deps.providers, provider_id)
-            content = masked_content(content, deps.secret_masker)
-            if isinstance(context_note, str):
-                # Execution and the crash/terminal fallback share the same Note
-                # identity, including when the input append itself never succeeds.
-                context_note = (
-                    ChatMessage.note(deps.secret_masker.mask(context_note))
-                    if context_note
-                    else None
-                )
-            elif context_note is not None and isinstance(context_note.content, str):
-                context_note = replace(
-                    context_note, content=deps.secret_masker.mask(context_note.content)
-                )
-            request = _RunRequest(
-                content=content,
-                sender=sender,
-                input_origin=input_origin,
-                reply_surface=reply_surface,
-                context_note=context_note,
-                run_overrides=run_overrides,
-            )
-            payload = _payload(request, working)
             session_agent = agent
             if run_overrides is not None and not run_overrides.is_empty:
                 session_agent = await resolver.resolve_agent_async(
@@ -279,6 +258,37 @@ class AccessorInputs:
                 await sessions.run_async(
                     resolver.capture_session_settings, session.address, session_agent
                 )
+            try:
+                if sender is None or sender.kind == "user":
+                    content = await capture_user_input(deps, session.address, content)
+                else:
+                    content = masked_content(content, deps.secret_masker)
+            except BaseException:
+                if new is not None:
+                    await preparation.release()
+                    await self.loop._discard_new_session(session)
+                raise
+            if isinstance(context_note, str):
+                # Execution and the crash/terminal fallback share the same Note
+                # identity, including when the input append itself never succeeds.
+                context_note = (
+                    ChatMessage.note(deps.secret_masker.mask(context_note))
+                    if context_note
+                    else None
+                )
+            elif context_note is not None and isinstance(context_note.content, str):
+                context_note = replace(
+                    context_note, content=deps.secret_masker.mask(context_note.content)
+                )
+            request = _RunRequest(
+                content=content,
+                sender=sender,
+                input_origin=input_origin,
+                reply_surface=reply_surface,
+                context_note=context_note,
+                run_overrides=run_overrides,
+            )
+            payload = _payload(request, working)
             queue_id = new_id("que")
 
             async def accept() -> None:
@@ -427,11 +437,10 @@ class AccessorInputs:
         input_origin: InputOrigin | None,
         reply_surface: ReplySurface | None,
     ) -> bool:
-        content = masked_content(content, self.loop._dependencies.secret_masker)
         item = self._item(address, item_id)
         if item is None:
             return False
-        _, executor, preview = await self.loop.build_queue_update(
+        _, executor, _ = await self.loop.build_queue_update(
             address.agent_id,
             address.session_id,
             content,
@@ -452,8 +461,9 @@ class AccessorInputs:
                 current_executor = current.executor
                 if not isinstance(current_executor, QueuedChatInput):
                     raise ChatError("queued input is not an editable Chat request")
+                safe_content = await capture_user_input(self.loop._dependencies, address, content)
                 replacement = current_executor.with_edited_content(
-                    content, input_origin, reply_surface
+                    safe_content, input_origin, reply_surface
                 )
                 if item.admission.accessor_input_id is not None:
                     payload = _payload(replacement.request, item.admission.working_project_id)
@@ -470,9 +480,9 @@ class AccessorInputs:
                     address.session_id,
                     item_id,
                     replacement,
-                    preview,
+                    _display_content_preview(safe_content),
                     project_id=address.project_id,
-                    editable=queue_content_is_editable(content),
+                    editable=queue_content_is_editable(safe_content),
                 )
 
             return await settle_before_cancelling(change())

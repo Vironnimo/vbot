@@ -11,16 +11,41 @@ import pytest
 from textual import events
 from textual.widgets import Input, Select, TextArea
 
-from cli.tui import agent_secrets
+from cli.tui import agent_secrets, drafts
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import Picker, SecretDialog, SecretInput, TextDialog
 from cli.tui.drafts import DraftStore
+from cli.tui.state import Conversation
 from cli.tui.transport import ClientError
 from tests.cli.test_tui import Server
 
 type JsonObject = dict[str, Any]
 
 _SECRET_CHANGED = {"type": "resource_changed", "payload": {"kind": "agent_secrets"}}
+
+
+def test_detected_key_never_enters_local_draft_or_recovery() -> None:
+    key = "ghp_" + ("AbCdEf0123456789" * 3)[:36]
+    submission = {"text": key, "request": {"content": key}}
+    view = Conversation("main", draft=key, uncertain=True, uncertain_submission=submission)
+    record = drafts.draft_record(view)
+    assert record is not None
+    assert key not in str(record)
+    assert not record["uncertain"]
+    saved = drafts.saved_input_record(
+        {
+            "agent": "main",
+            "text": key,
+            "attachments": [],
+            "mentions": [],
+            "operation": "chat.edit",
+            "message_id": "msg",
+            "uncertain": True,
+            "request": {"content": key},
+            "retry_submission": submission,
+        }
+    )
+    assert key not in str(saved)
 
 
 def _request(**overrides: Any) -> JsonObject:

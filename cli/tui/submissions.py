@@ -19,6 +19,7 @@ from cli.tui.dialogs import Picker, TextDialog
 from cli.tui.drafts import (
     DraftStore,
     draft_record,
+    kept_draft,
     restore_draft,
     saved_input_record,
     secret_command_argument,
@@ -481,7 +482,7 @@ class SubmissionController:
                 return
         finally:
             self.pending.discard(id(view))
-        if text:
+        if text and kept_draft(text):
             self.history.append(text)
             self.history = self.history[-100:]
         self.accept(view, submitted)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -580,6 +581,23 @@ class ChatLoop:
             provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
             _ensure_provider_exists(self._dependencies.providers, provider_id)
             manager = self._dependencies.run_manager
+            if (
+                content is not None
+                and not internal
+                and (sender is None or sender.kind == "user")
+                and reply_surface is not None
+                and (
+                    (run_kind == RunKind.USER and reply_surface.kind in {"webui", "tui"})
+                    or (
+                        run_kind in {RunKind.USER, RunKind.CHANNEL}
+                        and reply_surface.kind == "channel"
+                        and reply_surface.conversation_kind == "direct"
+                    )
+                )
+            ):
+                from core.chat._secret_capture import capture_user_input
+
+                content = await capture_user_input(self._dependencies, session.address, content)
             request = _RunRequest(
                 content=content,
                 run_overrides=run_overrides,
@@ -890,6 +908,29 @@ class ChatLoop:
                     raise ChatError("history edits require visible plain-text content")
                 editable_session_message_index(await session.load_active_async(), edit_message_id)
             manager = self._dependencies.run_manager
+            if (
+                content is not None
+                and not internal
+                and (sender is None or sender.kind == "user")
+                and reply_surface is not None
+                and (
+                    (run_kind == RunKind.USER and reply_surface.kind in {"webui", "tui"})
+                    or (
+                        run_kind in {RunKind.USER, RunKind.CHANNEL}
+                        and reply_surface.kind == "channel"
+                        and reply_surface.conversation_kind == "direct"
+                    )
+                )
+            ):
+                from core.chat._secret_capture import capture_user_input
+
+                try:
+                    content = await capture_user_input(self._dependencies, session.address, content)
+                except BaseException:
+                    if new_session is not None:
+                        await preparation.release()
+                        await self._discard_new_session(session)
+                    raise
             request = _RunRequest(
                 content=content,
                 run_overrides=run_overrides,
@@ -946,9 +987,11 @@ class ChatLoop:
         try:
             async with self._dependencies.run_manager.session_admission_guard(address):
                 if session.generation_id is not None:
-                    await sessions.run_async(
+                    discarded = await sessions.run_async(
                         sessions.discard_unused, address, session.generation_id
                     )
+                    if discarded and self._dependencies.secrets is not None:
+                        await asyncio.to_thread(self._dependencies.secrets.remove_session, address)
         except ActiveRunError:
             # Active/queued work or another lifecycle operation owns this Session now.
             return

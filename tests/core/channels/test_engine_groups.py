@@ -33,6 +33,28 @@ from .engine_test_support import (
 _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["text", "caption", "context"])
+async def test_group_key_is_refused_before_admission(tmp_path: Path, source: str) -> None:
+    key = "ghp_" + ("AbCdEf0123456789" * 3)[:36]
+    engine, _sessions, trigger, transport = make_engine(tmp_path, response_mode="all")
+    group = make_conversation(kind="group", mentioned_bot=True)
+    context = [(group, key)] if source == "context" else ()
+    if source == "caption":
+        accepted = await engine.handle_inbound_media(
+            group, (SimpleNamespace(caption=key),), observed_context=context
+        )
+    else:
+        accepted = await engine.handle_inbound_text(
+            group, key if source == "text" else "hello", observed_context=context
+        )
+    assert not accepted
+    trigger.assert_not_awaited()
+    assert transport.sent and key not in str(transport.sent)
+    assert not engine._chat_queues
+    await engine.stop()
+
+
 def _observed_notes(chat_sessions: Any) -> list[str]:
     return [
         message.content

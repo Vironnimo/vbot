@@ -20,6 +20,7 @@ Group response gating, group access with sender roles and the group Tool ceiling
 
 ## Observed and quoted context
 
+- Group text, captions, observed context and quoted text containing a recognized API key are refused before Session or observation-inbox persistence; a group sender does not grant an Agent Secret by posting one.
 - Observed (unaddressed, `observe_unaddressed: true`) group messages enqueue in the conversation FIFO: the worker ensures the shared group Session, refreshes its Channel metadata, and appends an internal note - no Run, no reply. The sender is recorded as a participant at ingress like any group sender. An observed message on a known conversation writes only its note (`test_engine_groups.py`).
 - Text/media ingress accepts bounded `observed_context` carried under the triggering turn's one waiting-work reservation. The engine snapshots context sender roles at ingress and persists the notes before triggering the Run; rejected turns do not consume their context.
 - Context acquisition is platform-specific (Telegram passive observation; Discord bounded history backfill), feeding the same observed-note representation and FIFO.

@@ -45,7 +45,7 @@ Chat is the execution seam between Sessions and Runs: it loads canonical Session
 - Session ownership (`run.project_id`) and its Working Project (`run.working_project_id`) are distinct. The Working Project supplies cwd, instructions, Skills and shared Memory in the existing Memory block; it does not move Identity Sessions, their Workspace or personal Memory, permissions, or Sub-Agent addressing.
 - Chat never infers or injects foreign Project Context from filesystem paths a Tool used. An Identity Agent loads it explicitly through the `project` Tool, whose latest successful Result also routes Skill activation for that Session while the prompt-epoch Skill catalog keeps the admitted scope (`tools/project.md`).
 - Visible output, canonical Assistant/Tool messages, and Run annotations persist at stable boundaries; transient streaming deltas are never Session records.
-- Chat masks known Agent Secret values in Tool results and displays, user input and every Model request; persisted history is never rewritten (`secrets/agent-secrets.md` -> Masking).
+- Secret capture precedes admission; masking covers input, Tool results/displays and Model requests, never rewriting history (capture and masking: `secrets/agent-secrets.md`).
 
 ## Constraints & Gotchas
 

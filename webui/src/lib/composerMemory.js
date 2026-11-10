@@ -27,6 +27,7 @@
 // localStorage.
 
 import { holdsSecretArgument } from './agentSecrets.js';
+import { containsPotentialApiKey } from './secretDetection.js';
 
 const DRAFTS_STORAGE_KEY = 'vbot.composer.drafts.v1';
 const HISTORY_STORAGE_KEY = 'vbot.composer.history.v1';
@@ -61,11 +62,42 @@ function readStore(storageKey) {
     if (typeof localStorage === 'undefined') {
       return null;
     }
-    return parseStore(localStorage.getItem(storageKey));
+    const parsed = parseStore(localStorage.getItem(storageKey));
+    if (!parsed) return parsed;
+    const cleaned = cleanStoredText(storageKey, parsed);
+    if (JSON.stringify(cleaned) !== JSON.stringify(parsed)) {
+      localStorage.setItem(storageKey, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch {
     // Storage disabled (private browsing): never throw into module load.
     return null;
   }
+}
+
+function cleanStoredText(storageKey, store) {
+  if (storageKey === DRAFTS_STORAGE_KEY) {
+    return Object.fromEntries(
+      Object.entries(store).filter(
+        ([, value]) =>
+          typeof value !== 'string' || !containsPotentialApiKey(value),
+      ),
+    );
+  }
+  if (storageKey === HISTORY_STORAGE_KEY) {
+    return Object.fromEntries(
+      Object.entries(store).map(([key, value]) => [
+        key,
+        Array.isArray(value)
+          ? value.filter(
+              (item) =>
+                typeof item !== 'string' || !containsPotentialApiKey(item),
+            )
+          : value,
+      ]),
+    );
+  }
+  return store;
 }
 
 function parseStore(raw) {
@@ -217,7 +249,11 @@ function adoptOtherTabWrites() {
         readStore(DRAFTS_STORAGE_KEY) ??
         (adoptAll ? null : parseStore(event.newValue));
       if (external) {
-        drafts = withLocalChanges(external, drafts, dirtyDrafts);
+        drafts = withLocalChanges(
+          cleanStoredText(DRAFTS_STORAGE_KEY, external),
+          drafts,
+          dirtyDrafts,
+        );
       }
     }
     if (adoptAll || event.key === ATTACHMENTS_STORAGE_KEY) {
@@ -236,7 +272,9 @@ function adoptOtherTabWrites() {
         readStore(HISTORY_STORAGE_KEY) ??
         (adoptAll ? null : parseStore(event.newValue));
       if (external) {
-        histories = withPendingHistory(external);
+        histories = withPendingHistory(
+          cleanStoredText(HISTORY_STORAGE_KEY, external),
+        );
       }
     }
   });
@@ -266,7 +304,7 @@ export function setDraft(sessionKey, text) {
     return;
   }
   const next = typeof text === 'string' ? text : '';
-  if (!next || holdsSecretArgument(next)) {
+  if (!next || holdsSecretArgument(next) || containsPotentialApiKey(next)) {
     clearDraft(sessionKey);
     return;
   }
@@ -404,7 +442,7 @@ export function pushHistory(agentKey, text) {
     return;
   }
   const entry = typeof text === 'string' ? text.trim() : '';
-  if (!entry || holdsSecretArgument(entry)) {
+  if (!entry || holdsSecretArgument(entry) || containsPotentialApiKey(entry)) {
     return;
   }
   const existing = histories[agentKey];

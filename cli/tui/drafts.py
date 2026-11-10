@@ -30,6 +30,7 @@ from core.json_documents import (
     validate_format_version,
     write_json_document,
 )
+from core.secrets.detection import contains_potential_api_key
 from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 _FIELDS = frozenset(
@@ -153,7 +154,17 @@ def holds_secret(text: str) -> bool:
 
 def kept_draft(text: str) -> str:
     """The composer text a conversation keeps as its draft."""
-    return "" if holds_secret(text) else text
+    return "" if holds_secret(text) or contains_potential_api_key(text) else text
+
+
+def _contains_api_key(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(contains_potential_api_key(value))
+    if isinstance(value, dict):
+        return any(_contains_api_key(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_api_key(item) for item in value)
+    return False
 
 
 def draft_record(view: Conversation) -> JsonObject | None:
@@ -162,6 +173,11 @@ def draft_record(view: Conversation) -> JsonObject | None:
         return None
     record = {key: copy.deepcopy(getattr(view, key)) for key in _FIELDS}
     record["draft"] = draft
+    for field in ("uncertain_submission", "retry_submission"):
+        if _contains_api_key(record[field]):
+            record[field] = None
+            if field == "uncertain_submission":
+                record["uncertain"] = False
     return record
 
 
@@ -180,10 +196,14 @@ def saved_input_record(value: JsonObject) -> JsonObject:
         draft=kept_draft(value["text"]),
         attachments=copy.deepcopy(value.get("attachments", [])),
         mentions=list(value.get("mentions", [])),
-        retry_submission=copy.deepcopy(value.get("retry_submission")),
+        retry_submission=(
+            None
+            if _contains_api_key(value.get("retry_submission"))
+            else copy.deepcopy(value.get("retry_submission"))
+        ),
     )
     record = {key: copy.deepcopy(getattr(view, key)) for key in _FIELDS}
-    if value.get("operation") == "chat.edit":
+    if value.get("operation") == "chat.edit" and not _contains_api_key(value.get("request")):
         record["edit_recovery"] = {
             key: copy.deepcopy(value[key])
             for key in ("operation", "message_id", "uncertain", "request")

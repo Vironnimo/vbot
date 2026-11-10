@@ -145,6 +145,48 @@ describe('composerMemory /secret text', () => {
   });
 });
 
+describe('API keys in composer memory', () => {
+  it('purges previously stored keys during hydration', async () => {
+    const key = `ghp_${'a'.repeat(36)}`;
+    localStorage.setItem(
+      'vbot.composer.drafts.v1',
+      JSON.stringify({
+        'agent::one': `use ${key}`,
+        'agent::two': 'safe',
+      }),
+    );
+    localStorage.setItem(
+      'vbot.composer.history.v1',
+      JSON.stringify({
+        agent: [`use ${key}`, 'safe'],
+      }),
+    );
+    vi.resetModules();
+    const restored = await import('../composerMemory.js');
+    expect(restored.getDraft('agent::one')).toBe('');
+    expect(restored.getDraft('agent::two')).toBe('safe');
+    expect(restored.getHistory('agent')).toEqual(['safe']);
+    expect(localStorage.getItem('vbot.composer.drafts.v1')).not.toContain(key);
+    expect(localStorage.getItem('vbot.composer.history.v1')).not.toContain(key);
+  });
+
+  it('does not retain a typed key or its candidate prefix in drafts and history', () => {
+    const key = `ghp_${'a'.repeat(36)}`;
+    setDraft('agent::one', 'ordinary draft');
+    flushComposerMemory();
+    setDraft('agent::one', 'use ghp_');
+    setDraft('agent::one', `use ${key}`);
+    pushHistory('agent', `use ${key}`);
+    flushComposerMemory();
+    expect(getDraft('agent::one')).toBe('');
+    expect(getHistory('agent')).toEqual([]);
+    expect(localStorage.getItem('vbot.composer.drafts.v1')).not.toContain(key);
+    expect(
+      localStorage.getItem('vbot.composer.history.v1') ?? '',
+    ).not.toContain(key);
+  });
+});
+
 describe('composerMemory attachments', () => {
   it('keeps uploaded attachments isolated to their session', () => {
     setPendingAttachments('agent-one::session-one', [

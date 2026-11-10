@@ -671,3 +671,149 @@ async def test_simultaneous_peer_sends_in_opposite_directions_are_admitted(tmp_p
         await asyncio.gather(*(submission.run.wait() for submission in submissions))
         assert len([message for message in source.load() if message.sender]) == 1
         assert len([message for message in target.load() if message.sender]) == 1
+
+
+@pytest.mark.asyncio
+async def test_human_input_captures_before_durable_admission_and_retry(tmp_path):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from core.secrets.agent_secrets import AgentSecrets
+    from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+    key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    secrets.reload()
+    adapter = HeldFirstAdapter([{"content": "done"}])
+    async with _harness(tmp_path, adapter) as (runtime, loop):
+        loop._dependencies = replace(loop._dependencies, secrets=secrets)
+        first = await _submit(loop, "capture", f"Use {key}", new_session=True)
+        await asyncio.wait_for(adapter.entered.wait(), 3)
+        retry = await _submit(loop, "capture", f"Use {key}", new_session=True)
+        assert retry.record.address == first.record.address
+        assert len(secrets.usable(first.record.address)) == 1
+        assert key not in json.dumps(first.record.payload)
+        assert "{{secret:GITHUB_TOKEN}}" in json.dumps(first.record.payload)
+        assert key not in str(runtime.chat_sessions.get(first.record.address).load())
+        assert key not in str(adapter.requests)
+        queued = await _submit(
+            loop, "queued-capture", "later", session_id=first.record.address.session_id
+        )
+        second = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+        assert await loop.update_accessor_queued(
+            first.record.address, queued.record.queue_id, second
+        )
+        updated = await runtime.chat_sessions.lookup_accessor_input_async("queued-capture")
+        assert second not in json.dumps(updated.payload)
+        assert "{{secret:GITHUB_TOKEN_2}}" in json.dumps(updated.payload)
+        adapter.release.set()
+        await first.run.wait()
+
+
+@pytest.mark.asyncio
+async def test_secret_storage_failure_refuses_input_before_acceptance(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from core.secrets.agent_secrets import AgentSecrets
+    from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    secrets.reload()
+
+    def fail(*args):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(secrets, "capture_api_keys", fail)
+    async with _harness(tmp_path, StubAdapter([])) as (runtime, loop):
+        loop._dependencies = replace(loop._dependencies, secrets=secrets)
+        with pytest.raises(OSError):
+            await _submit(
+                loop, "failed", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", new_session=True
+            )
+        assert await runtime.chat_sessions.lookup_accessor_input_async("failed") is None
+        assert not runtime.chat_sessions.list("coder")
+
+
+@pytest.mark.asyncio
+async def test_direct_channel_run_captures_before_start_and_queue(tmp_path):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from core.chat.messages import MessageSender
+    from core.secrets.agent_secrets import AgentSecrets
+    from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    secrets.reload()
+    adapter = HeldFirstAdapter()
+    surface = ReplySurface.channel(
+        platform="test",
+        platform_display_name="Test",
+        channel_id="direct",
+        conversation_kind="direct",
+    )
+    sender = MessageSender(id="user", display_name="User")
+    first_key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    second_key = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+    async with _harness(tmp_path, adapter) as (runtime, loop):
+        loop._dependencies = replace(loop._dependencies, secrets=secrets)
+        session = runtime.chat_sessions.create("coder", session_id="channel-session")
+        run = await loop.start_run(
+            "coder",
+            first_key,
+            session_id=session.id,
+            run_kind=RunKind.CHANNEL,
+            reply_surface=surface,
+            sender=sender,
+        )
+        await asyncio.wait_for(adapter.entered.wait(), 3)
+        queued = await loop.queue_run(
+            "coder",
+            second_key,
+            session_id=session.id,
+            run_kind=RunKind.CHANNEL,
+            reply_surface=surface,
+            sender=sender,
+        )
+        assert queued.display_content == "{{secret:GITHUB_TOKEN_2}}"
+        assert first_key not in str(session.load())
+        assert first_key not in str(adapter.requests)
+        assert [item.name for item in secrets.usable(session.address)] == [
+            "GITHUB_TOKEN",
+            "GITHUB_TOKEN_2",
+        ]
+        adapter.release.set()
+        await run.wait()
+        await queued.future
+
+
+@pytest.mark.asyncio
+async def test_recognized_key_containing_known_secret_is_captured_whole(tmp_path):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from core.secrets.agent_secrets import AgentSecrets
+    from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    secrets.reload()
+    secrets.create(name="FRAGMENT", kind="text", values={"value": "abcdefgh"}, actor="user")
+    key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    adapter = HeldFirstAdapter([{"content": "done"}])
+    async with _harness(tmp_path, adapter) as (_, loop):
+        loop._dependencies = replace(loop._dependencies, secrets=secrets)
+        result = await _submit(loop, "contains-known", key, new_session=True)
+        assert result.record.payload["message"]["content"] == "{{secret:GITHUB_TOKEN}}"
+        secret = secrets.lookup(result.record.address, "GITHUB_TOKEN")
+        assert secret is not None and secret.default_field().value == key
+        adapter.release.set()
+        await result.run.wait()

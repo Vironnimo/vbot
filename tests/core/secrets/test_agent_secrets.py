@@ -522,3 +522,40 @@ def test_grants_use_full_addresses_and_revocation_reaches_descendants(
         secrets.remove_session(owner)
     assert secrets.usable(child, passed_only=True) == []
     assert _secrets(tmp_path).usable(descendant, passed_only=True) == []
+
+
+def test_capture_api_keys_is_atomic_idempotent_and_never_replaces(
+    tmp_path: Path, monkeypatch
+) -> None:
+    secrets = _secrets(tmp_path)
+    address = SessionAddress(None, "main", "s1")
+    secrets.create(
+        name="API_KEY",
+        kind="token",
+        values={"value": TOKEN},
+        actor="user",
+        lifetime="session",
+        session_id="s1",
+        agents=["main"],
+    )
+    other = "different-value-123456789"
+    secrets.capture_api_keys(address, [("API_KEY", other), ("API_KEY", other), ("API_KEY", TOKEN)])
+    assert [item.name for item in secrets.usable(address)] == ["API_KEY", "API_KEY_2"]
+    assert secrets.masker.mask(other) == "{{secret:API_KEY_2}}"
+    secrets.capture_api_keys(address, [("API_KEY", other)])
+    unrelated = SessionAddress(None, "other", "s2")
+    secrets.capture_api_keys(unrelated, [("API_KEY", other)])
+    assert not secrets.usable(unrelated)
+    assert len(secrets.all()) == 2
+    assert other not in (tmp_path / "data" / "secrets.json").read_text(encoding="utf-8")
+
+    def fail(_change):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(secrets._store, "update", fail)
+    with pytest.raises(OSError):
+        secrets.capture_api_keys(
+            address, [("ONE", "new-secret-value-123"), ("TWO", "another-secret-value-456")]
+        )
+    assert len(secrets.all()) == 2
+    assert secrets.masker.mask("new-secret-value-123") == "new-secret-value-123"

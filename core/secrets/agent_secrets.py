@@ -416,6 +416,67 @@ class AgentSecrets:
         self._notify(SecretChange("created", secret, actor))
         return secret
 
+    def capture_api_keys(
+        self, address: SessionAddress, candidates: Sequence[tuple[str, str]]
+    ) -> None:
+        """Atomically store previously unknown user-supplied values for this Session."""
+        from core.projects.address import format_agent_address
+
+        created: list[AgentSecret] = []
+        with self._lock:
+            names = {item.name for item in self.all()}
+            names.update(credential_name_key(item).upper() for item in self._credential_names())
+            values: set[str] = set()
+            for base, value in candidates:
+                if value in values or self.masker.matches_exactly(value):
+                    continue
+                values.add(value)
+                base = normalize_secret_name(base)
+                name = base
+                suffix = 2
+                while name in names:
+                    tail = f"_{suffix}"
+                    name = base[: 64 - len(tail)] + tail
+                    suffix += 1
+                names.add(name)
+                secret = AgentSecret(
+                    id=new_id(
+                        SECRET_ID_PREFIX,
+                        claim=lambda item: (
+                            item not in self._records
+                            and all(item != existing.id for existing in created)
+                        ),
+                    ),
+                    name=name,
+                    kind="token",
+                    description="",
+                    fields=_build_fields("token", {"value": value}, {}, None, bound=False),
+                    lifetime="session",
+                    session_id=address.session_id,
+                    expires_at=None,
+                    agents=(format_agent_address(address.agent_id, address.project_id),),
+                    sessions=(),
+                    session_grants=(),
+                    sinks=DEFAULT_SINKS["token"],
+                    source=None,
+                    created_at=self._clock(),
+                    created_by="user",
+                )
+                created.append(secret)
+            if created:
+
+                def write(change: SecretTransaction) -> None:
+                    for secret in created:
+                        change.set(AGENT_SECRETS, secret.id, encode_record(secret))
+
+                self._store.update(write)
+                self._commit({secret.id: secret for secret in created})
+        for secret in created:
+            _LOGGER.info(
+                "Agent Secret %s created (kind=token lifetime=session actor=user)", secret.name
+            )
+            self._notify(SecretChange("created", secret, "user"))
+
     def update(
         self,
         secret_id: str,

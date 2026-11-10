@@ -48,6 +48,7 @@ from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import (
     WaitingWorkLimitError,
 )
+from core.secrets.detection import detect_api_keys
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
@@ -87,6 +88,7 @@ _LOGGER = get_logger("channels.engine")
 
 
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
+_GROUP_KEY_REPLY = "This message contains an API key. Send it privately instead."
 _QUOTED_MESSAGE_PREFIX = "[quoted-message]"
 _QUOTED_MESSAGE_UNAVAILABLE = "[quoted-message unavailable]"
 
@@ -243,6 +245,8 @@ class ChannelConversationEngine:
                     self._config.id,
                 )
                 return False
+            if await self._reject_group_keys(conversation, (message_text,), observed_context):
+                return False
             reply_plan = self._routing._reply_plan_for(conversation)
             unavailable = self._command_dispatcher.unavailability(
                 prepared_command, self._replies.reply_surface(conversation.kind)
@@ -275,6 +279,8 @@ class ChannelConversationEngine:
                 return False
             return True
 
+        if await self._reject_group_keys(conversation, (message_text,), observed_context):
+            return False
         if not self._access.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
                 return await self._enqueue_observed_message(
@@ -315,6 +321,8 @@ class ChannelConversationEngine:
             *((normalized_companion,) if normalized_companion is not None else ()),
             *caption_texts,
         )
+        if await self._reject_group_keys(conversation, gating_texts, observed_context):
+            return False
         if not self._access.should_respond(conversation, gating_texts):
             if self._config.observe_unaddressed and conversation.kind == "group":
                 notes = []
@@ -342,6 +350,24 @@ class ChannelConversationEngine:
         ):
             await self._reject_overflow(conversation)
             return False
+        return True
+
+    async def _reject_group_keys(
+        self,
+        conversation: ConversationFacts,
+        texts: Sequence[str | None],
+        context: Sequence[tuple[ConversationFacts, str]],
+    ) -> bool:
+        if not (
+            conversation.kind == "group"
+            and any(text and detect_api_keys(text) for text in texts)
+            or any(facts.kind == "group" and detect_api_keys(text) for facts, text in context)
+        ):
+            return False
+        if not self._stopped:
+            await self._replies.send_ingress(
+                self._routing._reply_plan_for(conversation), _GROUP_KEY_REPLY
+            )
         return True
 
     async def _snapshot_observed_context(
@@ -749,6 +775,16 @@ class ChannelConversationEngine:
             if quoted is not None:
                 content = await self._content_with_quoted_message(queued, quoted)
 
+        if (
+            queued.conversation.kind == "group"
+            and isinstance(content, list)
+            and any(
+                isinstance(block, TextBlock) and detect_api_keys(block.text) for block in content
+            )
+        ):
+            await self._replies.answer_admitted(queued.pending, reply_plan, _GROUP_KEY_REPLY)
+            return
+
         await self._replies.trigger_and_relay(
             route,
             reply_plan,
@@ -812,6 +848,12 @@ class ChannelConversationEngine:
                     exc_info=(type(error), error, error.__traceback__),
                 )
                 failure_replies.append(_media_failure_reply(error))
+
+        if queued.conversation.kind == "group" and any(
+            isinstance(block, TextBlock) and detect_api_keys(block.text) for block in content_blocks
+        ):
+            await self._replies.answer_admitted(queued.pending, reply_plan, _GROUP_KEY_REPLY)
+            return
 
         for reply in dict.fromkeys(failure_replies):
             await self._replies.send(reply_plan, reply)

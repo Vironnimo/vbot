@@ -5,6 +5,7 @@ import {
   RPC_ERROR_RESPONSE,
 } from '../api/transport.js';
 import { holdsSecretArgument, isBareSecretCommand } from '../agentSecrets.js';
+import { containsPotentialApiKey } from '../secretDetection.js';
 
 const STORAGE_KEY = 'vbot.pending-chat-inputs';
 const MAX_PENDING_INPUTS = 32;
@@ -14,6 +15,8 @@ const MAX_PENDING_INPUTS = 32;
 // Restoring a page only reads these records; a deliberate send performs retries.
 export function createChatSubmissions(send, storage = browserStorage()) {
   let pending = [];
+  // Purge older pending requests before they can be restored or retried.
+  readPending(storage);
 
   function persist(entries) {
     try {
@@ -39,14 +42,15 @@ export function createChatSubmissions(send, storage = browserStorage()) {
     // Neither automatic replay nor browser persistence is safe for Commands.
     const commandCandidate = isSlashCommandCandidate(params.content);
     const request = JSON.stringify(params);
+    const sensitive = containsPotentialKeyInValue(params);
     let record = [
       ...pending,
-      ...(commandCandidate ? [] : readPending(storage)),
+      ...(commandCandidate || sensitive ? [] : readPending(storage)),
     ].find((entry) => entry.scope === scope && entry.request === request);
     if (!record) {
       record = { scope, request, inputId: newInputId() };
       pending = [...pending.slice(-(MAX_PENDING_INPUTS - 1)), record];
-      if (!commandCandidate) {
+      if (!commandCandidate && !sensitive) {
         persist([...readPending(storage), record].slice(-MAX_PENDING_INPUTS));
       }
     } else if (!pending.some((entry) => entry.inputId === record.inputId)) {
@@ -137,19 +141,42 @@ function browserStorage() {
 function readPending(storage) {
   try {
     const entries = JSON.parse(storage?.getItem(STORAGE_KEY) ?? '[]');
-    return Array.isArray(entries)
-      ? entries
-          .filter(
-            (entry) =>
-              typeof entry?.scope === 'string' &&
-              typeof entry.request === 'string' &&
-              typeof entry.inputId === 'string' &&
-              entry.inputId.length > 0 &&
-              entry.inputId.length <= 128,
-          )
-          .slice(-MAX_PENDING_INPUTS)
-      : [];
+    if (!Array.isArray(entries)) return [];
+    const safe = entries
+      .filter(
+        (entry) =>
+          typeof entry?.scope === 'string' &&
+          typeof entry.request === 'string' &&
+          isSafeStoredRequest(entry.request) &&
+          typeof entry.inputId === 'string' &&
+          entry.inputId.length > 0 &&
+          entry.inputId.length <= 128,
+      )
+      .slice(-MAX_PENDING_INPUTS);
+    if (safe.length !== entries.length) {
+      if (safe.length) storage?.setItem(STORAGE_KEY, JSON.stringify(safe));
+      else storage?.removeItem(STORAGE_KEY);
+    }
+    return safe;
   } catch {
     return [];
+  }
+}
+
+// Inspect decoded values: JSON escapes such as \n and \t otherwise hide
+// the boundary immediately before a key prefix.
+function containsPotentialKeyInValue(value) {
+  if (typeof value === 'string') return containsPotentialApiKey(value);
+  if (value && typeof value === 'object') {
+    return Object.values(value).some(containsPotentialKeyInValue);
+  }
+  return false;
+}
+
+function isSafeStoredRequest(request) {
+  try {
+    return !containsPotentialKeyInValue(JSON.parse(request));
+  } catch {
+    return false;
   }
 }
