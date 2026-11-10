@@ -14,6 +14,7 @@ A restricted check touches the filesystem (`realpath`, 8.3 expansion), and `buil
 
 ## Patterns and subtrees
 
+- Segment-pattern intersections are memoized in two process-wide LRU caches, each capped at 32,768 entries; distinct paths cannot grow either cache without bound. The per-segment recursion cache exists only for one comparison.
 - A path pattern covers what it names and everything below it, with or without wildcards (`{workdir}/secret*` covers `{workdir}/secrets/key.pem`). Matching is case-insensitive on Windows (`casefold`), never on POSIX; macOS counts as POSIX, so on its default case-insensitive volumes a differently cased path escapes a rule (known limit).
 - Tool paths do not expand placeholders: `{workdir}` in a Tool argument is a file name, as in `ToolContext.resolve_path` (`../tools/file_state.md` -> Path resolution); only `~` expands.
 - `check_path(..., glob=, subtree=, pruned=)`: `glob` (a relative rule-syntax pattern, `*.md`) and `subtree` (everything below, or below the glob's matches: a recursive delete, copy or listing) also refuse when a protected location or a deny rule could meet what they reach, segment by segment (`**` always can), except a deny below a folder named in `pruned`, which the access leaves out at every depth; `below` then names the denied part. `git`: a git operation across the files below `path`; below it only vBot's own protected locations refuse, not deny rules or rule files (`commands.md` -> Paths). The reach is case-folded like the path on Windows.

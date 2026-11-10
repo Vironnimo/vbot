@@ -21,11 +21,12 @@ import os
 import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from core.permissions._addresses import canonical_host
+from core.permissions._approval_access import ApprovalRequirement
 from core.permissions._paths import is_inside, path_key, split_lexical
 from core.permissions._refusal import PathAccess, PermissionRefusal
 from core.permissions.permissions import PermissionBoundary
@@ -34,7 +35,6 @@ if TYPE_CHECKING:
     from core.permissions.commands.commands import (
         CommandAnalyzer,
         CommandPlan,
-        PlannedPathAccess,
         ShellKind,
         SimpleCommand,
         UnresolvedElement,
@@ -81,6 +81,18 @@ _UNAVAILABLE_HINT: Final = "Run it again; if this repeats, tell the user."
 _DENIED_BELOW_HINT: Final = (
     "Use search_files, which leaves denied folders out, or name only the folders the command needs."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CommandDecision:
+    """Refused accesses paired with their exact approval identity, plus path freshness."""
+
+    refused: tuple[tuple[PermissionRefusal, ApprovalRequirement | None], ...] = ()
+    path_identities: tuple[ApprovalRequirement, ...] = ()
+
+    @property
+    def refusals(self) -> tuple[PermissionRefusal, ...]:
+        return tuple(refusal for refusal, _ in self.refused)
 
 
 class CommandChecker:
@@ -235,7 +247,7 @@ class CommandChecker:
         text: str,
         workdir_parameter: bool,
     ) -> PermissionRefusal | None:
-        refusals = self._decide_all(boundary, plan, cwd, text, workdir_parameter)
+        refusals = self._decide_all(boundary, plan, cwd, text, workdir_parameter).refusals
         return next(
             (item for item in refusals if item.reason != "not_permitted"),
             refusals[0] if refusals else None,
@@ -248,17 +260,30 @@ class CommandChecker:
         cwd: Path,
         text: str,
         workdir_parameter: bool,
-    ) -> tuple[PermissionRefusal, ...]:
-        """Collect all affected accesses, with hard refusals available to the caller."""
+        computer_id: str | None = None,
+        shell: str = "argv",
+    ) -> CommandDecision:
+        """Decide each access once and prepare its exact grant when requested."""
         from core.permissions.commands.commands import command_pattern_matches
 
-        found: list[PermissionRefusal] = []
+        found: list[tuple[PermissionRefusal, ApprovalRequirement | None]] = []
+        identities: list[ApprovalRequirement] = []
 
-        def add(refusal: PermissionRefusal | None) -> None:
-            if refusal is not None and refusal not in found:
-                found.append(refusal)
+        def add(
+            refusal: PermissionRefusal | None, requirement: ApprovalRequirement | None = None
+        ) -> None:
+            item = (refusal, requirement)
+            if refusal is not None and item not in found:
+                found.append((refusal, requirement))
 
-        add(boundary.check_path(cwd, "start_dir"))
+        root_identity = (
+            ApprovalRequirement.path(boundary, cwd, "start_dir", computer_id=computer_id)
+            if computer_id is not None
+            else None
+        )
+        if root_identity is not None:
+            identities.append(root_identity)
+        add(boundary.check_path(cwd, "start_dir"), root_identity)
         context = boundary.context
         windows = (context.platform if context is not None else sys.platform) == "win32"
         for check in (self._deny_rules, self._vbot_cli, self._vbot_server):
@@ -277,12 +302,40 @@ class CommandChecker:
                                 "not_permitted",
                                 source=layer.source,
                                 base="listed",
+                            ),
+                            ApprovalRequirement.command(
+                                text,
+                                shell=shell,
+                                cwd=cwd,
+                                computer_id=computer_id,
+                                identity=(
+                                    (command.name.casefold() if windows else command.name, True),
+                                    *((word.text, word.static) for word in command.words),
+                                ),
                             )
+                            if computer_id is not None
+                            else None,
                         )
         for url in plan.urls:
-            add(boundary.check_url(url, by_program=True))
+            refusal = boundary.check_url(url, by_program=True)
+            add(
+                refusal,
+                ApprovalRequirement.url(url, computer_id=computer_id)
+                if computer_id is not None
+                and refusal is not None
+                and refusal.reason == "not_permitted"
+                else None,
+            )
         for host in plan.hosts:
-            add(boundary.check_host(canonical_host(host), "connect", by_program=True))
+            refusal = boundary.check_host(canonical_host(host), "connect", by_program=True)
+            add(
+                refusal,
+                ApprovalRequirement.host(host, "connect", computer_id=computer_id)
+                if computer_id is not None
+                and refusal is not None
+                and refusal.reason == "not_permitted"
+                else None,
+            )
         for access in plan.paths:
             kind: PathAccess = access.kind
             path = access.path
@@ -306,6 +359,22 @@ class CommandChecker:
                         )
                     )
                     continue
+            identity = (
+                ApprovalRequirement.path(
+                    boundary,
+                    path,
+                    kind,
+                    computer_id=computer_id,
+                    subtree=access.subtree,
+                    glob=access.glob,
+                    pruned=access.pruned,
+                    git=access.git,
+                )
+                if computer_id is not None
+                else None
+            )
+            if identity is not None:
+                identities.append(identity)
             refused = boundary.check_path(
                 path,
                 kind,
@@ -321,12 +390,12 @@ class CommandChecker:
                 and not access.work_tree
             ):
                 refused = replace(refused, hint=_DENIED_BELOW_HINT)
-            add(refused)
+            add(refused, identity)
         for mention in plan.mentions:
             add(boundary.check_path(mention.path, "read", glob=mention.glob, deny_only=True))
         for element in plan.unresolved:
             add(_unresolved_refusal(boundary, element, text, workdir_parameter))
-        return tuple(found)
+        return CommandDecision(tuple(found), tuple(identities))
 
     async def prepare_line(
         self,
@@ -338,10 +407,11 @@ class CommandChecker:
         env: Mapping[str, str],
         home: Path,
         workdir_parameter: bool = False,
-    ) -> tuple[CommandPlan | None, tuple[PermissionRefusal, ...]]:
-        """Return the exact plan and all its refusals for Tool preflight."""
+        computer_id: str = "server",
+    ) -> tuple[CommandPlan | None, CommandDecision]:
+        """Return the exact plan, refusals and paired grants for Tool preflight."""
         if not boundary.restricted:
-            return None, ()
+            return None, CommandDecision()
         plan = await self._analyze(
             boundary,
             command_line,
@@ -350,11 +420,18 @@ class CommandChecker:
             ),
         )
         if isinstance(plan, PermissionRefusal):
-            return None, (plan,)
-        refusals = await _decision_pool().run(
-            self._decide_all, boundary, plan, cwd, command_line, workdir_parameter
+            return None, CommandDecision(((plan, None),))
+        decision = await _decision_pool().run(
+            self._decide_all,
+            boundary,
+            plan,
+            cwd,
+            command_line,
+            workdir_parameter,
+            computer_id,
+            shell,
         )
-        return plan, refusals
+        return plan, decision
 
     async def prepare_argv(
         self,
@@ -364,9 +441,10 @@ class CommandChecker:
         cwd: Path,
         env: Mapping[str, str],
         home: Path,
-    ) -> tuple[CommandPlan | None, tuple[PermissionRefusal, ...]]:
+        computer_id: str = "server",
+    ) -> tuple[CommandPlan | None, CommandDecision]:
         if not boundary.restricted:
-            return None, ()
+            return None, CommandDecision()
         text = " ".join(argv)
         plan = await self._analyze(
             boundary,
@@ -374,13 +452,11 @@ class CommandChecker:
             lambda analyzer: analyzer.analyze_argv(argv, cwd=cwd, env=env, home=home),
         )
         if isinstance(plan, PermissionRefusal):
-            return None, (plan,)
-        refusals = await _decision_pool().run(self._decide_all, boundary, plan, cwd, text, False)
-        return plan, refusals
-
-    @staticmethod
-    def command_path(boundary: PermissionBoundary, access: PlannedPathAccess) -> Path:
-        return _work_tree_top(boundary, access.path)[0] if access.work_tree else access.path
+            return None, CommandDecision(((plan, None),))
+        decision = await _decision_pool().run(
+            self._decide_all, boundary, plan, cwd, text, False, computer_id
+        )
+        return plan, decision
 
     async def check_line_all(
         self,
@@ -404,9 +480,10 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return (plan,)
-        return await _decision_pool().run(
+        decision = await _decision_pool().run(
             self._decide_all, boundary, plan, cwd, command_line, workdir_parameter
         )
+        return decision.refusals
 
     async def check_argv_all(
         self,
@@ -427,7 +504,8 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return (plan,)
-        return await _decision_pool().run(self._decide_all, boundary, plan, cwd, text, False)
+        decision = await _decision_pool().run(self._decide_all, boundary, plan, cwd, text, False)
+        return decision.refusals
 
     def _deny_rules(
         self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
@@ -449,29 +527,6 @@ class CommandChecker:
                         )
         return None
 
-    def _listed(
-        self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
-    ) -> PermissionRefusal | None:
-        from core.permissions.commands.commands import command_pattern_matches
-
-        for layer in boundary.layers:
-            if layer.commands != "listed":
-                continue
-            patterns = layer.shell_allow
-            for command in plan.commands:
-                if not any(
-                    command_pattern_matches(pattern, command, case_insensitive=windows)
-                    for pattern in patterns
-                ):
-                    return boundary.refusal(
-                        "command",
-                        _shown(command.source),
-                        "not_permitted",
-                        source=layer.source,
-                        base="listed",
-                    )
-        return None
-
     def _vbot_cli(
         self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
     ) -> PermissionRefusal | None:
@@ -491,6 +546,22 @@ class CommandChecker:
                 return boundary.refusal(
                     "command", _shown(command.source), "protected_location", location="vbot_cli"
                 )
+            if (
+                _PYTHONS.match(command.name) is not None
+                and command.python_path is not None
+                and not command.python_path.static
+                and _vbot_module(command)
+            ):
+                return boundary.refusal(
+                    "command",
+                    _shown(command.source),
+                    "unanalyzable",
+                    detail="the check cannot resolve PYTHONPATH to identify the Python module",
+                    hint=(
+                        "Run the module without changing PYTHONPATH, "
+                        "or name its script by a literal path."
+                    ),
+                )
         return None
 
     def _starts_vbot(
@@ -501,14 +572,23 @@ class CommandChecker:
         in_checkout: bool,
         windows: bool,
     ) -> bool:
+        root = self._key(self._vbot_root, windows)
+        module_folders = list(folders) if in_checkout else []
+        if command.executable and any(separator in command.executable for separator in ("/", "\\")):
+            module_folders.extend(folder / command.executable for folder in folders)
+        if command.python_path is not None and command.python_path.static:
+            separator = ";" if windows else ":"
+            module_folders.extend(
+                folder / entry
+                for entry in command.python_path.text.split(separator)
+                for folder in folders
+            )
+        if _vbot_module(command) and any(
+            is_inside(self._key(folder, windows), root) for folder in module_folders
+        ):
+            return True
         words = [word.text for word in command.words if word.static]
-        for index, word in enumerate(words):
-            if word == "-m" and index + 1 < len(words):
-                if in_checkout and _VBOT_MODULE.match(words[index + 1]):
-                    return True
-                continue
-            if word.startswith("-m") and in_checkout and _VBOT_MODULE.match(word[2:]):
-                return True
+        for word in words:
             if word.startswith("-") or not word.lower().endswith(".py"):
                 continue
             for folder in folders:
@@ -542,6 +622,19 @@ class CommandChecker:
     @staticmethod
     def _key(path: Path, windows: bool) -> str:
         return path_key(split_lexical(str(path), windows=windows).text, windows=windows)
+
+
+def _vbot_module(command: SimpleCommand) -> bool:
+    words = command.words
+    for index, word in enumerate(words):
+        if not word.static:
+            continue
+        if word.text == "-m" and index + 1 < len(words):
+            module = words[index + 1]
+            return module.static and _VBOT_MODULE.match(module.text) is not None
+        if word.text.startswith("-m") and _VBOT_MODULE.match(word.text[2:]):
+            return True
+    return False
 
 
 def _work_tree_top(boundary: PermissionBoundary, folder: Path) -> tuple[Path, bool]:

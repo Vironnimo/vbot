@@ -235,6 +235,11 @@ def powershell_command(analysis: Analysis, context: Context, raw: RawCommand) ->
         analysis.emit(context, name, raw.words[1:], raw)
         analysis.tier_b(context, raw, raw.words[1:])
         return
+    if lowered in ("start-bitstransfer", "bitstransfer\\start-bitstransfer"):
+        # BitsTransfer is not imported into the parser helper. Bind only its
+        # declared syntax here; do not depend on module discovery or execution.
+        cmdlet(analysis, context, raw, "Start-BitsTransfer", raw.binding or _bits_binding(raw))
+        return
     if raw.resolved is not None:
         resolved = raw.resolved
         location = LOCATION_FUNCTIONS.get(resolved.lower())
@@ -264,7 +269,12 @@ def cmdlet(
     analysis: Analysis, context: Context, raw: RawCommand, name: str, binding: Binding
 ) -> None:
     lowered = name.lower()
-    analysis.emit(context, name, raw.words[1:], raw)
+    arguments = (
+        [item for word in raw.words[1:] for item in items(word)]
+        if lowered == "start-bitstransfer"
+        else raw.words[1:]
+    )
+    analysis.emit(context, name, arguments, raw)
     if lowered in ("set-location", "push-location"):
         target = first_bound(binding, "Path", "LiteralPath")
         mode = "push" if lowered == "push-location" else "set"
@@ -304,6 +314,9 @@ def cmdlet(
         return
     if lowered in _WEB_CMDLETS:
         _web_address(analysis, context, raw, binding)
+    elif lowered == "start-bitstransfer":
+        _bits_transfer(analysis, context, raw, binding)
+        return
     parameters = cmdlet_parameters(lowered)
     if parameters is None:
         analysis.tier_b(context, raw, raw.words[1:], mentions=True)
@@ -547,9 +560,108 @@ def _new_object(analysis: Analysis, context: Context, raw: RawCommand, binding: 
 
 def _web_address(analysis: Analysis, context: Context, raw: RawCommand, binding: Binding) -> None:
     """Invoke-WebRequest's ``-Uri``: a computed one is unresolved, one without scheme is http."""
-    for value in items(binding.bound.get("Uri")):
+    for parameter in ("Uri", "Proxy"):
+        for value in items(binding.bound.get(parameter)):
+            text = analysis.literal_of(context, raw, value)
+            if text is None:
+                analysis.unresolve("url", value.source, "the address is computed when it runs")
+            else:
+                add_web_target(analysis, text, value.source)
+
+
+_BITS_SWITCHES = frozenset(
+    {
+        "Asynchronous", "Dynamic", "CustomHeadersWriteOnly", "Suspended", "WhatIf", "Confirm",
+        "Verbose", "Debug",
+    }
+)  # fmt: skip
+_BITS_VALUES = frozenset(
+    {
+        "Source", "Destination", "TransferType", "ProxyList", "NotifyCmdLine", "Authentication",
+        "Credential", "Description", "HttpMethod", "DisplayName", "Priority", "TransferPolicy",
+        "ACLFlags", "SecurityFlags", "UseStoredCredential", "ProxyAuthentication", "ProxyBypass",
+        "ProxyCredential", "ProxyUsage", "RetryInterval", "RetryTimeout", "MaxDownloadTime",
+        "CustomHeaders", "NotifyFlags", "CertStoreLocation", "CertStoreName", "CertHash",
+        "ErrorAction", "WarningAction", "InformationAction", "ProgressAction", "ErrorVariable",
+        "WarningVariable", "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable",
+    }
+)  # fmt: skip
+
+
+def _bits_binding(raw: RawCommand) -> Binding:
+    """Bind the two positional parameters and unambiguous named BITS parameters."""
+    binding = Binding({}, [], [])
+    index = 1
+    while index < len(raw.words):
+        word = raw.words[index]
+        index += 1
+        if word.parameter is not None:
+            matches = [
+                name
+                for name in _BITS_VALUES | _BITS_SWITCHES
+                if name.lower().startswith(word.parameter.lower())
+            ]
+            if len(matches) != 1:
+                binding.errors.append(word.parameter)
+                continue
+            parameter = matches[0]
+            value = word.argument
+            if parameter in _BITS_VALUES and value is None:
+                if index < len(raw.words) and raw.words[index].parameter is None:
+                    value = raw.words[index]
+                    index += 1
+                else:
+                    binding.errors.append(parameter)
+            if parameter in binding.bound:
+                binding.errors.append(parameter)
+            binding.bound[parameter] = value
+        else:
+            positional = next(
+                (name for name in ("Source", "Destination") if name not in binding.bound), None
+            )
+            if positional is None or word.splat:
+                binding.errors.append("arguments")
+            else:
+                binding.bound[positional] = word
+    return binding
+
+
+def _bits_transfer(analysis: Analysis, context: Context, raw: RawCommand, binding: Binding) -> None:
+    if binding.errors or any(word.splat for word in raw.words):
+        analysis.unresolve(
+            "path_write", raw.source, "its parameters cannot be bound before it runs"
+        )
+    accesses: tuple[tuple[str, AccessKind], ...] = (("Source", "read"), ("Destination", "write"))
+    for parameter, kind in accesses:
+        values = items(binding.bound.get(parameter))
+        if not values:
+            if parameter == "Destination" and (raw.pipeline is None or raw.pipeline.index == 0):
+                values = (Word.literal(".", source=raw.source),)
+            else:
+                analysis.unresolve(
+                    "path_read" if kind == "read" else "path_write",
+                    raw.source,
+                    "its parameters cannot be bound before it runs",
+                )
+        for value in values:
+            text = analysis.literal_of(context, raw, value)
+            if text is not None and "://" in text and not text.lower().startswith("file://"):
+                add_web_target(analysis, text, value.source)
+            else:
+                # A destination can be a folder; BITS then chooses filenames
+                # below it from Source, including the default working folder.
+                analysis.access(
+                    context, raw, kind, value, glob=True, tier="a", subtree=kind == "write"
+                )
+    for value in items(binding.bound.get("ProxyList")):
         text = analysis.literal_of(context, raw, value)
         if text is None:
             analysis.unresolve("url", value.source, "the address is computed when it runs")
-        elif "://" not in text:
+        else:
             add_web_target(analysis, text, value.source)
+    if "NotifyCmdLine" in binding.bound:
+        analysis.unresolve(
+            "command",
+            raw.source,
+            "the transfer starts another command; run that command separately",
+        )

@@ -204,7 +204,9 @@ class PermissionBoundary:
         self._windows = windows
         self._workdir = lexical_text(os.fspath(context.workdir), windows=windows)
         self._home = lexical_text(os.fspath(context.home), windows=windows)
-        self._compiled = tuple(_CompiledLayer(layer, windows=windows) for layer in layers)
+        self._compiled = tuple(
+            _CompiledLayer(layer, scratch=context.scratch_root, windows=windows) for layer in layers
+        )
         self._data_dirs = _Area.of(os.fspath(context.data_dir), windows=windows)
         self._workspace = _Area.optional(context.workspace, windows=windows)
         self._scratch = _Area.optional(context.scratch_root, windows=windows)
@@ -270,8 +272,8 @@ class PermissionBoundary:
 
     @property
     def layers(self) -> tuple[PermissionLayer, ...]:
-        """Every layer, the Agent's own first; each must permit an access."""
-        return self._layers
+        """Every effective layer, including this Run's Scratch Area, the Agent's own first."""
+        return tuple(compiled.layer for compiled in self._compiled)
 
     @property
     def context(self) -> BoundaryContext | None:
@@ -841,10 +843,12 @@ class _CompiledLayer:
         "web_deny",
     )
 
-    def __init__(self, layer: PermissionLayer, *, windows: bool) -> None:
-        self.layer = layer
+    def __init__(self, layer: PermissionLayer, *, scratch: PathLike | None, windows: bool) -> None:
+        self.layer = replace(layer, scratch=_optional_text(scratch, windows=windows))
         self.workdir = _Area.of(layer.workdir, windows=windows)
-        self.scratch = None if layer.scratch is None else _Area.of(layer.scratch, windows=windows)
+        # A ceiling retains its creator's workdir, but each Run owns its Scratch
+        # Area. The stored scratch field stays intact for ceiling round trips.
+        self.scratch = _Area.optional(scratch, windows=windows)
 
         def compiled(rules: tuple[PermissionRule, ...], kind: str) -> tuple[_PathRule, ...]:
             return tuple(_PathRule.of(rule, windows=windows) for rule in rules if rule.kind == kind)

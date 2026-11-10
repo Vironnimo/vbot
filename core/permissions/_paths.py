@@ -274,7 +274,7 @@ def _segment(text: str) -> str:
     return "**" if text == "**" else text.replace("**", "*")
 
 
-@functools.cache
+@functools.lru_cache(maxsize=32_768)
 def _segments_meet(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     """Whether two segment patterns (``*``, ``?`` within, ``**`` across) share a path."""
     if not first or not second:
@@ -293,7 +293,7 @@ def _segments_meet(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     return _segment_meets(first[0], second[0]) and _segments_meet(first[1:], second[1:])
 
 
-@functools.cache
+@functools.lru_cache(maxsize=32_768)
 def _segment_meets(first: str, second: str) -> bool:
     """Whether two one-segment wildcard patterns match a common name."""
 

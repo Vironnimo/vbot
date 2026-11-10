@@ -231,40 +231,46 @@ def test_rule_sets_resolve_per_part(
 
 
 @pytest.mark.parametrize(
-    ("first", "second", "expected"),
+    ("platform", "first", "second", "expected"),
     [
-        pytest.param(None, _rules(write="scratch"), _rules(write="scratch"), id="one-set"),
+        pytest.param("linux", None, _rules(write="scratch"), _rules(write="scratch"), id="one-set"),
         pytest.param(
+            "linux",
             _rules(read="work_area", write="work_area", deny=["Shell(rm *)"]),
             _rules(write="scratch", deny=["Read(~/.ssh)"]),
             _rules(read="work_area", write="scratch", deny=["Shell(rm *)", "Read(~/.ssh)"]),
             id="stricter-bases-and-every-deny",
         ),
         pytest.param(
+            "linux",
             _rules(commands="listed", allow=["Shell(git status)", "Shell(curl *)"]),
             _rules(commands="listed", allow=["Shell(git *)"]),
             _rules(commands="listed", allow=["Shell(git status)"]),
             id="commands-both-allow",
         ),
         pytest.param(
+            "linux",
             _rules(commands="listed", allow=["Shell(curl *)"]),
             _rules(allow=["Shell(rm *)"]),
             _rules(commands="listed", allow=["Shell(curl *)"]),
             id="an-inert-allow-stays-inert",
         ),
         pytest.param(
+            "linux",
             _rules(web="listed", allow=["Web(*.example.com)", "Web(other.org)"]),
             _rules(web="listed", allow=["Web(example.com)"]),
             _rules(web="listed", allow=["Web(*.example.com)"]),
             id="hosts-both-allow",
         ),
         pytest.param(
+            "linux",
             _rules(read="work_area", allow=["Read(~/docs/api/**)", "Read(/etc)", "Read(../x)"]),
             _rules(read="work_area", allow=["Read(~/docs)"]),
             _rules(read="work_area", allow=["Read(~/docs/api/**)"]),
             id="read-allows-inside-an-allowed-folder",
         ),
         pytest.param(
+            "linux",
             _rules(
                 read="work_area",
                 write="work_area",
@@ -278,12 +284,40 @@ def test_rule_sets_resolve_per_part(
             ),
             id="an-edit-allow-the-other-only-reads",
         ),
+        pytest.param(
+            "linux",
+            _rules(read="work_area", write="work_area", allow=["Edit(/srv/log:2026)"]),
+            _rules(read="anywhere", write="anywhere"),
+            _rules(read="work_area", write="work_area", allow=["Edit(/srv/log:2026)"]),
+            id="posix-colons-are-ordinary-filenames",
+        ),
+        pytest.param(
+            "linux",
+            _rules(read="anywhere", write="scratch", allow=["Edit(a:/notes)"]),
+            _rules(read="anywhere", write="work_area"),
+            _rules(read="anywhere", write="scratch", allow=["Edit(a:/notes)"]),
+            id="posix-drive-like-name-stays-relative-to-workdir",
+        ),
+        pytest.param(
+            "win32",
+            _rules(read="anywhere", write="scratch", allow=["Edit(a:/notes)"]),
+            _rules(read="anywhere", write="work_area"),
+            _rules(read="anywhere", write="scratch", allow=["Read(a:/notes)"]),
+            id="windows-drive-root-is-outside-workdir",
+        ),
+        pytest.param(
+            "win32",
+            _rules(read="work_area", write="work_area", allow=["Edit(C:/logs/file:stream)"]),
+            _rules(read="anywhere", write="anywhere"),
+            _rules(read="work_area", write="work_area", allow=[]),
+            id="windows-streams-still-need-an-explicit-allow",
+        ),
     ],
 )
 def test_an_intersection_permits_only_what_both_permit(
-    first: PermissionRules | None, second: PermissionRules, expected: PermissionRules
+    platform: str, first: PermissionRules | None, second: PermissionRules, expected: PermissionRules
 ) -> None:
-    assert intersect_rule_sets(first, second) == expected
+    assert intersect_rule_sets(first, second, platform=platform) == expected
 
 
 @pytest.mark.parametrize("written", ["work-dir", "work_dir", " Work dir "])

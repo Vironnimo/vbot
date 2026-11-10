@@ -54,6 +54,18 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
     [
         case("Get-ChildItem", id="listing reads the cwd", paths=("read w/p",)),
         case(
+            "$env:GIT_DIR = '../../outside/.git'; git reset --hard; "
+            "git config --global user.name x",
+            id="git powershell environment redirects and global config writes are checked",
+            paths=(
+                "read outside/.git",
+                "write w/p/** (work tree) (git)",
+                "write h/.gitconfig",
+                "write h/.config/git/config",
+            ),
+            unresolved=("path_write",),
+        ),
+        case(
             "foreach ($f in 'src/a.rs','src/b.rs') { Select-String -Path $f -Pattern x }",
             id="bounded loop literal paths are read individually",
             paths=("read w/p/src/a.rs", "read w/p/src/b.rs"),
@@ -553,6 +565,49 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "Get-ChildItem -Depth 2; Import-Module ..\\m.psm1; . ..\\s.ps1; & ..\\t.ps1",
             id="depth recurses and scripts and modules are read",
             paths=("read w/p/**", "read w/m.psm1", "read w/s.ps1", "read w/t.ps1"),
+        ),
+        case(
+            "Invoke-WebRequest ftp://evil.example/x; Invoke-RestMethod intranet "
+            "-Proxy http://proxy.example:8080; curl.exe --preproxy socks5://evil.example:1080 https://ok.example",
+            id="web cmdlets and native downloads check every network target",
+            urls=("http://proxy.example:8080", "http://intranet", "https://ok.example"),
+            hosts=("evil.example",),
+        ),
+        case(
+            "Start-BitsTransfer -Source https://ok.example/x -Destination C:/outside/x; "
+            "Start-BitsTransfer https://ok.example/y y; "
+            "BitsTransfer\\Start-BitsTransfer -Sou https://ok.example/z -Dest:z",
+            id="BITS named positional abbreviated and qualified destinations are writes",
+            paths=("write outside/x/**", "write w/p/y/**", "write w/p/z/**"),
+            urls=("https://ok.example/x", "https://ok.example/y", "https://ok.example/z"),
+        ),
+        case(
+            "Start-BitsTransfer -Source https://ok.example/x,https://ok.example/y "
+            "-Destination x,y; Start-BitsTransfer -Source upload.txt -Destination "
+            "https://ok.example/upload -TransferType Upload -ProxyList http://proxy.example:8080",
+            id="BITS checks every transfer endpoint and proxy",
+            paths=("write w/p/x/**", "write w/p/y/**", "read w/p/upload.txt"),
+            urls=(
+                "https://ok.example/x",
+                "https://ok.example/y",
+                "https://ok.example/upload",
+                "http://proxy.example:8080",
+            ),
+        ),
+        case(
+            "Start-BitsTransfer https://ok.example/x; "
+            "Start-BitsTransfer -Source https://ok.example/x -Destination $TARGET",
+            id="BITS omitted destination writes cwd and computed destination refuses",
+            paths=("write w/p/**",),
+            urls=("https://ok.example/x",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "Import-Csv inputs.csv | Start-BitsTransfer; "
+            "Start-BitsTransfer @options; Start-BitsTransfer x y -NotifyCmdLine cmd.exe,'/c del z'",
+            id="BITS piped splatted and deferred command effects stay unresolved",
+            paths=("read w/p/inputs.csv", "read w/p/x", "write w/p/y/**", "write w/p/**"),
+            unresolved=("path_read", "path_write", "command"),
         ),
         case(
             "Get-ChildItem *.md; Select-String -Path *.md x",

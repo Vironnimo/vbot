@@ -81,6 +81,9 @@ class SimpleCommand:
     words: tuple[CommandWord, ...]
     source: str
     shell: ShellKind
+    # Python launch context, retained for protecting vBot's own modules outside its cwd.
+    executable: str | None = None
+    python_path: CommandWord | None = None
 
 
 @dataclass(frozen=True, slots=True)

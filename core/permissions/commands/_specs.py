@@ -77,6 +77,7 @@ CMDLETS: Mapping[str, Mapping[str, CmdletParameter]] = {
     },
     "invoke-webrequest": {**_parameters("write", "OutFile"), **_parameters("read", "InFile")},
     "invoke-restmethod": {**_parameters("write", "OutFile"), **_parameters("read", "InFile")},
+    "start-bitstransfer": {**_parameters("read", "Source"), **_parameters("write", "Destination")},
     "start-transcript": _parameters("write", *_PATH, "OutputDirectory"),
     "mkdir": _parameters("write", *_PATH),
     # Reads.

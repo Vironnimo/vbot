@@ -135,11 +135,11 @@ async def test_hard_command_refusal_precedes_missing_access(tmp_path: Path) -> N
     )
     checker = fake_checker(analyzer)
     restricted = boundary(tmp_path, {"read": "work_area"})
-    plan_result, refusals = await checker.prepare_line(
+    plan_result, decision = await checker.prepare_line(
         restricted, "cat file; eval $x", shell="bash", cwd=tmp_path, env={}, home=tmp_path
     )
     assert plan_result is not None
-    assert {item.reason for item in refusals} == {"not_permitted", "unanalyzable"}
+    assert {item.reason for item in decision.refusals} == {"not_permitted", "unanalyzable"}
     refusal = await checker.check_line(
         restricted, "cat file; eval $x", shell="bash", cwd=tmp_path, env={}, home=tmp_path
     )
@@ -147,29 +147,103 @@ async def test_hard_command_refusal_precedes_missing_access(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize(
-    ("command", "cwd_in_checkout", "refused"),
+    ("command", "cwd_in_checkout", "python_path", "reason"),
     [
-        pytest.param("python {root}/cli/main.py agent list", False, True, id="cli-script"),
-        pytest.param("python cli/main.py agent list", True, True, id="relative-cli-script"),
-        pytest.param("python -m cli.main agent list", True, True, id="cli-module"),
-        pytest.param("python -m cli.main agent list", False, False, id="other-cli-module"),
-        pytest.param("python tools/build.py", True, False, id="other-script"),
+        pytest.param(
+            "python {root}/cli/main.py agent list",
+            False,
+            None,
+            "protected_location",
+            id="cli-script",
+        ),
+        pytest.param(
+            "python cli/main.py agent list",
+            True,
+            None,
+            "protected_location",
+            id="relative-cli-script",
+        ),
+        pytest.param(
+            "python -m cli.main agent list", True, None, "protected_location", id="cli-module"
+        ),
+        pytest.param("python -m cli.main agent list", False, None, None, id="other-cli-module"),
+        pytest.param("python tools/build.py", True, None, None, id="other-script"),
+        pytest.param(
+            '"{root}/.venv/Scripts/python.exe" -m cli agent list',
+            False,
+            None,
+            "protected_location",
+            id="checkout-interpreter",
+        ),
+        pytest.param(
+            'env "{root}/.venv/Scripts/python.exe" -mserver.main',
+            False,
+            None,
+            "protected_location",
+            id="wrapped-checkout-interpreter",
+        ),
+        pytest.param(
+            "python -m cli agent list",
+            False,
+            "{root}",
+            "protected_location",
+            id="pythonpath-checkout",
+        ),
+        pytest.param(
+            "python -m cli agent list",
+            False,
+            "../vbot",
+            "protected_location",
+            id="relative-pythonpath",
+        ),
+        pytest.param("python -m cli agent list", False, "{other}", None, id="unrelated-pythonpath"),
+        pytest.param("python -m compileall .", False, "{root}", None, id="unrelated-module"),
+        pytest.param(
+            "PYTHONPATH={root} python -m cli agent list",
+            False,
+            None,
+            "unanalyzable",
+            id="changed-pythonpath",
+        ),
+        pytest.param(
+            "env PYTHONPATH={root} python -m cli agent list",
+            False,
+            None,
+            "unanalyzable",
+            id="wrapped-changed-pythonpath",
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_vbots_own_cli_cannot_be_started(
-    tmp_path: Path, command: str, cwd_in_checkout: bool, refused: bool
+    real_analyzer: CommandAnalyzer,
+    tmp_path: Path,
+    command: str,
+    cwd_in_checkout: bool,
+    python_path: str | None,
+    reason: str | None,
 ) -> None:
     root = tmp_path / "vbot"
     work = root if cwd_in_checkout else tmp_path / "work"
-    analyzer = FakeAnalyzer(plan(command.replace("{root}", root.as_posix())))
-    checker = fake_checker(analyzer, vbot_root=root)
+    command = command.format(root=root.as_posix())
+    env = (
+        {}
+        if python_path is None
+        else {
+            "PYTHONPATH": python_path.format(
+                root=root.as_posix(), other=(tmp_path / "other").as_posix()
+            )
+        }
+    )
+    checker = CommandChecker(lambda: real_analyzer, vbot_root=root)
 
     refusal = await checker.check_line(
-        boundary(work, RESTRICTED), command, shell="bash", cwd=work, env={}, home=tmp_path
+        boundary(work, RESTRICTED), command, shell="bash", cwd=work, env=env, home=tmp_path
     )
 
-    assert (refusal.location if refusal else None) == ("vbot_cli" if refused else None)
+    assert (refusal.reason if refusal else None) == reason
+    if reason == "protected_location":
+        assert refusal is not None and refusal.location == "vbot_cli"
 
 
 @pytest.mark.asyncio
@@ -278,6 +352,48 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
         pytest.param("bash", "awk 1 --file=secrets/key.txt", "deny_rule", id="mention-denied"),
         pytest.param("bash", "awk '{print}' notes --out=x", None, id="mention-allowed"),
         pytest.param("bash", "echo secrets/key.txt", None, id="no-path-program"),
+        pytest.param(
+            "bash",
+            "curl --json '{\"message\":\"hello\"}' --data-raw 'hello world' https://ok.example",
+            None,
+            id="curl-inline-payloads-stay-allowed",
+        ),
+        pytest.param(
+            "bash",
+            "curl --json @../outside.json https://ok.example",
+            "not_permitted",
+            id="curl-json-file-outside-is-refused",
+        ),
+        *[
+            pytest.param("bash", line, reason, id=id)
+            for line, reason, id in (
+                (
+                    f"curl --resolve ok.example:{PORT}:127.0.0.1 http://ok.example:{PORT}/api",
+                    "protected_location",
+                    "curl-dns-override-protects-server-port",
+                ),
+                (
+                    f"curl --connect-to ok.example:{PORT}:127.0.0.1: http://ok.example:{PORT}/api",
+                    "protected_location",
+                    "curl-connect-override-inherits-server-port",
+                ),
+                (
+                    f"curl --connect-to ::127.0.0.1: http://ok.example:{PORT}/api",
+                    "protected_location",
+                    "curl-wildcard-override-inherits-url-port",
+                ),
+                (
+                    f"curl --connect-to :::{PORT} http://localhost:8000/api",
+                    "protected_location",
+                    "curl-port-override-inherits-url-host",
+                ),
+                (
+                    "curl --resolve ok.example:8000:127.0.0.1 http://ok.example:8000/api",
+                    None,
+                    "curl-dns-override-other-port-stays-allowed",
+                ),
+            )
+        ],
         pytest.param("bash", "../tools/viewer.exe --version", None, id="native-outside"),
         pytest.param("bash", '"{native}" --version', None, id="native-absolute-outside"),
         pytest.param(
@@ -298,6 +414,21 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
                 ),
             )
             for line, reason, id in (
+                (
+                    "Start-BitsTransfer -Source https://ok.example/secrets",
+                    "deny_rule",
+                    "bits-implicit-destination-checks-children",
+                ),
+                (
+                    "Start-BitsTransfer -Source https://ok.example/secrets -Destination .",
+                    "deny_rule",
+                    "bits-explicit-directory-checks-children",
+                ),
+                (
+                    "Start-BitsTransfer -Source https://ok.example/file -Destination out/file",
+                    None,
+                    "bits-destination-outside-denied-subtree-stays-allowed",
+                ),
                 ("pytest -q | Select-String passed", None, "native-output-is-text"),
                 ("pytest -q | Remove-Item", "unanalyzable", "native-output-is-not-a-file-list"),
                 (

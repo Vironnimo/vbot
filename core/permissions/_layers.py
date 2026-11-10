@@ -37,8 +37,9 @@ _LAYER_FIELDS: Final = _REQUIRED_FIELDS | {"scratch", "rule_files"}
 class PermissionLayer:
     """One placeholder-free rule set that a Run's accesses must satisfy.
 
-    Bases are always set (defaults filled). ``workdir`` and ``scratch`` are the
-    layer's Work Area; path patterns of its rules are absolute. ``rule_files``
+    Bases are always set (defaults filled). ``workdir`` is the layer's working
+    directory; stored ``scratch`` records its original Scratch Area and an
+    effective boundary layer uses its own Run's area. Rule paths are absolute. ``rule_files``
     are the files this layer's rules come from (a Team member's repository
     profile and the settings files its translation reads, also ones that do not
     exist yet): no Run under the layer may change them, so a ceiling protects

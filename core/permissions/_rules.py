@@ -355,7 +355,10 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
 
 
 def intersect_rule_sets(
-    first: PermissionRules | None, second: PermissionRules | None
+    first: PermissionRules | None,
+    second: PermissionRules | None,
+    *,
+    platform: str = sys.platform,
 ) -> PermissionRules | None:
     """One level that permits only what both rule sets permit.
 
@@ -378,7 +381,7 @@ def intersect_rule_sets(
             *((rule, first) for rule in second.allow or ()),
         )
         for rule, other in candidates:
-            within = _within(other, rule)
+            within = _within(other, rule, windows=platform == "win32")
             if within is not None and within not in kept:
                 kept.append(within)
         allow = tuple(kept)
@@ -407,15 +410,17 @@ def _stricter(part: str, first: str | None, second: str | None) -> str | None:
     return max(first, second, key=choices.index)
 
 
-def _within(rules: PermissionRules, rule: PermissionRule) -> PermissionRule | None:
+def _within(
+    rules: PermissionRules, rule: PermissionRule, *, windows: bool
+) -> PermissionRule | None:
     """``rule`` as far as ``rules`` permit what it names, or ``None``."""
     if rule.kind == "Shell":
         return rule if _permits_command(rules, rule.pattern) else None
     if rule.kind == "Web":
         return rule if _permits_host(rules, rule.pattern) else None
-    if rule.kind == "Edit" and _permits_path(rules, rule.pattern, write=True):
+    if rule.kind == "Edit" and _permits_path(rules, rule.pattern, write=True, windows=windows):
         return rule
-    if _permits_path(rules, rule.pattern, write=False):
+    if _permits_path(rules, rule.pattern, write=False, windows=windows):
         # An Edit allow also permits reading; where only reading is permitted, it reads.
         return PermissionRule("Read", rule.pattern)
     return None
@@ -462,32 +467,32 @@ _ALWAYS_READABLE: Final = frozenset({"{scratch}", "{workdir}", "{workspace}"})
 _ROOT = re.compile(r"//[^/]+/[^/]+/|[A-Za-z]:/|/")
 
 
-def _permits_path(rules: PermissionRules, pattern: str, *, write: bool) -> bool:
+def _permits_path(rules: PermissionRules, pattern: str, *, write: bool, windows: bool) -> bool:
     """Whether ``rules`` permit reading (or changing) everything ``pattern`` names.
 
     An unsafe form (network or device path, alternate data stream) is permitted
     only by an allow rule without wildcards, as the boundary decides it.
     """
-    unsafe = split_lexical(pattern, windows=True).unsafe is not None
+    unsafe = split_lexical(pattern, windows=windows).unsafe is not None
     read = rules.read or "anywhere"
     base = write_within_read(read, rules.write or "anywhere") if write else read
     if not unsafe:
         if base == "anywhere":
             return True
-        place = _anchored(pattern)
+        place = _anchored(pattern, windows=windows)
         if ".." not in place:
             free = {"{scratch}", "{workdir}"} if base == "work_area" else {"{scratch}"}
             if place[0] in (free if write else _ALWAYS_READABLE):
                 return True
     kinds = ("Edit",) if write else ("Read", "Edit")
     return any(
-        _path_covers(allowed.pattern, pattern, exact=unsafe)
+        _path_covers(allowed.pattern, pattern, exact=unsafe, windows=windows)
         for allowed in rules.allow or ()
         if allowed.kind in kinds
     )
 
 
-def _path_covers(allowed: str, pattern: str, *, exact: bool) -> bool:
+def _path_covers(allowed: str, pattern: str, *, exact: bool, windows: bool) -> bool:
     """Whether the path pattern ``allowed`` covers everything ``pattern`` names.
 
     Only a pattern without wildcards (apart from a closing ``/**``, unless
@@ -500,16 +505,16 @@ def _path_covers(allowed: str, pattern: str, *, exact: bool) -> bool:
         return True
     if exact:
         return not has_wildcard(allowed) and is_inside(pattern, allowed)
-    folder = _anchored(allowed)
+    folder = _anchored(allowed, windows=windows)
     if folder[-1] == "**":
         folder = folder[:-1]
     if any(has_wildcard(segment) for segment in folder):
         return False
-    place = _anchored(pattern)
+    place = _anchored(pattern, windows=windows)
     return place[: len(folder)] == folder and ".." not in place[len(folder) :]
 
 
-def _anchored(pattern: str) -> tuple[str, ...]:
+def _anchored(pattern: str, *, windows: bool) -> tuple[str, ...]:
     """A normalized path pattern as its anchor and its segments.
 
     The anchor is the placeholder (``~`` is ``{home}``, a relative pattern
@@ -520,8 +525,10 @@ def _anchored(pattern: str) -> tuple[str, ...]:
         anchor = head + "}"
     elif pattern == "~" or pattern.startswith("~/"):
         anchor, rest = "{home}", pattern[1:]
-    elif (root := _ROOT.match(pattern)) is not None:
+    elif windows and (root := _ROOT.match(pattern)) is not None:
         anchor, rest = root.group(0), pattern[root.end() :]
+    elif pattern.startswith("/"):
+        anchor, rest = "/", pattern.lstrip("/")
     else:
         anchor, rest = "{workdir}", pattern
     return (anchor, *(segment for segment in rest.split("/") if segment not in ("", ".")))

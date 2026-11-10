@@ -355,3 +355,69 @@ def test_session_grant_suggestion_lets_the_same_access_run(tmp_path: Path, case:
         assert widened.check_path(notes.parent / "elsewhere.md", "write") is not None
     elif case == "host":
         assert widened.check_host("example.org", "connect", by_program=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unpaired", [False, True])
+async def test_command_preflight_accounts_for_every_refused_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unpaired: bool
+) -> None:
+    from dataclasses import replace
+
+    from core.permissions import PermissionDenied
+    from core.tools._permission_preflight import authorize_command
+    from tests.core.permissions.command_check_support import FakeAnalyzer, fake_checker, plan
+    from tests.core.tools.tools_test_support import make_context
+
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"write": "work_area", "commands": "listed", "web": "listed"}),
+        BoundaryContext(workdir=work, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    checker = fake_checker(
+        FakeAnalyzer(
+            plan("fetch", writes=[outside], urls=["https://web.example/a"], hosts=["ssh.example"])
+        )
+    )
+    requests = []
+
+    async def approval(context, reason, requirements, arguments, cwd):
+        requests.append(requirements)
+        return True
+
+    async def refresh(force: bool):
+        return boundary, {"computer_id": "desktop"}
+
+    context = make_context(
+        "bash",
+        cwd=work,
+        permissions=boundary,
+        execution={"computer_id": "desktop"},
+        approval_hook=approval,
+        approval_refresh_hook=refresh,
+    )
+    if unpaired:
+        prepare = checker.prepare_line
+
+        async def without_requirement(*args, **kwargs):
+            prepared, decision = await prepare(*args, **kwargs)
+            refusal, _ = decision.refused[-1]
+            return prepared, replace(decision, refused=(*decision.refused[:-1], (refusal, None)))
+
+        monkeypatch.setattr(checker, "prepare_line", without_requirement)
+        with pytest.raises(PermissionDenied) as error:
+            await authorize_command(
+                context, checker, arguments={}, cwd=work, env={}, command="fetch", shell="bash"
+            )
+        assert error.value.refusal.reason == "not_permitted"
+        assert not requests
+        return
+
+    await authorize_command(
+        context, checker, arguments={}, cwd=work, env={}, command="fetch", shell="bash"
+    )
+    assert len(requests) == 1
+    assert {item.kind for item in requests[0]} == {"command", "path", "url", "host"}
+    assert all(item.computer_id == "desktop" for item in requests[0])
+    await context.revalidate_permissions()
+    assert len(requests) == 1

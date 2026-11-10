@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from core.permissions import (
     PermissionRefusal,
     run_permission_decision,
 )
-from core.permissions.commands.commands import CommandPlan, ShellKind, command_pattern_matches
+from core.permissions.commands.commands import CommandPlan, ShellKind
 from core.tools._tool_context import ToolContext
 from core.tools.contracts import JsonObject, ToolContractError
 
@@ -154,7 +153,6 @@ async def authorize_command(
     if not context.permissions.restricted:
         return
     computer = str(context.execution.get("computer_id", "server"))
-    original = command if command is not None else " ".join(argv or ())
 
     async def assess() -> tuple[
         CommandPlan | None,
@@ -165,7 +163,7 @@ async def authorize_command(
         boundary = context.permissions
         if command is not None:
             assert shell is not None
-            plan, refusals = await checker.prepare_line(
+            plan, decision = await checker.prepare_line(
                 boundary,
                 command,
                 shell=shell,
@@ -173,10 +171,11 @@ async def authorize_command(
                 env=env,
                 home=Path.home(),
                 workdir_parameter=workdir_parameter,
+                computer_id=computer,
             )
         else:
-            plan, refusals = await checker.prepare_argv(
-                boundary, argv or (), cwd=cwd, env=env, home=Path.home()
+            plan, decision = await checker.prepare_argv(
+                boundary, argv or (), cwd=cwd, env=env, home=Path.home(), computer_id=computer
             )
 
         def collect() -> tuple[
@@ -185,9 +184,12 @@ async def authorize_command(
             list[ApprovalRequirement],
             tuple[ApprovalRequirement, ...],
         ]:
-            for hard_refusal in refusals:
-                if hard_refusal.reason != "not_permitted":
-                    raise PermissionDenied(hard_refusal)
+            missing: list[ApprovalRequirement] = []
+            for refusal, requirement in decision.refused:
+                if refusal.reason != "not_permitted" or requirement is None:
+                    raise PermissionDenied(refusal)
+                if requirement not in missing:
+                    missing.append(requirement)
             if plan is not None and refuse_command is not None:
                 for simple_command in plan.commands:
                     problem = refuse_command(simple_command)
@@ -202,88 +204,7 @@ async def authorize_command(
                                 hint=hint,
                             )
                         )
-            missing: list[ApprovalRequirement] = []
-
-            def add(item: ApprovalRequirement) -> None:
-                if item not in missing:
-                    missing.append(item)
-
-            identities = [
-                ApprovalRequirement.path(boundary, cwd, "start_dir", computer_id=computer)
-            ]
-            if plan is None:
-                return plan, refusals, missing, tuple(identities)
-            if any(item.access == "command" for item in refusals):
-                windows = (
-                    boundary.context.platform if boundary.context else sys.platform
-                ) == "win32"
-                for simple in plan.commands:
-                    if any(
-                        layer.commands == "listed"
-                        and not any(
-                            command_pattern_matches(pattern, simple, case_insensitive=windows)
-                            for pattern in layer.shell_allow
-                        )
-                        for layer in boundary.layers
-                    ):
-                        identity = [(simple.name.casefold() if windows else simple.name, True)]
-                        identity.extend((word.text, word.static) for word in simple.words)
-                        add(
-                            ApprovalRequirement.command(
-                                original,
-                                shell=shell or "argv",
-                                cwd=cwd,
-                                computer_id=computer,
-                                identity=identity,
-                            )
-                        )
-            root_refusal = boundary.check_path(cwd, "start_dir")
-            if root_refusal is not None and root_refusal.reason == "not_permitted":
-                add(ApprovalRequirement.path(boundary, cwd, "start_dir", computer_id=computer))
-            for item in plan.paths:
-                path = checker.command_path(boundary, item)
-                identities.append(
-                    ApprovalRequirement.path(
-                        boundary,
-                        path,
-                        item.kind,
-                        computer_id=computer,
-                        subtree=item.subtree,
-                        glob=item.glob,
-                        pruned=item.pruned,
-                        git=item.git,
-                    )
-                )
-                refusal = boundary.check_path(
-                    path,
-                    item.kind,
-                    subtree=item.subtree,
-                    glob=item.glob,
-                    pruned=item.pruned,
-                    git=item.git,
-                )
-                if refusal is not None and refusal.reason == "not_permitted":
-                    add(
-                        ApprovalRequirement.path(
-                            boundary,
-                            path,
-                            item.kind,
-                            computer_id=computer,
-                            subtree=item.subtree,
-                            glob=item.glob,
-                            pruned=item.pruned,
-                            git=item.git,
-                        )
-                    )
-            for url in plan.urls:
-                refusal = boundary.check_url(url, by_program=True)
-                if refusal is not None and refusal.reason == "not_permitted":
-                    add(ApprovalRequirement.url(url, computer_id=computer))
-            for host in plan.hosts:
-                refusal = boundary.check_host(host, "connect", by_program=True)
-                if refusal is not None and refusal.reason == "not_permitted":
-                    add(ApprovalRequirement.host(host, "connect", computer_id=computer))
-            return plan, refusals, missing, tuple(identities)
+            return plan, decision.refusals, missing, decision.path_identities
 
         return await run_permission_decision(collect)
 

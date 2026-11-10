@@ -9,7 +9,7 @@ they never disagree on what a Session may reach.
 The boundary rides from the Run's execution context to every Tool Call
 (``ToolContext.permissions``). An Agent without rules, in a Session without an
 inherited ceiling, gets ``PermissionBoundary.UNRESTRICTED`` without building
-anything: full-access Runs pay nothing for the feature. Before each Tool round
+a boundary. Before each Tool round
 :class:`RunPermissions` notices a changed rule source or Session override, and
 the Run rebuilds it.
 """
@@ -120,10 +120,10 @@ class SessionPermissions:
             "home": str(Path.home()),
         }
 
-    def rule_sources(self) -> tuple[Path, ...]:
+    def rule_sources(self, data_dir: Path) -> tuple[Path, ...]:
         """The files whose change can change this boundary without a vBot write."""
         own = (self.agent_config,) if self.agent_config is not None else ()
-        return (*own, *self.rule_files)
+        return (DataDirectoryLayout(data_dir).settings_file, *own, *self.rule_files)
 
     def boundary(
         self,
@@ -261,9 +261,9 @@ class RunPermissions:
 
     ``documents`` counts the configuration documents vBot had written
     (:func:`core.json_documents.documents_written`): every rule edit through
-    vBot changes it, so even a full-access Run notices one without any I/O. A
-    restricted Run also compares its rule source files, which the user may edit
-    outside vBot. ``session_state`` is what the Session stored when the
+    vBot changes it, so every Run notices one without any I/O. Every Run also
+    compares its rule source files, because an external edit can restrict a
+    previously unrestricted Agent. ``session_state`` is what the Session stored when the
     boundary was built (the user's rules for it and its ceiling), which lives in
     the Session database, not in a document.
     """
@@ -283,7 +283,7 @@ class RunPermissions:
         overrides = await _session_overrides(dependencies, self.address)
         if _session_rule_state(overrides) != self.session_state:
             return True
-        if not self.boundary.restricted or not self.sources:
+        if not self.sources:
             return False
         return await _CHAT_TRANSFORM_WORKERS.run(_stamps, self.sources) != self.stamps
 
@@ -312,11 +312,15 @@ async def run_permission_boundary(
         agent, data_dir=data_dir, project_root=project_root, ceiling=overrides.ceiling()
     )
     if not permissions.restricted:
+        sources = permissions.rule_sources(data_dir)
+        stamps = await _CHAT_TRANSFORM_WORKERS.run(_stamps, sources)
         return RunPermissions(
             PermissionBoundary.UNRESTRICTED,
             documents,
             address,
             project_root,
+            sources,
+            stamps,
             session_state=session_state,
         )
     scratch_root: Path | None = None
@@ -358,7 +362,7 @@ def _build_run_permissions(
     session_state: str,
 ) -> RunPermissions:
     """Blocking: the sources' stamps are taken before the boundary is built from them."""
-    sources = permissions.rule_sources()
+    sources = permissions.rule_sources(data_dir)
     stamps = _stamps(sources)
     boundary = permissions.boundary(
         data_dir,
