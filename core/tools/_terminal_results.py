@@ -174,44 +174,45 @@ def _reply_pending_text(terminal_id: str) -> str:
 # Results
 
 
-# Snapshot facts no Tool result shows: attention records repeat what state,
-# wait_ended and the screen already say, revisions guard input the terminal
-# tracks itself, timestamps and sizes change no next call, and the observation
-# is the manager's record of the shown screen.
-_HIDDEN_SNAPSHOT_FIELDS = frozenset(
-    {
-        "attention",
-        "attention_revision",
-        "screen_revision",
-        "started_at",
-        "finished_at",
-        "pid",
-        "observation",
-        "columns",
-        "rows",
-        "alternate_screen",
-        "stopped",
-        "command",
-        "arguments",
-        "cursor",
-        "seen_line",
-        "idle_reason",
-        "log_complete",
-        "log_end_line",
-        "screen_behind",
-    }
-)
+# Explicit Agent projection: a new internal snapshot field is private by default.
+_SCREEN_FIELDS = ("screen", "scrollback", "size_change", "launch_pending", "note")
 _ALTERNATE_SCREEN_NOTE = (
     "The program shows a full-screen view (alternate screen), which keeps no terminal "
     "history; to see earlier content, use the program's own scrolling or paging."
 )
 # Launch facts: status shows them; other results do not repeat them, except
 # that start names the log and the computer it started on.
-_LAUNCH_FIELDS = ("program", "title", "workdir", "log")
 _COMPUTER_FIELDS = ("computer_id", "computer_name", "computer_online")
 # Results that follow the program: their history holds only lines the Agent
 # has not seen, and they offer no pages (user decision D1).
 _FOLLOWING_VIEWS = frozenset({"start", "input", "wait", "resize"})
+
+
+def _computer_result(result: JsonObject, *, allowed: set[str]) -> JsonObject:
+    """Name the computer only when it distinguishes an execution target."""
+    if not result.get("ok") or len(allowed) > 1:
+        return result
+    data = result["data"]
+    for item in (data, *data.get("terminals", [])):
+        if item.get("computer_id") == "server":
+            for key in _COMPUTER_FIELDS:
+                item.pop(key, None)
+    if allowed <= {"server"}:
+        data.pop("computers", None)
+    return result
+
+
+def _wait_ended_notes(ended: str, *, pattern: bool, seconds: float) -> list[str]:
+    if ended == "pattern_timeout":
+        return [
+            "The wait ended because matching pattern took too long. Simplify pattern "
+            "and wait again; the program keeps running."
+        ]
+    if ended == "user":
+        return ["The user ended this wait; the program keeps running."]
+    if ended == "timeout" and pattern:
+        return [f"No output matched pattern within {seconds:g} seconds."]
+    return []
 
 
 def _log_text(path: str, *, complete: bool, end_line: int | None = None) -> str:
@@ -266,22 +267,17 @@ def _screen_result(
         del projected["call_name"]
     if projected["state"] != "running" and snapshot.get("exit_code") is not None:
         projected["exit_code"] = snapshot["exit_code"]
-    for key, value in snapshot.items():
-        if key in _HIDDEN_SNAPSHOT_FIELDS or key in projected or key in {"state", "call_name"}:
-            continue
-        if value is None or value == "" or key == "exit_code":
-            continue
-        if key == "log_file":
-            projected["log"] = _log_text(str(value), complete=log_complete, end_line=log_end)
-            continue
-        projected[key] = value
-    if view != "status":
-        for key in _LAUNCH_FIELDS:
-            if not (view == "start" and key == "log"):
-                projected.pop(key, None)
-        if view != "start":
-            for key in _COMPUTER_FIELDS:
-                projected.pop(key, None)
+    fields = list(_SCREEN_FIELDS)
+    if view == "status":
+        fields.extend(("program", "title", "workdir"))
+    if view in {"start", "status"}:
+        fields.extend(_COMPUTER_FIELDS)
+        if log:
+            projected["log"] = _log_text(log, complete=log_complete, end_line=log_end)
+    for key in fields:
+        value = snapshot.get(key)
+        if value is not None and value != "":
+            projected[key] = value
     screen = projected.pop("screen", None)
     page = dict(projected.pop("scrollback", None) or {})
     history = page.pop("text", "")

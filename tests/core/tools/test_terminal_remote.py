@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -133,24 +134,60 @@ def _context(path: Path) -> Any:
     )
 
 
+@pytest.mark.parametrize("launch", ["default", "relative-program"])
 @pytest.mark.asyncio
 async def test_remote_terminal_keeps_its_computer_and_enforces_session_grants(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    launch: str,
 ) -> None:
     manager, link, factory = remote
     context = _context(tmp_path)
-    started = await call(manager, context, {"action": "start", "command": "editor"})
+    for invalid in (
+        {"command": "editor", "key": "space"},
+        {"command": "editor", "key": 5},
+        {"command": "editor", "columns": 20},
+        {"command": "editor", "rows": 100},
+        {"args": ["--flag"]},
+    ):
+        refused = await call(manager, context, {"action": "start", **invalid})
+        assert refused["error"]["code"] == "invalid_arguments", refused
+        assert manager.list_terminals() == [] and factory.calls == []
+        assert not any(request["operation"] == "start" for request in link.requests)
+    command = "editor"
+    directory = Path.home()
+    arguments: dict[str, Any] = {"action": "start", "command": command}
+    if launch == "relative-program":
+        command = Path(sys.executable).name + " tool"
+        (tmp_path / command).touch()
+        directory = tmp_path
+        arguments.update(command=command, workdir=str(directory))
+        monkeypatch.setattr(
+            terminal_execution,
+            "terminal_environment",
+            lambda: {"PATH": str(Path(sys.executable).parent)},
+        )
+    started = await call(manager, context, arguments)
     assert started["ok"], started
     terminal_id = started["data"]["terminal_id"]
-    assert factory.calls[0][0] == ["editor"]
-    assert factory.calls[0][1] == Path.home()
+    assert factory.calls[0][0] == [command]
+    assert factory.calls[0][1] == directory
     assert started["data"]["computer_id"] == "pc_laptop"
+    duplicate = await call(manager, context, {"action": "start", "terminal_id": terminal_id})
+    assert duplicate["error"]["code"] == "invalid_arguments"
+    assert terminal_id in duplicate["error"]["message"]
+    assert len(factory.calls) == 1
+    listed = await call(manager, context, {"action": "list"})
+    assert listed["data"]["terminals"][0]["computer_id"] == "pc_laptop"
+    assert listed["data"]["computers"][0]["computer_id"] == "pc_laptop"
     assert manager.list_for_operator()[0]["computer_name"] == "Laptop"
     context = replace(
         context,
         execution={"computer_id": "server", "allowed_computer_ids": ["server", "pc_laptop"]},
     )
+    listed = await call(manager, context, {"action": "list"})
+    assert {item["computer_id"] for item in listed["data"]["computers"]} == {"server", "pc_laptop"}
     sent = await call(
         manager, context, {"action": "input", "terminal_id": terminal_id, "data": "hello"}
     )
@@ -162,7 +199,7 @@ async def test_remote_terminal_keeps_its_computer_and_enforces_session_grants(
     for action in ("status", "input", "wait", "kill", "attach", "detach", "resize"):
         refused = await call(manager, context, {"action": action, "terminal_id": terminal_id})
         assert refused["error"]["code"] == "computer_not_allowed", refused
-    assert (await call(manager, context, {"action": "list"}))["data"]["terminals"] == []
+    assert (await call(manager, context, {"action": "list"}))["data"] == {"terminals": []}
     assert factory.adapters[0].alive
 
 

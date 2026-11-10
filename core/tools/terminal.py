@@ -73,6 +73,7 @@ from core.tools.tools import (
 )
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.subagents import SubAgentTree
@@ -112,6 +113,7 @@ from ._terminal_results import (
     _capacity_message,
     _capped_wait_note,
     _closed_message,
+    _computer_result,
     _find,
     _first_screen_pending_text,
     _not_attached_text,
@@ -129,6 +131,7 @@ from ._terminal_results import (
     _unread_screen_result,
     _unseen_from,
     _UnsentStartInput,
+    _wait_ended_notes,
     _wait_pattern,
     _wait_seconds,
     _with_notes,
@@ -141,6 +144,11 @@ from ._terminal_target import (
 )
 
 _LOGGER = get_logger("tools.terminal")
+_PREPARE_WORKER = BoundedWorkerPool(name="terminal_prepare", max_workers=4)
+
+
+class _PreparationChangedError(Exception):
+    """The call must be prepared again under current rules or prompt state."""
 
 
 def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[JsonObject]:
@@ -174,7 +182,7 @@ def make_terminal_handler(
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal(
+        result = await _handle_terminal(
             terminal_manager,
             projects,
             subagents,
@@ -183,6 +191,7 @@ def make_terminal_handler(
             scratch_areas,
             command_checker,
         )
+        return _computer_result(result, allowed=allowed_computers(context))
 
     return handler
 
@@ -314,12 +323,8 @@ async def _handle_terminal(
             "args and workdir, then start again.",
             retryable=False,
         )
-    except FileNotFoundError as error:
-        return tool_failure(
-            "terminal_command_not_found",
-            _not_found_program_message(error, arguments),
-            retryable=False,
-        )
+    except _PreparationChangedError as error:
+        return tool_failure("terminal_preparation_changed", str(error), retryable=True)
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
     except ComputerError as error:
@@ -344,16 +349,6 @@ async def _handle_start(
     scratch_areas: ScratchAreas | None,
     command_checker: CommandChecker | None,
 ) -> JsonObject:
-    requested_computer = optional_string(arguments.get("computer_id"), field_name="computer_id")
-    if terminal_manager.computers is not None:
-        computer = terminal_manager.computers.resolve(context, requested_computer, "terminal")
-        if computer.id != "server":
-            started = await start_remote(terminal_manager, context, arguments, computer)
-            return await _started_result(terminal_manager, context, arguments, started, [])
-    elif requested_computer not in (None, "server") or "server" not in allowed_computers(context):
-        raise ComputerError(
-            "computer_not_found", "No connected Desktop computer is available. Nothing was started."
-        )
     notes: list[str] = []
     requested_id = arguments.get("terminal_id")
     if isinstance(requested_id, str) and requested_id.strip():
@@ -369,39 +364,37 @@ async def _handle_start(
             )
     else:
         requested_id = None
+    unsent = _UnsentStartInput.of(arguments)
     raw_command = arguments.get("command")
+    command = (
+        None if raw_command in (None, "") else required_string(raw_command, field_name="command")
+    )
     args = optional_string_array(arguments.get("args"), field_name="args")
-    environment = await asyncio.to_thread(terminal_environment)
-    if raw_command in (None, ""):
-        if args:
-            raise ToolContractError(
-                "terminal was not run: args needs command, the program to start with them."
+    if command is None and args:
+        raise ToolContractError(
+            "No terminal was started: args needs command, the program to start with them."
+        )
+    columns, rows = _dimensions(arguments, starting=True)
+    assert columns is not None and rows is not None
+    requested_computer = optional_string(arguments.get("computer_id"), field_name="computer_id")
+    if terminal_manager.computers is not None:
+        computer = terminal_manager.computers.resolve(context, requested_computer, "terminal")
+        if computer.id != "server":
+            started = await start_remote(
+                terminal_manager,
+                context,
+                arguments,
+                computer,
+                command=command,
+                args=args,
+                columns=columns,
+                rows=rows,
             )
-        argv = default_terminal_argv(environment)
-    else:
-        command = required_string(raw_command, field_name="command")
-        argv = [command, *args]
-        words = split_terminal_command(command, environment)
-        if words is not None:
-            argv = [*words, *args]
-            notes.append(
-                f'command "{command}" is a whole command line, so it started as command '
-                f'"{words[0]}" with args {json.dumps(words[1:], ensure_ascii=False)}.'
-            )
-    columns = optional_int(
-        arguments.get("columns"),
-        field_name="columns",
-        default=TERMINAL_DEFAULT_COLUMNS,
-        minimum=TERMINAL_MIN_COLUMNS,
-        maximum=TERMINAL_MAX_COLUMNS,
-    )
-    rows = optional_int(
-        arguments.get("rows"),
-        field_name="rows",
-        default=TERMINAL_DEFAULT_ROWS,
-        minimum=TERMINAL_MIN_ROWS,
-        maximum=TERMINAL_MAX_ROWS,
-    )
+            return await _started_result(terminal_manager, context, arguments, started, [], unsent)
+    elif requested_computer not in (None, "server") or "server" not in allowed_computers(context):
+        raise ComputerError(
+            "computer_not_found", "No connected Desktop computer is available. Nothing was started."
+        )
     # start sends no input: the program gets it once it is ready for it.
     raw_workdir = arguments.get("workdir")
     workdir_value = optional_string(raw_workdir, field_name="workdir")
@@ -409,6 +402,9 @@ async def _handle_start(
         workdir_value = None
     workdir = _resolve_workdir(projects, context, workdir_value)
     context.record_worked_paths(workdir)
+    argv, split_note = await _PREPARE_WORKER.run(_start_argv, command, args, workdir)
+    if split_note is not None:
+        notes.append(split_note)
     owner = _owner(context)
     if arguments.get("group") not in (None, ""):
         notes.append(
@@ -449,22 +445,18 @@ async def _handle_start(
                     cwd=workdir,
                     env=confined,
                 )
-    else:
-        # Register a fresh check even if this call started with full access.
-        await authorize_paths(
-            context, [(workdir, "start_dir", {})], arguments=arguments, cwd=workdir
-        )
-    await context.revalidate_permissions()
-    if permission_scope(context.permissions) != scope:
-        raise ToolContractError(
-            "Permission Rules changed while the terminal was prepared. Call it again."
-        )
     if workdir_value is not None and is_project_workdir(workdir_value):
-        validate_project_workdir(workdir_value, workdir)
-    elif not workdir.is_dir():
+        await _PREPARE_WORKER.run(validate_project_workdir, workdir_value, workdir)
+    elif not await _PREPARE_WORKER.run(workdir.is_dir):
         raise ToolContractError(
             f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
             "an existing directory, or omit workdir to use the working directory."
+        )
+    await context.revalidate_permissions(force_refresh=True)
+    if permission_scope(context.permissions) != scope:
+        raise _PreparationChangedError(
+            "No terminal was started. Permission Rules changed while the terminal was "
+            "prepared. Call terminal again."
         )
     try:
         started = await terminal_manager.spawn(
@@ -483,7 +475,45 @@ async def _handle_start(
         if isinstance(cause, UnpassableArgumentError) and cause.index is not None:
             raise ToolContractError(_unpassable_argument_message(argv[0], cause.value)) from error
         raise
-    return await _started_result(terminal_manager, context, arguments, started, notes)
+    return await _started_result(terminal_manager, context, arguments, started, notes, unsent)
+
+
+def _dimensions(arguments: JsonObject, *, starting: bool) -> tuple[int | None, int | None]:
+    try:
+        columns = optional_int(
+            arguments.get("columns"),
+            field_name="columns",
+            default=TERMINAL_DEFAULT_COLUMNS if starting else None,
+            minimum=TERMINAL_MIN_COLUMNS,
+            maximum=TERMINAL_MAX_COLUMNS,
+        )
+        rows = optional_int(
+            arguments.get("rows"),
+            field_name="rows",
+            default=TERMINAL_DEFAULT_ROWS if starting else None,
+            minimum=TERMINAL_MIN_ROWS,
+            maximum=TERMINAL_MAX_ROWS,
+        )
+    except ToolContractError as error:
+        outcome = "No terminal was started" if starting else "The terminal was not resized"
+        raise ToolContractError(f"{outcome}: {error}. Pass a size within these bounds.") from error
+    return columns, rows
+
+
+def _start_argv(
+    command: str | None, args: list[str], workdir: Path
+) -> tuple[list[str], str | None]:
+    """Resolve the local environment and executable off the Event Loop."""
+    environment = terminal_environment()
+    if command is None:
+        return default_terminal_argv(environment), None
+    words = split_terminal_command(command, environment, cwd=workdir)
+    if words is None:
+        return [command, *args], None
+    return [*words, *args], (
+        f'command "{command}" is a whole command line, so it started as command '
+        f'"{words[0]}" with args {json.dumps(words[1:], ensure_ascii=False)}.'
+    )
 
 
 async def _started_result(
@@ -492,6 +522,7 @@ async def _started_result(
     arguments: JsonObject,
     started: TerminalInfo,
     notes: list[str],
+    unsent: _UnsentStartInput,
 ) -> JsonObject:
     terminal_id = started.terminal_id
     owner = _owner(context)
@@ -512,7 +543,7 @@ async def _started_result(
     running = data["state"] == "running"
     if launch_note := _terminal_info(terminal_manager, terminal_id).launch_note:
         notes.append(launch_note)
-    unsent_note = _UnsentStartInput.of(arguments).note(terminal_id, running=running)
+    unsent_note = unsent.note(terminal_id, running=running)
     if unsent_note is not None:
         notes.append(unsent_note)
     requested_id = arguments.get("terminal_id")
@@ -642,9 +673,10 @@ async def _handle_status(
         field_name="lines",
         default=TERMINAL_STATUS_DEFAULT_LINES,
         minimum=1,
-        maximum=TERMINAL_STATUS_MAX_LINES,
     )
     assert lines is not None
+    requested_lines = lines
+    lines = min(lines, TERMINAL_STATUS_MAX_LINES)
     start_line = optional_int(
         arguments.get("start_line"),
         field_name="start_line",
@@ -670,6 +702,14 @@ async def _handle_status(
         unseen_by_you=attached_here,
         requested_start=start_line,
     )
+    if requested_lines > lines:
+        _with_notes(
+            data,
+            [
+                f"lines was capped at {lines}; "
+                "use the scrollback paging requests to read more history."
+            ],
+        )
     if not attached_here:
         holders = await _subagent_holders(subagents, owner, [info])
         data.update(_attachment_fields(info, owner, holders))
@@ -707,10 +747,7 @@ async def _handle_wait(
             on_match=matched.append,
         ),
     )
-    if ended == "user":
-        notes.append("The user ended this wait; the program keeps running.")
-    elif ended == "timeout" and pattern is not None:
-        notes.append(f"No output matched pattern within {seconds:g} seconds.")
+    notes.extend(_wait_ended_notes(ended, pattern=pattern is not None, seconds=seconds))
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
     snapshot = await terminal_manager.snapshot(terminal_id, owner)
@@ -830,12 +867,14 @@ async def _handle_input(
 
     async def check_input_state() -> None:
         if permission_scope(context.permissions) != scope:
-            raise ToolContractError(
-                "Permission Rules changed while the terminal was prepared. Call it again."
+            raise _PreparationChangedError(
+                "No input was sent. Permission Rules changed while the terminal was "
+                "prepared. Call terminal again."
             )
         if prompt_identity() != prepared_prompt:
-            raise ToolContractError(
-                "The terminal prompt changed while the input was prepared. Call terminal again."
+            raise _PreparationChangedError(
+                "No input was sent. The terminal prompt changed while the input was "
+                "prepared. Call terminal again."
             )
 
     context.add_permission_recheck(check_input_state)
@@ -889,6 +928,8 @@ async def _handle_input(
     if isinstance(text, str) and ("\n" in text or "\r" in text):
         # Whether the lines went as one pasted block, or each line break as Enter.
         typed["pasted"] = bool(sent.get("pasted"))
+    if typed.get("pasted") and isinstance(text, str) and "\x1b[201~" in text:
+        notes.append("The embedded bracketed-paste end marker was removed from text.")
     if isinstance(text, str) and key is None and raw_data is None:
         submit = json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
         if typed.get("pasted") is False:
@@ -914,13 +955,16 @@ async def _handle_input(
         if pattern is not None:
             # A long wait is no typing: the program works without the focus.
             await terminal_manager.release_focus(terminal_id, owner)
-            ended = await terminal_manager.wait(
-                terminal_id,
-                owner,
-                seconds=seconds,
-                pattern=pattern,
-                after_revision=revision_before_input,
-                on_match=matched.append,
+            ended = await _wait_unless_released(
+                context,
+                terminal_manager.wait(
+                    terminal_id,
+                    owner,
+                    seconds=seconds,
+                    pattern=pattern,
+                    after_revision=revision_before_input,
+                    on_match=matched.append,
+                ),
             )
         else:
             # The reply: the output pauses after the input, as start's first screen does.
@@ -937,6 +981,7 @@ async def _handle_input(
     finally:
         with contextlib.suppress(Exception):
             await terminal_manager.release_focus(terminal_id, owner)
+    notes.extend(_wait_ended_notes(ended, pattern=pattern is not None, seconds=seconds))
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -965,20 +1010,7 @@ async def _handle_resize(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    columns = optional_int(
-        arguments.get("columns"),
-        field_name="columns",
-        default=None,
-        minimum=TERMINAL_MIN_COLUMNS,
-        maximum=TERMINAL_MAX_COLUMNS,
-    )
-    rows = optional_int(
-        arguments.get("rows"),
-        field_name="rows",
-        default=None,
-        minimum=TERMINAL_MIN_ROWS,
-        maximum=TERMINAL_MAX_ROWS,
-    )
+    columns, rows = _dimensions(arguments, starting=False)
     info = terminal_manager.terminal(terminal_id, owner)
     if columns is None and rows is None:
         raise ToolContractError(
@@ -1098,7 +1130,12 @@ def register_terminal_tool(
         open_input_schema=True,
         unadvertised_parameters=TERMINAL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_terminal_arguments,
-        announce_changes=("description", "parameters.computer_id", "parameters.workdir"),
+        announce_changes=(
+            "description",
+            "parameters.computer_id",
+            "parameters.workdir",
+            "parameters.lines",
+        ),
         # Answers password prompts; the length limit applies to the real value.
         secret_sinks={"text": "terminal", "data": "terminal"},
         defer_secret_consumption=True,

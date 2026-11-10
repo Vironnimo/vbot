@@ -18,7 +18,6 @@ from core.tools.terminal_manager import (
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_START_WAIT_SECONDS,
     TERMINAL_STATUS_DEFAULT_LINES,
-    TERMINAL_STATUS_MAX_LINES,
     TERMINAL_TEMPORARY_CATEGORY,
 )
 from core.tools.tools import (
@@ -157,7 +156,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "lines": {
             "type": "integer",
             "minimum": 1,
-            "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": "History lines status shows above the screen.",
         },

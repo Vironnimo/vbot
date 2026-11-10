@@ -368,7 +368,7 @@ class TerminalCapability:
         notes: list[str] = []
         operator = params.get("operator") is True
         if command and not operator:
-            words = split_terminal_command(command, environment)
+            words = split_terminal_command(command, environment, cwd=cwd)
             if words is not None:
                 argv = [*words, *args]
                 notes.append("command was read as a program and its arguments")

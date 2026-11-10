@@ -182,6 +182,12 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
+    original_snapshot = terminal_manager.snapshot
+
+    async def snapshot(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {**await original_snapshot(*args, **kwargs), "future_internal_field": "private"}
+
+    monkeypatch.setattr(terminal_manager, "snapshot", snapshot)
     factory.initial_output = "Welcome\r\nready> "
 
     def identity(address: SessionAddress) -> str:
@@ -207,9 +213,6 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     data = cast(dict[str, Any], result["data"])
     assert data == {
         "terminal_id": data["terminal_id"],
-        "computer_id": "server",
-        "computer_name": "Server",
-        "computer_online": True,
         "call_name": "Anna",
         "state": "running",
         "screen": data["screen"],
@@ -798,9 +801,6 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     attached = await run({"action": "attach"})
     assert attached["data"] == {
         "terminal_id": terminal_id,
-        "computer_id": "server",
-        "computer_name": "Server",
-        "computer_online": True,
         "call_name": "Anna",
         "program": "host-shell",
         "state": "running",

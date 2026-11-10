@@ -111,7 +111,7 @@ AttentionKind = Literal["idle", "exited", "error"]
 # Why a wait for a program ended: it exited, printed output matching the
 # pattern, went quiet after input, went idle showing a new screen, or the
 # wait's time ran out.
-WaitEnded = Literal["exited", "matched", "quiet", "idle", "timeout"]
+WaitEnded = Literal["exited", "matched", "quiet", "idle", "timeout", "pattern_timeout"]
 TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 

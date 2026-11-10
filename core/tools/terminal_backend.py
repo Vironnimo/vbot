@@ -116,7 +116,9 @@ def command_words(command: str) -> list[str]:
     return list(lexer)
 
 
-def split_terminal_command(command: str, environment: Mapping[str, str]) -> list[str] | None:
+def split_terminal_command(
+    command: str, environment: Mapping[str, str], *, cwd: Path | None = None
+) -> list[str] | None:
     """Return the words of a command line sent as command, or None for one program.
 
     A command with spaces is one program only when it names one, such as a path
@@ -125,7 +127,10 @@ def split_terminal_command(command: str, environment: Mapping[str, str]) -> list
     if not any(character.isspace() for character in command):
         return None
     path = environment.get("PATH")
-    if shutil.which(command, path=path) is not None or Path(command).is_file():
+    candidate = Path(command)
+    if cwd is not None and not candidate.is_absolute():
+        candidate = cwd / candidate
+    if candidate.is_file() or shutil.which(command, path=path) is not None:
         return None
     try:
         words = command_words(command)

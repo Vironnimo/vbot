@@ -6,6 +6,8 @@ import asyncio
 import re
 from collections.abc import Callable
 
+from core.utils.workers import BoundedWorkerPool
+
 from ._terminal_activity import (
     TerminalActivity,
 )
@@ -15,6 +17,43 @@ from ._terminal_state import (
     TerminalSessionServices,
     WaitEnded,
 )
+
+_PATTERN_WORKER = BoundedWorkerPool(name="terminal_pattern", max_workers=2)
+_PATTERN_SECONDS = 0.05
+
+
+def _matching_line(pattern: re.Pattern[str], text: str) -> tuple[str | None, bool]:
+    # regex releases the GIL and bounds the whole search. It cannot load in
+    # subinterpreters, so the renderer only supplies the immutable text.
+    import regex
+
+    flags = regex.VERSION0
+    for source, target in (
+        (re.ASCII, regex.ASCII),
+        (re.IGNORECASE, regex.IGNORECASE),
+        (re.MULTILINE, regex.MULTILINE),
+        (re.DOTALL, regex.DOTALL),
+        (re.VERBOSE, regex.VERBOSE),
+        (re.UNICODE, regex.UNICODE),
+        (re.DEBUG, regex.DEBUG),
+    ):
+        if pattern.flags & source:
+            flags |= target
+    try:
+        match = regex.search(
+            pattern.pattern,
+            text,
+            flags=flags,
+            concurrent=True,
+            timeout=_PATTERN_SECONDS,
+        )
+    except TimeoutError:
+        return None, True
+    if match is None:
+        return None, False
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.start())
+    return text[start : len(text) if end < 0 else end], False
 
 
 class TerminalWaits:
@@ -74,7 +113,9 @@ class TerminalWaits:
             if self._activity.finished:
                 return "exited"
             if pattern is not None:
-                matched, match_from = await self._output_matches(pattern, match_from)
+                matched, match_from, exhausted = await self._output_matches(pattern, match_from)
+                if exhausted:
+                    return "pattern_timeout"
                 if matched is not None:
                     if on_match is not None:
                         on_match(matched)
@@ -128,7 +169,7 @@ class TerminalWaits:
 
     async def _output_matches(
         self, pattern: re.Pattern[str], from_line: int | None
-    ) -> tuple[str | None, int]:
+    ) -> tuple[str | None, int, bool]:
         """The line where a match in the output from *from_line* on starts, or None;
         also the line to check from next.
 
@@ -139,13 +180,8 @@ class TerminalWaits:
         """
         async with self._lock:
             found = await self._output.screen.pattern_text(start_line=from_line)
-        text = found["text"]
-        match = pattern.search(text)
-        if match is None:
-            return None, int(found["next_line"])
-        start = text.rfind("\n", 0, match.start()) + 1
-        end = text.find("\n", match.start())
-        return text[start : len(text) if end < 0 else end], int(found["next_line"])
+        matched, exhausted = await _PATTERN_WORKER.run(_matching_line, pattern, found["text"])
+        return matched, int(found["next_line"]), exhausted
 
     def signal_change(self) -> None:
         """Wake every waiter: output, input, attention or the program's end changed."""

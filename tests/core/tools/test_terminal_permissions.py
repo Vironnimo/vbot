@@ -375,3 +375,41 @@ def test_the_shell_state_reads_the_prompt_and_folder_its_shell_reports(
     assert (state.at_prompt, state.prompt_count, state.cwd) == (True, 1, cwd)
     state.feed("\x1b]133;C\x07")
     assert state.at_prompt is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["start-rules", "input-rules", "input-prompt"])
+async def test_changed_preparation_refuses_effects_with_a_retryable_result(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    changed: str,
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    arguments: JsonObject = {
+        "action": "start",
+        "command": "pwsh" if changed == "input-prompt" else "fake-tui",
+    }
+    if changed != "start-rules":
+        started = await call(terminal_manager, context, arguments)
+        arguments = {
+            "action": "input",
+            "terminal_id": started["data"]["terminal_id"],
+            "key": "enter",
+        }
+    before = len(factory.calls)
+
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
+        if changed == "input-prompt":
+            state = terminal_manager.shell_state(arguments["terminal_id"], _OWNER)
+            assert state is not None
+            state.feed(_prompt(tmp_path))
+            return PermissionBoundary.UNRESTRICTED, context.execution
+        return restricted(tmp_path), context.execution
+
+    context = replace(context, approval_refresh_hook=refresh)
+    refused = await call(terminal_manager, context, arguments)
+    assert refused["error"]["code"] == "terminal_preparation_changed", refused
+    assert refused["error"]["retryable"] is True
+    assert len(factory.calls) == before
+    assert all(adapter.writes == [] for adapter in factory.adapters)

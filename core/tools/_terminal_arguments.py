@@ -281,7 +281,12 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     for key in list(normalized):
         if key == "action" or key in accepted:
             continue
-        if key in _OBSERVATION_FIELDS or key in _START_LABELS or key == "terminal_id":
+        if (
+            key in _OBSERVATION_FIELDS
+            or key in _START_LABELS
+            or key == "terminal_id"
+            or (action == "list" and key in {"command", "args"})
+        ):
             del normalized[key]
             continue
         if key in {"text", "data", "key"}:
@@ -376,6 +381,14 @@ def _infer_action(arguments: dict[str, Any], press_enter: bool) -> None:
     elif "command" not in arguments and ("columns" in arguments or "rows" in arguments):
         # Only start, which takes no terminal_id of a live terminal, and resize take a size.
         arguments["action"] = "resize"
+    elif "command" not in arguments and "args" not in arguments:
+        arguments["action"] = (
+            "wait"
+            if any(
+                key in arguments for key in ("pattern", "timeout", "timeout_ms", "after_revision")
+            )
+            else "status"
+        )
 
 
 def _pop_enter_flags(arguments: dict[str, Any]) -> bool:

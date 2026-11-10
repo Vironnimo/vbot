@@ -4,15 +4,9 @@ from __future__ import annotations
 
 from core.computers import ComputerError, ComputerInfo, normalize_execution
 from core.tools._workdir import is_project_workdir
-from core.tools.arguments import optional_int, optional_string
+from core.tools.arguments import optional_string
 from core.tools.contracts import ToolContractError
 from core.tools.terminal_manager import (
-    TERMINAL_DEFAULT_COLUMNS,
-    TERMINAL_DEFAULT_ROWS,
-    TERMINAL_MAX_COLUMNS,
-    TERMINAL_MAX_ROWS,
-    TERMINAL_MIN_COLUMNS,
-    TERMINAL_MIN_ROWS,
     TerminalInfo,
     TerminalManager,
     TerminalOwner,
@@ -62,24 +56,18 @@ def check_terminal_target(
 
 
 async def start_remote(
-    manager: TerminalManager, context: ToolContext, arguments: JsonObject, computer: ComputerInfo
+    manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+    computer: ComputerInfo,
+    *,
+    command: str | None,
+    args: list[str],
+    columns: int,
+    rows: int,
 ) -> TerminalInfo:
     if context.permissions.restricted:
         raise ComputerError("permission_denied", REMOTE_RESTRICTED)
-    command = optional_string(arguments.get("command"), field_name="command")
-    args = optional_string_array(arguments.get("args"), field_name="args")
-    if command is None and args:
-        raise ToolContractError(
-            "terminal was not run: args needs command, the program to start with them."
-        )
-    requested_id = arguments.get("terminal_id")
-    if requested_id and any(
-        item.terminal_id == requested_id and not item.finished for item in manager.list_terminals()
-    ):
-        raise ToolContractError(
-            "terminal was not run: start opens a new terminal. "
-            "Use input with the existing terminal_id."
-        )
     workdir = optional_string(arguments.get("workdir"), field_name="workdir")
     if workdir and is_project_workdir(workdir):
         raise ToolContractError(
@@ -92,20 +80,8 @@ async def start_remote(
         command=command,
         arguments=args,
         workdir=workdir,
-        columns=optional_int(
-            arguments.get("columns"),
-            field_name="columns",
-            default=TERMINAL_DEFAULT_COLUMNS,
-            minimum=TERMINAL_MIN_COLUMNS,
-            maximum=TERMINAL_MAX_COLUMNS,
-        ),
-        rows=optional_int(
-            arguments.get("rows"),
-            field_name="rows",
-            default=TERMINAL_DEFAULT_ROWS,
-            minimum=TERMINAL_MIN_ROWS,
-            maximum=TERMINAL_MAX_ROWS,
-        ),
+        columns=columns,
+        rows=rows,
         origin_run_id=context.run_id,
         execution_owner=context.execution_owner,
     )

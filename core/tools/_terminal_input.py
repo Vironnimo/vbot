@@ -85,6 +85,10 @@ def input_chunks(
         if len(text) > TERMINAL_INPUT_MAX_CHARS:
             raise ValueError(f"text must not exceed {TERMINAL_INPUT_MAX_CHARS} characters")
         typed = _typed(text)
+        if bracketed_paste:
+            # Pasted content cannot close its own bracketed-paste envelope.
+            while TERMINAL_BRACKETED_PASTE_END in typed:
+                typed = typed.replace(TERMINAL_BRACKETED_PASTE_END, "")
         chunks.append(
             f"{TERMINAL_BRACKETED_PASTE_START}{typed}{TERMINAL_BRACKETED_PASTE_END}"
             if bracketed_paste

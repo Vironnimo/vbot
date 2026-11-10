@@ -7,6 +7,7 @@ import dataclasses
 import json
 import re
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -16,6 +17,7 @@ import pytest
 from core.computers import ComputerError
 from core.providers._tool_result_text import render_tool_result_envelope
 from core.tools import _terminal_results as terminal_results
+from core.tools import _terminal_waits as terminal_waits
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, tool_failure
@@ -129,12 +131,15 @@ async def test_start_splits_a_command_line_whose_first_word_is_a_program(
     assert manager[1].calls[-1][0] == ["no-such-program-xyz --flag"]
     assert "note" not in unknown["data"]
 
-    spaced = tmp_path / "dir with space" / "tool"
-    spaced.parent.mkdir()
+    # The complete relative program is resolved against workdir, even when its
+    # first word could name an installed executable.
+    spaced = tmp_path / (Path(sys.executable).name + " tool")
     spaced.write_text("", encoding="utf-8")
-    path_result = await terminal({"action": "start", "command": str(spaced)})
+    path_result = await terminal(
+        {"action": "start", "command": str(spaced.relative_to(tmp_path)), "workdir": str(tmp_path)}
+    )
     assert path_result["ok"] is True
-    assert manager[1].calls[-1][0] == [str(spaced)]
+    assert manager[1].calls[-1][0] == [str(spaced.relative_to(tmp_path))]
 
 
 @pytest.mark.asyncio
@@ -338,6 +343,14 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     pasted = await send(text=multiline)
     assert adapter.writes[-1] == "\x1b[200~first\r  second\rthird\x1b[201~"
     assert pasted["data"]["pasted"] is True
+    guarded = await send(text="first\x1b[201~\nsecond")
+    assert adapter.writes[-1] == "\x1b[200~first\rsecond\x1b[201~"
+    assert guarded["data"]["pasted"] is True and guarded["data"].get("note")
+    # Removing one marker must not reveal another from its surrounding text.
+    await send(text="first\x1b[20\x1b[201~1~\nsecond")
+    assert adapter.writes[-1] == "\x1b[200~first\rsecond\x1b[201~"
+    await send(data="first\x1b[201~\nsecond")
+    assert adapter.writes[-1] == "first\x1b[201~\nsecond"
     await render("\x1b[?2004l")
     typed_lines = await send(text=multiline)
     assert adapter.writes[-1] == "first\r  second\rthird"
@@ -651,7 +664,9 @@ async def test_fields_that_only_shape_a_result_are_dropped_where_unused(
 ) -> None:
     terminal_id = await terminal.start()
 
-    listed = await terminal({"action": "list", "terminal_id": terminal_id})
+    listed = await terminal(
+        {"action": "list", "terminal_id": terminal_id, "command": "unused", "args": ["--unused"]}
+    )
     assert [item["terminal_id"] for item in listed["data"]["terminals"]] == [terminal_id]
     killed = await terminal(
         {
@@ -704,7 +719,9 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     )
 
 
-@pytest.mark.parametrize("ending", ["matched", "idle", "exited", "stopped", "user"])
+@pytest.mark.parametrize(
+    "ending", ["matched", "matched-ascii", "idle", "exited", "stopped", "user", "input-user"]
+)
 @pytest.mark.asyncio
 async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
@@ -715,11 +732,13 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
     arguments: JsonObject = {"action": "wait", "terminal_id": terminal_id}
     context = terminal.context
     releases: list[Callable[[], bool]] = []
-    if ending == "matched":
+    if ending in {"matched", "matched-ascii"}:
         # Output printed before the call counts, matched case-insensitively and line by line.
         adapter.emit("booting\r\nServer LISTENING on :8080\r\n")
         await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
         arguments["pattern"] = r"^server listening on :\d+$"
+        if ending == "matched-ascii":
+            arguments["pattern"] = r"(?a)^server listening on :\d+$"
     elif ending == "idle":
         await terminal(
             {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"}
@@ -735,14 +754,17 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
         arguments["timeout"] = 300
         context = dataclasses.replace(context, background_registration_hook=releases.append)
 
+    if ending == "input-user":
+        arguments.update(action="input", key="enter", pattern="not printed")
     waiting = asyncio.ensure_future(terminal(arguments, context))
-    if ending == "user":
+    if ending in {"user", "input-user"}:
         await eventually(lambda: bool(releases))
         assert releases[-1]() is True
     result = await asyncio.wait_for(waiting, 5)
 
     data = result["data"]
-    assert data["wait_ended"] == ending
+    expected_end = {"input-user": "user", "matched-ascii": "matched"}.get(ending, ending)
+    assert data["wait_ended"] == expected_end
     if ending == "exited":
         assert (data["state"], data["exit_code"], data["screen"]) == ("exited", 4, "bye")
         assert terminal.details(arguments, result)[-1] == {
@@ -752,7 +774,9 @@ async def test_wait_ends_at_the_exit_a_matching_line_or_an_idle_program(
         }
     elif ending == "stopped":
         assert data["state"] == "stopped"
-    elif ending == "user":
+    elif ending in {"user", "input-user"}:
+        if ending == "input-user":
+            assert adapter.writes == ["\r"]
         assert (data["state"], data["note"]) == (
             "running",
             "The user ended this wait; the program keeps running.",
@@ -861,9 +885,6 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         "terminal_id",
         "call_name",
         "state",
-        "computer_id",
-        "computer_name",
-        "computer_online",
         "log",
         "screen",
         "next",
@@ -906,3 +927,72 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     assert "log_file" not in status["data"]
     hidden = {"attention", "attention_revision", "screen_revision", "started_at", "columns"}
     assert not hidden & set(status["data"])
+
+
+@pytest.mark.asyncio
+async def test_omitted_action_reads_or_waits_only_when_unambiguous(
+    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
+) -> None:
+    terminal_id = await terminal.start()
+    observed = await terminal({"terminal_id": terminal_id})
+    assert observed["ok"] and "screen" in observed["data"]
+    waited = await terminal({"terminal_id": terminal_id, "timeout": 0.001})
+    assert waited["data"]["wait_ended"] == "timeout"
+    waited = await terminal({"terminal_id": terminal_id, "pattern": "missing", "timeout": 0.001})
+    assert waited["data"]["wait_ended"] == "timeout"
+    for fields in ({"command": "other"}, {"args": ["--flag"]}, {"action": "unknown"}):
+        refused = await terminal({"terminal_id": terminal_id, **fields})
+        assert _error(refused)["code"] == "invalid_arguments"
+    assert len(manager[1].calls) == 1
+    assert manager[1].adapters[0].writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["wait", "input"])
+async def test_expensive_pattern_ends_the_wait_and_leaves_the_terminal_usable(
+    terminal: Terminal,
+    manager: tuple[TerminalManager, AdapterFactory],
+    action: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_match = terminal_waits._matching_line
+    threads: list[int] = []
+
+    def matching(pattern: re.Pattern[str], text: str) -> tuple[str | None, bool]:
+        threads.append(threading.get_ident())
+        return original_match(pattern, text)
+
+    monkeypatch.setattr(terminal_waits, "_matching_line", matching)
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    output = "a" * 2000 + "!\r\n"
+    fields: JsonObject = {
+        "action": action,
+        "terminal_id": terminal_id,
+        "pattern": r"^(a|aa)+$",
+        "timeout": 60,
+    }
+    if action == "input":
+        fields["key"] = "enter"
+
+        async def answer() -> None:
+            await eventually(lambda: bool(adapter.writes))
+            adapter.emit("\r\n" + output)
+
+        answer_task = asyncio.create_task(answer())
+    else:
+        adapter.emit(output)
+        await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
+    result = await terminal(fields)
+    if action == "input":
+        await answer_task
+        assert adapter.writes == ["\r"]
+    assert threads and threading.get_ident() not in threads
+    assert result["ok"], result
+    assert result["data"]["wait_ended"] == "pattern_timeout"
+    assert result["data"]["state"] == "running" and result["data"].get("note")
+    status = await terminal({"action": "status", "terminal_id": terminal_id})
+    assert status["ok"] and "!" in status["data"]["screen"]
+    assert (await terminal({"action": "kill", "terminal_id": terminal_id}))["data"][
+        "state"
+    ] == "stopped"

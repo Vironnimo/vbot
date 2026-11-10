@@ -74,9 +74,6 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
     assert terminals == [
         {
             "terminal_id": terminal_id,
-            "computer_id": "server",
-            "computer_name": "Server",
-            "computer_online": True,
             "call_name": "Anna",
             "program": "fake-tui",
             "state": "running",
@@ -172,6 +169,14 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     )
     assert (await status(lines=3))["history"] == "line-29\nline-30\nline-31"
 
+    await _render(
+        terminal_manager, factory, terminal_id, "".join(f"tail-{i}\r\n" for i in range(150))
+    )
+    capped = await status(start_line=0, lines="500")
+    assert len(capped["history"].splitlines()) == 100
+    assert capped["scrollback"]["newer_request"] == request(100, 100)
+    assert capped.get("note")
+
     # A full-screen view keeps no terminal history, and status says so.
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049h\x1b[Hfull-screen view")
     full_screen = await status()
@@ -179,7 +184,7 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     assert "alternate screen" in full_screen["note"]
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049l")
     primary = await status()
-    assert primary["screen"].splitlines()[-1] == "more-4"
+    assert primary["screen"].splitlines()[-1] == "tail-149"
     assert "alternate_screen" not in primary
     assert "alternate screen" not in primary.get("note", "")
 
@@ -363,14 +368,16 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
         ({"action": "start", "command": "   "}, "command"),
         ({"action": "input", "terminal_id": "missing", "data": "raw", "key": "enter"}, "data"),
         ({"action": "resize", "terminal_id": "missing", "columns": 500}, "between 40 and 240"),
-        ({"action": "status", "terminal_id": "missing", "lines": 150}, "lines"),
+        ({"action": "start", "command": "fake-tui", "key": "space"}, "key"),
+        ({"action": "start", "command": "fake-tui", "key": 5}, "key"),
         ({"action": "unknown"}, "action"),
     ],
     ids=[
         "blank-command",
         "data-with-key",
         "resize",
-        "too-many-lines",
+        "unknown-start-key",
+        "non-string-start-key",
         "action",
     ],
 )
@@ -387,10 +394,11 @@ async def test_invalid_or_inapplicable_arguments_return_stable_failure(
     assert error["code"] == "invalid_arguments"
     assert message in error["message"]
     assert manager[1].calls == []
+    assert manager[0].list_terminals() == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [RuntimeError, OSError, EOFError])
+@pytest.mark.parametrize("failure", [RuntimeError, OSError, EOFError, FileNotFoundError])
 async def test_a_failure_while_acting_reports_unknown_effects(
     manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
@@ -422,6 +430,17 @@ async def test_a_failure_while_acting_reports_unknown_effects(
         "tool_execution_error" if failure is RuntimeError else "terminal_input_unconfirmed"
     )
     assert adapter.writes == ([] if failure is RuntimeError else ["y"])
+
+    if failure is FileNotFoundError:
+
+        async def missing_snapshot(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise FileNotFoundError("snapshot unavailable")
+
+        monkeypatch.setattr(terminal_manager, "read", missing_snapshot)
+        result = await call(
+            terminal_manager, context, {"action": "status", "terminal_id": terminal_id}
+        )
+        assert result["error"]["code"] == "tool_execution_error"
 
 
 async def _start_persisted(
