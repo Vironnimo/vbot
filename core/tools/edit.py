@@ -81,8 +81,10 @@ _EDIT_TEMPLATES = {
         "content. Put the current text to replace in old_string, or call write to replace "
         "the whole file."
     ),
-    "binary_file": "{path} is a binary file, so edit cannot change its text.",
-    "unsupported_encoding": "{path} is not UTF-8 text, so edit cannot change its text.",
+    "binary_file": (
+        "{path} is a binary file, so edit cannot change its text. "
+        "Use a binary-capable editor to change this file."
+    ),
     "file_changed": (
         "{path} changed on disk while this edit ran. Read it, then send the edits it still needs."
     ),
@@ -233,6 +235,16 @@ def _failed_edit(
     call's other edits were written, so an earlier edit that replaced this
     one's old text stays applied.
     """
+    if error.get("content_from_earlier_edit"):
+        where = f"{error['path_label']}, {error['label']}"
+        error = {
+            **error,
+            "message": (
+                f"{where}: old_string is empty, which creates a file, but an earlier edit "
+                "in this call already supplies its content. For later changes, use a "
+                "nonempty old_string containing the current text to replace."
+            ),
+        }
     number = _edit_number(error, total)
     earlier = [n for n in range(1, number or 1) if n not in idle]
     if not earlier:
@@ -266,10 +278,9 @@ def _edit_failure(
     numbers = [n for n in (_edit_number(error, total) for error in errors) if n is not None]
     failures = []
     for error in errors:
-        context.add_display_notice("error", str(error["message"]))
-        failures.append(
-            failure_text(_failed_edit(error, {*numbers, *in_place}, total, written=False))
-        )
+        prepared = _failed_edit(error, {*numbers, *in_place}, total, written=False)
+        context.add_display_notice("error", str(prepared["message"]))
+        failures.append(failure_text(prepared))
     if total == 1:
         lines = ["No file was changed.", *failures]
     else:

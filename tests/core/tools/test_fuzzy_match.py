@@ -53,6 +53,43 @@ def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
         ('msg = "hello"\n', f"msg = {chr(0x201C)}hello{chr(0x201D)}", 'msg = "hi"', 'msg = "hi"\n'),
         # A non-breaking space sent for a regular one.
         ("a = 1\n", f"a{chr(0xA0)}= 1", "a = 2", "a = 2\n"),
+        # Unchanged copied glyphs retain the file's typography, in both directions.
+        ("msg = “hello”\n", 'msg = "hello"', 'msg = "hi"', "msg = “hi”\n"),
+        ('msg = "hello"\n', "msg = “hello”", "msg = “hi”", 'msg = "hi"\n'),
+        (
+            "# pages 1–2\nrun\n",
+            "# pages 1-2\nrun",
+            "# pages 1-2\nrun --fast -x",
+            "# pages 1–2\nrun --fast -x\n",
+        ),
+        ("x\u00a0= 1\n", "x = 1", "x = 2", "x\u00a0= 2\n"),
+        (
+            "Er sagte: „gut“ – und ging.\n",
+            'Er sagte: "gut" - und ging.',
+            'Er sagte: "gut" - und blieb.',
+            "Er sagte: „gut“ – und blieb.\n",
+        ),
+        (
+            "«Salut» et ‹ami›: ‚oui‘\n",
+            "\"Salut\" et 'ami': 'oui'",
+            "\"Salut\" et 'amie': 'oui'",
+            "«Salut» et ‹amie›: ‚oui‘\n",
+        ),
+        ("pages 1‐2 et 3‑4\n", "pages 1-2 et 3-4", "pages 1-2 et 3-5", "pages 1‐2 et 3‑5\n"),
+        # Different line endings alone do not undo a deliberate glyph change.
+        (
+            "msg = “hello”\r\nrun\r\n",
+            "msg = “hello”\nrun",
+            'msg = "hello"\nrun --fast',
+            'msg = "hello"\r\nrun --fast\r\n',
+        ),
+        # Inserted lines retain their own glyphs; old lines stay aligned after them.
+        (
+            "msg = “hello”\nrun\n",
+            'msg = "hello"\nrun',
+            'added = "new"\nmsg = "hello"\nrun --fast',
+            'added = "new"\nmsg = “hello”\nrun --fast\n',
+        ),
         # An LF locator in a CRLF file keeps the file's endings.
         ("alpha\r\nbeta\r\ngamma\r\n", "alpha\nbeta", "one\ntwo", "one\r\ntwo\r\ngamma\r\n"),
         # One that starts with a line break takes the whole CRLF, never only its LF.
@@ -66,11 +103,31 @@ def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
 def test_normalized_matches_typography_and_line_endings(
     content: str, old_string: str, new_string: str, expected: str
 ) -> None:
-    result = replace_fuzzy(content, old_string, new_string, replace_all=False)
+    result = replace_fuzzy(content, old_string, new_string, replace_all=False, preserve_glyphs=True)
 
     assert isinstance(result, FuzzyReplacement)
     assert result.strategy == "normalized"
     assert result.new_content == expected
+
+
+def test_typography_projection_aligns_only_the_changed_interior(monkeypatch) -> None:
+    import core.tools._fuzzy_text as typography
+
+    original_matcher = typography.SequenceMatcher
+    work = []
+
+    def bounded_matcher(junk, old, new, **kwargs):
+        work.append(len(old) * len(new))
+        assert work[-1] <= 4
+        return original_matcher(junk, old, new, **kwargs)
+
+    monkeypatch.setattr(typography, "SequenceMatcher", bounded_matcher)
+    actual = "“head” " + "repeat " * 20_000 + "tail\n"
+    old = actual.rstrip("\n").replace("“", '"').replace("”", '"')
+    result = replace_fuzzy(actual, old, old[:-4] + "done", replace_all=False, preserve_glyphs=True)
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == actual[:-5] + "done\n"
+    assert sum(work) <= 4
 
 
 @pytest.mark.parametrize(
@@ -254,7 +311,7 @@ _REPEATS = 50_000
             f'a = "x"\r\nb\r\na = {chr(0x201C)}x{chr(0x201D)}\r\nb\r\n',
             'a = "x"\nb',
             'a = "z"\nb',
-            'a = "z"\r\nb\r\na = "z"\r\nb\r\n',
+            'a = "z"\r\nb\r\na = “z”\r\nb\r\n',
             [1, 3],
             4,
         ),
@@ -271,7 +328,9 @@ def test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced(
     last_line: int,
 ) -> None:
     ambiguous = replace_fuzzy(content, old_string, new_string, replace_all=False)
-    replaced = replace_fuzzy(content, old_string, new_string, replace_all=True)
+    replaced = replace_fuzzy(
+        content, old_string, new_string, replace_all=True, preserve_glyphs=True
+    )
 
     assert isinstance(ambiguous, AmbiguousFuzzyMatch)
     assert ambiguous.occurrences == len(lines)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 
 import pytest
 
@@ -599,6 +600,8 @@ async def test_lines_added_before_a_decorated_definition_keep_its_decorators(
     assert (re.findall(r"\d+", notes[-1]) if note else notes) == (note or [])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["apply_patch", "edit", "apply_patch_replacement"])
 @pytest.mark.parametrize(
     ("before", "old", "new", "expected"),
     [
@@ -611,16 +614,99 @@ async def test_lines_added_before_a_decorated_definition_keep_its_decorators(
         ("    —", "--", "new", "    new"),
         ("title—old", "title--old", "title: new", "title: new"),
         ("title—old", "title—old", "title--new", "title--new"),
+        ("msg = “hello”\nrun", 'msg = "hello"\nrun', "", ""),
+        (
+            "Er sagte: „gut“ – und ging.",
+            'Er sagte: "gut" - und ging.',
+            'Er sagte: "gut" - und blieb.',
+            "Er sagte: „gut“ – und blieb.",
+        ),
+        (
+            "«Salut» et ‹ami›: ‚oui‘",
+            "\"Salut\" et 'ami': 'oui'",
+            "\"Salut\" et 'amie': 'oui'",
+            "«Salut» et ‹amie›: ‚oui‘",
+        ),
+        ("pages 1‐2 et 3‑4", "pages 1-2 et 3-4", "pages 1-2 et 3-5", "pages 1‐2 et 3‑5"),
+        (
+            "# pages 1–2\nrun",
+            "# pages 1-2\nrun",
+            "# pages 1-2\nrun --fast -x",
+            "# pages 1–2\nrun --fast -x",
+        ),
+        (
+            "msg = “hello”\nrun",
+            "msg = “hello”\nrun",
+            'msg = "hello"\nrun --fast',
+            'msg = "hello"\nrun --fast',
+        ),
+        (
+            "msg = “hello”\nrun",
+            'msg = "hello"\nrun',
+            'added = "new"\nmsg = "hello"\nrun --fast',
+            'added = "new"\nmsg = “hello”\nrun --fast',
+        ),
     ],
 )
-def test_normalized_changed_lines_preserve_only_unchanged_typography(
-    tmp_path, before, old, new, expected
+async def test_normalized_changed_lines_preserve_only_unchanged_typography(
+    tmp_path, tool, before, old, new, expected
 ):
     path = tmp_path / "file.txt"
-    path.write_bytes((before + "\r\n").encode())
-    result = apply(tmp_path, update(f"@@\n-{old}\n+{new}"))
+    path.write_bytes((before.replace("\n", "\r\n") + "\r\n").encode())
+    if tool == "apply_patch":
+        old_lines, new_lines = old.split("\n"), new.split("\n")
+        lines = []
+        for tag, a, b, c, d in SequenceMatcher(None, old_lines, new_lines).get_opcodes():
+            if tag == "equal":
+                lines.extend(" " + line for line in old_lines[a:b])
+            else:
+                lines.extend("-" + line for line in old_lines[a:b])
+                lines.extend("+" + line for line in new_lines[c:d])
+        arguments = {"patch": update("@@\n" + "\n".join(lines))}
+    else:
+        arguments = {"path": "file.txt", "old_string": old, "new_string": new}
+    result = await call(tmp_path, arguments, name="edit" if tool == "edit" else "apply_patch")
     assert result["ok"], result
-    assert path.read_bytes() == (expected + "\r\n").encode()
+    assert path.read_bytes() == (expected.replace("\n", "\r\n") + "\r\n").encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["edit", "apply_patch"])
+@pytest.mark.parametrize(
+    ("before", "old", "new", "work_limit"),
+    [
+        ("left “hello” tail\n", 'left "hello" tail', 'right "goodbye" end', 4),
+        (
+            "msg = “hello”\nrun\n",
+            'msg = "hello"\nrun',
+            'msg = "hello!"\nrun --fast\nnext',
+            1_000_000,
+        ),
+    ],
+)
+async def test_typography_projection_refuses_incomplete_alignment_before_writing(
+    tmp_path, monkeypatch, tool, before, old, new, work_limit
+):
+    import core.tools._fuzzy_text as typography
+
+    monkeypatch.setattr(typography, "_TYPOGRAPHY_WORK", work_limit)
+    path = tmp_path / "file.txt"
+    path.write_bytes(before.encode())
+    arguments = {
+        "path": "file.txt",
+        "old_string": old,
+        "new_string": new,
+    }
+    refused = await call(tmp_path, arguments, name=tool)
+    assert not refused["ok"]
+    assert refused["error"]["code"] == "typography_mismatch"
+    assert path.read_bytes() == before.encode()
+    # Copying exact glyphs removes the need to project typography, regardless
+    # of the size of the requested rewrite.
+    arguments["old_string"] = before.rstrip("\n")
+    retried = await call(tmp_path, arguments, name=tool)
+    assert retried["ok"], retried
+    assert path.read_bytes() == (new + "\n").encode()
 
 
 @pytest.mark.asyncio

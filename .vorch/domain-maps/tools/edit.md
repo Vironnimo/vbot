@@ -73,7 +73,8 @@ Every explicit edit target is preflighted together before any file change.
   per call if it is cut off again. A break inside a text (a quote, an escape, a
   line break) gets `If this text fails again, send one edit per call, or call
   write with the whole file.` A flat `old_string`/`new_string` call is one
-  edit. An item's own `path` is accepted when it names the root path. Without a
+  edit; an empty `edits` array is treated as omitted, including beside that
+  flat pair. An item's own `path` is accepted when it names the root path. Without a
   root path, one distinct item path supplies it; several distinct paths are
   accepted when every applicable edit names its own file. Conflicting explicit
   root/item paths, conflicting item path aliases, invalid item path types, or
@@ -85,7 +86,7 @@ Every explicit edit target is preflighted together before any file change.
   file paths without a root; only the first applied, and three separate retries
   applied the remaining edits.
   Refused before any effect,
-  each naming the call to send: `edits` beside flat fields, a root `replace_all`
+  each naming the call to send: nonempty `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair.
   An `edits` item that is not an object, lacks `old_string` or `new_string`, has
   an unknown field with a value, or gives a content field twice with different
@@ -100,6 +101,7 @@ Every explicit edit target is preflighted together before any file change.
   without `old_string` says how to insert text with a neighbouring line; it adds
   that `old_string ""` creates a file unless another item of the call has old
   text, which shows that the file has text (the normalizer cannot see the file).
+  A lone `replace_all` supplies no change and receives the no-change refusal.
   Coverage:
   `test_other_edit_spellings_make_the_same_change`,
   `test_edits_json_text_runs_only_when_it_has_one_reading`,
@@ -107,7 +109,7 @@ Every explicit edit target is preflighted together before any file change.
 - **Semantics:** the canonical one-file call is one step of the shared pipeline run with
   `one_write=True`: every edit is planned in memory, in order, each against the
   text the applied edits before it left, then the file is written once with the
-  edits that applied. An edit that fails (not found, ambiguous, `line_join`, a
+  edits that applied. An edit that fails (not found, ambiguous, `line_join`, `file_exists`, a
   `new_string` with a NUL character, a refused item) is skipped (`apply_hunks`
   with `failures`) and reported by its number; the others still apply (user
   decision 2026-10-12, replacing the former all-or-nothing call). After a failed
@@ -116,8 +118,7 @@ Every explicit edit target is preflighted together before any file change.
   depends on a failed one fails to match instead of a guess. When no edit
   applies, or the applied ones leave the file as it was, nothing is written and
   the call fails. Problems of the whole call still write nothing: a missing or
-  unreadable file, not a regular file, binary or not UTF-8 text, an empty
-  `old_string` on a file with content (`file_exists`) or a creation with a NUL
+  unreadable file, not a regular file, binary or not UTF-8 text, a creation with a NUL
   character, the write guard, a file changed during the call. Replay of the 432
   live `edit` calls since 2026-10-04 (2026-10-12): 9 of the 11 replayable
   multi-edit calls refused for `text_not_found` now apply in part (the other 2
@@ -149,6 +150,12 @@ Every explicit edit target is preflighted together before any file change.
   a Swarm edit of 2026-10-14 mixed an escaped degree sign with a minus-sign escape
   the file already held literally; decoding both rejected the otherwise exact
   edit. Coverage: `test_unicode_escapes_in_old_string_match_the_characters_of_the_file`.
+  A skipped creation does not require a full-replacement read stamp or label the
+  successful text edits as a full-file replacement. A creation blocked by content
+  from an earlier edit names that origin; the partial result names which edits
+  were actually written. Evidence: a recorded two-edit call (2026-11-03) lost an
+  applicable replacement when a later empty `old_string` tried to create the same
+  file; replay confirms the independent replacement's exact output.
   `replace_all` replaces every leftmost non-overlapping occurrence. An empty
   `old_string` creates a missing file (parent folders included) or fills an empty
   or whitespace-only one, and fails `file_exists` otherwise. Changing existing text
@@ -378,6 +385,8 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Quoted text in match reports, the `line_join` refusal and notes, such as `First difference, line 1, character C: the file has "s = 'a°b'" where old_string has ...`: the characters as the file or the call has them, a backslash or quote single, an escape only for a character that shows nothing and is not whitespace (`​`) (`_patch_syntax.quoted`, shared with `apply_patch`); both texts of a first difference in one quote character, `"` only when one holds `'` and neither holds `"` | `repr` doubled every backslash: a line holding `°` read `'...\\u00b0...'` in the first difference while the closest-text listing above it showed one backslash (Swarm review, 2026-10-12), and an Agent copying the quote into `old_string` would send two. Tabs and other whitespace stay as written, as in the listing: matching and the first difference compare runs of whitespace as equal, so a tab is never the difference shown, and a `\t` escape among literal backslashes could not be told from a file's own `\t`; the quotes show where trailing spaces end. A zero-width character keeps its escape: the first difference can rest on one, and shown raw both sides would read alike. Quoted each on its own, the windows of the Swarm run 2026-10-20 lines above would read `'...");'` and `"...');"`, outer quotes mirroring the one difference. |
 | `edits item K has no old_string, the current text to replace. To insert text, put the line above it in old_string, and that line followed by the new text in new_string.` (`...; old_string "" creates a file.` unless another item has old text; flat: `new_string needs old_string, the current text it replaces. ...`) | Both such refusals in the live Sessions (Swarm, 2026-10-12) were inserts into a file other items of the call edited; the former `Send old_string and new_string (old_string "" creates a file)` named only file creation. Repeating the line in `new_string` keeps it, which Models miss when told only to use it as `old_string`. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
+| `...but an earlier edit in this call already supplies its content. For later changes, use a nonempty old_string containing the current text to replace.` | Two creation edits on an initially missing or empty file no longer imply that the content predated the call. The result names the applied edit, and the next step does not repeat its creation. |
+| `...is a binary file, so edit cannot change its text. Use a binary-capable editor to change this file.` | Gives a next step for binary content. BOM-marked UTF-16/32 instead uses the shared encoding refusal (`apply_patch.md` -> Agent-facing text). |
 | `edit has no page_id: it changes the file given as path. Swarm Wiki page w1 changes with swarm_wiki: action "update", page_id "w1", and old_text and new_text for the passage.` (after `No file was changed.`; `write ... it writes the file given as path.` for `write`) | An `edit` call sent a Wiki passage change with `page_id: "w1"` and no `path` and got only `The call names no file. Add path ...` (Swarm Sessions, 2026-10-13). A call without `path` that names a page as `page_id` is refused in the handler, where the offered Tools are known (`_page_id_refusal`); a call with `path` and `page_id` is refused the same way, since it has two targets. The Wiki sentence only when `swarm_wiki` is offered and the value is a page ID such as `w1` (`_swarm_references.wiki_change_call`). |
 | `file_not_found` for a page number: `w3.md is not a file. Swarm Wiki page w3 changes with swarm_wiki: action "update", page_id "w3", and old_text and new_text for the passage.` | An `edit` call named a Wiki page number as `path` (Swarm Sessions, 2026-10-12). No ready call: the Wiki takes its own `old_text` and `new_text`. Only when `swarm_wiki` is offered; built with `missing_file_message` (`tools/read.md`), shared with `apply_patch`. |
 | Broken `edits` JSON text: `edits is not valid JSON. At character N, <what breaks in which field>:` + the text around it + how to write it | The former `edits arrived as text, not as an array.` named no break, so the Model could not tell what to fix; 12 `edits` texts in the live Sessions failed this way, 7 of them still after the quote repair (tool review 2026-10-11). |
@@ -387,7 +396,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 
 ## Verification
 
-- `tests/core/tools/test_edit_tools.py`: activation and pinned definitions, the
+- `tests/core/tools/test_edit_tools.py`: activation and definition structure, the
   dialect table, ordered edits written once, failed edits skipped (partial and
   none applied), creation, spellings, the full failure and refusal inventories,
   unknown parameters, a race during the call.

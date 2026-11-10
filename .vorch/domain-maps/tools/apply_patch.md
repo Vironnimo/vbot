@@ -649,6 +649,16 @@ Every parsed source and destination is preflighted together before the first ope
   patch, field, Skill and Wiki suites.
 - Only changed lines are emitted from the replacement; context lines keep their
   actual original bytes.
+- Copied-text recovery has one deterministic work and candidate budget per
+  attempt, shared by line and fragment placement, alignment and merging.
+  Exhaustion returns no match and discards every partial candidate, so a limit
+  never turns unexamined ambiguity into a write. Even one expensive alignment
+  or spelling-distance comparison is charged before it runs. Negative-evidence
+  callers request a complete search: exhaustion cannot prove that a change
+  already exists. Fragment windows enumerate only endpoints
+  within the allowed token distance. Exact/precise matching is independent of
+  this fallback budget. Coverage: `test_copy_match.py` work-count and no-effect
+  regressions.
 - Lines a change adds before a definition whose decorators, annotations or
   attributes lie directly above the matched lines go above those decorators
   (`_decorated_insert.place_before_decorators`, called for every placed text
@@ -713,10 +723,18 @@ Every parsed source and destination is preflighted together before the first ope
   takes precedence over correction. An `old_string` whose every line carries a
   gutter is retried without the gutters, as whole lines, after its substring
   match misses.
-- Patch-only typography normalization also recognizes expanded em dashes and
-  ellipses, minus signs, and Unicode spaces. Precisely equivalent changed lines
-  preserve original glyphs only in unchanged portions; explicit glyph changes
-  and merely similar preimages do not trigger restoration.
+- Typography normalization recognizes German low quotes, French guillemets and
+  hyphen/nonbreaking-hyphen variants as well as curly quotes and en dashes.
+  Patch typography also recognizes expanded em dashes and ellipses, minus signs,
+  and Unicode spaces. Precisely equivalent changed lines preserve original
+  glyphs only in unchanged portions; explicit glyph changes and merely similar
+  preimages do not trigger restoration. `old_string` replacements opt into the
+  same preservation, per occurrence and corresponding line. Their projection
+  bounds comparison work after stripping equal edges; a rewrite whose glyph
+  correspondence cannot be established safely fails with `typography_mismatch`
+  without writing rather than flattening the copied glyphs. Exact copies permit intentional typography
+  changes. Coverage: the normalized typography tests in `test_fuzzy_match.py`
+  and `test_apply_patch_matching.py` through both edit dialects.
 - Escapes stay literal: approximate matches cannot introduce doubled
   quote/backslash escapes absent from the actual target.
   Surplus blank boundary context can be dropped after the full locator misses.
@@ -781,7 +799,10 @@ Every parsed source and destination is preflighted together before the first ope
   own; existing-target Updates need no prior read. Bytes and mode are checked
   after planning, before mutation, and after completed writes. Later entries
   detect drift from earlier observations and leave affected paths alone.
-- Updates reject NUL bytes and invalid UTF-8. New text holding a NUL character
+- Updates reject NUL bytes and invalid UTF-8. UTF-16/32 byte order marks are
+  recognized before the binary check: `unsupported_encoding` names the encoding
+  and its explicit `read` argument, without changing the bytes. Other invalid
+  UTF-8 is refused without guessing a legacy encoding. New text holding a NUL character
   (an Add, or an Update's result) fails `binary_file` with the `nul_text`
   wording: only binary files hold it, and source code writes its escape
   sequence, such as `\x00`. The binary-file wording offered Delete File and Move
@@ -883,6 +904,10 @@ replacements still went through Delete File plus Add File (agent-eval
 
 | Text | Reason |
 |---|---|
+| `X: this rewrite cannot preserve the file's typography safely. Send a smaller old_string and new_string, or copy the file's exact characters into old_string.` (with the file/edit label) | An over-budget or unaligned typography projection must not silently flatten unchanged copied glyphs. Both retries remove the uncertain mapping while preserving deliberate new text. |
+| `X uses UTF-16 with a byte order mark; text edits require UTF-8.` (`UTF-32` likewise; shared with `edit`) | A BOM identifies text that the NUL check otherwise called binary; names the known encoding without guessing for unmarked bytes. |
+| `Pass encoding="utf-16" to read, then use an editor that preserves UTF-16 to change this file.` (`UTF-32` likewise) | Supplies both the supported read form and a way to change the file without silently converting its encoding. |
+| `X is not UTF-8 text. Read it with an explicit encoding, then use an editor that preserves that encoding.` (shared with `edit`) | Unmarked bytes cannot uniquely identify cp1252 or another legacy encoding. Gives the next step instead of an unsupported encoding claim or an unrequested conversion. |
 | `This change was not applied: the permission rules refuse ...` | A later path check can refuse after a relative link moved earlier in the same patch. Names only the refused step, while the partial result retains completed moves and independent changes; saying the whole Tool was not run would invite replay of completed effects. |
 | `Could not change X: Y is a file, not a directory. Check this path before resending this change.` (shared with `write`) | A Windows parent-directory creation can report that the parent already exists; saying the requested child already exists invents an obstruction at the wrong path (review probe, 2026-10-18). Names the actual parent so the Agent can correct the target without changing its contents (F5). This wording requires strict confirmation that the parent is a file: Python 3.14's failed non-strict directory check also leaves a directory-creation EEXIST for an unavailable directory. A link move blocked by its destination parent names that destination; naming only the source obscures where the failure happened (independent verification, 2026-10-18). |
 | `Cannot use path new/: it ends with "/", so it names a folder, not a file. Add the file name after "new/"; missing folders are created with the file.` (shared with `write` and `edit`) | `write "new/"` created a regular file `new` and reported it as created (review 2026-10-22). Names the cause and the call that works; the last clause keeps the Agent from creating the folder with the shell first. |

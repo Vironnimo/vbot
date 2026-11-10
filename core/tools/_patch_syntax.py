@@ -93,7 +93,15 @@ _MESSAGES = {
         "hold. To produce that character in source code, write its escape sequence instead, "
         "such as \\x00."
     ),
-    "unsupported_encoding": "{path} is not UTF-8 text, so its text cannot be patched.",
+    "unsupported_encoding": (
+        "{path} is not UTF-8 text. Read it with an explicit encoding, then use an editor "
+        "that preserves that encoding."
+    ),
+    "bom_encoding": (
+        "{path} uses {encoding} with a byte order mark; text edits require UTF-8. "
+        'Pass encoding="{read_encoding}" to read, then use an editor that preserves '
+        "{encoding} to change this file."
+    ),
     "ambiguous_match": (
         "{where}: the lines to replace occur {occurrences} times ({lines}). Add unchanged "
         "lines around the change until it matches once, or start the block with an @@ line "
@@ -116,6 +124,11 @@ _MESSAGES = {
         "enough surrounding text to tell it apart."
     ),
     "text_not_found": "{where}: the lines to replace were not found.",
+    "typography_mismatch": (
+        "{where}: this rewrite cannot preserve the file's typography safely. "
+        "Send a smaller old_string and new_string, or copy the file's exact "
+        "characters into old_string."
+    ),
     "context_lines_not_found": "{where}: the context lines around the + lines were not found.",
     "old_text_not_found": "{where}: old_string was not found.",
     "line_join": (
