@@ -74,12 +74,65 @@ class WindowInfo:
     bottom: int
     elevated: bool
     owner: int = 0
+    shell: bool = False
 
     def contains(self, x: int, y: int) -> bool:
         return self.left <= x < self.right and self.top <= y < self.bottom
 
 
+@dataclass(frozen=True)
+class DesktopSnapshot:
+    displays: tuple[Display, ...]
+    windows: tuple[WindowInfo, ...]
+    foreground: WindowInfo | None
+    receivers: tuple[WindowInfo | None, ...] = ()
+
+    def same_layout(self, other: DesktopSnapshot) -> bool:
+        def identity(window: WindowInfo | None) -> object:
+            if window is None:
+                return None
+            return (
+                window.handle,
+                window.app.keys,
+                window.left,
+                window.top,
+                window.right,
+                window.bottom,
+                window.owner,
+                window.elevated,
+                window.shell,
+            )
+
+        return (
+            self.displays == other.displays
+            and identity(self.foreground) == identity(other.foreground)
+            and tuple(map(identity, self.windows)) == tuple(map(identity, other.windows))
+        )
+
+
+class CaptureChangedError(TargetError):
+    def __init__(self) -> None:
+        super().__init__(
+            "The screen changed during capture, so no image was returned. Take a new screenshot.",
+            "screen_changed",
+        )
+
+
 class DesktopTarget(Protocol):
+    def snapshot(self, points: list[tuple[int, int]]) -> DesktopSnapshot:
+        """Read display geometry, z-order, focus and all input receivers together."""
+        ...
+
+    def capture_region(
+        self,
+        area: tuple[int, int, int, int],
+        snapshot: DesktopSnapshot,
+        visible: list[int],
+        size: tuple[int, int],
+    ) -> Image.Image:
+        """Verify the snapshot around capture; mask before resizing on the native host."""
+        ...
+
     def readiness(self) -> str | None:
         """``None`` when usable, else an English reason for the readiness hint."""
         ...
@@ -133,6 +186,10 @@ class DesktopTarget(Protocol):
     def keys(self, chord: list[str], repeat: int) -> None:
         """Press *chord* (canonical names from ``_keys``) *repeat* times."""
         ...
+
+    def start_hold(self, chord: list[str]) -> None: ...
+
+    def end_hold(self) -> None: ...
 
     def hold(self, chord: list[str], seconds: float) -> None: ...
 

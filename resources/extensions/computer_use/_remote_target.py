@@ -16,9 +16,19 @@ from ._remote_wire import (
     display_data,
     display_value,
     image_value,
+    snapshot_data,
+    snapshot_value,
     window_value,
 )
-from .target import AppInfo, Display, InputInterrupted, TargetError, WindowInfo
+from .target import (
+    AppInfo,
+    CaptureChangedError,
+    DesktopSnapshot,
+    Display,
+    InputInterrupted,
+    TargetError,
+    WindowInfo,
+)
 
 if TYPE_CHECKING:
     from core.computers import ComputerInfo, ComputerRegistry
@@ -47,6 +57,7 @@ class RemoteDesktopTarget:
         self._control_error: TargetError | None = None
         self.hotkey_available = False
         self.on_control_changed: Callable[[], None] | None = None
+        self.on_stopped: Callable[[str], None] | None = None
 
     async def _send(
         self, operation: str, params: dict[str, Any], *, ordered: bool = True
@@ -60,7 +71,7 @@ class RemoteDesktopTarget:
             if self._closed:
                 raise TargetError("This desktop connection has ended.", "computer_offline")
             try:
-                return await self.computers.call(
+                result = await self.computers.call(
                     self.computer_id,
                     "computer_use",
                     operation,
@@ -68,10 +79,16 @@ class RemoteDesktopTarget:
                     timeout=timeout,
                     instance_id=self.instance_id,
                 )
+                if self.on_stopped is not None:
+                    for control_id in result.get("stopped_control_ids", []):
+                        self.on_stopped(str(control_id))
+                return result
             except Exception as error:
                 code = getattr(error, "code", "computer_use_failed")
                 if code == "computer_use_interrupted":
                     raise InputInterrupted() from error
+                if code == "screen_changed" and operation == "capture_region":
+                    raise CaptureChangedError() from error
                 raise TargetError(str(error), str(code)) from error
 
         if not ordered:
@@ -80,6 +97,7 @@ class RemoteDesktopTarget:
             if self._control_error is not None and operation not in {
                 "readiness",
                 "release",
+                "end_hold",
                 "control",
                 "begin",
                 "activity",
@@ -127,6 +145,26 @@ class RemoteDesktopTarget:
     def displays(self) -> list[Display]:
         return [display_value(item) for item in self._call("displays")["value"]]
 
+    def snapshot(self, points: list[tuple[int, int]]) -> DesktopSnapshot:
+        return snapshot_value(self._call("snapshot", points=[list(point) for point in points]))
+
+    def capture_region(
+        self,
+        area: tuple[int, int, int, int],
+        observed: DesktopSnapshot,
+        visible: list[int],
+        size: tuple[int, int],
+    ) -> Image.Image:
+        return image_value(
+            self._call(
+                "capture_region",
+                area=list(area),
+                snapshot=snapshot_data(observed),
+                visible=visible,
+                size=list(size),
+            )
+        )
+
     def capture(self, display: Display) -> Image.Image:
         return image_value(self._call("capture", display=display_data(display)))
 
@@ -169,6 +207,12 @@ class RemoteDesktopTarget:
 
     def keys(self, chord: list[str], repeat: int) -> None:
         self._call("keys", chord=chord, repeat=repeat)
+
+    def start_hold(self, chord: list[str]) -> None:
+        self._call("start_hold", chord=chord)
+
+    def end_hold(self) -> None:
+        self._call("end_hold")
 
     def hold(self, chord: list[str], seconds: float) -> None:
         self._call("hold", chord=chord, seconds=seconds)

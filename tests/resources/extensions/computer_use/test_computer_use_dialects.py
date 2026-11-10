@@ -72,7 +72,7 @@ CLICK: tuple = ("click", 200, 150, "left", 1, [])
         (
             "computer",
             {"action": "hold_key", "text": "shift", "duration_ms": 500},
-            [("hold", ["shift"], 0.5)],
+            [("start_hold", ["shift"]), ("end_hold",)],
         ),
         ("computer", json.dumps({"action": "type", "text": "hi"}), [("type", "hi")]),
         (

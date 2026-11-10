@@ -19,16 +19,20 @@
   let refreshing = false;
   let refreshQueued = false;
   let rediscover = false;
-  const computerName = $derived(
-    status?.computer_id && status.computer_id !== 'server'
-      ? status.computer_name || status.computer_id
-      : '',
+  const controls = $derived(
+    (status?.controls || (status ? [status] : [])).filter(
+      (item) => item.active || item.stopping,
+    ),
   );
+  const computerName = (item) =>
+    item.computer_id && item.computer_id !== 'server'
+      ? item.computer_name || item.computer_id
+      : '';
 
-  const control = (action) =>
+  const control = (action, controlId) =>
     extensionOperation(EXTENSION, 'control', {
       action,
-      ...(action === 'stop' ? { control_id: status.control_id } : {}),
+      ...(action === 'stop' ? { control_id: controlId } : {}),
     });
 
   // Computer Use publishes a change whenever its control status changes, so
@@ -95,12 +99,12 @@
     };
   });
 
-  async function stop() {
+  async function stop(controlId) {
     const requestRevision = ++revision;
     stopping = true;
     error = '';
     try {
-      const result = await control('stop');
+      const result = await control('stop', controlId);
       if (!disposed && requestRevision === revision) status = result;
     } catch (failure) {
       if (!disposed && requestRevision === revision) {
@@ -115,26 +119,27 @@
   }
 </script>
 
-{#if status?.active || stopping}
+{#each controls as item (item.control_id || item.computer_id)}
+  {@const name = computerName(item)}
   <Button
     variant="danger"
-    icon={!computerName}
-    disabled={stopping || status?.stopping}
-    ariaLabel={computerName
-      ? t('computers.stopControl', { name: computerName })
+    icon={!name}
+    disabled={stopping || item.stopping}
+    ariaLabel={name
+      ? t('computers.stopControl', { name })
       : t('computerControl.stop')}
     tooltip={error ||
-      (stopping || status?.stopping
+      (stopping || item.stopping
         ? t('computerControl.stopping')
-        : status.hotkey_available
+        : item.hotkey_available
           ? t('computerControl.hotkey')
           : t('computerControl.noHotkey'))}
-    onClick={stop}
+    onClick={() => stop(item.control_id)}
   >
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <rect x="1.5" y="2" width="13" height="9" rx="1" />
       <path d="M5 14h6M8 11v3M6 4.5l4 4M10 4.5l-4 4" />
     </svg>
-    {#if computerName}<span>{computerName}</span>{/if}
+    {#if name}<span>{name}</span>{/if}
   </Button>
-{/if}
+{/each}

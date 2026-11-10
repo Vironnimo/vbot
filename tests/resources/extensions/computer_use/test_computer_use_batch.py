@@ -309,6 +309,8 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     computer.published.clear()
     result = await computer.computer(action="type", text="x")
     status, ignored, stopped = seen
+    for snapshot in (status, ignored, stopped):
+        snapshot.pop("controls")
     assert computer.hotkey.armed is None
     assert status == {
         "available": True,
@@ -323,7 +325,7 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
         "available": True,
         "active": False,
         "stopping": True,
-        "hotkey_available": True,
+        "hotkey_available": False,
     }
     assert result["error"]["code"] == "computer_use_interrupted"
     assert result["error"]["message"].startswith(
@@ -333,6 +335,51 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     assert controls and all(ids == ["control"] for _, ids, _ in controls)
     assert [revision for *_, revision in controls] == sorted(revision for *_, revision in controls)
     assert (await computer.api.operations.invoke("control", {}))["active"] is False
+
+
+async def test_hold_keeps_input_serialized_without_blocking_app_listing(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    holding = asyncio.Event()
+    release = asyncio.Event()
+
+    async def pause(seconds, stop):
+        if seconds == 100:
+            holding.set()
+            await release.wait()
+        return stop.is_set()
+
+    monkeypatch.setattr(computer_use, "_sleep", pause)
+    task = asyncio.create_task(computer.computer(action="hold_key", text="shift", duration=100))
+    try:
+        await holding.wait()
+        assert computer.service._lock.locked()
+        listing = await computer.call("computer_apps", {"action": "list"})
+        assert listing["ok"] and not task.done()
+    finally:
+        release.set()
+        await task
+    assert computer.target.inputs == [("start_hold", ["shift"]), ("end_hold",)]
+
+
+async def test_batch_screenshot_honors_display(computer: Harness) -> None:
+    context = computer.context_for("computer_batch")
+    result = await computer.call(
+        "computer_batch", {"actions": [{"action": "screenshot", "display": "Wide"}]}, context
+    )
+    assert result["ok"]
+    assert images(context)[0].size == (1568, 500)
+    result = await computer.call(
+        "computer_batch",
+        {
+            "actions": [
+                {"action": "key", "text": "enter"},
+                {"action": "screenshot", "display": "missing"},
+            ]
+        },
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert computer.target.inputs == []
 
 
 @pytest.mark.parametrize("cancellation", ["run", "task", "both"])
@@ -533,6 +580,7 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
     await computer.computer(action="type", text="x")
     assert computer.target.activity == [True]
     control_id = computer.hotkey.armed
+    first_hotkey = computer.hotkey
     assert control_id is not None  # double Esc works between calls too
     assert (await computer.api.operations.invoke("control", {}))["control_id"] == control_id
 
@@ -545,6 +593,7 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
 
     # Taking the computer again in the same Run starts a new control.
     await computer.computer(action="screenshot")
+    assert first_hotkey.closed and computer.hotkey is not first_hotkey
     assert computer.hotkey.armed not in (None, control_id)
     await computer.service.run_end(SimpleNamespace(run_id="other"))
     assert computer.target.activity == [True, False, True]
@@ -559,6 +608,32 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
     assert computer.target.activity == [True, False, True, False, True, False]
     assert computer.target.released == 1
     assert computer.service._held_run is None
+
+
+async def test_shutdown_cancels_readiness_and_idle_work_before_closing_target(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await computer.computer(action="screenshot")
+    timer = computer.service._control_timer
+    assert timer is not None
+    worker_thread = await computer.service._on_worker(threading.get_ident)
+    closed_on = []
+    close = computer.target.close
+
+    def close_target():
+        closed_on.append(threading.get_ident())
+        close()
+
+    monkeypatch.setattr(computer.target, "close", close_target)
+
+    async def wait_for_readiness() -> None:
+        await asyncio.Event().wait()
+
+    pending = asyncio.create_task(wait_for_readiness())
+    computer.service._tasks.add(pending)
+    await computer.service.close()
+    assert timer.cancelled() and pending.cancelled()
+    assert closed_on == [worker_thread] and computer.target.closed
 
 
 @pytest.mark.parametrize("stop", ["double_escape", "control"])

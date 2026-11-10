@@ -66,7 +66,7 @@ COMPUTER_BATCH_DESCRIPTION = (
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
     "at the first one that fails, and the result says which steps ran and, if input was "
     "sent, shows the screen in a fresh screenshot. Each action takes "
-    "the same fields as computer, except display and computer_id. Coordinates refer to "
+    "the same fields as computer, except computer_id. Coordinates refer to "
     "screenshots you received before this call: the latest one, or the one named by "
     "screenshot_id. Screenshot and "
     "zoom actions return their images after the batch, in order, and a batch that sent "
@@ -210,7 +210,7 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
 
 _BATCH_ITEM: dict[str, Any] = {
     "type": "object",
-    "properties": _ACTION_PROPERTIES,
+    "properties": {**_ACTION_PROPERTIES, "display": _DISPLAY_PROPERTY},
     "required": ["action"],
 }
 
