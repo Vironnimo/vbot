@@ -47,7 +47,7 @@ from ._presentation import (
     _with_screen,
 )
 from ._registration import register as register
-from .target import AppInfo, DesktopTarget, InputInterrupted, TargetError
+from .target import AppInfo, CaptureChangedError, DesktopTarget, InputInterrupted, TargetError
 
 if TYPE_CHECKING:
     from ._routing import ComputerRouting
@@ -62,6 +62,8 @@ SETTLE_SECONDS = 0.5
 STEP_SETTLE_SECONDS = 0.2
 # After bringing an app to the front, which may launch it.
 OPEN_SETTLE_SECONDS = 1.5
+# Let transient window movement settle before retrying an observation.
+CAPTURE_RETRY_SECONDS = 0.2
 # A cached "not ready" is checked again at most this often.
 READINESS_RECHECK_SECONDS = 30.0
 # Desktop control lasts from the first call that takes the desktop until the Agent
@@ -765,21 +767,23 @@ class ComputerUseService:
         lines: list[str] = []
         try:
             if action.name == "screenshot":
-                lines.append(await self._on_worker(desktop.screenshot, action.display, action.view))
+                lines.append(
+                    await self._capture_image(desktop.screenshot, action.display, action.view)
+                )
             elif action.name == "zoom":
-                lines.append(await self._on_worker(desktop.zoom, frame, action))
+                lines.append(await self._capture_image(desktop.zoom, frame, action))
             elif action.name == "cursor_position":
                 lines.append(await self._on_worker(desktop.cursor, frame))
             elif action.name == "wait":
                 await self._pause(action.seconds)
                 lines.append(f"Waited {action.seconds:g} s.")
-                lines.append(await self._on_worker(desktop.screenshot))
+                lines.append(await self._capture_image(desktop.screenshot))
             else:
                 self._check_stop()
                 lines.append(f"Done: {await self._act(context, desktop, action, frame)}.")
                 if action.name != "left_mouse_down":
                     await self._pause(SETTLE_SECONDS)
-                    lines.append(await self._on_worker(desktop.screenshot))
+                    lines.append(await self._capture_image(desktop.screenshot))
         except InputInterrupted:
             sent = desktop.input_started and action.sends_input
             raise TargetError(
@@ -793,6 +797,21 @@ class ComputerUseService:
             raise
         return "\n".join([*lines, *action.notes])
 
+    async def _capture_image(self, capture: Callable[..., str], *args: Any) -> str:
+        for attempt in range(3):
+            self._check_stop()
+            try:
+                return await self._on_worker(capture, *args)
+            except CaptureChangedError:
+                if attempt == 2:
+                    raise TargetError(
+                        "No image was returned: the screen kept changing across three capture "
+                        "attempts. Let the windows stop moving before continuing.",
+                        "screen_changed",
+                    ) from None
+                await self._pause(CAPTURE_RETRY_SECONDS)
+        raise AssertionError("unreachable")
+
     async def _screen_after_failure(self, desktop: Desktop) -> None:
         """Screenshot the result of a failed call that had sent input.
 
@@ -803,7 +822,7 @@ class ComputerUseService:
             return
         try:
             await self._pause(SETTLE_SECONDS)
-            desktop.failure_screen = await self._on_worker(desktop.screenshot)
+            desktop.failure_screen = await self._capture_image(desktop.screenshot)
         except TargetError:
             pass
         except Exception:
@@ -902,7 +921,7 @@ class ComputerUseService:
         if sent and actions[-1].name != "screenshot":
             try:
                 await self._pause(SETTLE_SECONDS)
-                lines.append(await self._on_worker(desktop.screenshot))
+                lines.append(await self._capture_image(desktop.screenshot))
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
@@ -929,9 +948,9 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._on_worker(desktop.screenshot, action.display, action.view)
+            return await self._capture_image(desktop.screenshot, action.display, action.view)
         if action.name == "zoom":
-            return await self._on_worker(desktop.zoom, frame, action)
+            return await self._capture_image(desktop.zoom, frame, action)
         if action.name == "cursor_position":
             return await self._on_worker(desktop.cursor, frame)
         if action.name == "wait":
@@ -1084,7 +1103,7 @@ class ComputerUseService:
                 desktop.input_started = True
                 started = await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
                 await self._pause(OPEN_SETTLE_SECONDS)
-                shot = await self._on_worker(desktop.screenshot)
+                shot = await self._capture_image(desktop.screenshot)
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} while {match.name} was opening. {_STOPPED_ADVICE}",

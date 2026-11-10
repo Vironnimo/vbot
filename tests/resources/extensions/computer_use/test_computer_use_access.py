@@ -337,13 +337,16 @@ async def test_asking_opens_only_approved_apps(computer: Harness) -> None:
 
 
 @pytest.mark.parametrize("change", ["close", "move", "reorder", "continuous"])
+@pytest.mark.parametrize("action", ["screenshot", "zoom"])
 async def test_capture_never_publishes_pixels_with_a_changed_window_stack(
-    computer: Harness, monkeypatch: pytest.MonkeyPatch, change: str
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, change: str, action: str
 ) -> None:
     computer.ask_per_app()
     await computer.grant("Notepad")
     private = replace(computer.target.windows_[1], left=100, top=100, right=300, bottom=300)
     computer.target.windows_.insert(0, private)
+    if action == "zoom":
+        assert (await computer.computer(action="screenshot", view="display"))["ok"]
     capture = computer.target.capture
     captures = 0
 
@@ -363,7 +366,13 @@ async def test_capture_never_publishes_pixels_with_a_changed_window_stack(
 
     monkeypatch.setattr(computer.target, "capture", moving)
     context = computer.context_for("computer")
-    result = await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
+    arguments = (
+        {"action": "screenshot", "view": "display"}
+        if action == "screenshot"
+        else {"action": "zoom", "region": [100, 100, 400, 400]}
+    )
+    result = await computer.call("computer", arguments, context)
+    assert computer.sleeps == [0.2] * (2 if change == "continuous" else 1)
     if change == "continuous":
         assert result["error"]["code"] == "screen_changed"
         assert not context.result_media

@@ -32,7 +32,6 @@ from ._screens import (
 )
 from .target import (
     AppInfo,
-    CaptureChangedError,
     DesktopSnapshot,
     DesktopTarget,
     Display,
@@ -193,15 +192,6 @@ class Desktop:
 
     def screenshot(self, display: str | None = None, view: str | None = None) -> str:
         """Publish the foreground window by default, or an explicitly selected display."""
-        for attempt in range(3):
-            try:
-                return self._screenshot(display, view)
-            except CaptureChangedError:
-                if attempt == 2:
-                    raise
-        raise AssertionError("unreachable")
-
-    def _screenshot(self, display: str | None, view: str | None) -> str:
         observed = self.target.snapshot([])
         displays = observed.displays
         if display is not None:

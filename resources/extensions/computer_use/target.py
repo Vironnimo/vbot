@@ -113,7 +113,7 @@ class DesktopSnapshot:
 class CaptureChangedError(TargetError):
     def __init__(self) -> None:
         super().__init__(
-            "The screen changed during capture, so no image was returned. Take a new screenshot.",
+            "The screen changed during capture.",
             "screen_changed",
         )
 
