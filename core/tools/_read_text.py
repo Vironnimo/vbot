@@ -11,6 +11,7 @@ lines say which of them held UTF-16 text.
 
 from __future__ import annotations
 
+import codecs
 import io
 import json
 import os
@@ -79,13 +80,18 @@ def _open_text(
     A command's log (*log*) decodes run by run, as ``CommandOutputDecoder`` describes.
     """
     if log is None:
-        return resolved.open("r", encoding=encoding or "utf-8", errors="replace", newline="")
+        return resolved.open(
+            "r",
+            encoding=encoding or "utf-8",
+            errors="replace" if encoding is not None else _UTF8_ERRORS,
+            newline="",
+        )
     raw = io.BufferedReader(log.open(resolved), _DECODING_CHUNK_BYTES)
     return io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
 
 
 class _LogBytes(io.RawIOBase):
-    """A command's log file read through a ``CommandOutputDecoder``."""
+    """A file read through an incremental decoder that records line interpretations."""
 
     def __init__(self, raw: IO[bytes], decoder: CommandOutputDecoder) -> None:
         super().__init__()
@@ -114,6 +120,49 @@ class _LogBytes(io.RawIOBase):
     def close(self) -> None:
         self._raw.close()
         super().close()
+
+
+# A valid UTF-8 stream cannot contain a surrogate. Keep replacements distinct
+# from literal U+FFFD until the renderer knows which characters it actually shows.
+_INVALID_UTF8 = "\udc00"
+_UTF8_ERRORS = "vbot_read_utf8"
+
+
+def _mark_invalid_utf8(error: UnicodeError) -> tuple[str, int]:
+    if not isinstance(error, UnicodeDecodeError):
+        raise error
+    return _INVALID_UTF8, error.end
+
+
+codecs.register_error(_UTF8_ERRORS, _mark_invalid_utf8)
+
+
+class _Utf8Notes:
+    """First replacement positions in the bounded candidate output, never skipped text."""
+
+    def __init__(self) -> None:
+        self.positions: dict[int, int] = {}
+
+    def record(self, line: int, character: int) -> None:
+        self.positions.setdefault(line, character)
+
+    def note(self, shown: Iterable[int], next_offset: int | str | None = None) -> str | None:
+        end_line, end_character = (
+            map(int, next_offset.split(":")) if isinstance(next_offset, str) else (0, 0)
+        )
+        affected = [
+            line
+            for line in shown
+            if line in self.positions and (line != end_line or self.positions[line] < end_character)
+        ]
+        if not affected:
+            return None
+        subject, plural = _name_lines(affected, "Line")
+        verb = "contain" if plural else "contains"
+        return (
+            f"[{subject} {verb} bytes that are not valid UTF-8, shown as \ufffd. "
+            'If the file uses another encoding, pass encoding, such as "cp1252".]'
+        )
 
 
 class _LogDecoding:
@@ -463,6 +512,7 @@ def finalize_limited_text(
     byte_limited: bool,
     number: bool,
     continuation: str = READ_CONTINUATION,
+    max_bytes: int = MAX_FILE_BYTES,
 ) -> tuple[ReadPage, int]:
     """Fit rendered lines, append a continuation hint, and return the last line shown."""
     output = "".join(rendered_lines)
@@ -470,14 +520,14 @@ def finalize_limited_text(
     shown_line_count = len(rendered_lines)
     continuation_offset: str | None = None
     if byte_limited:
-        long_first_line = len(rendered_lines[0].encode("utf-8")) > MAX_FILE_BYTES
+        long_first_line = len(rendered_lines[0].encode("utf-8")) > max_bytes
         provisional_count = max(1, min(len(rendered_lines), shown_line_count))
         while True:
             provisional_end = start_line + provisional_count - 1
             if total_lines is not None:
                 provisional_end = min(total_lines, provisional_end)
             possible_continuation = (
-                f"{start_line}:{start_character + MAX_FILE_BYTES}" if long_first_line else None
+                f"{start_line}:{start_character + max_bytes}" if long_first_line else None
             )
             hint = _build_read_hint(
                 start_line,
@@ -488,8 +538,12 @@ def finalize_limited_text(
                 continuation=continuation,
             )
             reserved_bytes = len(hint.encode("utf-8")) + 2
-            available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
-            output, fitted_count = _fit_lines_within_byte_limit(rendered_lines, available_bytes)
+            available_bytes = max(max_bytes - reserved_bytes, 0)
+            # Only shrink: a shorter hint must not re-admit a line and oscillate
+            # forever when the last line crosses a decimal boundary (999/1000).
+            output, fitted_count = _fit_lines_within_byte_limit(
+                rendered_lines[:provisional_count], available_bytes
+            )
             if fitted_count == provisional_count:
                 shown_line_count = fitted_count
                 first_line_was_cut = (
@@ -556,7 +610,10 @@ def render_text_path(
 
 
 def _render_path(
-    resolved: Path, arguments: JsonObject, log: _LogDecoding | None, encoding: str | None
+    resolved: Path,
+    arguments: JsonObject,
+    log: _LogDecoding | None,
+    encoding: str | None,
 ) -> tuple[ReadPage, range]:
     """Render like ``render_text_path`` and return the line numbers shown."""
     position = read_position(arguments)
@@ -569,6 +626,7 @@ def _render_path(
             return ReadPage(""), range(0)
         position = ReadPosition(_start_line(position.line, known_total), position.character)
     rendered_lines: list[str] = []
+    notes = _Utf8Notes()
     rendered_bytes = 0
     source_line = 1
     source_character = 1
@@ -585,14 +643,18 @@ def _render_path(
     held_carriage_return = ""
     first_chunk = True
 
-    def append_bounded(text: str) -> bool:
+    def append_bounded(text: str, character: int) -> bool:
         nonlocal rendered_bytes
         if not text:
             return True
         remaining_bytes = MAX_FILE_BYTES + 1 - rendered_bytes
         if remaining_bytes <= 0:
             return False
+        invalid_at = text.find(_INVALID_UTF8)
+        text = text.replace(_INVALID_UTF8, "\ufffd")
         kept = _truncate_utf8(text, remaining_bytes)
+        if 0 <= invalid_at < len(kept):
+            notes.record(source_line, character + invalid_at)
         rendered_lines[-1] += kept
         rendered_bytes += len(kept.encode("utf-8"))
         return kept == text
@@ -637,7 +699,10 @@ def _render_path(
                     gutter = _line_gutter(source_line, required_character)
                     rendered_lines.append(gutter)
                     rendered_bytes += len(gutter.encode("utf-8"))
-                if not append_bounded(selected_fragment) or rendered_bytes > MAX_FILE_BYTES:
+                if (
+                    not append_bounded(selected_fragment, source_character + skip_characters)
+                    or rendered_bytes > MAX_FILE_BYTES
+                ):
                     byte_limited = True
                     return False
 
@@ -706,19 +771,40 @@ def _render_path(
 
     output = "".join(rendered_lines)
     if not (line_limited or byte_limited):
-        return ReadPage(output), range(position.line, position.line + len(rendered_lines))
-    if known_total is None:
-        known_total = count_lines(
-            resolved, max_bytes=_LINE_COUNT_MAX_BYTES, log=log, encoding=encoding
+        page = ReadPage(output)
+        shown_end = position.line + len(rendered_lines) - 1
+        known_total = total_lines
+    else:
+        if known_total is None:
+            known_total = count_lines(
+                resolved, max_bytes=_LINE_COUNT_MAX_BYTES, log=log, encoding=encoding
+            )
+        page, shown_end = finalize_limited_text(
+            rendered_lines,
+            start_line=position.line,
+            start_character=position.character,
+            total_lines=known_total,
+            byte_limited=byte_limited,
+            number=True,
         )
-    page, shown_end = finalize_limited_text(
-        rendered_lines,
-        start_line=position.line,
-        start_character=position.character,
-        total_lines=known_total,
-        byte_limited=byte_limited,
-        number=True,
-    )
+    budget = MAX_FILE_BYTES
+    while decoding_note := notes.note(range(position.line, shown_end + 1), page.next_offset):
+        prefix = decoding_note + "\n"
+        if len((prefix + page.content).encode("utf-8")) <= MAX_FILE_BYTES:
+            page = page.prefixed(prefix)
+            break
+        # Fit again in memory, only shrinking the budget. A changed range note
+        # cannot re-admit text or repeat the pagination oscillation.
+        budget = min(budget - 1, MAX_FILE_BYTES - len(prefix.encode("utf-8")))
+        page, shown_end = finalize_limited_text(
+            rendered_lines,
+            start_line=position.line,
+            start_character=position.character,
+            total_lines=known_total,
+            byte_limited=True,
+            number=True,
+            max_bytes=budget,
+        )
     return page, range(position.line, shown_end + 1)
 
 
@@ -822,6 +908,7 @@ def _matching_lines(
     )
 
     shown: list[str] = []
+    notes = _Utf8Notes()
     shown_numbers: list[int] = []
     shown_bytes = 0
     last_shown = 0
@@ -842,6 +929,8 @@ def _matching_lines(
                 f"{text[:_MATCH_LINE_CHARACTERS]} [line continues; read "
                 f'offset="{continuation}" for the rest]'
             )
+        invalid_at = text.find(_INVALID_UTF8)
+        text = text.replace(_INVALID_UTF8, "\ufffd")
         rendered = f"{_line_gutter(number, character)}{text}\n"
         if last_shown and number > last_shown + 1:
             rendered = "--\n" + rendered
@@ -849,6 +938,8 @@ def _matching_lines(
         if len(shown_numbers) >= max_lines or shown_bytes + size > MAX_FILE_BYTES:
             resume_at = number
             return
+        if invalid_at >= 0:
+            notes.record(number, character + invalid_at)
         shown.append(rendered)
         shown_numbers.append(number)
         shown_bytes += size
@@ -858,7 +949,7 @@ def _matching_lines(
         if number < position.line:
             continue
         text = plain_line_end(line).removesuffix("\n")
-        if regex.search(text):
+        if regex.search(text.replace(_INVALID_UTF8, "\ufffd")):
             matches += 1
             for previous_number, previous in before:
                 show(previous_number, previous)
@@ -877,10 +968,17 @@ def _matching_lines(
         return ReadPage(f"No line of {label}{scope} matches {quoted}{note}."), []
     noun = "line" if matches == 1 else "lines"
     header = f"{matches} {noun} of {label}{scope} match {quoted}{note}:\n"
-    output = header + "".join(shown)
-    if resume_at is not None:
-        output += f"[Output stopped before line {resume_at}. Use offset={resume_at} to continue.]"
-    return ReadPage(output, resume_at), shown_numbers
+    while True:
+        decoding_note = notes.note(shown_numbers)
+        output = (decoding_note + "\n" if decoding_note else "") + header + "".join(shown)
+        if resume_at is not None:
+            output += (
+                f"[Output stopped before line {resume_at}. Use offset={resume_at} to continue.]"
+            )
+        if len(output.encode("utf-8")) <= MAX_FILE_BYTES or not shown:
+            return ReadPage(output, resume_at), shown_numbers
+        shown.pop()
+        resume_at = shown_numbers.pop()
 
 
 def render_directory_listing(

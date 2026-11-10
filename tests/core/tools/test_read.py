@@ -129,6 +129,9 @@ async def test_paths_resolve_from_the_working_directory_or_are_absolute(
 @pytest.mark.parametrize(
     ("arguments", "refusal"),
     [
+        pytest.param({"path": ""}, "path", id="empty-path"),
+        pytest.param({"path": "   "}, "path", id="blank-path"),
+        pytest.param({"file_path": " \t "}, "path", id="blank-path-alias"),
         pytest.param(
             {"path": "notes.txt", "mode": "bytes"},
             '"mode" is not a parameter',
@@ -430,7 +433,6 @@ _ELEVEN = "".join(f"line{i}\n" for i in range(1, 12))
             b"| Variant | Focus |\n|---|---|\n",
             "1| | Variant | Focus |\n2| |---|---|\n",
         ),
-        ("invalid.txt", b"valid\xfftext", "1| valid�text"),
         ("bom.txt", b"\xef\xbb\xbfhello\nworld\n", "1| hello\n2| world\n"),
         ("empty.txt", b"", "[empty.txt is empty.]"),
         ("data.bin", b"\x7fELF\x00\x00\x01payload", binary_notice("data.bin")),
@@ -443,7 +445,6 @@ _ELEVEN = "".join(f"line{i}\n" for i in range(1, 12))
     ids=[
         "numbering",
         "leading_pipe",
-        "invalid_utf8",
         "bom",
         "empty",
         "nul_byte",
@@ -647,7 +648,96 @@ async def test_command_log_ansi_inference_is_scoped_to_shown_lines_and_command_l
     assert "cp1252" not in explicit and "2| pg_ctl: kein Server l\ufffduft" in explicit
     ordinary = workspace / "ordinary.txt"
     ordinary.write_bytes(raw)
-    assert content(await read(workspace, {"path": str(ordinary)})) == explicit
+    ordinary_shown = content(await read(workspace, {"path": str(ordinary)}))
+    assert ordinary_shown.split("\n", 1)[1] == explicit
+    assert "encoding" in ordinary_shown.splitlines()[0]
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_bytes", [1, 65536])
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])
+async def test_invalid_utf8_is_named_only_for_shown_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunk_bytes: int, newline: bytes
+) -> None:
+    monkeypatch.setattr(read_text_module, "_DECODING_CHUNK_BYTES", chunk_bytes)
+    monkeypatch.setattr(read_text_module, "_TEXT_STREAM_CHUNK_CHARACTERS", chunk_bytes)
+    path = tmp_path / "ordinary.txt"
+    # A literal replacement character is valid text; a truncated multibyte
+    # sequence is one replacement, even across raw decoder chunk boundaries.
+    raw = newline.join(["literal �".encode(), b"bad \xe2\x82", b"clean", b"bad \xff", b"end"])
+    path.write_bytes(raw)
+    for window, affected in (
+        ({}, [2, 4]),
+        ({"offset": 2, "limit": 1}, [2]),
+        ({"pattern": "bad"}, [2, 4]),
+        ({"pattern": "�"}, [2, 4]),
+    ):
+        shown = content(await read(tmp_path, {"path": path.name, **window}))
+        note = shown.splitlines()[0]
+        assert [int(n) for n in re.findall(r"\b[24]\b", note)] == affected
+        assert "encoding" in note and '"cp1252"' in note
+        assert "2| bad �" in shown and "bad ��" not in shown
+    for window in ({"limit": 1}, {"offset": -1}, {"offset": 3, "limit": 1}, {"pattern": "clean"}):
+        shown = content(await read(tmp_path, {"path": path.name, **window}))
+        assert "encoding" not in shown
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+async def test_utf8_notes_fit_the_page_and_describe_only_displayed_characters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "damaged.txt"
+    path.write_bytes((b"x" * 50 + b"\xff\n") * 20_000)
+    for window in ({}, {"pattern": "�"}):
+        result = await read(tmp_path, {"path": path.name, **window})
+        assert len(content(result).encode("utf-8")) <= 50 * 1024
+        assert result["data"]["next_offset"] > 1
+        assert "encoding" in content(result)
+
+    # Neither an omitted prefix nor read-ahead beyond the byte cut is shown.
+    path.write_bytes(b"\xff" + b"x" * 60_000 + b"\xe2\x82\n")
+    first = await read(tmp_path, {"path": path.name, "offset": "1:500"})
+    assert "encoding" not in content(first) and "�" not in content(first)
+    continued = await read(tmp_path, {"path": path.name, "offset": first["data"]["next_offset"]})
+    assert "encoding" in content(continued)
+    assert content(continued).endswith("x�\n")
+
+
+@pytest.mark.asyncio
+async def test_utf8_diagnostics_do_not_keep_skipped_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "damaged.txt"
+    path.write_bytes(b"\xff\nclean\n" * 10_000)
+    recorded: list[int] = []
+    record = read_text_module._Utf8Notes.record
+
+    def record_line(notes: read_text_module._Utf8Notes, line: int, character: int) -> None:
+        recorded.append(line)
+        record(notes, line, character)
+
+    monkeypatch.setattr(read_text_module._Utf8Notes, "record", record_line)
+    for window in ({"offset": 20_000}, {"pattern": "clean", "limit": 1}):
+        content(await read(tmp_path, {"path": path.name, **window}))
+        assert recorded == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"])
+async def test_bom_text_names_the_explicit_encoding_that_reads_it(
+    tmp_path: Path, encoding: str
+) -> None:
+    path = tmp_path / "unicode.txt"
+    raw = ("\ufeffGrüße aus Köln\n上😀\n").encode(encoding)
+    path.write_bytes(raw)
+    shown = content(await read(tmp_path, {"path": path.name}))
+    chosen = encoding.rsplit("-", 1)[0]
+    assert path.name in shown and f'encoding="{chosen}"' in shown
+    failure(await read(tmp_path, {"path": path.name, "pattern": "Grüße"}), "invalid_arguments")
+    decoded = content(await read(tmp_path, {"path": path.name, "encoding": chosen}))
+    assert decoded == "1| Grüße aus Köln\n2| 上😀\n"
     assert path.read_bytes() == raw
 
 
@@ -769,8 +859,10 @@ async def test_line_windows_name_the_call_that_continues_them(
     tmp_path: Path, raw: str, window: dict[str, int], expected: str | None, next_offset: int | None
 ) -> None:
     tmp_path.joinpath("notes.txt").write_bytes(raw.encode())
+    file_state = FileReadState()
 
-    result = await read(tmp_path, {"path": "notes.txt", **window})
+    result = await read(tmp_path, {"path": "notes.txt", **window}, file_state=file_state)
+    assert file_state.check_stale("session-1", (tmp_path / "notes.txt").resolve()) is None
     assert result["data"].get("next_offset") == next_offset
     if next_offset is None:
         assert "next_offset" not in result["data"]
@@ -784,8 +876,16 @@ async def test_line_windows_name_the_call_that_continues_them(
 
 
 @pytest.mark.asyncio
-async def test_short_lines_count_their_gutters_against_the_page_budget(tmp_path: Path) -> None:
-    source = "\n" * 50_000
+@pytest.mark.parametrize("decimal_boundary", [False, True])
+async def test_short_lines_count_their_gutters_against_the_page_budget(
+    tmp_path: Path, decimal_boundary: bool
+) -> None:
+    # At this exact alignment, shrinking the hint from line 1000 to 999 used
+    # to re-admit line 1000, whose larger hint then removed it forever.
+    source = (
+        ("x" * 46 + "\n") * 219 + ("x" * 45 + "\n") * 1781 if decimal_boundary else "\n" * 50_000
+    )
+    total = 2000 if decimal_boundary else 50_000
     tmp_path.joinpath("short.txt").write_bytes(source.encode())
     offset = 1
     shown: list[int] = []
@@ -794,14 +894,20 @@ async def test_short_lines_count_their_gutters_against_the_page_budget(tmp_path:
         result = await read(tmp_path, {"path": "short.txt", "offset": offset, "limit": 50_000})
         page = content(result)
         assert len(page.encode("utf-8")) <= 50 * 1024
-        shown.extend(int(match[1]) for match in re.finditer(r"(?m)^(\d+)\| \n", page))
+        shown.extend(int(match[1]) for match in re.finditer(r"(?m)^(\d+)\| [x]*\n", page))
         next_offset = result["data"].get("next_offset")
         if next_offset is None:
             break
         assert next_offset == shown[-1] + 1
         offset = next_offset
 
-    assert shown == list(range(1, 50_001))
+    assert shown == list(range(1, total + 1))
+    if decimal_boundary:
+        # Attachments, Skills and extracted documents share the in-memory renderer.
+        for number in (True, False):
+            rendered = read_text_module.render_text_page(source, 1, None, number=number)
+            assert len(rendered.content.encode("utf-8")) <= 50 * 1024
+            assert rendered.next_offset is not None
 
 
 @pytest.mark.asyncio
@@ -941,21 +1047,27 @@ async def test_an_image_passes_its_pixels_in_memory_without_creating_files(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_audio_is_transcribed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("transcript", ["hello from the recording", "   "])
+async def test_audio_is_transcribed(tmp_path: Path, transcript: str) -> None:
     tmp_path.joinpath("voice.mp3").write_bytes(_AUDIO)
-    speech = FakeSpeech(text="hello from the recording")
+    speech = FakeSpeech(text=transcript)
+    file_state = FileReadState()
 
-    result = await read(tmp_path, {"path": "voice.mp3"}, speech=speech)
+    result = await read(tmp_path, {"path": "voice.mp3"}, speech=speech, file_state=file_state)
 
-    assert content(result) == "[Transcription of voice.mp3 (audio/mpeg)]:\nhello from the recording"
+    if transcript.strip():
+        assert content(result) == f"[Transcription of voice.mp3 (audio/mpeg)]:\n{transcript}"
+    else:
+        assert "voice.mp3" in content(result) and "30 B" in content(result)
     assert speech.calls == [(_AUDIO, "voice.mp3", "audio/mpeg")]
+    assert file_state.check_stale("session-1", (tmp_path / "voice.mp3").resolve()) is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("name", "raw", "services", "code", "message"),
     [
-        ("voice.mp3", _AUDIO, {"speech_max_size_bytes": 8}, "audio_too_large", "exceeds limit 8"),
+        ("voice.mp3", _AUDIO, {"speech_max_size_bytes": 8}, "audio_too_large", "8 B"),
         (
             "voice.mp3",
             _AUDIO,
@@ -964,18 +1076,11 @@ async def test_audio_is_transcribed(tmp_path: Path) -> None:
             "speech-to-text is not configured",
         ),
         (
-            "voice.mp3",
-            _AUDIO,
-            {"speech": FakeSpeech(text="   ")},
-            "transcription_failed",
-            "voice.mp3",
-        ),
-        (
             "pic.png",
             _PNG,
             {"store": FakeAttachmentStore(max_size_bytes=4)},
             "attachment_error",
-            "exceeds limit",
+            "4 B",
         ),
         (
             "notes.txt",
@@ -988,7 +1093,6 @@ async def test_audio_is_transcribed(tmp_path: Path) -> None:
     ids=[
         "audio_too_large",
         "speech_error",
-        "empty_transcription",
         "image_too_large",
         "missing_bom",
     ],
@@ -1004,7 +1108,7 @@ async def test_failed_read_does_not_stamp_the_file(
 
     result = await read(tmp_path, arguments, file_state=file_state, **services)
 
-    assert message in failure(result, code)
+    assert name in failure(result, code) and message in failure(result, code)
     assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
     if code == "audio_too_large":
         assert services["speech"].calls == []

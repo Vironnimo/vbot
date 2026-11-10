@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from core.attachments import AttachmentError, sniff_media_type
+from core.attachments import AttachmentError, AttachmentTooLargeError, sniff_media_type
 from core.model_tasks import SpeechError
 from core.storage.layout import DataDirectoryLayout
 from core.tools._path_suggestions import missing_file_message
@@ -26,6 +26,7 @@ from core.tools._read_arguments import (
 from core.tools._read_text import (
     DEFAULT_LINE_LIMIT,
     MAX_FILE_BYTES,
+    _size_text,
     read_position,
     render_directory_listing,
     render_matching_lines,
@@ -74,6 +75,7 @@ _FILE_PROBE_BYTES = 64 * 1024
 @dataclass(frozen=True)
 class _PreparedAudio:
     resolved: Path
+    label: str
     raw: bytes
     media_type: str
     # Read stamp captured before the bytes; recorded after a successful transcription.
@@ -164,6 +166,19 @@ def _attachment_input_limit(attachment_store: Any, file_size: int) -> int:
     ):
         return configured_limit
     return max(file_size, 1)
+
+
+def _media_size_problem(
+    label: str, kind: str, size: int, limit: int, *, at_least: bool = False
+) -> str:
+    measured = f"{'at least ' if at_least else ''}{_size_text(size)}"
+    alternative = (
+        "a resized or compressed image" if kind == "image" else "a shorter or compressed recording"
+    )
+    return (
+        f"Could not read {label}: the {kind} ({measured}) exceeds the {_size_text(limit)} limit. "
+        f"Read {alternative} within that limit."
+    )
 
 
 def make_read_handler(
@@ -300,6 +315,30 @@ def make_read_handler(
         except OSError as error:
             return read_error(error)
 
+        # A BOM identifies a text encoding reliably; keep the ordinary UTF-8
+        # default and name the exact explicit read instead of a binary/shell hint.
+        bom_encoding = next(
+            (
+                encoding
+                for marks, encoding in (
+                    ((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE), "utf-32"),
+                    ((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE), "utf-16"),
+                )
+                if probe.startswith(marks)
+            ),
+            None,
+        )
+        if bom_encoding is not None:
+            notice = (
+                f'{label} uses {bom_encoding.upper()}. Pass encoding="{bom_encoding}" '
+                "to read it as text."
+            )
+            return (
+                tool_failure("invalid_arguments", notice)
+                if filtering
+                else tool_success({"content": f"[{notice}]"})
+            )
+
         media_type = sniff_media_type(probe, resolved.name)
         kind = detect_extractable_document(resolved.name, media_type)
         if (
@@ -316,12 +355,23 @@ def make_read_handler(
             try:
                 input_limit = _attachment_input_limit(attachment_store, file_size)
                 raw = _read_file_bytes_with_limit(resolved, input_limit)
+            except AttachmentTooLargeError:
+                return tool_failure(
+                    "attachment_error",
+                    _media_size_problem(label, "image", file_size, attachment_store.max_size_bytes),
+                )
             except AttachmentError as error:
-                return tool_failure("attachment_error", str(error))
+                return tool_failure(
+                    "attachment_error",
+                    f"Could not read {label} ({_size_text(file_size)}): {str(error).rstrip('.')}. "
+                    "Ask the user to check the image and attachment settings.",
+                )
             except _FileInputTooLargeError as error:
                 return tool_failure(
                     "attachment_error",
-                    f"Attachment size exceeds limit {error.max_bytes}",
+                    _media_size_problem(
+                        label, "image", error.max_bytes + 1, error.max_bytes, at_least=True
+                    ),
                 )
             except OSError as error:
                 return read_error(error)
@@ -330,18 +380,24 @@ def make_read_handler(
             if file_size > speech_max_size_bytes:
                 return tool_failure(
                     "audio_too_large",
-                    f"Audio size {file_size} exceeds limit {speech_max_size_bytes}",
+                    _media_size_problem(label, "audio", file_size, speech_max_size_bytes),
                 )
             try:
                 raw = _read_file_bytes_with_limit(resolved, speech_max_size_bytes)
             except _FileInputTooLargeError:
                 return tool_failure(
                     "audio_too_large",
-                    f"Audio size exceeds limit {speech_max_size_bytes}",
+                    _media_size_problem(
+                        label,
+                        "audio",
+                        speech_max_size_bytes + 1,
+                        speech_max_size_bytes,
+                        at_least=True,
+                    ),
                 )
             except OSError as error:
                 return read_error(error)
-            return _PreparedAudio(resolved=resolved, raw=raw, media_type=media_type)
+            return _PreparedAudio(resolved=resolved, label=label, raw=raw, media_type=media_type)
         if media_type.startswith("video/"):
             return _read_video(label, media_type)
         # PDF/Office/notebook extraction runs before the binary check: pdf/docx/xlsx
@@ -398,6 +454,7 @@ def make_read_handler(
                 prepared.resolved,
                 prepared.raw,
                 prepared.media_type,
+                prepared.label,
             )
             if result.get("ok") is True and prepared.stamp is not None:
                 file_state.record_stamp(
@@ -483,23 +540,27 @@ async def _read_audio(
     resolved: Path,
     raw: bytes,
     media_type: str,
+    label: str,
 ) -> JsonObject:
     """Transcribe an audio file to text via speech-to-text.
 
     Transcription is plain text, which is a legal tool result on every provider,
-    so no message injection is needed. STT failures and empty transcriptions
-    surface as a failure envelope rather than aborting the run.
+    so no message injection is needed. STT failures return a failure envelope;
+    a completed transcription without words is a successful no-speech result.
     """
     try:
         result = await speech_service.transcribe(raw, filename=resolved.name, media_type=media_type)
     except SpeechError as error:
-        return tool_failure("transcription_failed", str(error))
+        return tool_failure(
+            "transcription_failed",
+            f"Could not transcribe {label} ({_size_text(len(raw))}): {str(error).rstrip('.')}. "
+            "Ask the user to check speech-to-text availability or provide a transcript.",
+        )
 
     text = getattr(result, "text", None)
     if not isinstance(text, str) or not text.strip():
-        return tool_failure(
-            "transcription_failed",
-            f"transcription produced no text for {resolved.name}",
+        return tool_success(
+            {"content": f"[No speech recognized in {label} ({_size_text(len(raw))}).]"}
         )
 
     return tool_success({"content": f"[Transcription of {resolved.name} ({media_type})]:\n{text}"})
