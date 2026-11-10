@@ -510,6 +510,7 @@ class Desktop:
                     "value",
                     "text",
                     "selected_text",
+                    "truncated_fields",
                 )
                 if key in element
                 and (key in {"value", "text", "selected_text"} or element[key] not in ("", []))
@@ -523,8 +524,9 @@ class Desktop:
         lines.append("Focused element: " + (", ".join(focused) or "none exposed") + ".")
         if state.get("truncated"):
             lines.append(
-                "The accessibility result reached its size or time limit. Use the "
-                "screenshot for the remaining controls."
+                "The accessibility result reached a size or time limit. Fields in "
+                "truncated_fields are incomplete; use the screenshot and keyboard "
+                "for the missing content or controls."
             )
         if not state.get("elements"):
             lines.append("This window exposes no visible UI elements. Use screenshot coordinates.")

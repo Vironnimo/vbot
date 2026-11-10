@@ -169,7 +169,11 @@ class FakeTarget:
 
     def inspect(self, window: WindowInfo) -> dict[str, Any]:
         self.inspections.append(window.handle)
-        return {"elements": self.accessibility.get(window.handle, []), "truncated": False}
+        elements = self.accessibility.get(window.handle, [])
+        return {
+            "elements": elements,
+            "truncated": any(element.get("truncated_fields") for element in elements),
+        }
 
     def element(
         self, window: WindowInfo, reference: dict[str, Any], action: str, text: str
