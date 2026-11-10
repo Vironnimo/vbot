@@ -52,6 +52,7 @@ class Frame:
     front: AppInfo | None = None
     # The windows over the image's area when it was taken, topmost first.
     stack: tuple[WindowInfo, ...] = ()
+    front_window: WindowInfo | None = None
 
     @classmethod
     def of(cls, display: Display) -> Frame:

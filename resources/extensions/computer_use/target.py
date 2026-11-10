@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from PIL import Image
 
@@ -75,6 +75,14 @@ class WindowInfo:
     elevated: bool
     owner: int = 0
     shell: bool = False
+    process_id: int = 0
+
+    def same_window(self, other: WindowInfo) -> bool:
+        return (self.handle, self.process_id, self.app.keys) == (
+            other.handle,
+            other.process_id,
+            other.app.keys,
+        )
 
     def contains(self, x: int, y: int) -> bool:
         return self.left <= x < self.right and self.top <= y < self.bottom
@@ -93,6 +101,7 @@ class DesktopSnapshot:
                 return None
             return (
                 window.handle,
+                window.process_id,
                 window.app.keys,
                 window.left,
                 window.top,
@@ -116,6 +125,20 @@ class CaptureChangedError(TargetError):
 
 
 class DesktopTarget(Protocol):
+    def activate(self, window: WindowInfo) -> None:
+        """Activate this exact window; refuse a closed/replaced window or blocking modal."""
+        ...
+
+    def inspect(self, window: WindowInfo) -> dict[str, Any]:
+        """Read bounded accessibility state for this window, without a screenshot."""
+        ...
+
+    def element(
+        self, window: WindowInfo, reference: dict[str, Any], action: str, text: str
+    ) -> dict[str, Any]:
+        """Resolve an observed element or perform one of its advertised actions."""
+        ...
+
     def snapshot(self, points: list[tuple[int, int]]) -> DesktopSnapshot:
         """Read display geometry, z-order, focus and all input receivers together."""
         ...

@@ -21,6 +21,7 @@ from resources.extensions.computer_use._remote_wire import (
     snapshot_data,
     snapshot_value,
     window_data,
+    window_value,
 )
 from resources.extensions.computer_use.target import DesktopTarget, InputInterrupted, TargetError
 
@@ -36,6 +37,7 @@ _READ_OPERATIONS = frozenset(
         "capture",
         "snapshot",
         "capture_region",
+        "inspect",
     }
 )
 
@@ -272,6 +274,32 @@ class ComputerExecution:
                     "The selected app is no longer available. List apps again.", "app_not_found"
                 )
             return {"value": target.open(app)}
+        if operation in {"activate", "inspect", "element"}:
+            window = window_value(params.get("window"))
+            if window is None:
+                raise TargetError(
+                    "A selected window is required. Nothing was done.", "invalid_arguments"
+                )
+            if operation == "activate":
+                target.activate(window)
+                return {}
+            if operation == "inspect":
+                return target.inspect(window)
+            reference, action, text = (
+                params.get("reference"),
+                params.get("action"),
+                params.get("text", ""),
+            )
+            if (
+                not isinstance(reference, dict)
+                or action not in {"resolve", "focus", "invoke", "set_value"}
+                or not isinstance(text, str)
+            ):
+                raise TargetError(
+                    "An observed element and supported action are required. Nothing was done.",
+                    "invalid_arguments",
+                )
+            return target.element(window, reference, action, text)
         if operation == "move":
             target.move(_integer(params, "x"), _integer(params, "y"))
         elif operation == "button":

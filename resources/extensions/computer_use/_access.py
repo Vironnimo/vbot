@@ -42,6 +42,26 @@ class SessionState:
     images: dict[str, Frame] = field(default_factory=dict)
     latest_image: str | None = None
     last_used: float = 0.0
+    windows: dict[str, WindowInfo] = field(default_factory=dict)
+    elements: dict[str, tuple[WindowInfo, dict[str, Any]]] = field(default_factory=dict)
+
+    def remember_window(self, window: WindowInfo) -> str:
+        for identifier, old in self.windows.items():
+            if old.same_window(window):
+                self.windows[identifier] = window
+                return identifier
+        identifier = new_id("win", claim=lambda candidate: candidate not in self.windows)
+        self.windows[identifier] = window
+        while len(self.windows) > 128:
+            del self.windows[next(iter(self.windows))]
+        return identifier
+
+    def remember_element(self, window: WindowInfo, element: dict[str, Any]) -> str:
+        identifier = new_id("elm", claim=lambda candidate: candidate not in self.elements)
+        self.elements[identifier] = (window, element)
+        while len(self.elements) > 512:
+            del self.elements[next(iter(self.elements))]
+        return identifier
 
     def granted(self, app: AppInfo) -> bool:
         return any(grant.matches(app) for grant in self.grants)

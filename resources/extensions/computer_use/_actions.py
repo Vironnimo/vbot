@@ -18,7 +18,7 @@ from ._tools import ACTIONS, MAX_PATH_POINTS
 
 type Point = tuple[int, int]
 
-READ_ACTIONS = frozenset({"screenshot", "zoom", "cursor_position", "wait"})
+READ_ACTIONS = frozenset({"screenshot", "inspect", "zoom", "cursor_position", "wait"})
 # Keyboard input goes to the foreground window, wherever the pointer is.
 KEYBOARD = frozenset({"type", "key", "hold_key"})
 CLICKS = {
@@ -38,6 +38,10 @@ DRAG_PIXELS_PER_SECOND = 1000
 MIN_DRAG_SECONDS, MAX_DEFAULT_DRAG_SECONDS = 0.25, 5.0
 
 _FIELDS: dict[str, frozenset[str]] = {
+    "inspect": frozenset({"window_id"}),
+    "focus": frozenset({"window_id", "element_id"}),
+    "invoke": frozenset({"window_id", "element_id"}),
+    "set_value": frozenset({"window_id", "element_id", "text"}),
     "screenshot": frozenset({"display", "view"}),
     "zoom": frozenset({"region", "screenshot_id"}),
     **dict.fromkeys(CLICKS, frozenset({"coordinate", "text", "screenshot_id"})),
@@ -57,6 +61,13 @@ _FIELDS: dict[str, frozenset[str]] = {
     "wait": frozenset({"duration"}),
     "cursor_position": frozenset({"screenshot_id"}),
 }
+# Window selection applies to observations and input; an element is an alternative
+# to screenshot coordinates for an ordinary left click.
+_FIELDS = {
+    name: fields | ({"window_id"} if name not in {"zoom", "cursor_position", "wait"} else set())
+    for name, fields in _FIELDS.items()
+}
+_FIELDS["left_click"] |= {"element_id"}
 
 
 class ActionError(ValueError):
@@ -83,6 +94,8 @@ class Action:
     display: str | None = None
     view: str | None = None
     screenshot_id: str | None = None
+    window_id: str | None = None
+    element_id: str | None = None
     notes: tuple[str, ...] = ()
 
     @property
@@ -107,6 +120,10 @@ class Action:
     def describe(self) -> str:
         """Short wording of what the action did, without typed text."""
         name = self.name
+        if self.element_id is not None:
+            return f"{name} element {self.element_id}" + (
+                f" ({len(self.text)} characters)" if name == "set_value" else ""
+            )
         held = f" holding {'+'.join(self.modifiers)}" if self.modifiers else ""
         at = f"at {list(self.point)}" if self.point else "at the pointer"
         if name in CLICKS or name in {"left_mouse_down", "left_mouse_up"}:
@@ -142,7 +159,49 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
     fields = _FIELDS[name]
     unused = [key for key in arguments if key not in {"action", *fields}]
     _refuse_misplaced(name, unused)
-    values: dict[str, Any] = {"name": name}
+    values: dict[str, Any] = {
+        "name": name,
+        "window_id": arguments.get("window_id"),
+        "element_id": arguments.get("element_id"),
+    }
+    if values["element_id"] is not None and name not in {
+        "left_click",
+        "focus",
+        "invoke",
+        "set_value",
+    }:
+        raise ActionError(
+            f"{name} does not use element_id. Use left_click, focus, invoke or set_value "
+            "on an inspected element."
+        )
+    if values["element_id"] is not None and any(
+        arguments.get(field) is not None
+        for field in ("coordinate", "screenshot_id", "text")
+        if field != "text" or name != "set_value"
+    ):
+        raise ActionError(
+            "An element action and screenshot coordinates or modifiers "
+            "describe different input. Send element_id alone, with text only "
+            "for set_value. Nothing was done."
+        )
+    if name in {"focus", "invoke", "set_value"} and not values["element_id"]:
+        raise ActionError(
+            f"{name} needs element_id from inspect. Nothing was done. Inspect the window first."
+        )
+    if name == "set_value":
+        if not isinstance(arguments.get("text"), str):
+            raise ActionError(
+                "set_value needs the complete replacement value in text; use an "
+                "empty string to clear the field. Nothing was done."
+            )
+        values["text"] = arguments["text"]
+    if values["window_id"] and (
+        arguments.get("display") is not None or arguments.get("view") == "display"
+    ):
+        raise ActionError(
+            "window_id selects a window, while display selects a monitor. "
+            "Send one target. Nothing was done."
+        )
     notes = []
     if unused:
         notes.append(
@@ -215,6 +274,11 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
 
 def _refuse_misplaced(name: str, unused: list[str]) -> None:
     """Refuse fields whose presence means the Agent expects a different effect."""
+    if "window_id" in unused:
+        raise ActionError(
+            f"{name} does not select a window. Nothing was done. Take a screenshot with "
+            "window_id first, then use its screenshot_id."
+        )
     if "path" in unused:
         raise ActionError(
             f"{name} does not take a path. To hold the left button down along several points, "

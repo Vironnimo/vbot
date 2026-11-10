@@ -64,7 +64,7 @@ One `DesktopBridge` instance (`desktop/bridge.py`) is pywebview's `js_api` and s
 
 ## External Dependencies
 
-All ship in the `[desktop]` optional group: pywebview, the audio and ML packages (`desktop/voice.md` -> Dependencies), and Pillow, psutil, websockets and Windows pywinpty for native execution. Capability handlers and native dependencies load only when shared.
+All ship in the `[desktop]` optional group: pywebview, the audio and ML packages (`desktop/voice.md` -> Dependencies), and Pillow, psutil, websockets, Windows pywinpty and Windows comtypes for native execution. comtypes loads only in the Computer Use UI Automation subprocess. Capability handlers and native dependencies load only when shared.
 
 ## Constraints & Gotchas
 

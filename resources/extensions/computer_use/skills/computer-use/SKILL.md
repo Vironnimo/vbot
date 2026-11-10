@@ -29,9 +29,16 @@ computer moves the user's real mouse and keyboard on the selected computer's des
 
 ## Keys and text
 
-- type and key go to the foreground window, wherever the pointer is. Click the field first. They are refused if the app in front is not the one your last click in the same call went into or, without a click, the one in front in your latest screenshot; click into the window you want, then type.
+- type and key go to the foreground window, wherever the pointer is. Click the field first. The first key action after a click or screenshot is refused if a different window is now in front, including another window of the same app. In a batch, later key actions can follow a dialog opened by earlier keys; check its screenshot before continuing.
 - key presses keys or chords: `enter`, `escape`, `tab`, `ctrl+s`, `ctrl+shift+t`, `alt+f4`. Separate several chords with spaces to press them in order.
 - On clicks, scrolls and drags, text names modifier keys to hold, such as `shift` or `ctrl`.
+
+## Windows and UI elements
+
+- If several windows of the same app are open, use computer_apps `{"action":"windows"}` and select the intended title by window_id. Add query to filter titles and app names. Pass window_id to computer_apps open or computer screenshot to bring that exact window forward. Input with window_id also activates it; coordinates still refer to its screenshot.
+- Use inspect when a screenshot does not tell you which field has focus, what text is selected, or which control to address. It returns text and element_id values without an image. With window_id it reads that window; otherwise it reads the latest window screenshot's target, or the foreground window when none was captured.
+- Use only the actions listed for an element. set_value replaces the complete field value; an empty string clears it. If the app exposes no suitable element action, continue with screenshot coordinates and keyboard input. Pass element_id to focus, invoke or set_value; left_click also accepts element_id to click the element's current position. Omit coordinates when using element_id.
+- Window and element references belong to the current Session and computer. If a reference expires or its target changes, list windows or inspect again; do not substitute an id from another Session or computer. After an action with an unknown outcome, check the returned screenshot before repeating it.
 
 ## Safety
 

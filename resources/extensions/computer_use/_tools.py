@@ -22,6 +22,10 @@ from core.tools.contracts import ToolContract, ToolContractError, compile_tool_c
 
 ACTIONS = (
     "screenshot",
+    "inspect",
+    "focus",
+    "invoke",
+    "set_value",
     "zoom",
     "left_click",
     "right_click",
@@ -40,13 +44,15 @@ ACTIONS = (
     "cursor_position",
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
-APPS_ACTIONS = ("list", "open", "request", "release")
+APPS_ACTIONS = ("list", "windows", "open", "request", "release")
 MAX_BATCH_ACTIONS = 60
 MAX_PATH_POINTS = 200
 
 COMPUTER_DESCRIPTION = (
     "Operate the selected computer's desktop (Windows) with "
-    "screenshots, mouse and keyboard. Start with a screenshot; it shows the foreground "
+    "screenshots, mouse, keyboard and UI elements. Use inspect when you need UI elements, "
+    "text or focus state; screenshots remain the default. Start with a screenshot; "
+    "it shows the foreground "
     "window unless you choose a whole display with view. Coordinates are [x, y] pixels of "
     "the latest screenshot, counted from its top-left corner: use the position where you "
     "see the target, and the Tool maps it to the screen. Input actions return a new "
@@ -77,7 +83,9 @@ COMPUTER_APPS_DESCRIPTION = (
     "Find apps on the selected computer's desktop and bring them to the front for computer. list "
     "shows the displays, the running apps and whether the user requires approval per "
     "app; with query it also searches the installed apps. open brings an app to the "
-    "front, starting it if needed, and returns a screenshot. request is needed only when "
+    "front, starting it if needed, and returns a screenshot. windows lists approved open "
+    "windows with their titles and window_id; open with window_id activates that exact window. "
+    "request is needed only when "
     "the user requires approval per app: it asks the user to approve apps for the current "
     "Session and waits for the answer. Approvals end 30 minutes after the last Computer "
     "Use call in the Session. release hands the computer back to the user when you are "
@@ -97,6 +105,23 @@ def _point_schema(description: str) -> dict[str, Any]:
 
 _ACTION_PROPERTIES: dict[str, Any] = {
     "action": {"type": "string", "enum": list(ACTIONS), "description": "The action to perform."},
+    "window_id": {
+        "type": "string",
+        "description": (
+            "A window from computer_apps windows or a screenshot. screenshot and input "
+            "activate that exact window; inspect reads it without switching. "
+            "Omit unless you need to select a particular window."
+        ),
+    },
+    "element_id": {
+        "type": "string",
+        "description": (
+            "An element returned by inspect. Use it with left_click, focus, "
+            "invoke or set_value; inspect lists the actions the element "
+            "supports. Omit for screenshot coordinates and ordinary keyboard "
+            "input."
+        ),
+    },
     "coordinate": _point_schema(
         "[x, y] in the selected screenshot: where to click, move, scroll or end a drag. "
         "Omit on a click or scroll to use the pointer's position."
@@ -137,6 +162,8 @@ _ACTION_PROPERTIES: dict[str, Any] = {
     "text": {
         "type": "string",
         "description": (
+            "set_value: the complete replacement field value, including an empty string "
+            "to clear it. "
             "type: the text to type; \\n presses Enter. key and hold_key: a key or chord "
             "such as enter, ctrl+s or ctrl+shift+t; several chords separated by spaces are "
             "pressed in order. Clicks, scroll and drags: modifier keys to hold, such as "
@@ -238,6 +265,12 @@ COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
     "properties": {
         "computer_id": _COMPUTER_PROPERTY,
         "action": {"type": "string", "enum": list(APPS_ACTIONS), "description": "What to do."},
+        "window_id": {
+            "type": "string",
+            "description": (
+                "open: the exact window from windows or a screenshot. Omit to open by app name."
+            ),
+        },
         "apps": {
             "type": "array",
             "items": {"type": "string"},
@@ -254,7 +287,10 @@ COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
         },
         "query": {
             "type": "string",
-            "description": "list: also show installed apps whose names contain this text.",
+            "description": (
+                "list: search installed app names. windows: filter app names and "
+                "window titles. Omit to show running apps or all approved windows."
+            ),
         },
     },
     "required": ["action"],
@@ -312,6 +348,8 @@ _FIELD_ALIASES = SpellingAliases(
         "repeat": ("times", "presses", "repeat_count", "repetitions"),
         "display": ("monitor", "screen", "display_name", "display_id", "display_number"),
         "screenshot_id": ("image_id", "screenshotId"),
+        "window_id": ("window", "windowId"),
+        "element_id": ("element", "elementId", "ref"),
     }
 )
 _KEY_FIELDS = frozenset({"key", "keys", "combo", "shortcut", "chord", "hotkey"})
@@ -338,7 +376,7 @@ _ACTION_ALIASES = {
     **dict.fromkeys(("hold", "keyhold", "holdkeys"), "hold_key"),
     **dict.fromkeys(("sleep", "pause", "delay"), "wait"),
     **dict.fromkeys(("takescreenshot", "capture", "screencapture", "snapshot"), "screenshot"),
-    **dict.fromkeys(("zoomin", "inspect"), "zoom"),
+    "zoomin": "zoom",
     **dict.fromkeys(
         ("getcursorposition", "mouseposition", "getmouseposition", "cursor"), "cursor_position"
     ),
@@ -360,7 +398,7 @@ _LEFT_CLICK_BY_COUNT = {1: "left_click", 2: "double_click", 3: "triple_click"}
 _CLICK_BY_BUTTON = {"left": "left_click", "right": "right_click", "middle": "middle_click"}
 _KEYBOARD_ACTIONS = frozenset({"key", "hold_key"})
 _MODIFIER_ACTIONS = frozenset({*_CLICK_COUNTS, "scroll", "left_click_drag"})
-_READ_ACTIONS = frozenset({"screenshot", "zoom", "wait", "cursor_position"})
+_READ_ACTIONS = frozenset({"screenshot", "inspect", "zoom", "wait", "cursor_position"})
 _OPTIONAL = (
     "coordinate",
     "start_coordinate",
@@ -374,6 +412,8 @@ _OPTIONAL = (
     "display",
     "view",
     "screenshot_id",
+    "window_id",
+    "element_id",
 )
 # Per-action summaries from other harnesses or older calls; they change nothing.
 _SUMMARY_FIELDS = ("action_summary", "summary", "action_description")
@@ -536,6 +576,10 @@ def _normalized_action(contract: ToolContract, arguments: Any, tool: str) -> Any
     raw_action = next(
         (value for key, value in arguments.items() if _spelled(key) == "action"), None
     )
+    # Older harnesses use inspect with region for a visual zoom.
+    if raw_action == "inspect" and "region" in arguments:
+        arguments["action"] = "zoom"
+        raw_action = "zoom"
     if _action_name(raw_action) == "type" and any(
         _spelled(key) in _KEY_FIELDS for key in arguments
     ):
@@ -551,7 +595,11 @@ def _normalized_action(contract: ToolContract, arguments: Any, tool: str) -> Any
         enum_fields=("action", "scroll_direction"),
         field_aliases=_FIELD_ALIASES,
         field_normalizers=_FIELD_NORMALIZERS,
-        empty_as_omitted=_OPTIONAL,
+        empty_as_omitted=tuple(
+            field
+            for field in _OPTIONAL
+            if not (field == "text" and _action_name(raw_action) == "set_value")
+        ),
     )
     if not isinstance(repaired, dict):
         return repaired
@@ -781,9 +829,10 @@ def normalize_apps(arguments: Any) -> Any:
                 "apps": ("applications", "app_names", "names", "programs"),
                 "reason": ("why", "purpose", "justification", "message"),
                 "query": ("filter", "search", "term", "contains"),
+                "window_id": ("window", "windowId"),
             }
         ),
-        empty_as_omitted=("apps", "app", "reason", "query"),
+        empty_as_omitted=("apps", "app", "reason", "query", "window_id"),
     )
     if not isinstance(repaired, dict):
         return repaired
@@ -791,6 +840,10 @@ def normalize_apps(arguments: Any) -> Any:
     if isinstance(action, str) and action not in APPS_ACTIONS:
         repaired["action"] = _APPS_ALIASES.get(_spelled(action), action)
     action = repaired.get("action")
+    if repaired.get("window_id") is not None and action != "open":
+        raise _refuse(
+            "computer_apps", 'window_id selects one window with action="open". Nothing was done.'
+        )
     if action == "request" and "app" in repaired and "apps" not in repaired:
         repaired["apps"] = [repaired.pop("app")]
     elif action == "open" and "app" not in repaired:

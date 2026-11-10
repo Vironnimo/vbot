@@ -75,6 +75,7 @@ def window_value(data: dict[str, Any] | None) -> WindowInfo | None:
         bool(data["elevated"]),
         int(data.get("owner", 0)),
         bool(data.get("shell", False)),
+        int(data.get("process_id", 0)),
     )
 
 

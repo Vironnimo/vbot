@@ -120,6 +120,8 @@ class FakeTarget:
     # Called with each input record before it is recorded, on the worker thread.
     on_input: Callable[[tuple[Any, ...]], None] | None = None
     fail: dict[str, TargetError] = field(default_factory=dict)
+    accessibility: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
+    inspections: list[int] = field(default_factory=list)
 
     def readiness(self) -> str | None:
         return self.reason
@@ -157,6 +159,37 @@ class FakeTarget:
 
     def foreground(self) -> WindowInfo:
         return self.windows_[0]
+
+    def activate(self, window: WindowInfo) -> None:
+        current = next((item for item in self.windows_ if item.same_window(window)), None)
+        if current is None:
+            raise TargetError("Window closed", "window_unavailable")
+        self.windows_.remove(current)
+        self.windows_.insert(0, current)
+
+    def inspect(self, window: WindowInfo) -> dict[str, Any]:
+        self.inspections.append(window.handle)
+        return {"elements": self.accessibility.get(window.handle, []), "truncated": False}
+
+    def element(
+        self, window: WindowInfo, reference: dict[str, Any], action: str, text: str
+    ) -> dict[str, Any]:
+        current = next(
+            (
+                item
+                for item in self.accessibility.get(window.handle, [])
+                if item["runtime_id"] == reference["runtime_id"]
+            ),
+            None,
+        )
+        if current is None or current["name"] != reference["name"]:
+            raise TargetError("Element changed", "element_unavailable")
+        if action == "resolve":
+            return current
+        self._input("element", window.handle, action, text)
+        if action == "set_value":
+            current["value"] = text
+        return {}
 
     def window_at(self, x: int, y: int) -> WindowInfo | None:
         return next((item for item in self.windows_ if item.contains(x, y)), None)
