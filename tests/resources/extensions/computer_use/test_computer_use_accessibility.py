@@ -57,7 +57,7 @@ async def test_inspection_and_element_actions_keep_their_computer_and_session(
     if link:
         await link.connect()
     target = link.target if link else computer.target
-    target.accessibility[1] = [field()]
+    target.accessibility[1] = [{**field(), "truncated_fields": ["selected_text"]}]
     context = remote_context(computer) if remote else computer.context_for("computer")
 
     async def call(**arguments):
@@ -72,6 +72,7 @@ async def test_inspection_and_element_actions_keep_their_computer_and_session(
         state = await call(action="inspect", window_id=win)
         assert state["ok"] and not images(context)
         assert target.inspections == [1] and "Subject" in model_text(state)
+        assert '"truncated_fields": ["selected_text"]' in model_text(state)
         element = identifier(state, "elm")
         for text in ("new subject", ""):
             result = await call(action="set_value", element_id=element, text=text)

@@ -112,7 +112,19 @@ class Automation:
             # A misbehaving provider can put the value in Name as well.
             result["name"] = "Password field"
             return result
+        truncated_fields: list[str] = []
+
+        def content_text(key: str, value: str) -> None:
+            clipped = value[:MAX_TEXT]
+            # A provider's own UTF-16 cap can cut inside a surrogate pair.
+            if clipped and 0xD800 <= ord(clipped[-1]) <= 0xDBFF:
+                clipped = clipped[:-1]
+            result[key] = clipped
+            if len(clipped) < len(value):
+                truncated_fields.append(key)
+
         actions = []
+        observed_value: str | None = None
         if result["enabled"] and not result["offscreen"]:
             if bool(element.CurrentIsKeyboardFocusable):
                 actions.append("focus")
@@ -124,7 +136,8 @@ class Automation:
             value = self.pattern(element, "Value")
             if value:
                 if content:
-                    result["value"] = str(value.CurrentValue or "")[:MAX_TEXT]
+                    observed_value = str(value.CurrentValue or "")
+                    content_text("value", observed_value)
                 if result["enabled"] and not result["offscreen"] and not value.CurrentIsReadOnly:
                     actions.append("set_value")
         if content and bool(
@@ -132,13 +145,36 @@ class Automation:
         ):
             text = self.pattern(element, "Text")
             if text:
-                result["text"] = str(text.DocumentRange.GetText(MAX_TEXT))
+                # UIA counts UTF-16 code units. Twice the code-point budget plus
+                # one guarantees lookahead even for supplementary characters;
+                # clipping below also removes a provider-split trailing pair.
+                read_limit = 2 * MAX_TEXT + 1
+                document_text = str(text.DocumentRange.GetText(read_limit))
+                # Native EDIT providers can cap ValuePattern themselves. Compare
+                # before our own clipping; TextPattern may add a paragraph end.
+                if (
+                    result["control_type"]
+                    in {self.uia.UIA_EditControlTypeId, self.uia.UIA_DocumentControlTypeId}
+                    and observed_value is not None
+                    and document_text.startswith(observed_value)
+                    and document_text[len(observed_value) :].strip("\r\n")
+                    and "value" not in truncated_fields
+                ):
+                    truncated_fields.append("value")
+                content_text("text", document_text)
                 selected = text.GetSelection()
-                result["selected_text"] = "\n".join(
-                    str(selected.GetElement(index).GetText(MAX_TEXT))
-                    for index in range(min(selected.Length, 4))
-                )[:MAX_TEXT]
+                content_text(
+                    "selected_text",
+                    "\n".join(
+                        str(selected.GetElement(index).GetText(read_limit))
+                        for index in range(min(selected.Length, 4))
+                    ),
+                )
+                if selected.Length > 4 and "selected_text" not in truncated_fields:
+                    truncated_fields.append("selected_text")
         result["actions"] = actions
+        if truncated_fields:
+            result["truncated_fields"] = truncated_fields
         return result
 
     def inspect(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +195,7 @@ class Automation:
             count += 1
             item = self.describe(element, depth, content=content_size < MAX_CONTENT)
             if not item["offscreen"]:
+                truncated |= bool(item.get("truncated_fields"))
                 content_size += sum(
                     len(str(item.get(key, "")))
                     for key in ("name", "value", "text", "selected_text")

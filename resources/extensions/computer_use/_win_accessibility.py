@@ -38,9 +38,18 @@ class AccessibilityClient:
             return self._process
         self._replies = queue.Queue(maxsize=2)
         replies = self._replies
+        executable = Path(sys.executable)
+        if sys.platform == "win32" and executable.name.casefold() in {
+            "vbot.server.exe",
+            "vbot.desktop.exe",
+        }:
+            # Role hosts prepend their app entrypoint to script/flag arguments.
+            # The generic host keeps this version's dependency paths without
+            # starting a second server or Desktop.
+            executable = executable.with_name("vBot.Python.exe")
         process = subprocess.Popen(
             [
-                sys.executable,
+                str(executable),
                 "-E",
                 "-P",
                 "-B",
@@ -139,8 +148,8 @@ class AccessibilityClient:
         process, self._process = self._process, None
         if process is None:
             return
-        # This worker never launches children. Closing its stdin also ends it
-        # normally; kill bounds cleanup when it is blocked inside an app's COM call.
+        # The worker launches no children; a Windows venv redirector owns its
+        # interpreter's lifetime. Kill bounds cleanup during a blocked COM call.
         if process.poll() is None:
             process.kill()
         process.wait(timeout=2)
