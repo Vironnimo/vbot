@@ -68,6 +68,9 @@ class InputDesktop:
                 target.keys(["ctrl", "shift", "enter"], 1)
             case "hold":
                 target.hold(["ctrl", "shift"], 1)
+            case "split_hold":
+                target.start_hold(["ctrl", "shift"])
+                target.end_hold()
             case "type":
                 target.type_text("\U0001f600")  # both UTF-16 code units must be released
             case "click":
@@ -84,7 +87,10 @@ class InputDesktop:
 
 @pytest.mark.parametrize(
     ("action", "kind"),
-    [(action, "key") for action in ("keys", "hold", "type", "click", "drag", "scroll", "activate")]
+    [
+        (action, "key")
+        for action in ("keys", "hold", "split_hold", "type", "click", "drag", "scroll", "activate")
+    ]
     + [("click", "button"), ("drag", "button")],
 )
 def test_input_release_failure_is_reported_and_all_pressed_input_is_cleaned_up(
@@ -120,10 +126,11 @@ def test_stop_after_a_press_releases_input_without_masking_the_interruption(monk
     assert not desktop.held and not desktop.target._held
 
 
-def test_typing_preserves_an_intentionally_held_mouse_button(monkeypatch):
+@pytest.mark.parametrize("action", ["keys", "split_hold"])
+def test_typing_preserves_an_intentionally_held_mouse_button(monkeypatch, action):
     desktop = InputDesktop(monkeypatch)
     desktop.target.button("left", True)
-    desktop.act("keys")
+    desktop.act(action)
     assert desktop.held == {("button", "left")}
     desktop.target.button("left", False)
     assert not desktop.held and not desktop.target._held

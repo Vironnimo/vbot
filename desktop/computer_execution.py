@@ -18,12 +18,25 @@ from resources.extensions.computer_use._remote_wire import (
     display_data,
     display_value,
     image_data,
+    snapshot_data,
+    snapshot_value,
     window_data,
 )
 from resources.extensions.computer_use.target import DesktopTarget, InputInterrupted, TargetError
 
 _READ_OPERATIONS = frozenset(
-    {"readiness", "displays", "windows", "foreground", "window_at", "apps", "cursor", "capture"}
+    {
+        "readiness",
+        "displays",
+        "windows",
+        "foreground",
+        "window_at",
+        "apps",
+        "cursor",
+        "capture",
+        "snapshot",
+        "capture_region",
+    }
 )
 
 
@@ -125,7 +138,10 @@ class ComputerExecution:
                     "The desktop connection ended before this operation started. Nothing was done.",
                     "computer_offline",
                 )
-            return await self._work(self._execute, operation, params, generation)
+            result = await self._work(self._execute, operation, params, generation)
+            with self._state_lock:
+                result["stopped_control_ids"] = list(self._stopped_owners)
+            return result
 
     def _execute(self, operation: str, params: dict[str, Any], generation: int) -> dict[str, Any]:
         with self._state_lock:
@@ -172,6 +188,11 @@ class ComputerExecution:
                 if owner is None:
                     target.release_all()
                     target.set_activity(False)
+                    retired_hotkey, self._hotkey = self._hotkey, None
+                else:
+                    retired_hotkey = None
+            if retired_hotkey is not None:
+                retired_hotkey.close()
             return {"hotkey_available": bool(self._hotkey and self._hotkey.available)}
         if operation == "activity":
             with self._state_lock:
@@ -182,6 +203,9 @@ class ComputerExecution:
                 )
             target.set_activity(active)
             return {}
+        if operation == "end_hold":
+            target.end_hold()
+            return {}
         if operation == "release":
             target.release_all()
             return {}
@@ -191,6 +215,34 @@ class ComputerExecution:
                     raise InputInterrupted()
         if operation == "readiness":
             return {"reason": target.readiness()}
+        if operation == "snapshot":
+            points = params.get("points")
+            if not isinstance(points, list) or len(points) > 200:
+                raise TargetError("A snapshot accepts at most 200 points.", "invalid_arguments")
+            coordinates = []
+            for point in points:
+                if not isinstance(point, list) or len(point) != 2:
+                    raise TargetError("Each point needs x and y.", "invalid_arguments")
+                coordinates.append((_integer({"x": point[0]}, "x"), _integer({"y": point[1]}, "y")))
+            return snapshot_data(target.snapshot(coordinates))
+        if operation == "capture_region":
+            from resources.extensions.computer_use._imaging import fit
+
+            observed = snapshot_value(params["snapshot"])
+            area = tuple(_integer({"v": value}, "v") for value in params["area"])
+            if len(area) != 4 or not (area[0] < area[2] and area[1] < area[3]):
+                raise TargetError("A capture needs a visible rectangle.", "invalid_arguments")
+            width, height = area[2] - area[0], area[3] - area[1]
+            if width * height > 40_000_000 or tuple(params["size"]) != fit(width, height):
+                raise TargetError("The capture size is outside its limits.", "invalid_arguments")
+            return image_data(
+                target.capture_region(
+                    (area[0], area[1], area[2], area[3]),
+                    observed,
+                    params["visible"],
+                    fit(width, height),
+                )
+            )
         if operation == "displays":
             return {"value": [display_data(item) for item in target.displays()]}
         if operation == "windows":
@@ -261,6 +313,8 @@ class ComputerExecution:
             )
         elif operation == "keys":
             target.keys(_keys(params, "chord"), _integer(params, "repeat", 1, 100))
+        elif operation == "start_hold":
+            target.start_hold(_keys(params, "chord"))
         elif operation == "hold":
             target.hold(_keys(params, "chord"), _seconds(params))
         elif operation == "type":
@@ -285,7 +339,10 @@ class ComputerExecution:
             self._stop.set()
             self._owner = None
             if self._hotkey is not None:
-                self._hotkey.set_armed(None)
+                hotkey, self._hotkey = self._hotkey, None
+                hotkey.set_armed(None)
+                if self._worker is not None:
+                    self._worker.submit(hotkey.close)
             target = self._target
             if target is not None:
                 target.set_activity(False)
@@ -299,7 +356,10 @@ class ComputerExecution:
             self._stop.set()
             self._owner = None
             if self._hotkey is not None:
-                self._hotkey.set_armed(None)
+                hotkey, self._hotkey = self._hotkey, None
+                hotkey.set_armed(None)
+                if self._worker is not None:
+                    self._worker.submit(hotkey.close)
             if self._target is not None:
                 self._target.set_activity(False)
         async with self._lock:

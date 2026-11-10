@@ -238,6 +238,35 @@ it('adds no surface when computer control is merely available', async () => {
   expect(document.querySelector('button')).toBeNull();
 });
 
+it('shows and stops every active computer independently', async () => {
+  const laptop = {
+    ...ready,
+    computer_id: 'pc_laptop',
+    computer_name: 'Laptop',
+    control_id: 'ctl_laptop',
+  };
+  const workstation = {
+    ...ready,
+    computer_id: 'pc_work',
+    computer_name: 'Workstation',
+    control_id: 'ctl_work',
+  };
+  operation.mockResolvedValue({ controls: [laptop, workstation] });
+  mountControl();
+  await settle();
+  expect(button('Stop computer control on Laptop')).toBeDefined();
+  expect(button('Stop computer control on Workstation')).toBeDefined();
+  operation.mockResolvedValue({ controls: [workstation] });
+  button('Stop computer control on Laptop').click();
+  await settle();
+  expect(operation).toHaveBeenLastCalledWith('computer_use', 'control', {
+    action: 'stop',
+    control_id: 'ctl_laptop',
+  });
+  expect(button('Stop computer control on Laptop')).toBeUndefined();
+  expect(button('Stop computer control on Workstation')).toBeDefined();
+});
+
 it('keeps Stop accessible when a status read or the stop request fails', async () => {
   const onError = vi.fn();
   mountControl({ onError });

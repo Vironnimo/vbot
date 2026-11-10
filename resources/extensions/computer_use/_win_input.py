@@ -276,6 +276,7 @@ class WindowsInput:
         self._lock = threading.RLock()
         # Held keys and buttons in press order, each with the event that releases it.
         self._held: dict[str, Input] = {}
+        self._hold_keys: list[_Key] = []
 
     @staticmethod
     def enter_thread() -> None:
@@ -382,6 +383,23 @@ class WindowsInput:
             if index:
                 self._pause(0.03)
             self._tap(keys)
+
+    def start_hold(self, chord: list[str]) -> None:
+        _win32.enter_thread()
+        keys = self._plan(chord)
+        self._hold_keys = keys
+        try:
+            self._press_keys(keys)
+        except BaseException:
+            self._release_keys(keys)
+            raise
+
+    def end_hold(self) -> None:
+        keys, self._hold_keys = self._hold_keys, []
+        try:
+            self._release_keys(keys, strict=True)
+        finally:
+            self._release_keys(keys)
 
     def hold(self, chord: list[str], seconds: float) -> None:
         _win32.enter_thread()

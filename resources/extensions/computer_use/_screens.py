@@ -15,34 +15,26 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner
 from core.tools import ToolContext
 from core.utils.ids import write_id_file
 
+from ._imaging import MASK_FILL, MAX_AREA, MAX_LONG_EDGE
+from ._imaging import Area as Area
+from ._imaging import fit as fit
+from ._imaging import mask as mask
+from ._imaging import resized as resized
 from .target import AppInfo, Display, WindowInfo
 
-MAX_LONG_EDGE = 1568
-MAX_AREA = 1_150_000
-MASK_FILL = (128, 128, 128)
 # Temporary-file category of published images (``TEMPORARY_FILE_RETENTION``).
 IMAGE_CATEGORY = "computer_use"
 # Lossless PNG at zlib level 4: every later request uploads each screenshot of the
 # history again, and level 4 is the strongest within the encode budget (about 30 ms).
 # Not WebP: xAI carries only JPEG and PNG (extensions/computer-use.md -> Screenshot encoding).
 _PNG_COMPRESS_LEVEL = 4
-
-type Area = tuple[int, int, int, int]
-
-
-def fit(width: int, height: int) -> tuple[int, int]:
-    """Return *width* x *height* scaled down to the image limits, never up."""
-    factor = min(1.0, MAX_LONG_EDGE / max(width, height), math.sqrt(MAX_AREA / (width * height)))
-    if factor >= 1.0:
-        return width, height
-    return max(1, math.floor(width * factor)), max(1, math.floor(height * factor))
 
 
 @dataclass(frozen=True)
@@ -193,60 +185,6 @@ def describe_displays(displays: Sequence[Display], current: Display | None) -> s
         suffix = f" ({', '.join(marks)})" if marks else ""
         lines.append(f'{number}. "{display.name}" {display.width}x{display.height}{suffix}')
     return "\n".join(lines)
-
-
-def mask(
-    image: Image.Image,
-    area: Area,
-    windows: Sequence[WindowInfo],
-    visible: Callable[[WindowInfo], bool],
-) -> tuple[Image.Image, list[str]]:
-    """Hide every window of *area* that is not *visible*; return the image and hidden apps.
-
-    *image* shows the physical *area* at any size. Windows paint bottom to top:
-    a visible window reveals its frame, any other window covers it with a solid
-    fill, and pixels no window covers stay hidden. Edges round toward hiding.
-    The names are the apps that still have a hidden part, topmost first.
-    """
-    left, top, right, bottom = area
-    scale_x = image.width / (right - left)
-    scale_y = image.height / (bottom - top)
-    shown = Image.new("L", image.size, 0)
-    owners = Image.new("I", image.size, 0)
-    draw_shown = ImageDraw.Draw(shown)
-    draw_owners = ImageDraw.Draw(owners)
-    hidden: dict[int, str] = {}
-    for index in range(len(windows) - 1, -1, -1):
-        window = windows[index]
-        x0, y0 = max(window.left, left), max(window.top, top)
-        x1, y1 = min(window.right, right), min(window.bottom, bottom)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        reveal = visible(window)
-        inward, outward = (math.ceil, math.floor) if reveal else (math.floor, math.ceil)
-        box = (
-            inward((x0 - left) * scale_x),
-            inward((y0 - top) * scale_y),
-            outward((x1 - left) * scale_x),
-            outward((y1 - top) * scale_y),
-        )
-        if box[2] <= box[0] or box[3] <= box[1]:
-            continue
-        corners = [box[0], box[1], box[2] - 1, box[3] - 1]
-        draw_shown.rectangle(corners, fill=255 if reveal else 0)
-        draw_owners.rectangle(corners, fill=index + 1)
-        if not reveal:
-            hidden[index + 1] = window.app.name
-    present = {value for _, value in owners.getcolors(len(windows) + 1) or []}
-    names = [hidden[label] for label in sorted(hidden) if label in present]
-    covered = Image.composite(image.convert("RGB"), Image.new("RGB", image.size, MASK_FILL), shown)
-    return covered, list(dict.fromkeys(names))
-
-
-def resized(image: Image.Image, size: tuple[int, int]) -> Image.Image:
-    if image.size == size:
-        return image
-    return image.resize(size, Image.Resampling.LANCZOS)
 
 
 def publish_image(context: ToolContext, image: Image.Image) -> Path:

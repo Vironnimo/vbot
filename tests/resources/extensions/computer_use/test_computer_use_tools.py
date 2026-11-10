@@ -48,6 +48,7 @@ async def test_tools_register_as_one_opt_in_family_with_stop_control(computer: H
         assert tool.open_input_schema and "additionalProperties" not in tool.parameters
         assert tool.family == "computer_use" and tool.extension == "computer_use"
     status = await computer.api.operations.invoke("control", {"action": "status"})
+    assert len(status.pop("controls")) == 1
     assert status == {
         "available": True,
         "active": False,
@@ -125,6 +126,51 @@ async def test_a_target_that_becomes_unusable_refuses_calls(computer: Harness) -
         "retryable": False,
     }
     assert not computer.service.ready()
+    computer.target.reason = None
+    # Dispatch is hidden while unready locally, but exact remote dispatch reaches
+    # the service directly; it must recheck without a connected event.
+    result = await computer.service.computer(
+        computer.context_for("computer"), {"action": "screenshot"}
+    )
+    assert result["ok"] and computer.service.ready()
+
+
+@pytest.mark.parametrize("tool", ["computer", "computer_batch"])
+@pytest.mark.parametrize(
+    "change", ["cover", "elevated", "moved", "approval", "bounds", "no_coordinate"]
+)
+async def test_mouse_release_survives_input_guards(
+    computer: Harness, change: str, tool: str
+) -> None:
+    await computer.computer(action="screenshot")
+    await computer.computer(action="left_mouse_down", coordinate=[20, 20])
+    if change in {"cover", "no_coordinate"}:
+        computer.target.windows_.insert(
+            0, replace(computer.target.windows_[1], left=100, top=100, right=600, bottom=500)
+        )
+    elif change == "elevated":
+        computer.target.windows_[0] = replace(computer.target.windows_[0], elevated=True)
+    elif change == "moved":
+        computer.target.windows_[0] = replace(computer.target.windows_[0], left=110)
+    elif change == "approval":
+        computer.ask_per_app()
+    before = len(computer.target.inputs)
+    arguments: dict[str, Any] = {"action": "left_mouse_up"}
+    if change != "no_coordinate":
+        arguments["coordinate"] = [100000 if change == "bounds" else 20, 20]
+    result = await computer.call(
+        tool, {"actions": [arguments]} if tool == "computer_batch" else arguments
+    )
+    assert result["ok"] is (change == "no_coordinate")
+    assert computer.target.inputs[before:] == [("button", "left", False)]
+    assert computer.service._held_run is None
+
+
+async def test_shell_foreground_uses_the_display_view(computer: Harness) -> None:
+    computer.target.windows_.insert(0, replace(computer.target.windows_[-1], shell=True))
+    context = computer.context_for("computer")
+    assert (await computer.call("computer", {"action": "screenshot"}, context))["ok"]
+    assert images(context)[0].size == (1280, 720)
 
 
 async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
@@ -409,9 +455,15 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
             [("keys", ["ctrl", "shift", "t"], 1), ("keys", ["enter"], 1)] * 2,
         ),
         ({"action": "key", "text": "Page_Down", "repeat": 3}, [("keys", ["pagedown"], 3)]),
-        ({"action": "hold_key", "text": "shift", "duration": 2}, [("hold", ["shift"], 2.0)]),
+        (
+            {"action": "hold_key", "text": "shift", "duration": 2},
+            [("start_hold", ["shift"]), ("end_hold",)],
+        ),
         # Above 100, a hold or drag duration can only mean milliseconds.
-        ({"action": "hold_key", "text": "shift", "duration": 500}, [("hold", ["shift"], 0.5)]),
+        (
+            {"action": "hold_key", "text": "shift", "duration": 500},
+            [("start_hold", ["shift"]), ("end_hold",)],
+        ),
     ],
 )
 async def test_input_actions_map_frame_coordinates_and_return_a_screenshot(
@@ -422,7 +474,10 @@ async def test_input_actions_map_frame_coordinates_and_return_a_screenshot(
     result = await computer.call("computer", arguments, context)
     assert result["ok"], result
     assert computer.target.inputs == inputs
-    assert computer.sleeps == [computer_use.SETTLE_SECONDS]
+    waits = [computer_use.SETTLE_SECONDS]
+    if arguments["action"] == "hold_key":
+        waits.insert(0, 2.0 if arguments["duration"] == 2 else 0.5)
+    assert computer.sleeps == waits
     assert len(images(context)) == 1
     assert model_text(result).startswith("Done: ")
 

@@ -190,13 +190,33 @@ async def test_batch_keys_follow_an_app_its_own_keys_brought_up(computer: Harnes
     assert [record[0] for record in computer.target.inputs] == ["keys", "type", "keys"]
 
 
-@pytest.mark.parametrize("failure", ["target", "geometry", "artifact", "unexpected"])
-async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
-    computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str
+@pytest.mark.parametrize(
+    ("tool", "failure"),
+    [
+        (tool, failure)
+        for tool in ["computer", "computer_batch", "computer_apps"]
+        for failure in ["target", "geometry", "artifact", "unexpected", "changing"]
+    ]
+    + [
+        ("computer_batch_step", "changing"),
+        ("computer_apps_start", "changing"),
+        ("computer_apps_start", "stop"),
+    ],
+)
+async def test_completed_input_survives_a_failed_final_screenshot(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str, tool: str
 ) -> None:
     await computer.computer(action="screenshot", view="display")
+    failures = 0
 
     def fail_capture(*args):
+        nonlocal failures
+        failures += 1
+        if failure == "stop":
+            computer.service.stop()
+            raise computer_use.InputInterrupted()
+        if failure == "changing":
+            raise computer_use.CaptureChangedError()
         if failure == "geometry":
             raise computer_use.TargetError("test-owned-capture-unavailable", "invalid_arguments")
         error = {
@@ -210,18 +230,55 @@ async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
         monkeypatch.setattr(_desktop, "publish_image", fail_capture)
     else:
         monkeypatch.setattr(computer.target, "capture", fail_capture)
-    context = computer.context_for("computer_batch")
-    result = await computer.call(
-        "computer_batch", {"actions": [CLICK, {"action": "key", "text": "enter"}]}, context
-    )
-    assert result["error"]["code"] == (
-        "screen_changed" if failure == "geometry" else "computer_use_failed"
-    )
-    assert "test-owned-capture-unavailable" in result["error"]["message"]
+    explicit_screenshot = tool == "computer_batch_step"
+    starting_app = tool == "computer_apps_start"
+    if explicit_screenshot:
+        tool = "computer_batch"
+    elif starting_app:
+        tool = "computer_apps"
+    context = computer.context_for(tool)
+    key = {"action": "key", "text": "enter"}
+    arguments = {
+        "computer": key,
+        "computer_batch": {
+            "actions": [CLICK, key] + ([{"action": "screenshot"}] if explicit_screenshot else [])
+        },
+        "computer_apps": {"action": "open", "app": "Calculator" if starting_app else "Notepad"},
+    }[tool]
+    result = await computer.call(tool, arguments, context)
+    expected_code = "computer_use_failed"
+    if failure == "stop":
+        expected_code = "computer_use_interrupted"
+    elif failure == "changing":
+        expected_code = "screen_changed"
+    elif failure == "geometry":
+        expected_code = "screen_changed" if tool == "computer_batch" else "invalid_arguments"
+    assert result["error"]["code"] == expected_code
+    assert failures == (3 if failure == "changing" else 1)
+    if failure == "stop":
+        assert "do not try to operate the computer" in model_text(result)
+        assert "wait with computer" not in model_text(result)
+    elif failure == "changing":
+        assert "three capture attempts" in model_text(result)
+    elif failure in {"target", "geometry"} or tool == "computer_batch":
+        assert "test-owned-capture-unavailable" in model_text(result)
     # Each successful action keeps its evidence even though no final image exists.
-    assert "1. left_click at [200, 150]" in model_text(result)
-    assert "2. key enter" in model_text(result)
-    assert computer.target.inputs == [("click", 200, 150, "left", 1, []), ("keys", ["enter"], 1)]
+    if tool == "computer_batch":
+        assert "1. left_click at [200, 150]" in model_text(result)
+        assert "2. key enter" in model_text(result)
+        assert computer.target.inputs == [
+            ("click", 200, 150, "left", 1, []),
+            ("keys", ["enter"], 1),
+        ]
+    elif tool == "computer":
+        assert "Done: key enter." in model_text(result)
+        assert computer.target.inputs == [("keys", ["enter"], 1)]
+    elif starting_app:
+        assert "Started Calculator, which had no open window." in model_text(result)
+        assert computer.target.opened == ["Calculator"]
+    else:
+        assert "Brought the open window of Notepad to the front" in model_text(result)
+        assert computer.target.opened == ["Notepad"]
     assert context.result_media == []
 
 
@@ -309,6 +366,8 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     computer.published.clear()
     result = await computer.computer(action="type", text="x")
     status, ignored, stopped = seen
+    for snapshot in (status, ignored, stopped):
+        snapshot.pop("controls")
     assert computer.hotkey.armed is None
     assert status == {
         "available": True,
@@ -323,7 +382,7 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
         "available": True,
         "active": False,
         "stopping": True,
-        "hotkey_available": True,
+        "hotkey_available": False,
     }
     assert result["error"]["code"] == "computer_use_interrupted"
     assert result["error"]["message"].startswith(
@@ -333,6 +392,76 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     assert controls and all(ids == ["control"] for _, ids, _ in controls)
     assert [revision for *_, revision in controls] == sorted(revision for *_, revision in controls)
     assert (await computer.api.operations.invoke("control", {}))["active"] is False
+
+
+@pytest.mark.parametrize("ending", ["finish", "stop", "cancel"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_hold_keeps_input_serialized_and_preserves_its_outcome(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, ending: str, cleanup_fails: bool
+) -> None:
+    holding = asyncio.Event()
+    release = asyncio.Event()
+
+    async def pause(seconds, stop):
+        if seconds == 100:
+            holding.set()
+            await release.wait()
+        return stop.is_set()
+
+    monkeypatch.setattr(computer_use, "_sleep", pause)
+    end_hold = computer.target.end_hold
+
+    def finish_hold():
+        end_hold()
+        if cleanup_fails:
+            raise computer_use.TargetError("test-release-failure", "computer_offline")
+
+    monkeypatch.setattr(computer.target, "end_hold", finish_hold)
+    task = asyncio.create_task(computer.computer(action="hold_key", text="shift", duration=100))
+    try:
+        await holding.wait()
+        assert computer.service._lock.locked()
+        listing = await computer.call("computer_apps", {"action": "list"})
+        assert listing["ok"] and not task.done()
+        if ending == "stop":
+            computer.service.stop()
+        elif ending == "cancel":
+            task.cancel()
+    finally:
+        release.set()
+        if ending == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            if ending == "stop":
+                assert result["error"]["code"] == "computer_use_interrupted"
+                assert "do not try to operate the computer" in model_text(result)
+            elif cleanup_fails:
+                assert result["error"]["code"] == "computer_offline"
+            else:
+                assert result["ok"]
+    assert computer.target.inputs == [("start_hold", ["shift"]), ("end_hold",)]
+
+
+async def test_batch_screenshot_honors_display(computer: Harness) -> None:
+    context = computer.context_for("computer_batch")
+    result = await computer.call(
+        "computer_batch", {"actions": [{"action": "screenshot", "display": "Wide"}]}, context
+    )
+    assert result["ok"]
+    assert images(context)[0].size == (1568, 500)
+    result = await computer.call(
+        "computer_batch",
+        {
+            "actions": [
+                {"action": "key", "text": "enter"},
+                {"action": "screenshot", "display": "missing"},
+            ]
+        },
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert computer.target.inputs == []
 
 
 @pytest.mark.parametrize("cancellation", ["run", "task", "both"])
@@ -533,6 +662,7 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
     await computer.computer(action="type", text="x")
     assert computer.target.activity == [True]
     control_id = computer.hotkey.armed
+    first_hotkey = computer.hotkey
     assert control_id is not None  # double Esc works between calls too
     assert (await computer.api.operations.invoke("control", {}))["control_id"] == control_id
 
@@ -545,6 +675,7 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
 
     # Taking the computer again in the same Run starts a new control.
     await computer.computer(action="screenshot")
+    assert first_hotkey.closed and computer.hotkey is not first_hotkey
     assert computer.hotkey.armed not in (None, control_id)
     await computer.service.run_end(SimpleNamespace(run_id="other"))
     assert computer.target.activity == [True, False, True]
@@ -559,6 +690,32 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
     assert computer.target.activity == [True, False, True, False, True, False]
     assert computer.target.released == 1
     assert computer.service._held_run is None
+
+
+async def test_shutdown_cancels_readiness_and_idle_work_before_closing_target(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await computer.computer(action="screenshot")
+    timer = computer.service._control_timer
+    assert timer is not None
+    worker_thread = await computer.service._on_worker(threading.get_ident)
+    closed_on = []
+    close = computer.target.close
+
+    def close_target():
+        closed_on.append(threading.get_ident())
+        close()
+
+    monkeypatch.setattr(computer.target, "close", close_target)
+
+    async def wait_for_readiness() -> None:
+        await asyncio.Event().wait()
+
+    pending = asyncio.create_task(wait_for_readiness())
+    computer.service._tasks.add(pending)
+    await computer.service.close()
+    assert timer.cancelled() and pending.cancelled()
+    assert closed_on == [worker_thread] and computer.target.closed
 
 
 @pytest.mark.parametrize("stop", ["double_escape", "control"])

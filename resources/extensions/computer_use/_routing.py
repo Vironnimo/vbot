@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.computers import ComputerError
 from core.tools import tool_failure
+from core.utils.workers import settle_before_cancelling
 
 from ._remote_target import RemoteDesktopTarget, RemoteHotkey
 
@@ -33,7 +34,8 @@ class ComputerRouting:
         self.computers: ComputerRegistry | None = getattr(host, "computers", None)
         self._remotes: dict[str, _Remote] = {}
         self._closing: set[asyncio.Task[None]] = set()
-        self._lock = asyncio.Lock()
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._closed = False
         self._unsubscribe = self.computers.subscribe(self._event) if self.computers else None
 
     def ready(self) -> bool:
@@ -82,7 +84,9 @@ class ComputerRouting:
         from .extension import ComputerUseService
 
         assert self.computers is not None
-        async with self._lock:
+        async with self._locks.setdefault(computer.id, asyncio.Lock()):
+            if self._closed:
+                raise ComputerError("computer_offline", "Computer Use has stopped.")
             existing = self._remotes.get(computer.id)
             if existing is not None and existing.instance_id == computer.instance_id:
                 return existing.service
@@ -104,14 +108,24 @@ class ComputerRouting:
                     service._control_changed()
 
             target.on_control_changed = changed
-            await service.start(self.host)
+            target.on_stopped = service.native_stopped
             try:
+                await service.start(self.host)
                 # Registration can be removed while native readiness waits.
-                self.computers.get(computer.id)
-            except ComputerError:
+                current = self.computers.get(computer.id)
+                if (
+                    self._closed
+                    or not current.online
+                    or current.instance_id != computer.instance_id
+                ):
+                    raise ComputerError(
+                        "computer_offline", "The desktop connection changed. Take a new screenshot."
+                    )
+            except BaseException:
                 target.close()
-                await service.close()
-                await target.drain()
+                await settle_before_cancelling(
+                    self._retire(_Remote(computer.instance_id, service, target))
+                )
                 raise
             self._remotes[computer.id] = _Remote(computer.instance_id, service, target)
             return service
@@ -142,7 +156,7 @@ class ComputerRouting:
                 # Recheck the native desktop on the next call after reconnecting.
                 service._unready = None
         elif event == "stopped" and data.get("capability") == "computer_use":
-            service.stop(data.get("control_id"), source="double_escape")
+            service.native_stopped(str(data.get("control_id", "")))
 
     async def _retire(self, remote: _Remote) -> None:
         try:
@@ -163,26 +177,38 @@ class ComputerRouting:
                 return await remote.service.respond(arguments)
         return None
 
-    async def control(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         control_id = arguments.get("control_id")
         if arguments.get("action") == "stop" and control_id is not None:
+            self.local._local_control(arguments)
             for remote in self._remotes.values():
-                if remote.service._control_id == control_id:
-                    return await remote.service.control(arguments)
-            return None
+                remote.service._local_control(arguments)
+        local = self.local._local_control({})
+        controls = [{**local, "computer_id": "server", "computer_name": "Server"}]
         for computer_id, remote in self._remotes.items():
-            result = await remote.service.control({"action": "status"})
-            if result["active"]:
-                return {**result, "computer_id": computer_id, "computer_name": remote.target.name}
-        return None
+            controls.append(
+                {
+                    **remote.service._local_control({}),
+                    "computer_id": computer_id,
+                    "computer_name": remote.target.name,
+                }
+            )
+        # Retain the summary for clients while each desktop has its own stop target.
+        primary = next((item for item in controls[1:] if item["active"]), local)
+        return {**primary, "controls": controls}
 
     async def run_end(self, context: Any, **kwargs: Any) -> None:
         for remote in tuple(self._remotes.values()):
             await remote.service.run_end(context, **kwargs)
 
     async def close(self) -> None:
+        self._closed = True
         if self._unsubscribe is not None:
             self._unsubscribe()
+        # Settle creations before retiring their services.
+        for lock in tuple(self._locks.values()):
+            async with lock:
+                pass
         for remote in tuple(self._remotes.values()):
             await remote.service.close()
             await remote.target.drain()

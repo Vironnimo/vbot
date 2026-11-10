@@ -61,6 +61,8 @@ def _name(app: AppInfo) -> str:
 
 
 def _sent_text(desktop: Desktop | None) -> str:
+    if desktop is not None and desktop.completed_action is not None:
+        return desktop.completed_action
     if desktop is not None and desktop.failure_screen is not None:
         return "Input may have been sent."
     if desktop is not None and desktop.input_started:
@@ -77,6 +79,8 @@ def _with_screen(message: str, desktop: Desktop | None) -> str:
 
 def _target_text(error: TargetError, desktop: Desktop | None) -> str:
     message = str(error).rstrip()
+    if desktop is not None and desktop.completed_action is not None:
+        return f"{desktop.completed_action}\n{message}"
     if error.code in {"computer_use_failed", "computer_use_unavailable"}:
         return f"{message} {_sent_text(desktop)}"
     return message

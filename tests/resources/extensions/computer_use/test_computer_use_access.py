@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -41,9 +42,9 @@ async def test_waiting_input_rechecks_the_current_tool_and_app_permissions(
     active_call = computer.service._active_call
 
     @asynccontextmanager
-    async def observe_queue(context, desktop):
+    async def observe_queue(context, desktop, app=None):
         queued.set()
-        async with active_call(context, desktop):
+        async with active_call(context, desktop, app):
             yield
 
     monkeypatch.setattr(computer.service, "_active_call", observe_queue)
@@ -107,9 +108,9 @@ async def test_elevated_windows_refuse_input(computer: Harness, ask: bool) -> No
     assert computer.target.inputs == []
 
 
-@pytest.mark.parametrize("revoked", [False, True])
+@pytest.mark.parametrize("revoked", [None, "tool", "state"])
 async def test_accepted_request_approves_apps_for_the_session(
-    computer: Harness, revoked: bool
+    computer: Harness, revoked: str | None
 ) -> None:
     computer.ask_per_app()
     task = asyncio.ensure_future(
@@ -139,15 +140,19 @@ async def test_accepted_request_approves_apps_for_the_session(
         },
         "session_id": "session",
     }
-    if revoked:
+    if revoked == "tool":
         computer.agent.tool_access = ToolAccess(mode="none")
+    elif revoked == "state":
+        computer.service.sessions.clear()
     answer = await computer.api.operations.invoke(
         "respond", {"request_id": request["id"], "response": {"action": "accept"}}
     )
     assert answer == {"id": request["id"], "answered": True}
     result = await task
     if revoked:
-        assert result["error"]["code"] == "tool_not_allowed"
+        assert result["error"]["code"] == (
+            "tool_not_allowed" if revoked == "tool" else "computer_use_state_expired"
+        )
         assert computer.service.sessions.use((None, "agent", "session")).grants == []
         assert computer.api.operations.pending_inputs() == []  # type: ignore[misc]
         return
@@ -312,10 +317,14 @@ async def test_approvals_and_display_choice_expire_after_idle_time(computer: Har
 
 async def test_asking_opens_only_approved_apps(computer: Harness) -> None:
     computer.ask_per_app()
+    refused = await computer.call("computer_apps", {"action": "open", "app": "Slack"})
+    assert refused["error"]["code"] == "access_required"
+    assert computer.target.activity == [] and computer.hotkeys == []
     await computer.grant("Paint")
     context = computer.context_for("computer_apps")
     result = await computer.call("computer_apps", {"action": "open", "app": "paint"}, context)
     assert computer.target.opened == ["Paint"]
+
     assert computer.target.foreground().app == PAINT
     assert computer.sleeps[-1] == 1.5 and len(images(context)) == 1
 
@@ -325,3 +334,65 @@ async def test_asking_opens_only_approved_apps(computer: Harness) -> None:
     result = await computer.call("computer_apps", {"action": "open", "app": "Wordpad"})
     assert result["error"]["code"] == "invalid_arguments"
     assert computer.target.opened == ["Paint"]
+
+
+@pytest.mark.parametrize("change", ["close", "move", "reorder", "continuous"])
+@pytest.mark.parametrize("action", ["screenshot", "zoom"])
+async def test_capture_never_publishes_pixels_with_a_changed_window_stack(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, change: str, action: str
+) -> None:
+    computer.ask_per_app()
+    await computer.grant("Notepad")
+    private = replace(computer.target.windows_[1], left=100, top=100, right=300, bottom=300)
+    computer.target.windows_.insert(0, private)
+    if action == "zoom":
+        assert (await computer.computer(action="screenshot", view="display"))["ok"]
+    capture = computer.target.capture
+    captures = 0
+
+    def moving(display):
+        nonlocal captures
+        image = capture(display)
+        captures += 1
+        if captures == 1 or change == "continuous":
+            if change == "close":
+                computer.target.windows_.remove(private)
+            elif change == "reorder":
+                computer.target.windows_.append(computer.target.windows_.pop(0))
+            else:
+                item = computer.target.windows_[0]
+                computer.target.windows_[0] = replace(item, left=item.left + 10)
+        return image
+
+    monkeypatch.setattr(computer.target, "capture", moving)
+    context = computer.context_for("computer")
+    arguments = (
+        {"action": "screenshot", "view": "display"}
+        if action == "screenshot"
+        else {"action": "zoom", "region": [100, 100, 400, 400]}
+    )
+    result = await computer.call("computer", arguments, context)
+    assert computer.sleeps == [0.2] * (2 if change == "continuous" else 1)
+    if change == "continuous":
+        assert result["error"]["code"] == "screen_changed"
+        assert not context.result_media
+    else:
+        assert result["ok"] and captures == 2
+        image = images(context)[0]
+        # Private Chrome pixels in the first capture were never published.
+        assert color(2) not in set(image.get_flattened_data())
+
+
+@pytest.mark.parametrize("ask", [False, True])
+async def test_app_examples_preserve_quoted_names(computer: Harness, ask: bool) -> None:
+    name = 'Notes "daily" \\ archive'
+    computer.target.apps_[0] = replace(NOTEPAD, name=name)
+    if ask:
+        computer.ask_per_app()
+        result = await computer.grant(name)
+    else:
+        result = await computer.call("computer_apps", {"action": "request", "apps": [name]})
+    assert result["ok"]
+    example = model_text(result).split("computer_apps ", 1)[1]
+    call, _ = json.JSONDecoder().raw_decode(example)
+    assert call == {"action": "open", "app": name}

@@ -19,9 +19,10 @@ from collections.abc import Iterator, Sequence
 from PIL import Image
 
 from . import _color_filter, _win32, _win_apps
+from ._capture import capture_region, snapshot
 from ._win_input import WindowsInput
 from ._win_overlay import ActivityOverlay
-from .target import AppInfo, Display, TargetError, WindowInfo
+from .target import AppInfo, DesktopSnapshot, Display, TargetError, WindowInfo
 
 _LOCKED = (
     "The Windows screen is locked or shows a secure prompt such as User Account Control. "
@@ -106,6 +107,18 @@ class WindowsTarget(WindowsInput):
         if devices != self._display_names[0]:
             self._display_names = (devices, _win32.monitor_names())
         return name_displays(monitors, self._display_names[1])
+
+    def snapshot(self, points: list[tuple[int, int]]) -> DesktopSnapshot:
+        return snapshot(self, points)
+
+    def capture_region(
+        self,
+        area: tuple[int, int, int, int],
+        observed: DesktopSnapshot,
+        visible: list[int],
+        size: tuple[int, int],
+    ) -> Image.Image:
+        return capture_region(self, area, observed, visible, size)
 
     def capture(self, display: Display) -> Image.Image:
         _win32.enter_thread()
@@ -319,6 +332,7 @@ class WindowsTarget(WindowsInput):
             bottom=bottom,
             elevated=resolver.elevated(facts),
             owner=_win32.window_owner(handle),
+            shell=_win_apps.is_shell_surface(_win32.window_class(handle), facts.executable),
         )
 
     @staticmethod

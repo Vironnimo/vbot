@@ -13,7 +13,7 @@ from typing import Any
 
 from PIL import Image
 
-from .target import AppInfo, Display, TargetError, WindowInfo
+from .target import AppInfo, DesktopSnapshot, Display, TargetError, WindowInfo
 
 # Leave space for the JSON envelope below the connection's 16 MiB limit.
 MAX_PNG_BYTES = 11 * 1024 * 1024
@@ -74,6 +74,26 @@ def window_value(data: dict[str, Any] | None) -> WindowInfo | None:
         int(data["bottom"]),
         bool(data["elevated"]),
         int(data.get("owner", 0)),
+        bool(data.get("shell", False)),
+    )
+
+
+def snapshot_data(snapshot: DesktopSnapshot) -> dict[str, Any]:
+    return {
+        "displays": [display_data(item) for item in snapshot.displays],
+        "windows": [window_data(item) for item in snapshot.windows],
+        "foreground": window_data(snapshot.foreground),
+        "receivers": [window_data(item) for item in snapshot.receivers],
+    }
+
+
+def snapshot_value(data: dict[str, Any]) -> DesktopSnapshot:
+    windows = tuple(window_value(item) for item in data["windows"])
+    return DesktopSnapshot(
+        tuple(display_value(item) for item in data["displays"]),
+        tuple(item for item in windows if item is not None),
+        window_value(data["foreground"]),
+        tuple(window_value(item) for item in data["receivers"]),
     )
 
 

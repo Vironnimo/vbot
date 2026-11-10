@@ -32,8 +32,10 @@ from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
 from core.tools.tools import tool_failure_for_exception
 from resources.extensions.computer_use import extension as computer_use
+from resources.extensions.computer_use._capture import capture_region, snapshot
 from resources.extensions.computer_use.target import (
     AppInfo,
+    DesktopSnapshot,
     Display,
     InputInterrupted,
     TargetError,
@@ -125,6 +127,18 @@ class FakeTarget:
     def displays(self) -> list[Display]:
         return list(self.displays_)
 
+    def snapshot(self, points: list[tuple[int, int]]) -> DesktopSnapshot:
+        return snapshot(self, points)
+
+    def capture_region(
+        self,
+        area: tuple[int, int, int, int],
+        observed: DesktopSnapshot,
+        visible: list[int],
+        size: tuple[int, int],
+    ) -> Image.Image:
+        return capture_region(self, area, observed, visible, size)
+
     def capture(self, display: Display) -> Image.Image:
         image = Image.new("RGB", (display.width, display.height), BACKGROUND)
         draw = ImageDraw.Draw(image)
@@ -204,6 +218,12 @@ class FakeTarget:
     def keys(self, chord: list[str], repeat: int) -> None:
         self._input("keys", chord, repeat)
 
+    def start_hold(self, chord: list[str]) -> None:
+        self._input("start_hold", chord)
+
+    def end_hold(self) -> None:
+        self.inputs.append(("end_hold",))
+
     def hold(self, chord: list[str], seconds: float) -> None:
         self._input("hold", chord, seconds)
 
@@ -263,8 +283,7 @@ class Harness:
     @property
     def hotkey(self) -> FakeHotkey:
         """The double-Esc hotkey, which the first call that takes the desktop starts."""
-        (hotkey,) = self.hotkeys
-        return hotkey
+        return self.hotkeys[-1]
 
     def context_for(self, tool: str, **changes: Any) -> ToolContext:
         return replace(self.context, tool_name=tool, result_media=[], **changes)
