@@ -84,6 +84,18 @@ _POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX path grammar")
     [
         pytest.param("{url}", "write", "intended/out.txt", id="file-url"),
         pytest.param('"{url}"', "read", "intended/out.txt", id="quoted", marks=_WINDOWS_ONLY),
+        pytest.param(" out.txt \n", "write", "ws/out.txt", id="padded", marks=_WINDOWS_ONLY),
+        pytest.param(
+            "\t{url}\r\n", "read", "intended/out.txt", id="padded-url", marks=_WINDOWS_ONLY
+        ),
+        pytest.param(" out.txt", "write", "ws/ out.txt", id="leading-space"),
+        pytest.param("out.txt ", "write", None, id="trailing-space", marks=_WINDOWS_ONLY),
+        pytest.param(' "out.txt "\n', "write", None, id="quoted-space", marks=_WINDOWS_ONLY),
+        pytest.param("out.txt. \n", "write", None, id="padded-dot", marks=_WINDOWS_ONLY),
+        pytest.param(
+            " out.txt \n", "write", "ws/ out.txt \n", id="literal-padding", marks=_POSIX_ONLY
+        ),
+        pytest.param(Path(" out.txt \n"), "read", "ws/ out.txt \n", id="literal-path-object"),
         pytest.param("file:notes.txt", "read", "ws/file:notes.txt", id="name", marks=_POSIX_ONLY),
         pytest.param("file://elsewhere.invalid/a", "read", None, id="remote", marks=_POSIX_ONLY),
         # Windows resolved these below the server process's working directory.
@@ -96,10 +108,13 @@ _POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX path grammar")
 )
 @pytest.mark.asyncio
 async def test_tool_paths_take_file_urls_and_refuse_names_that_lead_elsewhere(
-    tmp_path: Path, spelling: str, access: Any, expected: str | None
+    tmp_path: Path, spelling: str | Path, access: Any, expected: str | None
 ) -> None:
     other_drive = "R" if tmp_path.drive.upper().startswith("Q") else "Q"
-    spelling = spelling.format(url=(tmp_path / "intended" / "out.txt").as_uri(), drive=other_drive)
+    if isinstance(spelling, str):
+        spelling = spelling.format(
+            url=(tmp_path / "intended" / "out.txt").as_uri(), drive=other_drive
+        )
     registry = ToolRegistry()
     seen = []
 

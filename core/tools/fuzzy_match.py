@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right
-from difflib import SequenceMatcher
 
 from core.tools._fuzzy_candidates import find_closest_candidates as find_closest_candidates
 from core.tools._fuzzy_candidates import find_closest_passages as find_closest_passages
@@ -70,6 +69,7 @@ from core.tools._fuzzy_text import (
 from core.tools._fuzzy_text import SearchText as SearchText
 from core.tools._fuzzy_text import dominant_line_ending as dominant_line_ending
 from core.tools._fuzzy_text import fold_for_search as fold_for_search
+from core.tools._fuzzy_text import preserve_typography as preserve_typography
 from core.tools._fuzzy_types import AmbiguousFuzzyMatch as AmbiguousFuzzyMatch
 from core.tools._fuzzy_types import ClosestFuzzyCandidate as ClosestFuzzyCandidate
 from core.tools._fuzzy_types import FuzzyReplacement as FuzzyReplacement
@@ -88,6 +88,7 @@ def replace_fuzzy(
     first: bool = False,
     rewrapped: bool = False,
     whitespace: bool = True,
+    preserve_glyphs: bool = False,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -99,6 +100,8 @@ def replace_fuzzy(
     winning strategy's first match. ``rewrapped`` adds a last strategy for one
     target: ``old_string`` whose line breaks fall in other places than the file's,
     for an edit that changes more than whitespace.
+    ``preserve_glyphs`` retains copied typography in corresponding unchanged
+    portions of replacement lines, with bounded alignment work.
     ``whitespace=False`` keeps spacing and indentation significant, including
     in the typographic step, for callers checking an edit's post-state.
     """
@@ -157,6 +160,7 @@ def replace_fuzzy(
             reindent=reindent or (typographic and name == "normalized"),
             old_string_lf=old_lf,
             file_ending=file_ending,
+            preserve_glyphs=preserve_glyphs,
         )
 
     # An edit of whitespace alone is about the line breaks that old_string
@@ -206,6 +210,7 @@ def _replaced(
     old_string_lf: str,
     file_ending: str | None,
     lines_correspond: bool = True,
+    preserve_glyphs: bool = False,
 ) -> FuzzyReplacement:
     """Replace the ``selected`` spans and describe the result."""
     new_content, before_spans, after_spans = _apply_replacements(
@@ -216,6 +221,7 @@ def _replaced(
         old_string_lf=old_string_lf,
         file_ending=file_ending,
         lines_correspond=lines_correspond,
+        preserve_glyphs=preserve_glyphs and strategy != "exact" and lines_correspond,
     )
     # The spans ascend without overlapping, so the last one reaches furthest.
     first_line = _line_number_at(content, selected[0][0])
@@ -282,45 +288,6 @@ def _match_normalized(
             if end > start
         ]
     return matches
-
-
-def preserve_typography(actual: str, locator: str, replacement: str) -> str:
-    """Retain original glyphs in unchanged portions of a normalized patch line.
-
-    Only a precisely equivalent preimage proves the character correspondence.
-    A changed glyph or a merely similar preimage never authorizes restoration.
-    """
-    actual_body, old_body, new_body = (
-        text.lstrip(" \t") for text in (actual, locator, replacement)
-    )
-    actual_folded, actual_spans = _normalize_with_spans(actual_body, typographic=True)
-    old_folded = _normalize_with_spans(old_body, typographic=True)[0]
-    new_folded, new_spans = _normalize_with_spans(new_body, typographic=True)
-    if actual_folded != old_folded:
-        return replacement
-    blocks = SequenceMatcher(None, old_folded, new_folded, autojunk=False).get_matching_blocks()
-    replacements = []
-    index = 0
-    while index < len(actual_spans):
-        start, end = actual_spans[index]
-        limit = index + 1
-        while limit < len(actual_spans) and actual_spans[limit] == (start, end):
-            limit += 1
-        original = actual_body[start:end]
-        folded = actual_folded[index:limit]
-        if original != folded:
-            for block in blocks:
-                if block.a <= index and limit <= block.a + block.size:
-                    new_start = block.b + index - block.a
-                    new_end = new_start + limit - index
-                    left, right = new_spans[new_start][0], new_spans[new_end - 1][1]
-                    if new_body[left:right] == folded:
-                        replacements.append((left, right, original))
-                    break
-        index = limit
-    for start, end, original in reversed(replacements):
-        new_body = new_body[:start] + original + new_body[end:]
-    return replacement[: len(replacement) - len(replacement.lstrip(" \t"))] + new_body
 
 
 def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:

@@ -8,7 +8,14 @@ from collections.abc import Callable
 
 import pytest
 
-from core.tools.copy_match import copy_warnings, match_copied_edit, replace_copied
+from core.tools import _copy_tokens as copy_tokens_module
+from core.tools import copy_match as copy_match_module
+from core.tools.copy_match import (
+    CopyMatchLimitError,
+    copy_warnings,
+    match_copied_edit,
+    replace_copied,
+)
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement
 
 
@@ -887,3 +894,96 @@ def test_work_per_resembling_place_does_not_grow_with_the_line() -> None:
         per_place.append(work / found.occurrences)
     # Pairing every start of a line with every end would grow with the line's square.
     assert per_place[1] < 1.5 * per_place[0]
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_an_exhausted_copy_search_discards_already_matching_passages(
+    monkeypatch, replacement: bool
+) -> None:
+    old = "alpha beta gamma receipt"
+    new = old + " delta"
+    source = "alpha beta gamma reciept\n"
+
+    def find(content: str):
+        if replacement:
+            return replace_copied(content, old, new)
+        return match_copied_edit(content, [("-", old), ("+", new)])
+
+    assert _applied(find(source)).new_content == "alpha beta gamma reciept delta\n"
+    place = copy_match_module._place_lines
+    accepted = []
+
+    def observe(*args, **kwargs):
+        result = place(*args, **kwargs)
+        if result is not None:
+            accepted.append(result)
+        return result
+
+    monkeypatch.setattr(copy_tokens_module, "_MAX_COPY_WORK", 1000)
+    monkeypatch.setattr(copy_match_module, "_place_lines", observe)
+
+    # Several candidates have already qualified when the next alignment exhausts
+    # the budget. Neither a best-so-far match nor an incomplete ambiguity is safe.
+    assert find(source * 30) is None
+    assert 0 < len(accepted) < 4
+    if replacement:
+        with pytest.raises(CopyMatchLimitError):
+            replace_copied(source * 30, old, new, require_complete=True)
+
+
+def test_copy_candidate_enumeration_stops_before_alignment(monkeypatch) -> None:
+    old = "alpha beta gamma receipt"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("an incomplete candidate set must not be aligned")
+
+    monkeypatch.setattr(copy_tokens_module, "_MAX_COPY_CANDIDATES", 2)
+    monkeypatch.setattr(copy_match_module, "_place_lines", unexpected)
+
+    assert replace_copied("alpha beta gamma reciept\n" * 3, old, old + " delta") is None
+    with pytest.raises(CopyMatchLimitError):
+        replace_copied("alpha beta gamma reciept\n" * 3, old, old + " delta", require_complete=True)
+
+
+def test_one_large_copy_alignment_is_refused_before_difflib(monkeypatch) -> None:
+    source = "alpha beta gamma receipt delta epsilon " * 20
+    old = source.replace("receipt", "reciept", 1)
+    new = old + "zeta"
+    assert _applied(replace_copied(source, old, new)).new_content == source + "zeta"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("a single oversized token alignment must not enter difflib")
+
+    monkeypatch.setattr(copy_tokens_module, "_MAX_COPY_WORK", 10_000)
+    monkeypatch.setattr(copy_tokens_module, "SequenceMatcher", unexpected)
+
+    assert replace_copied(source, old, new) is None
+
+
+@pytest.mark.parametrize("fragment", [False, True])
+def test_spelling_distance_work_stays_within_the_copy_budget(monkeypatch, fragment: bool) -> None:
+    word = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl"
+    budget = 20_000
+    comparisons = []
+    distance = copy_tokens_module.edit_distance
+
+    def observed(first: str, second: str, bound: int) -> int:
+        comparisons.append(len(first) * len(second))
+        return distance(first, second, bound)
+
+    monkeypatch.setattr(copy_tokens_module, "_MAX_COPY_WORK", budget)
+    monkeypatch.setattr(copy_tokens_module, "edit_distance", observed)
+
+    if fragment:
+        old = f"{word[:-1]}z {word} {word}"
+        found = replace_copied((word + " ") * 100, old, old + " done")
+    else:
+        content = (word + " alpha beta gamma\n") * 10 + "finish alpha\n"
+        lines = [(" ", word[:-1] + letter + " alpha beta gamma") for letter in "abcdefghij"]
+        lines.extend([("-", "finish alpha"), ("+", "finish alpha done")])
+        found = match_copied_edit(content, lines)
+
+    assert found is None
+    # Token counts alone conceal the character matrix of each spelling check.
+    # Both fragment endpoints and hunk alignment must charge it before evaluation.
+    assert 0 < sum(comparisons) <= budget

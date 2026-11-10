@@ -113,6 +113,20 @@ _GUARD_CONTENT_MAX_LINES = 400
 
 def decode_text(payload: bytes, path: object) -> str:
     """Decode file bytes as UTF-8 text, refusing binary and other encodings."""
+    # A BOM identifies these encodings without guessing from their NUL bytes.
+    # Test UTF-32 first: its little-endian BOM starts with the UTF-16 BOM.
+    for marks, encoding in (
+        ((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"), "UTF-32"),
+        ((b"\xff\xfe", b"\xfe\xff"), "UTF-16"),
+    ):
+        if payload.startswith(marks):
+            raise _PatchError(
+                "unsupported_encoding",
+                template="bom_encoding",
+                path=path,
+                encoding=encoding,
+                read_encoding=encoding.lower(),
+            )
     if b"\x00" in payload:
         raise _PatchError("binary_file", path=path)
     try:
@@ -149,8 +163,9 @@ def _plan(
     """Plan the operations' effects; each Update's change end goes into ``change_ends``.
 
     See ``apply_hunks`` for what a change end orders, and for ``failures``: with
-    it, an Update's hunks that fail are skipped and collected there. The labels
-    of text replacements that changed nothing go to ``unchanged``, with why.
+    it, an Update's hunks that fail and creations over nonempty content are
+    skipped and collected there. The labels of text replacements that changed
+    nothing go to ``unchanged``, with why.
     """
     pending = before.copy()
     warnings: dict[Path, list[str]] = {}
@@ -160,7 +175,17 @@ def _plan(
         payload = source.payload
         if operation.action == "add":
             if operation.only_if_empty and source.exists and not _is_empty(payload):
-                raise _PatchError("file_exists", path=path, label=operation.label)
+                initially_empty = not before[path].exists or _is_empty(before[path].payload)
+                error = _PatchError(
+                    "file_exists",
+                    path=path,
+                    label=operation.label,
+                    details={"content_from_earlier_edit": True} if initially_empty else None,
+                )
+                if failures is None:
+                    raise error
+                failures.append(error)
+                continue
             if operation.minus_line and source.exists and not _is_empty(payload):
                 # Replacing content, a - line may be a removal meant for Update File.
                 line, text = operation.minus_line
@@ -653,6 +678,13 @@ def _run_step(
             pending, warnings = _plan(
                 operations, paths, before, change_ends, failures, unchanged if one_write else None
             )
+            if failures:
+                failed_labels = {error.values.get("label") for error in failures}
+                # A refused creation neither replaces the file nor requires a
+                # read stamp for the ordinary text edits that still apply.
+                adds = any(
+                    op.action == "add" and op.label not in failed_labels for op in operations
+                )
             skipped = _skipped_changes(context, state, batch, source, failures or [], operations)
             if unchanged:
                 outcome["unchanged"] = unchanged

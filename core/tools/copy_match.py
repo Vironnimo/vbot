@@ -64,11 +64,12 @@ passage's form.
 
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 from core.tools._copy_tokens import (
     _ALIKE,
@@ -101,6 +102,8 @@ from core.tools._copy_tokens import (
     _Speller,
     _Text,
     _tolerated,
+    _WorkBudget,
+    _WorkLimitError,
 )
 from core.tools._fuzzy_text import (
     _in_form,
@@ -115,14 +118,31 @@ from core.tools.arguments import TEXT_LINE_BREAK
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement, dominant_line_ending
 
 
+class CopyMatchLimitError(RuntimeError):
+    """The copy search was incomplete, so absence of a match is not established."""
+
+
 def replace_copied(
-    content: str, old: str, new: str
+    content: str, old: str, new: str, *, require_complete: bool = False
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Apply an ``old``/``new`` text edit whose ``old`` copies the file with errors.
 
     ``old`` names whole lines, or part of one line when it has no line break.
-    Returns ``None`` when no passage qualifies.
+    Returns ``None`` when no passage qualifies or the work budget is exhausted.
+    With ``require_complete``, exhaustion raises ``CopyMatchLimitError`` instead:
+    callers using absence as evidence must distinguish an incomplete search.
     """
+    try:
+        return _replace_copied(content, old, new, _WorkBudget())
+    except _WorkLimitError:
+        if require_complete:
+            raise CopyMatchLimitError from None
+        return None
+
+
+def _replace_copied(
+    content: str, old: str, new: str, budget: _WorkBudget
+) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     old_body, new_body = _without_final_break(old), _without_final_break(new)
     old_lines = TEXT_LINE_BREAK.split(old_body)
     whole = old_body != old
@@ -131,6 +151,7 @@ def replace_copied(
     if not any(line.strip() for line in old_lines):
         return None
     lines: list[tuple[str, str]] = []
+    budget.compare(old_lines, new_lines)
     matcher = SequenceMatcher(None, old_lines, new_lines, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
@@ -138,7 +159,7 @@ def replace_copied(
             continue
         lines.extend(("-", line) for line in old_lines[i1:i2])
         lines.extend(("+", line) for line in new_lines[j1:j2])
-    file = _File(content)
+    file = _File(content, budget)
     found = _match_lines(file, lines, at_eof=False, drop_breaks=True)
     if found is None and len(old_lines) == 1 and not whole:
         found = _match_fragment(file, old, new)
@@ -151,13 +172,16 @@ def match_copied_edit(
     """Apply a hunk whose kept (``" "``) and removed (``"-"``) lines copy whole lines.
 
     Added lines are ``"+"``. With ``at_eof`` the passage must end the file.
-    Returns ``None`` when no passage qualifies.
+    Returns ``None`` when no passage qualifies or the work budget is exhausted.
     """
     if not any(text.strip() for prefix, text in lines if prefix in " -"):
         return None
-    found = _match_lines(_File(content), lines, at_eof=at_eof)
-    old = "\n".join(text for prefix, text in lines if prefix in " -")
-    return _in_file_form(content, old, found)
+    try:
+        found = _match_lines(_File(content, _WorkBudget()), lines, at_eof=at_eof)
+        old = "\n".join(text for prefix, text in lines if prefix in " -")
+        return _in_file_form(content, old, found)
+    except _WorkLimitError:
+        return None
 
 
 def _in_file_form(
@@ -226,11 +250,12 @@ def _lines_warning(lines: Sequence[tuple[int, str]], line_shift: int, one: str, 
     return "\n".join(parts)
 
 
-def _excerpt(text: str, copy: str) -> str:
+def _excerpt(text: str, copy: str, budget: _WorkBudget) -> str:
     """The line, or the part of a long line from just before its first difference."""
     if len(text) <= _WARNING_LINE_CHARACTERS:
         return text
     held, copied = _read(text), _read(copy)
+    budget.compare(copied.keys, held.keys)
     matcher = SequenceMatcher(
         None,
         [" " if _is_space(key) else key for key in copied.keys],
@@ -247,8 +272,9 @@ def _excerpt(text: str, copy: str) -> str:
 class _File:
     """The content by lines, with folded line keys and where each word occurs."""
 
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, budget: _WorkBudget) -> None:
         self.content = content
+        self.budget = budget
         parts = _split_lines_preserving_endings(content)
         self.texts = [text for text, _ in parts]
         self.endings = [ending for _, ending in parts]
@@ -276,6 +302,7 @@ class _File:
 
     def line(self, number: int) -> _Text:
         if number not in self._lines:
+            self.budget.spend(len(self.texts[number]))
             self._lines[number] = _read(self.texts[number])
         return self._lines[number]
 
@@ -285,6 +312,7 @@ class _File:
             return self.line(first)
         if (first, count) not in self._groups:
             begin, end = self.region(first, first + count - 1)
+            self.budget.spend(end - begin)
             self._groups[first, count] = _read(self.content[begin:end])
         return self._groups[first, count]
 
@@ -399,16 +427,27 @@ def _anchor_words(file: _File, lines: Sequence[str]) -> list[tuple[str, list[int
 def _line_starts(file: _File, old: Sequence[str]) -> list[int]:
     """First lines of passages that could hold ``old``: an exact line or a rare word."""
     starts: set[int] = set()
+    limit = len(file.texts) - len(old)
+
+    def add(number: int, index: int) -> None:
+        file.budget.spend(1)
+        start = number - index
+        if 0 <= start <= limit:
+            starts.add(start)
+            if len(starts) > file.budget.candidates:
+                raise _WorkLimitError
+
     by_key = file.by_key()
     for index, line in enumerate(old):
         key = _line_key(line)
         if _WORD.search(key):
-            starts.update(number - index for number in by_key.get(key, ()))
+            for number in by_key.get(key, ()):
+                add(number, index)
     for word, positions in _anchor_words(file, old):
         for number in file.postings[word]:
-            starts.update(number - index for index in positions)
-    limit = len(file.texts) - len(old)
-    return sorted(start for start in starts if 0 <= start <= limit)
+            for index in positions:
+                add(number, index)
+    return sorted(starts)
 
 
 def _ends_match(file: _File, old: Sequence[str], start: int) -> bool:
@@ -426,13 +465,16 @@ def _anchored(file: _File, old: Sequence[str], start: int) -> bool:
         return False
     if min(len(_WORD.findall(first)), len(_WORD.findall(last))) < _ANCHOR_MIN_WORDS:
         return False
+    anchors = file.by_key().get(first, ())
+    file.budget.spend(len(anchors))
     shared = sum(
         number + count - 1 < len(file.keys) and file.keys[number + count - 1] == last
-        for number in file.by_key().get(first, ())
+        for number in anchors
     )
     threshold = _ANCHOR_UNIQUE_SIMILARITY if shared == 1 else _ANCHOR_SHARED_SIMILARITY
     middle = "\n".join(_line_key(line) for line in old[1:-1])
     held = "\n".join(file.keys[start + 1 : start + count - 1])
+    file.budget.compare(middle, held)
     return SequenceMatcher(None, middle, held).ratio() >= threshold
 
 
@@ -514,6 +556,10 @@ def _correct_bound(file: _File, hunk: _Hunk, start: int) -> int:
     bound = 0
     for segment, words in zip(hunk.segments, hunk.words, strict=True):
         first = start + segment.old
+        file.budget.spend(
+            len(words)
+            + sum(len(file.line_words[number]) for number in range(first, first + segment.removed))
+        )
         held = Counter(
             word
             for number in range(first, first + segment.removed)
@@ -531,6 +577,7 @@ def _match_lines(
     for start in _line_starts(file, hunk.old):
         if at_eof and not file.ends_after(start + len(hunk.old) - 1):
             continue
+        file.budget.candidate()
         bound = _correct_bound(file, hunk, start)
         if bound >= hunk.total * _MIN_CORRECT_SHARE or _ends_match(file, hunk.old, start):
             candidates.append((bound, start))
@@ -570,7 +617,7 @@ def _place_lines(
     if any(_takes_blank_line(file, old, segment, start) for segment in hunk.segments):
         return None
     anchored = best != 0 and _anchored(file, old, start)
-    speller = _Speller(file.words)
+    speller = _Speller(file.words, file.budget)
     aligned = []
     total = _Alignment([])
     gaps = 0
@@ -625,7 +672,7 @@ def _place_lines(
             output.append(file.texts[first])
             if file.keys[first] != _line_key(old[segment.old]):
                 # The kept line is named where the edit leaves it.
-                excerpt = _excerpt(file.texts[first], old[segment.old])
+                excerpt = _excerpt(file.texts[first], old[segment.old], file.budget)
                 kept_differed.append((start + segment.new + 1, excerpt))
             continue
         wanted = _read(file.ending.join(new[segment.new : segment.new + segment.added]))
@@ -693,18 +740,24 @@ def _match_fragment(
     if not copy.tokens:
         return None
     wanted = _read(TEXT_LINE_BREAK.sub(file.ending, new[len(lead) : len(new) - len(trail)]))
-    lines = sorted(
-        {number for word, _ in _anchor_words(file, [old]) for number in file.postings[word]}
-    )
+    lines: set[int] = set()
+    for word, _ in _anchor_words(file, [old]):
+        for number in file.postings[word]:
+            file.budget.spend(1)
+            lines.add(number)
+            if len(lines) > file.budget.candidates:
+                raise _WorkLimitError
     copied = Counter(key for key in copy.keys if _is_word(key))
     placed: list[_Placed] = []
-    for number in lines:
+    for number in sorted(lines):
+        file.budget.spend(len(file.line_words[number]))
         held = Counter(file.line_words[number])
         if (copied & held).total() < copied.total() * _MIN_CORRECT_SHARE:
             continue
         line = file.line(number)
-        for first, last in _windows(line, copy, file.words):
-            speller = _Speller(file.words)
+        for first, last in _windows(line, copy, file.words, file.budget):
+            file.budget.candidate()
+            speller = _Speller(file.words, file.budget)
             window = line.window(first, last)
             alignment = _align(copy, window, speller)
             level = _level(alignment)
@@ -720,22 +773,25 @@ def _match_fragment(
     return _result(file, placed)
 
 
-def _windows(line: _Text, copy: _Text, words: frozenset[str]) -> list[tuple[int, int]]:
+def _windows(
+    line: _Text, copy: _Text, words: frozenset[str], budget: _WorkBudget
+) -> Iterator[tuple[int, int]]:
     """Token ranges of ``line`` whose ends could be copied as the ends of ``copy``."""
     keys, wanted = line.keys, copy.keys
+    budget.spend(len(keys))
     slack = 2 * (_content(wanted) // _WORDS_PER_DIFFERENCE + 1)
 
+    @lru_cache(maxsize=512)
     def fits(copied: str, held: str) -> bool:
-        return copied == held or (copied not in words and _misspelling(copied, held))
+        return copied == held or (copied not in words and _misspelling(copied, held, budget))
 
     firsts = [index for index, key in enumerate(keys) if fits(wanted[0], key)]
     lasts = [index + 1 for index, key in enumerate(keys) if fits(wanted[-1], key)]
-    return [
-        (first, last)
-        for first in firsts
-        for last in lasts
-        if first < last and abs(last - first - len(wanted)) <= slack
-    ]
+    for first in firsts:
+        low = bisect_left(lasts, max(first + 1, first + len(wanted) - slack))
+        high = bisect_right(lasts, first + len(wanted) + slack)
+        for index in range(low, high):
+            yield first, lasts[index]
 
 
 def _result(
@@ -751,6 +807,7 @@ def _result(
         (item for item in placed if item.level == level),
         key=lambda item: (item.cost, item.start, item.end),
     ):
+        file.budget.spend(len(unique))
         if any(
             (item.start, item.end) == (other.start, other.end)
             or (item.start < other.end and other.start < item.end and item.cost > other.cost)
@@ -786,7 +843,9 @@ def _result(
 
 
 def _excerpts(file: _File, lines: Sequence[tuple[int, str]]) -> tuple[tuple[int, str], ...]:
-    return tuple((number, _excerpt(file.texts[number - 1], copy)) for number, copy in lines)
+    return tuple(
+        (number, _excerpt(file.texts[number - 1], copy, file.budget)) for number, copy in lines
+    )
 
 
 def _without_final_break(text: str) -> str:
@@ -797,4 +856,4 @@ def _without_final_break(text: str) -> str:
     return text
 
 
-__all__ = ["copy_warnings", "match_copied_edit", "replace_copied"]
+__all__ = ["CopyMatchLimitError", "copy_warnings", "match_copied_edit", "replace_copied"]

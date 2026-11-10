@@ -139,6 +139,8 @@ def normalize_edit_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
+    if normalized.get("edits") == []:
+        normalized.pop("edits")
     flat = {field: normalized.pop(field) for field in _EDIT_FIELDS if field in normalized}
     if flat and "edits" in normalized:
         if set(flat) == {"replace_all"}:
@@ -148,7 +150,7 @@ def normalize_edit_arguments(arguments: Any) -> Any:
         raise ValueError(
             "The call gives both edits and old_string/new_string. Put every change into edits."
         )
-    if flat:
+    if flat and set(flat) != {"replace_all"}:
         _check_flat_edit(flat)
         normalized["edits"] = [flat]
     elif "content" in normalized and "edits" not in normalized:

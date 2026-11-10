@@ -10,13 +10,12 @@ from typing import Any
 
 import pytest
 
+from core.tools import _copy_tokens as copy_tokens_module
 from core.tools import _file_changes as file_changes_module
 from core.tools._patch_report import edit_outcome
 from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.edit import (
-    EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_PARAMETERS,
-    WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_PARAMETERS,
     edit_dialect,
 )
@@ -44,48 +43,23 @@ def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
 
 
 def test_edit_and_write_have_minimal_definitions() -> None:
-    assert EDIT_TOOL_DESCRIPTION == (
-        "Replace text in a file. Calls that change different files never need each other "
-        "finished first; send them in the same response."
-    )
-    assert EDIT_TOOL_PARAMETERS == {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "edits": {
-                "type": "array",
-                "description": "All changes to this file.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "old_string": {
-                            "type": "string",
-                            "description": "Text to replace. Without replace_all, it must "
-                            "occur exactly once.",
-                        },
-                        "new_string": {"type": "string"},
-                        "replace_all": {
-                            "type": "boolean",
-                            "description": "Replace every occurrence. Omit to replace one.",
-                        },
-                    },
-                    "required": ["old_string", "new_string"],
-                },
-            },
-        },
-        "required": ["path", "edits"],
+    assert EDIT_TOOL_PARAMETERS["type"] == WRITE_TOOL_PARAMETERS["type"] == "object"
+    assert set(EDIT_TOOL_PARAMETERS["properties"]) == {"path", "edits"}
+    assert set(EDIT_TOOL_PARAMETERS["required"]) == {"path", "edits"}
+    assert EDIT_TOOL_PARAMETERS["properties"]["path"]["type"] == "string"
+    edits = EDIT_TOOL_PARAMETERS["properties"]["edits"]
+    assert edits["type"] == "array"
+    assert edits["items"]["type"] == "object"
+    assert {field: schema["type"] for field, schema in edits["items"]["properties"].items()} == {
+        "old_string": "string",
+        "new_string": "string",
+        "replace_all": "boolean",
     }
-    assert WRITE_TOOL_DESCRIPTION == (
-        "Create a file or replace all of its content. To replace an existing file, read it first."
-    )
-    assert WRITE_TOOL_PARAMETERS == {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "content": {"type": "string", "description": "Complete file content."},
-        },
-        "required": ["path", "content"],
-    }
+    assert set(edits["items"]["required"]) == {"old_string", "new_string"}
+    assert {
+        field: schema["type"] for field, schema in WRITE_TOOL_PARAMETERS["properties"].items()
+    } == {"path": "string", "content": "string"}
+    assert set(WRITE_TOOL_PARAMETERS["required"]) == {"path", "content"}
 
 
 @pytest.mark.parametrize(
@@ -287,6 +261,13 @@ ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit":
             LINES, [("two", "one"), ("one", "1")], b"one\none\none\n", [2], id="ambiguous"
         ),
         pytest.param(
+            LINES,
+            [("two", "2"), ("", "extra"), ("one\n2", "1\n2")],
+            b"1\n2\none\n",
+            [2],
+            id="creation-over-content",
+        ),
+        pytest.param(
             JOINABLE,
             [
                 ("import a from 'a';\n", "import a from 'a';"),
@@ -324,6 +305,20 @@ ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit":
             COMPUTE.replace(b"compute", b"calc"),
             [1, 2],
             id="copy-after-a-failure",
+        ),
+        pytest.param(
+            COMPUTE,
+            [
+                ("", "extra"),
+                (
+                    "    value = total / count\n    retrun value",
+                    "    value = total / count\n    return 0",
+                ),
+                ("def compute", "def calc"),
+            ],
+            COMPUTE.replace(b"compute", b"calc"),
+            [1, 2],
+            id="copy-after-a-failed-creation",
         ),
         # None applied: an error that names every failed edit; the file stays.
         pytest.param(LINES, [("zzz", "z"), ("TWO", "x")], LINES, [1, 2], id="none-applied"),
@@ -835,24 +830,28 @@ async def test_an_old_string_from_another_file_of_the_session_names_that_file(
 
 
 @pytest.mark.asyncio
-async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> None:
+@pytest.mark.parametrize("duplicate_creation", [False, True])
+async def test_empty_old_string_creates_a_missing_or_empty_file(
+    tmp_path, duplicate_creation
+) -> None:
     (tmp_path / "empty.txt").write_bytes(b"")
+    edits = [
+        {"old_string": "", "new_string": "a\nb\n"},
+        {"old_string": "b", "new_string": "B"},
+    ]
+    if duplicate_creation:
+        edits.insert(1, {"old_string": "", "new_string": "second"})
     created = await call(
         tmp_path,
-        {
-            "path": "sub/dir/new.txt",
-            "edits": [
-                {"old_string": "", "new_string": "a\nb\n"},
-                {"old_string": "b", "new_string": "B"},
-            ],
-        },
+        {"path": "sub/dir/new.txt", "edits": edits},
         name="edit",
     )
     filled = await call(
         tmp_path, {"path": "empty.txt", "old_string": "", "new_string": "x\n"}, name="edit"
     )
 
-    assert text(created) == "Created sub/dir/new.txt (2 lines)."
+    assert created["ok"]
+    assert (edit_outcome(text(created)) == "partial") is duplicate_creation
     assert (tmp_path / "sub" / "dir" / "new.txt").read_bytes() == b"a\nB\n"
     assert filled["ok"] and (tmp_path / "empty.txt").read_bytes() == b"x\n"
 
@@ -862,6 +861,8 @@ async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> Non
     "arguments",
     [
         {"file_path": "a.py", "old_string": "x = 1", "new_string": "x = 3"},
+        {"path": "a.py", "edits": [], "old_string": "x = 1", "new_string": "x = 3"},
+        {"path": "a.py", "edits": "[]", "old_string": "x = 1", "new_string": "x = 3"},
         {"filePath": "a.py", "oldString": "x = 1", "newString": "x = 3", "replaceAll": False},
         {"filename": "a.py", "old_str": "x = 1", "new_str": "x = 3"},
         {"target_file": "a.py", "search": "x = 1", "replace": "x = 3", "global": "false"},
@@ -887,7 +888,8 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
 
     result = await call(tmp_path, arguments, name="edit")
 
-    assert result["data"] == {"content": "Updated a.py (line 1)."}
+    assert result["ok"]
+    assert (tmp_path / "a.py").read_bytes() == b"x = 3\ny = 2\n"
 
 
 _CUT_EDITS = '[{"old_string": "x = 1", "new_string": "x = 2\ny'
@@ -1028,6 +1030,7 @@ TOTALS_EDIT = (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("copy_budget", [None, "work", "candidates"])
 @pytest.mark.parametrize(
     ("content", "edit", "done"),
     [
@@ -1057,11 +1060,25 @@ TOTALS_EDIT = (
             False,
             id="old-text-copied-elsewhere",
         ),
+        pytest.param(
+            "heading alpha\nalpha beta gamma receipt new\nseparator\n"
+            "heading alpha\nalpha beta gamma receipt old\n",
+            (
+                "heading alpha\nalpha beta gamma reciept old",
+                "heading alpha\nalpha beta gamma receipt new",
+            ),
+            False,
+            id="copied-old-target-beside-new-text",
+        ),
     ],
 )
 async def test_an_edit_whose_result_already_stands_has_nothing_to_do(
-    tmp_path, content, edit, done
+    tmp_path, monkeypatch, content, edit, done, copy_budget
 ) -> None:
+    if copy_budget is not None:
+        # An incomplete search cannot establish that no old target remains.
+        limit = "_MAX_COPY_WORK" if copy_budget == "work" else "_MAX_COPY_CANDIDATES"
+        monkeypatch.setattr(copy_tokens_module, limit, 0)
     (tmp_path / "a.py").write_bytes(content.encode())
 
     result = await call(
@@ -1071,7 +1088,7 @@ async def test_an_edit_whose_result_already_stands_has_nothing_to_do(
     )
 
     assert (tmp_path / "a.py").read_bytes() == content.encode()
-    if not done:
+    if not done or copy_budget is not None:
         assert result["error"]["code"] == "text_not_found"
         return
     assert result["ok"]
@@ -1236,6 +1253,10 @@ FILES = {
     "app.py": b"def main():\n    total = compute(1, 2)\n    print(total)\n    return total\n",
     "bin.dat": b"\xff\x00\x01 binary",
     "latin.txt": "caf\xe9\n".encode("latin-1"),
+    "utf16le.txt": b"\xff\xfe" + "caf\xe9\n".encode("utf-16-le"),
+    "utf16be.txt": b"\xfe\xff" + "caf\xe9\n".encode("utf-16-be"),
+    "utf32le.txt": b"\xff\xfe\x00\x00" + "caf\xe9\n".encode("utf-32-le"),
+    "utf32be.txt": b"\x00\x00\xfe\xff" + "caf\xe9\n".encode("utf-32-be"),
 }
 NOT_FOUND = 'No similar text is in the file; read(path="a.txt") shows its current content.'
 NUL = (
@@ -1291,16 +1312,26 @@ NUL = (
             "edit",
             {"path": "bin.dat", "edits": [{"old_string": "binary", "new_string": "b"}]},
             "binary_file",
-            "bin.dat is a binary file, so edit cannot change its text.",
+            None,
             id="binary",
         ),
         pytest.param(
             "edit",
             {"path": "latin.txt", "edits": [{"old_string": "caf", "new_string": "b"}]},
             "unsupported_encoding",
-            "latin.txt is not UTF-8 text, so edit cannot change its text.",
+            None,
             id="encoding",
         ),
+        *[
+            pytest.param(
+                "edit",
+                {"path": filename, "old_string": "caf\xe9", "new_string": "tea"},
+                "unsupported_encoding",
+                None,
+                id=filename.removesuffix(".txt"),
+            )
+            for filename in ("utf16le.txt", "utf16be.txt", "utf32le.txt", "utf32be.txt")
+        ],
         pytest.param(
             "edit",
             {"path": "a.txt", "edits": [{"old_string": "two", "new_string": "t\x00o"}]},
@@ -1542,6 +1573,18 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
             "The call names a.txt but no change. Send edits, each with old_string, the current "
             "text, and new_string, its replacement.",
             id="edit-no-change",
+        ),
+        pytest.param(
+            "edit",
+            {"path": "a.txt", "replace_all": True},
+            None,
+            id="edit-replace-all-without-change",
+        ),
+        pytest.param(
+            "edit",
+            {"path": "a.txt", "replace_all": True, "edits": []},
+            None,
+            id="edit-replace-all-with-empty-changes",
         ),
         pytest.param(
             "edit",

@@ -62,6 +62,36 @@ _HYPHENS = (["-"], ["-", "-"])
 _BACKSLASH = "\\"
 _INLINE_SPACE = " \t"
 
+# Copied-text recovery is a fallback, not an unbounded similarity search. Charge
+# the possible pair comparisons before calling difflib, including a single very
+# long alignment. Exhaustion discards the entire search, never a partial winner.
+_MAX_COPY_WORK = 8_000_000
+_MAX_COPY_CANDIDATES = 4096
+
+
+class _WorkLimitError(Exception):
+    """The complete candidate set could not be checked within the work budget."""
+
+
+class _WorkBudget:
+    def __init__(self) -> None:
+        self.remaining = _MAX_COPY_WORK
+        self.candidates = _MAX_COPY_CANDIDATES
+
+    def spend(self, amount: int) -> None:
+        self.remaining -= amount
+        if self.remaining < 0:
+            raise _WorkLimitError
+
+    def candidate(self) -> None:
+        self.candidates -= 1
+        if self.candidates < 0:
+            raise _WorkLimitError
+
+    def compare(self, left: Sequence[str], right: Sequence[str]) -> None:
+        self.spend(len(left) + len(right))
+        self.spend(len(left) * len(right))
+
 
 @dataclass(frozen=True, slots=True)
 class _Token:
@@ -209,7 +239,7 @@ def _line_key(text: str) -> str:
     return " ".join(_composed(text).translate(_FOLD).split())
 
 
-def _misspelling(wrong: str, right: str) -> bool:
+def _misspelling(wrong: str, right: str, budget: _WorkBudget) -> bool:
     """Whether word ``wrong`` reads as a copy error of word ``right`` (see the module)."""
     if not (_is_word(wrong) and _is_word(right)):
         return False
@@ -219,20 +249,26 @@ def _misspelling(wrong: str, right: str) -> bool:
     if _DIGITS.findall(wrong) != _DIGITS.findall(right):
         return False
     bound = 2 if shorter >= _TWO_ERRORS_MIN_CHARACTERS else 1
-    return edit_distance(wrong.casefold(), right.casefold(), bound) <= bound
+    folded_wrong, folded_right = wrong.casefold(), right.casefold()
+    budget.compare(folded_wrong, folded_right)
+    return edit_distance(folded_wrong, folded_right, bound) <= bound
 
 
 class _Speller:
     """Tells misspellings apart, keeping one file spelling per misspelled word."""
 
-    def __init__(self, words: frozenset[str]) -> None:
+    def __init__(self, words: frozenset[str], budget: _WorkBudget) -> None:
         self.words = words
+        self.budget = budget
         self.spelling: dict[str, str] = {}
 
     def misspelled(self, wrong: str, right: str) -> bool:
-        if wrong in self.words or self.spelling.get(wrong, right) != right:
+        known = self.spelling.get(wrong)
+        if wrong in self.words or (known is not None and known != right):
             return False
-        if not _misspelling(wrong, right):
+        if known is not None:
+            return True
+        if not _misspelling(wrong, right, self.budget):
             return False
         self.spelling[wrong] = right
         return True
@@ -275,12 +311,14 @@ class _Alignment:
 
 def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
     copied, held = copy.keys, actual.keys
+    speller.budget.spend(len(copied) + len(held))
     if copied == held:
         alignment = _Alignment([_SAME] * len(copied))
         alignment.before = {index: index for index in range(len(copied) + 1)}
         alignment.after = dict(alignment.before)
         alignment.correct = sum(_is_word(key) for key in copied)
         return alignment
+    speller.budget.compare(copied, held)
     alignment = _Alignment([_OTHER] * len(copied))
     copy_names, actual_names = _code_names(copy), _code_names(actual)
 
@@ -438,7 +476,9 @@ def _merge(
     copied = copy.keys
     # Locating a copy ignores spacing; deciding what the caller changed does not.
     # In particular, a kept word moved into a new block needs its new indentation.
-    opcodes = _changes(_change_keys(copy), _change_keys(new))
+    copied_changes, new_changes = _change_keys(copy), _change_keys(new)
+    speller.budget.compare(copied_changes, new_changes)
+    opcodes = _changes(copied_changes, new_changes)
     pieces: list[str] = []
     held = -1  # the file gap the kept text before already holds
     for tag, i1, i2, j1, j2 in opcodes:

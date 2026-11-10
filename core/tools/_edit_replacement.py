@@ -19,14 +19,14 @@ from core.tools._edit_locations import (
     _new_text_line,
     _poststate,
 )
-from core.tools._fuzzy_text import _inside_crlf
+from core.tools._fuzzy_text import TypographyMatchError, _inside_crlf
 from core.tools._patch_syntax import _Hunk, _PatchError, _Replacement, quoted
 from core.tools.arguments import (
     TEXT_LINE_BREAK,
     split_text_lines,
     strip_line_number_gutters,
 )
-from core.tools.copy_match import copy_warnings, replace_copied
+from core.tools.copy_match import CopyMatchLimitError, copy_warnings, replace_copied
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -40,13 +40,26 @@ from core.tools.tools import JsonObject
 
 
 def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]]:
+    try:
+        return _replace_text(content, hunk, path)
+    except TypographyMatchError:
+        raise _PatchError("typography_mismatch", path=path, label=hunk.label) from None
+
+
+def _replace_text(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]]:
     """Replace ``old_string`` text, located precisely, else as a copy with errors."""
     replacement = hunk.replacement
     assert replacement is not None
     old, new, replace_all = replacement.old, replacement.new, replacement.replace_all
     notes: list[str] = []
     found = replace_fuzzy(
-        content, old, new, replace_all=replace_all, typographic=True, rewrapped=True
+        content,
+        old,
+        new,
+        replace_all=replace_all,
+        typographic=True,
+        rewrapped=True,
+        preserve_glyphs=True,
     )
     if isinstance(found, FuzzyReplacement) and found.strategy == "rewrapped":
         return _rewrapped(content, found, hunk, path)
@@ -61,6 +74,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             replace_all=replace_all,
             whole_lines=True,
             typographic=True,
+            preserve_glyphs=True,
         )
         if isinstance(found, FuzzyReplacement):
             notes.append(_GUTTER_WARNING)
@@ -261,6 +275,7 @@ def _replace_unicode_escapes(
             reindent=True,
             old_string_lf=TEXT_LINE_BREAK.sub("\n", interpreted.old),
             file_ending=dominant_line_ending(content),
+            preserve_glyphs=True,
         ),
         interpreted,
         _escapes_note(matched, written),
@@ -298,7 +313,10 @@ def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | Non
     start, end = present.before_spans[0]
     if not _covers_lines(content, new, start, end):
         return None
-    copied = replace_copied(content, old, new)
+    try:
+        copied = replace_copied(content, old, new, require_complete=True)
+    except CopyMatchLimitError:
+        return None
     if isinstance(copied, AmbiguousFuzzyMatch):
         return None
     if copied is not None and any(

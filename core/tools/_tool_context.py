@@ -59,13 +59,25 @@ def builtin_payload_owner(tool_name: str) -> str:
 
 
 def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
-    """Remove only quoting that cannot be a legal literal in the host path grammar."""
+    """Repair only padding and quoting that cannot be literal in the host grammar."""
     if windows and isinstance(path, str):
         text = path.strip()
         if len(text) >= 2 and text[0] == text[-1] == '"':
             return text[1:-1]
+        # An outer tab or line break cannot belong to a Windows name. Plain
+        # spaces can, so keep them literal unless part of such invalid padding.
+        # In particular, a trailing space alone must still reach the write guard.
+        padding_chars = " \t\r\n\v\f"
+        text = path.strip(padding_chars)
+        padding = (
+            path[: len(path) - len(path.lstrip(padding_chars))]
+            + path[len(path.rstrip(padding_chars)) :]
+        )
+        if text and any(character in "\t\r\n\v\f" for character in padding):
+            return text
     # Single quotes are legal on Windows. POSIX also permits double quotes and
-    # backslashes. Existence must not redirect a missing literal to another file.
+    # backslashes and outer whitespace. Path objects always remain literal.
+    # Existence must not redirect a missing literal to another file.
     return path
 
 

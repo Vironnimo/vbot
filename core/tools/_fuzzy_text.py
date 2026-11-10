@@ -7,7 +7,8 @@ import re
 import unicodedata
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from difflib import Match, SequenceMatcher
 from functools import cache
 from typing import Literal
 
@@ -22,10 +23,12 @@ from core.utils.line_endings import dominant_line_ending as dominant_line_ending
 _UNICODE_NORMALIZATION = {
     "“": '"',  # left double quotation mark
     "”": '"',  # right double quotation mark
+    **dict.fromkeys("„«»", '"'),  # low double quotation mark and guillemets
     "‘": "'",  # left single quotation mark
     "’": "'",  # right single quotation mark
+    **dict.fromkeys("‚‹›", "'"),  # low single quotation mark and guillemets
     "\u00a0": " ",  # non-breaking space
-    "–": "-",  # en dash
+    **dict.fromkeys("‐‑–", "-"),  # hyphen, non-breaking hyphen, en dash
 }
 
 # Patch-only typography folds may expand a glyph. Default substring calls keep
@@ -323,6 +326,7 @@ def _apply_replacements(
     old_string_lf: str,
     file_ending: str | None,
     lines_correspond: bool = True,
+    preserve_glyphs: bool = False,
 ) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     # The spans do not overlap: the result is built in one pass, so many
     # replacements cost linear time instead of one copy of the content each.
@@ -334,6 +338,7 @@ def _apply_replacements(
     # Finding the file's indentation unit reads every line; only a replacement
     # whose indentation changes asks for it.
     file_unit = cache(lambda: _indent_unit([_meaningful_indents(content)]))
+    typography_work = _TypographyWork()
     for start, end in sorted(matches):
         if reindent:
             line_start = content.rfind("\n", 0, start) + 1
@@ -348,6 +353,10 @@ def _apply_replacements(
             )
         else:
             replacement_lf = replacement_text
+        if preserve_glyphs:
+            replacement_lf = _preserve_replacement_typography(
+                content[start:end], old_string_lf, replacement_lf, typography_work
+            )
         replacement = _in_form(
             _to_line_ending(replacement_lf, file_ending),
             _written_form(content[start:end], old_string_lf),
@@ -360,6 +369,161 @@ def _apply_replacements(
         offset_shift += len(replacement) - (end - start)
     parts.append(content[cursor:])
     return "".join(parts), tuple(before_spans), tuple(after_spans)
+
+
+# Comparison units for typography projection, independent of file size. Common
+# unchanged prefixes and suffixes are stripped in linear time before spending it.
+_TYPOGRAPHY_WORK = 1_000_000
+
+
+class TypographyMatchError(Exception):
+    """Copied typography has no safe correspondence within the available work."""
+
+
+class _TypographyWork:
+    def __init__(self) -> None:
+        self.remaining = _TYPOGRAPHY_WORK
+
+    def spend(self, amount: int) -> None:
+        self.remaining -= amount
+        if self.remaining < 0:
+            raise TypographyMatchError
+
+
+def _matching_blocks[T](
+    old: Sequence[T],
+    new: Sequence[T],
+    work: _TypographyWork | None = None,
+    relevant: set[int] | None = None,
+) -> list[Match]:
+    """Align changed interiors after removing their shared, often very long edges."""
+    prefix = 0
+    size = min(len(old), len(new))
+    while prefix < size and old[prefix] == new[prefix]:
+        prefix += 1
+    suffix = 0
+    while suffix < size - prefix and old[-suffix - 1] == new[-suffix - 1]:
+        suffix += 1
+    old_end, new_end = len(old) - suffix, len(new) - suffix
+    needed = relevant is None or any(prefix <= index < old_end for index in relevant)
+    blocks = [Match(0, 0, prefix)] if prefix else []
+    if needed and old_end > prefix and new_end > prefix:
+        if work is not None:
+            work.spend((old_end - prefix) * (new_end - prefix))
+        blocks.extend(
+            Match(block.a + prefix, block.b + prefix, block.size)
+            for block in SequenceMatcher(
+                None, old[prefix:old_end], new[prefix:new_end], autojunk=False
+            ).get_matching_blocks()
+            if block.size
+        )
+    if suffix:
+        blocks.append(Match(old_end, new_end, suffix))
+    blocks.append(Match(len(old), len(new), 0))
+    return blocks
+
+
+def _preserve_replacement_typography(
+    actual: str, locator: str, replacement: str, work: _TypographyWork
+) -> str:
+    """Pair unchanged and rewritten lines without donating glyphs to inserted lines."""
+    if not replacement or not (
+        _TYPOGRAPHIC_GLYPH_RE.search(actual) or _TYPOGRAPHIC_GLYPH_RE.search(locator)
+    ):
+        return replacement
+    actual_lines = _normalize_newlines(actual).split("\n")
+    old_lines = locator.split("\n")
+    new_lines = replacement.split("\n")
+    if len(actual_lines) != len(old_lines):
+        return replacement
+    old_bodies = [line.lstrip(" \t") for line in old_lines]
+    new_bodies = [line.lstrip(" \t") for line in new_lines]
+    old_start = new_start = 0
+    relevant = {
+        index
+        for index, (actual_line, old_line) in enumerate(zip(actual_lines, old_lines, strict=True))
+        if actual_line.lstrip(" \t") != old_line.lstrip(" \t")
+    }
+    for block in _matching_blocks(old_bodies, new_bodies, work, relevant):
+        # A differently sized rewritten block has no proven line correspondence.
+        # Refuse where guessing would donate or drop copied glyphs; equal
+        # neighbors still retain theirs when insertions shift the line number.
+        if (
+            block.b > new_start
+            and block.a - old_start != block.b - new_start
+            and any(old_start <= index < block.a for index in relevant)
+        ):
+            raise TypographyMatchError
+        if block.a - old_start == block.b - new_start:
+            for offset in range(block.a - old_start):
+                old_index, new_index = old_start + offset, new_start + offset
+                new_lines[new_index] = preserve_typography(
+                    actual_lines[old_index], old_lines[old_index], new_lines[new_index], work
+                )
+        for offset in range(block.size):
+            old_index, new_index = block.a + offset, block.b + offset
+            new_lines[new_index] = preserve_typography(
+                actual_lines[old_index], old_lines[old_index], new_lines[new_index], work
+            )
+        old_start, new_start = block.a + block.size, block.b + block.size
+    return "\n".join(new_lines)
+
+
+def preserve_typography(
+    actual: str, locator: str, replacement: str, work: _TypographyWork | None = None
+) -> str:
+    """Retain original glyphs where a precisely equivalent copied line stays unchanged.
+
+    A glyph explicitly changed between locator and replacement stays as sent,
+    even if another difference made the match use normalization.
+    """
+    actual_body, old_body, new_body = (
+        text.lstrip(" \t") for text in (actual, locator, replacement)
+    )
+    if actual_body == old_body:
+        return replacement
+    actual_folded, actual_spans = _normalize_with_spans(actual_body, typographic=True)
+    old_folded, old_spans = _normalize_with_spans(old_body, typographic=True)
+    new_folded, new_spans = _normalize_with_spans(new_body, typographic=True)
+    if actual_folded != old_folded:
+        return replacement
+    glyphs = []
+    index = 0
+    while index < len(actual_spans):
+        limit = index + 1
+        while limit < len(actual_spans) and (
+            actual_spans[limit - 1] == actual_spans[limit]
+            or old_spans[limit - 1] == old_spans[limit]
+        ):
+            limit += 1
+        start, end = actual_spans[index][0], actual_spans[limit - 1][1]
+        original = actual_body[start:end]
+        old_start, old_end = old_spans[index][0], old_spans[limit - 1][1]
+        copied = old_body[old_start:old_end]
+        if original != copied:
+            glyphs.append((index, limit, original, copied))
+        index = limit
+    if not glyphs:
+        return replacement
+    blocks = _matching_blocks(old_folded, new_folded, work, {glyph[0] for glyph in glyphs})
+    replacements = []
+    for index, limit, original, copied in glyphs:
+        for block in blocks:
+            if block.a <= index and limit <= block.a + block.size:
+                new_start = block.b + index - block.a
+                new_end = new_start + limit - index
+                left, right = new_spans[new_start][0], new_spans[new_end - 1][1]
+                if new_body[left:right] == copied:
+                    replacements.append((left, right, original))
+                break
+    parts: list[str] = []
+    cursor = 0
+    for start, end, original in replacements:
+        parts.extend((new_body[cursor:start], original))
+        cursor = end
+    parts.append(new_body[cursor:])
+    new_body = "".join(parts)
+    return replacement[: len(replacement) - len(replacement.lstrip(" \t"))] + new_body
 
 
 def _leading_whitespace(line: str) -> str:
