@@ -335,7 +335,7 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert (own["source"], own["read"], own["write"]) == ("agent", [root, "{scratch}"], None)
     assert inherited["source"] == "parent"
     assert inherited["read"] is None
-    assert inherited["write"] == [_posix(tmp_path / "parent-scratch")]
+    assert inherited["write"] == ["{scratch}"]
     assert result["stored_ceiling"] is True
 
     # Only the user lifts the inherited ceiling; the Agent's own rules stay.

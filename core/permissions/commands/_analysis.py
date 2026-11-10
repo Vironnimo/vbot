@@ -482,7 +482,13 @@ class Analysis:
             self.unresolve("command", raw.source, "the command name is computed when it runs")
             return
         self.program_path(context, raw, words[0])
-        self.program(context, raw, _paths.program_name(name), list(words[1:]), fed=fed)
+        self.program(
+            context,
+            replace(raw, words=list(words)),
+            _paths.program_name(name),
+            list(words[1:]),
+            fed=fed,
+        )
 
     def program_path(
         self, context: Context, raw: RawCommand, word: Word, *, script: bool = False
@@ -627,10 +633,11 @@ class Analysis:
                 writes.append(value)
         lowered = name.lower()
         self.emit(context, name, rest, raw)
-        subcommand = [self.value(context, word, location).text for word in rest[:1]]
-        if writes and (lowered != "git" or git_writes(subcommand)):
+        subcommand = [self.value(context, word, location).text for word in rest]
+        if writes:
+            access: AccessKind = "write" if lowered != "git" or git_writes(subcommand) else "read"
             for value in writes:
-                self.access(context, raw, "write", value, glob=False, tier="a", subtree=True)
+                self.access(context, raw, access, value, glob=False, tier="a", subtree=True)
         self._program_body(context, raw, lowered, rest, fed=fed)
         context.states[raw.scope] = saved
 
@@ -776,6 +783,21 @@ class Analysis:
         if flags & spec.skip_cancel:
             spec = replace(spec, skip=0)
         paths = operands[spec.skip :]
+        if name == "sed":
+            from core.permissions.commands._sed import writes_file
+
+            expressions = [word for option, word, _ in values if option in ("-e", "--expression")]
+            if spec.skip:
+                expressions += operands[: spec.skip]
+            for expression in expressions:
+                script = self.value(context, expression, location).text
+                if script is None or writes_file(script):
+                    self.unresolve(
+                        "path_write",
+                        expression.source,
+                        "the sed script can write another file; "
+                        "redirect its output to a literal file instead",
+                    )
         if name in ("rsync", "scp"):
             # host:path names another machine; what it reaches there is not a local path.
             local = []
@@ -1037,6 +1059,13 @@ class Analysis:
             return self.env_folded.get(name.upper())
         return self.env.get(name)
 
+    def environment_value(self, context: Context, name: str) -> Word | None:
+        """A program's environment value: absent, literal, or changed by the script."""
+        if context.environment_changed or environment_key(name) in self.environment_dynamic:
+            return Word((Part("dynamic", name),), name)
+        value = self.environment(name)
+        return None if value is None else Word.literal(value, source=name)
+
     def literal_of(self, context: Context, raw: RawCommand, word: Word | None) -> str | None:
         if word is None:
             return None
@@ -1257,8 +1286,25 @@ class Analysis:
             words.append(
                 CommandWord(value.text if value.text is not None else word.source, value.static)
             )
+        executable = None
+        python_path = None
+        if re.fullmatch(r"(?:python[\d.]*w?|py|pythonw|uv)", name, re.IGNORECASE):
+            executable = self.value(context, raw.words[0], location).text if raw.words else None
+            environment = self.environment_value(context, "PYTHONPATH")
+            if environment is not None:
+                value = self.value(context, environment, location)
+                python_path = CommandWord(
+                    value.text if value.text is not None else environment.source, value.static
+                )
         self._commands.append(
-            SimpleCommand(name, tuple(words), raw.source[:SOURCE_LIMIT] or name, context.shell)
+            SimpleCommand(
+                name,
+                tuple(words),
+                raw.source[:SOURCE_LIMIT] or name,
+                context.shell,
+                executable,
+                python_path,
+            )
         )
 
     def add(

@@ -336,22 +336,49 @@ def test_rules_whose_placeholder_has_no_value_are_dropped(area: Area) -> None:
     assert with_project.check_path(str(project / "a.txt"), "write") is None
 
 
-def test_every_layer_must_permit_and_any_layer_can_deny(area: Area) -> None:
+@pytest.mark.parametrize("source", ["parent", "cron"])
+def test_every_layer_must_permit_and_any_layer_can_deny(area: Area, source: str) -> None:
     parent = area.boundary({"read": "work_area", "deny": ["Read({workdir}/private)"]})
-    ceiling = PermissionCeiling.from_ceiling_dict(parent.to_ceiling_dict(source="parent"))
+    ceiling = PermissionCeiling.from_ceiling_dict(
+        parent.to_ceiling_dict(source="parent" if source == "parent" else "cron")
+    )
+    scratch = area.scratch if source == "parent" else area.scratch.with_name("cron-session")
     child = PermissionBoundary.build(
-        normalize_permission_rules({"write": "scratch", "allow": ["Read({workdir}/private)"]}),
-        area.context(workdir=area.outside),
+        normalize_permission_rules(
+            {
+                "write": "scratch",
+                "allow": ["Read({workdir}/private)"],
+                "deny": ["Read({scratch}/private)"],
+            }
+        ),
+        area.context(workdir=area.outside, scratch_root=scratch),
         ceilings=[ceiling],
     )
 
     refusal = child.check_path(area.path("{outside}/notes.txt"), "read")
     assert refusal is not None and refusal.reason == "not_permitted"
-    assert refusal.source == "parent"
+    assert refusal.source == source
     refusal = child.check_path(area.path("{work}/private/a.txt"), "read")
-    assert refusal is not None and refusal.reason == "deny_rule" and refusal.source == "parent"
+    assert refusal is not None and refusal.reason == "deny_rule" and refusal.source == source
     assert child.check_path(area.path("{work}/a.txt"), "read") is None
-    assert [layer.source for layer in child.layers] == ["agent", "parent"]
+    assert [layer.source for layer in child.layers] == ["agent", source]
+    assert all(layer.scratch == scratch.as_posix() for layer in child.layers)
+    inherited_layer = child.layers[-1]
+    if source == "cron":
+        assert inherited_layer.fingerprint != ceiling.layers[0].fingerprint
+    # Serializing a ceiling still preserves the stored format and its original snapshot.
+    stored_child_ceiling = child.ceiling(source="parent")
+    assert stored_child_ceiling is not None
+    assert stored_child_ceiling.layers[-1] == ceiling.layers[0]
+    for access in ("read", "write"):
+        assert child.check_path(scratch / "notes.txt", access) is None
+        assert scratch.as_posix() in (child.allowed_summary(access) or ())
+        denied = child.check_path(scratch / "private" / "secret.txt", access)
+        assert denied is not None and denied.reason == "deny_rule"
+        if source == "cron":
+            old_scratch = child.check_path(area.scratch / "notes.txt", access)
+            assert old_scratch is not None and old_scratch.location == "data_dir"
+            assert area.scratch.as_posix() not in (child.allowed_summary(access) or ())
 
 
 def test_ceilings_round_trip_as_json(area: Area) -> None:

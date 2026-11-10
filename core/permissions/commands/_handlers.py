@@ -12,8 +12,9 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
-from core.permissions.commands import _git_files, _paths
+from core.permissions.commands import _git_files, _git_metadata, _paths
 from core.permissions.commands._docker import handle_docker
 from core.permissions.commands._specs import (
     ATTACHED_OUTPUT_OPTIONS,
@@ -282,24 +283,40 @@ def _handle_download(
     writes = _CURL_WRITES if program == "curl" else _WGET_WRITES
     reads = _CURL_READS if program == "curl" else _WGET_READS
     remote_name = False
-    values_seen: set[int] = set()
+    operands: list[Word] = []
+    connections: list[tuple[str, str | None, str]] = []
+    ended = False
     index = 0
     while index < len(arguments):
         word = arguments[index]
         text = analysis.value(context, word, location).text
         index += 1
-        if text is None or not text.startswith("-"):
+        if text == "--":
+            ended = True
+            continue
+        if ended or text is None or not text.startswith("-"):
+            operands.append(word)
             continue
         option, equals, attached = text.partition("=")
-        if program == "curl" and not option.startswith("--") and len(option) > 2:
-            option, attached, equals = option[:2], option[2:], "="
+        if not option.startswith("--") and len(option) > 2:
+            for position, letter in enumerate(option[1:], start=1):
+                short = "-" + letter
+                if program == "curl" and short in ("-O", "-J"):
+                    remote_name = True
+                if short in writes | reads | _DOWNLOAD_VALUES:
+                    attached = option[position + 1 :]
+                    option, equals = short, "=" if attached else ""
+                    break
+            else:
+                continue
         if option in ("-O", "--remote-name", "--remote-name-all", "-J"):
             remote_name = True
             continue
         kind: AccessKind | None = (
             "write" if option in writes else "read" if option in reads else None
         )
-        if option in _DOWNLOAD_VALUES or kind is not None:
+        network_option = program == "curl" and option in _CURL_NETWORK_OPTIONS
+        if option in _DOWNLOAD_VALUES or kind is not None or network_option or option == "--url":
             value = (
                 word.part(attached)
                 if equals
@@ -307,15 +324,27 @@ def _handle_download(
             )
             if not equals:
                 index += 1
-            if value is not None and not equals:
-                values_seen.add(id(value))
-            if kind is None or value is None:
+            if value is None:
                 continue
             text_value = analysis.value(context, value, location).text
+            if network_option:
+                connections.append((option, text_value, value.source))
+            elif option == "--url":
+                operands.append(value)
+            if kind is None:
+                continue
             if (
                 text_value is not None
                 and program == "curl"
-                and option in ("-d", "--data", "--data-binary", "--data-urlencode", "-F", "--form")
+                and option in ("-d", "--data", "--data-ascii", "--data-binary", "--json")
+            ):
+                if not text_value.startswith("@"):
+                    continue
+                value = value.part(text_value[1:])
+            if (
+                text_value is not None
+                and program == "curl"
+                and option in ("--data-urlencode", "-F", "--form")
             ):
                 if "@" not in text_value:
                     continue
@@ -333,32 +362,147 @@ def _handle_download(
         analysis.access(
             context, raw, "write", Word.literal(".", source=raw.source), glob=False, tier="a"
         )
-    operands = [
-        word
-        for word in arguments
-        if not (analysis.value(context, word, location).text or "-").startswith("-")
-        and id(word) not in values_seen
-    ]
+    endpoints: list[tuple[str, int]] = []
     for word in operands:
         text = analysis.value(context, word, location).text
-        if text is not None:
+        if text is None:
+            analysis.unresolve("url", word.source, "the address is computed when it runs")
+        else:
             add_web_target(analysis, text, word.source)
+            endpoint = _download_endpoint(text)
+            if endpoint is not None:
+                endpoints.append(endpoint)
+    for option, text, source in connections:
+        _download_connection(analysis, option, text, source, endpoints)
     analysis.tier_b(context, raw, operands)
 
 
 def add_web_target(analysis: Analysis, text: str, source: str) -> None:
-    """A web program's target without scheme (``curl evil.com/x``) reaches ``http://`` it."""
-    if "://" in text or not _SCHEMELESS.match(text):
+    """Record HTTP URLs and other network hosts, including scheme-less host names."""
+    if text.lower().startswith(("http://", "https://")):
+        analysis.add_url(text, source)
         return
-    analysis.add_url("http://" + text, source)
+    if text.lower().startswith("file://"):
+        return  # The caller's path analysis handles file URLs.
+    if "://" in text:
+        if not add_network_target(analysis, text, source):
+            analysis.unresolve("url", source, "the address cannot be resolved before it runs")
+        return
+    if _SCHEMELESS.fullmatch(text):
+        analysis.add_url("http://" + text, source)
+    else:
+        analysis.unresolve("url", source, "the address cannot be resolved before it runs")
 
 
-# host[:port][/path], with a dot, a port, or localhost: what curl and Invoke-WebRequest fetch.
+# host[:port][/path], including single-label intranet names.
 _SCHEMELESS = re.compile(
-    r"^(?:[^@/\\\s]+@)?(?:\[[0-9A-Fa-f:.]+\]|localhost|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
-    r"|[A-Za-z0-9-]+(?=:\d))(?::\d{1,5})?(?:[/?#]\S*)?$",
+    r"(?:[^@/\\\s]+@)?(?:\[[0-9A-Fa-f:.]+\]|[\w-]+(?:\.[\w-]+)*\.?)"
+    r"(?::\d{1,5})?(?:[/?#]\S*)?",
     re.IGNORECASE,
 )
+
+
+_CURL_NETWORK_OPTIONS = frozenset(
+    {
+        "-x", "--proxy", "--preproxy", "--proxy1.0", "--socks4", "--socks4a",
+        "--socks5", "--socks5-hostname", "--connect-to", "--resolve",
+    }
+)  # fmt: skip
+
+
+_DEFAULT_PORTS = {
+    "http": 80,
+    "https": 443,
+    "ws": 80,
+    "wss": 443,
+    "ftp": 21,
+    "ftps": 990,
+    "ssh": 22,
+    "sftp": 22,
+    "scp": 22,
+    "gopher": 70,
+    "gophers": 70,
+    "telnet": 23,
+    "dict": 2628,
+    "imap": 143,
+    "imaps": 993,
+    "ldap": 389,
+    "ldaps": 636,
+    "mqtt": 1883,
+    "pop3": 110,
+    "pop3s": 995,
+    "rtsp": 554,
+    "smb": 445,
+    "smbs": 445,
+    "smtp": 25,
+    "smtps": 465,
+    "tftp": 69,
+}
+
+
+def _download_endpoint(text: str) -> tuple[str, int] | None:
+    try:
+        parsed = urlsplit(text if "://" in text else "http://" + text)
+        port = parsed.port or _DEFAULT_PORTS.get(parsed.scheme.lower())
+        if parsed.hostname and port is not None:
+            return parsed.hostname, port
+    except ValueError:
+        pass  # add_web_target already marks unresolvable targets.
+    return None
+
+
+def _download_connection(
+    analysis: Analysis,
+    option: str,
+    text: str | None,
+    source: str,
+    endpoints: Sequence[tuple[str, int]],
+) -> None:
+    """Proxy endpoints and curl's host/port routing overrides are separate connections."""
+    if text is None:
+        analysis.unresolve("url", source, "the address is computed when it runs")
+        return
+    if not text:
+        return  # An empty proxy disables proxying.
+    routed: list[tuple[str, int]] = []
+    if option in ("--connect-to", "--resolve"):
+        # Colons within bracketed IPv6 addresses are not field separators.
+        fields = re.split(r":(?![^\[]*\])", text)
+        if option == "--connect-to" and len(fields) == 4:
+            targets = [fields[2]] if fields[2] else []
+            for host, port in endpoints:
+                if fields[0] and fields[0].strip("[]").lower() != host.lower():
+                    continue
+                if fields[1] and fields[1] != str(port):
+                    continue
+                if fields[3] and not fields[3].isdigit():
+                    analysis.unresolve(
+                        "url", source, "the address cannot be resolved before it runs"
+                    )
+                    return
+                routed.append((fields[2] or host, int(fields[3]) if fields[3] else port))
+        elif option == "--resolve" and text.startswith("-") and len(fields) == 2:
+            targets = []  # Remove a DNS-cache entry; the URL still supplies its host.
+        elif option == "--resolve" and len(fields) == 3:
+            targets = fields[2].split(",")
+            if not fields[1].isdigit():
+                analysis.unresolve("url", source, "the address cannot be resolved before it runs")
+                return
+            routed.extend((target, int(fields[1])) for target in targets)
+        else:
+            analysis.unresolve("url", source, "the address cannot be resolved before it runs")
+            return
+    else:
+        targets = [text]
+    for target in targets:
+        if not add_network_target(analysis, target, source, bare=True):
+            analysis.unresolve("url", source, "the address cannot be resolved before it runs")
+    for host, port in routed:
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        # Preserve the connection port so URL checks protect vBot's own server,
+        # also when DNS or connect-to replaces the hostname written in its URL.
+        analysis.add_url(f"http://{host}:{port}/", source)
 
 
 _CURL_WRITES = frozenset(
@@ -386,8 +530,10 @@ _CURL_READS = frozenset(
         "--config",
         "-d",
         "--data",
+        "--data-ascii",
         "--data-binary",
         "--data-urlencode",
+        "--json",
         "-F",
         "--form",
         "--cacert",
@@ -418,6 +564,8 @@ _DOWNLOAD_VALUES = frozenset(
     {
         "-H",
         "--header",
+        "--data-raw",
+        "--form-string",
         "-X",
         "--request",
         "-u",
@@ -513,7 +661,8 @@ _GIT_WRITES = frozenset(
         "clone", "commit", "fetch", "filter-branch", "format-patch", "gc", "init", "maintenance",
         "merge", "mv", "notes", "prune", "pull", "read-tree", "rebase", "repack", "replace",
         "reset", "restore", "revert", "rm", "sparse-checkout", "stash", "submodule", "switch",
-        "update-index", "worktree",
+        "update-index", "worktree", "branch", "tag", "update-ref", "symbolic-ref", "reflog",
+        "remote", "config", "push", "lfs", "hash-object", "stage",
     }
 )  # fmt: skip
 _GIT_REMOTES = frozenset({"clone", "fetch", "pull", "push", "ls-remote", "remote", "submodule"})
@@ -539,7 +688,7 @@ _GIT_OUTPUTS = frozenset({"-o", "--output", "--output-directory"})
 # [user@]host:path, as git, scp and rsync name a remote.
 _SCP_TARGET = re.compile(r"^(?:[^@/\\\s:]+@)?(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][\w.-]*):(?!//)")
 _NETWORK_URL = re.compile(
-    r"^(?:ssh|git|git\+ssh|ssh\+git|ftp|ftps|sftp|rsync|telnet)://(?:[^@/]+@)?"
+    r"^(?!file://)[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]+@)?"
     r"(\[[0-9A-Fa-f:.]+\]|[^:/?#]+)",
     re.IGNORECASE,
 )
@@ -558,6 +707,12 @@ def handle_git(
     texts = [analysis.value(context, word, location).text for word in arguments]
     subcommand = (texts[0] or "") if texts else ""
     rest = list(zip(arguments[1:], texts[1:], strict=True))
+    writing = git_writes(texts)
+    _git_metadata.environment_paths(analysis, context, raw, writing=writing)
+    if _git_metadata.handle_files(
+        analysis, context, raw, subcommand, arguments[1:], texts[1:], writing=writing
+    ):
+        return
     operands = _operands(rest, _GIT_CLONE_VALUES | _GIT_INIT_VALUES | _GIT_OUTPUTS)
     consumed: set[int] = set()
     if subcommand in _GIT_REMOTES:
@@ -594,7 +749,7 @@ def handle_git(
         analysis.access(context, raw, "write", operands[1][0], glob=False, tier="a", subtree=True)
         consumed.add(id(operands[1][0]))
     else:
-        if subcommand in _GIT_WRITES:
+        if writing:
             consumed |= _git_files.changed_files(analysis, context, raw, subcommand, rest)
         consumed |= _git_files.read_files(analysis, context, raw, subcommand, rest)
     consumed |= _output_values(analysis, context, raw, rest, _GIT_OUTPUTS)
@@ -603,7 +758,10 @@ def handle_git(
 
 def git_writes(arguments: Sequence[str | None]) -> bool:
     """Whether the git subcommand after the global options changes its repository."""
-    return bool(arguments) and arguments[0] in _GIT_WRITES
+    if not arguments:
+        return False
+    subcommand = arguments[0] or ""
+    return _git_metadata.writes(subcommand, arguments[1:], default=subcommand in _GIT_WRITES)
 
 
 def _repository_name(remote: str | None) -> str | None:
@@ -677,14 +835,17 @@ def handle_remote_shell(
 def add_network_target(analysis: Analysis, text: str, source: str, *, bare: bool = False) -> bool:
     """Record the host *text* reaches (``user@host:path``, ``ssh://host``; with *bare* a
     plain ``[user@]host[:port]``); False when it names no remote host."""
+    if text.lower().startswith(("http://", "https://")):
+        analysis.add_url(text, source)
+        return True
     match = _NETWORK_URL.match(text) or _SCP_TARGET.match(text)
     if match is not None and not re.match(r"^[A-Za-z]:[\\/]", text):
         analysis.add_host(match.group(1), source)
         return True
     if bare:
         host = text.rsplit("@", 1)[-1]
-        host = re.sub(r":\d+$", "", host) if not host.startswith("[") else host
-        if re.match(r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][\w.-]*)$", host):
+        host = re.sub(r":\d+$", "", host)
+        if re.fullmatch(r"(?:\[[0-9A-Fa-f:.]+\]|[^\W_][\w.-]*)", host):
             analysis.add_host(host, source)
             return True
     return False

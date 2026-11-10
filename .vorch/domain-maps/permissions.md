@@ -4,7 +4,7 @@ The optional rules that confine what an Agent's Tools may read, change, run and 
 
 ## Overview
 
-`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, the refusal type and its Agent-facing text, the presets and editor data, exact per-call access requirements/grants, and the command check (`_command_check.py::CommandChecker`). `commands/` holds the shell command analysis (References). Apart from the checker, which owns the analyzer, the package is a pure library: it keeps no global state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors`.
+`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, the refusal type and its Agent-facing text, the presets and editor data, exact per-call access requirements/grants, and the command check (`_command_check.py::CommandChecker`). `commands/` holds the shell command analysis (References). Apart from the checker, which owns the analyzer, the package is a pure library: it keeps no mutable service state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors`.
 
 Not owned here: storing `permission_rules` on Agents, Settings defaults, Project overrides, Sessions and `TemporaryAgentConfig`, resolving them per part (`projects/resolution.md` -> Permission Rules), building the Run's boundary and carrying it to `ToolContext` (`chat/run-execution.md` -> Permission Boundary), the checks inside each Tool (Tools), persisting ceilings on Sub-Agent Sessions and Cron jobs (`subagents/delegation.md`, `automation/cron.md`), and every UI. `tool_failure_for_exception` maps `PermissionDenied` to `permission_denied` (`tools/registry-dispatch.md` -> Failure codes).
 
@@ -52,7 +52,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 - For command checks: `restricted`, `layers` (`PermissionLayer.commands`, `shell_allow`, `shell_deny`), `context`, `loopback_port`, `refusal(...)` (builds a refusal with the allowed summary) and `allowed_summary(access)`.
 - `to_ceiling_dict(*, source)` / `ceiling(*, source)` turn the boundary into a ceiling for a Run it causes (its own layer retagged as `source`, inherited layers keep theirs); `PermissionCeiling.from_ceiling_dict(value)` reads one strictly (exact fields, every base present, absolute placeholder-free path patterns).
 
-**Command checks** (`CommandChecker`, one per Runtime, `runtime._command_checker`): `check_line(boundary, command_line, *, shell, cwd, env, home, workdir_parameter=False)` for a shell Tool call (whose cwd hint names `workdir`), a terminal line or a Cron watch command; `check_argv(boundary, argv, *, cwd, env, home)` for a program a terminal starts. Each returns `None` or a `PermissionRefusal`. A failed analysis refuses (fail closed, `retryable`); every unresolved element refuses too (`unanalyzable`, with a fix in `hint`): with the protected locations, no unresolved path or command is harmless. Decision order: `permissions/commands.md` -> Command checks.
+**Command checks:** `CommandChecker`, one per Runtime (`runtime._command_checker`), owns analysis and decisions for shell Tool calls, terminal lines/programs and Cron watch commands. `check_line` / `check_argv` return a refusal or `None`; `check_*_all` return every refusal; `prepare_line` / `prepare_argv` pair refusals with exact approval requirements and path identities (`permissions/approvals.md`). Full access returns before analysis. Failed analysis refuses (`retryable`), and every unresolved element refuses (`unanalyzable`, with a rewrite hint). Signatures, plans and decision order: `permissions/commands.md` -> Command checks.
 
 **Refusal:** `PermissionRefusal` records the access, target, reason and source; `PermissionDenied` carries it through Tools as `permission_denied`. Exact fields, classification and approval use: `permissions/approvals.md` -> Decision inputs.
 
@@ -68,7 +68,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 - Terminal: `start` (program, folder), lines submitted at an integrated shell prompt, and `attach`/`status` only for terminals started under the same or narrower rules (`tools/terminal.md` -> Permission Rules).
 - Restricted Session reads stay in the caller's Agent and, with inherited ceilings, its tree; peer sends are refused (`tools/session_search.md`, `tools/session.md`).
 - Ceilings: `AgentOverrides.permission_ceiling` of a Session, joined and never widened (`source` `parent` by delegation and `send`, `cron` for a fired Session), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).
-- Editors and summaries: RPC `agent.create`/`agent.update` `permission_rules`, `permissions.validate`, `permissions.session`, `permissions.set_session_rules`, `permissions.remove_session_grants` and `permissions.clear_session_ceiling` (`server/session-agent-rpcs.md` -> Permission Rules), the CLI permission flags of `agent` and `project override set` (`cli/agent-commands.md`), the WebUI editors, the Session badge and refused Tool rows (`webui/settings.md`, `webui/projects.md`, `webui/chat.md`). `permissions_block_text(boundary)` gives the text every Agent reads.
+- Editors and summaries: Agent and Session permission RPCs (`server/session-agent-rpcs.md` -> Permission Rules), CLI permission flags (`cli/agent-commands.md`), WebUI editors, Session badge and refused Tool rows (`webui/settings.md`, `webui/projects.md`, `webui/chat.md`). `permissions_block_text(boundary)` gives the text every Agent reads.
 
 ## Approval ownership
 
@@ -81,7 +81,7 @@ For a path, in this order (normalization, unsafe forms and links in detail: `per
 2. Resolve links and junctions; the lexical and the resolved form must both pass every later step.
 3. Protected locations: the Agent's `agent.json` (always); the locations a Team member's rules come from (`rule_files`) and install and interpreter dirs (writes); the data directory, except the Workspace and the Scratch Area, and for reading also `readable_dirs` (the Run's own artifact folders and Skill folders).
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.
-5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. Every layer permits the Workspace, and reading `readable_dirs`.
+5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. Every layer permits the current Run's Scratch Area and Workspace, and reading `readable_dirs`.
 
 Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `permissions/rule-language.md` -> Bases, kinds and placeholders.
 
@@ -90,7 +90,7 @@ Hosts and commands: a deny rule of any layer refuses; under `listed` every such 
 - `UNRESTRICTED` (every boundary without layers) answers each check before any work; keep that the first statement of every new check: full-access Agents pay nothing.
 - A path pattern covers what it names and everything below it, with or without wildcards; Tool paths expand only `~`, never placeholders (`permissions/paths.md`).
 - `limits_writes` (a narrowed write base or a path deny rule in any layer) decides changes no path rule covers: `skill_manage` then changes only the Agent's own Skills (`skills/skill-manage.md` -> Calls).
-- Ceilings are self-contained: they store their own Work Area folders, so a Sub-Agent working elsewhere stays inside its parent's area.
+- Ceilings retain their creator's working directory, so a Sub-Agent working elsewhere stays inside its parent's area. Each Layer uses the current Run's Scratch Area; the stored scratch field remains for format round trips.
 
 ## Agent-facing text
 

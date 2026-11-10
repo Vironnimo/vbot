@@ -277,6 +277,11 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
         assert [layer.source for layer in context.permissions.layers] == [inherited_from]
         refused = context.permissions.check_path(tmp_path / "elsewhere.md", "write")
         assert refused is not None and refused.source == inherited_from
+        for access in ("read", "write"):
+            assert (
+                context.permissions.check_path(tmp_path / "scratch" / "s1" / "note.txt", access)
+                is None
+            )
     assert len(seen) == 2
     # The System Prompt says where the inherited rules come from.
     source = {"parent": "Session that started you", "cron": "Session that scheduled this job"}
@@ -310,23 +315,37 @@ def test_a_ceiling_only_session_boundary_keeps_the_agents_workspace_and_config(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changed", ["agent_rules", "session_ceiling"])
+@pytest.mark.parametrize(
+    "changed", ["agent_rules", "session_ceiling", "agent_file", "settings_file"]
+)
+@pytest.mark.parametrize("restricted", [False, True])
 async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
-    tmp_path: Path, changed: str
+    tmp_path: Path, changed: str, restricted: bool
 ) -> None:
     address = SessionAddress(None, "coder", "s1")
 
     def tighten() -> None:
         if len(seen) != 1:
             return
-        if changed == "agent_rules":
+        if changed in {"agent_rules", "agent_file", "settings_file"}:
             agent = runtime.agents._agent
             runtime.agents._agent = replace(
                 agent, permission_rules=normalize_permission_rules({"write": "scratch"})
             )
-            # The edit as vBot saves it: a configuration document change.
-            with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
-                pass
+            if changed == "agent_rules":
+                # The edit as vBot saves it: a configuration document change.
+                with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
+                    pass
+            else:
+                # An external edit changes only the file, never vBot's document
+                # counter. The stub resolver above supplies the newly read rules.
+                path = (
+                    tmp_path
+                    / "data"
+                    / ("settings.json" if changed == "settings_file" else "agents/coder/agent.json")
+                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('{"permission_rules": {"write": "scratch"}}', encoding="utf-8")
             return
         # A change to what the Session stores, such as a ceiling a Cron fire joins.
         ceiling = PermissionBoundary.build(
@@ -342,13 +361,17 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
         on_call=tighten,
     )
     # Real System Prompt assembly, which pins the prompt epoch's blocks.
-    runtime.agents._agent = _agent(tmp_path / "workspace", allowed_tools=["*"])
+    runtime.agents._agent = replace(
+        _agent(tmp_path / "workspace", allowed_tools=["*"]),
+        permission_rules=normalize_permission_rules({"web": "listed"}) if restricted else None,
+    )
     runtime.system_prompts = _manager(tmp_path, tools=runtime.tools)
 
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
     first, second = seen
-    assert first.permissions is PermissionBoundary.UNRESTRICTED
+    assert first.permissions.restricted is restricted
+    assert first.permissions.check_path(tmp_path / "elsewhere.md", "write") is None
     refused = second.permissions.check_path(tmp_path / "elsewhere.md", "write")
     assert refused is not None and refused.reason == "not_permitted"
     # The Model learns the new rules once, at the request after the change, and
@@ -357,7 +380,8 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
     assert len(runtime.adapter.requests) == 3 and len(systems) == 1
     notes = [message for message in history(runtime, "s1") if is_prompt_block_change_note(message)]
     assert len(notes) == 1
-    assert "full access" in systems.pop() and "full access" not in str(notes[0].content)
+    assert ("full access" in systems.pop()) is not restricted
+    assert "full access" not in str(notes[0].content)
 
 
 @pytest.mark.asyncio

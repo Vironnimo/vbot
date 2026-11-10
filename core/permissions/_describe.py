@@ -77,7 +77,7 @@ def describe_permission_rules(
 
 
 def describe_layer(layer: PermissionLayer) -> LayerDescription:
-    """Describe one placeholder-free layer of a boundary or ceiling."""
+    """Describe one layer; its Scratch Area belongs to the receiving Run."""
     return _describe(
         source=layer.source,
         read=layer.read,
@@ -85,7 +85,7 @@ def describe_layer(layer: PermissionLayer) -> LayerDescription:
         commands=layer.commands,
         web=layer.web,
         workdir=layer.workdir,
-        scratch=layer.scratch,
+        scratch="{scratch}",
         allow=layer.allow,
         deny=layer.deny,
     )
