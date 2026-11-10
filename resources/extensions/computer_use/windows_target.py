@@ -15,11 +15,13 @@ import sys
 import threading
 import time
 from collections.abc import Iterator, Sequence
+from typing import Any
 
 from PIL import Image
 
 from . import _color_filter, _win32, _win_apps
 from ._capture import capture_region, snapshot
+from ._win_accessibility import AccessibilityClient
 from ._win_input import WindowsInput
 from ._win_overlay import ActivityOverlay
 from .target import AppInfo, DesktopSnapshot, Display, TargetError, WindowInfo
@@ -81,6 +83,7 @@ class WindowsTarget(WindowsInput):
         self._filters: dict[str, _color_filter.Matrix] = {}
         self._filtered: set[str] = set()
         self._rendering: set[int] = set()
+        self._accessibility: AccessibilityClient | None = None
 
     def readiness(self) -> str | None:
         if sys.platform != "win32":
@@ -277,6 +280,71 @@ class WindowsTarget(WindowsInput):
 
     def close(self) -> None:
         self._overlay.close()
+        if self._accessibility is not None:
+            self._accessibility.close()
+
+    def _checked_window(self, window: WindowInfo) -> WindowInfo:
+        current = next((item for item in self.windows() if item.same_window(window)), None)
+        if current is None:
+            raise TargetError(
+                (
+                    "The selected window closed or is no longer visible. Nothing was "
+                    "done. List windows again."
+                ),
+                "window_unavailable",
+            )
+        if current.elevated or not _win32.input_desktop_available():
+            raise TargetError(
+                (
+                    "The selected window is elevated or the desktop is locked. "
+                    "Nothing was done. Ask the user to make it available."
+                ),
+                "computer_use_unavailable",
+            )
+        return current
+
+    def activate(self, window: WindowInfo) -> None:
+        self._checked_window(window)
+        self._check()
+        if not _win32.is_enabled(window.handle):
+            raise TargetError(
+                (
+                    "A dialog blocks the selected window. Nothing was done. List "
+                    "windows and select the dialog."
+                ),
+                "window_unavailable",
+            )
+        self._activate(window.handle, window.app.name)
+        if _win32.foreground_window() != window.handle:
+            raise TargetError(
+                (
+                    "The selected window did not become foreground. No action was "
+                    "sent. Take a screenshot."
+                ),
+                "focus_changed",
+            )
+
+    def _uia(self) -> AccessibilityClient:
+        if self._accessibility is None:
+            self._accessibility = AccessibilityClient(self._stop)
+        return self._accessibility
+
+    def inspect(self, window: WindowInfo) -> dict[str, Any]:
+        self._checked_window(window)
+        return self._uia().call("inspect", handle=window.handle, process_id=window.process_id)
+
+    def element(
+        self, window: WindowInfo, reference: dict[str, Any], action: str, text: str
+    ) -> dict[str, Any]:
+        self._checked_window(window)
+        return self._uia().call(
+            "resolve" if action == "resolve" else "act",
+            handle=window.handle,
+            process_id=window.process_id,
+            reference=reference,
+            action=action,
+            text=text,
+        )
 
     def open(self, app: AppInfo) -> bool:
         _win32.enter_thread()
@@ -333,6 +401,7 @@ class WindowsTarget(WindowsInput):
             elevated=resolver.elevated(facts),
             owner=_win32.window_owner(handle),
             shell=_win_apps.is_shell_surface(_win32.window_class(handle), facts.executable),
+            process_id=_win32.window_process(handle)[0],
         )
 
     @staticmethod

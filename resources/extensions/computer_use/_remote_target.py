@@ -18,6 +18,7 @@ from ._remote_wire import (
     image_value,
     snapshot_data,
     snapshot_value,
+    window_data,
     window_value,
 )
 from .target import (
@@ -183,6 +184,19 @@ class RemoteDesktopTarget:
 
     def open(self, app: AppInfo) -> bool:
         return bool(self._call("open", app=app_data(app))["value"])
+
+    def activate(self, window: WindowInfo) -> None:
+        self._call("activate", window=window_data(window))
+
+    def inspect(self, window: WindowInfo) -> dict[str, Any]:
+        return self._call("inspect", window=window_data(window))
+
+    def element(
+        self, window: WindowInfo, reference: dict[str, Any], action: str, text: str
+    ) -> dict[str, Any]:
+        return self._call(
+            "element", window=window_data(window), reference=reference, action=action, text=text
+        )
 
     def cursor(self) -> tuple[int, int]:
         x, y = self._call("cursor")["value"]

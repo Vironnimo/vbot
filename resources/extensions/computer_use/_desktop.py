@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from typing import Any
 
 from PIL import Image
 
@@ -71,6 +72,7 @@ class Desktop:
         self.failure_screen: str | None = None
         # The app this call's last mouse button press went into; keys must reach it.
         self.clicked: AppInfo | None = None
+        self.clicked_window: WindowInfo | None = None
         # Whether keys were sent since the last press: they can bring up another app
         # themselves, such as the Start menu or a dialog, so later keys are not checked.
         self.keyed = False
@@ -79,6 +81,17 @@ class Desktop:
 
     def frame(self, action: Action) -> Frame:
         """Resolve an image reference before the call or batch sends any input."""
+        if action.window_id is not None:
+            self.window(action.window_id)
+        if action.element_id is not None:
+            window, element = self.element_reference(action)
+            if action.name != "left_click" and action.name not in element.get("actions", []):
+                raise CallRefusedError(
+                    "element_not_supported",
+                    f"The inspected element does not support {action.name}. Nothing was done. "
+                    "Use its listed actions or screenshot coordinates.",
+                )
+            return Frame.of(self._chosen(self.target.displays()))
         needs_image = (
             bool(action.frame_points())
             or action.region is not None
@@ -114,6 +127,17 @@ class Desktop:
                 "its screenshot_id and pixel coordinates. Nothing was done.",
             )
         self.validate_frame(frame)
+        if (
+            action.window_id
+            and action.frame_points()
+            and frame.window is not None
+            and not frame.window.same_window(self.window(action.window_id))
+        ):
+            raise CallRefusedError(
+                "invalid_arguments",
+                "The screenshot and window_id name different windows. Nothing was "
+                "done. Take a screenshot of the intended window first.",
+            )
         return frame
 
     def validate_frame(self, frame: Frame, snapshot: DesktopSnapshot | None = None) -> None:
@@ -138,7 +162,7 @@ class Desktop:
             window = next((item for item in stack if item.handle == observed.handle), None)
             if (
                 window is None
-                or not window.app.matches(observed.app)
+                or not window.same_window(observed)
                 or (window.left, window.top, window.right, window.bottom)
                 != (observed.left, observed.top, observed.right, observed.bottom)
             ):
@@ -192,9 +216,26 @@ class Desktop:
 
     # Images
 
-    def screenshot(self, display: str | None = None, view: str | None = None) -> str:
+    def screenshot(
+        self, display: str | None = None, view: str | None = None, window_id: str | None = None
+    ) -> str:
         """Publish the foreground window by default, or an explicitly selected display."""
+        if window_id is not None:
+            selected = self.window(window_id)
+            self._allow(Action("screenshot"), selected, "The selected window")
+            self.target.activate(selected)
+            view = "window"
         observed = self.target.snapshot([])
+        if window_id is not None and (
+            observed.foreground is None or not observed.foreground.same_window(selected)
+        ):
+            raise CallRefusedError(
+                "screen_changed",
+                (
+                    "The selected window lost focus before capture. No screenshot was "
+                    "returned. Select the window again."
+                ),
+            )
         displays = observed.displays
         if display is not None:
             self.state.display = self._selection(displays, display)
@@ -295,7 +336,17 @@ class Desktop:
         front = foreground.app if foreground is not None and visible(foreground) else None
         # Which app the image shows at each point, for the check before pointer input.
         stack = tuple(item for item in windows if overlaps(item, area))
-        frame = Frame(display, *size, area, path.stem, tuple(displays), window, front, stack)
+        frame = Frame(
+            display,
+            *size,
+            area,
+            path.stem,
+            tuple(displays),
+            window,
+            front,
+            stack,
+            foreground if front else None,
+        )
         self.state.images[frame.screenshot_id] = frame
         self.state.latest_image = frame.screenshot_id
         self.state.shown = display
@@ -305,6 +356,8 @@ class Desktop:
         # No size, ratio or reduction: Agents used each to convert coordinates by hand
         # instead of using the position where they saw the target.
         text = f'{label}, screenshot_id="{frame.screenshot_id}".'
+        if window is not None:
+            text += f' window_id="{self.state.remember_window(window)}".'
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
@@ -342,6 +395,181 @@ class Desktop:
 
     # Input
 
+    def window(self, identifier: str) -> WindowInfo:
+        previous = self.state.windows.get(identifier)
+        current = next(
+            (
+                item
+                for item in self.target.windows()
+                if previous is not None and item.same_window(previous)
+            ),
+            None,
+        )
+        if current is None:
+            raise CallRefusedError(
+                "window_unavailable",
+                f'Window "{identifier}" is unavailable in this Session or has closed. '
+                "Nothing was done. Use computer_apps with action windows, "
+                "or take a new screenshot.",
+            )
+        self._allow(Action("inspect"), current, "The selected window")
+        return current
+
+    def windows(self, query: object = None) -> str:
+        folded = query.strip().casefold() if isinstance(query, str) else ""
+        lines = []
+        for window in self.target.windows():
+            if not self.access.window_visible(window) or window.shell:
+                continue
+            if folded and folded not in (window.app.name + " " + window.title).casefold():
+                continue
+            identifier = self.state.remember_window(window)
+            lines.append(
+                f"{identifier}: {json.dumps(window.app.name, ensure_ascii=False)} - "
+                f"{json.dumps(window.title, ensure_ascii=False)}"
+            )
+            if len(lines) == 64:
+                lines.append("Window limit reached; narrow the list with query.")
+                break
+        return "Open windows (window_id):\n" + ("\n".join(lines) or "No approved windows match.")
+
+    def element_reference(self, action: Action) -> tuple[WindowInfo, dict[str, Any]]:
+        found = self.state.elements.get(action.element_id or "")
+        if found is None:
+            raise CallRefusedError(
+                "element_unavailable",
+                f'Element "{action.element_id}" is unavailable in this Session. '
+                "Nothing was done. Inspect the window again.",
+            )
+        old, reference = found
+        window_id = action.window_id or self.state.remember_window(old)
+        current = self.window(window_id)
+        if not current.same_window(old):
+            raise CallRefusedError(
+                "invalid_arguments",
+                (
+                    "element_id and window_id name different windows. Nothing was "
+                    "done. Use the element's window or inspect the intended window."
+                ),
+            )
+        return current, reference
+
+    def inspect(self, action: Action) -> str:
+        window: WindowInfo | None
+        if action.window_id is not None:
+            window = self.window(action.window_id)
+        else:
+            frame = self.state.images.get(self.state.latest_image or "")
+            previous = frame.window if frame is not None else None
+            window = (
+                self.window(self.state.remember_window(previous))
+                if previous
+                else self.target.foreground()
+            )
+        if window is None:
+            raise CallRefusedError(
+                "window_unavailable",
+                (
+                    "There is no window to inspect. Nothing was done. List windows or "
+                    "open an app first."
+                ),
+            )
+        self._allow(action, window, "The selected window")
+        state = self.target.inspect(window)
+        identifier = self.state.remember_window(window)
+        lines = [
+            f'UI elements of window_id="{identifier}" '
+            f"({json.dumps(window.title, ensure_ascii=False)}):"
+        ]
+        focused = []
+        for element in state.get("elements", []):
+            reference = {
+                key: element[key]
+                for key in (
+                    "runtime_id",
+                    "generation",
+                    "depth",
+                    "name",
+                    "control_type",
+                    "automation_id",
+                    "password",
+                    "actions",
+                )
+            }
+            element_id = self.state.remember_element(window, reference)
+            if element.get("focused"):
+                focused.append(element_id)
+            details = {
+                key: element[key]
+                for key in (
+                    "role",
+                    "name",
+                    "enabled",
+                    "password",
+                    "actions",
+                    "value",
+                    "text",
+                    "selected_text",
+                )
+                if key in element
+                and (key in {"value", "text", "selected_text"} or element[key] not in ("", []))
+            }
+            lines.append(
+                "  " * min(int(element.get("depth", 0)), 12)
+                + element_id
+                + " "
+                + json.dumps(details, ensure_ascii=False)
+            )
+        lines.append("Focused element: " + (", ".join(focused) or "none exposed") + ".")
+        if state.get("truncated"):
+            lines.append(
+                "The accessibility result reached its size or time limit. Use the "
+                "screenshot for the remaining controls."
+            )
+        if not state.get("elements"):
+            lines.append("This window exposes no visible UI elements. Use screenshot coordinates.")
+        return "\n".join(lines)
+
+    def _element_action(self, action: Action) -> str:
+        window, reference = self.element_reference(action)
+        self.target.activate(window)
+        if action.name == "left_click":
+            current = self.target.element(window, reference, "resolve", "")
+            if current.get("password") or not current.get("enabled") or current.get("offscreen"):
+                raise CallRefusedError(
+                    "element_not_supported",
+                    (
+                        "The element is protected, disabled or hidden. Nothing was done. "
+                        "Use the screenshot or ask the user to make it available."
+                    ),
+                )
+            left, top, right, bottom = current["bounds"]
+            if right <= left or bottom <= top:
+                raise CallRefusedError(
+                    "element_not_supported",
+                    (
+                        "The element has no clickable area. Nothing was done. Use an "
+                        "advertised action or the screenshot."
+                    ),
+                )
+            x, y = (left + right) // 2, (top + bottom) // 2
+            receiver = self.target.window_at(x, y)
+            if receiver is None or not receiver.same_window(window):
+                raise CallRefusedError(
+                    "screen_changed",
+                    "Another window covers the element. Nothing was clicked. Take a screenshot.",
+                )
+            self._allow(action, receiver, "The element's window")
+            self.input_started = True
+            self.target.click(x, y, "left", 1, [])
+            self.clicked, self.clicked_window, self.keyed = window.app, window, False
+        else:
+            self.input_started = True
+            self.target.element(window, reference, action.name, action.text)
+            if action.name == "focus":
+                self.clicked, self.clicked_window, self.keyed = window.app, window, False
+        return action.describe()
+
     def act(self, action: Action, frame: Frame) -> str:
         """Check access for *action*, send its input and describe what was done.
 
@@ -352,12 +580,40 @@ class Desktop:
             self.input_started = True
             self.target.button("left", False)
             return action.describe()
+        if action.element_id is not None:
+            return self._element_action(action)
+        selected = self.window(action.window_id) if action.window_id is not None else None
+        if selected is not None:
+            if (
+                action.frame_points()
+                and frame.window is not None
+                and not frame.window.same_window(selected)
+            ):
+                raise CallRefusedError(
+                    "invalid_arguments",
+                    (
+                        "The screenshot and window_id name different windows. Nothing was "
+                        "sent. Take a screenshot of the intended window first."
+                    ),
+                )
+            self.target.activate(selected)
         points = self._points(action, frame)
         observed = self.target.snapshot(points)
         windows = observed.windows
         if action.frame_points() or (action.uses_pointer and action.screenshot_id is not None):
             self.validate_frame(frame, observed)
-        if action.name in KEYBOARD and not self.keyed:
+        if selected is not None:
+            selected_receivers = observed.receivers if points else (observed.foreground,)
+            if any(item is None or not item.same_window(selected) for item in selected_receivers):
+                raise CallRefusedError(
+                    "focus_changed",
+                    (
+                        "Input would reach a different window than window_id. Nothing was "
+                        "sent. Take a screenshot or select the dialog from computer_apps "
+                        "windows."
+                    ),
+                )
+        if action.name in KEYBOARD and not self.keyed and selected is None:
             self._check_front(action, frame, observed.foreground)
         for point in points:
             self._check_owner(action, frame, point, windows)
@@ -393,6 +649,7 @@ class Desktop:
         if name in PRESSES:
             # The press activated the window under it; later keys of this call must go there.
             self.clicked = receivers[0].app
+            self.clicked_window = receivers[0]
             self.keyed = False
         elif name in KEYBOARD:
             self.keyed = True
@@ -451,22 +708,41 @@ class Desktop:
     def _check_owner(
         self, action: Action, frame: Frame, point: Point, windows: Sequence[WindowInfo]
     ) -> None:
-        """Refuse pointer input where another app lies now than in the Agent's image.
+        """Refuse pointer input where another window lies now than in the Agent's image.
 
         Both sides read the topmost window of a window stack, so a new screenshot
-        always resolves a refusal. A new window of the same app, such as a menu or
-        a dialog, passes. Points outside the image, such as a pointer the image does
+        always resolves a refusal. An owned popup of the same app, such as a menu,
+        passes. Points outside the image, such as a pointer the image does
         not show, are not checked.
         """
+        expected_window = next((item for item in frame.stack if item.contains(*point)), None)
+        current_window = next((item for item in windows if item.contains(*point)), None)
         expected = frame.owner(*point)
         current = app_at(windows, *point)
-        if expected is None or current is None or current.matches(expected):
+        related = (
+            current_window is not None
+            and expected_window is not None
+            and current_window.owner == expected_window.handle
+            and current_window.app.matches(expected_window.app)
+        )
+        if (
+            expected is None
+            or current is None
+            or (
+                expected_window is not None
+                and current_window is not None
+                and (current_window.same_window(expected_window) or related)
+            )
+        ):
             return
         shown = list(frame.to_frame(*point))
+        receiver = (
+            f"another window of {current.name}" if current.matches(expected) else current.name
+        )
         raise CallRefusedError(
             "screen_changed",
             f'Image "{frame.screenshot_id}" shows {expected.name} at {shown}, but '
-            f"{current.name} is there now, so {action.name} was not sent. Take a screenshot to "
+            f"{receiver} is there now, so {action.name} was not sent. Take a screenshot to "
             f"see what is there now; to continue in {expected.name}, bring it to the front "
             "first.",
         )
@@ -480,16 +756,27 @@ class Desktop:
         another app themselves, such as the Start menu after win.
         """
         expected = self.clicked or frame.front
-        if expected is None or current is None or current.app.matches(expected):
+        expected_window = self.clicked_window or frame.front_window
+        matches = current is not None and (
+            current.same_window(expected_window)
+            if expected_window is not None
+            else expected is not None and current.app.matches(expected)
+        )
+        if expected is None or current is None or matches:
             return
         seen = (
             f"Your last click went into {expected.name}"
             if self.clicked is not None
             else f'{expected.name} was in front in image "{frame.screenshot_id}"'
         )
+        receiver = (
+            f"the foreground is now another window of {current.app.name}"
+            if current.app.matches(expected)
+            else f"the foreground window now belongs to {current.app.name}"
+        )
         raise CallRefusedError(
             "focus_changed",
-            f"{seen}, but the foreground window now belongs to {current.app.name}, so "
+            f"{seen}, but {receiver}, so "
             f"{action.name} was not sent. Click into the window you want to type into, or take "
             "a screenshot to see what is in front.",
         )

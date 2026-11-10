@@ -768,8 +768,12 @@ class ComputerUseService:
         try:
             if action.name == "screenshot":
                 lines.append(
-                    await self._capture_image(desktop.screenshot, action.display, action.view)
+                    await self._capture_image(
+                        desktop.screenshot, action.display, action.view, action.window_id
+                    )
                 )
+            elif action.name == "inspect":
+                lines.append(await self._on_worker(desktop.inspect, action))
             elif action.name == "zoom":
                 lines.append(await self._capture_image(desktop.zoom, frame, action))
             elif action.name == "cursor_position":
@@ -963,7 +967,11 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._capture_image(desktop.screenshot, action.display, action.view)
+            return await self._capture_image(
+                desktop.screenshot, action.display, action.view, action.window_id
+            )
+        if action.name == "inspect":
+            return await self._on_worker(desktop.inspect, action)
         if action.name == "zoom":
             return await self._capture_image(desktop.zoom, frame, action)
         if action.name == "cursor_position":
@@ -985,10 +993,28 @@ class ComputerUseService:
             action = arguments.get("action")
             if action == "list":
                 return await self._on_worker(_listing, desktop, arguments.get("query"))
+            if action == "windows":
+                return await self._on_worker(desktop.windows, arguments.get("query"))
             if action == "request":
                 return await self._request(context, access, agent, arguments)
             if action == "release":
                 return await self._release(context)
+            if arguments.get("window_id") is not None:
+                window = await self._on_worker(desktop.window, arguments["window_id"])
+                if (
+                    arguments.get("app") is not None
+                    and str(arguments["app"]).casefold() != window.app.name.casefold()
+                ):
+                    raise ActionError(
+                        "app and window_id name different targets. Nothing was done. Send "
+                        "window_id alone to select that window."
+                    )
+                async with self._active_call(context, desktop, window.app):
+                    await self._on_worker(desktop.target.activate, window, interrupt_on_cancel=True)
+                    desktop.completed_action = "Brought the selected window to the front."
+                    await self._pause(SETTLE_SECONDS)
+                    shot = await self._capture_image(desktop.screenshot)
+                return f"{desktop.completed_action}\n{shot}"
             return await self._open(context, access, desktop, arguments.get("app"))
 
         return await self._handle(context, "computer_apps", work)
