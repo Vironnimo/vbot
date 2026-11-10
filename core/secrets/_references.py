@@ -207,6 +207,10 @@ class SecretMasker:
     def contains(self, text: str) -> bool:
         return self._pattern is not None and self._pattern.search(text) is not None
 
+    def matches_exactly(self, text: str) -> bool:
+        """Whether the entire text is a known value or one of its masking variants."""
+        return text in self._variants
+
 
 EMPTY_MASKER: Final = SecretMasker({})
 

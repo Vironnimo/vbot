@@ -69,6 +69,52 @@ describe('send and edit admission', () => {
     },
   );
 
+  it.each([' ', '\n', '\t'])(
+    'keeps key-bearing retries in memory and purges restored copies after %j',
+    async (separator) => {
+      const key = `ghp_${'a'.repeat(36)}`;
+      const storageKey = 'vbot.pending-chat-inputs';
+      const values = new Map([
+        [
+          storageKey,
+          JSON.stringify([
+            {
+              scope: 'old',
+              request: JSON.stringify({
+                content: [{ type: 'text', text: `use${separator}${key}` }],
+              }),
+              inputId: 'old',
+            },
+          ]),
+        ],
+      ]);
+      vi.stubGlobal('sessionStorage', {
+        getItem: (name) => values.get(name) ?? null,
+        setItem: (name, value) => values.set(name, value),
+        removeItem: (name) => values.delete(name),
+      });
+      const startChatRun = vi
+        .fn()
+        .mockRejectedValue(new ApiClientError('network_error', 'Disconnected'));
+      const { chatState, controller } = setupController({
+        operationOverrides: { startChatRun },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      await controller.sendMessage(session, `use${separator}${key}`);
+      expect(startChatRun).toHaveBeenCalledTimes(2);
+      expect(startChatRun.mock.calls[0][0]).toEqual(
+        startChatRun.mock.calls[1][0],
+      );
+      expect([...values.values()].join('')).not.toContain(key);
+      controller.destroy();
+      const restored = setupController({
+        operationOverrides: { startChatRun },
+      });
+      expect([...values.values()].join('')).not.toContain(key);
+      restored.controller.destroy();
+    },
+  );
+
   it('retains an uncertain new-session input across page restoration without resubmitting it', async () => {
     const values = new Map();
     vi.stubGlobal('sessionStorage', {
