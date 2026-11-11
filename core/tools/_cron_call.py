@@ -34,6 +34,9 @@ _CALL_ORDER = (
     "repeat",
     "session",
     "deliver",
+    "working_project",
+    "model",
+    "thinking_effort",
     "notification_policy",
     "watch",
     "watch_runs",
@@ -80,9 +83,12 @@ class _Problems:
 
 def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
     """Render a canonical ``cron`` call as compact JSON; ``OMIT`` removes a field."""
+    # Import at call time: cron's definition imports these rendering helpers.
+    from core.tools.cron import CRON_TOOL_PARAMETERS
+
     call = {**arguments, **overrides}
     ordered: dict[str, Any] = {}
-    for name in (*_CALL_ORDER, TIMEZONE_FIELD, ENABLED_FIELD):
+    for name in (*_CALL_ORDER, *CRON_TOOL_PARAMETERS["properties"], TIMEZONE_FIELD, ENABLED_FIELD):
         if name in call and call[name] is not OMIT:
             ordered[name] = call[name]
     prompt = ordered.get("prompt")

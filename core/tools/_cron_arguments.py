@@ -314,7 +314,7 @@ _EMAIL_SEPARATORS = re.compile(r"[\s,;]+")
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
-_LIST_ONLY_KEYS = frozenset({"limit", "offset", "all", "showall"})
+_LIST_ONLY_KEYS = frozenset({"all", "showall"})
 SELF_TARGET = "self"
 """The target that names the calling Agent; the handler resolves it."""
 _SELF_WORDS = frozenset({"self", "current", "default", "this", "me", "myself", "currentagent"})
@@ -353,6 +353,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
             "action": _action_word,
             WATCH_RUNS_FIELD: _watch_runs_word,
             "notification_policy": _notification_policy_word,
+            "repeat": _repeat_value,
         },
         empty_as_omitted=(
             "id",
@@ -790,12 +791,21 @@ def _read_extras(arguments: dict[str, Any]) -> None:
         word = spelling(key)
         if word in _DESCRIPTION_KEYS:
             item = arguments.pop(key)
-            if "name" not in arguments and isinstance(item, str) and item.strip():
-                arguments["name"] = item.strip()
+            if "name" not in arguments and isinstance(item, str):
+                label = item.strip()
+                if 0 < len(label) <= 80 and len(label.splitlines()) == 1:
+                    arguments["name"] = label
         elif word in _IGNORED_KEYS or (
             word in _LIST_ONLY_KEYS and arguments.get("action") in {None, "list"}
         ):
             del arguments[key]
+
+
+def _repeat_value(value: Any) -> Any:
+    """Keep unlimited dialects inside the advertised integer schema."""
+    if value is None or (isinstance(value, str) and spelling(value) in _REPEAT_UNLIMITED_WORDS):
+        return 0
+    return value
 
 
 def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
@@ -836,16 +846,12 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
     for name in (TIMEZONE_FIELD, WATCH_RUNS_FIELD):
         if name in arguments and _is_stand_in(arguments[name], PLACEHOLDER_WORDS):
             del arguments[name]
-    if "repeat" in arguments:
-        repeat = arguments["repeat"]
-        if isinstance(repeat, str) and spelling(repeat) in _REPEAT_UNLIMITED_WORDS:
-            arguments["repeat"] = None
-        elif isinstance(repeat, int) and not isinstance(repeat, bool) and repeat < 1:
-            problems.add(
-                "repeat counts the remaining fires and must be 1 or more; omit it for no limit "
-                "(null on update removes a limit)."
-            )
-            del arguments["repeat"]
+    repeat = arguments.get("repeat")
+    if isinstance(repeat, int) and not isinstance(repeat, bool) and repeat < 0:
+        problems.add(
+            f"repeat {repeat} is not valid. Choose a positive run count, or 0 for no limit.",
+            repeat="<run count, or 0 for no limit>",
+        )
 
 
 def _is_stand_in(value: Any, words: frozenset[str]) -> bool:

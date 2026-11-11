@@ -9,6 +9,7 @@ with the corrected call. Schedules and time zones: ``test_cron_call_times.py``.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -482,17 +483,21 @@ def test_openclaw_system_event_is_refused(tool: CronTool) -> None:
     assert 'payload kind "systemEvent" is not available' in message
 
 
-def test_scheduled_task_spelling_uses_the_description_as_name(tool: CronTool) -> None:
+@pytest.mark.parametrize("key", ["description", "summary", "details"])
+@pytest.mark.parametrize("label", ["Daily digest", "a" * 80, "a" * 81, "Daily\ndigest"])
+def test_scheduled_task_spelling_uses_a_short_description_as_name(
+    tool: CronTool, key: str, label: str
+) -> None:
     job, _text = tool.created(
         {
             "action": "create",
             "cronExpression": "0 8 * * *",
             "prompt": JOB_PROMPT,
-            "description": "Daily digest",
+            key: label,
         },
     )
 
-    assert job.name == "Daily digest"
+    assert job.name == (label if len(label) <= 80 and "\n" not in label else JOB_PROMPT)
 
 
 # -- actions, placeholders and fields that do not fit their action ----------------------------
@@ -639,14 +644,97 @@ def test_self_target_on_update_moves_the_job_to_the_calling_agent(
     assert "target: agent-one" in text
 
 
-def test_repeat_words_and_invalid_counts(tool: CronTool) -> None:
+@pytest.mark.parametrize("repeat", [0, None, "unlimited"])
+def test_repeat_words_and_invalid_counts(tool: CronTool, repeat: Any) -> None:
+    tool.add_job(repeat=repeat)
+    assert tool.only_job().remaining_runs is None
+    tool.succeeded({"action": "delete", "id": tool.only_job().id})
     job_id = tool.add_job(repeat=3)
 
-    tool.call({"action": "update", "id": job_id, "repeat": "unlimited"})
-    message = tool.refused({"action": "update", "id": job_id, "repeat": 0})
-
+    tool.succeeded({"action": "update", "id": job_id, "repeat": repeat})
     assert tool.only_job().remaining_runs is None
-    assert "must be 1 or more" in message
+    tool.refused({"action": "update", "id": job_id, "repeat": -1})
+    message = tool.refused({"action": "update", "id": job_id, "schedule": "10m", "repeat": -1})
+    corrections = [json.loads(text) for text in re.findall(r"\{[^{}]+\}", message)]
+    assert corrections and all(
+        item["repeat"] == "<run count, or 0 for no limit>" for item in corrections
+    )
+    tool.succeeded({**corrections[-1], "repeat": 2})
+    assert tool.only_job().remaining_runs == 2
+
+
+@pytest.mark.parametrize("schedule", ["in 10m", "10m"])
+def test_corrected_calls_keep_execution_choices(tool: CronTool, schedule: str) -> None:
+    choices = {"working_project": "vbot", "model": "test/model", "thinking_effort": "high"}
+    call = {"action": "create", "prompt": JOB_PROMPT, "schedule": schedule, "repeat": 3, **choices}
+    message = tool.refused(call)
+    corrections = [json.loads(text) for text in re.findall(r"\{[^{}]+\}", message)]
+    assert corrections
+    for corrected in corrections:
+        assert all(corrected[key] == value for key, value in choices.items())
+    corrected = corrections[-1]
+    job, _ = tool.created(corrected)
+    assert job.working_project_id == "vbot"
+    assert job.run_overrides is not None
+    assert job.run_overrides.as_dict() == {"model": "test/model", "thinking_effort": "high"}
+
+
+@pytest.mark.parametrize("schedule", ["in 10m", "webhook", "email"])
+def test_changing_a_watched_job_offers_to_stop_the_stored_watch(
+    tool: CronTool, schedule: str
+) -> None:
+    job_id = tool.add_job(watch="https://status.example/", watch_runs="always")
+    fields = {"email_channel": "mail-main"} if schedule == "email" else {}
+    call = {"action": "update", "id": job_id, "schedule": schedule, **fields}
+    message = tool.refused(call)
+    corrections = [json.loads(text) for text in re.findall(r"\{[^{}]+\}", message)]
+    assert {**call, "watch": "none"} in corrections
+    repeating = next(item for item in corrections if item["schedule"] == "<repeating schedule>")
+    tool.succeeded({**repeating, "schedule": "every 3h"})
+    assert tool.only_job().watch is not None
+    explicit = tool.refused({**call, "watch": "https://status.example/"})
+    assert '"watch":"none"' not in explicit
+    tool.succeeded(next(corrected for corrected in corrections if corrected.get("watch") == "none"))
+    job = tool.only_job()
+    assert job.watch is None
+    assert job.schedule_type == ("once" if schedule == "in 10m" else schedule)
+
+
+@pytest.mark.parametrize("action", ["create", "update"])
+def test_invalid_effort_offers_tool_choices_and_preserves_other_fields(
+    tool: CronTool, action: str
+) -> None:
+    fields = {"model": "test/model", "working_project": "vbot"}
+    call = (
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
+        if action == "create"
+        else {"action": "update", "id": tool.add_job(), **fields}
+    )
+    message = tool.refused({**call, "thinking_effort": "ultra"})
+    assert "''" not in message
+    assert "default" in message
+    assert ("inherit" in message) == (action == "update")
+    corrected = json.loads(message.split(" Send: ", 1)[1])
+    assert {key: value for key, value in corrected.items() if key != "thinking_effort"} == call
+    corrected["thinking_effort"] = "default" if action == "create" else "inherit"
+    tool.succeeded(corrected)
+    overrides = tool.only_job().run_overrides
+    assert overrides is not None
+    assert overrides.as_dict() == (
+        {"model": "test/model", "thinking_effort_default": True}
+        if action == "create"
+        else {"model": "test/model"}
+    )
+
+
+@pytest.mark.parametrize("field", ["limit", "offset"])
+def test_list_reports_pagination_fields_without_effect(tool: CronTool, field: str) -> None:
+    tool.add_job(name="First")
+    tool.add_job(name="Second")
+    result, _ = tool.call({"action": "list", field: 1})
+    assert result["ok"] is True
+    assert result["data"]["jobs"] == 2
+    assert field in result["data"]["note"]
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ from core.automation.cron import (
 from core.permissions import PermissionDenied, join_ceilings
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
+from core.settings import ALLOWED_THINKING_EFFORTS
 from core.tools._cron_arguments import (
     CURRENT_SESSION,
     DELIVER_PLATFORM_FIELD,
@@ -108,8 +109,8 @@ _UPDATE_FIELDS = (
     ENABLED_FIELD,
 )
 _SCHEDULE_FORMS = (
-    'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
-    '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
+    'Use five cron fields in local time such as "0 9 * * 1-5" (weekdays at 09:00), '
+    '"every 2h", "in 30m", a local time such as "2030-01-01T09:00", "webhook" or "email".'
 )
 # Values only the Agent can choose; a call that sends one back unchanged changes nothing.
 _SCHEDULE_STAND_IN = "<when>"
@@ -145,7 +146,7 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "description": (
                 "Job id from list or an earlier result. Required for update, delete, enable, "
-                "and disable."
+                "and disable. With list, shows that job only."
             ),
         },
         "target": {
@@ -186,11 +187,11 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "repeat": {
-            "type": ["integer", "null"],
-            "minimum": 1,
+            "type": "integer",
+            "minimum": 0,
             "description": (
-                "Number of runs before the job ends. Omit for no limit; null on update removes "
-                "a limit."
+                "Number of runs before the job ends. Omit on create for no limit (one-time "
+                "jobs run once), on update to keep the limit. 0 removes a limit."
             ),
         },
         "session": {
@@ -353,6 +354,7 @@ def register_cron_tool(
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
+        announce_changes=("parameters.repeat",),
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_cron_display_parts,
@@ -516,7 +518,7 @@ async def _handle_create(
         event_id=parsed.event_id,
         event_edge=parsed.event_edge,
         event_offset_minutes=parsed.event_offset_minutes,
-        remaining_runs=repeat,
+        remaining_runs=repeat or None,
         session_id=session_id,
         status="paused" if paused else "active",
         project_id=project_id,
@@ -552,7 +554,9 @@ def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject
     zone = ZoneInfo(cron_service.system_timezone_name())
     data: JsonObject = {"jobs": len(jobs), "timezone": cron_service.system_timezone_name()}
     if jobs:
-        data["content"] = "\n\n".join(_job_block(cron_service, job, zone) for job in jobs)
+        data["content"] = "\n\n".join(
+            _job_block(cron_service, job, zone, full_prompt="id" in arguments) for job in jobs
+        )
     return tool_success(data)
 
 
@@ -605,7 +609,7 @@ async def _handle_update(
                 )
             updates["remaining_runs"] = 1
     if "repeat" in arguments:
-        updates["remaining_runs"] = arguments["repeat"]
+        updates["remaining_runs"] = arguments["repeat"] or None
     stored = cron_service.get_job(job_id)
     email = _email_trigger(
         arguments, updates.get("schedule_type", stored.schedule_type), stored.email
@@ -1025,8 +1029,13 @@ def _parse_schedule(
                 )
             ) from error
         detail = str(error).rstrip(". ")
+        if detail.startswith("schedule must be an ISO 8601 timestamp"):
+            detail = ""
+        elif detail.startswith("duration must be"):
+            detail = "Durations use whole minutes (m), hours (h) or days (d); the minimum is 1m"
+        explanation = f" {detail}." if detail else ""
         raise CronCallRefusedError(
-            f'cron was not run: schedule "{schedule}" is not valid ({detail}). {_SCHEDULE_FORMS}'
+            f'cron was not run: schedule "{schedule}" is not valid.{explanation} {_SCHEDULE_FORMS}'
         ) from error
 
 
@@ -1102,6 +1111,18 @@ def _validation_message(
     if detail.startswith("run_overrides: "):
         detail = detail.removeprefix("run_overrides: ")
     detail = detail.replace("working_project_id", "working_project")
+    if detail.startswith("thinking_effort must be one of"):
+        choices = [*sorted(effort for effort in ALLOWED_THINKING_EFFORTS if effort), "default"]
+        if action == "update":
+            choices.append("inherit")
+        return refusal(
+            f'thinking_effort "{arguments.get("thinking_effort")}" is not valid. '
+            f"Choose a level supported by the job's Model: {', '.join(choices)}.",
+            arguments,
+            thinking_effort="<supported level, default or inherit>"
+            if action == "update"
+            else "<supported level or default>",
+        )
     if detail.startswith("Calendar event not found"):
         listing = " The calendar list shows events and their ids." if calendar_offered else ""
         return f'cron was not run: no calendar event has id "{arguments.get("event_id")}".{listing}'
@@ -1111,6 +1132,14 @@ def _validation_message(
         if others:
             return refusal(EVENT_REPEAT_REFUSAL, arguments, repeat=OMIT)
         return f"{REFUSAL_PREFIX}{EVENT_REPEAT_REFUSAL}"
+    if detail.startswith(
+        ("repeat cannot be null for a one-time schedule", "once jobs require repeat")
+    ):
+        return refusal(
+            f"The job fires once, so repeat cannot be {_json(arguments.get('repeat'))}.",
+            arguments,
+            repeat=1,
+        )
     if detail.startswith("Session does not exist"):
         return (
             f"{REFUSAL_PREFIX}{detail}. Continue this conversation or start each run in a new "
@@ -1122,10 +1151,15 @@ def _validation_message(
         return refusal(f"{detail}.", arguments, deliver="app")
     if detail.startswith("watch applies only"):
         text = 'watch needs a repeating schedule (five cron fields or "every <duration>")'
-        alternatives: list[dict[str, Any]] = [{"schedule": _REPEATING_STAND_IN}]
+        alternatives: list[dict[str, Any]] = [
+            {"schedule": _REPEATING_STAND_IN, "event_id": OMIT, **dict.fromkeys(EMAIL_FIELDS, OMIT)}
+        ]
         if action == "create":
             text += "; to keep this schedule, leave watch out"
-            alternatives.append({"watch": OMIT})
+            alternatives.append({"watch": OMIT, WATCH_RUNS_FIELD: OMIT})
+        elif "watch" not in arguments and WATCH_RUNS_FIELD not in arguments:
+            text += ". To keep this schedule, stop watching with watch: none"
+            alternatives.insert(0, {"watch": NO_WATCH})
         calls = " or ".join(render_call(arguments, **fields) for fields in alternatives)
         return f"{REFUSAL_PREFIX}{text}: {calls}"
     if detail.startswith(("email Channel", "Channel ", "an email schedule")):
@@ -1236,11 +1270,22 @@ def _delivery_text(delivery: CronDelivery | None) -> str:
     return f"chat {delivery.platform_target}{thread} of Channel {delivery.channel_id}"
 
 
-def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
+def _job_block(
+    cron_service: CronService, job: CronJob, zone: ZoneInfo, *, full_prompt: bool
+) -> str:
     fields = {key: value for key, value in _job_fields(cron_service, job, zone).items() if value}
+    if fields.get("notification_policy") == "all":
+        del fields["notification_policy"]
     lines = [f"{key}: {value}" for key, value in fields.items()]
     prompt_lines = job.prompt.splitlines() or [""]
+    truncated = not full_prompt and (len(prompt_lines) > 1 or len(prompt_lines[0]) > 200)
+    if not full_prompt:
+        prompt_lines = [prompt_lines[0][:200]]
     lines.append("prompt: " + "\n  ".join(prompt_lines))
+    if truncated:
+        lines.append(
+            f'note: prompt shortened; {{"action":"list","id":"{job.id}"}} shows it in full.'
+        )
     if job.status == "failed":
         lines.append(
             f"note: stopped after {'failed checks or runs' if job.watch else 'failed runs'}; "

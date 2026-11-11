@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock
@@ -21,6 +23,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
 )
 from core.sessions import SessionAddress
+from core.tools import definition_change_announced
 from core.tools._cron_arguments import render_call
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import (
@@ -39,7 +42,7 @@ def _error(envelope: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], envelope["error"])
 
 
-def test_schema_advertises_only_the_canonical_fields() -> None:
+def test_schema_advertises_only_the_canonical_fields(tmp_path: Path) -> None:
     properties = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"])
     # Accepted time zone and paused-state spellings are never advertised.
     assert list(properties) == [
@@ -73,10 +76,23 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "disable",
     ]
     assert CRON_TOOL_PARAMETERS["required"] == ["action"]
-    assert properties["repeat"]["type"] == ["integer", "null"]
+    assert properties["repeat"]["type"] == "integer"
+    assert properties["repeat"]["minimum"] == 0
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in properties.values()
+    )
+    tool = cron_tool(tmp_path)
+    current = next(
+        definition
+        for definition in tool.registry.provider_definitions()
+        if definition["name"] == CRON_TOOL_NAME
+    )
+    pinned = deepcopy(current)
+    pinned["parameters"]["properties"]["repeat"].update(type=["integer", "null"], minimum=1)
+    # Sessions must adopt the integer schema before null dialects normalize to 0.
+    assert definition_change_announced(
+        tool.registry.get(CRON_TOOL_NAME).announce_changes, pinned, current
     )
 
 
@@ -160,16 +176,31 @@ def test_one_time_job_shows_its_local_time_once(tmp_path: Path) -> None:
     assert "repeat" not in text
 
 
-@pytest.mark.parametrize(("action", "repeat"), [("create", 2), ("create", None), ("update", None)])
+@pytest.mark.parametrize(
+    ("action", "send_schedule"), [("create", True), ("update", True), ("update", False)]
+)
+@pytest.mark.parametrize("repeat", [2, 0, None, "unlimited"])
 def test_one_time_schedule_refuses_another_repeat(
-    tmp_path: Path, action: str, repeat: int | None
+    tmp_path: Path, action: str, send_schedule: bool, repeat: int | str | None
 ) -> None:
     tool = cron_tool(tmp_path)
-    created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 1d"})
+    created, _ = tool.call(
+        {
+            "action": "create",
+            "prompt": PROMPT,
+            "schedule": "every 1d" if send_schedule else "in 30m",
+        }
+    )
     subject = {"prompt": PROMPT} if action == "create" else {"id": created["data"]["id"]}
+    before = [job.to_dict() for job in tool.jobs()]
 
     envelope, _text = tool.call(
-        {"action": action, **subject, "schedule": "in 30m", "repeat": repeat}
+        {
+            "action": action,
+            **subject,
+            **({"schedule": "in 30m"} if send_schedule else {}),
+            "repeat": repeat,
+        }
     )
 
     error = _error(envelope)
@@ -177,7 +208,10 @@ def test_one_time_schedule_refuses_another_repeat(
     assert "fires once" in error["message"]
     assert '"repeat":1' in error["message"]
     assert "retryable" not in error
-    assert [(job.schedule_type, job.remaining_runs) for job in tool.jobs()] == [("interval", None)]
+    assert [job.to_dict() for job in tool.jobs()] == before
+    assert "null" not in error["message"]
+    corrected = json.loads(error["message"].split(" Send: ", 1)[1])
+    tool.succeeded(corrected)
 
 
 def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
@@ -212,7 +246,13 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
     assert header == "jobs: 2\ntimezone: Europe/Berlin"
     assert "name: Digest\nstatus: active\nschedule: 0 8 * * *\n" in digest
     assert "last_outcome: success (answered [SILENT])" in digest
-    assert digest.endswith("prompt: Write the digest.\n  Keep it short.")
+    assert "prompt: Write the digest." in digest
+    assert "Keep it short." not in digest
+    assert json.loads(digest[digest.index('{"action":"list"') :].split(" shows", 1)[0]) == {
+        "action": "list",
+        "id": quiet.id,
+    }
+    assert "notification_policy: all" not in text
     assert "status: failed" in stopped
     assert "next_run" not in stopped
     assert "last_run: 2026-01-05T09:00:00+01:00" in stopped
@@ -227,8 +267,15 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
 
 def test_list_with_an_id_shows_that_job(tmp_path: Path) -> None:
     tool = cron_tool(tmp_path)
+    prompt = "A" * 300 + "\nKeep the complete instruction."
     first, _ = tool.call(
-        {"action": "create", "name": "First", "prompt": PROMPT, "schedule": "every 2h"}
+        {
+            "action": "create",
+            "name": "First",
+            "prompt": prompt,
+            "schedule": "every 2h",
+            "notification_policy": "errors",
+        }
     )
     tool.call({"action": "create", "name": "Second", "prompt": PROMPT, "schedule": "every 3h"})
 
@@ -237,6 +284,11 @@ def test_list_with_an_id_shows_that_job(tmp_path: Path) -> None:
     assert "jobs: 1" in text
     assert "name: First" in text
     assert "Second" not in text
+    assert "prompt: " + prompt.replace("\n", "\n  ") in text
+    assert "notification_policy: errors" in text
+    overview = tool.succeeded({"action": "list"})
+    assert "A" * 200 in overview and "A" * 201 not in overview
+    assert "Keep the complete instruction." not in overview
 
 
 def test_empty_list_has_no_body(tmp_path: Path) -> None:
@@ -426,13 +478,16 @@ def test_a_restricted_session_pins_jobs_only_to_its_own_session_tree(tmp_path: P
     assert len(tool.jobs()) == 6
 
 
-def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("repeat", [0, "0", 0.0, None, "unlimited"])
+def test_update_with_unlimited_repeat_removes_the_limit(tmp_path: Path, repeat: Any) -> None:
     tool = cron_tool(tmp_path)
     created, _ = tool.call(
         {"action": "create", "prompt": PROMPT, "schedule": "every 2h", "repeat": 3}
     )
 
-    tool.call({"action": "update", "id": created["data"]["id"], "repeat": None})
+    tool.succeeded({"action": "update", "id": created["data"]["id"], "name": "Unchanged limit"})
+    assert tool.only_job().remaining_runs == 3
+    tool.succeeded({"action": "update", "id": created["data"]["id"], "repeat": repeat})
 
     assert tool.only_job().remaining_runs is None
 
@@ -1047,6 +1102,8 @@ def test_event_job_without_an_occurrence_ahead_says_so(tmp_path: Path) -> None:
 def test_list_with_an_event_id_shows_the_jobs_at_that_event(tmp_path: Path) -> None:
     tool = cron_tool(tmp_path)
     standup = _standup(tool)
+    empty, _ = tool.call({"action": "list", "event_id": standup})
+    assert empty["ok"] is True and empty["data"]["jobs"] == 0
     tool.add_job(name="Elsewhere")
     tool.succeeded(
         {
@@ -1086,14 +1143,16 @@ def test_event_job_refuses_repeat(tmp_path: Path, action: str) -> None:
 
 
 @pytest.mark.parametrize("calendar_offered", [True, False])
-def test_unknown_event_is_refused(tmp_path: Path, calendar_offered: bool) -> None:
+@pytest.mark.parametrize("action", ["create", "list"])
+def test_unknown_event_is_refused(tmp_path: Path, calendar_offered: bool, action: str) -> None:
     tool = scheduling_tools(
         tmp_path, offered=("calendar", "cron") if calendar_offered else ("cron",)
     )[1]
 
-    message = tool.refused(
-        {"action": "create", "event_id": "evt_missing", "prompt": PROMPT, "schedule": "start"}
-    )
+    call = {"action": action, "event_id": "evt_missing"}
+    if action == "create":
+        call.update(prompt=PROMPT, schedule="start")
+    message = tool.refused(call)
 
     listing = " The calendar list shows events and their ids." if calendar_offered else ""
     assert message == f'cron was not run: no calendar event has id "evt_missing".{listing}'

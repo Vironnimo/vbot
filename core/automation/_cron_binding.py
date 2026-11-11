@@ -140,14 +140,19 @@ class CronEventBinding:
         """Refuse an event job whose calendar event does not exist."""
         if job.schedule_type != "event":
             return
+        assert job.event_id is not None
+        self._require_event(job.event_id)
+
+    def _require_event(self, event_id: str) -> None:
+        """Validate an explicit event target without treating unavailable storage as absence."""
         if self._owner._calendar is None:
             raise CronJobValidationError("Calendar events are not available for cron jobs")
         try:
-            event = self._event_of(job)
+            self._owner._calendar.get_event(event_id)
+        except CalendarEventNotFoundError as error:
+            raise CronJobValidationError(f"Calendar event not found: {event_id}") from error
         except CalendarStorageError as error:
             raise CronStorageError(f"The calendar cannot be read: {error}") from error
-        if event is None:
-            raise CronJobValidationError(f"Calendar event not found: {job.event_id}")
 
 
 _LOGGER = get_logger("automation.cron")

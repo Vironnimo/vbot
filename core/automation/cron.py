@@ -552,6 +552,8 @@ class CronService:
     def list_jobs(self, *, event_id: str | None = None) -> list[CronJob]:
         """List persisted cron jobs in created order; with ``event_id``, that event's jobs."""
         self._ensure_jobs_loaded(allow_degraded=True)
+        if event_id is not None:
+            self._event_binding._require_event(event_id)
         ordered = sorted(self._jobs.values(), key=lambda value: (value.created_at, value.id))
         return [
             self._clone_job(job)

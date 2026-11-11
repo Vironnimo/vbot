@@ -471,7 +471,8 @@ def _read_event_schedule(
         arguments["schedule"] = " ".join(str(candidates[0][1]).split())
     if not bound:
         return
-    if arguments.pop("repeat", None) is not None:
+    repeat = arguments.pop("repeat", None)
+    if repeat is not None and (type(repeat) is not int or repeat != 0):
         problems.add(EVENT_REPEAT_REFUSAL)
     arguments.pop(TIMEZONE_FIELD, None)
 
