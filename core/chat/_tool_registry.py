@@ -118,8 +118,8 @@ class _EmittingToolRegistry(ToolRegistry):
             capture = getattr(self._registry, "capture_output_secrets", None)
             if capture is not None:
                 local_masker = await capture(context, (result, display))
-                result = local_masker.mask_value(result)
-                display = local_masker.mask_value(display)
+                result = local_masker.mask_value(result, include_keys=True)
+                display = local_masker.mask_value(display, include_keys=True)
         except Exception as error:
             _LOGGER.warning(
                 "Tool output withheld after Secret capture failed (tool=%s error=%s)",
@@ -708,7 +708,7 @@ def _leaving_call[T](masker: SecretMasker, value: T) -> T:
     A Tool's text can hold a lone surrogate (a byte that was no UTF-8, read
     with ``surrogateescape``); UTF-8 cannot encode it for history or a Provider.
     """
-    return without_lone_surrogates(masker.mask_value(value))
+    return without_lone_surrogates(masker.mask_value(value, include_keys=True))
 
 
 def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:

@@ -18,6 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -430,9 +431,20 @@ class CommandCheckpoints:
         assert entry.body is not None
         while entry.pending:
             if self._secrets is not None:
-                entry.body = await self.store.run_async(
-                    self._secrets.protect_output, entry.report.owner, entry.body
-                )
+                try:
+                    entry.body = await self.store.run_async(
+                        self._secrets.protect_output,
+                        entry.report.owner,
+                        entry.body,
+                        resolve_address=partial(
+                            self.store.generation_address,
+                            self._generations[entry.report.command_id],
+                        ),
+                    )
+                except SessionNotFoundError:
+                    entry.pending = False
+                    self._save(entry)
+                    return
             if await self.store.run_async(
                 self.store.background_command_delivered, entry.report.command_id, entry.body
             ):

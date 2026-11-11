@@ -335,7 +335,9 @@ class ToolRegistry:
     async def capture_output_secrets(self, context: ToolContext, value: Any) -> SecretMasker:
         """Capture new API keys before Chat publishes a Tool result or its display."""
         candidates = [
-            (key.name, key.value) for text in iter_strings(value) for key in detect_api_keys(text)
+            (key.name, key.value)
+            for text in iter_strings(value, include_keys=True)
+            for key in detect_api_keys(text)
         ]
         if not candidates:
             return EMPTY_MASKER

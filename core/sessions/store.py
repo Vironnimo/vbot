@@ -551,25 +551,7 @@ class SessionStore:
         continued.
         """
 
-        if tool_results:
-            tool_results = {
-                call_id: replace(
-                    facts,
-                    payloads=tuple(
-                        replace(
-                            payload,
-                            sealed_payload="sealed:1:"
-                            + self._secrets.seal_data(
-                                replace_lone_surrogates(payload.payload_json).encode("utf-8"),
-                                purpose="session-tool-payload/1",
-                                identity=f"{payload.owner_name}\0{payload.payload_id}",
-                            ),
-                        )
-                        for payload in facts.payloads
-                    ),
-                )
-                for call_id, facts in tool_results.items()
-            }
+        tool_results = self._seal_tool_results(tool_results)
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
             if expected_generation_id is not None:
@@ -730,6 +712,32 @@ class SessionStore:
             )
         )
         return self._open_tool_payload(content, payload_id, owner_name)
+
+    def _seal_tool_results(
+        self, tool_results: Mapping[str, ToolResultFacts] | None
+    ) -> Mapping[str, ToolResultFacts] | None:
+        """Prepare ordinary and receipt-bearing appends before their transaction."""
+        if tool_results:
+            tool_results = {
+                call_id: replace(
+                    facts,
+                    payloads=tuple(
+                        replace(
+                            payload,
+                            sealed_payload="sealed:1:"
+                            + self._secrets.seal_data(
+                                replace_lone_surrogates(payload.payload_json).encode("utf-8"),
+                                purpose="session-tool-payload/1",
+                                identity=f"{payload.owner_name}\0{payload.payload_id}",
+                            ),
+                        )
+                        for payload in facts.payloads
+                    ),
+                )
+                for call_id, facts in tool_results.items()
+            }
+
+        return tool_results
 
     def _open_tool_payload(
         self, content: str | None, payload_id: str, owner_name: str

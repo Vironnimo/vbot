@@ -36,6 +36,7 @@ def append_notes_once(
     notes: Sequence[str],
     *,
     generation_id: str,
+    content_hash: str | None = None,
 ) -> None:
     """Commit a whole external Note batch with its receipt, or do nothing on replay."""
     from core.chat.messages import ChatMessage
@@ -45,7 +46,12 @@ def append_notes_once(
     state = _store_values._require_live(connection, address)
     if state["generation_id"] != generation_id:
         raise SessionNotFoundError("External Note delivery belongs to another Session generation")
-    digest = hashlib.sha256(json.dumps(list(notes), ensure_ascii=False).encode()).hexdigest()
+    # A caller that protects the displayed text may retain identity over the
+    # original content, so changed masking never changes delivery identity.
+    digest = (
+        content_hash
+        or hashlib.sha256(json.dumps(list(notes), ensure_ascii=False).encode()).hexdigest()
+    )
     existing = connection.execute(
         "SELECT content_hash FROM session_external_note_receipts "
         "WHERE session_key = ? AND delivery_id = ?",

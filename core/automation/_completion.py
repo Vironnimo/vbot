@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
@@ -93,6 +94,10 @@ class _CompletionNotice:
     subagent_message: SubAgentMessage | None = None
     schedule_options: dict[str, Any] = field(default_factory=dict)
     expected_session_generation_id: str | None = None
+    # Retain producer input until durable delivery. A relocated retry must
+    # protect against its current scope, rather than reuse an earlier mask.
+    original_body: str | None = None
+    original_subagent_message: SubAgentMessage | None = None
 
     @property
     def read(self) -> bool:
@@ -441,6 +446,18 @@ class _CompletionDeliveryCoordinator:
         _claim(pending, True)
         try:
             await self._protect_notices(address, pending)
+            if self._secrets is not None and (
+                error := await self._follow_moved_sessions(bucket, pending)
+            ):
+                raise error
+            remaining = self._still_pending(bucket, pending)
+            if self._closed or any(notice.suppress_run for notice in remaining):
+                _claim(pending, False)
+                return None
+            _claim([notice for notice in pending if notice not in remaining], False)
+            pending = remaining
+            if not pending:
+                return None
             message = ChatMessage.note(
                 _completion_message(pending), subagent_messages=_subagent_messages(pending)
             )
@@ -562,6 +579,20 @@ class _CompletionDeliveryCoordinator:
                 _claim(pending, True)
                 try:
                     await self._protect_notices(address, pending)
+                    if self._secrets is not None and (
+                        error := await self._follow_moved_sessions(bucket, pending)
+                    ):
+                        raise error
+                    _claim(pending, False)
+                    if self._closed:
+                        return
+                    pending = self._reject_inadmissible_owned(
+                        address, bucket, self._still_pending(bucket, pending)
+                    )
+                    if not pending or any(notice.suppress_run for notice in pending):
+                        continue
+                    _claim(pending, True)
+                    expected_generation = pending[0].expected_session_generation_id
                     message = _completion_message(pending, follow_up=owner is None)
                     if owner is not None:
                         # Each origin keeps its exact lifetime owner even if a target
@@ -926,8 +957,24 @@ class _CompletionDeliveryCoordinator:
             _claim(pending, True)
             try:
                 await self._protect_notices(address, pending)
+                if self._secrets is not None and (
+                    relocation_error := await self._follow_moved_sessions(bucket, pending)
+                ):
+                    raise relocation_error
+                remaining = self._reject_inadmissible_owned(
+                    address, bucket, self._still_pending(bucket, pending)
+                )
+                _claim([notice for notice in pending if notice not in remaining], False)
+                pending = remaining
+                if not pending:
+                    return None
             except BaseException as error:
                 _claim(pending, False)
+                if isinstance(error, SessionNotFoundError):
+                    if relocation_error := await self._follow_moved_sessions(bucket, pending):
+                        return relocation_error
+                    self._fail(bucket, self._still_pending(bucket, pending), error)
+                    return None
                 if isinstance(error, Exception):
                     return error
                 raise
@@ -970,17 +1017,35 @@ class _CompletionDeliveryCoordinator:
     ) -> None:
         if self._secrets is None:
             return
+        sessions = self._sessions
+        if sessions is not None and any(
+            notice.expected_session_generation_id is None for notice in notices
+        ):
+            versions = await sessions.run_async(sessions.list_history_versions, [address])
+            version = versions.get(address)
+            if version is None:
+                raise SessionNotFoundError("The output's Session no longer exists")
+            for notice in notices:
+                if notice.expected_session_generation_id is None:
+                    notice.expected_session_generation_id = version[0]
         for notice in notices:
             if notice.read_after is None:
-                notice.body = await finish_despite_cancel(
-                    asyncio.to_thread(self._secrets.protect_output, address, notice.body)
+                resolve = (
+                    partial(sessions.generation_address, notice.expected_session_generation_id)
+                    if sessions is not None and notice.expected_session_generation_id is not None
+                    else None
                 )
-                if display := notice.subagent_message:
-                    title = await finish_despite_cancel(
-                        asyncio.to_thread(self._secrets.protect_output, address, display.title)
-                    )
+                protect = partial(self._secrets.protect_output, address, resolve_address=resolve)
+                if notice.original_body is None:
+                    notice.original_body = notice.body
+                    notice.original_subagent_message = notice.subagent_message
+                notice.body = await finish_despite_cancel(
+                    asyncio.to_thread(protect, notice.original_body)
+                )
+                if display := notice.original_subagent_message:
+                    title = await finish_despite_cancel(asyncio.to_thread(protect, display.title))
                     content = await finish_despite_cancel(
-                        asyncio.to_thread(self._secrets.protect_output, address, display.content)
+                        asyncio.to_thread(protect, display.content)
                     )
                     notice.subagent_message = replace(display, title=title, content=content)
 

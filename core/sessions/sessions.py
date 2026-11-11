@@ -623,6 +623,7 @@ class ChatSessionManager:
         content: str,
         *,
         owner_name: str,
+        protected_content: str,
     ) -> bool:
         """Persist a late Extension outcome once, without rerunning the invocation."""
         return await self.run_async(
@@ -630,6 +631,7 @@ class ChatSessionManager:
             receipt_id,
             content,
             owner_name=owner_name,
+            protected_content=protected_content,
         )
 
     async def prepare_tool_outcome_async(

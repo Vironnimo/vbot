@@ -106,6 +106,7 @@ def session_database_spec(
             Migration("sessions.0011_session_messages", breaks_older=True),
             # Older readers cannot open protected opaque Tool payloads/checkpoints.
             Migration("sessions.0012_protected_tool_data", breaks_older=True),
+            Migration("sessions.0013_protected_tool_outcomes", breaks_older=True),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,

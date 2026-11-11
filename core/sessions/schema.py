@@ -788,6 +788,7 @@ CREATE TABLE extension_tool_receipts (
   execution_owner_json TEXT NOT NULL CHECK (json_valid(execution_owner_json)),
   deferred INTEGER NOT NULL DEFAULT 0,
   outcome_content TEXT,
+  outcome_fingerprint TEXT,
   outcome_delivered INTEGER NOT NULL DEFAULT 0,
   UNIQUE (owner_name, call_key)
 ) STRICT;
