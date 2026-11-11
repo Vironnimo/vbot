@@ -642,6 +642,12 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
             paths=("write w/p/** (work tree) (git)",),
             unresolved=("path_write",),
         ),
+        case(
+            'set "GIT_DIR=../../outside/.git"&& bash -c "git reset --hard"',
+            id="a nested shell inherits the cmd environment assignment",
+            paths=("write w/p/** (work tree) (git)",),
+            unresolved=("path_write",),
+        ),
     ],
 )
 @pytest.mark.asyncio

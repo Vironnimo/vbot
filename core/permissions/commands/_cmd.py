@@ -217,8 +217,10 @@ def _strip_conditions(words: list[Word], script: Script) -> list[Word]:
     if words and _static(words[0]).lower() == "set" and len(words) > 1:
         assignment = next((word for word in words[1:] if "=" in _static(word)), None)
         if assignment is not None:
-            name = _static(assignment).split("=", 1)[0].strip('"').lower()
-            script.assigned.add("env:" + name)
+            name = _static(assignment).split("=", 1)[0].strip('"')
+            # Keep the spelling inherited by programs as well as cmd's folded
+            # variable reference, also when analyzing a cmd line on POSIX.
+            script.assigned.update(("env:" + name, "env:" + name.lower()))
     return words
 
 
