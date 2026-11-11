@@ -37,6 +37,20 @@ _RULES = tuple(
 _PREFIXES = re.compile(
     rf"(?<![{_TOKEN}])(?:{'|'.join(re.escape(prefix) for prefix in _SPEC['draft_prefixes'])})"
 )
+_GROWING_KEY = re.compile(
+    rf"(?<![{_TOKEN}])(?:{'|'.join(re.escape(prefix) for prefix in _SPEC['draft_prefixes'])})"
+    rf"[{_TOKEN}]*\Z"
+)
+
+
+def complete_output_prefix(text: str) -> str:
+    """Hold back a possible API key at the open end of a live output snapshot.
+
+    A final Tool Result still goes through complete detection unchanged. Live
+    output must wait for a delimiter before capturing a variable-length key.
+    """
+    match = _GROWING_KEY.search(text)
+    return text if match is None else text[: match.start()]
 
 
 def detect_api_keys(text: str) -> list[DetectedApiKey]:

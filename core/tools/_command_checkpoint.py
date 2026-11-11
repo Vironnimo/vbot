@@ -27,6 +27,7 @@ from core.permissions import (
     normalize_permission_rules,
 )
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
@@ -99,8 +100,15 @@ class _Recovered:
 
 
 class CommandCheckpoints:
-    def __init__(self, store: CommandCheckpointStore, *, retention_seconds: float) -> None:
+    def __init__(
+        self,
+        store: CommandCheckpointStore,
+        *,
+        retention_seconds: float,
+        secrets: AgentSecrets | None = None,
+    ) -> None:
         self.store = store
+        self._secrets = secrets
         self._retention_seconds = retention_seconds
         self._retained_until: dict[str, float] = {}
         # When each command started, in seconds since the epoch.
@@ -421,6 +429,10 @@ class CommandCheckpoints:
     async def _deliver(self, entry: _Recovered, sink: CompletionSink) -> None:
         assert entry.body is not None
         while entry.pending:
+            if self._secrets is not None:
+                entry.body = await self.store.run_async(
+                    self._secrets.protect_output, entry.report.owner, entry.body
+                )
             if await self.store.run_async(
                 self.store.background_command_delivered, entry.report.command_id, entry.body
             ):

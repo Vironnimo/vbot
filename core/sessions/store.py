@@ -7,12 +7,14 @@ import sqlite3
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.database import Database, DatabaseError, open_database
 from core.database.snapshots import read_retained_snapshot_members
+from core.secrets.store import SecretStore
 from core.sessions import (
     _store_accessor_inputs,
     _store_archive,
@@ -45,6 +47,7 @@ from core.sessions._types import (
     SessionSearchResult,
 )
 from core.sessions.errors import FtsHealth, SessionNotFoundError
+from core.utils.surrogates import replace_lone_surrogates
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -99,9 +102,10 @@ class SessionStore:
     one complete domain step.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, secrets: SecretStore | None = None) -> None:
         self.execution = SessionExecutionStore(self)
         self.path = Path(path)
+        self._secrets = secrets if secrets is not None else SecretStore(self.path.parent)
         self._health = SessionHealth()
         self._database = open_database(session_database_spec(self.path, health=self._health))
         self._metadata_revision = 0
@@ -547,6 +551,26 @@ class SessionStore:
         continued.
         """
 
+        if tool_results:
+            tool_results = {
+                call_id: replace(
+                    facts,
+                    payloads=tuple(
+                        replace(
+                            payload,
+                            sealed_payload="sealed:1:"
+                            + self._secrets.seal_data(
+                                replace_lone_surrogates(payload.payload_json).encode("utf-8"),
+                                purpose="session-tool-payload/1",
+                                identity=f"{payload.owner_name}\0{payload.payload_id}",
+                            ),
+                        )
+                        for payload in facts.payloads
+                    ),
+                )
+                for call_id, facts in tool_results.items()
+            }
+
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
             if expected_generation_id is not None:
                 state = _store_values._require_live(connection, address)
@@ -692,18 +716,31 @@ class SessionStore:
     def tool_result_payload(
         self, address: SessionAddress, payload_id: str, *, owner_name: str
     ) -> str | None:
-        return self._read(
+        content = self._read(
             lambda connection: _store_history.tool_result_payload(
                 connection, address, payload_id, owner_name
             )
         )
+        return self._open_tool_payload(content, payload_id, owner_name)
 
     def tool_result_payload_by_id(self, payload_id: str, *, owner_name: str) -> str | None:
-        return self._read(
+        content = self._read(
             lambda connection: _store_history.tool_result_payload_by_id(
                 connection, payload_id, owner_name
             )
         )
+        return self._open_tool_payload(content, payload_id, owner_name)
+
+    def _open_tool_payload(
+        self, content: str | None, payload_id: str, owner_name: str
+    ) -> str | None:
+        if content is None or not content.startswith("sealed:1:"):
+            return content
+        return self._secrets.open_data(
+            content.removeprefix("sealed:1:"),
+            purpose="session-tool-payload/1",
+            identity=f"{owner_name}\0{payload_id}",
+        ).decode("utf-8")
 
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
         return self._read_decoded(

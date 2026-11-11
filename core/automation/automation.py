@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from core.projects import AgentOverrides
     from core.runs import RunContinuationSource
     from core.runtime.runtime import Runtime
+    from core.secrets.agent_secrets import AgentSecrets
     from core.sessions import ChatSession, ChatSessionManager
 
 from core.automation._completion import (
@@ -104,6 +105,7 @@ class TriggerService:
         *,
         sessions: ChatSessionManager | None = None,
         secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
+        secrets: AgentSecrets | None = None,
     ) -> None:
         self._chat_loop = chat_loop
         self._chat_run_manager = chat_run_manager
@@ -113,6 +115,7 @@ class TriggerService:
             chat_run_manager,
             sessions,
             secret_masker,
+            secrets,
         )
 
     def submit_completion(

@@ -526,7 +526,13 @@ class ShellTool:
         async def progress(output: str) -> None:
             command_id = await started
             if self._secrets is not None:
-                output = self._secrets.masker.mask_growing(output)
+                output = await run_tool_worker(
+                    self._secrets.protect_output,
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
+                    output,
+                    passed_only=context.subagent_session,
+                    growing=True,
+                )
             await context.emit(
                 TOOL_CALL_OUTPUT_EVENT,
                 {"tool_call_id": context.tool_call_id, "command_id": command_id, "output": output},

@@ -526,18 +526,30 @@ def link_tool_result(
     if facts is not None and facts.payloads:
         created_at = _store_values._timestamp(message.timestamp, "Message timestamp")
         payloads = [
-            (payload.payload_id, payload.owner_name, replace_lone_surrogates(payload.payload_json))
+            (
+                payload.payload_id,
+                payload.owner_name,
+                replace_lone_surrogates(payload.payload_json),
+                payload.sealed_payload,
+            )
             for payload in facts.payloads
         ]
         connection.executemany(
             "INSERT INTO tool_result_payloads (payload_id, call_key, owner_name, created_at, "
-            "payload_json) VALUES (?, ?, ?, ?, ?)",
+            "payload_json, sealed_payload) VALUES (?, ?, ?, ?, ?, ?)",
             [
-                (payload_id, call_key, owner_name, created_at, payload_json)
-                for payload_id, owner_name, payload_json in payloads
+                (
+                    payload_id,
+                    call_key,
+                    owner_name,
+                    created_at,
+                    payload_json if sealed is None else "null",
+                    sealed,
+                )
+                for payload_id, owner_name, payload_json, sealed in payloads
             ],
         )
-        for _payload_id, _owner_name, payload_json in payloads:
+        for _payload_id, _owner_name, payload_json, _sealed in payloads:
             _store_attachments.record(connection, entry_key, json.loads(payload_json))
 
 

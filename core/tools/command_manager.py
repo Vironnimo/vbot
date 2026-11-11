@@ -70,6 +70,7 @@ from pathlib import Path
 
 from core.permissions import PermissionBoundary
 from core.runs import RunExecutionOwner
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.file_status import is_dir_strict
@@ -161,6 +162,7 @@ class CommandManager:
         output_host: InterpreterHost | None = None,
         checkpoint_store: CommandCheckpointStore | None = None,
         read_listening: ListeningReader = listening_pids,
+        secrets: AgentSecrets | None = None,
     ) -> None:
         """*output_host* cleans the commands' output; by default the manager
         owns one with subinterpreter workers and closes it with itself."""
@@ -180,7 +182,9 @@ class CommandManager:
         self._owns_output_host = output_host is None
         self._output_host = output_host or command_output_host()
         self._checkpoints = (
-            CommandCheckpoints(checkpoint_store, retention_seconds=retention_seconds)
+            CommandCheckpoints(
+                checkpoint_store, retention_seconds=retention_seconds, secrets=secrets
+            )
             if checkpoint_store
             else None
         )

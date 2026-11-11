@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.messages import ToolCall
+from core.database import create_data_snapshot
 from core.sessions import (
     ChatSession,
     ChatSessionManager,
@@ -59,11 +62,22 @@ async def _load(
 
 
 @pytest.mark.asyncio
-async def test_payload_is_visible_to_its_owner_in_its_session_only(manager) -> None:
+async def test_payload_is_visible_to_its_owner_in_its_session_only(manager, tmp_path) -> None:
     session = manager.create("agent", session_id="source")
     other = manager.create("agent", session_id="other")
     _payload_run(session, "run-one", _payload("res_one"), _payload("res_two", value='"text"'))
     _payload_run(other, "run-other", _payload("res_foreign"))
+    key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
+    original = {key: {"token": key, "rows": [1, None, True]}, "attachment_id": "att_payload123"}
+    _payload_run(session, "run-secret", _payload("res_secret", value=json.dumps(original)))
+    assert await _load(manager, session.address, "res_secret") == original
+    assert await manager.tool_result_payload_by_id_async("res_secret", owner_name="mcp") == original
+    assert "att_payload123" in manager.referenced_attachment_ids()
+    snapshot = create_data_snapshot(tmp_path, reason="test", databases=(manager._store.database,))
+    assert snapshot is not None
+    assert key.encode() not in (snapshot / "sessions.db").read_bytes()
+    for path in tmp_path.glob("sessions.db*"):
+        assert key.encode() not in path.read_bytes()
 
     assert await _load(manager, session.address, "res_one") == {"rows": [1]}
     assert await _load(manager, session.address, "res_two") == "text"

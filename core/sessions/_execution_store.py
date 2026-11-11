@@ -436,6 +436,11 @@ class SessionExecutionStore:
         *,
         generation_id: str,
     ) -> None:
+        # A newly created encryption key must be durable before the database
+        # transaction starts (the snapshot freeze owns the opposite lock order).
+        secrets = self._store._secrets
+        if secrets.status().state == "absent":
+            secrets.update(lambda transaction: transaction.ensure_created())
         self._store._execute_write(
             lambda connection: _store_commands.put(
                 connection,
@@ -444,11 +449,14 @@ class SessionExecutionStore:
                 origin_run_id,
                 checkpoint,
                 generation_id=generation_id,
+                secrets=secrets,
             )
         )
 
     def background_command_read(self) -> list[JsonObject]:
-        return self._store._read(_store_commands.read)
+        return self._store._read(
+            lambda connection: _store_commands.read(connection, secrets=self._store._secrets)
+        )
 
     def background_command_delete(self, command_id: str) -> None:
         self._store._execute_write(

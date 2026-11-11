@@ -448,6 +448,7 @@ CREATE TABLE tool_result_payloads (
   owner_name TEXT NOT NULL,
   created_at TEXT NOT NULL,
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  sealed_payload TEXT,
   UNIQUE (call_key, payload_id)
 ) STRICT;
 
@@ -773,6 +774,7 @@ CREATE TABLE session_background_commands (
   session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
   origin_run_id TEXT NOT NULL,
   checkpoint_json TEXT NOT NULL CHECK (json_valid(checkpoint_json)),
+  sealed_checkpoint TEXT,
   updated_at TEXT NOT NULL
 ) STRICT;
 -- Session deletion and checkpoint ownership lookup.

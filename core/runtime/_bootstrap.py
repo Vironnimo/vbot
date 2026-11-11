@@ -303,6 +303,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._chat_sessions = ChatSessionManager(
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
+            secrets=runtime._storage.secrets,
         )
         if runtime.safe_startup_mode == "verification":
             # An update's verification start converts the Project configurations an
@@ -783,6 +784,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime,
             sessions=runtime._chat_sessions,
             secret_masker=lambda: runtime.agent_secrets.masker,
+            secrets=runtime._agent_secrets,
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
@@ -796,6 +798,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._trigger_service,
             temporary_files=runtime._storage.temporary_files,
             checkpoint_store=runtime._chat_sessions,
+            secrets=runtime._agent_secrets,
         )
         if runtime._operational_producers == "enabled":
             runtime._command_manager.start(recover=runtime.safe_startup_mode is None)

@@ -28,6 +28,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
+    from core.secrets.agent_secrets import AgentSecrets
     from core.sessions import ChatSession, ChatSessionManager
 
 
@@ -124,11 +125,13 @@ class _CompletionDeliveryCoordinator:
         run_manager: ChatRunManager,
         sessions: ChatSessionManager | None,
         secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
+        secrets: AgentSecrets | None = None,
     ) -> None:
         self._chat_loop = chat_loop
         self._run_manager = run_manager
         self._sessions = sessions
         self._secret_masker = secret_masker
+        self._secrets = secrets
         self._buckets: dict[SessionAddress, _CompletionBucket] = {}
         self._suppressed_origins: dict[SessionAddress, list[str]] = {}
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
@@ -301,7 +304,7 @@ class _CompletionDeliveryCoordinator:
             expected_session_generation_id=expected_session_generation_id,
             # Results carry command output and terminal screens: every path
             # into the Session (note, Run input, owned Run) takes this body.
-            body=self._secret_masker().mask(body),
+            body=body if self._secrets is not None else self._secret_masker().mask(body),
             delivered=delivered,
             boundary_run=boundary_run,
             submitted_address=address,
@@ -435,11 +438,12 @@ class _CompletionDeliveryCoordinator:
         if not pending:
             return None
 
-        message = ChatMessage.note(
-            _completion_message(pending), subagent_messages=_subagent_messages(pending)
-        )
         _claim(pending, True)
         try:
+            await self._protect_notices(address, pending)
+            message = ChatMessage.note(
+                _completion_message(pending), subagent_messages=_subagent_messages(pending)
+            )
             # Request-boundary Notes are otherwise deferred. This append must
             # commit before a producer may retire its completion evidence.
             await finish_despite_cancel(session.append_async(message))
@@ -556,8 +560,9 @@ class _CompletionDeliveryCoordinator:
                     )
                 ]
                 _claim(pending, True)
-                message = _completion_message(pending, follow_up=owner is None)
                 try:
+                    await self._protect_notices(address, pending)
+                    message = _completion_message(pending, follow_up=owner is None)
                     if owner is not None:
                         # Each origin keeps its exact lifetime owner even if a target
                         # Session is later reused by unrelated work.
@@ -919,6 +924,13 @@ class _CompletionDeliveryCoordinator:
             if not pending:
                 return None
             _claim(pending, True)
+            try:
+                await self._protect_notices(address, pending)
+            except BaseException as error:
+                _claim(pending, False)
+                if isinstance(error, Exception):
+                    return error
+                raise
             append = asyncio.ensure_future(
                 session.append_many_async(
                     [
@@ -952,6 +964,25 @@ class _CompletionDeliveryCoordinator:
                 return error
             self._acknowledge(address, bucket, pending)
             return None
+
+    async def _protect_notices(
+        self, address: SessionAddress, notices: Sequence[_CompletionNotice]
+    ) -> None:
+        if self._secrets is None:
+            return
+        for notice in notices:
+            if notice.read_after is None:
+                notice.body = await finish_despite_cancel(
+                    asyncio.to_thread(self._secrets.protect_output, address, notice.body)
+                )
+                if display := notice.subagent_message:
+                    title = await finish_despite_cancel(
+                        asyncio.to_thread(self._secrets.protect_output, address, display.title)
+                    )
+                    content = await finish_despite_cancel(
+                        asyncio.to_thread(self._secrets.protect_output, address, display.content)
+                    )
+                    notice.subagent_message = replace(display, title=title, content=content)
 
     def _reject_stale_generation(
         self,

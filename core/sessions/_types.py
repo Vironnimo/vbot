@@ -30,6 +30,9 @@ class ToolResultPayload:
     payload_id: str
     owner_name: str
     payload_json: str
+    # Filled only by SessionStore, before its write transaction. The original
+    # JSON remains in memory for attachment reachability; only ciphertext is stored.
+    sealed_payload: str | None = None
 
 
 @dataclass(frozen=True)

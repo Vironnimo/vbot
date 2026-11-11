@@ -15,6 +15,7 @@ from typing import Any
 
 from core.permissions import PermissionBoundary
 from core.runs import RunExecutionOwner
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._interpreter_host import InterpreterHost
@@ -303,6 +304,7 @@ async def command_harness(
     run_blocking: Callable[..., Awaitable[Any]] = run_inline,
     checkpoint_store: Any = None,
     read_listening: Callable[[], frozenset[int]] = frozenset,
+    secrets: AgentSecrets | None = None,
 ) -> AsyncIterator[Harness]:
     """A started manager over fakes, with its log files under *tmp_path*; closed after.
 
@@ -324,6 +326,7 @@ async def command_harness(
         output_host=InterpreterHost.in_process(),
         checkpoint_store=checkpoint_store,
         read_listening=read_listening,
+        secrets=secrets,
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)
     manager.add_changed_callback(harness.changes.append)

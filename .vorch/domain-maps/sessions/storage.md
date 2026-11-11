@@ -45,6 +45,14 @@ Programmatic Tool activity uses the existing Assistant declaration and Tool Resu
 
 Assistant `thinking_effort` records the effective rendered effort alongside the Model: absent means it was not recorded or a Provider budget has no comparable effort level, an empty string means Provider default, `none` means disabled, and `on` means enabled by a binary toggle without a comparable effort level. An explicit rendered effort level takes precedence. It survives History and lineage copies, but request shaping removes it from Model Context. The nullable `assistant_entries` column is an additive generation-1 change.
 
+## Protected Tool data
+
+New Tool result payloads and background-command checkpoints are encrypted by the Session store using the runtime's shared Secret Store. Their owners read the original JSON back: Extension schemas, checkpoint merges, recovery transcripts and delivery matching retain their contents. Encryption grants no Agent access; completed output and background delivery capture API keys separately (`secrets/agent-secrets.md` -> Masking).
+
+The additive `sealed_payload` and `sealed_checkpoint` columns hold authenticated ciphertext. New writes leave only `null` or `{}` in the legacy JSON columns. Payloads bind to owner and payload id (so lineage copies still open); checkpoints bind to command id. Attachment references are indexed from the original in-memory payload in the same Result transaction. The key is made durable before entering a Session write transaction. An unavailable key or failed authentication never falls back to plaintext. Migration `sessions.0012_protected_tool_data` refuses older readers; existing unprotected rows remain readable and are not retroactively scrubbed from databases or snapshots.
+
+Command and Terminal output files remain unchanged by user decision (2026-11-12). Restart delivery protects the recovered body before acknowledgement matching and Note persistence; the database checkpoint keeps its exact encrypted original. Tests: `test_tool_result_payloads.py`, `test_store_database.py`, `test_command_manager.py` and `test_automation_completion.py`.
+
 ## Kernel integration
 
 Connection and journal policy, the serialized writer, the read pool, error classification, quarantine, data snapshots and metrics are kernel behavior (`database.md`); the Session store adds only the following.

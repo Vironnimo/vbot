@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -29,7 +30,8 @@ from core.runs import (
     RunExecutionOwner,
     RunKind,
 )
-from core.secrets._references import SecretMasker
+from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.store import SecretStore, SecretStoreUnavailableError
 from core.sessions import SessionAddress, SessionNotFoundError
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
@@ -669,12 +671,16 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         return await run_manager.start(_ADDRESS, execute)
 
     completion_loop = SimpleNamespace(start_run=AsyncMock(side_effect=fail_before_input))
+    secrets = AgentSecrets(SecretStore(tmp_path), clock=lambda: datetime.now(UTC))
+    secrets.set_system_values({"GITHUB": "hunter2-very-secret"})
+    discovered = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
     trigger_service = TriggerService(
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
         sessions=sessions,
-        secret_masker=lambda: SecretMasker({"hunter2-very-secret": "{{secret:GITHUB}}"}),
+        secret_masker=lambda: secrets.masker,
+        secrets=secrets,
     )
 
     persisted = asyncio.Event()
@@ -690,7 +696,10 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         SessionAddress(None, "coder", "session-one"),
         notice_id="bash:fallback",
         origin_run_id="origin-run",
-        body="background command finished: hunter2-very-secret",
+        body=f"background command finished: hunter2-very-secret {discovered}",
+        subagent_message=SubAgentMessage(
+            "child", f"child {discovered}", discovered, "message-secret", "coder", "child"
+        ),
         continuation_source=(
             Run(
                 run_id="old",
@@ -726,9 +735,58 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     assert len(notes) == 1
     assert "background command finished: {{secret:GITHUB}}" in notes[0]
     assert "hunter2" not in completion_loop.start_run.await_args.args[1] + notes[0]
+    assert discovered not in completion_loop.start_run.await_args.args[1] + notes[0]
+    captured = secrets.usable(_ADDRESS)
+    assert len(captured) == 1 and captured[0].reference("value") in notes[0]
+    environment = secrets.environment(_ADDRESS, captured[0].name)
+    assert environment is not None and environment[0][captured[0].name] == discovered
+    for path in tmp_path.glob("sessions.db*"):
+        assert discovered.encode() not in path.read_bytes()
     assert trigger_service.pending_completion_wakes(_ADDRESS) == 0
     await trigger_service.aclose()
     await run_manager.aclose()
+
+
+async def test_completion_capture_failure_keeps_output_pending_until_it_can_be_protected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", "session-one")
+    runs = ChatRunManager()
+    secrets = AgentSecrets(SecretStore(tmp_path), clock=lambda: datetime.now(UTC))
+    protect = secrets.protect_output
+    retrying, release = asyncio.Event(), asyncio.Event()
+
+    def unavailable_once(address, body, **kwargs):
+        monkeypatch.setattr(secrets, "protect_output", protect)
+        raise SecretStoreUnavailableError("temporarily unavailable")
+
+    async def wait_for_retry(_delay):
+        retrying.set()
+        await release.wait()
+
+    monkeypatch.setattr(secrets, "protect_output", unavailable_once)
+    monkeypatch.setattr(automation_module, "_sleep", wait_for_retry)
+    service = TriggerService(
+        cast(Any, Mock()), runs, cast(Any, Mock()), sessions=sessions, secrets=secrets
+    )
+    key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
+    delivery = service.submit_completion(
+        _ADDRESS, notice_id="command:secret", origin_run_id="origin", body=key, wake=False
+    )
+    try:
+        await asyncio.wait_for(retrying.wait(), 1)
+        assert not delivery.done()
+        assert _notes(sessions.get(_ADDRESS)) == []
+        release.set()
+        await asyncio.wait_for(delivery, 1)
+        notes = _notes(sessions.get(_ADDRESS))
+        assert len(notes) == 1 and "{{secret:GITHUB_TOKEN}}" in notes[0] and key not in notes[0]
+    finally:
+        release.set()
+        await service.aclose()
+        await runs.aclose()
+        sessions.close()
 
 
 @pytest.mark.parametrize("boundary", ["followup", "read", "append"])

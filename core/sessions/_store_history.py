@@ -297,7 +297,7 @@ def tool_result_payload(
     # CROSS JOIN fixes the order: the payload id index finds the few candidate
     # rows, and only their result entries are tested against the view.
     row = connection.execute(
-        "SELECT p.payload_json FROM tool_result_payloads AS p "
+        "SELECT COALESCE(p.sealed_payload, p.payload_json) FROM tool_result_payloads AS p "
         "CROSS JOIN tool_calls AS c ON c.call_key = p.call_key "
         "CROSS JOIN entries AS r ON r.entry_key = c.result_entry_key "
         f"WHERE p.payload_id = ? AND p.owner_name = ? AND ({visible}) LIMIT 1",
@@ -314,7 +314,7 @@ def tool_result_payload_by_id(
     Copies of one payload share its id and its content, so any row serves.
     """
     row = connection.execute(
-        "SELECT payload_json FROM tool_result_payloads "
+        "SELECT COALESCE(sealed_payload, payload_json) FROM tool_result_payloads "
         "WHERE payload_id = ? AND owner_name = ? LIMIT 1",
         (payload_id, owner_name),
     ).fetchone()

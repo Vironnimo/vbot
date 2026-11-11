@@ -495,6 +495,41 @@ class SecretStore:
             self._view = None
             return self.status()
 
+    def seal_data(
+        self, content: bytes, *, purpose: str, identity: str, create_store: bool = True
+    ) -> str:
+        """Protect an opaque durable payload without changing its contents.
+
+        The ciphertext belongs to this store and the caller's purpose and
+        identity. Create the key before publishing the ciphertext anywhere.
+        Inside a database transaction use ``create_store=False`` after ensuring
+        the key exists: taking the document snapshot lock there would invert
+        the snapshot's database/document lock order.
+        """
+        if create_store and self.status().state == "absent":
+            self.update(lambda transaction: transaction.ensure_created())
+        with self._lock:
+            view = self._current()
+            if view.state != "available" or view.key is None or view.store_id is None:
+                raise SecretStoreUnavailableError(_unavailable_message(view))
+            return seal(
+                view.key,
+                content,
+                associated_data(view.store_id, str(view.key_record["id"]), purpose, identity),
+            )
+
+    def open_data(self, content: str, *, purpose: str, identity: str) -> bytes:
+        """Open a payload protected by :meth:`seal_data`; never create a key."""
+        with self._lock:
+            view = self._current()
+            if view.state != "available" or view.key is None or view.store_id is None:
+                raise SecretStoreUnavailableError(_unavailable_message(view))
+            return open_sealed(
+                view.key,
+                content,
+                associated_data(view.store_id, str(view.key_record["id"]), purpose, identity),
+            )
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------

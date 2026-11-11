@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
@@ -28,6 +29,8 @@ import pytest_asyncio
 from core.database import write_bootstrap_marker
 from core.permissions import PermissionBoundary
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
+from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.store import SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.temp_files import TemporaryFileManager, artifact_owner
 from core.tools import _command_decoding as command_decoding_module
@@ -893,6 +896,9 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "owned_running",
         "owned_ended",
         "owned_delivered",
+        "secret",
+        "secret_delivered",
+        "owned_secret",
         "not_run_once",
     ],
 )
@@ -914,6 +920,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
     )
     running_outcomes = {"running", "moved", "owned_running"}
     restored_owner = OWNER
+    secret_output = outcome in {"secret", "secret_delivered", "owned_secret"}
+    key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
     try:
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
@@ -926,6 +934,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                 await sessions.move(OWNER, restored_owner)
             await harness.manager.to_background_durably(command_id, deliver=True)
+            if secret_output:
+                process.write(key + "\n")
             if outcome == "running":
                 # Output after its last saved state reaches only the raw log.
                 process.write("compiled 3 files\n")
@@ -934,14 +944,22 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 process.exit(9101 if outcome == "not_run_once" else 0)
                 await harness.finish(command_id)
                 await eventually(lambda: bool(harness.sink.submissions))
-            if outcome in {"delivered", "owned_delivered"}:
+            if outcome in {"delivered", "owned_delivered", "secret_delivered"}:
                 # The Session commit succeeded, but its acknowledgement did not
                 # get back to the checkpoint before the server disappeared.
-                await sessions.get(OWNER).add_note_async(harness.sink.bodies[0])
+                body = harness.sink.bodies[0]
+                if secret_output:
+                    secrets = AgentSecrets(SecretStore(data), clock=lambda: datetime.now(UTC))
+                    body = secrets.protect_output(OWNER, body + "\n" + key)
+                await sessions.get(OWNER).add_note_async(body)
             elif outcome == "withdrawn":
                 harness.manager.acknowledge(command_id)
             await harness.manager.flush()
             checkpoint = sessions.background_command_read()[0]["checkpoint"]
+            if secret_output:
+                # The harness formatter contains only status; retain an output
+                # body like the shell's real formatter supplies to checkpoints.
+                checkpoint["body"] = harness.sink.bodies[0] + "\n" + key
             if outcome == "not_run_once":
                 assert checkpoint["consumed_once_secrets"] == ["ONE_TIME"]
                 # Rebuild the delivery from durable metadata after restart.
@@ -971,15 +989,20 @@ async def test_background_checkpoint_recovers_once_after_restart(
         sessions.close()
 
     sessions = ChatSessionManager(data)
+    secrets = AgentSecrets(SecretStore(data), clock=lambda: datetime.now(UTC))
+    secrets.reload()
     try:
-        async with command_harness(tmp_path, checkpoint_store=sessions) as restored:
+        async with command_harness(
+            tmp_path, checkpoint_store=sessions, secrets=secrets
+        ) as restored:
             if outcome in {"replaced_session", "expired"}:
                 await restored.manager.wait_recovered()
                 assert restored.manager.commands([OWNER]) == []
                 assert sessions.background_command_read() == []
                 return
             expected_delivery = (
-                outcome not in {"delivered", "withdrawn"} and execution_owner is None
+                outcome not in {"delivered", "withdrawn", "secret_delivered"}
+                and execution_owner is None
             )
             submission_count = int(expected_delivery)
             if expected_delivery:
@@ -1025,6 +1048,26 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert len(notes) == 1
                 assert command_id in str(notes[0].content)
             report = restored.manager.report(command_id)
+            if secret_output:
+                content = "\n".join(
+                    str(message.content)
+                    for message in sessions.get(restored_owner).load()
+                    if message.role == "note"
+                )
+                assert "{{secret:GITHUB_TOKEN}}" in content and key not in content
+                assert (
+                    len(
+                        [
+                            message
+                            for message in sessions.get(restored_owner).load()
+                            if message.role == "note"
+                        ]
+                    )
+                    == 1
+                )
+                assert report.log_path is not None and key.encode() in report.log_path.read_bytes()
+                for path in data.glob("sessions.db*"):
+                    assert key.encode() not in path.read_bytes()
             assert report.finished
             assert report.owner == restored_owner
             assert report.status == (

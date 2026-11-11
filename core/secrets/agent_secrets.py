@@ -509,6 +509,28 @@ class AgentSecrets:
             self._notify(SecretChange("created", secret, actor))
         return references
 
+    def protect_output(
+        self,
+        address: SessionAddress,
+        text: str,
+        *,
+        passed_only: bool = False,
+        growing: bool = False,
+    ) -> str:
+        """Capture output keys before publication, preserving this Session's references."""
+        from core.secrets.detection import complete_output_prefix, detect_api_keys
+
+        if growing:
+            text = complete_output_prefix(text)
+        candidates = [(item.name, item.value) for item in detect_api_keys(text)]
+        references = (
+            self.capture_api_keys(address, candidates, source="tool", passed_only=passed_only)
+            if candidates
+            else {}
+        )
+        text = SecretMasker(references).mask(text)
+        return self.masker.mask_growing(text) if growing else self.masker.mask(text)
+
     def update(
         self,
         secret_id: str,

@@ -26,6 +26,7 @@ from core.secrets import (
     SecretStoreUnavailableError,
 )
 from core.secrets import store as store_module
+from core.secrets._crypto import SealedEntryError
 from core.utils.atomic import atomic_write_text
 from tests.core.secrets.secrets_test_support import (
     TOKEN_TEXT,
@@ -42,6 +43,28 @@ def _document(path: Path) -> dict[str, Any]:
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+
+
+def test_opaque_data_survives_restart_and_authenticates_its_owner(tmp_path: Path) -> None:
+    data_directory(tmp_path)
+    store = open_store(tmp_path)
+    original = b"an exact binary payload\x00\xff\r\nwith a secret"
+    with pytest.raises(SecretStoreUnavailableError):
+        store.seal_data(original, purpose="test/1", identity="owner\0payload", create_store=False)
+    assert not store.path.exists()
+    sealed = store.seal_data(original, purpose="test/1", identity="owner\0payload")
+    assert original not in sealed.encode()
+    reopened = open_store(tmp_path)
+    assert reopened.open_data(sealed, purpose="test/1", identity="owner\0payload") == original
+    for purpose, identity in (("other/1", "owner\0payload"), ("test/1", "other\0payload")):
+        with pytest.raises(SealedEntryError):
+            reopened.open_data(sealed, purpose=purpose, identity=identity)
+    with pytest.raises(SealedEntryError):
+        reopened.open_data(sealed[:-4] + "AAAA", purpose="test/1", identity="owner\0payload")
+    reopened.path.unlink()
+    with pytest.raises(SecretStoreUnavailableError):
+        reopened.open_data(sealed, purpose="test/1", identity="owner\0payload")
+    assert not reopened.path.exists()
 
 
 def test_entries_round_trip_sealed_in_an_owner_only_document(

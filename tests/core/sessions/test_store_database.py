@@ -47,6 +47,32 @@ def _address(session_id: str, project_id: str | None = None) -> SessionAddress:
     return SessionAddress(project_id=project_id, agent_id="coder", session_id=session_id)
 
 
+def test_background_checkpoints_keep_exact_data_encrypted_across_restarts(tmp_path: Path) -> None:
+    key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
+    checkpoint = {"transcript": {"head": [key], "tail": []}, "body": key, "pending": True}
+    with closing(SessionStore(tmp_path / "sessions.db")) as store:
+        manager = ChatSessionManager(tmp_path, store)
+        session = manager.create("coder", "checkpoint")
+        generation = session.generation_id
+        assert generation is not None
+        manager.background_command_put(
+            session.address, "cmd-secret", "run-one", checkpoint, generation_id=generation
+        )
+        manager.background_command_put(
+            session.address, "cmd-secret", "run-one", {"pending": False}, generation_id=generation
+        )
+        expected = checkpoint | {"pending": False}
+        assert manager.background_command_read()[0]["checkpoint"] == expected
+        snapshot = create_data_snapshot(tmp_path, reason="test", databases=(store.database,))
+        assert snapshot is not None
+        assert key.encode() not in (snapshot / "sessions.db").read_bytes()
+        for path in tmp_path.glob("sessions.db*"):
+            assert key.encode() not in path.read_bytes()
+        manager.close()
+    with closing(SessionStore(tmp_path / "sessions.db")) as reopened:
+        assert reopened.execution.background_command_read()[0]["checkpoint"] == expected
+
+
 def test_the_session_database_is_a_canonical_generation_one_database(tmp_path: Path) -> None:
     spec = session_database_spec(tmp_path / "sessions.db")
 

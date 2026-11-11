@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.database import Database
     from core.runs import Run
+    from core.secrets.store import SecretStore
 
 
 _LOGGER = get_logger("sessions")
@@ -67,10 +68,15 @@ class ChatSessionManager:
     """One SQLite-only Session service, injected into Runtime consumers."""
 
     def __init__(
-        self, data_dir: Path, store: SessionStore | None = None, *, store_path: Path | None = None
+        self,
+        data_dir: Path,
+        store: SessionStore | None = None,
+        *,
+        store_path: Path | None = None,
+        secrets: SecretStore | None = None,
     ) -> None:
         self.data_dir = data_dir
-        self._store = store or SessionStore(store_path or data_dir / "sessions.db")
+        self._store = store or SessionStore(store_path or data_dir / "sessions.db", secrets=secrets)
         self._owns_store = store is None
         self._archive_ledger = SessionArchiveLedger(self._store)
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []

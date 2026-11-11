@@ -6,7 +6,11 @@ from typing import Any, cast
 
 import pytest
 
-from core.secrets.detection import contains_potential_api_key, detect_api_keys
+from core.secrets.detection import (
+    complete_output_prefix,
+    contains_potential_api_key,
+    detect_api_keys,
+)
 
 _CASES = json.loads(Path(__file__).with_name("api_key_detection_cases.json").read_text())
 
@@ -36,6 +40,10 @@ def test_complete_key_formats_preserve_exact_spans(case: dict[str, Any]) -> None
     # Never carve a plausible key out of a longer token.
     assert not detect_api_keys(f"before{value}after")
     assert not detect_api_keys(value + "_")
+    # Live snapshots must not capture an unfinished variable-length credential.
+    assert complete_output_prefix(f"token={value}") == "token="
+    assert complete_output_prefix(f"token={value}\n") == f"token={value}\n"
+    assert complete_output_prefix("ordinary output") == "ordinary output"
 
 
 @pytest.mark.parametrize(
