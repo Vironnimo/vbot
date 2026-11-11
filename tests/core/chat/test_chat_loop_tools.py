@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,6 +17,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSession
 from core.tools import (
     ToolContext,
@@ -40,6 +42,70 @@ from tests.core.chat.chat_loop_tools_test_support import (
     tool_runtime,
     tool_turn,
 )
+from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+
+@pytest.mark.asyncio
+async def test_tool_discovered_key_is_usable_without_plaintext_history(tmp_path: Path) -> None:
+    key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    source = tmp_path / ".env"
+    source.write_text(f"GITHUB_TOKEN={key}\nMODE=dev\n", encoding="utf-8")
+    destination = tmp_path / "copied.env"
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    tools = ToolRegistry()
+    tools.set_secrets(secrets)
+
+    def read(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.add_display_notice("info", f"Read {key}")
+        return tool_success({"content": source.read_text(encoding="utf-8")})
+
+    def use(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        destination.write_text(arguments["content"], encoding="utf-8")
+        return tool_success({"saved": True})
+
+    tools.register(
+        "read_key", "Read the fixture.", {"type": "object"}, read, display=ToolDisplay(details=True)
+    )
+    tools.register(
+        "use_key",
+        "Use the key.",
+        {"type": "object", "properties": {"content": {"type": "string"}}},
+        use,
+        open_input_schema=True,
+        secret_sinks={"content": "files"},
+    )
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            tool_turn(("read", "read_key")),
+            tool_turn(("use", "use_key", {"content": "{{secret:GITHUB_TOKEN}}"})),
+            final("Done"),
+        ],
+    )
+    await build_chat_loop(runtime).send("coder", "Use the key in .env", session_id="session-one")
+
+    assert destination.read_text(encoding="utf-8") == key
+    assert source.read_text(encoding="utf-8") == f"GITHUB_TOKEN={key}\nMODE=dev\n"
+    address = session_address("coder", "session-one")
+    [secret] = secrets.usable(address)
+    assert secret.lifetime == "session"
+    assert secret.created_by == "agent:coder"
+    environment = secrets.environment(address, "GITHUB_TOKEN")
+    assert environment is not None and environment[0] == {"GITHUB_TOKEN": key}
+    assert not secrets.usable(session_address("coder", "other-session"))
+    persisted = [message.to_dict() for message in history(runtime)]
+    assert key not in json.dumps(persisted)
+    assert key not in json.dumps(runtime.adapter.requests)
+    assert "{{secret:GITHUB_TOKEN}}" in json.dumps(persisted)
+    run = runtime.chat_runs.get(persisted[-1]["run_id"])
+    events = await runtime.timelines.events(run)
+    assert key not in json.dumps([event.payload for event in events])
+    for path in tmp_path.glob("sessions.db*"):
+        assert key.encode() not in path.read_bytes()
+    assert key not in secrets._store.path.read_text(encoding="utf-8")
 
 
 def _weather_tools(**options: Any) -> ToolRegistry:

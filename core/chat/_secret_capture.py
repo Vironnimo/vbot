@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from core.chat.content_blocks import TextBlock, masked_content
 from core.chat.errors import ChatError
+from core.secrets.agent_secrets import SecretMasker
 from core.secrets.detection import detect_api_keys
 from core.utils.workers import settle_before_cancelling
 
@@ -28,7 +29,10 @@ async def capture_user_input(
     if candidates:
         if deps.secrets is None:
             raise ChatError("Secret storage is unavailable; the message was not sent.")
-        await settle_before_cancelling(
+        references = await settle_before_cancelling(
             asyncio.to_thread(deps.secrets.capture_api_keys, address, candidates)
         )
+        # Another Session can hold its own copy of a Tool-discovered key under
+        # a different name. Prefer references this receiving Session can use.
+        content = masked_content(content, SecretMasker(references))
     return masked_content(content, deps.secret_masker)

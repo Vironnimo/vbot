@@ -99,7 +99,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 
 ## Agent-facing text
 
-This domain owns the `secrets` Tool definition, results and errors and the `## Secrets` System Prompt block with its Secret lines (`core/tools/secrets.py`), the note `/secret` and its form add to a Session (`core/chat/secret_giving.py`) and the substitution refusals (`SecretUseError` in `core/secrets/agent_secrets.py`). Before you change, add or delete a sentence of them, read `secrets/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add. Shell and Sub-Agent Secret texts: `tools/shell/agent-facing-text.md`, `subagents/agent-facing-text.md`.
+This domain owns the `secrets` Tool definition, results and errors and the `## Secrets` System Prompt block with its Secret lines (`core/tools/secrets.py`), the note `/secret` and its form add to a Session (`core/chat/secret_giving.py`), the substitution refusals (`SecretUseError` in `core/secrets/agent_secrets.py`) and the capture-failure result (`core/chat/_tool_registry.py`). Before editing these texts, read their reasons in `secrets/agent-facing-text.md` and update its rows with every changed or added sentence. Shell and Sub-Agent Secret texts: `tools/shell/agent-facing-text.md`, `subagents/agent-facing-text.md`.
 
 ## References
 

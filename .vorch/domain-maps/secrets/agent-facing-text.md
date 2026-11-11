@@ -39,6 +39,8 @@ The texts were written with the design of 2026-10-21 and have not yet been check
 
 | Text | Reason |
 |---|---|
+| `The call's output was withheld because vBot could not securely store an API key it contains.` (`secret_capture_failed`, `core/chat/_tool_registry.py`) | Explains why an executed Tool's content is unavailable instead of leaking the value or presenting an unusable Secret reference (F4). |
+| `The call may have taken effect; check its outcome before repeating it.` | Secret capture happens after execution, so retrying a mutation can duplicate an effect (F3, F5). |
 | list: `You have no Secrets. Use action request to ask the user for one.` | The empty result names the next call (F4). |
 | list, request and generate results end with `Write a reference where the value belongs; vBot puts the value there, and output shows it to you as the reference.` | Results reach Agents whose System Prompt has no block (Session Secrets, Sub-Agents), so the use rule travels with the Secret. |
 | Source line: `It comes from <source>, which is <state>: ask the user to unlock it in Settings -> Secrets.` | A locked password manager fails at use time; the Agent learns the remedy before it tries. |

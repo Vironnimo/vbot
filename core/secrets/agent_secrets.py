@@ -417,20 +417,49 @@ class AgentSecrets:
         return secret
 
     def capture_api_keys(
-        self, address: SessionAddress, candidates: Sequence[tuple[str, str]]
-    ) -> None:
-        """Atomically store previously unknown user-supplied values for this Session."""
+        self,
+        address: SessionAddress,
+        candidates: Sequence[tuple[str, str]],
+        *,
+        source: Literal["user", "tool"] = "user",
+        passed_only: bool = False,
+    ) -> dict[str, str]:
+        """Capture received values atomically and return their local masking references.
+
+        Human input never grants an already-known value. A Tool may independently
+        rediscover an automatically captured value and receive its own Session
+        copy. Explicit grants, one-time values and retired values stay protected.
+        """
         from core.projects.address import format_agent_address
 
         created: list[AgentSecret] = []
+        references: dict[str, str] = {}
+        actor = f"agent:{address.agent_id}" if source == "tool" else "user"
         with self._lock:
+            usable_values = {
+                field.value: secret.reference(field.name)
+                for secret in self.usable(address, passed_only=passed_only)
+                for field in secret.fields
+                if field.concealed and field.value is not None
+            }
             names = {item.name for item in self.all()}
             names.update(credential_name_key(item).upper() for item in self._credential_names())
             values: set[str] = set()
             for base, value in candidates:
-                if value in values or self.masker.matches_exactly(value):
+                if value in values:
                     continue
                 values.add(value)
+                if value in usable_values:
+                    references[value] = usable_values[value]
+                    continue
+                if self.masker.matches_exactly(value):
+                    rediscovered = source == "tool" and any(
+                        secret.extra.get("captured_from") == "tool"
+                        and any(field.concealed and field.value == value for field in secret.fields)
+                        for secret in self.all()
+                    )
+                    if not rediscovered:
+                        continue
                 base = normalize_secret_name(base)
                 name = base
                 suffix = 2
@@ -460,9 +489,11 @@ class AgentSecrets:
                     sinks=DEFAULT_SINKS["token"],
                     source=None,
                     created_at=self._clock(),
-                    created_by="user",
+                    created_by=actor,
+                    extra={"captured_from": "tool"} if source == "tool" else {},
                 )
                 created.append(secret)
+                references[value] = secret.reference("value")
             if created:
 
                 def write(change: SecretTransaction) -> None:
@@ -473,9 +504,10 @@ class AgentSecrets:
                 self._commit({secret.id: secret for secret in created})
         for secret in created:
             _LOGGER.info(
-                "Agent Secret %s created (kind=token lifetime=session actor=user)", secret.name
+                "Agent Secret %s created (kind=token lifetime=session actor=%s)", secret.name, actor
             )
-            self._notify(SecretChange("created", secret, "user"))
+            self._notify(SecretChange("created", secret, actor))
+        return references
 
     def update(
         self,
@@ -547,6 +579,15 @@ class AgentSecrets:
                 )
             if secret == current:
                 return current
+            if secret.extra.get("captured_from") == "tool":
+                # An explicit edit replaces the automatic capture policy with
+                # the user's chosen lifetime, fields and grants.
+                secret = replace(
+                    secret,
+                    extra={
+                        key: value for key, value in secret.extra.items() if key != "captured_from"
+                    },
+                )
             if (secret.lifetime, secret.session_id, secret.agents) != (
                 current.lifetime,
                 current.session_id,

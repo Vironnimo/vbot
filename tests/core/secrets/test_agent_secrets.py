@@ -559,3 +559,37 @@ def test_capture_api_keys_is_atomic_idempotent_and_never_replaces(
         )
     assert len(secrets.all()) == 2
     assert secrets.masker.mask("new-secret-value-123") == "new-secret-value-123"
+
+
+def test_tool_capture_grants_only_the_session_that_independently_read_the_value(
+    tmp_path: Path,
+) -> None:
+    secrets = _secrets(tmp_path)
+    first = SessionAddress(None, "main", "one")
+    second = SessionAddress("project", "helper", "two")
+    candidates = [("API_KEY", TOKEN)]
+    references = secrets.capture_api_keys(first, candidates, source="tool")
+    assert references == {TOKEN: "{{secret:API_KEY}}"}
+    assert not secrets.usable(second, passed_only=True)
+
+    other_references = secrets.capture_api_keys(second, candidates, source="tool", passed_only=True)
+    assert other_references == {TOKEN: "{{secret:API_KEY_2}}"}
+    assert secrets.capture_api_keys(first, candidates, source="tool") == references
+    assert len(secrets.all()) == 2
+    assert (
+        secrets.substitute(second, other_references[TOKEN], "files", passed_only=True)[0] == TOKEN
+    )
+    secrets.remove_session(first)
+    assert not secrets.usable(first)
+    assert (
+        secrets.substitute(second, other_references[TOKEN], "files", passed_only=True)[0] == TOKEN
+    )
+    reopened = _secrets(tmp_path)
+    assert (
+        reopened.substitute(second, other_references[TOKEN], "files", passed_only=True)[0] == TOKEN
+    )
+    [second_secret] = reopened.usable(second, passed_only=True)
+    reopened.update(second_secret.id, actor="user", sinks=[])
+    third = SessionAddress(None, "main", "three")
+    assert reopened.capture_api_keys(third, candidates, source="tool") == {}
+    assert not reopened.usable(third)

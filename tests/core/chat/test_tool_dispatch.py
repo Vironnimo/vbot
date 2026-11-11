@@ -374,7 +374,7 @@ async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
 async def test_secret_values_leave_a_tool_call_only_as_references(
     tmp_path: Path, retirement: str
 ) -> None:
-    value = "sk-1234567890abcdef"
+    value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if retirement == "delete":
@@ -419,6 +419,51 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
     assert value not in json.dumps(completed.payload["display"])
     assert value not in persisted
     assert completed.payload["display"]["secrets_used"] == ["API.value (files)"]
+    assert len(secrets.all()) == (0 if retirement in {"once", "delete"} else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["error", "display"])
+@pytest.mark.parametrize("store_available", [True, False])
+async def test_discovered_keys_in_failures_and_display_are_captured_or_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, store_available: bool
+) -> None:
+    value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    (tmp_path / "data").mkdir(exist_ok=True)
+    store = SecretStore(
+        tmp_path / "data", protections=(KeyFileProtection(directories=(tmp_path / "keys",)),)
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    tools = ToolRegistry()
+    tools.set_secrets(secrets)
+
+    def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        if surface == "error":
+            return tool_failure("fixture_error", f"Rejected {value}")
+        context.add_display_notice("info", value)
+        return tool_success({"done": True})
+
+    def fail(_change: Any) -> None:
+        raise OSError(f"Cannot store {value}")
+
+    if not store_available:
+        monkeypatch.setattr(store, "update", fail)
+    tools.register(
+        "probe", "Probe.", {"type": "object"}, handler, display=ToolDisplay(details=True)
+    )
+    harness = ToolDispatchHarness(tmp_path, tools)
+    dispatched = await harness.dispatch([call("probe")])
+    [completed] = dispatched.events(TOOL_CALL_RESULT_EVENT)
+    assert value not in json.dumps(completed.payload)
+    assert value not in json.dumps([message.to_dict() for message in dispatched.messages])
+    if store_available:
+        [secret] = secrets.all()
+        assert secret.lifetime == "session"
+        assert "{{secret:GITHUB_TOKEN}}" in json.dumps(completed.payload)
+    else:
+        assert not secrets.all()
+        assert dispatched.results[0]["error"]["code"] == "secret_capture_failed"
+        assert dispatched.results[0]["error"]["retryable"] is False
 
 
 @pytest.mark.asyncio

@@ -110,6 +110,38 @@ class _EmittingToolRegistry(ToolRegistry):
         masker = getattr(self._registry, "secret_masker", None)
         return masker if isinstance(masker, SecretMasker) else EMPTY_MASKER
 
+    async def _protect_result(
+        self, context: ToolContext, result: JsonObject, display: JsonObject
+    ) -> tuple[JsonObject, JsonObject]:
+        """Keep newly read keys usable without publishing or persisting their values."""
+        try:
+            capture = getattr(self._registry, "capture_output_secrets", None)
+            if capture is not None:
+                local_masker = await capture(context, (result, display))
+                result = local_masker.mask_value(result)
+                display = local_masker.mask_value(display)
+        except Exception as error:
+            _LOGGER.warning(
+                "Tool output withheld after Secret capture failed (tool=%s error=%s)",
+                context.tool_name,
+                type(error).__name__,
+            )
+            return (
+                tool_failure(
+                    "secret_capture_failed",
+                    "The call's output was withheld because vBot could not securely store "
+                    "an API key it contains. The call may have taken effect; check its "
+                    "outcome before repeating it.",
+                    retryable=False,
+                ),
+                _empty_tool_display_payload(),
+            )
+        masker = self._secret_masker()
+        return (
+            _leaving_call(masker, context.mask_prepared_secrets(result)),
+            _leaving_call(masker, context.mask_prepared_secrets(display)),
+        )
+
     def _hook_context(self) -> HookContext:
         return HookContext(
             session_id=self._run.session_id,
@@ -344,11 +376,6 @@ class _EmittingToolRegistry(ToolRegistry):
                 result = await self._finish_result_hooks(
                     context, effective_arguments, result, result_contract
                 )
-            # No Secret value and no lone surrogate leaves the call: not to the
-            # Model, the events or the persisted Tool Result.
-            masker = self._secret_masker()
-            result = _leaving_call(masker, context.mask_prepared_secrets(result))
-
             if result.get("ok") is True:
                 context._commit_owned_effects()
             context._commit_worked_paths()
@@ -357,20 +384,20 @@ class _EmittingToolRegistry(ToolRegistry):
             # such as a screenshot of what a failed input step left on screen.
             if context.result_media:
                 self._tool_media[context.tool_call_id] = context.result_media
-            timing = _timing_payload(started_at, started_perf)
-            self._tool_timings[context.tool_call_id] = timing
-            completed_display = _leaving_call(
-                masker,
-                context.mask_prepared_secrets(
-                    _tool_display_payload(
-                        self._registry,
-                        context.tool_name,
-                        effective_arguments,
-                        context=context,
-                        result=result,
-                    )
+            # Capture before masking, including values found only in the display.
+            result, completed_display = await self._protect_result(
+                context,
+                result,
+                _tool_display_payload(
+                    self._registry,
+                    context.tool_name,
+                    effective_arguments,
+                    context=context,
+                    result=result,
                 ),
             )
+            timing = _timing_payload(started_at, started_perf)
+            self._tool_timings[context.tool_call_id] = timing
             self._tool_displays[context.tool_call_id] = completed_display
             error = result.get("error")
             error_code = error.get("code") if isinstance(error, dict) else None
@@ -511,26 +538,18 @@ class _EmittingToolRegistry(ToolRegistry):
         started_perf: float,
     ) -> JsonObject:
         """Finish the lifecycle of a call whose hooks or bookkeeping raised."""
-        masker = self._secret_masker()
-        result = _leaving_call(
-            masker,
-            context.mask_prepared_secrets(tool_failure_for_exception(context.tool_name, error)),
-        )
+        result = tool_failure_for_exception(context.tool_name, error)
         try:
-            display = _leaving_call(
-                masker,
-                context.mask_prepared_secrets(
-                    _tool_display_payload(
-                        self._registry,
-                        context.tool_name,
-                        events.arguments,
-                        context=context,
-                        result=result,
-                    )
-                ),
+            display = _tool_display_payload(
+                self._registry,
+                context.tool_name,
+                events.arguments,
+                context=context,
+                result=result,
             )
         except Exception:
             display = _empty_tool_display_payload()
+        result, display = await self._protect_result(context, result, display)
         fingerprint = _tool_context_schema_fingerprint(self, context)
         if not events.started:
             await self._emit_started(

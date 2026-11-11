@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from difflib import SequenceMatcher
 from typing import Any, cast
 
+from core.secrets._references import iter_strings
 from core.secrets.agent_secrets import (
     EMPTY_MASKER,
     AgentSecrets,
@@ -21,6 +22,8 @@ from core.secrets.agent_secrets import (
     describe_uses,
     has_reference_or_escape,
 )
+from core.secrets.detection import detect_api_keys
+from core.secrets.store import SecretStoreUnavailableError
 from core.sessions import SessionAddress
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
@@ -328,6 +331,24 @@ class ToolRegistry:
     def secret_masker(self) -> SecretMasker:
         """Masks known Secret values in what Tools return (Chat applies it)."""
         return self._secrets.masker if self._secrets is not None else EMPTY_MASKER
+
+    async def capture_output_secrets(self, context: ToolContext, value: Any) -> SecretMasker:
+        """Capture new API keys before Chat publishes a Tool result or its display."""
+        candidates = [
+            (key.name, key.value) for text in iter_strings(value) for key in detect_api_keys(text)
+        ]
+        if not candidates:
+            return EMPTY_MASKER
+        if self._secrets is None:
+            raise SecretStoreUnavailableError("Secret storage is unavailable.")
+        references = await run_tool_worker(
+            self._secrets.capture_api_keys,
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            candidates,
+            source="tool",
+            passed_only=context.subagent_session,
+        )
+        return SecretMasker(references)
 
     def register(
         self,
