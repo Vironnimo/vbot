@@ -43,6 +43,10 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
         "session.delete",
         "archive.restore",
         "archive.purge",
+        "external.list",
+        "external.show",
+        "external.memories",
+        "external.import_session",
     }
 )
 # A Run's SSE stream sends a heartbeat after 10 quiet seconds; six missed

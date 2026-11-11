@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import unicodedata
@@ -53,6 +54,7 @@ from core.memory._history import (
 )
 from core.tools.file_state import FileRead
 from core.utils.atomic import atomic_write_bytes
+from core.utils.ids import is_safe_id
 from core.utils.paths import model_path
 
 
@@ -125,6 +127,42 @@ class FilePinnedMemoryBackend:
             _enforce_scope_budget(validated_scope, entries, _total(before))
             revision = self._commit(path, validated_scope, "added", before, entries, writer)
             return MemoryEntry(len(entries), validated_scope, normalized, revision)
+
+    def add_entries(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        contents: Sequence[str],
+        *,
+        writer: MemoryWriter = _INTERNAL_WRITER,
+        source_document: tuple[str, str] | None = None,
+    ) -> list[MemoryEntry]:
+        """Add reviewed imported facts atomically, preserving existing entries."""
+        validated_scope = validate_memory_scope(scope)
+        path = self._path(workspace, validated_scope)
+        normalized = list(dict.fromkeys(_normalize_entry_content(value) for value in contents))
+        if source_document is not None and not is_safe_id(source_document[0]):
+            raise MemoryError("Invalid Memory source name")
+        with self._file_lock(path):
+            before = self._read_synced(path, validated_scope, writer)
+            after = [*before, *(value for value in normalized if value not in before)]
+            _enforce_scope_budget(validated_scope, after, _total(before))
+            if source_document is not None:
+                source_name, original = source_document
+                source_path = memory_source_path(workspace, source_name, original)
+                source_path.parent.mkdir(parents=True, exist_ok=True)
+                # Keep the original before committing the selected facts. If the
+                # Memory write fails, this inert source copy remains recoverable.
+                atomic_write_bytes(source_path, original.encode("utf-8"))
+            revision = (
+                self._commit(path, validated_scope, "added", before, after, writer)
+                if after != before
+                else None
+            )
+            return [
+                MemoryEntry(after.index(value) + 1, validated_scope, value, revision)
+                for value in normalized
+            ]
 
     def replace_entry(
         self,
@@ -939,3 +977,9 @@ _TYPOGRAPHIC_EQUIVALENTS = str.maketrans(
         "−": "-",
     }
 )
+
+
+def memory_source_path(workspace: Path, source: str, content: str) -> Path:
+    """Immutable imported document, outside the pinned Memory files."""
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return workspace / "memory-sources" / source / (digest + ".md")

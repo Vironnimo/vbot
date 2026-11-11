@@ -217,6 +217,9 @@ class ChatMessage:
     # Internal Tool activity retained for History, never part of Model Context.
     programmatic: bool = False
     parent_tool_call_id: str | None = None
+    # Provenance and original record of an imported conversation entry. These
+    # are history data, never executable vBot Tool calls or Provider fields.
+    external_history: JsonObject | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -557,6 +560,7 @@ class ChatMessage:
         if self.programmatic:
             message["programmatic"] = True
         _add_if_not_none(message, "parent_tool_call_id", self.parent_tool_call_id)
+        _add_if_not_none(message, "external_history", self.external_history)
         if self.skill_package is not None:
             message["skill_package"] = self.skill_package.to_dict()
         _add_if_not_none(message, "model", self.model)
@@ -764,6 +768,7 @@ class ChatMessage:
             goal_event=goal_event,
             subagent_messages=subagent_messages,
             widget_states=widget_states,
+            external_history=data.get("external_history"),
         )
         message.validate()
         return message
@@ -771,6 +776,15 @@ class ChatMessage:
     def validate(self) -> None:
         """Validate this message against the role-specific canonical schema."""
         _message_validation._validate_core_fields(self)
+        if self.external_history is not None:
+            if not isinstance(self.external_history, dict) or not isinstance(
+                self.external_history.get("source"), str
+            ):
+                raise ChatMessageValidationError("external_history requires a source")
+            if self.role not in {"user", "assistant"} or self.tool_calls or self.tool_call_id:
+                raise ChatMessageValidationError(
+                    "imported history requires ordinary text without executable Tool calls"
+                )
         if self.interrupted and self.role != "assistant":
             raise ChatMessageValidationError(f"{self.role} messages cannot include interrupted")
         if self.interruption_cause is not None:

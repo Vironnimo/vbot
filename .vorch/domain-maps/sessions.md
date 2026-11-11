@@ -107,3 +107,5 @@ Read these only when your task matches - not by default.
 - Session creation and lookup, lists, summaries, batched reads, metadata keys, prompt-state APIs, Recall visibility or Ephemeral Sessions -> `sessions/lists-and-metadata.md`
 - Working Project binding, rename retargeting, Sub-Agent links, archive scope membership, restore provenance or paired Agent/Project changes -> `sessions/ownership.md`
 - Session or group title generation, the title parser or title callbacks -> `sessions/titles.md`
+
+- Reading or importing another coding agent's conversation, imported-message provenance, and atomic initial history -> `external-history.md`

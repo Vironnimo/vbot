@@ -110,3 +110,5 @@ Read these only when your task matches - not by default.
 - Changing `skill.inventory` or `skill.inspect` payloads, manager availability, the Project scan preview's Skill pool, or a client that reads them -> `skills/manager.md`
 - Changing the bundled `pdf` Skill (commands, environment, browser discovery, templates, text) -> `skills/pdf-skill.md`
 - Changing how Skill writes are recorded, reverted, archived, restored, purged or pinned, their surfaces, or the `skill` Tool's answer for an archived name -> `skills/history.md`
+
+- The bundled read-only Skill for external coding-agent Sessions and Memories -> `external-history.md`

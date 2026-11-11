@@ -27,6 +27,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Projects and their Agents, Sessions (create, fork, rename, delete), archived Agents, Projects and Sessions | `references/projects-sessions.md` |
 | Send a message to an Agent and read its answer, with files or in a throwaway Session, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
 | Session lists, consumption, compact activity, transcripts, exact Tool Results and extended conversation search | `references/session-search.md` |
+| Import Sessions or Memory from another coding agent into vBot | `references/external-import.md` |
 | Provider keys, logins and limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |

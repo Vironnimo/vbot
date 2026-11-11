@@ -52,16 +52,18 @@ This domain owns the bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`) a
 
 ## References
 
-Read these only when your task matches - not by default.
+Read when the task matches.
 
-- Changing `server start|stop|restart|status` without an installation, health probes and classification, stop and kill behavior, lifecycle logging, `home` or `desktop` -> `cli/server-lifecycle.md`
-- Changing port resolution or `--url` targets, what `cli/server_client.py` attaches, Device sign-ins, or `vbot devices` (approve, pair, logout) -> `cli/server-access.md`
-- Changing `vbot data-store` (status, snapshots, incidents, unregister, config backups, secrets) -> `cli/data-store.md`
-- Changing `vbot agent-secrets` -> `cli/agent-secrets.md`
-- Changing `vbot approvals` -> `permissions/approvals.md`
-- Changing `vbot chat`, its Run following or its output -> `cli/chat.md`
-- Changing `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
-- Changing the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
-- Changing the `provider`, `model`, `task-model`, `channel`, `extensions` (including management operations), `prompt`, `log`, `config`, `doctor`, `tool`, `debug`, `performance` or `statistics` commands -> `cli/system-commands.md`
-- Changing full-screen terminal conversations, Textual interactions, terminal transport or TUI recovery -> `cli/tui.md`
-- Changing the installers, packages and their CI publication, update channels, durable update operations, Autostart or the systemd unit, uninstall, the tray, or extra dependency environments -> `cli/application.md`
+- `server start|stop|restart|status` without an installation, health probes and classification, stop and kill behavior, lifecycle logging, `home` or `desktop` -> `cli/server-lifecycle.md`
+- port resolution or `--url` targets, what `cli/server_client.py` attaches, Device sign-ins, or `vbot devices` (approve, pair, logout) -> `cli/server-access.md`
+- `vbot data-store` (status, snapshots, incidents, unregister, config backups, secrets) -> `cli/data-store.md`
+- `vbot agent-secrets` -> `cli/agent-secrets.md`
+- `vbot approvals` -> `permissions/approvals.md`
+- `vbot chat`, its Run following or its output -> `cli/chat.md`
+- `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
+- the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
+- the `provider`, `model`, `task-model`, `channel`, `extensions` (including management operations), `prompt`, `log`, `config`, `doctor`, `tool`, `debug`, `performance` or `statistics` commands -> `cli/system-commands.md`
+- full-screen terminal conversations, Textual interactions, terminal transport or TUI recovery -> `cli/tui.md`
+- the installers, packages and their CI publication, update channels, durable update operations, Autostart or the systemd unit, uninstall, the tray, or extra dependency environments -> `cli/application.md`
+
+- External history reads, imports and continuation -> `external-history.md`

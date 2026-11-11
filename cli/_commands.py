@@ -208,6 +208,13 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "external":
+        from cli.external_history import dispatch_external
+
+        result = dispatch_external(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "session":
         from cli._dispatch_agents import dispatch_session_command
 

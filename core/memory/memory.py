@@ -97,6 +97,20 @@ class MemoryService:
     ) -> MemoryEntry:
         return self._scope_backend(scope).add_entry(workspace, scope, content, writer=writer)
 
+    def add_entries(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        contents: Sequence[str],
+        *,
+        writer: MemoryWriter = _INTERNAL_WRITER,
+        source_document: tuple[str, str] | None = None,
+    ) -> list[MemoryEntry]:
+        """Import selected facts in one Memory revision and preserve the source."""
+        return self._scope_backend(scope).add_entries(
+            workspace, scope, contents, writer=writer, source_document=source_document
+        )
+
     def replace_entry(
         self,
         workspace: Path,

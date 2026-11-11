@@ -56,7 +56,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 
 ## References
 
-Read these only when your task matches - not by default.
+Read when the task matches.
 
 - Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
 - Using or changing the behavior of the shared LazyContent, SortableList, PathField, DataTable, DateField, TimeField, Button, Modal, ImageLightbox or Dropdown -> `webui/shared-controls.md`
@@ -70,3 +70,5 @@ Read these only when your task matches - not by default.
 - Settings, Providers and Model pickers, Extensions, Skills view, Agents, onboarding, appearance, logs, channels, Desktop Voice, Access & devices, named credentials, credential texts, Agent Secrets -> `webui/settings.md`
 - Projects management view/discovery/scans/Team rows/overrides -> `webui/projects.md`
 - The Settings Archive page (retention, archived items, entry sub-pages) or the delete dialogs' permanent option -> `webui/archive.md`
+
+- External history reads, imports and continuation -> `external-history.md`

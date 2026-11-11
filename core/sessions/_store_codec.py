@@ -231,8 +231,12 @@ def insert_entry(
     text = _text_row(message)
     if text is not None:
         connection.execute(
-            "INSERT INTO entry_text (entry_key, content, blocks_json, search_text) VALUES (?, ?, ?, ?)",
-            (entry_key, *text),
+            "INSERT INTO entry_text (entry_key, content, blocks_json, search_text, external_history_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                entry_key,
+                *text,
+                _store_values._optional_json(message.external_history, "external history"),
+            ),
         )
     match message.role:
         case "assistant":
@@ -619,6 +623,8 @@ class EntryBatch:
                 data["run_id"] = self.run_ids[int(row["run_key"])]
             text = self.text.get(key)
             if text is not None:
+                if text["external_history_json"] is not None:
+                    data["external_history"] = json.loads(str(text["external_history_json"]))
                 if text["blocks_json"] is not None:
                     data["content"] = json.loads(str(text["blocks_json"]))
                 elif text["content"] is not None:
@@ -910,7 +916,7 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
     texted = [int(row["entry_key"]) for row in rows if str(row["role"]) not in _TEXTLESS_ROLES]
     batch.text = _rows_by_key(
         connection,
-        f"SELECT entry_key, content, blocks_json FROM entry_text WHERE entry_key {_KEYS}",
+        f"SELECT entry_key, content, blocks_json, external_history_json FROM entry_text WHERE entry_key {_KEYS}",
         texted,
     )
     assistants = by_role.get("assistant", [])

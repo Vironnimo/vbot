@@ -1,5 +1,6 @@
 <script>
   import ChatHeader from './chat/ChatHeader.svelte';
+  import ExternalHistoryDialog from './chat/ExternalHistoryDialog.svelte';
   import {
     contextCompactionState,
     isRunActive,
@@ -155,6 +156,7 @@
   } = $props();
 
   const chatState = $state(createChatState());
+  let importTarget = $state('');
   const target = createChatViewTarget({
     get selectedProjectId() {
       return selectedProjectId;
@@ -766,6 +768,7 @@
     }}
     {newSessionDisabled}
     onNewSession={navigation.handleNewSession}
+    onImport={() => (importTarget = target.activeAgentAddress)}
     {otherArea}
     actions={workspaceActions}
     infoPanelOpen={activityPanelOpen}
@@ -774,6 +777,23 @@
     infoRunningCount={activityRunningCount}
     onToggleInfoPanel={() => (activityPanelOpen = !activityPanelOpen)}
   />
+
+  {#if importTarget}
+    <ExternalHistoryDialog
+      agentAddress={importTarget}
+      {projects}
+      onClose={() => (importTarget = '')}
+      onImported={(result) => {
+        importTarget = '';
+        createdSessions += 1;
+        void navigation.handleSessionSelected(
+          result.session_id,
+          result.agent_id,
+          false,
+        );
+      }}
+    />
+  {/if}
 
   {#if target.projectAgentActive}
     <ProjectScanBanner report={target.projectReport} {onNavigateToProjects} />

@@ -56,6 +56,7 @@ from core.chat.events import (
     _emit_message_event,
     _persist_run_error,
 )
+from core.chat.imported_history import import_transition_note
 from core.chat.messages import (
     PARENT_AGENT_INPUT_SYSTEM_REMINDER,
     SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
@@ -351,6 +352,12 @@ class RunExecution:
                     # queued for the Session lock. Refresh before assigning image
                     # references so each persisted image stays unique.
                     await context.session_snapshot.refresh(session)
+                    if (
+                        transition := import_transition_note(
+                            context.session_snapshot.active_messages
+                        )
+                    ) is not None:
+                        session.add_note(transition)
                     if request.edit_message_id is not None:
                         editable_session_message_index(
                             context.session_snapshot.active_lineage, request.edit_message_id

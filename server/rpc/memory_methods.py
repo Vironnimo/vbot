@@ -8,6 +8,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
+from core.external_history import ExternalHistory, ExternalHistoryError
+from core.external_history.history import memory_entries
 from core.memory import (
     MemoryEntry,
     MemoryRevertIncompleteError,
@@ -15,6 +17,7 @@ from core.memory import (
     MemoryScope,
     MemoryWriter,
 )
+from core.memory._file_backend import memory_source_path
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
 from server.rpc._mutations import MutationHandler, serialized_mutation
@@ -94,6 +97,57 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
         ),
     )
     return response
+
+
+@_guard_memory_mutation
+async def _import_memory(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params, _OWNER_FIELDS | {"scope", "source", "path", "entries"}, "memory.import"
+    )
+    owner = await _memory_owner(state, params)
+    scope = _memory_scope(params, owner)
+    source = _required_string(params, "source")
+    path = _required_string(params, "path")
+
+    def import_entries() -> JsonObject:
+        document = ExternalHistory().read_memory(source, path)
+        entries = params.get("entries")
+        if entries is None:
+            entries = memory_entries(document["content"])
+        if (
+            not isinstance(entries, list)
+            or not entries
+            or not all(isinstance(entry, str) and entry.strip() for entry in entries)
+        ):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "entries must contain at least one non-empty fact. Nothing was imported.",
+            )
+        saved = state.runtime.memory.add_entries(
+            owner.workspace,
+            scope,
+            entries,
+            writer=owner.writer,
+            source_document=(source, document["content"]),
+        )
+        return {
+            **_memory_response(state, owner),
+            "entries": [_entry_response(entry) for entry in saved],
+            "source": source,
+            "source_path": path,
+            "saved_source_path": memory_source_path(
+                owner.workspace, source, document["content"]
+            ).as_posix(),
+        }
+
+    try:
+        result: JsonObject = await _MEMORY_RPC_WORKERS.run(_operate, state, owner, import_entries)
+    except ExternalHistoryError as exc:
+        raise RpcError("external_history_error", str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    _publish_memory_changed(state, owner)
+    return result
 
 
 @_guard_memory_mutation
@@ -402,6 +456,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "memory.list": _list_memories,
         "memory.add": _add_memory,
+        "memory.import": _import_memory,
         "memory.replace": _replace_memory,
         "memory.remove": _remove_memory,
         "memory.history": _memory_history,

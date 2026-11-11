@@ -903,3 +903,41 @@ async def test_fast_mode_is_read_again_at_each_model_step(tmp_path: Path) -> Non
     runtime = _runtime(tmp_path, [], adapter=adapter)
     await build_chat_loop(runtime).send("coder", "Check the weather", session_id="session-one")
     assert [request["kwargs"]["test_fast_mode"] for request in adapter.requests] == [False, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_persisted", [False, True])
+async def test_import_transition_is_persisted_once_before_the_first_model_request(
+    tmp_path, already_persisted
+):
+    from core.chat.imported_history import IMPORT_REMINDER_PREFIX
+    from core.external_history.records import ExternalEntry
+
+    runtime = _runtime(tmp_path, _answers(2), allowed_tools=[])
+    session = runtime.chat_sessions.get(SESSION)
+    imported = ExternalEntry(
+        "tool",
+        "foreign-result",
+        "2026-11-01T00:00:00Z",
+        {"opaque": "raw-secret-sentinel"},
+        "tool_activity",
+    ).message("codex", "source", 0)
+    session.append(imported)
+    if already_persisted:
+        session.append(ChatMessage.user("admitted input"))
+    loop = build_chat_loop(runtime)
+    await loop.send("coder", "continue", session_id="session-one")
+    await loop.send("coder", "next", session_id="session-one")
+    notes = [
+        m
+        for m in session.load()
+        if m.role == "note" and str(m.content).startswith(IMPORT_REMINDER_PREFIX)
+    ]
+    assert len(notes) == 1
+    for request in runtime.adapter.requests:
+        text = json.dumps(request, ensure_ascii=False)
+        assert IMPORT_REMINDER_PREFIX in text
+        assert "foreign-result" in text
+        assert "raw-secret-sentinel" not in text
+        assert "external_history" not in text
+        assert all(m["role"] != "tool" for m in request["messages"])

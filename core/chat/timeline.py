@@ -71,6 +71,19 @@ def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[Run
     for message in messages:
         role = message.get("role")
         record_key = _record_key(message)
+        if message.get("external_history") is not None:
+            flush()
+            imported_message = copy.deepcopy(message)
+            imported_message["external_history"].pop("raw", None)
+            items.append(
+                {
+                    "id": f"external-{record_key}",
+                    "type": "external_history",
+                    "timestamp": message.get("timestamp"),
+                    "message": imported_message,
+                }
+            )
+            continue
         run_id = message.get("history_run_id") or message.get("run_id")
         if not run_id and run is not None and role in {"assistant", "tool", "run_summary"}:
             run_id = run.run_id

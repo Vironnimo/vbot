@@ -16,6 +16,7 @@ from core.activity import IDLE
 from core.agents import BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
+from core.chat.messages import ChatMessage
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.computers import normalize_execution
 from core.projects import (
@@ -87,7 +88,13 @@ SESSION_LIST_MAX_LIMIT = 100
 SESSION_LIST_MAX_AGENT_BATCH = 100
 
 
-async def _create_session(state: Any, params: JsonObject) -> JsonObject:
+async def _create_session(
+    state: Any,
+    params: JsonObject,
+    *,
+    initial_messages: Sequence[ChatMessage] = (),
+    initial_metadata: JsonObject | None = None,
+) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
@@ -112,9 +119,11 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
             actor="rpc",
             working_project_id=working_project_id if project_id is None else None,
             metadata={
+                **(initial_metadata or {}),
                 **AgentOverrides(**(overrides or {})).capture(agent).session_metadata(),
                 **({"execution": execution} if execution is not None else {}),
             },
+            **({"initial_messages": initial_messages} if initial_messages else {}),
         )
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)

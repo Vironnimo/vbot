@@ -337,7 +337,28 @@
   {/if}
 {/snippet}
 
-{#if item.type === 'message' && shouldRenderMessage(item.message)}
+{#if item.type === 'external_history'}
+  <article class="msg external-history-entry">
+    <div class="msg-header">
+      <span class="msg-author"
+        >{t('external.imported', {
+          source: item.message.external_history.source,
+        })}</span
+      >
+      <span>{item.message.external_history.role}</span>
+      <span class="msg-timestamp">{formatTime(item.message.timestamp)}</span>
+    </div>
+    {#if item.message.external_history.kind === 'message'}
+      <MarkdownContent source={item.message.content} class="msg-markdown" />
+    {:else}
+      <details>
+        <summary>{t('external.historicalActivity')}</summary>
+        <pre class="external-history-entry__content">{item.message
+            .content}</pre>
+      </details>
+    {/if}
+  </article>
+{:else if item.type === 'message' && shouldRenderMessage(item.message)}
   <article
     bind:this={messageElement}
     class:assistant={item.message.role === 'assistant'}
