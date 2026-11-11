@@ -212,6 +212,7 @@ def _message_to_request_dict(
     data.pop("thinking_effort", None)
     data.pop("subagent_reply_target", None)
     data.pop("skill_package", None)
+    data.pop("external_history", None)
     if data.get("role") == "assistant":
         if not _replays_assistant_reasoning(message, replay_policy, agent_model):
             data.pop("reasoning", None)

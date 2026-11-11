@@ -52,6 +52,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | activity.md | `core/activity/` | Session activity (working, waiting, idle) and work span across Runs, commands, results and Sub-Agents |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
 | sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
+| external-history.md | `core/external_history/` | External coding-agent history readers, Session and Memory import |
 | database.md | `core/database/` | SQLite kernel, format evolution, data-store marker, data snapshots, configuration backups, recovery |
 | recall.md | `core/recall/` | Recall backends, Passage index (FTS and vectors), semantic indexing |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC, shared measurement period |

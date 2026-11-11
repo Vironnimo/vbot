@@ -59,14 +59,16 @@ Agent create/update/rename/delete likewise enter through the reference lock befo
 
 ## References
 
-Read these only when your task matches - not by default.
+Read when the task matches.
 
 - Shared `/ws` events, reconnect/epoch replay, presence, `resource_changed`, Run bridging, SSE replay, WebSocket send/receive pumps, log-socket handoff -> `server/events-and-reconnect.md`
 - Native `/ws/computers` command connection -> `computers.md`
-- Changing `server/main.py` startup or shutdown, uvicorn options, the `create_app` hooks, the start or stop line, exit statuses, the control route, record or claim, the restart callback, or `application.update_*` -> `server/process-lifecycle.md`
-- Changing `/api/files/`, Tool media projection, website previews, Extension page routes and streams, the opaque-origin exceptions, or `/api/oauth/callback` -> `server/browser-capabilities.md`
-- Changing `chat.send`/`chat.stream`, `chat.history` paging, `chat.edit`, `chat.timeline`, `chat.queue_update`, `chat.work`, or the Working Project of chat reads -> `server/chat-rpcs.md`
-- Changing `session.*`, `agent.*`, `tool.list` or `learning.*` RPCs -> `server/session-agent-rpcs.md`
-- Changing `filesystem.*`, `files.list` or `core/utils/directory_listing.py` -> `server/path-pickers.md`
-- Changing background activity (`activity.*`, `server/activity.py`), `data_store.*`, `recall.*`, statistics RPCs or the update check (`application.update_status`, `server/update_availability.py`) -> `server/operator-surfaces.md`
+- `server/main.py` startup or shutdown, uvicorn options, the `create_app` hooks, the start or stop line, exit statuses, the control route, record or claim, the restart callback, or `application.update_*` -> `server/process-lifecycle.md`
+- `/api/files/`, Tool media projection, website previews, Extension page routes and streams, the opaque-origin exceptions, or `/api/oauth/callback` -> `server/browser-capabilities.md`
+- `chat.send`/`chat.stream`, `chat.history` paging, `chat.edit`, `chat.timeline`, `chat.queue_update`, `chat.work`, or the Working Project of chat reads -> `server/chat-rpcs.md`
+- `session.*`, `agent.*`, `tool.list` or `learning.*` RPCs -> `server/session-agent-rpcs.md`
+- `filesystem.*`, `files.list` or `core/utils/directory_listing.py` -> `server/path-pickers.md`
+- background activity (`activity.*`, `server/activity.py`), `data_store.*`, `recall.*`, statistics RPCs or the update check (`application.update_status`, `server/update_availability.py`) -> `server/operator-surfaces.md`
 - Live voice RPCs, the `/ws/live/{call_id}` owner socket, or the `server/live/` call registry and host -> `model_tasks/live.md`; the Live Tools (app operations), Run feed, or exact completed-Run projection (`chat.run_result`) -> `model_tasks/live-operator.md`
+
+- External history reads, imports and continuation -> `external-history.md`

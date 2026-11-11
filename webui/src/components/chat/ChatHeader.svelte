@@ -59,6 +59,7 @@
     onToggleSessionList = () => {},
     newSessionDisabled = false,
     onNewSession = () => {},
+    onImport = null,
     // Actions for this Chat area at the bar's end, such as Split.
     actions = undefined,
     // The Session information panel at the right: whether it is open, its id,
@@ -608,6 +609,11 @@
     {/if}
   </div>
   <div class="chat-header__area-actions">
+    {#if onImport}
+      <Button variant="tertiary" disabled={!selectedAddress} onClick={onImport}>
+        {t('external.open')}
+      </Button>
+    {/if}
     {@render actions?.()}
     <Button
       id={infoToggleId}

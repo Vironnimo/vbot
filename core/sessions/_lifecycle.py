@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.chat.errors import ChatSessionError
+from core.chat.messages import ChatMessage
 from core.runs import RunKind
 from core.sessions._archive_types import ArchiveEntryRef
 from core.sessions._io import _SessionWriteLock
@@ -77,6 +78,7 @@ class SessionLifecycle:
         run_kind: RunKind | None = None,
         metadata: JsonObject | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        initial_messages: Sequence[ChatMessage] = (),
     ) -> ChatSession:
         """Create a Session.
 
@@ -102,22 +104,24 @@ class SessionLifecycle:
             raise ChatSessionError("run kind must be a RunKind")
         requested = SessionAddress(project_id, agent_id, session_id or "")
         working_project = self._new_working_project(requested, working_project_id)
-        address, generation_id = self._store.create(
+        address, generation_id, created = self._store.create(
             requested,
             generate_id=session_id is None,
             run_kind=None if run_kind is None else run_kind.value,
             metadata=metadata,
             working_project_id=working_project,
+            initial_messages=initial_messages,
         )
-        _LOGGER.log(
-            logging.INFO if actor is not None else logging.DEBUG,
-            "Session created (agent=%s%s session=%s%s actor=%s)",
-            address.agent_id,
-            f" project={address.project_id}" if address.project_id else "",
-            address.session_id,
-            f" working_project={working_project}" if working_project else "",
-            actor or "internal",
-        )
+        if created:
+            _LOGGER.log(
+                logging.INFO if actor is not None else logging.DEBUG,
+                "Session created (agent=%s%s session=%s%s actor=%s)",
+                address.agent_id,
+                f" project={address.project_id}" if address.project_id else "",
+                address.session_id,
+                f" working_project={working_project}" if working_project else "",
+                actor or "internal",
+            )
         return ChatSession(self._store, address, generation_id=generation_id)
 
     def get(self, address: SessionAddress) -> ChatSession:

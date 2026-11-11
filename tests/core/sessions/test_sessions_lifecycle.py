@@ -450,3 +450,66 @@ def test_archived_address_can_start_a_fresh_generation(manager) -> None:
 
     assert [message.content for message in replacement.load()] == ["new"]
     assert replacement.load_since(original_cursor) is None
+
+
+def test_import_creates_history_atomically_and_reuses_the_same_snapshot(manager) -> None:
+    from core.external_history.history import import_metadata
+    from core.external_history.records import ExternalEntry, ExternalSession
+
+    source = ExternalSession(
+        "codex",
+        "source",
+        "/source.jsonl",
+        "Imported",
+        "2026-11-01T00:00:00Z",
+        entries=[
+            ExternalEntry(
+                "tool", "old result", "2026-11-01T00:00:00Z", {"name": "old_shell"}, "tool_activity"
+            )
+        ],
+    )
+    metadata = {"external_import": import_metadata(source)}
+    first = manager.create("coder", initial_messages=source.messages(), metadata=metadata)
+    again = manager.create("coder", initial_messages=source.messages(), metadata=metadata)
+    assert first.id == again.id
+    saved = first.load()
+    assert len(saved) == 1
+    assert saved[0].external_history["raw"] == {"name": "old_shell"}
+    assert saved[0].tool_calls is None
+    assert saved[0].role == "assistant"
+    from core.chat.imported_history import import_transition_note
+    from core.sessions import PromptEpoch
+
+    before = asyncio.run(manager.fork(first.address))
+    assert before.load_active()[0].external_history == saved[0].external_history
+    assert import_transition_note(before.load_active()) is not None
+    note = import_transition_note(first.load())
+    assert note is not None
+    first.append(ChatMessage.note(note))
+    snapshot = first.load_since()
+    first.commit_compaction(
+        ChatMessage.compaction_checkpoint(
+            summary="Imported work", projection=[], compacted_token_count=1
+        ),
+        since=snapshot.cursor,
+        epoch=PromptEpoch(pins={}, seen_skills=()),
+    )
+    after = asyncio.run(manager.fork(first.address))
+    assert after.load_active()[0].external_history == saved[0].external_history
+    assert import_transition_note(after.load_active()) is None
+    from core.chat.errors import ChatMessageValidationError
+
+    with pytest.raises(ChatMessageValidationError):
+        manager.create(
+            "coder",
+            session_id="broken-import",
+            initial_messages=[
+                ChatMessage(
+                    id="invalid",
+                    timestamp="2026-11-01T00:00:00Z",
+                    role="tool",
+                    content="missing call id",
+                )
+            ],
+        )
+    assert not manager.exists(SessionAddress(None, "coder", "broken-import"))

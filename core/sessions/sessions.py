@@ -179,6 +179,7 @@ class ChatSessionManager:
         run_kind: RunKind | None = None,
         metadata: JsonObject | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        initial_messages: Sequence[ChatMessage] = (),
     ) -> ChatSession:
         return self._lifecycle.create(
             agent_id,
@@ -188,6 +189,7 @@ class ChatSessionManager:
             run_kind=run_kind,
             metadata=metadata,
             working_project_id=working_project_id,
+            initial_messages=initial_messages,
         )
 
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:

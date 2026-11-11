@@ -62,3 +62,5 @@ This domain owns the `memory:guidance` System Prompt block, its cut notice (`_PR
 Read these only when your task matches - not by default.
 
 - Changing `memory-history.jsonl`, its revision kinds, writers, revert, `check_revert` or `strict` revert, or `memory.history`/`show`/`diff`/`revert` -> `memory/history.md`
+
+- Importing reviewed external facts and retaining their complete source documents -> `external-history.md`

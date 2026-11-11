@@ -335,6 +335,7 @@ CREATE TABLE entry_text (
   content TEXT,
   blocks_json TEXT CHECK (blocks_json IS NULL OR (json_valid(blocks_json) AND json_type(blocks_json) = 'array')),
   search_text TEXT,
+  external_history_json TEXT,
   CHECK (content IS NULL OR blocks_json IS NULL),
   CHECK ((blocks_json IS NULL) = (search_text IS NULL))
 ) STRICT;

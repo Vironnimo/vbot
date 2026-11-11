@@ -34,6 +34,7 @@ from cli._parser_content import (
     _add_tool_parsers,
 )
 from cli._parser_data_store import _add_data_store_parsers
+from cli._parser_external import add_external_parsers
 from cli._parser_lifecycle import (
     _add_application_parsers,
     _add_autostart_parsers,
@@ -188,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_chat_parser(subparsers)
     _add_tui_parser(subparsers)
     _add_data_store_parsers(subparsers)
+    add_external_parsers(subparsers)
     _add_agent_secrets_parsers(subparsers)
     _add_approval_parsers(subparsers)
     _add_channel_parsers(subparsers)

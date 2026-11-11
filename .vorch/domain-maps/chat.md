@@ -62,15 +62,17 @@ This domain owns the context-command note, the Compaction checkpoint guidance, t
 
 ## References
 
-Read these only when your task matches - not by default.
+Read when the task matches.
 
 - Choosing how a producer informs the Model (notes, System Reminders, announcements, prompt blocks, Tool Results) or adding a kernel-to-Model channel -> `model-communication.md`
 - Session peer coordination (`session_peers.py`) -> `tools/session.md`
-- Changing the shared semantic conversation projection, complete-Run paging or timeline snapshots/patches -> `chat/timeline.md`
+- the shared semantic conversation projection, complete-Run paging or timeline snapshots/patches -> `chat/timeline.md`
 - Exact completed-Run lookup for voice announcements (`chat.run_result`) -> `model_tasks/live-operator.md`
-- Changing canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
-- Changing Run admission or execution, Queue steering, streaming recovery, cancellation, interruption, Stream drafts, Tool dispatch or programmatic calls, Run events, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
-- Changing `start_external_run` or `ExternalRun` (a Live call's conversation) -> `chat/external-run.md`
-- Changing the commands a new Session starts with, or their note -> `chat/context-commands.md`
-- Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, output speed, or the server-owned token projection -> `chat/usage.md`
-- Changing Built-in or Extension Command recognition, scheduling, effects, neutral outcomes, surface availability, or projection -> `chat/commands.md`
+- canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
+- Run admission or execution, Queue steering, streaming recovery, cancellation, interruption, Stream drafts, Tool dispatch or programmatic calls, Run events, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
+- `start_external_run` or `ExternalRun` (a Live call's conversation) -> `chat/external-run.md`
+- the commands a new Session starts with, or their note -> `chat/context-commands.md`
+- token normalization, estimation, persistence, whole-Session aggregation, Usage events, output speed, or the server-owned token projection -> `chat/usage.md`
+- Built-in or Extension Command recognition, scheduling, effects, neutral outcomes, surface availability, or projection -> `chat/commands.md`
+
+- External history reads, imports and continuation -> `external-history.md`

@@ -1,6 +1,14 @@
 // Public API boundary. Internal modules own RPC transport, event streams,
 // binary media and domain request adapters; callers import this file.
 export {
+  listExternalSources,
+  listExternalSessions,
+  readExternalSession,
+  readExternalMemories,
+  importExternalSession,
+  importExternalMemory,
+} from './api/externalHistory.js';
+export {
   RPC_ERROR_INVALID_CLIENT_REQUEST,
   RPC_ERROR_NETWORK,
   RPC_ERROR_HTTP,

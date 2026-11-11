@@ -645,3 +645,16 @@ def test_abandoned_provisional_rows_do_not_change_successor_identity_after_reloa
     assert [item["id"] for item in run_block(timeline.snapshot())["items"]] == [
         item["id"] for item in run_block(history_timeline(messages))["items"]
     ]
+
+
+def test_external_activity_is_distinct_and_keeps_raw_data_out_of_timeline():
+    original = message(
+        "imported",
+        "assistant",
+        content="old result",
+        external_history={"source": "codex", "kind": "tool_activity", "raw": {"opaque": "hidden"}},
+    )
+    items = history_timeline([original])
+    assert items[0]["type"] == "external_history"
+    assert items[0]["message"]["external_history"] == {"source": "codex", "kind": "tool_activity"}
+    assert original["external_history"]["raw"] == {"opaque": "hidden"}

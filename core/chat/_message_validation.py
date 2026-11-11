@@ -300,7 +300,7 @@ def _validate_user_message(message: _records.ChatMessage) -> None:
 
 
 def _validate_assistant_message(message: _records.ChatMessage) -> None:
-    if message.model is None:
+    if message.model is None and message.external_history is None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")

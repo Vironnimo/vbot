@@ -219,8 +219,36 @@ class SessionStore:
         run_kind: str | None = None,
         metadata: JsonObject | None = None,
         working_project_id: str | None = None,
-    ) -> tuple[SessionAddress, str]:
-        def create(connection: sqlite3.Connection) -> tuple[SessionAddress, str]:
+        initial_messages: Sequence[ChatMessage] = (),
+    ) -> tuple[SessionAddress, str, bool]:
+        def create(connection: sqlite3.Connection) -> tuple[SessionAddress, str, bool]:
+            provenance = (metadata or {}).get("external_import")
+            if initial_messages and isinstance(provenance, dict):
+                existing = connection.execute(
+                    "SELECT session_id, generation_id FROM sessions WHERE state = 'live' "
+                    "AND project_id = ? AND agent_id = ? AND working_project_id IS ? "
+                    "AND json_extract(metadata_json, '$.external_import.source') = ? "
+                    "AND json_extract(metadata_json, '$.external_import.session_id') = ? "
+                    "AND json_extract(metadata_json, '$.external_import.digest') = ?",
+                    (
+                        address.project_id or "",
+                        address.agent_id,
+                        working_project_id,
+                        provenance.get("source"),
+                        provenance.get("session_id"),
+                        provenance.get("digest"),
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    from core.sessions._types import SessionAddress
+
+                    return (
+                        SessionAddress(
+                            address.project_id, address.agent_id, str(existing["session_id"])
+                        ),
+                        str(existing["generation_id"]),
+                        False,
+                    )
             created = _store_mutations.create(
                 connection,
                 address,
@@ -230,7 +258,13 @@ class SessionStore:
                 metadata=metadata,
                 working_project_id=working_project_id,
             )
-            return created, str(_store_values._require_live(connection, created)["generation_id"])
+            if initial_messages:
+                _store_mutations.append_messages(connection, created, initial_messages)
+            return (
+                created,
+                str(_store_values._require_live(connection, created)["generation_id"]),
+                True,
+            )
 
         return self._execute_write(create)
 
