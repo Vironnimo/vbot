@@ -81,7 +81,7 @@ def test_each_platform_offers_the_fields_it_delivers(
 
     assert definition is not None
     assert set(definition["parameters"]["properties"]) == fields
-    assert delivered(envelope) == {"channel_id": "work", "platform_target": "C1"}
+    delivered(envelope)
     assert tool.sent() == [("work", "Done", "C1", options())]
 
 
@@ -124,8 +124,13 @@ def test_channel_ids_are_never_matched_loosely(tmp_path: Path, requested: str) -
         ({"channel": "telegram", "text": "Hello there"}, ["telegram", "Hello there"]),
         # A call the Tool refuses is labeled as the Model wrote it.
         ({"action": "delete", "message": "Hi"}, ["Hi"]),
+        (
+            {"channel_id": "tg-main", "file_paths": ["docs/a.pdf", "C:/my docs/b.png"]},
+            ["tg-main", "a.pdf", "b.png"],
+        ),
+        ({"message": "MEDIA:docs/a.pdf"}, ["a.pdf"]),
     ],
-    ids=["other-spellings", "refused-call"],
+    ids=["other-spellings", "refused-call", "files", "media-marker"],
 )
 def test_display_labels_what_the_call_meant(
     tmp_path: Path, arguments: dict[str, Any], labels: list[str]

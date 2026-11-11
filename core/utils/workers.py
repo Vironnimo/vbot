@@ -325,7 +325,16 @@ async def cancel_and_wait(*tasks: asyncio.Task[Any]) -> None:
     await settle_before_cancelling(drain())
 
 
-async def finish_despite_cancel[FinishedResult](work: Awaitable[FinishedResult]) -> FinishedResult:
+class CancellationGraceExpiredError(TimeoutError):
+    """Admitted work did not finish within its cancellation grace period."""
+
+
+async def finish_despite_cancel[FinishedResult](
+    work: Awaitable[FinishedResult],
+    *,
+    cancellation_allowed: Callable[[], bool] | None = None,
+    grace_seconds: float | None = None,
+) -> FinishedResult:
     """Await *work* and return its result, even when the caller is cancelled meanwhile.
 
     For work whose result must reach the caller once it has begun, because its
@@ -333,14 +342,39 @@ async def finish_despite_cancel[FinishedResult](work: Awaitable[FinishedResult])
     receive the start result. Unlike :func:`settle_before_cancelling`, the
     cancellation is absorbed: the caller returns the result normally, and an
     enclosing ``asyncio.timeout`` does not expire. A failure of *work* propagates.
+
+    With ``cancellation_allowed``, absorb only cancellations the owner permits;
+    any other cancellation stops and drains the work, even if it just finished.
+    ``grace_seconds`` bounds the wait from the first absorbed cancellation, then
+    stops and drains the work and raises ``CancellationGraceExpiredError``. A timeout
+    raised by the work itself remains its own failure.
     """
     future = asyncio.ensure_future(work)
-    while True:
-        try:
-            return await asyncio.shield(future)
-        except asyncio.CancelledError:
-            if future.done():
+    deadline: float | None = None
+    try:
+        while True:
+            try:
+                if deadline is None:
+                    return await asyncio.shield(future)
+                remaining = max(0, deadline - asyncio.get_running_loop().time())
+                done, _ = await asyncio.wait((future,), timeout=remaining)
+                if not done:
+                    raise CancellationGraceExpiredError
                 return future.result()
+            except asyncio.CancelledError:
+                if cancellation_allowed is not None and not cancellation_allowed():
+                    raise
+                if future.done():
+                    return future.result()
+                if grace_seconds is not None and deadline is None:
+                    deadline = asyncio.get_running_loop().time() + grace_seconds
+    finally:
+        if not future.done():
+            future.cancel()
+            await finish_despite_cancel(asyncio.gather(future, return_exceptions=True))
+        elif not future.cancelled():
+            # Retrieve a failure even if authoritative caller cancellation won the race.
+            future.exception()
 
 
 _NO_MARK = object()

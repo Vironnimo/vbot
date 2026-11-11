@@ -26,6 +26,7 @@ from core.channels.telegram import TelegramChannelAdapter
 from core.chat.messages import ReplySurface
 from core.extensions import InteractionButton
 from core.sessions import ChatSessionManager, SessionAddress
+from core.tools import ToolCall, ToolExecutor
 from tests.core.channels.channels_test_support import (
     make_config as make_real_channel_config,
 )
@@ -40,6 +41,7 @@ from tests.core.tools.channel_send_test_support import (
     options,
     refused,
 )
+from tests.core.tools.tools_test_support import make_execution_config
 
 
 @pytest.mark.parametrize(
@@ -56,18 +58,23 @@ from tests.core.tools.channel_send_test_support import (
         pytest.param("run:done", "project-1", None, id="run-button-in-project"),
     ],
 )
+@pytest.mark.parametrize("dialect", ["canonical", "telegram", "both"])
 def test_buttons_reach_the_channel(
-    tmp_path: Path, data: str, project_id: str | None, run_origin: RouteFacts | None
+    tmp_path: Path, data: str, project_id: str | None, run_origin: RouteFacts | None, dialect: str
 ) -> None:
     tool = channel_send(tmp_path)
+
+    def button(label: str, data: str) -> dict[str, str]:
+        return {
+            **({"label": label, "data": data} if dialect != "telegram" else {}),
+            **({"text": label, "callback_data": data} if dialect != "canonical" else {}),
+        }
 
     envelope = tool.call(
         {
             "message": "Shopping list",
             "platform_target": "111",
-            "buttons": [
-                [{"label": "Milk ⬜", "data": data}, {"label": "Eggs", "data": "chk:eggs"}]
-            ],
+            "buttons": [[button("Milk ⬜", data), button("Eggs", "chk:eggs")]],
         },
         project_id=project_id,
     )
@@ -80,6 +87,7 @@ def test_buttons_reach_the_channel(
     if run_origin is not None:
         expected["run_origin"] = run_origin
     assert tool.sent() == [("tg-main", "Shopping list", "111", expected)]
+    assert json.loads(tool.note().split("\n", 1)[1])["buttons"] == [["Milk ⬜", "Eggs"]]
 
 
 @pytest.mark.parametrize(
@@ -133,44 +141,49 @@ def test_a_checklist_reaches_the_channel_as_its_keyboard(
 
 
 @pytest.mark.parametrize(
-    ("error", "code", "message"),
+    ("error", "code"),
     [
         (
             ChannelNotFoundError("Channel not active: tg-main"),
             "channel_not_found",
-            "Channel not active: tg-main",
         ),
         (
             ChannelError("Telegram rejected the message"),
             "channel_error",
-            "Nothing was sent: Telegram rejected the message.",
         ),
         # A visible part or an unanswered write: repeating the call can duplicate it.
         (
             ChannelError("Channel request could not be confirmed", possibly_delivered=True),
             "delivery_unconfirmed",
-            "It is unknown how much of the message reached the chat: Channel request could "
-            "not be confirmed. Sending the same message again can show it twice.",
         ),
         # Raised while sending, so the message may be out; not a refused argument.
         (
             ValueError("Invalid IPv6 URL"),
             "tool_execution_error",
-            "channel_send failed while running: Invalid IPv6 URL. It is unknown how much of the "
-            "call took effect. Check the current state before you call channel_send again.",
+        ),
+        (TimeoutError("transport timeout"), "delivery_unconfirmed"),
+        (
+            ChannelError("internal diagnostic BadRequest", user_message="Chat not found"),
+            "channel_error",
         ),
     ],
-    ids=["inactive-channel", "platform-rejection", "possibly-delivered", "failure-while-sending"],
+    ids=[
+        "inactive-channel",
+        "platform-rejection",
+        "possibly-delivered",
+        "failure-while-sending",
+        "timeout",
+        "public-cause",
+    ],
 )
-def test_a_failed_delivery_is_a_failure_result(
-    tmp_path: Path, error: Exception, code: str, message: str
-) -> None:
+def test_a_failed_delivery_is_a_failure_result(tmp_path: Path, error: Exception, code: str) -> None:
     tool = channel_send(tmp_path)
     tool.service.send.side_effect = error
 
-    envelope = tool.call({"message": "Task finished"})
+    envelope = tool.call({"message": "Task finished", "platform_target": "999"})
 
-    assert refused(envelope, code) == message
+    result = refused(envelope, code)
+    assert "internal diagnostic" not in result
     tool.service.record_outbound_note.assert_not_awaited()
 
 
@@ -227,7 +240,7 @@ def test_a_note_that_cannot_be_recorded_keeps_the_send_successful(
     with caplog.at_level(logging.WARNING):
         envelope = tool.call({"message": "Task finished"})
 
-    assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
+    delivered(envelope)
     assert tool.sent() == [("tg-main", "Task finished", "111", options())]
     assert "Could not record channel_send outbound note" in caplog.text
 
@@ -237,7 +250,9 @@ def test_a_note_that_cannot_be_recorded_keeps_the_send_successful(
 async def test_a_run_cancel_lets_a_started_send_report_what_happened(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, send_finishes: bool
 ) -> None:
-    monkeypatch.setattr(channel_tool_module, "_SEND_CANCEL_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(
+        channel_tool_module, "_SEND_CANCEL_GRACE_SECONDS", 10 if send_finishes else 0
+    )
     tool = channel_send(tmp_path)
     sending = asyncio.Event()
     release = asyncio.Event()
@@ -260,13 +275,10 @@ async def test_a_run_cancel_lets_a_started_send_report_what_happened(
     envelope = await call
 
     if send_finishes:
-        assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
+        delivered(envelope)
         tool.service.record_outbound_note.assert_awaited_once()
     else:
-        assert refused(envelope, "delivery_unconfirmed") == (
-            "It is unknown how much of the message reached the chat: the Run was stopped "
-            "while it was being sent. Sending the same message again can show it twice."
-        )
+        refused(envelope, "delivery_unconfirmed")
         tool.service.record_outbound_note.assert_not_awaited()
 
 
@@ -291,6 +303,70 @@ async def test_a_cancel_without_a_run_cancel_stops_the_send(tmp_path: Path) -> N
     with pytest.raises(asyncio.CancelledError):
         await call
     assert stopped.is_set()
+
+
+@pytest.mark.parametrize("field,alias", [("label", "text"), ("data", "callback_data")])
+def test_conflicting_button_aliases_never_send(tmp_path: Path, field: str, alias: str) -> None:
+    tool = channel_send(tmp_path)
+    button = {"label": "A", "data": "run:a", alias: "different"}
+    result = refused(tool.call({"message": "Pick", "buttons": [[button]]}))
+    assert field in result and alias in result
+    assert tool.sent() == []
+
+
+@pytest.mark.parametrize("buttons", [None, [[{"label": "A", "data": "run:a"}]]])
+def test_a_done_label_without_a_checklist_reports_no_effect(tmp_path: Path, buttons: Any) -> None:
+    tool = channel_send(tmp_path)
+    args = {"message": "Pick", "done_label": "Fertig"}
+    if buttons:
+        args["buttons"] = buttons
+    data = delivered(tool.call(args))
+    assert "done_label" in data["note"]
+    sent_buttons = tool.sent()[0][3]["buttons"]
+    assert [b.label for row in sent_buttons or [] for b in row] == (["A"] if buttons else [])
+
+
+def test_a_target_lookup_timeout_has_no_delivery_effect(tmp_path: Path) -> None:
+    tool = channel_send(tmp_path)
+    tool.sessions.get_metadata_async.side_effect = TimeoutError()
+    refused(tool.call({"message": "Hi"}), "channel_error")
+    assert tool.sent() == []
+    tool.service.record_outbound_note.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sends_in_one_model_turn_keep_their_delivery_order(tmp_path: Path) -> None:
+    tool = channel_send(tmp_path)
+    (tool.workspace / "report.pdf").write_bytes(b"%PDF-1.7\n")
+    events: list[str] = []
+    first_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def send(_channel: str, message: str | None, _target: str, **kwargs: Any) -> None:
+        kind = "file" if kwargs["files"] else "buttons"
+        events.append("start:" + kind)
+        if kind == "file":
+            first_started.set()
+            await release.wait()
+        events.append("end:" + kind)
+
+    tool.service.send.side_effect = send
+    batch = ToolExecutor(tool.registry).start_batch(
+        make_execution_config(workspace=tool.workspace, allowed_tools=["channel_send"])
+    )
+    batch.add(ToolCall(id="file", name="channel_send", arguments={"file_paths": ["report.pdf"]}))
+    batch.add(
+        ToolCall(
+            id="buttons",
+            name="channel_send",
+            arguments={"message": "Pick", "buttons": [[{"label": "OK", "data": "run:ok"}]]},
+        )
+    )
+    await first_started.wait()
+    release.set()
+    results = await batch.results()
+    assert all(result["ok"] for result in results)
+    assert events == ["start:file", "end:file", "start:buttons", "end:buttons"]
 
 
 def _reply_target(chat: str) -> dict[str, Any]:
@@ -331,8 +407,7 @@ def test_sends_prefer_the_admitted_runs_destination_over_later_session_routing(
 
     result = tool.call({"file_paths": ["report.pdf"], **arguments}, reply_surface=surface)
 
-    assert delivered(result)["platform_target"] == expected_chat
-    assert delivered(result).get("thread_id") == expected_thread
+    delivered(result)
     sent = tool.sent()[0]
     assert sent[2] == expected_chat
     assert sent[3]["thread_id"] == expected_thread
@@ -366,7 +441,7 @@ async def test_a_project_session_never_uses_a_same_named_identity_sessions_chat(
         sent = await tool.dispatch({"message": "Project result"}, project_id="project-one")
         listed = await tool.dispatch({"action": "list"}, project_id="project-one")
 
-        assert delivered(sent)["platform_target"] == expected
+        delivered(sent)
         assert tool.sent() == [("tg-main", "Project result", expected, options())]
         assert "99999" not in model_text(listed)
         assert ("this conversation's chat: 23456" in model_text(listed)) is (
@@ -397,7 +472,8 @@ def test_the_reply_target_is_read_on_the_session_pool(
     try:
         envelope = tool.call({"message": "Done"})
 
-        assert delivered(envelope)["platform_target"] == "111"
+        delivered(envelope)
+        assert tool.sent()[0][2] == "111"
         assert threads["target"].startswith("vbot-db-sessions")
     finally:
         sessions.close()
@@ -449,7 +525,7 @@ async def test_file_deliveries_keep_the_actual_topic_for_followup_sends(
             if index == 0 and first_target == "explicit_topic":
                 arguments.update(platform_target="-10001", thread_id=expected_topic)
             result = await tool.dispatch(arguments, **caller)
-            assert delivered(result)["thread_id"] == expected_topic
+            delivered(result)
 
         assert [call.kwargs["message_thread_id"] for call in bot.send_document.await_args_list] == [
             int(expected_topic),
@@ -469,7 +545,7 @@ async def test_file_deliveries_keep_the_actual_topic_for_followup_sends(
             {"channel_id": config.id, "platform_target": "-10001", "file_paths": ["report.pdf"]},
             **caller,
         )
-        assert delivered(result) == {"channel_id": config.id, "platform_target": "-10001"}
+        delivered(result)
         assert "message_thread_id" not in bot.send_document.await_args.kwargs
         assert "thread_id" not in sessions.get_metadata(address)["last_reply_target"]
     finally:

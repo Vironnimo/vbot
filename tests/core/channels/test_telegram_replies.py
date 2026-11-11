@@ -248,6 +248,8 @@ async def test_send_errors_are_retried_by_their_telegram_classification(
     assert raised.value.retryable is False
     assert raised.value.retry_after == retry_after
     assert raised.value.possibly_delivered is maybe_shown
+    assert "error_type=" not in raised.value.user_message
+    assert "channel=" not in raised.value.user_message
     await adapter.stop()
 
 
