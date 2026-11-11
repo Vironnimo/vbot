@@ -44,6 +44,54 @@ def completed(output: str = "selected\n") -> CodeExecutionResult:
     return CodeExecutionResult("completed", 0, output, "", 0, 0, [])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unlisted", [0, 2])
+async def test_tool_failure_count_only_reports_unlisted_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unlisted: int
+) -> None:
+    failures = [{"tool": "read", "code": "denied", "message": "test-owned", "count": 4}]
+
+    async def worker(*args: Any, **kwargs: Any) -> CodeExecutionResult:
+        return CodeExecutionResult(
+            "completed", 0, "handled", "", 4 + unlisted, 4 + unlisted, failures
+        )
+
+    monkeypatch.setattr(execute_code, "run_python", worker)
+    result = await dispatch_as_executor(
+        registry(),
+        make_context("execute_code", workspace=tmp_path, tool_call_hook=invoke),
+        {"code": "pass"},
+        ["execute_code", "bash"],
+    )
+    assert result["data"]["tool_failures"] == failures
+    if unlisted:
+        assert result["data"]["tool_failure_count"] == 4 + unlisted
+    else:
+        assert "tool_failure_count" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_empty_success_has_an_informational_display(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def worker(*args: Any, **kwargs: Any) -> CodeExecutionResult:
+        return completed("")
+
+    monkeypatch.setattr(execute_code, "run_python", worker)
+    tools = registry()
+    result = await dispatch_as_executor(
+        tools,
+        make_context("execute_code", workspace=tmp_path, tool_call_hook=invoke),
+        {"code": "1 + 1"},
+        ["execute_code", "bash"],
+    )
+    assert result["data"]["status"] == "completed" and result["data"]["note"]
+    display = tools.get("execute_code").display
+    assert display is not None
+    details = display.to_payload({"code": "1 + 1"}, result=result)["details"]
+    assert any(block.get("type") == "notice" and block["level"] == "info" for block in details)
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -95,6 +143,7 @@ async def test_python_source_reaches_worker_unchanged(
     ("arguments", "fields", "allowed", "error"),
     [
         ({"code": "print(1)", "python": "print(2)"}, {}, ["bash"], "invalid_arguments"),
+        ({"code": "print('\ud800')"}, {}, ["bash"], "invalid_arguments"),
         ({"code": "print(1)"}, {"programmatic": True}, ["bash"], "code_recursion"),
         ({"code": "print(1)"}, {}, [], "tool_not_allowed"),
         ({"code": "print(1)"}, {"tool_call_hook": None}, ["bash"], "code_unavailable"),
@@ -180,21 +229,21 @@ async def test_python_launch_uses_existing_command_rules_and_confined_environmen
 
 
 @pytest.mark.parametrize(
-    ("outcome", "note_parts"),
-    [
-        ("timed_out", ["300-second", "remain applied", "incomplete"]),
-        ("compile", ["Nothing was run", "compile"]),
-        ("cleanup", []),
-    ],
+    "outcome",
+    ["timed_out", "compile", "cleanup", "startup"],
 )
 @pytest.mark.asyncio
 async def test_partial_execution_and_shortened_output_are_actionable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, note_parts: list[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     log = tmp_path / "output.log"
     log.touch()
 
     async def worker(*args: Any, **kwargs: Any) -> CodeExecutionResult:
+        if outcome == "startup":
+            return CodeExecutionResult(
+                "failed", 2, "", "startup diagnostic", 0, 0, [], ran=False, started=False
+            )
         if outcome == "compile":
             return CodeExecutionResult(
                 "failed", 1, "", "SyntaxError: '(' was never closed", 0, 0, [], ran=False
@@ -235,14 +284,12 @@ async def test_partial_execution_and_shortened_output_are_actionable(
     )
     assert result["ok"] is True, result
     data = result["data"]
-    for part in note_parts:
-        assert part in data["note"]
+    assert data["note"]
+    assert not {"output_truncated", "stderr_truncated", "log_truncated"} & data.keys()
     if outcome == "timed_out":
         assert data["status"] == "timed_out"
         assert data["tool_calls"] == 4
         assert data["tool_failure_count"] == 2
-        assert data["output_truncated"] is True
-        assert data["log_truncated"] is True
         assert data["output_file"] == log.as_posix()
         assert log.exists()
     elif outcome == "cleanup":
@@ -254,6 +301,11 @@ async def test_partial_execution_and_shortened_output_are_actionable(
         assert data["execution_error"] == "Test-owned cleanup failure"
         assert data["output_file"] == log.as_posix()
         assert log.exists()
+    elif outcome == "startup":
+        assert data["status"] == "failed" and data["exit_code"] == 2
+        assert data["tool_calls"] == 0
+        assert data["stderr"] == "startup diagnostic"
+        assert not log.exists()
     else:
         # Nothing ran, so nothing needs inspecting.
         assert "remain applied" not in data["note"]

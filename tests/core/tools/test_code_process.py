@@ -25,6 +25,76 @@ from core.tools.contracts import JsonObject
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["launch", "exit", "zero_exit"])
+async def test_startup_failure_never_reports_program_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
+) -> None:
+    launch = _code_process.create_subprocess_exec
+
+    async def wrong_interpreter(
+        _program: str, *args: Any, **kwargs: Any
+    ) -> asyncio.subprocess.Process:
+        if failure == "launch":
+            raise OSError("Test-owned launch failure")
+        code = 0 if failure == "zero_exit" else 2
+        return await launch(
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import sys; sys.stdin.read(); print('test-owned startup error', file=sys.stderr); "
+            f"sys.exit({code})",
+            **kwargs,
+        )
+
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
+        raise AssertionError("An unstarted program cannot call Tools")
+
+    monkeypatch.setattr(_code_process, "create_subprocess_exec", wrong_interpreter)
+    result = await run_python(
+        "print('program ran')", cwd=tmp_path, environment=os.environ, invoke=invoke
+    )
+    assert result.status == "failed"
+    assert not result.started and not result.ran
+    assert result.tool_calls == 0 and result.output == ""
+    assert result.exit_code == (None if failure == "launch" else 0 if failure == "zero_exit" else 2)
+    assert any(
+        record.levelname == "ERROR" and record.name == "vbot.tools.execute_code"
+        for record in caplog.records
+    )
+    if failure != "launch":
+        assert "test-owned startup error" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_caught_tool_failures_are_grouped_and_bounded(tmp_path: Path) -> None:
+    async def invoke(name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
+        return tool_failure(str(arguments["code"]), "x" * 2000)
+
+    result = await run_python(
+        """from vbot_tools import tools, ToolError
+calls = [('read', 'denied')] * 25 + [('write', 'denied')]
+calls += [('read', str(n)) for n in range(25)] + [('read', 'denied')]
+for name, code in calls:
+    try:
+        tools.call(name, code=code)
+    except ToolError:
+        pass
+""",
+        cwd=tmp_path,
+        environment=os.environ,
+        invoke=invoke,
+    )
+    assert result.status == "completed"
+    assert result.tool_calls == result.tool_failure_count == 52
+    assert len(result.tool_failures) == _code_process.MAX_FAILURES
+    assert result.tool_failures[0]["count"] == 26
+    assert result.tool_failures[1]["tool"] == "write"
+    assert all(len(item["message"]) <= 300 for item in result.tool_failures)
+    assert sum(item.get("count", 1) for item in result.tool_failures) == 45
+
+
+@pytest.mark.asyncio
 async def test_python_calls_keep_data_and_parallel_call_results(tmp_path: Path) -> None:
     entered: list[int] = []
     all_entered = asyncio.Event()
@@ -87,8 +157,10 @@ except KeyError as error:
 async def test_python_runs_like_a_main_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged: bool
 ) -> None:
-    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
-        raise AssertionError("This program calls no Tools")
+    async def invoke(name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
+        if name == "refused":
+            return tool_failure("permission_denied", "Test-owned refusal")
+        return tool_success(arguments)
 
     if packaged:
         # Model a native Server host while retaining the real bridge and child.
@@ -111,28 +183,51 @@ async def test_python_runs_like_a_main_script(
 
     tmp_path.joinpath("helper.py").write_text("", encoding="utf-8")
     result = await run_python(
-        """import importlib.util, os, pickle, threading, time
+        """import importlib.util, os, multiprocessing, threading, time
+from concurrent.futures import ProcessPoolExecutor
+from vbot_tools import tools, echo, ToolError
 import helper  # the working directory's own modules import
-# Only the standard library: vBot's own dependencies stay out of reach.
 assert importlib.util.find_spec("psutil") is None
 def square(value):
-    return value * value
-# multiprocessing finds functions of a real __main__ script this way.
-assert pickle.loads(pickle.dumps(square)) is square
-print(__name__, os.path.isfile(__file__))
-print(__file__)
-def late():
-    time.sleep(0.2)
-    print("thread finished")
-threading.Thread(target=late).start()
+    return echo(value=value * value)
+def refused():
+    tools.refused()
+if __name__ == "__main__":
+    print(__name__, os.path.isfile(__file__))
+    print(__file__)
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=2, mp_context=context) as pool:
+        try:
+            pool.submit(refused).result()
+        except ToolError as error:
+            assert error.tool == 'refused' and error.code == 'permission_denied'
+        else:
+            raise AssertionError('The failed Tool must raise ToolError in the parent')
+        results = list(pool.map(square, [1, 2, 3]))
+    with context.Pool(2) as pool:
+        try:
+            pool.apply(refused)
+        except ToolError as error:
+            assert error.result['error']['code'] == 'permission_denied'
+        else:
+            raise AssertionError('The failed Tool must raise ToolError in the parent')
+        assert pool.map(square, [1, 2, 3]) == results
+    print([item["value"] for item in results])
+    def late():
+        time.sleep(0.2)
+        print("thread finished")
+    threading.Thread(target=late).start()
 """,
         cwd=tmp_path,
         environment=os.environ,
         invoke=invoke,
     )
     assert result.status == "completed", result.stderr
-    first, path, last = result.output.splitlines()
-    assert (first, last) == ("__main__ True", "thread finished")
+    first, path, squares, last = result.output.splitlines()
+    assert (first, squares, last) == ("__main__ True", "[1, 4, 9]", "thread finished")
+    assert result.tool_calls == 8 and result.tool_failure_count == 2
+    assert result.started and result.ran
+    assert "\r" not in result.output
     assert not Path(path).exists()
 
 
@@ -287,21 +382,27 @@ except ToolError as error:
         ("raise ValueError('test-owned script failure')", 1, True, True),
         ("raise SystemExit(4)", 4, False, True),
         ("def malformed(\n", 1, True, False),
+        ("import sys; print('finished'); sys.stdout.close(); sys.stderr.close()", 0, False, True),
     ],
 )
-async def test_python_failure_is_not_a_successful_cell(
+async def test_python_reports_program_outcomes(
     tmp_path: Path, source: str, exit_code: int, has_traceback: bool, ran: bool
 ) -> None:
     async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
     result = await run_python(source, cwd=tmp_path, environment=os.environ, invoke=invoke)
-    assert result.status == "failed"
+    assert result.status == ("completed" if exit_code == 0 else "failed")
     assert result.exit_code == exit_code
     assert bool(result.stderr) is has_traceback
     assert result.tool_calls == 0
     assert result.ran is ran
     assert "_code_worker" not in result.stderr
+    assert "vbot-code-" not in result.stderr
+    assert "\r" not in result.stderr
+    assert result.started
+    if has_traceback:
+        assert 'File "program.py"' in result.stderr
 
 
 @pytest.mark.asyncio

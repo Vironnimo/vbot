@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import secrets
 import shutil
 import subprocess
@@ -36,6 +37,8 @@ MAX_OUTPUT_BYTES = 64 * 1024
 MAX_STDERR_BYTES = 16 * 1024
 MAX_LOG_BYTES = 8 * 1024 * 1024
 MAX_FAILURES = 20
+MAX_FAILURE_MESSAGE_CHARS = 300
+logger = logging.getLogger("vbot.tools.execute_code")
 _CREATE_SUSPENDED = 0x00000004
 type ToolInvoker = Callable[[str, JsonObject, list[Any]], Awaitable[JsonObject]]
 type ExecutionStatus = Literal["completed", "failed", "timed_out", "stopped"]
@@ -67,8 +70,9 @@ class CodeExecutionResult:
     stderr_truncated: bool = False
     output_path: Path | None = None
     log_truncated: bool = False
-    # False when Python refused to compile the program, so none of it ran.
+    # False when startup or compilation failed, so none of the program ran.
     ran: bool = True
+    started: bool = True
     # A process/output cleanup error, after execution may already have effects.
     failure: str | None = None
 
@@ -112,7 +116,8 @@ class _Bridge:
         self.failure_count = 0
         self.failures: list[JsonObject] = []
         self.closed = False
-        self.ran = True
+        self.started = False
+        self.ran = False
 
     def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.create_task(self._handle(reader, writer), name="code-tool-bridge")
@@ -133,7 +138,13 @@ class _Bridge:
                 return
             if not secrets.compare_digest(request["token"], self.token):
                 return
-            if request.get("operation") == "finish":
+            if request.get("operation") == "start":
+                self.started = True
+                # Once acknowledged, program effects are possible until a
+                # compile refusal proves otherwise.
+                self.ran = True
+                result = tool_success({})
+            elif request.get("operation") == "finish":
                 code = request.get("exit_code")
                 if isinstance(code, int) and not self.finished.done():
                     self.ran = request.get("ran") is not False
@@ -199,13 +210,20 @@ class _Bridge:
 
     def _record_failure(self, name: str, result: JsonObject) -> None:
         self.failure_count += 1
+        error = result.get("error") or {}
+        for failure in self.failures:
+            if failure["tool"] == name and failure["code"] == error.get("code"):
+                failure["count"] = failure.get("count", 1) + 1
+                return
         if len(self.failures) < MAX_FAILURES:
-            error = result.get("error") or {}
+            message = str(error.get("message"))
+            if len(message) > MAX_FAILURE_MESSAGE_CHARS:
+                message = message[: MAX_FAILURE_MESSAGE_CHARS - 1] + "…"
             self.failures.append(
                 {
                     "tool": name,
                     "code": error.get("code"),
-                    "message": str(error.get("message"))[:2000],
+                    "message": message,
                 }
             )
 
@@ -262,7 +280,7 @@ async def run_python(
     status: ExecutionStatus = "failed"
     exit_code: int | None = None
     failures: list[str] = []
-    server = await asyncio.start_server(bridge.accept, "127.0.0.1", 0, limit=MAX_REQUEST_BYTES + 1)
+    server: asyncio.Server | None = None
 
     def record_failure(stage: str, error: Exception) -> None:
         message = f"{stage}: {error}"
@@ -296,6 +314,13 @@ async def run_python(
 
     async def launch() -> None:
         nonlocal process
+        assert server is not None and server.sockets is not None
+        child_environment = dict(environment)
+        child_environment.update(
+            VBOT_CODE_PORT=str(server.sockets[0].getsockname()[1]),
+            VBOT_CODE_TOKEN=bridge.token,
+            VBOT_CODE_TIMEOUT=str(timeout_seconds),
+        )
         # -S: only the standard library, the same in every installation; vBot's
         # own dependencies are not the program's.
         argv = [
@@ -308,7 +333,7 @@ async def run_python(
             "utf8",
             str(Path(__file__).with_name("_code_worker.py")),
         ]
-        wrapped = guarded_process_launch(argv, env=environment)
+        wrapped = guarded_process_launch(argv, env=child_environment)
         options: dict[str, Any] = (
             {"creationflags": subprocess_creation_flags(new_process_group=True) | _CREATE_SUSPENDED}
             if sys.platform == "win32"
@@ -320,13 +345,14 @@ async def run_python(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
-            env=dict(environment),
+            env=child_environment,
             on_created=created,
             **options,
         )
 
     async def cleanup() -> None:
-        server.close()
+        if server is not None:
+            server.close()
         bridge.closed = True
         termination_failed = False
         try:
@@ -343,7 +369,8 @@ async def run_python(
                     record_failure("Closing the Python process tree failed", error)
                     termination_failed = True
             await bridge.close()
-            await server.wait_closed()
+            if server is not None:
+                await server.wait_closed()
             if process is not None and (not termination_failed or sys.platform == "win32"):
                 try:
                     async with asyncio.timeout(5):
@@ -393,12 +420,20 @@ async def run_python(
         # kill: it must retain custody and keep trying to stop its descendants.
 
     try:
+        server = await asyncio.start_server(
+            bridge.accept, "127.0.0.1", 0, limit=MAX_REQUEST_BYTES + 1
+        )
         if output_path is not None:
             log = await run_tool_worker(output_path.open, "wb")
         program_dir = Path(await run_tool_worker(tempfile.mkdtemp, prefix="vbot-code-"))
         program_path = program_dir / "program.py"
         # Unchanged source: no newline translation of the program's own text.
         await run_tool_worker(program_path.write_text, code, encoding="utf-8", newline="")
+        await run_tool_worker(
+            shutil.copyfile,
+            Path(__file__).with_name("_code_client.py"),
+            program_dir / "vbot_tools.py",
+        )
         async with asyncio.timeout(timeout_seconds):
             # A cancelled launch must still publish its process/tree to cleanup.
             launch_task = asyncio.create_task(launch())
@@ -413,13 +448,7 @@ async def run_python(
                 asyncio.create_task(capture(process.stdout, stdout)),
                 asyncio.create_task(capture(process.stderr, stderr)),
             ]
-            assert server.sockets is not None
-            bootstrap = {
-                "path": str(program_path),
-                "port": server.sockets[0].getsockname()[1],
-                "token": bridge.token,
-                "timeout": timeout_seconds,
-            }
+            bootstrap = {"path": str(program_path)}
             process.stdin.write(_encode(bootstrap))
             await process.stdin.drain()
             process.stdin.close()
@@ -445,8 +474,6 @@ async def run_python(
     except TimeoutError:
         status = "timed_out"
     except Exception as error:
-        if process is None:
-            raise
         if not failures:
             record_failure("Python execution failed", error)
         status = "failed"
@@ -454,8 +481,6 @@ async def run_python(
         try:
             await finish_despite_cancel(cleanup())
         except Exception as error:
-            if process is None:
-                raise
             record_failure("Python execution cleanup failed", error)
     if failures and status == "completed":
         status = "failed"
@@ -463,6 +488,13 @@ async def run_python(
         # Capture can fail before the wait loop observes exit. Cleanup may
         # still confirm the process's end; retain that fact, including stops.
         exit_code = process.returncode
+    if not bridge.started:
+        if status not in {"stopped", "timed_out"}:
+            status = "failed"
+        if status != "stopped":
+            logger.error(
+                "Python worker failed to start (status=%s exit_code=%s)", status, exit_code
+            )
     return CodeExecutionResult(
         status=status,
         exit_code=exit_code,
@@ -476,5 +508,6 @@ async def run_python(
         output_path=output_path,
         log_truncated=log_truncated,
         ran=bridge.ran,
+        started=bridge.started,
         failure="\n".join(failures) or None,
     )

@@ -85,6 +85,12 @@ def _details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObjec
         data = result.get("data", {})
         if note := data.get("note"):
             level = "warning" if data.get("status") in {"completed", "stopped"} else "error"
+            if (
+                data.get("status") == "completed"
+                and not data.get("output")
+                and not data.get("stderr")
+            ):
+                level = "info"
             blocks.append(display_notice(level, str(note)))
         blocks.append(display_text("output", source="result", path=["data", "output"]))
         if data.get("stderr"):
@@ -108,6 +114,13 @@ class _ExecuteCode:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         code = required_string(arguments.get("code"), field_name="code", strip=False)
+        try:
+            code.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ToolContractError(
+                "Nothing was run: code contains an unpaired Unicode surrogate. "
+                "Replace it with a valid character or write it as a Python escape sequence."
+            ) from None
         if context.programmatic:
             return tool_failure(
                 "code_recursion",
@@ -176,46 +189,65 @@ class _ExecuteCode:
             data["stderr"] = result.stderr
         if result.tool_failures:
             data["tool_failures"] = result.tool_failures
-        if result.tool_failure_count:
+        if result.tool_failure_count > sum(item.get("count", 1) for item in result.tool_failures):
             data["tool_failure_count"] = result.tool_failure_count
+        notes: list[str] = []
+        if not result.started:
+            if result.status == "stopped":
+                notes.append(
+                    "Nothing was run: the user stopped this Python execution before it started."
+                )
+            elif result.status == "timed_out":
+                notes.append("Nothing was run: Python startup reached its 300-second time limit.")
+            else:
+                notes.append("Nothing was run: Python could not be started.")
+            if result.status != "stopped":
+                notes.append(
+                    "Repeating this call will not fix the startup failure. "
+                    f"Use {SHELL_MODEL_NAME} for Python-only work, or call the Tools directly."
+                )
+        elif not result.ran:
+            notes.append(
+                "Nothing was run: Python could not compile the program. Fix the error in stderr."
+            )
+        elif result.status != "completed":
+            if result.failure or result.status in {"timed_out", "stopped"}:
+                notes.append(
+                    {
+                        "timed_out": "Python reached its 300-second time limit.",
+                        "stopped": "The user stopped this Python execution.",
+                    }.get(result.status, "Python execution did not finish cleanly.")
+                )
+                notes.append(
+                    "Earlier Tool calls and Python changes remain applied. "
+                    "Inspect their outcomes before repeating any changes."
+                )
+            else:
+                notes.append(
+                    "The Python program failed. See stderr for the error."
+                    if result.stderr
+                    else "The Python program exited with a non-zero exit code."
+                )
+                if result.tool_calls:
+                    notes.append("Earlier Tool calls remain applied.")
+        elif not result.output and not result.stderr:
+            notes.append("The program printed nothing.")
         if result.failure:
             data["execution_error"] = result.failure
             if result.output_path is not None:
                 data["output_file"] = str(result.output_path).replace(os.sep, "/")
-                data["note"] = "Read output_file for the output captured before the failure."
+                notes.append("Read output_file for the output captured before the failure.")
         if result.output_truncated or result.stderr_truncated:
-            data["output_truncated"] = result.output_truncated
-            data["stderr_truncated"] = result.stderr_truncated
-            data["note"] = (str(data["note"]) + " " if "note" in data else "") + (
-                "Output was shortened. The program already ran; do not repeat its effects."
-            )
-            if result.output_path is not None:
+            notes.append("Output was shortened.")
+            if result.ran:
+                notes.append("The program already ran; do not repeat its effects.")
+            if result.output_path is not None and "output_file" not in data:
                 data["output_file"] = str(result.output_path).replace(os.sep, "/")
-                data["note"] += " Read output_file for the captured output."
+                notes.append("Read output_file for the captured output.")
         if result.log_truncated:
-            data["log_truncated"] = True
-            data["note"] = str(data.get("note", "")) + (
-                " The captured output file reached its size limit and is incomplete."
-            )
-        if not result.ran:
-            data["note"] = (
-                "Nothing was run: Python could not compile the program. Fix the error in stderr."
-            )
-        elif result.status != "completed":
-            stopped = {
-                "timed_out": "Python reached its 300-second time limit. ",
-                "stopped": "The user stopped this Python execution. ",
-            }.get(
-                result.status,
-                "Python execution did not finish cleanly. "
-                if result.failure
-                else "The Python program failed. ",
-            )
-            data["note"] = (
-                stopped + "Earlier Tool calls and Python changes "
-                "remain applied. Inspect their outcomes before repeating any changes."
-                + (" " + str(data["note"]) if "note" in data else "")
-            )
+            notes.append("The captured output file reached its size limit and is incomplete.")
+        if notes:
+            data["note"] = " ".join(notes)
         return tool_success(data)
 
     async def _run(
