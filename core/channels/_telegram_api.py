@@ -377,7 +377,8 @@ def _classify_telegram_error(
     would duplicate it.
     """
     channel_error = ChannelError(
-        f"Telegram request failed (channel={channel_id} error_type={type(error).__name__}): {text}"
+        f"Telegram request failed (channel={channel_id} error_type={type(error).__name__}): {text}",
+        user_message=text,
     )
     # PTB's permanent BadRequest also inherits NetworkError. Reject it before
     # classifying actual transport failures, or invalid requests retry unchanged.

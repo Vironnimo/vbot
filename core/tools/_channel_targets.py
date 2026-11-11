@@ -130,6 +130,10 @@ def _split_target(
     target: str, owned: list[ChannelConfig], arguments: JsonObject
 ) -> tuple[str | None, str | None, str | None]:
     """Read ``platform``, ``channel:chat`` or ``platform:chat:thread``, or a plain chat id."""
+    if target.lower().startswith("mailto:") and target.split(":", 1)[0] not in {
+        config.id for config in owned
+    }:
+        return None, target, None
     parts = [part.strip() for part in target.split(":")]
     head = parts[0]
     names_channel = head in {config.id for config in owned} or (
@@ -354,7 +358,8 @@ def _missing_target(prepared: _PreparedChannelSend) -> str:
     if not chats:
         return refusal(why.removesuffix(":") + ".", prepared.call, platform_target="<chat id>")
     calls = [render_call(prepared.call, platform_target=chat) for chat in chats[:_LISTED_CHATS]]
-    return choice(why, calls)
+    more = len(chats) - len(calls)
+    return choice(why, calls) + (f"; and {more} more configured chats." if more else "")
 
 
 def _send_target_from_session_metadata(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,9 +46,7 @@ def _build_file_data(
         return []
 
     files: list[FileData] = []
-    for index, raw_path in enumerate(value):
-        if not raw_path.strip():
-            raise ChannelSendRefusedError(f"file_paths[{index}] must be a non-empty string")
+    for raw_path in value:
         path_text = raw_path.strip()
         if path_text.lower().startswith("file://"):
             # None for a file on another computer, which only Windows paths can name.
@@ -61,30 +60,42 @@ def _build_file_data(
             )
         path_text = local_path
         resolved_path = context.resolve_path(path_text, access="read")
-        if resolved_path.is_dir():
-            raise ChannelSendRefusedError(
-                f'{REFUSAL_PREFIX}file_paths "{path_text}" is a folder; list the files in it '
-                "one by one."
-            )
-        if not resolved_path.is_file():
+        path_text = resolved_path.as_posix()
+        try:
+            status = resolved_path.stat()
+            if stat.S_ISDIR(status.st_mode):
+                raise ChannelSendRefusedError(
+                    f'{REFUSAL_PREFIX}Nothing was sent. file_paths "{path_text}" is a folder. '
+                    "List its files individually in file_paths."
+                )
+            if not stat.S_ISREG(status.st_mode):
+                raise ChannelSendRefusedError(
+                    f'{REFUSAL_PREFIX}Nothing was sent. file_paths "{path_text}" is not a '
+                    "regular file. Supply the path of a readable local file."
+                )
+            # Check the size before reading, without loading oversized files into memory.
+            if status.st_size > max_size_bytes:
+                raise ChannelSendRefusedError(
+                    f'{REFUSAL_PREFIX}Nothing was sent. file_paths "{path_text}" is '
+                    f"{_size_text(status.st_size)}; the limit is {_size_text(max_size_bytes)}. "
+                    "Send a smaller file or put a download link in message."
+                )
+            data = resolved_path.read_bytes()
+        except FileNotFoundError as error:
             raise ChannelSendRefusedError(
                 _missing_file(path_text, resolved_path, context.permissions)
-            )
-
-        # Reject oversize files by their on-disk size before reading, so a large
-        # file never gets loaded into memory just to be turned away.
-        size_bytes = resolved_path.stat().st_size
-        if size_bytes > max_size_bytes:
-            raise ChannelSendRefusedError(
-                f'{REFUSAL_PREFIX}file_paths "{path_text}" is {_size_text(size_bytes)}; files '
-                f"sent through a Channel may be at most {_size_text(max_size_bytes)}."
-            )
-
-        try:
-            data = resolved_path.read_bytes()
+            ) from error
         except OSError as error:
+            cause = (
+                "access was denied"
+                if isinstance(error, PermissionError)
+                else "the file operation timed out"
+                if isinstance(error, TimeoutError)
+                else "the operating system could not read the file"
+            )
             raise ChannelSendRefusedError(
-                f"cannot read file_paths[{index}] {raw_path}: {error}"
+                f'{REFUSAL_PREFIX}Nothing was sent. Cannot read file_paths "{path_text}": '
+                f"{cause}. Check that the file is accessible, or supply a readable local copy."
             ) from error
 
         files.append(
@@ -99,13 +110,13 @@ def _build_file_data(
 
 
 def _missing_file(path_text: str, resolved_path: Path, permissions: PermissionBoundary) -> str:
-    text = f'{REFUSAL_PREFIX}file_paths "{path_text}" does not exist ({resolved_path}).'
+    text = f'{REFUSAL_PREFIX}Nothing was sent. file_paths "{path_text}" does not exist.'
     similar = similar_entries(resolved_path, permissions=permissions, kind="files", limit=3)
     if similar:
         base = Path(path_text).parent
         names = ", ".join(f'"{(base / entry.name).as_posix()}"' for entry in similar)
         text += f" Files with similar names there: {names}."
-    return text
+    return text + " Supply the intended existing file in file_paths."
 
 
 def _size_text(size_bytes: int) -> str:
@@ -138,7 +149,9 @@ def _build_buttons(
             if unknown_fields:
                 names = ", ".join(unknown_fields)
                 raise ChannelSendRefusedError(
-                    f"buttons[{row_index}][{button_index}] has unknown field(s): {names}"
+                    f"{REFUSAL_PREFIX}Nothing was sent. buttons[{row_index}][{button_index}] "
+                    f"has unknown field(s): {names}. Each button takes label and data; "
+                    "remove the other fields only if their effect is not needed."
                 )
             buttons.append(InteractionButton(label=button["label"], data=button["data"]))
         rows.append(buttons)

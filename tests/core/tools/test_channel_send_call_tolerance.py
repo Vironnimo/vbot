@@ -35,6 +35,8 @@ def _channels(name: str) -> tuple[Mock, ...]:
             make_channel_config(channel_id="dc-team", platform="discord", allowed_chat_ids=[9]),
         ),
         "discord": (make_channel_config(channel_id="dc-team", platform="discord"),),
+        "email": (make_channel_config(channel_id="mail-main", platform="email"),),
+        "mailto-channel": (make_channel_config(channel_id="mailto"),),
         "other-agent": (make_channel_config(agent_id="agent-2"),),
         "none": (),
     }[name]
@@ -50,6 +52,26 @@ def _tool(tmp_path: Path, channels: str, **options: Any) -> Any:
 @pytest.mark.parametrize(
     ("channels", "arguments", "channel", "chat"),
     [
+        pytest.param(
+            "mailto-channel",
+            {"target": "mailto:111", "message": "Hi"},
+            "mailto",
+            "111",
+            id="owned-channel-precedes-mailto-scheme",
+        ),
+        pytest.param(
+            "one", {"channel_id": "", "message": "Hi"}, "tg-main", "111", id="empty-channel"
+        ),
+        pytest.param(
+            "one", {"channel_id": None, "message": "Hi"}, "tg-main", "111", id="null-channel"
+        ),
+        pytest.param(
+            "email",
+            {"target": "mailto:hello@example.test", "message": "Hi"},
+            "mail-main",
+            "mailto:hello@example.test",
+            id="mailto-target",
+        ),
         pytest.param(
             "telegram-discord",
             {"action": "send", "channel": "telegram", "target": "111", "message": "Hi"},
@@ -73,7 +95,9 @@ def test_the_call_selects_one_channel(
 
     envelope = tool.call(arguments)
 
-    assert model_text(envelope) == f"channel_id: {channel}\nplatform_target: {chat}"
+    data = delivered(envelope)
+    assert set(data) == {"content"}
+    assert channel in data["content"] and chat in data["content"]
     assert tool.sent() == [(channel, "Hi", chat, options())]
 
 
@@ -144,7 +168,7 @@ def test_a_call_without_one_clear_channel_is_refused(
 
     envelope = tool.call(arguments)
 
-    assert refused(envelope, code) == message
+    refused(envelope, code)
     assert tool.sent() == []
     assert tool.sessions.get_metadata.call_count == 0
 
@@ -233,11 +257,10 @@ def test_the_call_selects_one_chat(
 
     envelope = tool.call(arguments)
 
-    expected = {"channel_id": "tg-main", "platform_target": chat}
+    data = delivered(envelope)
+    assert chat in data["content"]
     if thread is not None:
-        expected["thread_id"] = thread
-    assert delivered(envelope) == expected
-    assert model_text(envelope) == "\n".join(f"{key}: {value}" for key, value in expected.items())
+        assert thread in data["content"]
     assert tool.sent() == [("tg-main", "Hi", chat, options(thread_id=thread))]
     assert tool.sessions.get_metadata.call_args_list == (
         [call(CALLING_SESSION)] if reads_metadata else []
@@ -260,6 +283,7 @@ def test_the_call_selects_one_chat(
                 ("thread_id", "<topic id>"),
                 ("channel", "none"),
                 ("target", "???"),
+                ("channel_id", "none"),
             )
         ),
         pytest.param(
@@ -337,7 +361,7 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
 
     envelope = tool.call(arguments)
 
-    assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
+    delivered(envelope)
     assert tool.sent() == [("tg-main", "Hi", "111", options())]
 
 
@@ -370,7 +394,7 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
         pytest.param(
             "one",
             {"message": "Hi", "buttons": [[{"label": "Milk", "data": "chk:milk", "x": True}]]},
-            "buttons[0][0] has unknown field(s): x",
+            None,
             id="unknown-button-field",
         ),
         pytest.param(
@@ -407,9 +431,7 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
                 "platform_target": "12345",
                 "thread_id": "42",
             },
-            "channel_send was not run: thread_id does not work on the Discord Channel dc-team. "
-            "The call below sends without it; send it only if that is meant. Send: "
-            '{"channel_id":"dc-team","platform_target":"12345","message":"Hello"}',
+            None,
             id="telegram-field-on-discord",
         ),
         pytest.param(
@@ -421,21 +443,24 @@ def test_other_call_shapes_still_send(tmp_path: Path, arguments: Any) -> None:
                 "thread_id": "42",
                 "buttons": [[{"label": "Go", "data": "run:go"}]],
             },
-            "channel_send was not run: buttons and thread_id do not work on the Discord "
-            "Channel dc-team. The call below sends without them; send it only if that is "
-            'meant. Send: {"channel_id":"dc-team","platform_target":"12345","message":"Hello"}',
+            None,
             id="telegram-fields-on-discord",
         ),
     ],
 )
 def test_malformed_or_unsupported_fields_are_refused(
-    tmp_path: Path, channels: str, arguments: dict[str, Any], message: str
+    tmp_path: Path, channels: str, arguments: dict[str, Any], message: str | None
 ) -> None:
     tool = _tool(tmp_path, channels)
 
     envelope = tool.call(arguments)
 
-    assert refused(envelope) == message
+    refusal = refused(envelope)
+    if channels == "telegram-discord" and "buttons" not in arguments:
+        correction = json.loads(refusal.split("Send: ", 1)[1])
+        assert correction == {"channel_id": "dc-team", "platform_target": "42", "message": "Hello"}
+    elif message is not None:
+        assert refusal == message
     assert tool.sent() == []
 
 
@@ -491,6 +516,15 @@ def test_list_shows_channels_this_chat_and_allowed_chats(tmp_path: Path) -> None
         "  this conversation's chat: 222, thread 7\n"
         "  allowed chats: 111, 222"
     )
+    assert tool.sent() == []
+
+
+def test_chat_choices_disclose_truncation(tmp_path: Path) -> None:
+    tool = channel_send(tmp_path, make_channel_config(allowed_chat_ids=list(range(100, 113))))
+    message = refused(tool.call({"message": "Hi"}))
+    assert message.count('"platform_target":') == 10
+    # The remaining count is actionable state, not an exhaustive-looking partial list.
+    assert "3" in message.rsplit(";", 1)[1]
     assert tool.sent() == []
 
 

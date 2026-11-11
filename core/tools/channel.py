@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
-from collections.abc import Awaitable
 from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.channels import (
@@ -46,6 +45,7 @@ from core.tools.tools import (
 )
 from core.utils.logging import get_logger
 from core.utils.paths import file_url_path
+from core.utils.workers import CancellationGraceExpiredError, finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.channels import ChannelService
@@ -60,6 +60,7 @@ from core.tools._channel_payloads import (
 )
 from core.tools._channel_targets import (
     _SEND_FIELDS,
+    _allowed_text,
     _list_targets,
     _one_value,
     _owned_channels,
@@ -287,6 +288,12 @@ def _channel_send_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayP
     message = arguments.get("message")
     if isinstance(message, str) and message.strip():
         parts.append(ToolDisplayPart(message.strip()))
+    elif isinstance(arguments.get("file_paths"), list):
+        parts.extend(
+            ToolDisplayPart(Path(path).name)
+            for path in arguments["file_paths"]
+            if isinstance(path, str)
+        )
     return tuple(parts)
 
 
@@ -337,6 +344,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
+        parallel_safe=False,
         summary="Send messages or files to your messaging Channels.",
         open_input_schema=True,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
@@ -360,6 +368,8 @@ async def _handle_channel_send_tool(
     *,
     max_attachment_size_bytes: int,
 ) -> JsonObject:
+    prepared: _PreparedChannelSend | None = None
+    sending = False
     try:
         if arguments.get(ACTION_FIELD) == "list":
             return await _list_targets(channel_service, chat_sessions, context, arguments)
@@ -384,31 +394,44 @@ async def _handle_channel_send_tool(
                 session_id=context.session_id,
             )
         await context.revalidate_permissions()
-        await _finish_despite_run_cancel(
-            context,
+        sending = True
+        await finish_despite_cancel(
             channel_service.send(
                 prepared.channel_id,
                 prepared.message,
                 platform_target,
                 **send_options,
             ),
+            cancellation_allowed=context.is_cancelled,
             grace_seconds=_SEND_CANCEL_GRACE_SECONDS,
+        )
+    except CancellationGraceExpiredError:
+        return _send_failure(
+            ChannelError("the Run was stopped while it was being sent", possibly_delivered=True),
+            prepared,
         )
     except TimeoutError:
         return _send_failure(
-            ChannelError("the Run was stopped while it was being sent", possibly_delivered=True)
+            ChannelError(
+                "the Channel send timed out" if sending else "preparing the send timed out",
+                possibly_delivered=sending,
+            ),
+            prepared,
         )
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
-        return tool_failure("channel_not_found", str(error))
+        return tool_failure(
+            "channel_not_found",
+            f"Nothing was sent. {error.user_message}. Check that the intended Channel is enabled "
+            "and connected in Channel settings before trying again.",
+        )
     except ChannelConfigError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelError as error:
-        return _send_failure(error)
+        return _send_failure(error, prepared)
 
-    await _finish_despite_run_cancel(
-        context,
+    await finish_despite_cancel(
         _record_outbound_message_note(
             channel_service,
             prepared.channel_id,
@@ -419,57 +442,42 @@ async def _handle_channel_send_tool(
             message=prepared.message,
             files=prepared.files,
             checklist=prepared.checklist,
+            buttons=prepared.buttons,
         ),
+        cancellation_allowed=context.is_cancelled,
     )
-    result: JsonObject = {
-        "channel_id": prepared.channel_id,
-        "platform_target": platform_target,
-    }
+    content = f"Sent to chat {platform_target} on {prepared.channel_id}"
     if thread_id is not None:
-        result["thread_id"] = thread_id
+        content += f", thread {thread_id}"
+    content += "."
+    if prepared.files:
+        content += "\nFiles: " + ", ".join(file.filename for file in prepared.files)
+    result: JsonObject = {"content": content}
+    if prepared.checklist is None and "done_label" in arguments:
+        result["note"] = "done_label had no effect because no checklist was sent."
     return tool_success(result)
 
 
-async def _finish_despite_run_cancel[Result](
-    context: ToolContext, work: Awaitable[Result], *, grace_seconds: float | None = None
-) -> Result:
-    """Finish ``work`` although the Run is cancelled, so its effect gets its Tool Result.
-
-    Any other cancellation stops ``work`` at once. With ``grace_seconds``, a Run
-    cancel stops it after that many seconds and raises ``TimeoutError``.
-    """
-    task = asyncio.ensure_future(work)
-    deadline: float | None = None
-    try:
-        while True:
-            try:
-                if deadline is None:
-                    return await asyncio.shield(task)
-                async with asyncio.timeout_at(deadline):
-                    return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if task.done():
-                    return task.result()
-                if not context.is_cancelled():
-                    raise
-                if grace_seconds is not None and deadline is None:
-                    deadline = asyncio.get_running_loop().time() + grace_seconds
-    finally:
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-
-def _send_failure(error: ChannelError) -> JsonObject:
+def _send_failure(error: ChannelError, prepared: _PreparedChannelSend | None = None) -> JsonObject:
     """Say whether a failed send left part of the message in the chat."""
-    cause = str(error).strip().rstrip(".") or "the Channel reported no reason"
+    cause = error.user_message.strip().rstrip(".") or "the Channel reported no reason"
     if error.possibly_delivered:
         return tool_failure(
             "delivery_unconfirmed",
             f"It is unknown how much of the message reached the chat: {cause}. "
-            "Sending the same message again can show it twice.",
+            "Check the destination chat before sending again; "
+            "repeating the message can show it twice.",
         )
-    return tool_failure("channel_error", f"Nothing was sent: {cause}.")
+    next_step = "Check the destination and the Channel's connection before trying again."
+    if prepared is not None and prepared.requested_platform_target is not None:
+        next_step = (
+            f'Check that platform_target "{prepared.requested_platform_target}" is the intended '
+            "chat and the Channel can reach it. "
+        )
+        if prepared.channel_config.allowed_chat_ids:
+            next_step += _allowed_text(prepared.channel_config) + ". "
+        next_step += "Use another target only if that is the intended recipient."
+    return tool_failure("channel_error", f"Nothing was sent. {cause}. {next_step}")
 
 
 def _prepare_channel_send(
@@ -545,6 +553,22 @@ def _prepare_channel_send(
 def _validate_platform_arguments(call: JsonObject, channel_config: ChannelConfig) -> None:
     allowed_arguments = frozenset(_CHANNEL_PROFILE_FIELDS.get(channel_config.platform, ()))
     unsupported = sorted(name for name in call if name not in allowed_arguments)
+    if channel_config.platform == "discord" and "thread_id" in unsupported:
+        other = [name for name in unsupported if name != "thread_id"]
+        if other:
+            raise ChannelSendRefusedError(
+                f"{REFUSAL_PREFIX}Nothing was sent. For a Discord thread, use its id as "
+                f"platform_target. Discord also cannot send {', '.join(other)}; "
+                "choose a supported platform if those effects are needed."
+            )
+        raise ChannelSendRefusedError(
+            refusal(
+                "Nothing was sent. For a Discord thread, use its id as platform_target.",
+                call,
+                platform_target=call["thread_id"],
+                thread_id=None,
+            )
+        )
     if unsupported:
         names = " and ".join(unsupported)
         verb = "does" if len(unsupported) == 1 else "do"
@@ -576,9 +600,10 @@ async def _record_outbound_message_note(
     message: str | None,
     files: list[FileData],
     checklist: list[ChecklistItem] | None = None,
+    buttons: list[list[InteractionButton]] | None = None,
 ) -> None:
     try:
-        note = _outbound_message_note(sender_agent_id, message, files, checklist)
+        note = _outbound_message_note(sender_agent_id, message, files, checklist, buttons)
         # The sending Session already has the call and its arguments in its history.
         await channel_service.record_outbound_note(
             channel_id,
@@ -604,6 +629,7 @@ def _outbound_message_note(
     message: str | None,
     files: list[FileData],
     checklist: list[ChecklistItem] | None = None,
+    buttons: list[list[InteractionButton]] | None = None,
 ) -> str:
     record: JsonObject = {"sender_agent_id": sender_agent_id}
     if message is not None:
@@ -614,6 +640,8 @@ def _outbound_message_note(
         record["checklist"] = [
             {"id": item.id, "label": item.label, "checked": item.checked} for item in checklist
         ]
+    if buttons:
+        record["buttons"] = [[button.label for button in row] for row in buttons]
     content = json.dumps(record, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
     return (
         "A message was sent to this chat via channel_send. "

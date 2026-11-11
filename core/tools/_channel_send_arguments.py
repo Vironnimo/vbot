@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from functools import cache
+from pathlib import Path
 from typing import Any
 
 from core.channels.config import ALLOWED_CHANNEL_PLATFORMS
@@ -25,7 +27,12 @@ from core.tools.call_syntax import (
     normalize_call_arguments,
     spelling,
 )
-from core.tools.contracts import ToolContract, ToolContractError
+from core.tools.contracts import (
+    ToolContract,
+    ToolContractError,
+    compile_tool_contract,
+    decode_json_argument,
+)
 
 ACTION_FIELD = "action"
 CHANNEL_FIELD = "channel"
@@ -118,6 +125,7 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
         field_aliases=_FIELD_ALIASES,
         field_normalizers={ACTION_FIELD: _action_word, "file_paths": _file_list},
         empty_as_omitted=(
+            "channel_id",
             "message",
             "platform_target",
             "thread_id",
@@ -128,7 +136,7 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
     )
     if not isinstance(normalized, dict):
         return normalized
-    for name in ("platform_target", "thread_id", CHANNEL_FIELD, TARGET_FIELD):
+    for name in ("channel_id", "platform_target", "thread_id", CHANNEL_FIELD, TARGET_FIELD):
         item = normalized.get(name)
         if isinstance(item, str) and not item.strip():
             del normalized[name]
@@ -160,7 +168,34 @@ def normalize_channel_send_arguments(contract: ToolContract, arguments: Any) -> 
             "a message or files to a chat. To send, leave action out."
         )
     _read_media_tokens(normalized)
+    buttons = normalized.get("buttons")
+    if isinstance(buttons, list):
+        normalized["buttons"] = [
+            [
+                normalize_call_arguments(
+                    _button_contract(),
+                    button,
+                    field_aliases=SpellingAliases({"label": ("text",), "data": ("callback_data",)}),
+                )
+                for button in row
+            ]
+            if isinstance(row, list)
+            else row
+            for row in buttons
+        ]
     return normalized
+
+
+@cache
+def _button_contract() -> ToolContract:
+    return compile_tool_contract(
+        name="channel_send",
+        input_schema={
+            "type": "object",
+            "properties": {"label": {"type": "string"}, "data": {"type": "string"}},
+        },
+        require_closed_input=False,
+    )
 
 
 def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
@@ -197,6 +232,14 @@ def _action_word(value: Any) -> Any:
 
 def _file_list(value: Any) -> Any:
     """One path, a path object (``{"media": ...}``) or a list of either becomes a list."""
+    if isinstance(value, str) and value.lstrip().startswith("["):
+        try:
+            decoded = decode_json_argument(value, {"type": "array"})
+        except ValueError:
+            pass  # A local filename can start with a bracket.
+        else:
+            if isinstance(decoded, list):
+                value = decoded
     items = value if isinstance(value, list) else [value]
     paths: list[Any] = []
     for index, item in enumerate(items):
@@ -218,7 +261,15 @@ def _file_list(value: Any) -> Any:
             unsupported = [
                 key
                 for key, entry in item.items()
-                if spelling(key) not in _FILE_OBJECT_KEYS and entry not in (None, "")
+                if spelling(key) not in _FILE_OBJECT_KEYS
+                and entry not in (None, "")
+                and not (
+                    spelling(key) == "type"
+                    and entry in ("file", "attachment")
+                    or spelling(key) in ("filename", "name")
+                    and isinstance(path, str)
+                    and entry == Path(path).name
+                )
             ]
             if unsupported:
                 raise ToolContractError(
@@ -254,6 +305,12 @@ def _read_media_tokens(arguments: dict[str, Any]) -> None:
             continue
         match = _MEDIA_LINE.fullmatch(text) if fence is None else None
         if match is None:
+            if fence is None and text.startswith("MEDIA:"):
+                raise ToolContractError(
+                    f"{REFUSAL_PREFIX}Nothing was sent. The standalone MEDIA: line is not "
+                    "a readable file marker. Put its exact local path in file_paths and "
+                    "remove that line from message; keep any accompanying text."
+                )
             kept.append(line)
         else:
             quoted, plain = match.groups()

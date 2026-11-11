@@ -120,11 +120,13 @@ class ChannelError(VBotError):
         retryable: bool = False,
         retry_after: float | None = None,
         possibly_delivered: bool = False,
+        user_message: str | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.retry_after = retry_after
         self.possibly_delivered = possibly_delivered
+        self.user_message = message if user_message is None else user_message
 
 
 class ChannelNotFoundError(ChannelError):

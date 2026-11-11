@@ -14,7 +14,67 @@ import pytest
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.utils.errors import VBotError
-from core.utils.workers import BoundedWorkerPool, OrderedWorker, SharedRefresh, cancel_and_wait
+from core.utils.workers import (
+    BoundedWorkerPool,
+    CancellationGraceExpiredError,
+    OrderedWorker,
+    SharedRefresh,
+    cancel_and_wait,
+    finish_despite_cancel,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed", [True, False])
+@pytest.mark.parametrize("finish", [True, False])
+async def test_finish_despite_cancel_obeys_the_owners_policy(allowed: bool, finish: bool) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def work() -> int:
+        started.set()
+        try:
+            await release.wait()
+            return 42
+        finally:
+            stopped.set()
+
+    owned = asyncio.create_task(work())
+    caller = asyncio.create_task(
+        finish_despite_cancel(
+            owned,
+            cancellation_allowed=lambda: allowed,
+            grace_seconds=0,
+        )
+    )
+    await started.wait()
+    if finish:
+        release.set()
+        await owned
+    caller.cancel()
+    if not allowed:
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+    elif finish:
+        assert await caller == 42
+    else:
+        with pytest.raises(CancellationGraceExpiredError):
+            await caller
+    assert stopped.is_set()
+    assert owned.done()
+
+
+@pytest.mark.asyncio
+async def test_finish_despite_cancel_keeps_the_work_timeout_distinct() -> None:
+    error = TimeoutError("transport timeout")
+
+    async def work() -> None:
+        raise error
+
+    with pytest.raises(TimeoutError) as caught:
+        await finish_despite_cancel(work(), grace_seconds=0)
+    assert caught.value is error
 
 
 @pytest.mark.asyncio
