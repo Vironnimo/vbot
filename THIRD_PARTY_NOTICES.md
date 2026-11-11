@@ -53,6 +53,20 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Optional wake-word downloads
+
+`desktop/wakeword/models/catalog.json` records pinned source revisions, SHA-256
+checksums, sizes, and upstream license metadata for optional downloads. These
+phrase heads are downloaded only when the user adds them, and are not bundled.
+The catalog's community models come from the same MIT-licensed
+[Home Assistant Wake Words Collection](https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2)
+as Hey Nabu; its copyright and license above also apply to those downloads.
+The original Alexa, Hey Jarvis, Hey Mycroft and Hey Rhasspy heads are provided by
+[pyopen-wakeword](https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd)
+and carry openWakeWord's CC-BY-NC-SA-4.0 model license; the catalog links to the
+upstream source. Okay Nabu is also fetched from that pinned pyopen-wakeword
+revision; no model-specific license is asserted where it is unverified.
+
 ## pyopen-wakeword audio test fixtures
 
 `tests/fixtures/wakeword/okay_nabu.wav` and `tests/fixtures/wakeword/unrelated_hey_jarvis.wav` come from the corresponding test directories in [rhasspy/pyopen-wakeword](https://github.com/rhasspy/pyopen-wakeword/tree/main/tests) and are distributed under that project's Apache License 2.0. Their SHA-256 values are `c19747e603b00db74eb53ee2a65ae0489dd9feb574a9e98683fc3be8740b6c66` and `05bf58195bd9c6af46becd373565c87bf0e57d133a950f2c0aa441daf1acb908`, respectively.

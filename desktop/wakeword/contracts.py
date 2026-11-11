@@ -19,6 +19,7 @@ MODE_MOCK = "mock"
 MODE_UNAVAILABLE = "unavailable"
 
 STATE_OFF = "off"
+STATE_IDLE = "idle"
 STATE_STARTING = "starting"
 STATE_LISTENING = "listening"
 STATE_MICROPHONE_DISCONNECTED = "microphone_disconnected"

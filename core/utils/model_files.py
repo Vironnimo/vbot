@@ -1,6 +1,6 @@
 """Pinned model files of local engines: fetch, verify and adopt them.
 
-A :class:`PinnedModel` names one Hugging Face repository revision and every
+A :class:`PinnedModel` names one repository revision and every
 file a local engine loads from it, each with its SHA-256 and size. Installing
 the model fetches exactly those files into one directory on this machine, so
 a ready model runs offline and never changes underneath vBot.
@@ -8,9 +8,9 @@ a ready model runs offline and never changes underneath vBot.
 :func:`fetch_model_files` runs in a worker thread. Per file it keeps a file
 that is already complete, otherwise adopts a matching copy from the local
 Hugging Face cache (a hard link where possible), otherwise downloads it over
-HTTPS, resuming a partial download. Every file is checked against its
-SHA-256 before it takes its final name. Progress counts the bytes of files
-already present, adopted, or downloaded so far.
+HTTPS (a pinned URL or a Hugging Face revision), resuming a partial download.
+Every file is checked against its SHA-256 before it takes its final name.
+Progress counts the bytes of files already present, adopted, or downloaded so far.
 """
 
 from __future__ import annotations
@@ -20,13 +20,12 @@ import os
 import shutil
 import threading
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 import httpx
-
-from core.utils.tls import shared_ssl_context
 
 _CHUNK_BYTES = 1024 * 1024
 _ATTEMPTS = 4
@@ -38,9 +37,12 @@ _HUB_URL = "https://huggingface.co"
 
 @dataclass(frozen=True)
 class ModelFile:
+    """Pinned bytes at a relative destination, optionally from a fixed non-Hub URL."""
+
     path: str
     sha256: str
     size: int
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class ModelFilesCancelledError(Exception):
 
 def open_client() -> httpx.Client:
     """The HTTP client downloads use; tests replace it with a fake transport."""
+    from core.utils.tls import shared_ssl_context
+
     return httpx.Client(
         verify=shared_ssl_context(),
         follow_redirects=True,
@@ -87,6 +91,8 @@ def fetch_model_files(
     progress: Callable[[int], None],
     cancelled: threading.Event,
     reuse: Sequence[Path] = (),
+    client_factory: Callable[[], httpx.Client] | None = None,
+    offline: bool = False,
 ) -> None:
     """Make *directory* hold every file of *model*, verified; blocking.
 
@@ -95,7 +101,10 @@ def fetch_model_files(
     exists under one of the *reuse* directories (such as an earlier revision
     of this model) or in the Hugging Face cache, and downloaded otherwise.
     Raises :class:`ModelFilesError` or :class:`ModelFilesCancelledError`;
-    files already verified stay in place.
+    files already verified stay in place. ``client_factory`` lets Desktop
+    preserve its own TLS/proxy policy without importing the server's TLS owner.
+    ``offline`` only adopts local copies and never opens an HTTP client; a
+    missing file raises ``ModelFilesError("model_missing")``.
     """
     directory.mkdir(parents=True, exist_ok=True)
     done = 0
@@ -120,12 +129,14 @@ def fetch_model_files(
         needed += item.size - present if 0 <= present <= item.size else item.size
     if shutil.disk_usage(directory).free < needed:
         raise ModelFilesError("insufficient_space")
-    with open_client() as client:
+    with nullcontext(None) if offline else (client_factory or open_client)() as client:
         for item in missing:
             target = directory / item.path
             target.parent.mkdir(parents=True, exist_ok=True)
             report = partial(_offset, progress, done)
             if not _adopt(model, item, target, reuse, cancelled, report):
+                if client is None:
+                    raise ModelFilesError("model_missing")
                 _download(client, model, item, target, cancelled, report)
             done += item.size
             progress(done)
@@ -177,6 +188,8 @@ def _cached_candidates(model: PinnedModel, item: ModelFile) -> Iterator[Path]:
     The cache names large (LFS) blobs by their SHA-256; small files are found
     through the repository's snapshot folders. Each candidate is still hashed.
     """
+    if item.url is not None:
+        return
     repository = hub_cache() / ("models--" + model.repo.replace("/", "--"))
     yield repository / "blobs" / item.sha256
     try:
@@ -227,7 +240,7 @@ def _download(
 ) -> None:
     """Download one file to ``<name>.part``, resuming it, then verify and rename."""
     partial = target.with_name(target.name + ".part")
-    url = f"{_HUB_URL}/{model.repo}/resolve/{model.revision}/{item.path}"
+    url = item.url or f"{_HUB_URL}/{model.repo}/resolve/{model.revision}/{item.path}"
     last = _ATTEMPTS - 1
     for attempt in range(_ATTEMPTS):
         # A pause before each retry; cancelling the installation ends it at once.

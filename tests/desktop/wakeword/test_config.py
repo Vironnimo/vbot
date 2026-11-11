@@ -104,7 +104,6 @@ def test_parse_reads_a_complete_section() -> None:
 @pytest.mark.parametrize(
     "active_model_ids",
     [
-        [],
         ["builtin/okay_nabu", "builtin/okay_nabu"],
         ["builtin/okay_nabu", ""],
         ["builtin/okay_nabu", 3],
@@ -119,10 +118,7 @@ def test_parse_falls_back_to_default_phrases_for_malformed_active_ids(
         {"active_model_ids": active_model_ids, "model_sensitivities": {"builtin/hey_nabu": 0.7}}
     )
 
-    assert config.phrases == (
-        PhraseConfig("builtin/okay_nabu", 0.5),
-        PhraseConfig("builtin/hey_nabu", 0.7),
-    )
+    assert config.phrases == (PhraseConfig("builtin/hey_nabu", 0.7),)
 
 
 def test_parse_accepts_the_maximum_number_of_phrases_and_trims_ids() -> None:
@@ -280,7 +276,7 @@ def test_listener_settings_change_only_for_acoustic_fields() -> None:
             },
         }
     )
-    retuned = parse_voice_config({"model_sensitivities": {"builtin/okay_nabu": 0.6}})
+    retuned = parse_voice_config({"model_sensitivities": {"builtin/hey_nabu": 0.6}})
 
     assert base.listener_settings_changed(rerouted) is False
     assert base.listener_settings_changed(retuned) is True
@@ -306,7 +302,12 @@ def test_apply_changes_writes_global_and_profile_fields() -> None:
         },
     )
 
-    assert section == {
+    assert section["selected_model_ids"] == [
+        "builtin/hey_nabu",
+        "builtin/hey_jarvis",
+        "builtin/alexa",
+    ]
+    assert {key: value for key, value in section.items() if key != "selected_model_ids"} == {
         "enabled": True,
         "unknown": {"kept": True},
         "active_model_ids": ["builtin/hey_jarvis", "builtin/alexa"],
@@ -400,7 +401,7 @@ def test_apply_changes_moves_an_alias_profile_to_the_canonical_key() -> None:
         # The microphone is the Desktop's shared setting, not part of Voice.
         ({"microphone": None}, "microphone"),
         ({"echo_cancellation": False}, "echo_cancellation"),
-        ({"active_model_ids": []}, "active_model_ids"),
+        ({"selected_model_ids": ["unknown"]}, "selected_model_ids"),
         (
             {"active_model_ids": [f"custom/{index}" for index in range(MAX_ACTIVE_PHRASES + 1)]},
             "active_model_ids",
@@ -682,6 +683,7 @@ def test_config_status_projects_phrases_actions_and_limits() -> None:
 
     status = config_status(config, SERVER, {"builtin/hey_nabu": "Hey Nabu"})
 
+    assert status.pop("selected_phrases") == status["phrases"]
     assert status == {
         "enabled": True,
         "default_agent_id": "main",
@@ -716,3 +718,27 @@ def test_config_status_projects_phrases_actions_and_limits() -> None:
         "min_sensitivity": 0.05,
         "max_sensitivity": 0.95,
     }
+
+
+@pytest.mark.parametrize("selection", [None, "malformed", [42]])
+def test_personal_selection_retains_disabled_settings_and_can_be_empty(selection: object) -> None:
+    legacy: dict[str, Any] = {
+        "active_model_ids": ["builtin/okay_nabu", "builtin/hey_nabu"],
+        "model_sensitivities": {"builtin/okay_nabu": 0.7},
+        "unknown": 42,
+        "selected_model_ids": selection,
+    }
+    assert parse_voice_config(legacy).selected_model_ids == tuple(legacy["active_model_ids"])
+    disabled = _apply(legacy, {"active_model_ids": []})
+    config = parse_voice_config(disabled)
+    assert config.active_model_ids == ()
+    assert config.selected_model_ids == tuple(legacy["active_model_ids"])
+    assert config_status(config, SERVER, {})["selected_phrases"][0]["sensitivity"] == 0.7
+    removed = _apply(disabled, {"selected_model_ids": []})
+    assert parse_voice_config(removed).selected_model_ids == ()
+    assert removed["unknown"] == 42
+    restored = _apply(removed, {"active_model_ids": ["builtin/okay_nabu"]})
+    phrase = parse_voice_config(restored).phrase("builtin/okay_nabu")
+    assert phrase is not None and phrase.sensitivity == 0.7
+    with pytest.raises(VoiceConfigError):
+        _apply(legacy, {"selected_model_ids": [], "active_model_ids": ["builtin/okay_nabu"]})

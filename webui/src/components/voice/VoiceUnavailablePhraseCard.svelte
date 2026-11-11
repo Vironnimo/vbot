@@ -1,7 +1,7 @@
 <script>
-  // An active wake phrase whose model is no longer installed on this Desktop.
+  // A selected wake phrase whose model is no longer in the catalog.
   // It cannot be heard or tuned; the card only explains that and lets the
-  // user stop listening for it. Its stored sensitivity and actions stay, so
+  // user remove it from the selection. Its sensitivity and actions stay, so
   // importing the model again brings the phrase back as it was.
   import { t } from '$lib/i18n.js';
   import Badge from '../ui/Badge.svelte';
@@ -38,12 +38,12 @@
     <Button
       variant="tertiary"
       disabled={deactivateDisabled}
-      ariaLabel={t('settings.voice.deactivatePhraseAria', {
+      ariaLabel={t('settings.voice.removeSelectionAria', {
         name,
       })}
       onClick={onDeactivate}
     >
-      {t('settings.voice.deactivatePhrase')}
+      {t('settings.voice.removeSelection')}
     </Button>
   </div>
 </div>

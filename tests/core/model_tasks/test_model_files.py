@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import namedtuple
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
-from core.model_tasks import model_files
-from core.model_tasks.model_files import (
+from core.utils import model_files
+from core.utils.model_files import (
     ModelFile,
     ModelFilesCancelledError,
     ModelFilesError,
@@ -47,7 +48,7 @@ class Hub:
         self.requests: list[tuple[str, str | None]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        path = request.url.path.split(f"/resolve/{REVISION}/", 1)[1]
+        path = request.url.path.split(f"/resolve/{REVISION}/", 1)[-1].lstrip("/")
         self.requests.append((path, request.headers.get("Range")))
         if self.status != 200:
             return httpx.Response(self.status)
@@ -80,8 +81,18 @@ def fetch(model: PinnedModel, directory: Path) -> list[int]:
     return reported
 
 
-def test_fetch_downloads_missing_files_and_keeps_complete_ones(tmp_path: Path, hub) -> None:
+@pytest.mark.parametrize("direct_url", [False, True], ids=["hugging-face", "catalog-url"])
+def test_fetch_downloads_missing_files_and_keeps_complete_ones(
+    tmp_path: Path, hub, direct_url: bool
+) -> None:
     model = pinned(**{"onnx/model.bin": WEIGHTS, "config.json": CONFIG})
+    if direct_url:
+        model = replace(
+            model,
+            files=tuple(
+                replace(item, url=f"https://models.example.com/{item.path}") for item in model.files
+            ),
+        )
     target = tmp_path / "model"
     target.mkdir()
     (target / "config.json").write_bytes(CONFIG)

@@ -1,0 +1,192 @@
+[
+  {
+    "id": "builtin/hey_nabu",
+    "label": "Hey Nabu",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_nabu/hey_nabu_v2.tflite",
+    "sha256": "ce18b69e1bddfb56e70fe739d6ca0f423f70a6e710f05b376baf6a3625689234",
+    "size_bytes": 207512,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_nabu",
+    "bundled": true,
+    "community": true,
+    "overlaps": [
+      "builtin/okay_nabu"
+    ]
+  },
+  {
+    "id": "builtin/okay_nabu",
+    "label": "Okay Nabu",
+    "url": "https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/okay_nabu.tflite",
+    "sha256": "2982cecde4ee81cc7a2573d2602a7d54f0669425c94a7b64af77e0ff92b03a18",
+    "size_bytes": 206380,
+    "language": "en",
+    "license": null,
+    "homepage": "https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models",
+    "bundled": false,
+    "community": false,
+    "overlaps": [
+      "builtin/hey_nabu"
+    ]
+  },
+  {
+    "id": "builtin/hey_jarvis",
+    "label": "Hey Jarvis",
+    "url": "https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/hey_jarvis.tflite",
+    "sha256": "14bff778604985e1b5c19f0f7bbe477a69cf281d8db34b232b3b972411f710e2",
+    "size_bytes": 1278912,
+    "language": "en",
+    "license": "CC-BY-NC-SA-4.0",
+    "homepage": "https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models",
+    "bundled": false,
+    "community": false,
+    "overlaps": []
+  },
+  {
+    "id": "builtin/hey_mycroft",
+    "label": "Hey Mycroft",
+    "url": "https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/hey_mycroft.tflite",
+    "sha256": "bf9e43136afd3ca323698820a6e32a47f885ef4c30a3b8b577ec71688a9d64d8",
+    "size_bytes": 860300,
+    "language": "en",
+    "license": "CC-BY-NC-SA-4.0",
+    "homepage": "https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models",
+    "bundled": false,
+    "community": false,
+    "overlaps": []
+  },
+  {
+    "id": "builtin/hey_rhasspy",
+    "label": "Hey Rhasspy",
+    "url": "https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/hey_rhasspy.tflite",
+    "sha256": "01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9",
+    "size_bytes": 416140,
+    "language": "en",
+    "license": "CC-BY-NC-SA-4.0",
+    "homepage": "https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models",
+    "bundled": false,
+    "community": false,
+    "overlaps": []
+  },
+  {
+    "id": "builtin/alexa",
+    "label": "Alexa",
+    "url": "https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/alexa.tflite",
+    "sha256": "7333a317a790070a7f3432b81d9439c779481cc4ebd67c73da7174ea3cf48397",
+    "size_bytes": 855312,
+    "language": "en",
+    "license": "CC-BY-NC-SA-4.0",
+    "homepage": "https://github.com/rhasspy/pyopen-wakeword/tree/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models",
+    "bundled": false,
+    "community": false,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/hey_friday",
+    "label": "Hey Friday",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_friday/hey_Friday%21.tflite",
+    "sha256": "eb127d82d884a1ef4167b455ec67682bf362b9de3e232c3f8d544a5e6ab4cb8b",
+    "size_bytes": 206748,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_friday",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/computer",
+    "label": "Computer",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/computer/computer_v2.tflite",
+    "sha256": "411db364955bf7b7a13a50d732a8b59c129e2fbe130a54f9eb3c20ca183bc4d0",
+    "size_bytes": 207512,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/computer",
+    "bundled": false,
+    "community": true,
+    "overlaps": [
+      "catalog/ok_computer"
+    ]
+  },
+  {
+    "id": "catalog/ok_computer",
+    "label": "OK Computer",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/ok_computer/ok_computer.tflite",
+    "sha256": "b22dadba0f1c6ac2549a1336e8938f3e2366b3f43a3e95a622ca897aa5a3477a",
+    "size_bytes": 206380,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/ok_computer",
+    "bundled": false,
+    "community": true,
+    "overlaps": [
+      "catalog/computer"
+    ]
+  },
+  {
+    "id": "catalog/glados",
+    "label": "GLaDOS",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/glados/glados.tflite",
+    "sha256": "7564b95e5deed29cecfd55fd34cac70da5307c0d86108a7f87bfc610c9724dec",
+    "size_bytes": 207512,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/glados",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/alfred",
+    "label": "Alfred",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/alfred/alfred.tflite",
+    "sha256": "ee50efc6898d065eaf6a5a993d10be0d6a1bb6737ba577d623fa3d1327e2310e",
+    "size_bytes": 206380,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/alfred",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/hey_luna",
+    "label": "Hey Luna",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/Hey%20Luna/hey_luna.tflite",
+    "sha256": "92902aa5076211b39786d7bb5ebd22a71d25da2d7440c2028d6e07885a086490",
+    "size_bytes": 206748,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/Hey%20Luna",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/tars",
+    "label": "TARS",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/TARS/TARS.tflite",
+    "sha256": "f410fb20e94b8fdd52965ffc928d25802ebc839f80f81be857a9122f4ad97865",
+    "size_bytes": 206748,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/TARS",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  },
+  {
+    "id": "catalog/hey_spock",
+    "label": "Hey Spock",
+    "url": "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_spock/hey_spock.tflite",
+    "sha256": "f39eb339c0c2b18315e085a0cc4debcc7d74dd2d0b35585d3d4c49a0acec89d3",
+    "size_bytes": 206748,
+    "language": "en",
+    "license": "MIT",
+    "homepage": "https://github.com/fwartner/home-assistant-wakewords-collection/tree/8bcd2f20bb7b76c351b2eff871fa1ce873fe9be2/en/hey_spock",
+    "bundled": false,
+    "community": true,
+    "overlaps": []
+  }
+]

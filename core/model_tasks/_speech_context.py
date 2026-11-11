@@ -10,7 +10,6 @@ from threading import Lock, Timer
 from typing import Any, Protocol
 
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
-from core.model_tasks.model_files import PinnedModel
 from core.model_tasks.speech_types import (
     SpeechAudioChunk,
     SpeechProgress,
@@ -18,6 +17,7 @@ from core.model_tasks.speech_types import (
     SpeechTranscriptionResult,
 )
 from core.utils.errors import VBotError
+from core.utils.model_files import PinnedModel
 
 # A cancelled request's running engine call may still finish within these seconds.
 _CANCEL_GRACE_S = 30.0

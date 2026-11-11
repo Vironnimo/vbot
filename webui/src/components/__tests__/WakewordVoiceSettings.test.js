@@ -18,6 +18,9 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   setVoiceEnabled: vi.fn(),
   updateVoiceConfig: vi.fn(),
   listWakewordModels: vi.fn(),
+  addWakewordModel: vi.fn(),
+  cancelWakewordModelDownload: vi.fn(),
+  openDesktopExternalUrl: vi.fn(),
   importWakewordModel: vi.fn(),
   deleteWakewordModel: vi.fn(),
   retryVoice: vi.fn(),
@@ -84,6 +87,7 @@ function voiceStatus(overrides = {}) {
     default_agent_id: 'main',
     default_session_behavior: 'active',
     phrases: [phrase(NABU), phrase(HEY_NABU)],
+    selected_phrases: overrides.phrases ?? [phrase(NABU), phrase(HEY_NABU)],
     recording: null,
     commands: [],
     calibration: null,
@@ -98,7 +102,7 @@ function voiceStatus(overrides = {}) {
 
 // What the Desktop does with an `updateVoiceConfig` change.
 function applyChanges(status, changes) {
-  let phrases = status.phrases;
+  let phrases = status.selected_phrases ?? status.phrases;
   if (changes.active_model_ids)
     phrases = changes.active_model_ids.map(
       (modelId) =>
@@ -124,6 +128,15 @@ function applyChanges(status, changes) {
     ...status,
     sequence: status.sequence + 1,
     phrases,
+    selected_phrases: (
+      changes.selected_model_ids ??
+      status.selected_phrases.map((entry) => entry.model_id)
+    ).map(
+      (id) =>
+        phrases.find((entry) => entry.model_id === id) ??
+        status.selected_phrases.find((entry) => entry.model_id === id) ??
+        phrase(id),
+    ),
     default_agent_id:
       'default_agent_id' in changes
         ? changes.default_agent_id
@@ -251,7 +264,7 @@ describe('WakewordVoiceSettings', () => {
       expect(
         switchByLabel('Enable wakeword listening').getAttribute('aria-checked'),
       ).toBe('true');
-      expect(document.querySelectorAll('.voice-model-card')).toHaveLength(3);
+      expect(document.querySelectorAll('.voice-model-card')).toHaveLength(2);
     });
   });
 
@@ -339,7 +352,11 @@ describe('WakewordVoiceSettings', () => {
 
   describe('wake phrases', () => {
     it('bounds the active phrases by the Desktop limit', async () => {
-      await mountPanel();
+      await mountPanel({
+        status: voiceStatus({
+          selected_phrases: [phrase(NABU), phrase(HEY_NABU), phrase(JARVIS)],
+        }),
+      });
 
       expect(document.body.textContent).toContain(
         t('settings.voice.phraseLimit', { count: 2, max: 2 }),
@@ -351,8 +368,8 @@ describe('WakewordVoiceSettings', () => {
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         active_model_ids: [NABU],
       });
-      // The last active phrase stays.
-      expect(switchByLabel('Listen for Okay Nabu').disabled).toBe(true);
+      // Selected phrases remain visible when switched off.
+      expect(switchByLabel('Listen for Okay Nabu').disabled).toBe(false);
       expect(switchByLabel('Listen for Hey Jarvis').disabled).toBe(false);
 
       switchByLabel('Listen for Hey Jarvis').click();
@@ -368,6 +385,7 @@ describe('WakewordVoiceSettings', () => {
     it('offers no activation or sensitivity the Desktop reports no limits for', async () => {
       await mountPanel({
         status: voiceStatus({
+          selected_phrases: [phrase(NABU), phrase(HEY_NABU), phrase(JARVIS)],
           limits: {
             max_active_phrases: null,
             min_sensitivity: null,
@@ -432,7 +450,7 @@ describe('WakewordVoiceSettings', () => {
       });
     });
 
-    it('lets an active phrase whose model is gone be deactivated unless it is the last one', async () => {
+    it('lets an active phrase whose model is gone be removed even when it is the last one', async () => {
       const GONE = 'custom/gone';
       await mountPanel({
         status: voiceStatus({
@@ -456,19 +474,22 @@ describe('WakewordVoiceSettings', () => {
       expect(card.textContent).toContain(
         errorMessage('wakeword_model_unavailable'),
       );
-      expect(document.querySelectorAll('.voice-model-card')).toHaveLength(4);
+      expect(document.querySelectorAll('.voice-model-card')).toHaveLength(2);
 
-      buttonByLabel(`Stop listening for ${GONE}`).click();
+      buttonByLabel(`Remove ${GONE} from your wakewords`).click();
       await settle();
 
       expect(desktopBridge.updateVoiceConfig).toHaveBeenCalledExactlyOnceWith({
         active_model_ids: [NABU],
+        selected_model_ids: [NABU],
       });
       expect(phraseCard(GONE)).toBeNull();
 
       owner.status = voiceStatus({ sequence: 10, phrases: [phrase(GONE)] });
       flushSync();
-      expect(buttonByLabel(`Stop listening for ${GONE}`).disabled).toBe(true);
+      expect(buttonByLabel(`Remove ${GONE} from your wakewords`).disabled).toBe(
+        false,
+      );
     });
 
     it('marks a phrase Agent that is not on this server', async () => {
@@ -881,6 +902,85 @@ describe('WakewordVoiceSettings', () => {
   });
 
   describe('models', () => {
+    it('shows shared download progress after reopening and lets the user cancel', async () => {
+      await mountPanel({
+        status: voiceStatus({
+          model_download: { model_id: JARVIS, completed: 100, total: 200 },
+        }),
+      });
+      buttonByText(t('settings.voice.addWakeword')).click();
+      await settle();
+      expect(
+        document
+          .querySelector('[role="progressbar"]')
+          .getAttribute('aria-valuenow'),
+      ).toBe('50');
+      buttonByText(t('common.cancel')).click();
+      await settle();
+      expect(desktopBridge.cancelWakewordModelDownload).toHaveBeenCalledOnce();
+      owner.adopt({ ...owner.status, sequence: 2, model_download: null });
+      await settle();
+      expect(document.querySelector('[role="progressbar"]')).toBeNull();
+      expect(desktopBridge.listWakewordModels).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([false, true])(
+      'adds from the searchable catalog only after a successful download (failure=%s)',
+      async (failed) => {
+        desktopBridge.listWakewordModels.mockResolvedValue(
+          MODELS.map((model) => ({ ...model, installed: model.id !== JARVIS })),
+        );
+        await mountPanel();
+        expect(phraseCard(JARVIS)).toBeNull();
+        const before = owner.status;
+        desktopBridge.addWakewordModel.mockImplementation(async (id) => {
+          if (failed) throw new Error('wakeword_model_download_failed');
+          desktopBridge.listWakewordModels.mockResolvedValue(MODELS);
+          owner.adopt({
+            ...owner.status,
+            sequence: 2,
+            selected_phrases: [...owner.status.selected_phrases, phrase(id)],
+          });
+          return { id, activated: false };
+        });
+        buttonByText(t('settings.voice.addWakeword')).click();
+        await settle();
+        const search = document.querySelector('input[type="search"]');
+        search.value = 'jarvis';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect(
+          document.querySelectorAll('[data-catalog-model-id]'),
+        ).toHaveLength(1);
+        buttonByText(t('settings.voice.downloadAndAdd')).click();
+        await waitForCondition(
+          () => desktopBridge.addWakewordModel.mock.calls.length === 1,
+        );
+        await settle();
+        expect(desktopBridge.addWakewordModel).toHaveBeenCalledWith(JARVIS);
+        if (failed) {
+          expect(owner.status).toEqual(before);
+          expect(phraseCard(JARVIS)).toBeNull();
+          expect(
+            document.querySelector('[role="alert"]').textContent,
+          ).toContain(t('settings.voice.error.modelDownloadFailed'));
+        } else {
+          expect(phraseCard(JARVIS)).not.toBeNull();
+          expect(buttonByText(t('settings.voice.added')).disabled).toBe(true);
+          document.querySelector('[aria-label="Close"]').click();
+          await settle();
+          phraseCard(JARVIS)
+            .querySelector(
+              '[aria-label="Remove Hey Jarvis from your wakewords"]',
+            )
+            .click();
+          await settle();
+          expect(phraseCard(JARVIS)).toBeNull();
+          expect(desktopBridge.deleteWakewordModel).not.toHaveBeenCalled();
+        }
+      },
+    );
+
     it('imports a TFLite model without activating it', async () => {
       const onToast = vi.fn();
       const importedModel = {
@@ -899,6 +999,17 @@ describe('WakewordVoiceSettings', () => {
         .mockResolvedValueOnce(MODELS)
         .mockResolvedValue([...MODELS, importedModel]);
       await mountPanel({ onToast });
+      owner.refresh.mockImplementation(async () => {
+        const next = voiceStatus({
+          sequence: 2,
+          selected_phrases: [
+            ...owner.status.selected_phrases,
+            phrase(importedModel.id),
+          ],
+        });
+        owner.adopt(next);
+        return next;
+      });
 
       const fileInput = document.body.querySelector('input[type="file"]');
       expect(fileInput.accept).toContain('.tflite');
@@ -981,7 +1092,9 @@ describe('WakewordVoiceSettings', () => {
       ]);
       await mountPanel();
 
-      // Built-in phrases cannot be removed.
+      buttonByText(t('settings.voice.addWakeword')).click();
+      await settle();
+      // Only imported model files can be permanently deleted.
       const remove = t('settings.voice.removeModel');
       expect(
         [...document.querySelectorAll('button')].filter(
@@ -990,7 +1103,7 @@ describe('WakewordVoiceSettings', () => {
       ).toHaveLength(1);
       buttonByText(remove).click();
       flushSync();
-      const dialog = document.querySelector('[role="dialog"]');
+      const dialog = [...document.querySelectorAll('[role="dialog"]')].at(-1);
       expect(dialog.textContent).toContain('Hey Computer');
       buttonByText(t('common.delete')).click();
       await settle();

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("vbot.desktop.bridge")
 
-VOICE_API_VERSION = 3
+VOICE_API_VERSION = 4
 """Version of the Voice bridge methods; the WebUI enables Voice only for this version.
 
 3: the microphone and echo cancellation moved from the Voice config to the
@@ -311,6 +311,16 @@ class DesktopBridge:
     def listWakewordModels(self) -> list[dict[str, Any]]:  # noqa: N802
         """Return the curated built-ins and the imported wakeword models."""
         return self._voice.list_models()
+
+    def addWakewordModel(self, model_id: Any) -> dict[str, Any]:  # noqa: N802
+        """Download a catalog model if needed and add it to the personal selection."""
+        label = self._voice.model_label(model_id)
+        self._permissions.import_model(label)
+        return self._voice.add_model(model_id)
+
+    def cancelWakewordModelDownload(self) -> dict[str, bool]:  # noqa: N802
+        """Cancel the current catalog installation, keeping partial downloads for retry."""
+        return self._voice.cancel_model_download()
 
     def importWakewordModel(self, filename: Any, content_base64: Any) -> dict[str, Any]:  # noqa: N802
         """Install one base64-encoded TFLite model; returns its descriptor and ``activated``.

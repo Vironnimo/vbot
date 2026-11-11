@@ -311,13 +311,29 @@ def test_runtime_rejects_unexcluded_links(tmp_path: Path, relative: str) -> None
 
 @pytest.mark.parametrize("shape", SHAPES)
 def test_runtime_provisioning_uses_shape_lock_with_hashes(
-    tmp_path: Path, pip_commands: list[list[str]], shape: str
+    tmp_path: Path, pip_commands: list[list[str]], shape: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = _source(tmp_path)
     lock = source / "scripts" / "windows" / f"requirements-{shape}.lock"
     runtime = _runtime(tmp_path)
 
+    model_directory = tmp_path / "copy/Lib/site-packages/pyopen_wakeword/models"
+
+    def install(command: list[str]) -> None:
+        pip_commands.append(command)
+        if "--target" in command:
+            model_directory.mkdir(parents=True)
+            for name in ("embedding_model", "melspectrogram", "hey_jarvis", "okay_nabu"):
+                (model_directory / f"{name}.tflite").write_bytes(b"model")
+
+    monkeypatch.setattr(build_windows, "run_tool", install)
+
     build_windows.copy_runtime(runtime, tmp_path / "copy", app_source=source, shape=shape)
+
+    assert sorted(path.stem for path in model_directory.iterdir()) == [
+        "embedding_model",
+        "melspectrogram",
+    ]
 
     command = pip_commands[-1]
     assert command[:5] == [sys.executable, "-B", "-m", "pip", "--python"]

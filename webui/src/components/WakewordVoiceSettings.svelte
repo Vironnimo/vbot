@@ -20,6 +20,9 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import {
+    addWakewordModel,
+    cancelWakewordModelDownload,
+    desktopErrorCode,
     deleteWakewordModel,
     importWakewordModel,
     isDesktopAccessor,
@@ -38,6 +41,7 @@
     rebaseVoiceConfig,
     voiceConfigFromStatus,
   } from '$lib/wakewordSettings.js';
+  import WakewordCatalog from './voice/WakewordCatalog.svelte';
   import VoicePhraseCard from './voice/VoicePhraseCard.svelte';
   import VoiceUnavailablePhraseCard from './voice/VoiceUnavailablePhraseCard.svelte';
   import WakewordCalibration from './voice/WakewordCalibration.svelte';
@@ -86,6 +90,14 @@
   let calibrationStarting = $state(null);
   let calibrationStopping = null;
   let deleteConfirmModel = $state(null);
+  let catalogOpen = $state(false);
+  let addingModelId = $state(null);
+  let catalogError = $state(null);
+  let selectedModels = $derived(
+    (draft?.selected_model_ids ?? [])
+      .map((id) => wakewordModels.find((model) => model.id === id))
+      .filter(Boolean),
+  );
 
   let voiceReady = $derived(
     isDesktopAccessor() && desktopVoice?.available === true,
@@ -99,7 +111,10 @@
   let maxActivePhrases = $derived(limits?.max_active_phrases ?? null);
   let calibration = $derived(status?.calibration ?? null);
   let calibrating = $derived(calibration !== null);
-  let modelActionBusy = $derived(modelActionState !== 'idle');
+  let modelActionBusy = $derived(
+    modelActionState !== 'idle' || Boolean(status?.model_download),
+  );
+  let downloadWasRunning = false;
   let enableBusy = $derived(enablePending !== null);
   let enabled = $derived(enablePending ?? status?.enabled ?? false);
   let indicator = $derived(voiceIndicator(status));
@@ -122,9 +137,12 @@
   let unavailablePhrases = $derived.by(() => {
     if (!listsLoaded || !draft) return [];
     const statusLabels = new Map(
-      (status?.phrases ?? []).map((phrase) => [phrase.model_id, phrase.label]),
+      (status?.selected_phrases ?? status?.phrases ?? []).map((phrase) => [
+        phrase.model_id,
+        phrase.label,
+      ]),
     );
-    return draft.active_model_ids
+    return draft.selected_model_ids
       .filter((modelId) => !modelLabels.has(modelId))
       .map((modelId) => ({ modelId, label: statusLabels.get(modelId) ?? '' }));
   });
@@ -260,6 +278,14 @@
   });
 
   $effect(() => {
+    const running = Boolean(status?.model_download);
+    untrack(() => {
+      if (downloadWasRunning && !running) void loadLists();
+      downloadWasRunning = running;
+    });
+  });
+
+  $effect(() => {
     if (!voiceReady) return;
     untrack(() => {
       if (!listsLoaded) void loadLists();
@@ -390,12 +416,52 @@
       (maxActivePhrases === null || ids.length >= maxActivePhrases)
     )
       return;
-    if (!checked && ids.length <= 1) return;
+
     editDraft({
       active_model_ids: checked
         ? [...ids, modelId]
         : ids.filter((activeId) => activeId !== modelId),
     });
+  }
+
+  function removeSelection(modelId) {
+    editDraft({
+      selected_model_ids: draft.selected_model_ids.filter(
+        (id) => id !== modelId,
+      ),
+      active_model_ids: draft.active_model_ids.filter((id) => id !== modelId),
+    });
+  }
+
+  async function addModel(modelId) {
+    if (modelActionBusy) return;
+    addingModelId = modelId;
+    modelActionState = 'adding';
+    catalogError = null;
+    try {
+      if (!(await voiceAutosave.flush())) return;
+      await addWakewordModel(modelId);
+      await refreshAfterModelChange();
+    } catch (error) {
+      if (
+        !isDesktopDeclined(error) &&
+        desktopErrorCode(error) !== 'wakeword_model_download_cancelled'
+      )
+        catalogError =
+          bridgeErrorMessage(error) ||
+          t('settings.voice.error.modelDownloadFailed');
+    } finally {
+      addingModelId = null;
+      modelActionState = 'idle';
+    }
+  }
+
+  async function cancelDownload() {
+    try {
+      await cancelWakewordModelDownload();
+    } catch (error) {
+      errorToast(error);
+    }
   }
 
   function handleSensitivityInput(modelId, value) {
@@ -696,12 +762,11 @@
               <VoiceUnavailablePhraseCard
                 modelId={phrase.modelId}
                 label={phrase.label}
-                deactivateDisabled={captureLocked ||
-                  draft.active_model_ids.length <= 1}
-                onDeactivate={() => handlePhraseToggle(phrase.modelId, false)}
+                deactivateDisabled={captureLocked}
+                onDeactivate={() => removeSelection(phrase.modelId)}
               />
             {/each}
-            {#each wakewordModels as model (model.id)}
+            {#each selectedModels as model (model.id)}
               {@const active =
                 draft?.active_model_ids.includes(model.id) ?? false}
               {@const phraseCalibration =
@@ -720,9 +785,9 @@
                   (modelId) => modelLabels.get(modelId) ?? modelId,
                 )}
                 toggleDisabled={captureLocked ||
-                  (active && draft.active_model_ids.length <= 1) ||
                   (!active &&
-                    (maxActivePhrases === null ||
+                    (model.installed === false ||
+                      maxActivePhrases === null ||
                       draft.active_model_ids.length >= maxActivePhrases))}
                 sensitivityDisabled={captureLocked}
                 routingDisabled={routingLocked}
@@ -736,7 +801,12 @@
                 onActionChange={(action) =>
                   handlePhraseActionChange(model.id, action)}
                 onCalibrate={() => handleCalibrate(model.id)}
-                onRemove={() => (deleteConfirmModel = model)}
+                onRemove={() => removeSelection(model.id)}
+                onDownload={() => {
+                  catalogOpen = true;
+                  void addModel(model.id);
+                }}
+                downloading={addingModelId === model.id}
                 calibration={phraseCalibration ? calibrationPanel : null}
               />
               {#snippet calibrationPanel()}
@@ -752,7 +822,23 @@
               {/snippet}
             {/each}
           </div>
+          {#if selectedModels.length === 0 && unavailablePhrases.length === 0}
+            <p class="voice-model-help">{t('settings.voice.selectionEmpty')}</p>
+          {/if}
+          {#if catalogError && !catalogOpen}
+            <Banner variant="error">{catalogError}</Banner>
+          {/if}
           <div class="voice-model-actions">
+            <Button
+              variant="secondary"
+              disabled={captureLocked && !status?.model_download}
+              onClick={() => {
+                catalogError = null;
+                catalogOpen = true;
+              }}
+            >
+              {t('settings.voice.addWakeword')}
+            </Button>
             <span class="voice-model-limit">
               {#if maxActivePhrases !== null}
                 {t('settings.voice.phraseLimit', {
@@ -768,18 +854,7 @@
               accept=".tflite,application/octet-stream"
               onchange={handleWakewordModelFile}
             />
-            <Button
-              variant="secondary"
-              loading={modelActionState === 'importing'}
-              disabled={captureLocked}
-              onClick={chooseWakewordModelFile}
-            >
-              {t('settings.voice.importModel')}
-            </Button>
           </div>
-          <p class="voice-model-help">
-            {t('settings.voice.importHelp')}
-          </p>
         </div>
       </div>
 
@@ -879,6 +954,26 @@
     onClick={() => voiceAutosave.runSave('manual')}
   />
 </div>
+
+{#if catalogOpen && active}
+  <WakewordCatalog
+    models={wakewordModels}
+    selectedIds={draft?.selected_model_ids ?? []}
+    activeIds={draft?.active_model_ids ?? []}
+    busy={modelActionBusy}
+    {addingModelId}
+    download={status?.model_download}
+    onCancelDownload={cancelDownload}
+    error={catalogError}
+    onAdd={addModel}
+    onImport={chooseWakewordModelFile}
+    onDelete={(model) => (deleteConfirmModel = model)}
+    onClose={() => {
+      catalogOpen = false;
+      catalogError = null;
+    }}
+  />
+{/if}
 
 {#if deleteConfirmModel}
   <ConfirmDialog

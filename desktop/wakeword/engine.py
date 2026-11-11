@@ -1,6 +1,6 @@
 """Wakeword model catalog and shared multi-phrase detection engine.
 
-The catalog lists curated built-ins and validated Desktop-local imports. Each
+The catalog lists curated downloads and validated Desktop-local imports. Each
 descriptor carries its detector ``kind`` (``tflite_head`` today) and the ids of
 catalog models it ``overlaps`` with (models trained on overlapping phrases, so
 one utterance can trigger both). :class:`MultiWakewordEngine` runs every active
@@ -11,18 +11,29 @@ together), and returns at most one winner per audio window.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
 import tempfile
+import threading
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
+from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.model_files import (
+    ModelFile,
+    ModelFilesCancelledError,
+    ModelFilesError,
+    PinnedModel,
+    fetch_model_files,
+)
 from desktop.wakeword.config import (
     DEFAULT_MODEL_IDS,
     DEFAULT_SENSITIVITY,
@@ -80,6 +91,13 @@ class WakewordModelDescriptor:
     builtin: bool = False
     kind: str = DETECTOR_KIND_TFLITE_HEAD
     overlaps: tuple[str, ...] = ()
+    installed: bool = True
+    bundled: bool = False
+    size_bytes: int | None = None
+    language: str | None = None
+    license: str | None = None
+    homepage: str | None = None
+    community: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return the public descriptor without exposing a local filesystem path."""
@@ -91,6 +109,13 @@ class WakewordModelDescriptor:
             "removable": self.removable,
             "kind": self.kind,
             "overlaps": list(self.overlaps),
+            "installed": self.installed,
+            "bundled": self.bundled,
+            "size_bytes": self.size_bytes,
+            "language": self.language,
+            "license": self.license,
+            "homepage": self.homepage,
+            "community": self.community,
         }
 
 
@@ -103,65 +128,11 @@ class WakewordMatch:
     threshold: float
 
 
-_BUILTIN_MODELS = (
-    WakewordModelDescriptor(
-        id="builtin/okay_nabu",
-        label="Okay Nabu",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target="okay_nabu",
-        builtin=True,
-        overlaps=("builtin/hey_nabu",),
-    ),
-    # The bundled hey_nabu_v2 head was trained on both "hey nabu" and "ok nabu".
-    WakewordModelDescriptor(
-        id="builtin/hey_nabu",
-        label="Hey Nabu",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target=str(_BUNDLED_HEY_NABU_PATH),
-        overlaps=("builtin/okay_nabu",),
-    ),
-    WakewordModelDescriptor(
-        id="builtin/hey_jarvis",
-        label="Hey Jarvis",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target="hey_jarvis",
-        builtin=True,
-    ),
-    WakewordModelDescriptor(
-        id="builtin/hey_mycroft",
-        label="Hey Mycroft",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target="hey_mycroft",
-        builtin=True,
-    ),
-    WakewordModelDescriptor(
-        id="builtin/hey_rhasspy",
-        label="Hey Rhasspy",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target="hey_rhasspy",
-        builtin=True,
-    ),
-    WakewordModelDescriptor(
-        id="builtin/alexa",
-        label="Alexa",
-        source="built_in",
-        format="tflite",
-        removable=False,
-        target="alexa",
-        builtin=True,
-    ),
+# Pinned assets, reviewed with the app; the page can select ids, never URLs.
+_CATALOG_ENTRIES = json.loads(
+    Path(__file__).with_name("models").joinpath("catalog.json").read_text(encoding="utf-8")
 )
-_BUILTIN_MODELS_BY_ID = {descriptor.id: descriptor for descriptor in _BUILTIN_MODELS}
+_CATALOG_BY_ID = {entry["id"]: entry for entry in _CATALOG_ENTRIES}
 
 
 class WakewordModelError(ValueError):
@@ -173,27 +144,44 @@ class WakewordModelError(ValueError):
 
 
 class WakewordModelCatalog:
-    """Own built-in selection and durable Desktop-local TFLite imports."""
+    """Own pinned catalog downloads and durable Desktop-local TFLite imports."""
 
-    def __init__(self, settings_file: Path | None = None) -> None:
+    def __init__(
+        self, settings_file: Path | None = None, *, versions_directory: Path | None = None
+    ) -> None:
         if settings_file is None:
             from desktop.settings import settings_path
 
             settings_file = settings_path()
         self._model_directory = settings_file.parent / _CUSTOM_MODEL_DIRECTORY_NAME
+        self._download_lock = threading.Lock()
+        self._versions_directory = versions_directory
+
+    def adopt_existing_models(self, model_ids: Iterable[str]) -> None:
+        """Preserve selected legacy heads locally before their old runtime is retired."""
+        for model_id in model_ids:
+            if model_id not in _CATALOG_BY_ID or not model_id.startswith("builtin/"):
+                continue
+            try:
+                with self._download_lock:
+                    self._install_model(
+                        model_id, lambda _done: None, threading.Event(), offline=True
+                    )
+            except WakewordModelError:
+                logger.info("Selected wakeword needs a download (model=%s)", model_id)
 
     def list_models(self) -> list[WakewordModelDescriptor]:
-        """Return curated built-ins followed by valid imported models."""
+        """Return catalog entries followed by valid imported models."""
         custom_models = sorted(
             self._custom_models(), key=lambda model: (model.label.casefold(), model.id)
         )
-        return [*_BUILTIN_MODELS, *custom_models]
+        return [*(self._catalog_descriptor(entry) for entry in _CATALOG_ENTRIES), *custom_models]
 
     def resolve(self, model_id: str) -> WakewordModelDescriptor:
         """Resolve a public model id to its executable target."""
-        builtin = _BUILTIN_MODELS_BY_ID.get(model_id)
-        if builtin is not None:
-            return builtin
+        entry = _CATALOG_BY_ID.get(model_id)
+        if entry is not None:
+            return self._catalog_descriptor(entry)
         custom = next((model for model in self._custom_models() if model.id == model_id), None)
         if custom is not None:
             return custom
@@ -201,6 +189,115 @@ class WakewordModelCatalog:
             f"Wakeword model is not available: {model_id}",
             error_code="wakeword_model_unavailable",
         )
+
+    def _catalog_descriptor(self, entry: dict[str, Any]) -> WakewordModelDescriptor:
+        path = (
+            _BUNDLED_HEY_NABU_PATH
+            if entry["bundled"]
+            else self._model_directory / "catalog" / f"{entry['sha256']}.tflite"
+        )
+        return WakewordModelDescriptor(
+            id=entry["id"],
+            label=entry["label"],
+            source="catalog",
+            format="tflite",
+            removable=False,
+            target=str(path),
+            overlaps=tuple(entry["overlaps"]),
+            installed=is_file_strict(path) and _model_digest(path) == entry["sha256"],
+            bundled=entry["bundled"],
+            size_bytes=entry["size_bytes"],
+            language=entry["language"],
+            license=entry["license"],
+            homepage=entry["homepage"],
+            community=entry["community"],
+        )
+
+    def install_model(
+        self,
+        model_id: str,
+        *,
+        progress: Callable[[int], None] = lambda _done: None,
+        cancelled: threading.Event | None = None,
+    ) -> WakewordModelDescriptor:
+        """Fetch through the shared model downloader, then validate and select locally."""
+        with self._download_lock:
+            return self._install_model(model_id, progress, cancelled or threading.Event())
+
+    def _install_model(
+        self,
+        model_id: str,
+        progress: Callable[[int], None],
+        cancelled: threading.Event,
+        *,
+        offline: bool = False,
+    ) -> WakewordModelDescriptor:
+        descriptor = self.resolve(model_id)
+        if descriptor.installed or descriptor.source == "imported":
+            return descriptor
+        if descriptor.bundled:
+            raise WakewordModelError(
+                "The bundled wakeword is missing", error_code="wakeword_model_unavailable"
+            )
+        entry = _CATALOG_BY_ID[model_id]
+        target = Path(descriptor.target)
+        filename = unquote(urlsplit(entry["url"]).path.rsplit("/", 1)[-1])
+        staging = target.parent / ".downloads" / entry["sha256"]
+        model = PinnedModel(
+            repo=model_id,
+            revision=entry["sha256"],
+            files=(ModelFile(filename, entry["sha256"], entry["size_bytes"], url=entry["url"]),),
+        )
+        try:
+            previous = (
+                tuple(
+                    self._versions_directory.glob(
+                        "*/runtime/Lib/site-packages/pyopen_wakeword/models"
+                    )
+                )
+                if self._versions_directory is not None
+                else ()
+            )
+            fetch_model_files(
+                model,
+                staging,
+                progress=progress,
+                cancelled=cancelled,
+                reuse=(*_legacy_model_directories(model_id), *previous),
+                client_factory=_download_client,
+                offline=offline,
+            )
+            candidate = staging / filename
+            if not offline:
+                _validate_custom_model(candidate)
+            if cancelled.is_set():
+                raise ModelFilesCancelledError
+            candidate.replace(target)
+            # A previously interrupted attempt can leave a redundant .part file.
+            _remove_file(staging / f"{filename}.part")
+            staging.rmdir()
+        except ModelFilesCancelledError as exc:
+            raise WakewordModelError(
+                "Wakeword download cancelled", error_code="wakeword_model_download_cancelled"
+            ) from exc
+        except ModelFilesError as exc:
+            code = (
+                "wakeword_model_insufficient_space"
+                if exc.code == "insufficient_space"
+                else "wakeword_model_download_failed"
+            )
+            raise WakewordModelError(
+                "Wakeword model could not be downloaded", error_code=code
+            ) from exc
+        except WakewordModelError:
+            raise
+        except Exception as exc:
+            raise WakewordModelError(
+                "Wakeword model could not be downloaded. Try again.",
+                error_code="wakeword_model_download_failed",
+            ) from exc
+        logger.info("Wakeword model installed (model=%s)", model_id)
+        return replace(descriptor, installed=True)
 
     def create_engine(
         self,
@@ -307,7 +404,7 @@ class WakewordModelCatalog:
             ) from exc
 
     def _custom_models(self) -> list[WakewordModelDescriptor]:
-        if not self._model_directory.is_dir():
+        if not is_dir_strict(self._model_directory):
             return []
         models: list[WakewordModelDescriptor] = []
         for metadata_path in self._model_directory.glob(f"*{_CUSTOM_MODEL_METADATA_SUFFIX}"):
@@ -345,7 +442,7 @@ class WakewordModelCatalog:
         ):
             return None
         model_path = self._model_directory / expected_filename
-        if not model_path.is_file():
+        if not is_file_strict(model_path):
             return None
         return WakewordModelDescriptor(
             id=model_id,
@@ -630,6 +727,11 @@ def _create_feature_stream() -> Any:
 
 
 def _create_phrase_head(descriptor: WakewordModelDescriptor) -> Any:
+    if descriptor.source == "catalog" and not descriptor.installed:
+        raise WakewordModelError(
+            f"Wakeword model needs a verified download: {descriptor.label}",
+            error_code="wakeword_model_unavailable",
+        )
     from desktop.wakeword._openwakeword import PhraseHead, builtin_model_path
 
     try:
@@ -730,3 +832,35 @@ def _remove_file(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         logger.warning("Failed to clean up wakeword model file: %s", os.fspath(path))
+
+
+def _model_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _legacy_model_directories(model_id: str) -> tuple[Path, ...]:
+    """Let the shared downloader adopt a matching head from an older runtime."""
+    if not model_id.startswith("builtin/"):
+        return ()
+    from importlib.util import find_spec
+
+    try:
+        spec = find_spec("pyopen_wakeword")
+        return (
+            tuple(Path(location) / "models" for location in (spec.submodule_search_locations or ()))
+            if spec
+            else ()
+        )
+    except ImportError, ValueError:
+        return ()
+
+
+def _download_client() -> Any:
+    import httpx
+
+    from desktop._http import shared_ssl_context
+
+    return httpx.Client(
+        trust_env=False, verify=shared_ssl_context(), timeout=15, follow_redirects=False
+    )

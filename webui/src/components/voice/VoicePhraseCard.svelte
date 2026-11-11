@@ -49,9 +49,16 @@
     onActionChange = noop,
     onCalibrate = noop,
     onRemove = noop,
+    onDownload = noop,
+    downloading = false,
     // Snippet rendering the running calibration of this phrase.
     calibration = null,
   } = $props();
+
+  let tuningOpen = $state(false);
+  $effect(() => {
+    if (calibration) tuningOpen = true;
+  });
 
   const ACTION_OPTIONS = [
     {
@@ -146,7 +153,7 @@
     <div class="voice-model-card__identity">
       <span class="voice-model-card__name">{model.label}</span>
       <!-- Built-in phrases are the norm; only an imported one is marked. -->
-      {#if model.source !== 'built_in'}
+      {#if model.source === 'imported'}
         <Badge variant="neutral">{t('settings.voice.modelImported')}</Badge>
       {/if}
       {#if active && problem}
@@ -185,29 +192,6 @@
     {/if}
 
     <div class="voice-model-card__tuning">
-      <div class="voice-model-card__sensitivity">
-        <label for={sliderId}>
-          {t('settings.voice.sensitivity')}
-        </label>
-        <span
-          >{sliderAvailable ? `${Math.round(sliderValue * 100)}%` : '–'}</span
-        >
-      </div>
-      <input
-        id={sliderId}
-        type="range"
-        min={minSensitivity ?? 0}
-        max={maxSensitivity ?? 1}
-        step="0.01"
-        value={sliderValue}
-        oninput={handleSensitivityInput}
-        onchange={onSensitivityCommit}
-        disabled={sensitivityDisabled || !sliderAvailable}
-      />
-      <p class="voice-model-card__help">
-        {t('settings.voice.sensitivityHelp')}
-      </p>
-
       <div class="voice-model-card__action">
         <span aria-hidden="true">
           {t('settings.voice.modelAction')}
@@ -254,31 +238,74 @@
       {/if}
     </div>
 
-    {#if calibration}
-      {@render calibration()}
-    {:else if calibrateDisabled !== null}
-      <div class="voice-model-card__actions">
-        <span class="voice-model-card__help">
-          {t('settings.voice.calibrationOptional')}
-        </span>
-        <Button
-          variant="tertiary"
-          disabled={calibrateDisabled}
-          disabledReason={calibrateDisabledReason}
-          ariaLabel={t('settings.voice.calibrateAria', {
-            name: model.label,
-          })}
-          onClick={onCalibrate}
+    <details bind:open={tuningOpen} class="voice-model-card__details">
+      <summary>{t('settings.voice.detectionSettings')}</summary>
+      <div class="voice-model-card__sensitivity">
+        <label for={sliderId}>
+          {t('settings.voice.sensitivity')}
+        </label>
+        <span
+          >{sliderAvailable ? `${Math.round(sliderValue * 100)}%` : '–'}</span
         >
-          {t('settings.voice.calibrate')}
-        </Button>
       </div>
-    {/if}
-  {:else if model.removable}
+      <input
+        id={sliderId}
+        type="range"
+        min={minSensitivity ?? 0}
+        max={maxSensitivity ?? 1}
+        step="0.01"
+        value={sliderValue}
+        oninput={handleSensitivityInput}
+        onchange={onSensitivityCommit}
+        disabled={sensitivityDisabled || !sliderAvailable}
+      />
+      <p class="voice-model-card__help">
+        {t('settings.voice.sensitivityHelp')}
+      </p>
+
+      {#if calibration}
+        {@render calibration()}
+      {:else if calibrateDisabled !== null}
+        <div class="voice-model-card__actions">
+          <span class="voice-model-card__help">
+            {t('settings.voice.calibrationOptional')}
+          </span>
+          <Button
+            variant="tertiary"
+            disabled={calibrateDisabled}
+            disabledReason={calibrateDisabledReason}
+            ariaLabel={t('settings.voice.calibrateAria', {
+              name: model.label,
+            })}
+            onClick={onCalibrate}
+          >
+            {t('settings.voice.calibrate')}
+          </Button>
+        </div>
+      {/if}
+    </details>
+  {/if}
+  {#if model.installed === false}
     <div class="voice-model-card__actions">
-      <Button variant="tertiary" disabled={removeDisabled} onClick={onRemove}>
-        {t('settings.voice.removeModel')}
-      </Button>
+      <span class="voice-model-card__help"
+        >{t('settings.voice.downloadNeeded')}</span
+      >
+      <Button
+        variant="secondary"
+        disabled={removeDisabled}
+        loading={downloading}
+        onClick={onDownload}>{t('settings.voice.downloadWakeword')}</Button
+      >
     </div>
   {/if}
+  <div class="voice-model-card__actions">
+    <Button
+      variant="tertiary"
+      disabled={removeDisabled}
+      onClick={onRemove}
+      ariaLabel={t('settings.voice.removeSelectionAria', { name: model.label })}
+    >
+      {t('settings.voice.removeSelection')}
+    </Button>
+  </div>
 </div>

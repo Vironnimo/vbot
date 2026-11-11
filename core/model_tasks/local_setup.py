@@ -15,7 +15,7 @@ recipe names, else the server's own, so it follows vBot's Python without a
 pin of its own. An environment based on another Python reports
 ``python_changed`` and is created again by the next installation.
 
-A setup may also own one pinned model (:mod:`core.model_tasks.model_files`):
+A setup may also own one pinned model (:mod:`core.utils.model_files`):
 its files live in ``<models_dir>/<name>/<revision>`` with their own receipt,
 the setup is available only once both the environment and the model are,
 and :meth:`LocalSetup._fetch_model` reports the model download in bytes.
@@ -40,14 +40,14 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks.model_files import (
+from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.logging import get_logger
+from core.utils.model_files import (
     ModelFilesCancelledError,
     ModelFilesError,
     PinnedModel,
     fetch_model_files,
 )
-from core.utils.file_status import is_dir_strict, is_file_strict
-from core.utils.logging import get_logger
 from core.utils.workers import (
     BoundedWorkerPool,
     cancel_and_wait,

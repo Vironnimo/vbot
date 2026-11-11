@@ -16,7 +16,7 @@ pywebview disables its renderer's default right-click menu outside Debug Mode, s
 
 Desktop Voice (`desktop/wakeword/`) and Desktop dictation (`desktop/dictation/`) share the speech core (`desktop/speech/`); the active server transcribes. Live voice (`model_tasks/live.md`) runs in the loaded WebUI page; the Desktop supports it without owning the call.
 
-The running app can share local Terminal and Computer Use capabilities with its selected server (`desktop/execution.py`), including while minimized. This is app-owned native execution, not a background installation: it ends with the app. Reusable OS/process primitives and id utilities are narrow allowed imports from `core`; Runtime, Agent and server services stay server-owned. Grants, connection lifetime, shutdown and extension seams: `desktop/computer-sharing.md`.
+The running app can share local Terminal and Computer Use capabilities with its selected server (`desktop/execution.py`), including while minimized. This is app-owned native execution, not a background installation: it ends with the app. Reusable OS/process primitives, id utilities and the verified pinned-file downloader (`core/utils/model_files.py`) are narrow allowed imports from `core`; Runtime, Agent and server services stay server-owned. Grants, connection lifetime, shutdown and extension seams: `desktop/computer-sharing.md`.
 
 ## Terms
 

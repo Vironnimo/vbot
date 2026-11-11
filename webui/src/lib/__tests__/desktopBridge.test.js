@@ -113,7 +113,9 @@ function rawStatus(overrides = {}) {
     default_agent_id: 'main',
     default_session_behavior: 'active',
     phrases: [],
+    selected_phrases: overrides.phrases ?? [],
     recording: null,
+    model_download: null,
     commands: [],
     calibration: null,
     limits: {
@@ -188,7 +190,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      voiceApi: 3,
+      voiceApi: 4,
       liveHotkey: 1,
       microphone: true,
       dictation: 1,
@@ -204,7 +206,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      voiceApi: 3,
+      voiceApi: 4,
       liveHotkey: true,
       microphone: true,
       dictation: true,
@@ -248,10 +250,10 @@ describe('getDesktopCapabilities', () => {
   });
 
   it('offers the Voice UI only for the Voice bridge version it speaks', () => {
-    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 3 })).toBe(true);
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 4 })).toBe(true);
     expect(supportsDesktopVoice({ wakeword: true, voiceApi: 0 })).toBe(false);
     expect(supportsDesktopVoice({ wakeword: true, voiceApi: 2 })).toBe(false);
-    expect(supportsDesktopVoice({ wakeword: false, voiceApi: 3 })).toBe(false);
+    expect(supportsDesktopVoice({ wakeword: false, voiceApi: 4 })).toBe(false);
     expect(supportsDesktopVoice(null)).toBe(false);
   });
 });
@@ -684,6 +686,7 @@ describe('Voice status validation', () => {
       default_agent_id: null,
       default_session_behavior: 'active',
       recording: null,
+      model_download: null,
       commands: [{ command_id: 'c-1', model_id: null, stage: null }],
       limits: {
         max_active_phrases: null,

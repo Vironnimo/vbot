@@ -7,9 +7,9 @@ import pytest
 import pytest_asyncio
 
 from core.database import write_bootstrap_marker
-from core.model_tasks import model_files
 from core.providers.http import ProviderHTTPTransports
 from core.usage import UsageRecorder
+from core.utils import model_files
 from tests.core.model_tasks import model_tasks_test_support
 
 

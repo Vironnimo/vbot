@@ -16,13 +16,13 @@ from core.model_tasks._speech_engines import (
 )
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
-from core.model_tasks.model_files import PinnedModel
 from core.model_tasks.options import (
     TaskModelOptionChoice,
     TaskModelOptionField,
 )
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
+from core.utils.model_files import PinnedModel
 
 _LOAD_OPTIONS = ("model_path", "device", "dtype")
 

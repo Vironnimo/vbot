@@ -52,7 +52,6 @@ from core.model_tasks._speech_context import (
 from core.model_tasks._speech_engines import _audio_chunks, _ManagedSttEngine, _WaitingWorkers
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
-from core.model_tasks.model_files import PinnedModel
 from core.model_tasks.options import (
     TaskModelOptionSchema,
     validate_task_model_options,
@@ -68,6 +67,7 @@ from core.model_tasks.speech_types import (
     SpeechTranscriptionResult,
 )
 from core.utils.logging import get_logger
+from core.utils.model_files import PinnedModel
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("speech.local")

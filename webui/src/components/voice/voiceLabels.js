@@ -22,6 +22,9 @@ export function voiceIndicator(status) {
   if (!status?.enabled || status.state === 'off') {
     return indicator('off', t('voice.state.off'), t('voice.mic.tooltip.off'));
   }
+  if (status.state === 'idle') {
+    return indicator('off', t('voice.state.idle'), t('voice.state.idle'));
+  }
   if (status.recording) {
     return {
       ...indicator(
@@ -114,6 +117,10 @@ function knownErrorMessage(code) {
     target_agent_unavailable: t('settings.voice.error.targetUnavailable'),
     engine_start_failed: t('settings.voice.error.engine'),
     wakeword_model_unavailable: t('settings.voice.error.modelUnavailable'),
+    wakeword_model_insufficient_space: t('settings.voice.error.modelSpace'),
+    wakeword_model_download_failed: t(
+      'settings.voice.error.modelDownloadFailed',
+    ),
     wakeword_model_invalid: t('settings.voice.error.modelInvalid'),
     wakeword_model_active: t('settings.voice.error.modelActive'),
     wakeword_model_delete_failed: t('settings.voice.error.modelDeleteFailed'),

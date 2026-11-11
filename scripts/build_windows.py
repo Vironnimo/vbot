@@ -170,6 +170,12 @@ def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: st
                 str(lock),
             ]
         )
+    # Only shared feature models ship in the dependency. The app supplies
+    # Hey Nabu; all other phrase heads are installed from its pinned catalog.
+    model_directory = site / "pyopen_wakeword" / "models"
+    for model_path in model_directory.glob("*.tflite"):
+        if model_path.name not in {"melspectrogram.tflite", "embedding_model.tflite"}:
+            model_path.unlink()
     write_inventory(destination, site)
 
 

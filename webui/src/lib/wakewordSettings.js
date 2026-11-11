@@ -67,13 +67,16 @@ export function voiceConfigFromStatus(status) {
   const phrases = Array.isArray(status?.phrases) ? status.phrases : [];
   const sensitivities = {};
   const actions = {};
-  for (const phrase of phrases) {
+  for (const phrase of status?.selected_phrases ?? phrases) {
     if (Number.isFinite(phrase.sensitivity))
       sensitivities[phrase.model_id] = phrase.sensitivity;
     actions[phrase.model_id] = canonicalAction(phrase.action);
   }
   return {
     active_model_ids: phrases.map((phrase) => phrase.model_id),
+    selected_model_ids: (status?.selected_phrases ?? phrases).map(
+      (phrase) => phrase.model_id,
+    ),
     model_sensitivities: sensitivities,
     default_agent_id: status?.default_agent_id ?? null,
     default_session_behavior:
@@ -87,6 +90,9 @@ export function cloneVoiceConfig(config) {
   return {
     ...config,
     active_model_ids: [...config.active_model_ids],
+    selected_model_ids: [
+      ...(config.selected_model_ids ?? config.active_model_ids),
+    ],
     model_sensitivities: { ...config.model_sensitivities },
     phrase_actions: Object.fromEntries(
       Object.entries(config.phrase_actions).map(([modelId, action]) => [
@@ -125,6 +131,12 @@ export function rebaseVoiceConfig(draft, previous, next) {
   const identical = (left, right) => left === right;
   return cloneVoiceConfig({
     active_model_ids: pick('active_model_ids', sameList),
+    selected_model_ids: sameList(
+      draft.selected_model_ids ?? draft.active_model_ids,
+      previous.selected_model_ids ?? previous.active_model_ids,
+    )
+      ? (next.selected_model_ids ?? next.active_model_ids)
+      : (draft.selected_model_ids ?? draft.active_model_ids),
     model_sensitivities: rebaseEntries(
       draft.model_sensitivities,
       previous.model_sensitivities,
@@ -163,6 +175,15 @@ function actionChange(action) {
  */
 export function buildVoiceConfigChanges(draft, baseline) {
   const changes = {};
+  if (
+    !sameList(
+      draft.selected_model_ids ?? draft.active_model_ids,
+      baseline.selected_model_ids ?? baseline.active_model_ids,
+    )
+  )
+    changes.selected_model_ids = [
+      ...(draft.selected_model_ids ?? draft.active_model_ids),
+    ];
   if (!sameList(draft.active_model_ids, baseline.active_model_ids))
     changes.active_model_ids = [...draft.active_model_ids];
 

@@ -9,7 +9,7 @@ Specialized Task Model bindings, target discovery and execution.
 1. **Bindings & discovery** (`model_tasks.py` main file plus constants/local targets/options) - normalized settings, target ID parsing, credential-gated discovery, local target descriptors, backend-owned option schemas for the Settings UI.
 2. **Execution** - per-task services and their wire clients for speech, image, embeddings, video, music, decisions, and Live voice calls. Bindings and execution change together when a task type is added - one module on purpose. Shared internals: `TaskBindingResolver` (binding lookup + options merge + target parse) and central artifact handling (the bounded `task-artifacts` pool owns preflight and admitted writes, which settle before cancellation); image/video/music write to caller-owned directories selected by their Tools.
 
-Every local engine shares `LocalSetup` (`local_setup.py`), the fixed-recipe installation job with its uv-managed environments, and `model_files.py`, the one owner of verified pinned Model files. Engines never download at use: a ready target runs offline (`model_tasks/local-engines.md`).
+Every local engine shares `LocalSetup` (`local_setup.py`) for installation in uv-managed environments and `core/utils/model_files.py` for verified pinned files. Desktop wakewords reuse the latter. Ready targets run offline (`model_tasks/local-engines.md`).
 
 The package `__init__.py` resolves public exports on demand, so the standalone managed STT worker imports `speech_local.py` without unrelated task implementations and their dependencies. Settings modules import Task Model constants from `constants.py` at module load; `paths.py` resolves target equality when preparing a patch, after package initialization.
 

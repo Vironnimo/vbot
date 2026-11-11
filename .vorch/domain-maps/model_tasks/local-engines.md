@@ -18,11 +18,13 @@ A setup may own one pinned Model (`model=PinnedModel`, `models_dir`): its files 
 
 ## Pinned Model files
 
-`model_files.py` is the one owner of pinned Model files for every local engine: `ModelFile(path, sha256, size)`, `PinnedModel(repo, revision, files)` (`download_bytes` is their sum) and `fetch_model_files(model, directory, *, progress, cancelled, reuse)`, a blocking call `_fetch_model()` runs in an executor thread. Per file it:
+`core/utils/model_files.py` is the shared owner of pinned Model files for every local engine: `ModelFile(path, sha256, size, url=None)`, `PinnedModel(repo, revision, files)` (`download_bytes` is their sum) and `fetch_model_files(model, directory, *, progress, cancelled, reuse)`, a blocking call `_fetch_model()` runs in an executor thread. Per file it:
 
 1. keeps a file whose size and SHA-256 already match;
 2. else adopts a verified copy from a `reuse` folder (`_fetch_model()` passes the Model's other installed revisions, so a revision bump fetches only changed files) or the user's Hugging Face cache (`HF_HUB_CACHE`, else `HF_HOME/hub`, else `~/.cache/huggingface/hub`; `blobs/<sha256>` or `snapshots/*/<path>`; hard link, else `Path.copy`, which clones blocks where the file system can);
 3. else downloads `https://huggingface.co/{repo}/resolve/{revision}/{path}` with httpx and the shared SSL context into `<path>.part`, resuming it with `Range` and retrying 429/5xx and transport errors (4 attempts).
+
+A `ModelFile.url` can instead pin a fixed external URL (used by Desktop wakewords); such files skip Hugging Face cache discovery. `client_factory` lets Desktop use its own verified TLS/proxy policy; the default server client is built lazily. `offline=True` adopts only verified local copies, opens no HTTP client and reports `model_missing` if none exists; Desktop uses it to migrate selected legacy heads. Progress, resume, retries, disk-space checks and verification stay shared.
 
 A file takes its final name only after its size and SHA-256 match. Before anything is fetched, the missing bytes plus a 512 MB margin must be free; resumable `.part` bytes already on disk do not count as missing. Error codes: `insufficient_space`, `checksum_mismatch`, `download_failed`; cancelling the job sets a `threading.Event`, the thread stops within one chunk (`interrupted`) and `.part` files stay for the next install. Engines never download at use: a ready target runs offline.
 
@@ -39,5 +41,5 @@ The WebUI installs every local target through the generic status/install pair (`
 
 ## Source and tests
 
-- `core/model_tasks/local_setup.py`, `core/model_tasks/model_files.py`; RPCs in `server/rpc/task_model_methods.py`
+- `core/model_tasks/local_setup.py`, `core/utils/model_files.py`; RPCs in `server/rpc/task_model_methods.py`
 - `tests/core/model_tasks/test_model_files.py` covers the fetch; `tests/core/model_tasks/conftest.py` replaces the seam `model_files.open_client` with a guard that fails any test that would reach Hugging Face. RPC coverage: `tests/server/rpc/test_task_model_methods.py`.

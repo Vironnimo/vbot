@@ -27,6 +27,8 @@ from desktop.wakeword.controller import VoiceController
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
 VOICE_METHODS = {
+    "addWakewordModel",
+    "cancelWakewordModelDownload",
     "getVoiceStatus",
     "setVoiceEnabled",
     "updateVoiceConfig",
@@ -51,6 +53,11 @@ class FakeVoice:
     def __init__(self, error: Exception | None = None) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.error = error
+
+    def model_label(self, _model_id: str) -> str:
+        if self.error is not None:
+            raise self.error
+        return "Computer"
 
     def __getattr__(self, name: str) -> Any:
         def call(*args: Any) -> Any:
@@ -253,7 +260,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
 
     assert bridge.getDesktopCapabilities() == {
         "wakeword": True,
-        "voiceApi": 3,
+        "voiceApi": 4,
         "serverSelection": True,
         "contextMenu": True,
         "microphone": True,
@@ -359,6 +366,7 @@ def test_microphone_methods_delegate_to_the_service(
         ("listWakewordModels", (), "list_models"),
         ("deleteWakewordModel", ("custom/computer",), "delete_model"),
         ("retryVoice", (), "retry"),
+        ("cancelWakewordModelDownload", (), "cancel_model_download"),
         ("stopVoiceRecording", (), "stop_recording"),
         ("startVoiceCalibration", ("builtin/okay_nabu",), "start_calibration"),
         ("restartVoiceCalibration", (), "restart_calibration"),
@@ -385,6 +393,28 @@ def test_model_import_decodes_the_base64_content() -> None:
 
     assert result == {"from": "import_model"}
     assert voice.calls == [("import_model", ("computer.tflite", b"tflite-model"))]
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+def test_catalog_install_asks_before_downloading_for_another_servers_page(allowed: bool) -> None:
+    questions: list[str] = []
+
+    def confirm(_title: str, message: str) -> bool:
+        questions.append(message)
+        return allowed
+
+    bridge, voice = _bridge(
+        permissions=_page_permissions(lambda: "https://other.example.com", confirm)
+    )
+    if allowed:
+        assert bridge.addWakewordModel("catalog/computer") == {"from": "add_model"}
+        assert voice.calls == [("add_model", ("catalog/computer",))]
+    else:
+        with pytest.raises(BridgeError, match="^declined$"):
+            bridge.addWakewordModel("catalog/computer")
+        assert voice.calls == []
+    assert len(questions) == 1
+    assert "Computer" in questions[0] and "https://other.example.com" in questions[0]
 
 
 @pytest.mark.parametrize(

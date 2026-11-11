@@ -10,17 +10,19 @@ from __future__ import annotations
 import hashlib
 import json
 import wave
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import numpy as np
 import pytest
 
+from core.utils import model_files
 from desktop.wakeword import engine as engine_module
 from desktop.wakeword._speech_detection import SpeechDetector, SpeechGate
-from desktop.wakeword.config import DEFAULT_MODEL_IDS, MAX_ACTIVE_PHRASES, PhraseConfig
+from desktop.wakeword.config import MAX_ACTIVE_PHRASES, PhraseConfig
 from desktop.wakeword.engine import (
     DETECTOR_KIND_TFLITE_HEAD,
     MAX_CUSTOM_WAKEWORD_MODEL_BYTES,
@@ -42,7 +44,8 @@ BUILTIN_IDS = [
     "builtin/hey_rhasspy",
     "builtin/alexa",
 ]
-OKAY, HEY = DEFAULT_MODEL_IDS
+OKAY, HEY = "builtin/okay_nabu", "builtin/hey_nabu"
+NABU_IDS = (OKAY, HEY)
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "wakeword"
 
 
@@ -130,24 +133,22 @@ def _started(
 # -- Catalog -------------------------------------------------------------------------
 
 
-def test_catalog_lists_the_builtin_models_with_nabu_first(catalog: WakewordModelCatalog) -> None:
+def test_catalog_lists_downloads_and_one_offline_starter(catalog: WakewordModelCatalog) -> None:
     models = [model.to_dict() for model in catalog.list_models()]
-
-    assert [model["id"] for model in models] == BUILTIN_IDS
-    assert [models[0]["label"], models[1]["label"]] == ["Okay Nabu", "Hey Nabu"]
+    assert set(BUILTIN_IDS) <= {model["id"] for model in models}
+    assert [model["id"] for model in models if model["installed"]] == [HEY]
+    assert [model["id"] for model in models if model["bundled"]] == [HEY]
     for model in models:
         assert (model["source"], model["format"], model["removable"]) == (
-            "built_in",
+            "catalog",
             "tflite",
             False,
         )
         assert model["kind"] == DETECTOR_KIND_TFLITE_HEAD
-        assert "target" not in model
+        assert "target" not in model and "url" not in model
     overlaps = {model["id"]: model["overlaps"] for model in models}
     assert overlaps[OKAY] == [HEY]
     assert overlaps[HEY] == [OKAY]
-    assert overlaps["builtin/hey_jarvis"] == []
-    assert catalog.resolve(OKAY).builtin is True
 
 
 def test_bundled_hey_nabu_model_has_pinned_checksum(catalog: WakewordModelCatalog) -> None:
@@ -157,6 +158,116 @@ def test_bundled_hey_nabu_model_has_pinned_checksum(catalog: WakewordModelCatalo
     assert hashlib.sha256(model_path.read_bytes()).hexdigest() == (
         "ce18b69e1bddfb56e70fe739d6ca0f423f70a6e710f05b376baf6a3625689234"
     )
+
+
+@pytest.mark.parametrize(
+    "response", ["valid", "checksum", "short", "oversized", "http-error", "invalid-model"]
+)
+def test_catalog_installs_verified_models_atomically_and_reuses_downloads(
+    catalog: WakewordModelCatalog,
+    models: ScriptedModels,
+    monkeypatch: pytest.MonkeyPatch,
+    response: str,
+) -> None:
+    model_id = "catalog/computer"
+    content = b"a-compatible-model"
+    entry = engine_module._CATALOG_BY_ID[model_id]
+    monkeypatch.setitem(entry, "sha256", hashlib.sha256(content).hexdigest())
+    monkeypatch.setitem(entry, "size_bytes", len(content))
+    monkeypatch.setattr(engine_module, "_legacy_model_directories", lambda *_args: ())
+    monkeypatch.setattr(model_files, "_RETRY_PAUSE_S", 0.0)
+    target = Path(catalog.resolve(model_id).target)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"previous-incomplete-download")
+    requests: list[httpx.Request] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        bodies = {
+            "checksum": b"x" * len(content),
+            "short": content[:-1],
+            "oversized": content + b"!",
+        }
+        return httpx.Response(
+            503 if response == "http-error" else 200, content=bodies.get(response, content)
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        engine_module, "_download_client", lambda: client(transport=httpx.MockTransport(serve))
+    )
+    if response == "invalid-model":
+
+        def invalid(_descriptor: Any) -> Any:
+            raise ValueError("incompatible shape")
+
+        monkeypatch.setattr(engine_module, "_create_phrase_head", invalid)
+    if response == "valid":
+        assert catalog.install_model(model_id).installed
+        assert catalog.resolve(model_id).installed
+        assert target.read_bytes() == content
+        assert catalog.install_model(model_id).installed
+    else:
+        with pytest.raises(WakewordModelError):
+            catalog.install_model(model_id)
+        assert target.read_bytes() == b"previous-incomplete-download"
+        assert not catalog.resolve(model_id).installed
+    assert len(requests) == (4 if response in {"short", "http-error"} else 1)
+    assert str(requests[0].url) == entry["url"]
+    assert list(target.parent.glob("*.tflite")) == [target]
+
+
+@pytest.mark.parametrize("source", ["current-runtime", "previous-version", "corrupt"])
+def test_catalog_adopts_selected_legacy_heads_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    content = b"pinned-model"
+    entry = engine_module._CATALOG_BY_ID[OKAY]
+    monkeypatch.setitem(entry, "sha256", hashlib.sha256(content).hexdigest())
+    monkeypatch.setitem(entry, "size_bytes", len(content))
+    versions = tmp_path / "versions"
+    legacy = versions / "previous/runtime/Lib/site-packages/pyopen_wakeword/models"
+    legacy.mkdir(parents=True)
+    (legacy / "okay_nabu.tflite").write_bytes(content if source != "corrupt" else b"wrong-bytes")
+    monkeypatch.setattr(
+        engine_module,
+        "_legacy_model_directories",
+        lambda _id: (legacy,) if source == "current-runtime" else (),
+    )
+
+    def refuse(*_args: Any) -> Any:
+        pytest.fail("Local migration must not open HTTP or load the native stack")
+
+    monkeypatch.setattr(engine_module, "_download_client", refuse)
+    monkeypatch.setattr(engine_module, "_create_phrase_head", refuse)
+    catalog = WakewordModelCatalog(
+        tmp_path / "settings.json",
+        versions_directory=versions if source != "current-runtime" else None,
+    )
+
+    catalog.adopt_existing_models([OKAY])
+
+    assert catalog.resolve(OKAY).installed == (source != "corrupt")
+    assert not catalog.resolve("builtin/hey_jarvis").installed
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_catalog_never_runs_an_unverified_cached_head(
+    catalog: WakewordModelCatalog,
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt: bool,
+) -> None:
+    target = Path(catalog.resolve(OKAY).target)
+    if corrupt:
+        target.parent.mkdir(parents=True)
+        target.write_bytes(Path(catalog.resolve(HEY).target).read_bytes())
+    monkeypatch.setattr(engine_module, "_create_feature_stream", ScriptedFeatures)
+    engine = catalog.create_engine([PhraseConfig(OKAY)])
+    with pytest.raises(WakewordModelError) as error:
+        engine.start()
+    assert error.value.error_code == "wakeword_model_unavailable"
 
 
 def test_catalog_imports_validates_and_resolves_a_custom_model(
@@ -285,7 +396,7 @@ def test_catalog_ignores_obsolete_or_tampered_custom_metadata(
         (model_dir / f"{token}.json").write_bytes(b"\xff")
 
     catalog = WakewordModelCatalog(tmp_path / "settings.json")
-    assert [model.id for model in catalog.list_models()] == BUILTIN_IDS
+    assert all(model.source == "catalog" for model in catalog.list_models())
     assert catalog.resolve(OKAY).id == OKAY
     with pytest.raises(WakewordModelError) as error:
         catalog.resolve(f"custom/{token}")
@@ -299,7 +410,7 @@ def test_catalog_deletes_only_imported_models(
 
     catalog.delete_model(imported.id)
 
-    assert [model.id for model in catalog.list_models()] == BUILTIN_IDS
+    assert all(model.source == "catalog" for model in catalog.list_models())
     assert not Path(imported.target).exists()
     with pytest.raises(WakewordModelError) as rejected:
         catalog.delete_model(OKAY)
@@ -331,7 +442,7 @@ def test_catalog_hosts_the_maximum_number_of_phrases_with_own_sensitivities(
     catalog: WakewordModelCatalog, models: ScriptedModels
 ) -> None:
     imported = [catalog.import_model(f"phrase{index}.tflite", b"tflite") for index in range(2)]
-    model_ids = [model.id for model in catalog.list_models()]
+    model_ids = [*BUILTIN_IDS, *(model.id for model in imported)]
     assert len(model_ids) == MAX_ACTIVE_PHRASES
     phrases = [
         PhraseConfig(model_id, 0.1 * (index + 1)) for index, model_id in enumerate(model_ids)
@@ -579,9 +690,16 @@ _SAMPLE_RATE = 16000
 
 
 @pytest.fixture(scope="module")
-def real_models() -> Iterator[None]:
+def real_models(tmp_path_factory: pytest.TempPathFactory) -> WakewordModelCatalog:
     pytest.importorskip("pyopen_wakeword")
-    yield
+    catalog = WakewordModelCatalog(tmp_path_factory.mktemp("wakeword-models") / "settings.json")
+    for model_id in BUILTIN_IDS:
+        if model_id == HEY:
+            continue
+        target = Path(catalog.resolve(model_id).target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_pyopen_model_bytes(model_id.split("/", 1)[1] + ".tflite"))
+    return catalog
 
 
 def _speech_gate() -> SpeechGate:
@@ -633,11 +751,11 @@ def _detect_file(engine: WakewordEngine, path: Path, gate: SpeechGate | None) ->
     [
         ([OKAY], "okay_nabu.wav", True, [OKAY]),
         ([HEY], "hey_nabu.wav", True, [HEY]),
-        (DEFAULT_MODEL_IDS, "okay_nabu.wav", True, 1),
-        (DEFAULT_MODEL_IDS, "hey_nabu.wav", True, 1),
-        (DEFAULT_MODEL_IDS, "okay_nabu.wav", False, 1),
-        (DEFAULT_MODEL_IDS, "hey_nabu.wav", False, 1),
-        (DEFAULT_MODEL_IDS, "unrelated_hey_jarvis.wav", False, 0),
+        (NABU_IDS, "okay_nabu.wav", True, 1),
+        (NABU_IDS, "hey_nabu.wav", True, 1),
+        (NABU_IDS, "okay_nabu.wav", False, 1),
+        (NABU_IDS, "hey_nabu.wav", False, 1),
+        (NABU_IDS, "unrelated_hey_jarvis.wav", False, 0),
     ],
     ids=[
         "okay-gated",
@@ -650,21 +768,19 @@ def _detect_file(engine: WakewordEngine, path: Path, gate: SpeechGate | None) ->
     ],
 )
 def test_bundled_nabu_models_activate_once_per_phrase_on_real_audio(
-    real_models: None,
+    real_models: WakewordModelCatalog,
     model_ids: list[str],
     fixture_name: str,
     gated: bool,
     expected: list[str] | int,
 ) -> None:
-    engine = WakewordModelCatalog(FIXTURES / "settings.json").create_engine(
-        [PhraseConfig(model_id) for model_id in model_ids]
-    )
+    engine = real_models.create_engine([PhraseConfig(model_id) for model_id in model_ids])
 
     matches = _detect_file(engine, FIXTURES / fixture_name, _speech_gate() if gated else None)
 
     if isinstance(expected, int):
         assert len(matches) == expected
-        assert set(matches) <= set(DEFAULT_MODEL_IDS)
+        assert set(matches) <= set(NABU_IDS)
     else:
         assert matches == expected
 
@@ -672,11 +788,11 @@ def test_bundled_nabu_models_activate_once_per_phrase_on_real_audio(
 # okay_nabu sustains its score for about a second and dips below high
 # thresholds within it; with the speech gate open (no speech detector, or speech
 # continuing after the phrase) one utterance must still activate at most once.
-@pytest.mark.parametrize("model_ids", [[OKAY], DEFAULT_MODEL_IDS], ids=["okay", "both"])
+@pytest.mark.parametrize("model_ids", [[OKAY], NABU_IDS], ids=["okay", "both"])
 def test_bundled_nabu_model_activates_at_most_once_at_every_sensitivity(
-    real_models: None, model_ids: list[str]
+    real_models: WakewordModelCatalog, model_ids: list[str]
 ) -> None:
-    catalog = WakewordModelCatalog(FIXTURES / "settings.json")
+    catalog = real_models
     for step in range(1, 20):
         sensitivity = round(step * 0.05, 2)
         engine = catalog.create_engine(
@@ -734,7 +850,7 @@ def _chunks(path: Path) -> list[bytes]:
 
 
 @pytest.fixture(scope="module")
-def reference_scores(real_models: None) -> dict[str, list[dict[str, float]]]:
+def reference_scores(real_models: WakewordModelCatalog) -> dict[str, list[dict[str, float]]]:
     return {name: _reference_scores(name) for name in _PHRASE_FIXTURES}
 
 
@@ -747,6 +863,7 @@ def reference_scores(real_models: None) -> dict[str, list[dict[str, float]]]:
     ids=["xnnpack", "builtin-kernels"],
 )
 def test_engine_scores_real_audio_like_pyopen_wakeword(
+    real_models: WakewordModelCatalog,
     reference_scores: dict[str, list[dict[str, float]]],
     xnnpack: bool,
     fixture_names: tuple[str, ...],
@@ -759,8 +876,8 @@ def test_engine_scores_real_audio_like_pyopen_wakeword(
     for fixture_name in fixture_names:
         expected = reference_scores[fixture_name]
         observed: list[dict[str, float]] = []
-        engine = WakewordModelCatalog(FIXTURES / "settings.json").create_engine(
-            [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS],
+        engine = real_models.create_engine(
+            [PhraseConfig(model_id) for model_id in NABU_IDS],
             score_listener=observed.append,
         )
         engine.start()
@@ -798,7 +915,7 @@ def _pyopen_model_bytes(name: str) -> bytes:
     ids=["phrase-head", "other-tflite-model", "corrupt"],
 )
 def test_catalog_imports_only_real_phrase_models(
-    real_models: None, tmp_path: Path, content: Callable[[], bytes], accepted: bool
+    real_models: WakewordModelCatalog, tmp_path: Path, content: Callable[[], bytes], accepted: bool
 ) -> None:
     catalog = WakewordModelCatalog(tmp_path / "settings.json")
 

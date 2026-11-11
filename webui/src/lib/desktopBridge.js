@@ -18,7 +18,7 @@ const RESTART_REQUEST_EVENT = 'vbot-desktop-restart';
 const DICTATION_PUSH_EVENT = 'vbot-desktop-dictation';
 const COMPUTER_SHARING_PUSH_EVENT = 'vbot-desktop-computer-sharing';
 // The Voice UI works only against this Desktop Voice bridge version.
-const DESKTOP_VOICE_API_VERSION = 3;
+const DESKTOP_VOICE_API_VERSION = 4;
 // A Live voice start never waits longer than this for the Desktop capabilities
 // that decide whether the page may open the microphone.
 const MICROPHONE_ACCESS_TIMEOUT_MS = 3000;
@@ -37,6 +37,7 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
 });
 
 const VOICE_STATES = new Set([
+  'idle',
   'off',
   'starting',
   'listening',
@@ -486,10 +487,29 @@ function normalizeVoiceStatus(raw) {
       ? raw.default_session_behavior
       : 'active',
     phrases: normalizePhrases(raw.phrases),
+    selected_phrases: normalizePhrases(raw.selected_phrases ?? raw.phrases),
+    model_download: normalizeModelDownload(raw.model_download),
     recording: normalizeRecording(raw.recording),
     commands: normalizeCommands(raw.commands),
     calibration: normalizeCalibration(raw.calibration),
     limits: normalizeLimits(raw.limits),
+  };
+}
+
+function normalizeModelDownload(value) {
+  if (
+    !isPlainObject(value) ||
+    typeof value.model_id !== 'string' ||
+    !Number.isFinite(value.completed) ||
+    !Number.isFinite(value.total) ||
+    value.completed < 0 ||
+    value.total < 0
+  )
+    return null;
+  return {
+    model_id: value.model_id,
+    completed: Math.min(value.completed, value.total),
+    total: value.total,
   };
 }
 
@@ -664,6 +684,15 @@ export async function listWakewordModels() {
         ? model.overlaps.filter((id) => typeof id === 'string')
         : [],
     }));
+}
+
+/** Download a pinned catalog model if needed and select it on this Desktop. */
+export async function addWakewordModel(modelId) {
+  return callBridge('addWakewordModel', modelId);
+}
+
+export async function cancelWakewordModelDownload() {
+  return callBridge('cancelWakewordModelDownload');
 }
 
 /** Validate and install one user-selected TFLite wakeword model. */

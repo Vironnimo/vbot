@@ -282,7 +282,9 @@ def _run_desktop(
     )
     # One player for every Voice and dictation cue, so they play in order.
     cues = CuePlayer()
-    voice = _create_voice(args, settings_file, microphone, server_url, page_events, cues, access)
+    voice = _create_voice(
+        args, settings_file, microphone, server_url, page_events, cues, access, contract=contract
+    )
     dictation = DictationController(
         settings_path=settings_file,
         microphone=microphone,
@@ -589,6 +591,8 @@ def _create_voice(
     page_events: PageEventDispatcher,
     cues: CuePlayer | None = None,
     access: ServerAccess | None = None,
+    *,
+    contract: restart.RelaunchContract | None = None,
 ) -> VoiceController:
     """Create Voice for the window's server; it starts listening on ``start()``.
 
@@ -601,6 +605,7 @@ def _create_voice(
     """
 
     from desktop.wakeword.controller import VoiceController
+    from desktop.wakeword.engine import WakewordModelCatalog
 
     return VoiceController(
         settings_path=settings_file,
@@ -612,6 +617,12 @@ def _create_voice(
         stack_available=_real_wakeword_available,
         cues=cues,
         authorization=access,
+        catalog=WakewordModelCatalog(
+            settings_file,
+            versions_directory=contract.version_file.parent / "versions"
+            if contract is not None
+            else None,
+        ),
     )
 
 

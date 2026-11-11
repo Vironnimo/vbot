@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any, override
 
 from core.model_tasks.local_setup import LocalSetup
-from core.model_tasks.model_files import PinnedModel
 from core.utils.logging import get_logger
+from core.utils.model_files import PinnedModel
 
 _LOGGER = get_logger("speech.setup")
 

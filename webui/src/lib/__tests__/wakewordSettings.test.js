@@ -75,6 +75,7 @@ describe('voiceConfigFromStatus', () => {
 
     expect(config).toEqual({
       active_model_ids: [NABU, JARVIS],
+      selected_model_ids: [NABU, JARVIS],
       model_sensitivities: { [NABU]: 0.5 },
       default_agent_id: 'main',
       default_session_behavior: 'new',
@@ -88,6 +89,7 @@ describe('voiceConfigFromStatus', () => {
   it('reads a missing snapshot as an empty configuration', () => {
     expect(voiceConfigFromStatus(null)).toEqual({
       active_model_ids: [],
+      selected_model_ids: [],
       model_sensitivities: {},
       default_agent_id: null,
       default_session_behavior: 'active',

@@ -11,7 +11,7 @@ vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
 });
 
-const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 3 };
+const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 4 };
 // Longer than the auto-dismiss delay of non-error Toasts.
 const PAST_AUTO_DISMISS_MS = 10000;
 

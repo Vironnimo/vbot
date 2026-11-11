@@ -21,7 +21,6 @@ from core.model_tasks._speech_context import _AUDIO, _PROGRESS
 from core.model_tasks._speech_engines import _TtsEngine, _WaitingWorkers
 from core.model_tasks.constants import TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
-from core.model_tasks.model_files import ModelFilesError, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
     LocalSpeechError,
@@ -32,6 +31,7 @@ from core.model_tasks.speech_local import (
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
 from core.model_tasks.speech_types import SpeechAudioChunk, SpeechProgress, SpeechSynthesisResult
+from core.utils.model_files import ModelFilesError, PinnedModel
 
 
 @pytest.mark.asyncio

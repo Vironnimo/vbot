@@ -34,11 +34,11 @@ from core.model_tasks._worker_process import JsonLineWorker, WorkerStoppedError
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
 from core.model_tasks.local_setup import LocalSetup
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
-from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.utils.errors import VBotError
 from core.utils.file_status import is_file_strict
 from core.utils.logging import get_logger
+from core.utils.model_files import ModelFile, PinnedModel
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("embeddings.local")

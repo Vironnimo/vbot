@@ -468,6 +468,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
         "core.utils.file_status",
         "core.utils.ids",
         "core.utils.logging",
+        "core.utils.model_files",
         "core.utils.processes",
         "core.utils.workers",
     }
@@ -532,7 +533,7 @@ bridge = DesktopBridge(
 )
 voice.start()
 dictation.start()
-assert bridge.getDesktopCapabilities()['voiceApi'] == 3
+assert bridge.getDesktopCapabilities()['voiceApi'] == 4
 assert bridge.getVoiceStatus()['state'] == 'off'
 assert bridge.getDictation()['enabled'] is False
 dictation.stop()
@@ -838,6 +839,8 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
         _page_events: Any,
         _cues: Any,
         _access: Any,
+        *,
+        contract: Any = None,
     ) -> RecordingVoice:
         created_for.append(url)
         return voice
@@ -858,7 +861,9 @@ def test_a_failing_gui_loop_closes_voice_hotkey_and_instance_without_starting_th
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch_seams: LaunchSeams
 ) -> None:
     voice_events: list[str] = []
-    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: RecordingVoice(voice_events))
+    monkeypatch.setattr(
+        desktop_main, "_create_voice", lambda *_args, **_kwargs: RecordingVoice(voice_events)
+    )
 
     with pytest.raises(RuntimeError, match="gui loop crashed"):
         _launch(tmp_path, webview=StartRaisesWebview())
@@ -1232,10 +1237,12 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
         page_events: Any,
         cues: Any,
         access: Any,
+        *,
+        contract: Any = None,
     ) -> Any:
         voice_sinks.append(page_events)
         return original_create_voice(
-            args, settings, microphone, server_url, page_events, cues, access
+            args, settings, microphone, server_url, page_events, cues, access, contract=contract
         )
 
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)

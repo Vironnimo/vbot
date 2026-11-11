@@ -1140,7 +1140,7 @@ describe('SettingsView', () => {
           agents: agentsPayload(),
           desktopCapabilities: {
             wakeword: true,
-            voiceApi: 3,
+            voiceApi: 4,
             serverSelection: true,
             computerSharing: true,
           },

@@ -31,7 +31,7 @@ from core.model_tasks.embeddings_local import (
     builtin_local_embedding_models,
     default_threads,
 )
-from core.model_tasks.model_files import ModelFilesError
+from core.utils.model_files import ModelFilesError
 
 GRANITE, HARRIER = builtin_local_embedding_models()
 

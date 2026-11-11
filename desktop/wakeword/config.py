@@ -64,7 +64,7 @@ MAX_ACTIVE_PHRASES = 8
 MIN_SENSITIVITY = 0.05
 MAX_SENSITIVITY = 0.95
 DEFAULT_SENSITIVITY = 0.5
-DEFAULT_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
+DEFAULT_MODEL_IDS = ("builtin/hey_nabu",)
 
 SESSION_BEHAVIOR_ACTIVE = "active"
 SESSION_BEHAVIOR_NEW = "new"
@@ -103,6 +103,7 @@ _CHANGE_DEFAULT_SESSION_BEHAVIOR = "default_session_behavior"
 _CHANGE_PHRASE_ACTIONS = "phrase_actions"
 _GLOBAL_CHANGE_KEYS = (
     _CHANGE_ACTIVE_MODEL_IDS,
+    "selected_model_ids",
     _CHANGE_MODEL_SENSITIVITIES,
 )
 _PROFILE_CHANGE_KEYS = (
@@ -204,15 +205,26 @@ class VoiceConfig:
     enabled: bool = False
     phrases: tuple[PhraseConfig, ...] = field(default_factory=_default_phrases)
     profiles: Mapping[str, ServerVoiceProfile] = field(default_factory=_frozen_mapping)
+    selected_phrases: tuple[PhraseConfig, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "phrases", tuple(self.phrases))
+        object.__setattr__(
+            self,
+            "selected_phrases",
+            tuple(self.selected_phrases) if self.selected_phrases is not None else self.phrases,
+        )
         object.__setattr__(self, "profiles", _frozen_mapping(self.profiles))
 
     @property
     def active_model_ids(self) -> tuple[str, ...]:
         """Ordered model ids of the active phrases."""
         return tuple(phrase.model_id for phrase in self.phrases)
+
+    @property
+    def selected_model_ids(self) -> tuple[str, ...]:
+        """Personal selection, including temporarily disabled phrases."""
+        return tuple(phrase.model_id for phrase in self.selected_phrases or ())
 
     def phrase(self, model_id: str) -> PhraseConfig | None:
         """Return the active phrase for ``model_id``, or ``None`` when inactive."""
@@ -292,7 +304,7 @@ def parse_voice_config(raw: object) -> VoiceConfig:
 
     A missing or non-object section yields the defaults. Each malformed field
     falls back to its default on its own: malformed ``active_model_ids`` (not
-    1 to :data:`MAX_ACTIVE_PHRASES` unique non-empty ids) select the default
+    0 to :data:`MAX_ACTIVE_PHRASES` unique non-empty ids) select the default
     phrases; malformed sensitivities, profiles and phrase actions are dropped
     entry by entry. Unknown keys are ignored; the retired ``model_actions`` is
     carried over into the stored profiles first (see the module docstring).
@@ -300,19 +312,29 @@ def parse_voice_config(raw: object) -> VoiceConfig:
     section = _writable_section(raw)
     enabled = section.get(_KEY_ENABLED)
     model_ids = _parse_active_model_ids(section.get(_KEY_ACTIVE_MODEL_IDS))
+    if model_ids is None:
+        model_ids = DEFAULT_MODEL_IDS
+    selected = _parse_selected_model_ids(section.get("selected_model_ids"))
+    selected = tuple(
+        dict.fromkeys((*(selected if selected is not None else model_ids), *model_ids))
+    )
     sensitivities = _parse_sensitivities(section.get(_KEY_MODEL_SENSITIVITIES))
     return VoiceConfig(
         enabled=enabled if isinstance(enabled, bool) else False,
         phrases=tuple(
             PhraseConfig(model_id, sensitivities.get(model_id, DEFAULT_SENSITIVITY))
-            for model_id in (model_ids or DEFAULT_MODEL_IDS)
+            for model_id in model_ids
         ),
         profiles=_parse_profiles(section.get(_KEY_SERVER_PROFILES)),
+        selected_phrases=tuple(
+            PhraseConfig(model_id, sensitivities.get(model_id, DEFAULT_SENSITIVITY))
+            for model_id in selected
+        ),
     )
 
 
 def _parse_active_model_ids(value: object) -> tuple[str, ...] | None:
-    if not isinstance(value, list) or not 1 <= len(value) <= MAX_ACTIVE_PHRASES:
+    if not isinstance(value, list) or not 0 <= len(value) <= MAX_ACTIVE_PHRASES:
         return None
     model_ids = tuple(_non_empty_string(model_id) for model_id in value)
     if any(model_id is None for model_id in model_ids):
@@ -320,6 +342,14 @@ def _parse_active_model_ids(value: object) -> tuple[str, ...] | None:
     if len(set(model_ids)) != len(model_ids):
         return None
     return tuple(model_id for model_id in model_ids if model_id is not None)
+
+
+def _parse_selected_model_ids(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, list):
+        return None
+    if any(_non_empty_string(item) is None for item in value):
+        return None
+    return tuple(dict.fromkeys(item.strip() for item in value))
 
 
 def _parse_sensitivities(value: object) -> dict[str, float]:
@@ -424,7 +454,7 @@ def apply_voice_changes(
 ) -> dict[str, Any]:
     """Validate one partial Voice change and return the new stored section.
 
-    ``changes`` keys: ``active_model_ids`` (1 to
+    ``changes`` keys: ``selected_model_ids`` (the personal list), ``active_model_ids`` (0 to
     :data:`MAX_ACTIVE_PHRASES` unique ids; an id that is not active yet must
     be known, while an active one whose model is gone may stay, so the other
     phrases stay editable), ``model_sensitivities``
@@ -450,12 +480,36 @@ def apply_voice_changes(
             )
 
     section = _writable_section(raw)
+    previous = parse_voice_config(section)
+    if "selected_model_ids" in changes:
+        selected = _parse_selected_model_ids(changes["selected_model_ids"])
+        if selected is None or len(selected) != len(changes["selected_model_ids"]):
+            raise VoiceConfigError(
+                "Selected wakewords must be unique ids", field="selected_model_ids"
+            )
+        for model_id in selected:
+            if model_id not in previous.selected_model_ids:
+                _validated_model_id(model_id, "selected_model_ids", known_model_ids)
+        section["selected_model_ids"] = list(selected)
+        section[_KEY_ACTIVE_MODEL_IDS] = [
+            model_id for model_id in previous.active_model_ids if model_id in selected
+        ]
     if _CHANGE_ACTIVE_MODEL_IDS in changes:
-        active = frozenset(parse_voice_config(section).active_model_ids)
+        active = frozenset(previous.active_model_ids)
         section[_KEY_ACTIVE_MODEL_IDS] = _validated_active_model_ids(
             changes[_CHANGE_ACTIVE_MODEL_IDS],
             lambda model_id: model_id in active or known_model_ids(model_id),
         )
+    if _CHANGE_ACTIVE_MODEL_IDS in changes or "selected_model_ids" in changes:
+        active_ids = section[_KEY_ACTIVE_MODEL_IDS]
+        selected_ids = (
+            section["selected_model_ids"]
+            if "selected_model_ids" in changes
+            else list(previous.selected_model_ids)
+        )
+        if "selected_model_ids" in changes and any(item not in selected_ids for item in active_ids):
+            raise VoiceConfigError("Active wakewords must be selected", field="active_model_ids")
+        section["selected_model_ids"] = list(dict.fromkeys([*selected_ids, *active_ids]))
     if _CHANGE_MODEL_SENSITIVITIES in changes:
         sensitivities = _validated_sensitivities(
             changes[_CHANGE_MODEL_SENSITIVITIES], known_model_ids
@@ -513,6 +567,9 @@ def forget_model(raw: object, model_id: str) -> dict[str, Any]:
     they are; ``active_model_ids`` is not touched.
     """
     section = _writable_section(raw)
+    selected = parse_voice_config(section).selected_model_ids
+    if model_id in selected:
+        section["selected_model_ids"] = [item for item in selected if item != model_id]
     sensitivities = section.get(_KEY_MODEL_SENSITIVITIES)
     if isinstance(sensitivities, dict):
         sensitivities.pop(model_id, None)
@@ -601,9 +658,9 @@ def _validated_bool(value: object, field_name: str) -> bool:
 
 
 def _validated_active_model_ids(value: object, known_model_ids: Callable[[str], bool]) -> list[str]:
-    if not isinstance(value, list) or not 1 <= len(value) <= MAX_ACTIVE_PHRASES:
+    if not isinstance(value, list) or not 0 <= len(value) <= MAX_ACTIVE_PHRASES:
         raise VoiceConfigError(
-            f"Choose between 1 and {MAX_ACTIVE_PHRASES} wake phrases",
+            f"Choose up to {MAX_ACTIVE_PHRASES} active wake phrases",
             field=_CHANGE_ACTIVE_MODEL_IDS,
         )
     model_ids = [
@@ -782,6 +839,16 @@ def config_status(
                 "effective": config.effective_action(phrase.model_id, server_url).to_dict(),
             }
             for phrase in config.phrases
+        ],
+        "selected_phrases": [
+            {
+                "model_id": phrase.model_id,
+                "label": labels.get(phrase.model_id, phrase.model_id),
+                "sensitivity": phrase.sensitivity,
+                "action": profile.phrase_actions.get(phrase.model_id, CommandAction()).to_dict(),
+                "effective": config.effective_action(phrase.model_id, server_url).to_dict(),
+            }
+            for phrase in config.selected_phrases or ()
         ],
         "limits": voice_limits(),
     }

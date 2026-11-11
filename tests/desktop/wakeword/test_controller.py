@@ -34,6 +34,7 @@ from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.contracts import VoiceControlError
 from desktop.wakeword.controller import VoiceController
 from desktop.wakeword.detection import DETECTION_CHUNK_SAMPLES
+from desktop.wakeword.engine import WakewordModelCatalog, WakewordModelError
 from desktop.wakeword.listener import VoiceRuntime
 from desktop.wakeword.server_client import VoiceServerClient
 from tests.desktop.speech.speech_test_support import (
@@ -71,6 +72,8 @@ STATUS_KEYS = {
     "default_agent_id",
     "default_session_behavior",
     "phrases",
+    "selected_phrases",
+    "model_download",
     "recording",
     "commands",
     "calibration",
@@ -343,6 +346,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         path = tmp_path / f"settings-{len(rigs)}.json"
         section: dict[str, Any] = {
             "enabled": True,
+            "active_model_ids": [OKAY, HEY],
             "server_profiles": {SERVER: {"target_agent_id": "main"}},
         }
         section.update(settings or {})
@@ -859,6 +863,101 @@ def test_a_config_change_during_a_recording_restarts_the_listener_and_drops_it(
     assert len(rig.sd.streams) == 2
     assert rig.voice.status()["recording"] is None
     assert rig.cues.played == ["listen"]
+
+
+def test_removing_every_phrase_releases_the_microphone_and_keeps_voice_idle(
+    voice_rig: Callable[..., Rig],
+) -> None:
+    rig = voice_rig()
+    rig.wait_ready()
+    rig.voice.update_config({"selected_model_ids": []})
+    rig.wait_state("idle")
+    assert rig.voice.status()["phrases"] == []
+    assert rig.voice.status()["selected_phrases"] == []
+    assert rig.voice.status()["enabled"]
+    wait_until(lambda: all(engine.stopped.is_set() for engine in rig.engines))
+    rig.voice.add_model(HEY)
+    rig.wait_state("listening")
+    assert [phrase["model_id"] for phrase in rig.voice.status()["phrases"]] == [HEY]
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_catalog_add_selects_only_after_install_and_respects_the_active_limit(
+    voice_rig: Callable[..., Rig],
+    monkeypatch: pytest.MonkeyPatch,
+    failed: bool,
+) -> None:
+    rig = voice_rig(start=False)
+    ids = [model["id"] for model in rig.voice.list_models()][:8]
+    rig.voice.update_config({"active_model_ids": ids})
+    before = rig.voice.status()
+    model_id = "catalog/hey_spock"
+
+    def install(catalog: WakewordModelCatalog, model_id: str, **kwargs: Any) -> Any:
+        if failed:
+            raise WakewordModelError("Download failed")
+        return catalog.resolve(model_id)
+
+    monkeypatch.setattr(WakewordModelCatalog, "install_model", install)
+    if failed:
+        with pytest.raises(WakewordModelError):
+            rig.voice.add_model(model_id)
+        after = rig.voice.status()
+        assert {key: value for key, value in after.items() if key != "sequence"} == {
+            key: value for key, value in before.items() if key != "sequence"
+        }
+    else:
+        assert not rig.voice.add_model(model_id)["activated"]
+        after = rig.voice.status()
+        assert after["phrases"] == before["phrases"]
+        assert after["selected_phrases"][-1]["model_id"] == model_id
+
+
+def test_repairing_a_selected_disabled_wakeword_keeps_it_disabled(
+    voice_rig: Callable[..., Rig],
+) -> None:
+    rig = voice_rig(start=False, settings={"active_model_ids": [], "selected_model_ids": [HEY]})
+    assert not rig.voice.add_model(HEY)["activated"]
+    assert rig.voice.status()["phrases"] == []
+    assert rig.voice.status()["selected_phrases"][0]["model_id"] == HEY
+
+
+def test_catalog_download_reports_progress_and_cancel_never_selects_it(
+    voice_rig: Callable[..., Rig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = voice_rig(start=False)
+    entered, release = threading.Event(), threading.Event()
+    errors: list[str] = []
+
+    def install(_catalog: WakewordModelCatalog, _id: str, **kwargs: Any) -> Any:
+        kwargs["progress"](123)
+        entered.set()
+        assert release.wait(2)
+        assert kwargs["cancelled"].is_set()
+        raise WakewordModelError("Cancelled", error_code="wakeword_model_download_cancelled")
+
+    monkeypatch.setattr(WakewordModelCatalog, "install_model", install)
+
+    def add() -> None:
+        try:
+            rig.voice.add_model("catalog/computer")
+        except WakewordModelError as exc:
+            errors.append(exc.error_code)
+
+    thread = threading.Thread(target=add)
+    thread.start()
+    try:
+        assert entered.wait(2)
+        assert rig.voice.status()["model_download"]["completed"] == 123
+        rig.voice.cancel_model_download()
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    assert errors == ["wakeword_model_download_cancelled"]
+    assert rig.voice.status()["model_download"] is None
+    assert [item["model_id"] for item in rig.voice.status()["selected_phrases"]] == [OKAY, HEY]
 
 
 def test_an_active_phrase_whose_model_is_gone_can_still_be_removed(

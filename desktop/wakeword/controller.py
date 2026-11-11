@@ -112,6 +112,7 @@ class VoiceController:
         self._config = parse_voice_config(
             desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, settings_path)
         )
+        self._catalog.adopt_existing_models(self._config.selected_model_ids)
         self._server_url = _normalized_url(server_url)
         self._listeners = listener.ListenerFactory(
             microphone,
@@ -132,6 +133,9 @@ class VoiceController:
         self._labels: dict[str, str] = {}
         self._labels_loaded = False
         self._command_ids = itertools.count(1)
+        self._model_download: dict[str, Any] | None = None
+        self._download_cancelled: threading.Event | None = None
+        self._download_pushed_at = 0.0
         # Runtime state of the current generation (see _reset_runtime_locked).
         self._recording: voice._Recording | None = None
         # While set (a Desktop dictation records), detections are ignored.
@@ -169,6 +173,8 @@ class VoiceController:
                 if self._closed:
                     return
                 self._closed = True
+                if self._download_cancelled is not None:
+                    self._download_cancelled.set()
                 self._generation += 1
                 session, self._session = self._session, None
                 if session is not None:
@@ -297,7 +303,7 @@ class VoiceController:
     # -- Models --------------------------------------------------
 
     def list_models(self) -> list[dict[str, Any]]:
-        """Return the curated built-ins and the imported models."""
+        """Return the downloadable catalog and the imported models."""
         with self._catalog_lock:
             models = self._catalog.list_models()
         self._store_labels(models)
@@ -308,31 +314,110 @@ class VoiceController:
         with self._catalog_lock:
             descriptor = self._catalog.import_model(filename, content)
         self._ensure_labels(force=True)
+        return self._select_model(descriptor)
+
+    def model_label(self, model_id: object) -> str:
+        """Validate a catalog selection before native page consent."""
+        if not isinstance(model_id, str):
+            raise WakewordModelError("Wakeword model id must be text")
+        with self._catalog_lock:
+            return self._catalog.resolve(model_id).label
+
+    def add_model(self, model_id: object) -> dict[str, Any]:
+        """Install and select a catalog phrase; failed downloads never select it."""
+        self.model_label(model_id)
+        assert isinstance(model_id, str)
+        descriptor = self._catalog.resolve(model_id)
+        cancelled = threading.Event()
+        with self._lock:
+            if self._model_download is not None or self._closed:
+                raise WakewordModelError("A model install cannot start now")
+            self._download_cancelled = cancelled
+            self._model_download = {
+                "model_id": model_id,
+                "completed": 0,
+                "total": descriptor.size_bytes or 0,
+            }
+            self._download_pushed_at = self._clock()
+            self._commit_locked()
+
+        def report(completed: int) -> None:
+            with self._lock:
+                assert self._model_download is not None
+                self._model_download["completed"] = completed
+                now = self._clock()
+                if (
+                    now - self._download_pushed_at >= 0.2
+                    or completed == self._model_download["total"]
+                ):
+                    self._download_pushed_at = now
+                    self._commit_locked()
+
+        try:
+            descriptor = self._catalog.install_model(model_id, progress=report, cancelled=cancelled)
+            self._ensure_labels(force=True)
+            result = self._select_model(descriptor, cancelled=cancelled)
+            with self._lock:
+                retry = (
+                    self._config.enabled
+                    and model_id in self._config.active_model_ids
+                    and self._fatal_error is not None
+                )
+            if retry:
+                self.retry()
+            return result
+        finally:
+            with self._lock:
+                self._model_download = None
+                self._download_cancelled = None
+                self._commit_locked()
+
+    def cancel_model_download(self) -> dict[str, bool]:
+        """Request cancellation; the in-flight addition settles before its selection changes."""
+        with self._mutation_lock, self._lock:
+            if self._download_cancelled is not None:
+                self._download_cancelled.set()
+        return {"cancelled": True}
+
+    def _select_model(
+        self, descriptor: WakewordModelDescriptor, *, cancelled: threading.Event | None = None
+    ) -> dict[str, Any]:
         activated = False
         with self._mutation_lock:
+            if cancelled is not None and cancelled.is_set():
+                raise WakewordModelError(
+                    "Wakeword download cancelled", error_code="wakeword_model_download_cancelled"
+                )
             known_model_ids = self._known_model_ids()
             with self._lock:
                 server_url = self._server_url
 
-            def activate(raw: dict[str, Any]) -> dict[str, Any]:
+            def select(raw: dict[str, Any]) -> dict[str, Any]:
                 nonlocal activated
-                active = parse_voice_config(raw).active_model_ids
-                if len(active) >= MAX_ACTIVE_PHRASES or descriptor.id in active:
-                    return raw
-                activated = True
+                config = parse_voice_config(raw)
+                active = list(config.active_model_ids)
+                if (
+                    descriptor.id not in config.selected_model_ids
+                    and len(active) < MAX_ACTIVE_PHRASES
+                ):
+                    active.append(descriptor.id)
+                activated = descriptor.id in active
                 return apply_voice_changes(
                     raw,
-                    {"active_model_ids": [*active, descriptor.id]},
+                    {
+                        "active_model_ids": active,
+                        "selected_model_ids": list(
+                            dict.fromkeys([*config.selected_model_ids, descriptor.id])
+                        ),
+                    },
                     server_url=server_url,
                     known_model_ids=known_model_ids.__contains__,
                 )
 
             section = desktop_settings.update_section(
-                desktop_settings.WAKEWORD_KEY, activate, self._settings_path
+                desktop_settings.WAKEWORD_KEY, select, self._settings_path
             )
-            logger.info(
-                "Wakeword model imported (model=%s, activated=%s)", descriptor.id, activated
-            )
+            logger.info("Wakeword selected (model=%s activated=%s)", descriptor.id, activated)
             self._apply_config(parse_voice_config(section))
         return {**descriptor.to_dict(), "activated": activated}
 
@@ -436,7 +521,12 @@ class VoiceController:
         if session is not None:
             session.signal()
         self._reset_runtime_locked()
-        should_run = self._started and not self._closed and self._config.enabled
+        should_run = (
+            self._started
+            and not self._closed
+            and self._config.enabled
+            and bool(self._config.phrases)
+        )
         if session is None and not should_run:
             return
         previous = self._transition_thread
@@ -878,6 +968,8 @@ class VoiceController:
     def _derive_state_locked(self) -> tuple[str, str | None]:
         if not self._config.enabled:
             return voice.STATE_OFF, None
+        if not self._config.phrases:
+            return voice.STATE_IDLE, None
         if self._fatal_error is not None:
             return voice.STATE_ERROR, self._fatal_error
         if self._capture_state == _CAPTURE_DISCONNECTED:
@@ -920,6 +1012,10 @@ class VoiceController:
             "default_agent_id": base["default_agent_id"],
             "default_session_behavior": base["default_session_behavior"],
             "phrases": phrases,
+            "selected_phrases": base["selected_phrases"],
+            "model_download": dict(self._model_download)
+            if self._model_download is not None
+            else None,
             "recording": (
                 {
                     "command_id": recording.command_id,

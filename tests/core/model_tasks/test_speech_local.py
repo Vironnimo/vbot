@@ -28,7 +28,6 @@ from core.model_tasks import _speech_context
 from core.model_tasks._speech_engines import _audio_chunks
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
-from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
     PRELOAD_OPTION,
@@ -44,6 +43,7 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
+from core.utils.model_files import ModelFile, PinnedModel
 
 
 def wav(samples: Any = None, *, rate: int = 16_000, channels: int = 1) -> bytes:

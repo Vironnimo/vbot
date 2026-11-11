@@ -1464,8 +1464,6 @@ export default Object.freeze({
   'settings.voice.phraseLimit': '{count} of {max} phrases active',
   'settings.voice.phraseNotReady': 'Not ready',
   'settings.voice.phraseUnavailable': 'Not installed',
-  'settings.voice.deactivatePhrase': 'Stop listening',
-  'settings.voice.deactivatePhraseAria': 'Stop listening for {name}',
   'settings.voice.overlapWarning':
     '“{name}” can also be heard as {others}, which does something else. Give them the same action or keep only one of them active.',
   'settings.voice.actionCommand': 'Send a command',
@@ -1520,7 +1518,40 @@ export default Object.freeze({
     'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
   'settings.voice.error.calibrationInactive':
     'No calibration is running anymore. Start the calibration again.',
-  'settings.voice.models': 'Wake phrases',
+  'voice.state.idle': 'No active wakewords',
+  'settings.voice.addWakeword': 'Add wakeword',
+  'settings.voice.addWakewordShort': 'Add',
+  'settings.voice.addAria': 'Add {name}',
+  'settings.voice.addingWakeword': 'Adding…',
+  'settings.voice.added': 'Added',
+  'settings.voice.downloadAndAdd': 'Download & add',
+  'settings.voice.downloadWakeword': 'Download',
+  'settings.voice.downloadNeeded':
+    'Download this wakeword to use it on this Desktop.',
+  'settings.voice.selectionEmpty':
+    'No wakewords selected. Add one from the catalog to get started.',
+  'settings.voice.removeSelection': 'Remove from your wakewords',
+  'settings.voice.removeSelectionAria': 'Remove {name} from your wakewords',
+  'settings.voice.detectionSettings': 'Detection settings',
+  'settings.voice.catalogTitle': 'Wakeword catalog',
+  'settings.voice.catalogDescription':
+    'Choose a phrase to listen for. Downloads stay on this Desktop and work offline.',
+  'settings.voice.catalogSearch': 'Search wakewords',
+  'settings.voice.catalogEmpty': 'No matching wakewords.',
+  'settings.voice.communityModel': 'Community',
+  'settings.voice.communityHelp':
+    'Community models may respond differently to accents and background sound. You can tune sensitivity after adding a wakeword.',
+  'settings.voice.included': 'Included',
+  'settings.voice.languageEnglish': 'English',
+  'settings.voice.modelSource': 'Source & license',
+  'settings.voice.sourceAria': 'Source and license for {name}',
+  'settings.voice.sourceFailed': 'The source page could not be opened.',
+  'settings.voice.deleteAria': 'Delete imported model {name}',
+  'settings.voice.error.modelSpace':
+    'There is not enough free space on this Desktop to download the wakeword.',
+  'settings.voice.error.modelDownloadFailed':
+    'The wakeword could not be downloaded or verified. Check your connection and try again. Your selection has not changed.',
+  'settings.voice.models': 'Your wakewords',
   'settings.voice.modelsHelp':
     'Turn on the phrases to listen for. Each active phrase has its own sensitivity and action: send a spoken command to an Agent, or start or end Live voice.\n\nSensitivity tuning is optional. It suggests a setting for an existing phrase using a short background check and a few repetitions. It does not train a new phrase or learn to recognize only your voice.',
   'settings.voice.modelImported': 'Imported',

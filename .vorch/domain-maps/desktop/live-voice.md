@@ -15,7 +15,7 @@ Read for the Desktop side of Live voice: hands-free starts (a wake phrase with t
 
 - `liveHotkey` - a global shortcut can be registered (Windows only); gates the "Live voice shortcut" Settings section.
 - `secureOrigins` - the remote `http://` origins that are secure contexts in this Desktop process (fixed at startup, see WebView2 below).
-- The Live voice phrase action needs no own flag: it is part of the Voice bridge (`voiceApi` 3).
+- The Live voice phrase action needs no own flag: it is part of the Voice bridge (`voiceApi` 4).
 
 ## Hands-free starts
 
