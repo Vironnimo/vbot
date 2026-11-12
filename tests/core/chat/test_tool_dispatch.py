@@ -423,7 +423,7 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("surface", ["error", "display"])
+@pytest.mark.parametrize("surface", ["error", "display", "field_name"])
 @pytest.mark.parametrize("store_available", [True, False])
 async def test_discovered_keys_in_failures_and_display_are_captured_or_withheld(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, store_available: bool
@@ -440,6 +440,14 @@ async def test_discovered_keys_in_failures_and_display_are_captured_or_withheld(
     def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
         if surface == "error":
             return tool_failure("fixture_error", f"Rejected {value}")
+        if surface == "field_name":
+            return tool_success(
+                {
+                    value: "quota",
+                    "{{secret:GITHUB_TOKEN}}": "literal reference",
+                    "{{secret:GITHUB_TOKEN}} [2]": "literal suffix",
+                }
+            )
         context.add_display_notice("info", value)
         return tool_success({"done": True})
 
@@ -460,6 +468,12 @@ async def test_discovered_keys_in_failures_and_display_are_captured_or_withheld(
         [secret] = secrets.all()
         assert secret.lifetime == "session"
         assert "{{secret:GITHUB_TOKEN}}" in json.dumps(completed.payload)
+        if surface == "field_name":
+            assert completed.payload["result"]["data"] == {
+                "{{secret:GITHUB_TOKEN}} [3]": "quota",
+                "{{secret:GITHUB_TOKEN}}": "literal reference",
+                "{{secret:GITHUB_TOKEN}} [2]": "literal suffix",
+            }
     else:
         assert not secrets.all()
         assert dispatched.results[0]["error"]["code"] == "secret_capture_failed"

@@ -346,6 +346,7 @@ class SessionExecutionStore:
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Receipt-carrying variant of :meth:`append_messages` with the same options."""
+        tool_results = self._store._seal_tool_results(tool_results)
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
             _store_owned.append_messages_with_receipts(
@@ -499,10 +500,16 @@ class SessionExecutionStore:
             )
         )
 
-    def deliver_tool_outcome(self, receipt_id: str, content: str, *, owner_name: str) -> bool:
+    def deliver_tool_outcome(
+        self, receipt_id: str, content: str, *, owner_name: str, protected_content: str
+    ) -> bool:
         return self._store._execute_write(
             lambda connection: _store_extension_results.deliver_tool_outcome(
-                connection, receipt_id, content, owner_name=owner_name
+                connection,
+                receipt_id,
+                content,
+                owner_name=owner_name,
+                protected_content=protected_content,
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
@@ -510,8 +517,12 @@ class SessionExecutionStore:
     def prepare_tool_outcome(
         self, receipt_id: str, content: str, *, owner_name: str
     ) -> JsonObject | None:
+        secrets = self._store._secrets
+        if secrets.status().state == "absent":
+            secrets.update(lambda transaction: transaction.ensure_created())
+        fingerprint = secrets.fingerprint(content.encode("utf-8"))
         return self._store._execute_write(
             lambda connection: _store_extension_results.prepare_tool_outcome(
-                connection, receipt_id, content, owner_name=owner_name
+                connection, receipt_id, content, owner_name=owner_name, fingerprint=fingerprint
             )
         )

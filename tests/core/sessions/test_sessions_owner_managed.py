@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -15,6 +16,8 @@ from core.sessions import (
     ChatSessionManager,
     SessionAddress,
     TemporarySessionBinding,
+    ToolResultFacts,
+    ToolResultPayload,
 )
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.sessions.sessions_test_support import _address
@@ -85,6 +88,7 @@ def _announce(sessions: ChatSessionManager, address: SessionAddress, batch) -> N
 @pytest.mark.asyncio
 async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempotent(
     manager,
+    tmp_path,
 ) -> None:
     address = _address("temporary", "participant")
 
@@ -132,10 +136,24 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
         ChatMessage.note("after-tools"),
     ]
     _announce(manager, address, tools_and_note)
+    key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    payload = {"token": key, "rows": [None, True, 1]}
     deliver(
         tools_and_note,
         [(0, "tool-1", "hash-1", "delivery", "tool"), (1, "tool-2", "hash-2", "delivery", "tool")],
+        tool_results={
+            "one": ToolResultFacts(
+                "completed",
+                True,
+                payloads=(ToolResultPayload("res_owned", "swarm", json.dumps(payload)),),
+            )
+        },
     )
+    assert (
+        await manager.tool_result_payload_async(address, "res_owned", owner_name="swarm") == payload
+    )
+    for path in tmp_path.glob("sessions.db*"):
+        assert key.encode() not in path.read_bytes()
     assert _contents(manager, address) == ["delivery", "tool-one", "tool-two", "after-tools"]
     tool_two = await receipt("tool-2")
     assert tool_two is not None

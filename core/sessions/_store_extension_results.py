@@ -6,6 +6,7 @@ that Session's live generation after moves, never a reused address or a fork.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from typing import Any
@@ -93,7 +94,12 @@ def resolve_tool_receipt(
 
 
 def deliver_tool_outcome(
-    connection: sqlite3.Connection, receipt_id: str, content: str, *, owner_name: str
+    connection: sqlite3.Connection,
+    receipt_id: str,
+    content: str,
+    *,
+    owner_name: str,
+    protected_content: str,
 ) -> bool:
     context = resolve_tool_receipt(connection, receipt_id, owner_name=owner_name)
     if context is None:
@@ -103,14 +109,20 @@ def deliver_tool_outcome(
         connection,
         address,
         f"extension:{owner_name}/task:{receipt_id}",
-        [content],
+        [protected_content],
         generation_id=context["generation_id"],
+        content_hash=hashlib.sha256(json.dumps([content], ensure_ascii=False).encode()).hexdigest(),
     )
     return True
 
 
 def prepare_tool_outcome(
-    connection: sqlite3.Connection, receipt_id: str, content: str, *, owner_name: str
+    connection: sqlite3.Connection,
+    receipt_id: str,
+    content: str,
+    *,
+    owner_name: str,
+    fingerprint: str,
 ) -> dict[str, Any] | None:
     """Bind one background outcome before handing it to completion delivery.
 
@@ -123,11 +135,17 @@ def prepare_tool_outcome(
     if context is None or not context["deferred"]:
         return None
     row = connection.execute(
-        "SELECT outcome_content,outcome_delivered FROM extension_tool_receipts "
+        "SELECT outcome_content,outcome_fingerprint,outcome_delivered FROM extension_tool_receipts "
         "WHERE receipt_id=? AND owner_name=?",
         (receipt_id, owner_name),
     ).fetchone()
-    if row["outcome_content"] is not None and row["outcome_content"] != content:
+    if (
+        row["outcome_fingerprint"] is not None
+        and row["outcome_fingerprint"] != fingerprint
+        or row["outcome_fingerprint"] is None
+        and row["outcome_content"] is not None
+        and row["outcome_content"] != content
+    ):
         raise ChatSessionError("Tool outcome conflicts with its prior content")
     marker = f"Background Tool result {receipt_id}:"
     delivered = (
@@ -145,8 +163,9 @@ def prepare_tool_outcome(
         is not None
     )
     connection.execute(
-        "UPDATE extension_tool_receipts SET outcome_content=?,outcome_delivered=? "
+        "UPDATE extension_tool_receipts SET outcome_content=NULL,"
+        "outcome_fingerprint=?,outcome_delivered=? "
         "WHERE receipt_id=?",
-        (content, delivered, receipt_id),
+        (fingerprint, delivered, receipt_id),
     )
     return context | {"content": f"{marker}\n{content}", "delivered": delivered}

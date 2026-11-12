@@ -91,27 +91,42 @@ def unescape_references(text: str) -> str:
     return substitute(text, lambda reference: text[reference.start : reference.end])
 
 
-def iter_strings(value: Any) -> Iterable[str]:
+def iter_strings(value: Any, *, include_keys: bool = False) -> Iterable[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from iter_strings(item)
+        for key, item in value.items():
+            if include_keys and isinstance(key, str):
+                yield key
+            yield from iter_strings(item, include_keys=include_keys)
     elif isinstance(value, (list, tuple)):
         for item in value:
-            yield from iter_strings(item)
+            yield from iter_strings(item, include_keys=include_keys)
 
 
-def map_strings(value: Any, change: Callable[[str], str]) -> Any:
-    """``value`` with ``change`` applied to every string (keys stay unchanged)."""
+def map_strings(value: Any, change: Callable[[str], str], *, include_keys: bool = False) -> Any:
+    """Apply ``change`` to strings; output masking may include property names."""
     if isinstance(value, str):
         return change(value)
     if isinstance(value, Mapping):
-        return {key: map_strings(item, change) for key, item in value.items()}
+        keys = {key: change(key) if include_keys and isinstance(key, str) else key for key in value}
+        unchanged = {key for key, mapped in keys.items() if key == mapped}
+        result = {}
+        for key, item in value.items():
+            mapped = keys[key]
+            if mapped != key:
+                # A literal reference or another masked key may already use
+                # this name. Keep every value and preserve unchanged names.
+                base, suffix = mapped, 2
+                while mapped in unchanged or mapped in result:
+                    mapped = f"{base} [{suffix}]"
+                    suffix += 1
+            result[mapped] = map_strings(item, change, include_keys=include_keys)
+        return result
     if isinstance(value, list):
-        return [map_strings(item, change) for item in value]
+        return [map_strings(item, change, include_keys=include_keys) for item in value]
     if isinstance(value, tuple):
-        return tuple(map_strings(item, change) for item in value)
+        return tuple(map_strings(item, change, include_keys=include_keys) for item in value)
     return value
 
 
@@ -198,11 +213,13 @@ class SecretMasker:
                 return masked[:position]
         return masked
 
-    def mask_value[T](self, value: T) -> T:
+    def mask_value[T](self, value: T, *, include_keys: bool = False) -> T:
         """``value`` (JSON-like) with every string masked; ``value`` itself when none matches."""
-        if self._pattern is None or not any(self.contains(text) for text in iter_strings(value)):
+        if self._pattern is None or not any(
+            self.contains(text) for text in iter_strings(value, include_keys=include_keys)
+        ):
             return value
-        return cast(T, map_strings(value, self.mask))
+        return cast(T, map_strings(value, self.mask, include_keys=include_keys))
 
     def contains(self, text: str) -> bool:
         return self._pattern is not None and self._pattern.search(text) is not None

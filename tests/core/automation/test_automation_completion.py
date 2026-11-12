@@ -513,10 +513,12 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
     origin_run: Run | None = None
     origin_release = asyncio.Event()
     backoff_waits: list[float] = []
+    backoff_entered = asyncio.Event()
     guards = AsyncExitStack()
 
     async def hold_backoff(delay: float) -> None:
         backoff_waits.append(delay)
+        backoff_entered.set()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(automation_module, "_sleep", hold_backoff)
@@ -549,10 +551,8 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
         body="owned result",
         execution_owner=_LIVE_OWNER,
     )
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if origin_run is not None or backoff_waits:
-            break
+    if origin_run is None:
+        await asyncio.wait_for(backoff_entered.wait(), timeout=1)
     assert backoff_waits == ([] if origin_run is not None else [0.25])
     if waiting_for == "renamed":
         await sessions.run_async(sessions.retarget_identity_agent_sessions, "coder", "renamed")
@@ -789,7 +789,7 @@ async def test_completion_capture_failure_keeps_output_pending_until_it_can_be_p
         sessions.close()
 
 
-@pytest.mark.parametrize("boundary", ["followup", "read", "append"])
+@pytest.mark.parametrize("boundary", ["followup", "read", "append", "capture"])
 @pytest.mark.parametrize("transition", ["rename", "replace"])
 async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, transition: str
@@ -801,10 +801,12 @@ async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transi
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     loop = build_chat_loop(runtime)
+    secrets = AgentSecrets(SecretStore(tmp_path), clock=lambda: datetime.now(UTC))
     service = TriggerService(
-        loop, runtime.chat_runs, cast(Any, runtime), sessions=runtime.chat_sessions
+        loop, runtime.chat_runs, cast(Any, runtime), sessions=runtime.chat_sessions, secrets=secrets
     )
     entered, release = asyncio.Event(), asyncio.Event()
+    capture_release = threading.Event()
     first = True
 
     async def pause_once() -> None:
@@ -830,7 +832,7 @@ async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transi
             return await get(address)
 
         monkeypatch.setattr(runtime.chat_sessions, "get_async", held_get)
-    else:
+    elif boundary == "append":
         append = ChatSession.append_many_async
 
         async def held_append(
@@ -840,13 +842,24 @@ async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transi
             return await append(chat_session, messages, **options)
 
         monkeypatch.setattr(ChatSession, "append_many_async", held_append)
+    else:
+        protect = secrets.protect_output
+        event_loop = asyncio.get_running_loop()
+
+        def held_protect(*args: Any, **options: Any) -> str:
+            event_loop.call_soon_threadsafe(entered.set)
+            assert capture_release.wait(2)
+            return protect(*args, **options)
+
+        monkeypatch.setattr(secrets, "protect_output", held_protect)
+    key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
     delivery = service.submit_completion(
         session.address,
         notice_id="lifecycle-result",
         origin_run_id="original-run",
-        body="Result belongs to the original conversation",
+        body=f"Result belongs to the original conversation: {key}",
         expected_session_generation_id=session.generation_id,
-        wake=boundary == "followup",
+        wake=boundary in {"followup", "capture"},
     )
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
@@ -858,25 +871,33 @@ async def test_completion_keeps_its_session_across_a_concurrent_lifecycle_transi
                     runtime.chat_sessions.retarget_identity_agent_sessions, "coder", "renamed"
                 )
                 runtime.agents._agent = replace(runtime.agents._agent, id="renamed")
+                await asyncio.to_thread(secrets.retarget_agent, "coder", "renamed")
                 target = SessionAddress(None, "renamed", "session-one")
                 runtime.chat_sessions.create("coder", session_id="session-one")
             else:
                 await runtime.chat_sessions.run_async(runtime.chat_sessions.delete, session.address)
+                await asyncio.to_thread(secrets.remove_session, session.address)
                 runtime.chat_sessions.create("coder", session_id="session-one")
                 target = session.address
         release.set()
+        capture_release.set()
         if transition == "replace":
             with pytest.raises(SessionNotFoundError):
                 await asyncio.wait_for(delivery, timeout=1)
             assert runtime.chat_sessions.get(target).load() == []
+            assert secrets.usable(target) == []
         else:
             await asyncio.wait_for(delivery, timeout=1)
             notes = _notes(runtime.chat_sessions.get(target))
             assert sum("Result belongs to the original conversation" in note for note in notes) == 1
             assert runtime.chat_sessions.get(target).generation_id == session.generation_id
             assert runtime.chat_sessions.get(session.address).load() == []
+            assert len(secrets.usable(target)) == 1
+            assert secrets.usable(session.address) == []
+            assert all(key not in str(note) for note in notes)
     finally:
         release.set()
+        capture_release.set()
         await service.aclose()
         await runtime.chat_runs.aclose()
         runtime.chat_sessions.close()
@@ -1325,7 +1346,16 @@ async def test_a_claimed_follow_up_is_not_delivered_by_a_concurrent_user_run(
 
 
 @pytest.mark.parametrize(
-    "boundary", ["pending", "reply_surface", "preflight", "owned_preflight", "settling_admission"]
+    "boundary",
+    [
+        "pending",
+        "reply_surface",
+        "preflight",
+        "owned_preflight",
+        "settling_admission",
+        "capture",
+        "closing_capture",
+    ],
 )
 async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
@@ -1333,6 +1363,7 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
     manager = ChatRunManager()
     service, loop, session = _completion_service(tmp_path, manager)
     entered, release = asyncio.Event(), asyncio.Event()
+    capture_release = threading.Event()
     start_run = loop.start_run
     late_runs: list[Run] = []
 
@@ -1372,6 +1403,18 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
     elif boundary == "reply_surface":
         service.set_completion_run_relay(AsyncMock())
         monkeypatch.setattr(service._completion_delivery, "_latest_reply_surface", held_surface)  # noqa: SLF001
+    elif boundary in {"capture", "closing_capture"}:
+        secrets = AgentSecrets(SecretStore(tmp_path), clock=lambda: datetime.now(UTC))
+        protect = secrets.protect_output
+        event_loop = asyncio.get_running_loop()
+
+        def held_protect(*args: Any, **options: Any) -> str:
+            event_loop.call_soon_threadsafe(entered.set)
+            assert capture_release.wait(2)
+            return protect(*args, **options)
+
+        monkeypatch.setattr(secrets, "protect_output", held_protect)
+        service._completion_delivery._secrets = secrets  # noqa: SLF001
 
     result = service.submit_completion(
         _ADDRESS,
@@ -1383,13 +1426,23 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
     try:
         if boundary != "pending":
             await asyncio.wait_for(entered.wait(), timeout=1)
-        assert await service.suppress_completion_wakes([_ADDRESS]) == 1
-        assert service.pending_completion_wakes(_ADDRESS) == 0
+        closing = None
+        if boundary == "closing_capture":
+            closing = asyncio.create_task(service.aclose())
+            await asyncio.sleep(0)
+        else:
+            assert await service.suppress_completion_wakes([_ADDRESS]) == 1
+            assert service.pending_completion_wakes(_ADDRESS) == 0
         release.set()
+        capture_release.set()
+        if closing is not None:
+            await asyncio.wait_for(closing, timeout=1)
         await asyncio.wait_for(result, timeout=1)
         assert loop.messages == []
         assert len(_notes(session)) == 1
         assert "RESULT_BEFORE_STOP" in _notes(session)[0]
+        if closing is not None:
+            return
         if boundary == "settling_admission":
             [late] = late_runs
             assert late.status.value == "cancelled"
@@ -1405,6 +1458,7 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
         assert "RESULT_AFTER_STOP" in loop.messages[0]
     finally:
         release.set()
+        capture_release.set()
         await service.aclose()
         await manager.aclose()
 

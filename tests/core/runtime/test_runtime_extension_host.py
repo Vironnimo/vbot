@@ -1001,14 +1001,22 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
         monkeypatch.setattr(
             runtime.chat_sessions, "prepare_tool_outcome_async", fail_acknowledgement
         )
+    key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    content = f"recovered-outcome-sentinel {key}"
+    if deferred:
         with pytest.raises(OSError, match="acknowledgement interrupted"):
-            await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
-    assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
-    assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
+            await host.deliver_tool_outcome(receipt, content)
+    assert await host.deliver_tool_outcome(receipt, content)
+    assert await host.deliver_tool_outcome(receipt, content)
     notes = [message.content for message in moved.load() if message.role == "note"]
     assert len(notes) == 1
     note = notes[0]
     assert isinstance(note, str) and "recovered-outcome-sentinel" in note
+    assert key not in note and "{{secret:GITHUB_TOKEN}}" in note
+    environment = runtime.agent_secrets.environment(moved.address, "GITHUB_TOKEN")
+    assert environment is not None and environment[0]["GITHUB_TOKEN"] == key
+    for path in runtime.storage.data_dir.glob("sessions.db*"):
+        assert key.encode() not in path.read_bytes()
     with pytest.raises(ChatSessionError, match="conflicts"):
         await host.deliver_tool_outcome(receipt, "different-outcome")
     if deferred:

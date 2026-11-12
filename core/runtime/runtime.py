@@ -186,6 +186,7 @@ class Runtime(RuntimeServiceGraph):
                 projects=self.projects,
                 agents=self.agents,
                 sessions=self.chat_sessions,
+                secrets=self.agent_secrets,
                 statistics_index=self.statistics_index,
                 usage_recorder=self.usage_recorder,
                 tools=self.tools,

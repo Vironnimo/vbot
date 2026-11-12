@@ -66,7 +66,7 @@ from core.secrets._references import substitute as substitute_references
 from core.secrets._totp import TotpSeedError, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
 from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -423,6 +423,7 @@ class AgentSecrets:
         *,
         source: Literal["user", "tool"] = "user",
         passed_only: bool = False,
+        resolve_address: Callable[[], SessionAddress | None] | None = None,
     ) -> dict[str, str]:
         """Capture received values atomically and return their local masking references.
 
@@ -434,8 +435,18 @@ class AgentSecrets:
 
         created: list[AgentSecret] = []
         references: dict[str, str] = {}
-        actor = f"agent:{address.agent_id}" if source == "tool" else "user"
         with self._lock:
+            # Lifecycle operations move/archive Sessions before retargeting or
+            # removing their Secrets under this same lock. Resolve a captured
+            # generation here so a reused old address receives no grants.
+            if resolve_address is not None:
+                current = resolve_address()
+                if current is None:
+                    raise SessionNotFoundError("The output's Session no longer exists")
+                address = current
+            if not candidates:
+                return {}
+            actor = f"agent:{address.agent_id}" if source == "tool" else "user"
             usable_values = {
                 field.value: secret.reference(field.name)
                 for secret in self.usable(address, passed_only=passed_only)
@@ -516,6 +527,7 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
         growing: bool = False,
+        resolve_address: Callable[[], SessionAddress | None] | None = None,
     ) -> str:
         """Capture output keys before publication, preserving this Session's references."""
         from core.secrets.detection import complete_output_prefix, detect_api_keys
@@ -523,10 +535,12 @@ class AgentSecrets:
         if growing:
             text = complete_output_prefix(text)
         candidates = [(item.name, item.value) for item in detect_api_keys(text)]
-        references = (
-            self.capture_api_keys(address, candidates, source="tool", passed_only=passed_only)
-            if candidates
-            else {}
+        references = self.capture_api_keys(
+            address,
+            candidates,
+            source="tool",
+            passed_only=passed_only,
+            resolve_address=resolve_address,
         )
         text = SecretMasker(references).mask(text)
         return self.masker.mask_growing(text) if growing else self.masker.mask(text)

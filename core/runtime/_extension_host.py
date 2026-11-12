@@ -54,7 +54,7 @@ from core.runtime.interfaces import (
     LoggerProtocol,
     ProviderCredentialResolverProtocol,
 )
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, SessionNotFoundError
 from core.sessions.titles import SessionTitleService
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex, StatisticsService
@@ -80,6 +80,7 @@ from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
+    from core.secrets.agent_secrets import AgentSecrets
 
 
 def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
@@ -156,6 +157,7 @@ class ExtensionHostFactory:
         projects: ProjectStore,
         agents: AgentStore,
         sessions: ChatSessionManager,
+        secrets: AgentSecrets,
         statistics_index: StatisticsIndex,
         usage_recorder: UsageRecorder,
         tools: ToolRegistry,
@@ -190,6 +192,7 @@ class ExtensionHostFactory:
         self.projects = projects
         self.agents = agents
         self.chat_sessions = sessions
+        self._secrets = secrets
         self._statistics_index = statistics_index
         self._usage_recorder = usage_recorder
         self.tools = tools
@@ -851,8 +854,20 @@ class ExtensionHostFactory:
             self._deferred_runs.pop((identity, receipt), None)
             return False
         if not record["deferred"]:
+            try:
+                protected = await _RUNTIME_WORKERS.run(
+                    self._secrets.protect_output,
+                    SessionAddress(record["project_id"], record["agent_id"], record["session_id"]),
+                    content,
+                    resolve_address=partial(
+                        self.chat_sessions.generation_address, record["generation_id"]
+                    ),
+                )
+            except SessionNotFoundError:
+                return False
+            self._require_registration(identity)
             return await self.chat_sessions.deliver_tool_outcome_async(
-                receipt, content, owner_name=identity.name
+                receipt, content, owner_name=identity.name, protected_content=protected
             )
         outcome = await self.chat_sessions.prepare_tool_outcome_async(
             receipt, content, owner_name=identity.name
