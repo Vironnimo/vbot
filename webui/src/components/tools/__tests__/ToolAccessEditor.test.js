@@ -430,11 +430,10 @@ describe('ToolAccessEditor', () => {
       loadingSwitch()
         .querySelector('.dropdown-primitive__trigger-label')
         .textContent.trim();
+    // The shared default is its own option, marked "(default)".
     const defaultLabel = (on) =>
-      t('toolAccess.onDemand.followDefault', {
-        state: t(
-          on ? 'toolAccess.onDemand.stateOn' : 'toolAccess.onDemand.stateOff',
-        ),
+      t('common.defaultOption', {
+        label: t(on ? 'toolAccess.onDemand.on' : 'toolAccess.onDemand.off'),
       });
 
     it('offers the choice only to editors that enable it', async () => {
@@ -444,7 +443,8 @@ describe('ToolAccessEditor', () => {
     });
 
     // Without its own choice the Agent follows the shared default; an own
-    // choice keeps an own list, and Default drops only the choice.
+    // choice keeps an own list, and the "(default)" option drops only the
+    // choice.
     it.each([
       [null, false, 'on', { on_demand: true }],
       [null, true, 'off', { on_demand: false }],
@@ -553,6 +553,8 @@ describe('ToolAccessEditor', () => {
       mountLoading({
         toolLoadingEditable: true,
         toolLoading,
+        // Off is an own choice only over a default switched on.
+        toolLoadingDefault: { on_demand: true, always_loaded: [] },
         onToolLoadingChange,
       });
       expect(pinNames(true)).toEqual(['memory']);

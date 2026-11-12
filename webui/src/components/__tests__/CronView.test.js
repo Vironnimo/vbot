@@ -406,7 +406,12 @@ describe('CronView', () => {
     const choices = [...document.querySelectorAll('[role="option"]')].map(
       (option) => option.textContent.trim(),
     );
-    expect(choices).toContain(t('agents.form.thinkingEffortOption.low'));
+    // The Project Agent's effective effort is the option marked "(default)".
+    expect(choices).toContain(
+      t('common.defaultOption', {
+        label: t('agents.form.thinkingEffortOption.low'),
+      }),
+    );
     expect(choices).not.toContain(t('agents.form.thinkingEffortOption.high'));
     expect(choices).not.toContain(t('agents.form.thinkingEffortOption.none'));
     expect(document.getElementById('cron-working-project')).toBeNull();

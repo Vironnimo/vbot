@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n.js';
+  import { defaultChoiceValue, markDefaultOption } from '$lib/defaultChoice.js';
   import {
     listExternalSources,
     listExternalSessions,
@@ -19,7 +20,15 @@
   import TextArea from '../ui/TextArea.svelte';
   import Dropdown from '../Dropdown.svelte';
 
-  let { agentAddress, projects = [], onClose, onImported } = $props();
+  let {
+    agentAddress,
+    projects = [],
+    // The Identity Agent's default Project id, '' for its Workspace, or null
+    // while unknown; it is the place option marked "(default)".
+    defaultProjectId = null,
+    onClose,
+    onImported,
+  } = $props();
   const id = $props.id();
   let sources = $state([]);
   let source = $state('codex');
@@ -304,16 +313,25 @@
                 <Dropdown
                   id={field.controlId}
                   ariaLabelledby={field.labelId}
-                  value={project}
+                  value={defaultChoiceValue(project, {
+                    defaultValue: defaultProjectId,
+                    unsetValue: 'default',
+                  })}
                   disabled={busy}
-                  options={[
-                    { value: 'default', label: t('external.defaultProject') },
-                    { value: '', label: t('external.workspace') },
-                    ...projects.map((item) => ({
-                      value: item.id,
-                      label: item.name || item.id,
-                    })),
-                  ]}
+                  options={markDefaultOption(
+                    [
+                      { value: '', label: t('external.workspace') },
+                      ...projects.map((item) => ({
+                        value: item.id,
+                        label: item.name || item.id,
+                      })),
+                    ],
+                    {
+                      defaultValue: defaultProjectId,
+                      unsetValue: 'default',
+                      fallbackLabel: t('external.defaultProject'),
+                    },
+                  )}
                   onValueChange={(value) => (project = value)}
                 />
               {/snippet}

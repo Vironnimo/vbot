@@ -46,6 +46,15 @@ dnd-kit setup: the manager gets its plugins and sensors at construction, because
 - `SearchableDropdown` balances `onOpenChange` for actual state transitions, including closing an open picker on teardown; calling `open()` again while open does not report another opening. This lets catalog owners hold refreshed options until every picker is closed (`SearchableDropdown.test.js`).
 - Shared Dropdown variants implement the listbox/combobox keyboard contract with an explicit active option (the simple list adds typeahead; the searchable one filters); callers provide values and callbacks, not bespoke keyboard behavior. The searchable variant's collapsible-group mode switches to the tree pattern: Right opens a group or enters it, Left closes it or returns to its header, Enter toggles a header; callers own which groups are open (`expandedGroups` plus `onGroupToggle`). A Dropdown inside a `FormField` passes the field's `labelId` as `ariaLabelledby`, so its visible label and current value name the trigger; without it the trigger falls back to `ariaLabel` or the placeholder.
 
+## Default choices
+
+User requirement (2026-11-12): a choice that falls back to a default while it has no own value lists that default as the option it resolves to, labelled `<label> (default)` (`common.defaultOption`), never as a separate `Default ...`, `Inherit ...` or `Use the default ...` entry. Choosing the marked option clears the own value, so the choice follows the default again; an own value equal to the default shows as the marked option.
+
+- `lib/defaultChoice.js` implements it: `markDefaultOption(options, {defaultValue, unsetValue, fallbackLabel})` gives the matching option the unset value and the marked label, and `defaultChoiceValue(value, {defaultValue, unsetValue})` is the value the Dropdown shows. Callers keep their own unset value (`''`, `'default'`, `'inherit'`, a sentinel) and payload mapping.
+- A separate unset option remains only where the default matches no option: it is unknown (`Provider default`, the microphone's `System default`), not offered by the current Model, or a list rather than a value (a Channel's selected Tools, inherited custom permission rules). `fallbackLabel` names it, marked `(default)` when the value is known.
+- Model pickers keep their empty option above the favorites, because the inherited Model can appear once per Connection; its label, the callers' `emptyLabel`, is the inherited Model marked `(default)`.
+- Users: Wakeword phrase Agent and Session, Agent/create/Project thinking effort, Tool loading on demand, permission preset and bases, Automation execution effort, Channel member Tools, the external-history import place.
+
 ## Disabled Button help
 
 `Button.svelte` keeps native controls disabled. With a `disabledReason`, its wrapper becomes the keyboard-focusable disabled control, named from the button and described by persistent hidden reason text; the shared tooltip shows the same reason on keyboard focus or hover. Enabling the button removes that extra tab stop and exposes the native control again (`ui/__tests__/Button.test.js`).

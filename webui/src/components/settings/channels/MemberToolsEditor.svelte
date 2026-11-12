@@ -7,6 +7,11 @@
   } from '$lib/autosave.js';
   import { activationSources, toolCatalogForEditor } from '$lib/toolAccess.js';
   import { t } from '$lib/i18n.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
   import Dropdown from '../../Dropdown.svelte';
   import ToolCatalogEditor from '../../tools/ToolCatalogEditor.svelte';
   import SaveStatus from '../../ui/SaveStatus.svelte';
@@ -43,20 +48,42 @@
   });
 
   let effective = $derived(draft ?? inherited);
-  let mode = $derived(draft?.mode ?? 'inherit');
-  let options = $derived([
-    ...(scopeId === null
-      ? []
-      : [
-          {
-            value: 'inherit',
-            label: t('settings.channels.memberTools.inherit'),
-          },
-        ]),
-    { value: 'none', label: t('settings.channels.memberTools.none') },
-    { value: 'selected', label: t('settings.channels.memberTools.selected') },
-    { value: 'all', label: t('settings.channels.memberTools.all') },
-  ]);
+  // A group without its own policy follows the Channel default, which marks
+  // its mode "(default)". A Channel selection of Tools stays a separate
+  // choice, so the group can still make its own selection.
+  let inheritedMode = $derived(
+    scopeId === null || inherited?.mode === 'selected'
+      ? null
+      : (inherited?.mode ?? null),
+  );
+  let mode = $derived(
+    defaultChoiceValue(draft?.mode, {
+      defaultValue: inheritedMode,
+      unsetValue: 'inherit',
+    }),
+  );
+  let options = $derived(
+    markDefaultOption(
+      [
+        { value: 'none', label: t('settings.channels.memberTools.none') },
+        {
+          value: 'selected',
+          label: t('settings.channels.memberTools.selected'),
+        },
+        { value: 'all', label: t('settings.channels.memberTools.all') },
+      ],
+      {
+        defaultValue: inheritedMode,
+        unsetValue: 'inherit',
+        fallbackLabel:
+          scopeId === null
+            ? ''
+            : defaultOptionLabel(
+                t('settings.channels.memberTools.channelSelection'),
+              ),
+      },
+    ),
+  );
   let catalog = $derived.by(() => {
     const visible = toolCatalogForEditor(tools).filter(
       (tool) => tool.activation !== 'follows' && tool.name !== 'load_tools',

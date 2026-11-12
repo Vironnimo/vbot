@@ -1,6 +1,11 @@
 <script>
   import { onDestroy } from 'svelte';
   import { t } from '$lib/i18n.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
   import { sessionDisplayName } from '$lib/sessionListView.js';
   import {
@@ -212,11 +217,21 @@
   function inheritLabel(field) {
     const value = inherited(field);
     return value
-      ? t('cron.execution.inheritValue', { value })
+      ? defaultOptionLabel(value)
       : existing
         ? t('cron.execution.inheritSession')
         : t('cron.execution.inheritAgent');
   }
+  // The effort a Run without an override uses: a level, 'default' for the
+  // Provider default, or null while it is unknown.
+  let inheritedEffort = $derived.by(() => {
+    const overrides = existing ? session?.agent_overrides : null;
+    if (overrides?.thinking_effort_default) return 'default';
+    const value = inherited('thinking_effort');
+    if (value) return value;
+    // Only a resolved effective value says that nothing sets an effort.
+    return targetAgent?.effective ? 'default' : null;
+  });
   let allModelOptions = $derived(
     buildModelSelectOptions({
       models,
@@ -234,16 +249,29 @@
   let reasoning = $derived(
     reasoningForModelValue(values.model_override || inherited('model'), models),
   );
-  let effortOptions = $derived([
-    { value: '', label: inheritLabel('thinking_effort') },
-    { value: 'default', label: t('chat.sessionSettings.providerDefault') },
-    ...effortOptionsForReasoning(reasoning)
-      .filter(Boolean)
-      .map((level) => ({
-        value: level,
-        label: t(`agents.form.thinkingEffortOption.${level}`),
-      })),
-  ]);
+  // The inherited effort is the option marked "(default)".
+  let effortOptions = $derived(
+    markDefaultOption(
+      [
+        { value: 'default', label: t('chat.sessionSettings.providerDefault') },
+        ...effortOptionsForReasoning(reasoning)
+          .filter(Boolean)
+          .map((level) => ({
+            value: level,
+            label: t(`agents.form.thinkingEffortOption.${level}`),
+          })),
+      ],
+      {
+        defaultValue: inheritedEffort,
+        fallbackLabel: inheritLabel('thinking_effort'),
+      },
+    ),
+  );
+  let effortValue = $derived(
+    defaultChoiceValue(values.thinking_effort_override, {
+      defaultValue: inheritedEffort,
+    }),
+  );
 
   function chooseModel(value) {
     editor.updateFormField('model_override', value);
@@ -443,7 +471,7 @@
         <div class="s-row-control">
           <Dropdown
             id="cron-run-effort"
-            value={values.thinking_effort_override}
+            value={effortValue}
             options={effortOptions}
             disabled={busy || reasoning?.supported === false}
             ariaLabel={t('agents.form.thinkingEffort')}

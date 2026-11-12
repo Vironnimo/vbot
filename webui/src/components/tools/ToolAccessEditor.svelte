@@ -29,6 +29,7 @@
   } from '$lib/toolAccess.js';
   import { tick } from 'svelte';
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { defaultChoiceValue, markDefaultOption } from '$lib/defaultChoice.js';
 
   const noop = () => {};
 
@@ -79,25 +80,28 @@
       effectiveToolLoading(loading, toolLoadingDefault, completeCatalog)
         .on_demand,
   );
+  // The inherited state is the option marked "(default)"; choosing it clears
+  // the own choice again.
+  let inheritedOnDemand = $derived(inheritedLoading.on_demand ? 'on' : 'off');
   let onDemandChoice = $derived(
-    typeof loading?.on_demand === 'boolean'
-      ? loading.on_demand
-        ? 'on'
-        : 'off'
-      : 'default',
+    defaultChoiceValue(
+      typeof loading?.on_demand === 'boolean'
+        ? loading.on_demand
+          ? 'on'
+          : 'off'
+        : null,
+      { defaultValue: inheritedOnDemand, unsetValue: 'default' },
+    ),
   );
-  let onDemandOptions = $derived([
-    {
-      value: 'default',
-      label: t('toolAccess.onDemand.followDefault', {
-        state: inheritedLoading.on_demand
-          ? t('toolAccess.onDemand.stateOn')
-          : t('toolAccess.onDemand.stateOff'),
-      }),
-    },
-    { value: 'on', label: t('toolAccess.onDemand.on') },
-    { value: 'off', label: t('toolAccess.onDemand.off') },
-  ]);
+  let onDemandOptions = $derived(
+    markDefaultOption(
+      [
+        { value: 'on', label: t('toolAccess.onDemand.on') },
+        { value: 'off', label: t('toolAccess.onDemand.off') },
+      ],
+      { defaultValue: inheritedOnDemand, unsetValue: 'default' },
+    ),
+  );
   let catalogItems = $derived(
     groupToolCatalog(completeCatalog, ceiling)
       .flatMap((group) => group.members)

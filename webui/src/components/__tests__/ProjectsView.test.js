@@ -1041,6 +1041,26 @@ describe('ProjectsView Project settings', () => {
       default_temperature: 0.2,
       default_thinking_effort: 'low',
     });
+
+    // The global default (none here, so the Provider's) is the option marked
+    // "(default)"; choosing it removes the project default instead of
+    // forcing the Provider default for the Team.
+    const followGlobal = t('common.defaultOption', {
+      label: t('inherit.optionProviderDefault'),
+    });
+    inputById('project-edit-thinking-effort').click();
+    flushSync();
+    await waitForCondition(() => optionByText(followGlobal));
+    optionByText(followGlobal).click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-save-demo"]'),
+    );
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+    expect(setProjectMock.mock.calls[1][1]).toEqual({
+      default_thinking_effort: null,
+    });
   });
 
   it('offers the Team as default agents, keeps a stored agent outside it, and clears the default', async () => {

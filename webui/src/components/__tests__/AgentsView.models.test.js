@@ -532,21 +532,24 @@ describe('AgentsView models', () => {
         ],
       }),
     );
-    const inherited = (value) => t('inherit.option', { value });
+    const marked = (label) => t('common.defaultOption', { label });
 
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
     // The raw model is empty, so the field is in the inherit state; its trigger
-    // shows the global-default inherit label.
+    // shows the global default marked "(default)".
     await waitForCondition(
-      () => modelTriggerLabel() === inherited('openai/gpt-5.2'),
+      () => modelTriggerLabel() === marked('openai/gpt-5.2'),
       100,
     );
     expect(
       document.querySelectorAll('.agent-model-settings__fallback-row').length,
     ).toBe(0);
-    expect(thinkingTriggerLabel()).toBe(inherited('high'));
+    // The inherited effort is its own level, marked "(default)".
+    expect(thinkingTriggerLabel()).toBe(
+      marked(t('agents.form.thinkingEffortOption.high')),
+    );
   });
 
   it('shows the sampling inherit hint, the Model recommendation and a reset affordance', async () => {

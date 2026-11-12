@@ -465,9 +465,8 @@ export default Object.freeze({
     'Skill maintenance of {name} started. Its result appears here when the pass ends.',
   'skills.librarian.runError': 'Skill maintenance could not start.',
   'skills.librarian.loadError': 'Skill maintenance could not be loaded.',
-  'inherit.option': 'Inherited: {value} (global default)',
   'inherit.optionNotConfigured': 'Inherit (not configured)',
-  'inherit.optionProviderDefault': 'Inherit (provider default)',
+  'inherit.optionProviderDefault': 'Provider default',
   'inherit.hint': 'Inherited: {value} (global default)',
   'inherit.hintProviderDefault':
     'Provider default — nothing is set here or in the global defaults.',
@@ -635,15 +634,12 @@ export default Object.freeze({
   'toolAccess.imageAlwaysAvailable': 'Available with vision',
   'toolAccess.readiness.unregistered': 'Not registered right now',
   'toolAccess.onDemand.label': 'Load Tools on demand',
-  'toolAccess.onDemand.followDefault': 'Default ({state})',
-  'toolAccess.onDemand.stateOn': 'on',
-  'toolAccess.onDemand.stateOff': 'off',
   'toolAccess.onDemand.on': 'On',
   'toolAccess.onDemand.off': 'Off',
   'toolAccess.onDemand.description':
     'Only Tools marked Always loaded are sent with every request. The Agent loads the others when it needs them, which saves context.',
   'toolAccess.onDemand.help':
-    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nSome Models handle loading less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.\n\nDefault follows the setting and the Always loaded list in the Shared defaults for Agents until you choose otherwise here.',
+    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nSome Models handle loading less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.\n\nThe option marked (default) follows the setting and the Always loaded list in the Shared defaults for Agents until you choose otherwise here.',
   'toolAccess.alwaysLoaded.title': 'Always loaded',
   'toolAccess.alwaysLoaded.summary':
     '{alwaysLoaded} always loaded, {onDemand} on demand. Use the pin on a Tool to change it.',
@@ -829,7 +825,6 @@ export default Object.freeze({
   'projects.manage.defaultAgentUnavailable': '{agentId} (not in team)',
   'projects.manage.defaultModel': 'Default model',
   'projects.manage.defaultThinkingEffort': 'Default thinking effort',
-  'projects.manage.noThinkingEffort': 'No project default',
   'projects.manage.providerThinkingEffortDefault': '— (provider default)',
   'projects.manage.modelSearchPlaceholder': 'Filter models…',
   'projects.manage.modelSearchEmpty': 'No models match',

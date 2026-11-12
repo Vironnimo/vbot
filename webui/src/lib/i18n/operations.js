@@ -617,7 +617,6 @@ export default Object.freeze({
   'cron.execution.advanced': 'Advanced settings',
   'cron.execution.overridesHelp':
     'Optional Model and Reasoning settings apply only to this Automation’s Runs. The Agent and Session keep their own settings.',
-  'cron.execution.inheritValue': 'Inherit ({value})',
   'cron.execution.inheritSession': 'Inherit from Session',
   'cron.execution.inheritAgent': 'Inherit from Agent',
   'cron.execution.loadModelsError': 'Could not load Models.',

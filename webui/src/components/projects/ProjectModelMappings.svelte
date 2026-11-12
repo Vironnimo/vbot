@@ -3,6 +3,7 @@
   // Models; an unmapped name uses the Project default.
   import { t } from '$lib/i18n.js';
   import { buildModelSelectOptions } from '$lib/modelSelection.js';
+  import { defaultOptionLabel } from '$lib/defaultChoice.js';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -16,7 +17,10 @@
       models: projectsState.availableModels,
       connections: projectsState.availableConnections,
       selectedModelValue: '',
-      emptyLabel: t('projects.sources.modelUnmapped'),
+      // An unmapped name uses the Project default Model, shown by name once set.
+      emptyLabel: projectsState.editForm.default_model
+        ? defaultOptionLabel(projectsState.editForm.default_model)
+        : t('projects.sources.modelUnmapped'),
     }),
   );
   let mappings = $derived(

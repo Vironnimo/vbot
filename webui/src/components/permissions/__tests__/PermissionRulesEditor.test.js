@@ -168,14 +168,15 @@ describe('PermissionRulesEditor', () => {
     );
     await mountEditor({ value: null });
 
+    // What applies is the option marked "(default)", not a separate entry.
     expect(triggerLabel(t('permissions.preset'))).toBe(
-      t('permissions.preset.useDefault', {
-        preset: t('permissions.preset.work_dir_read_only'),
+      t('common.defaultOption', {
+        label: t('permissions.preset.work_dir_read_only'),
       }),
     );
     expect(triggerLabel(t('permissions.part.write'))).toBe(
-      t('permissions.base.inherited', {
-        value: t('permissions.base.write.scratch'),
+      t('common.defaultOption', {
+        label: t('permissions.base.write.scratch'),
       }),
     );
   });

@@ -152,6 +152,7 @@ export default Object.freeze({
   'common.close': 'Close',
   'common.confirm': 'Confirm',
   'common.copy': 'Copy',
+  'common.defaultOption': '{label} (default)',
   'common.copied': 'Copied',
   'common.create': 'Create',
   'common.delete': 'Delete',

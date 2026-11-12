@@ -277,7 +277,13 @@ describe('SettingsView Channels', () => {
     expect(editor('-100').textContent).not.toContain(
       t('settings.channels.memberTools.all'),
     );
-    choose('-100', t('settings.channels.memberTools.inherit'));
+    // The Channel default is the group's option marked "(default)".
+    choose(
+      '-100',
+      t('common.defaultOption', {
+        label: t('settings.channels.memberTools.all'),
+      }),
+    );
     await waitForCondition(
       () => callsTo('channel.member_tools.set').length === 3,
     );

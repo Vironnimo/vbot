@@ -778,6 +778,9 @@
                 {limits}
                 action={draft?.phrase_actions[model.id] ?? null}
                 {agentOptions}
+                defaultAgentId={draft?.default_agent_id ?? null}
+                defaultSessionBehavior={draft?.default_session_behavior ??
+                  'active'}
                 problem={savedActiveIds.has(model.id)
                   ? (phraseProblems.get(model.id) ?? null)
                   : null}

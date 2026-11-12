@@ -394,12 +394,20 @@
   );
   let effortOptions = $derived.by(() => {
     const levels = effortOptionsForReasoning(reasoning).filter(Boolean);
+    // The Agent's own effort is marked like its default Project.
+    const agentDefault = t('chat.sessionSettings.agentDefault');
+    const defaultEffort = view.defaultThinkingEffort ?? '';
     const options = [
       {
         value: '',
         label: t('chat.sessionSettings.providerDefault'),
+        secondaryLabel: defaultEffort === '' ? agentDefault : '',
       },
-      ...levels.map((level) => ({ value: level, label: effortLabel(level) })),
+      ...levels.map((level) => ({
+        value: level,
+        label: effortLabel(level),
+        secondaryLabel: level === defaultEffort ? agentDefault : '',
+      })),
     ];
     if (view.thinkingEffort && !levels.includes(view.thinkingEffort)) {
       options.push({

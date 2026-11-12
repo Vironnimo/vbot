@@ -785,8 +785,8 @@ describe('AgentsView', () => {
     await waitForCondition(
       () =>
         triggerTextContent(getSimpleRoot(preset)) ===
-        t('permissions.preset.useDefault', {
-          preset: t('permissions.preset.work_dir'),
+        t('common.defaultOption', {
+          label: t('permissions.preset.work_dir'),
         }),
       100,
     );
@@ -885,13 +885,11 @@ describe('AgentsView', () => {
     await flushAsyncUpdates();
 
     // The three run fields default to the inherit state. The model inherit
-    // option shows the global default fetched on open.
+    // option shows the global default fetched on open, marked "(default)".
     await waitForCondition(
       () =>
         triggerTextContent(getSearchableTrigger('agent-create-model')) ===
-        t('inherit.option', {
-          value: 'openai/gpt-5.2',
-        }),
+        t('common.defaultOption', { label: 'openai/gpt-5.2' }),
       100,
     );
 

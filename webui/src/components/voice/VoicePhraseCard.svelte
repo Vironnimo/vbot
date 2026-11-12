@@ -15,6 +15,11 @@
     voiceActionChoice,
     voiceActionForChoice,
   } from '$lib/wakewordSettings.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
 
   const noop = () => {};
 
@@ -30,6 +35,11 @@
     // Draft action of this phrase.
     action = null,
     agentOptions = [],
+    // What a phrase without an Agent or Session behavior of its own uses: the
+    // server's default Agent (null when none is set) and the default Session
+    // behavior. Their options show as "(default)".
+    defaultAgentId = null,
+    defaultSessionBehavior = 'active',
     // Problem code the Desktop reports for this phrase.
     problem = null,
     // Labels of active phrases that can fire on the same words but do
@@ -76,10 +86,6 @@
   ];
   const SESSION_OPTIONS = [
     {
-      value: '',
-      label: t('settings.voice.sessionDefault'),
-    },
-    {
       value: 'active',
       label: t('settings.voice.sessionBehaviorActive'),
     },
@@ -102,13 +108,26 @@
   );
   let actionChoice = $derived(voiceActionChoice(action));
   let command = $derived(actionChoice === ACTION_CHOICE_COMMAND);
+  let sessionChoices = $derived(
+    markDefaultOption(SESSION_OPTIONS, {
+      defaultValue: defaultSessionBehavior,
+    }),
+  );
+  let sessionValue = $derived(
+    defaultChoiceValue(action?.session_behavior, {
+      defaultValue: defaultSessionBehavior,
+    }),
+  );
   let agentChoices = $derived([
-    {
-      value: '',
-      label: t('settings.voice.agentDefault'),
-    },
-    ...agentOptions,
+    ...markDefaultOption(agentOptions, {
+      defaultValue: defaultAgentId,
+      // The default Agent is unset or no longer on this server.
+      fallbackLabel: defaultOptionLabel(
+        defaultAgentId || t('settings.voice.noDefaultAgent'),
+      ),
+    }),
     ...(action?.agent_id &&
+    action.agent_id !== defaultAgentId &&
     !agentOptions.some((option) => option.value === action.agent_id)
       ? [
           {
@@ -120,6 +139,9 @@
         ]
       : []),
   ]);
+  let agentValue = $derived(
+    defaultChoiceValue(action?.agent_id, { defaultValue: defaultAgentId }),
+  );
 
   function changeChoice(choice) {
     onActionChange(voiceActionForChoice(choice, action));
@@ -212,7 +234,7 @@
             {t('settings.voice.phraseAgent')}
           </span>
           <Dropdown
-            value={action?.agent_id ?? ''}
+            value={agentValue}
             options={agentChoices}
             ariaLabel={t('settings.voice.phraseAgentAria', {
               name: model.label,
@@ -226,8 +248,8 @@
             {t('settings.voice.phraseSession')}
           </span>
           <Dropdown
-            value={action?.session_behavior ?? ''}
-            options={SESSION_OPTIONS}
+            value={sessionValue}
+            options={sessionChoices}
             ariaLabel={t('settings.voice.phraseSessionAria', {
               name: model.label,
             })}

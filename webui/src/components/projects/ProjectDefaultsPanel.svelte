@@ -17,6 +17,11 @@
     modelSelectionValue,
     parseModelSelectionValue,
   } from '$lib/modelSelection.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
   let {
     projectsState = $bindable(),
     projectsController,
@@ -61,20 +66,31 @@
     }),
   );
 
-  let thinkingEffortOptions = $derived([
-    {
-      value: PROJECT_THINKING_EFFORT_NO_DEFAULT,
-      label: t('projects.manage.noThinkingEffort'),
-    },
-    {
-      value: '',
-      label: defaultThinkingEffortInheritLabel(),
-    },
-    ...PROJECT_THINKING_EFFORT_OPTIONS.map((option) => ({
-      value: option,
-      label: t(`agents.form.thinkingEffortOption.${option}`),
-    })),
-  ]);
+  // No project default (the sentinel) follows the global default, which marks
+  // its level "(default)"; '' forces the Provider default for the Team.
+  let globalThinkingEffort = $derived(globalDefaultText('thinking_effort'));
+  let thinkingEffortOptions = $derived(
+    markDefaultOption(
+      [
+        { value: '', label: t('inherit.optionProviderDefault') },
+        ...PROJECT_THINKING_EFFORT_OPTIONS.map((option) => ({
+          value: option,
+          label: t(`agents.form.thinkingEffortOption.${option}`),
+        })),
+      ],
+      {
+        defaultValue: globalThinkingEffort,
+        unsetValue: PROJECT_THINKING_EFFORT_NO_DEFAULT,
+        fallbackLabel: defaultOptionLabel(globalThinkingEffort),
+      },
+    ),
+  );
+  let thinkingEffortValue = $derived(
+    defaultChoiceValue(projectsState.editForm.default_thinking_effort, {
+      defaultValue: globalThinkingEffort,
+      unsetValue: PROJECT_THINKING_EFFORT_NO_DEFAULT,
+    }),
+  );
 
   // Project defaults serve every Team member's Model, so no single Model's
   // recommendation is offered here.
@@ -98,22 +114,7 @@
 
   function defaultModelInheritLabel() {
     const value = globalDefaultText('model');
-    if (value) {
-      return t('inherit.option', {
-        value,
-      });
-    }
-    return t('inherit.optionNotConfigured');
-  }
-
-  function defaultThinkingEffortInheritLabel() {
-    const value = globalDefaultText('thinking_effort');
-    if (value) {
-      return t('inherit.option', {
-        value,
-      });
-    }
-    return t('inherit.optionProviderDefault');
+    return value ? defaultOptionLabel(value) : t('inherit.optionNotConfigured');
   }
 
   function globalDefaultText(fieldName) {
@@ -220,7 +221,7 @@
           <div class="s-row-control">
             <Dropdown
               id="project-edit-thinking-effort"
-              value={projectsState.editForm.default_thinking_effort}
+              value={thinkingEffortValue}
               options={thinkingEffortOptions}
               ariaLabel={t('projects.manage.defaultThinkingEffort')}
               triggerClass="projects-dropdown"

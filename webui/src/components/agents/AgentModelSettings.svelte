@@ -11,6 +11,7 @@
     effortOptionsForReasoning,
     effortForReasoning,
     samplingRecommendationsForModelValue,
+    THINKING_EFFORT_OPTIONS,
   } from '$lib/agentForm.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -24,6 +25,11 @@
     modelSelectionValue,
     parseModelSelectionValue,
   } from '$lib/modelSelection.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
 
   const noop = () => {};
 
@@ -153,11 +159,32 @@
     selectedModelReasoning?.supported === false,
   );
 
+  // The inherited effort is the level marked "(default)"; with none set the
+  // Provider decides.
+  let inheritedThinkingEffort = $derived(
+    inheritSource('thinking_effort') === 'global_default'
+      ? inheritDisplayValue('thinking_effort')
+      : '',
+  );
+
   let thinkingEffortOptions = $derived(
-    effortOptionsForReasoning(selectedModelReasoning).map((option) => ({
-      value: option,
-      label: thinkingEffortLabel(option),
-    })),
+    markDefaultOption(
+      effortOptionsForReasoning(selectedModelReasoning)
+        .filter(Boolean)
+        .map((option) => ({ value: option, label: effortLabel(option) })),
+      {
+        defaultValue: inheritedThinkingEffort,
+        fallbackLabel: inheritedThinkingEffort
+          ? defaultOptionLabel(effortLabel(inheritedThinkingEffort))
+          : t('inherit.optionProviderDefault'),
+      },
+    ),
+  );
+
+  let thinkingEffortValue = $derived(
+    defaultChoiceValue(formValues.thinking_effort, {
+      defaultValue: inheritedThinkingEffort,
+    }),
   );
 
   function selectModelOptions(selectedModelValue, emptyLabel) {
@@ -204,20 +231,10 @@
     );
   }
 
-  function thinkingEffortLabel(option) {
-    // The empty option is the inherit state: describe what it inherits. A global
-    // default value → "Inherited: <value> (global default)"; nothing set anywhere
-    // → the provider default falls through.
-    if (option === '') {
-      if (inheritSource('thinking_effort') === 'global_default') {
-        return t('inherit.option', {
-          value: inheritDisplayValue('thinking_effort'),
-        });
-      }
-      return t('inherit.optionProviderDefault');
-    }
-
-    return t(`agents.form.thinkingEffortOption.${option}`);
+  function effortLabel(option) {
+    return THINKING_EFFORT_OPTIONS.includes(option)
+      ? t(`agents.form.thinkingEffortOption.${option}`)
+      : option;
   }
 
   // The empty-option label for the model / fallback-model select. Uses that
@@ -225,9 +242,7 @@
   // unconfigured model shows "Inherit (not configured)".
   function inheritModelLabel(fieldName) {
     if (inheritSource(fieldName) === 'global_default') {
-      return t('inherit.option', {
-        value: inheritDisplayValue(fieldName),
-      });
+      return defaultOptionLabel(inheritDisplayValue(fieldName));
     }
     return t('inherit.optionNotConfigured');
   }
@@ -273,7 +288,7 @@
     <div class="s-row-control">
       <Dropdown
         id={`${idPrefix}-thinking-effort`}
-        value={formValues.thinking_effort}
+        value={thinkingEffortValue}
         options={thinkingEffortOptions}
         disabled={effortDropdownDisabled}
         ariaLabel={t('agents.form.thinkingEffort')}

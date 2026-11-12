@@ -421,8 +421,16 @@ describe('WakewordVoiceSettings', () => {
     it('sends a phrase to its own Agent and Session', async () => {
       await mountPanel();
 
+      // The default Agent and Session behavior show as their own options.
+      const mainDefault = t('common.defaultOption', { label: 'Main' });
+      const activeDefault = t('common.defaultOption', {
+        label: t('settings.voice.sessionBehaviorActive'),
+      });
       expect(buttonByLabel('Agent for Okay Nabu').textContent).toContain(
-        t('settings.voice.agentDefault'),
+        mainDefault,
+      );
+      expect(buttonByLabel('Session for Okay Nabu').textContent).toContain(
+        activeDefault,
       );
       await choose('Agent for Okay Nabu', 'Writer');
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
@@ -443,8 +451,8 @@ describe('WakewordVoiceSettings', () => {
         },
       });
 
-      await choose('Agent for Okay Nabu', t('settings.voice.agentDefault'));
-      await choose('Session for Okay Nabu', t('settings.voice.sessionDefault'));
+      await choose('Agent for Okay Nabu', mainDefault);
+      await choose('Session for Okay Nabu', activeDefault);
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [NABU]: null },
       });

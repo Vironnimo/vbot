@@ -757,12 +757,13 @@ describe('ProjectsView Team', () => {
 
   // The member follows the shared default until it chooses; choosing keeps an
   // own Always loaded list.
+  // Off is the Team default here, so choosing it drops the member's choice.
   it.each([
     [null, 'on', { on_demand: true }],
     [
       { on_demand: true, always_loaded: ['read'] },
-      'off',
-      { on_demand: false, always_loaded: ['read'] },
+      'default',
+      { always_loaded: ['read'] },
     ],
   ])(
     'sets the On-demand Tools override %j from the member choice %s to %j',
@@ -787,24 +788,26 @@ describe('ProjectsView Team', () => {
       await selectDemo();
       await expandMember('builder');
 
+      const offDefault = t('common.defaultOption', {
+        label: t('toolAccess.onDemand.off'),
+      });
       const loadingSwitch = () =>
         memberDetail('builder')?.querySelector(
           `button[aria-label="${t('toolAccess.onDemand.label')}"]`,
         );
       await waitForCondition(loadingSwitch);
       expect(loadingSwitch().textContent.trim()).toBe(
-        stored
-          ? t('toolAccess.onDemand.on')
-          : t('toolAccess.onDemand.followDefault', {
-              state: t('toolAccess.onDemand.stateOff'),
-            }),
+        stored ? t('toolAccess.onDemand.on') : offDefault,
       );
       loadingSwitch().click();
       flushSync();
       [...document.querySelectorAll('.dropdown-primitive__option')]
         .find(
           (option) =>
-            option.textContent.trim() === t(`toolAccess.onDemand.${choice}`),
+            option.textContent.trim() ===
+            (choice === 'default'
+              ? offDefault
+              : t(`toolAccess.onDemand.${choice}`)),
         )
         .click();
       flushSync();

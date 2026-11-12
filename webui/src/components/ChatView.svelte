@@ -157,6 +157,14 @@
 
   const chatState = $state(createChatState());
   let importTarget = $state('');
+  // The Identity Agent's default place for an import: a Project id, '' for its
+  // Workspace, or null while the Agent is unknown.
+  let importDefaultProjectId = $derived.by(() => {
+    const agent = importTarget
+      ? target.agentById(parseAgentAddress(importTarget).agentId)
+      : null;
+    return agent ? agent.root_project_id || '' : null;
+  });
   const target = createChatViewTarget({
     get selectedProjectId() {
       return selectedProjectId;
@@ -782,6 +790,7 @@
     <ExternalHistoryDialog
       agentAddress={importTarget}
       {projects}
+      defaultProjectId={importDefaultProjectId}
       onClose={() => (importTarget = '')}
       onImported={(result) => {
         importTarget = '';

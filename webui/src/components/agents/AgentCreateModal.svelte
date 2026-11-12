@@ -19,7 +19,13 @@
     effortForReasoning,
     normalizeAgentForm,
     reasoningForModelValue,
+    THINKING_EFFORT_OPTIONS,
   } from '$lib/agentForm.js';
+  import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
@@ -88,38 +94,40 @@
   let effortDropdownDisabled = $derived(
     selectedModelReasoning?.supported === false,
   );
+  // The global default effort is the level marked "(default)"; with none set
+  // the Provider decides.
+  let defaultThinkingEffort = $derived(defaultValueText('thinking_effort'));
   let thinkingEffortOptions = $derived(
-    effortOptionsForReasoning(selectedModelReasoning).map((option) => ({
-      value: option,
-      label:
-        option === ''
-          ? thinkingEffortInheritLabel()
-          : t(`agents.form.thinkingEffortOption.${option}`),
-    })),
+    markDefaultOption(
+      effortOptionsForReasoning(selectedModelReasoning)
+        .filter(Boolean)
+        .map((option) => ({ value: option, label: effortLabel(option) })),
+      {
+        defaultValue: defaultThinkingEffort,
+        fallbackLabel: defaultThinkingEffort
+          ? defaultOptionLabel(effortLabel(defaultThinkingEffort))
+          : t('inherit.optionProviderDefault'),
+      },
+    ),
+  );
+  let thinkingEffortValue = $derived(
+    defaultChoiceValue(formValues.thinking_effort, {
+      defaultValue: defaultThinkingEffort,
+    }),
   );
 
   // The inherit-option label for a run field, derived from the global default
   // (the modal's stand-in for "effective" — no agent exists yet). A present
-  // default → "Inherited: <value> (global default)"; absent → "Inherit (not
-  // configured)".
+  // default → "<value> (default)"; absent → "Inherit (not configured)".
   function inheritLabelForDefault(fieldName) {
     const value = defaultValueText(fieldName);
-    if (value) {
-      return t('inherit.option', {
-        value,
-      });
-    }
-    return t('inherit.optionNotConfigured');
+    return value ? defaultOptionLabel(value) : t('inherit.optionNotConfigured');
   }
 
-  function thinkingEffortInheritLabel() {
-    const value = defaultValueText('thinking_effort');
-    if (value) {
-      return t('inherit.option', {
-        value,
-      });
-    }
-    return t('inherit.optionProviderDefault');
+  function effortLabel(option) {
+    return THINKING_EFFORT_OPTIONS.includes(option)
+      ? t(`agents.form.thinkingEffortOption.${option}`)
+      : option;
   }
 
   function defaultValueText(fieldName) {
@@ -368,7 +376,7 @@
           {/snippet}
           <Dropdown
             id="agent-create-thinking-effort"
-            value={formValues.thinking_effort}
+            value={thinkingEffortValue}
             options={thinkingEffortOptions}
             disabled={isSaving || effortDropdownDisabled}
             ariaLabel={t('agents.form.thinkingEffort')}

@@ -21,9 +21,6 @@ export default Object.freeze({
   'permissions.preset.work_dir': 'Work in the working directory',
   'permissions.preset.work_dir_read_only': 'Read-only in the working directory',
   'permissions.preset.custom': 'Custom',
-  'permissions.preset.useDefault': 'Use the default ({preset})',
-  'permissions.preset.useInherited': 'Use inherited ({preset})',
-  'permissions.preset.customRules': 'custom rules',
   'permissions.preset.ignoresDefault':
     'This Agent ignores the default restrictions.',
   'permissions.preset.ignoresInherited':
@@ -41,8 +38,6 @@ export default Object.freeze({
   'permissions.base.commands.listed': 'Only allowed commands',
   'permissions.base.web.any': 'Any destination',
   'permissions.base.web.listed': 'Only allowed destinations',
-  'permissions.base.inherited': 'Inherited: {value}',
-  'permissions.base.default': 'Default: {value}',
   'permissions.base.writeNarrowed':
     'Changing files now stays in the work area: an Agent can change only files it can read.',
   'permissions.base.writeStaysInWorkArea':

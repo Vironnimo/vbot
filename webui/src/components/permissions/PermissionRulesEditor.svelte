@@ -9,6 +9,11 @@
   import { validatePermissionRules } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
+    defaultChoiceValue,
+    defaultOptionLabel,
+    markDefaultOption,
+  } from '$lib/defaultChoice.js';
+  import {
     PERMISSION_LEVEL_AGENT,
     PERMISSION_LEVEL_DEFAULT,
     PERMISSION_LEVEL_OVERRIDE,
@@ -128,6 +133,18 @@
       presets,
     }),
   );
+  // Own rules equal to the inherited preset show as its "(default)" option;
+  // custom rules never match another level's custom rules.
+  let presetChoice = $derived.by(() => {
+    if (level === PERMISSION_LEVEL_DEFAULT) return presetValue;
+    const inherited = inheritedPresetName(parent);
+    return inherited === PERMISSION_PRESET_CUSTOM
+      ? presetValue
+      : defaultChoiceValue(presetValue, {
+          defaultValue: inherited,
+          unsetValue: PERMISSION_PRESET_INHERIT,
+        });
+  });
   let presetOptions = $derived(
     buildPresetOptions(presets, parent, presetValue),
   );
@@ -179,35 +196,19 @@
     return (PRESET_LABELS[name] ?? PRESET_LABELS.custom)();
   }
 
-  // "Use the default (Work in the working directory)": what no own rules
-  // means at this level.
-  function inheritOptionLabel(parentRules) {
-    const name =
-      parentRules === null
-        ? PERMISSION_PRESET_FULL_ACCESS
-        : (result?.inherited_preset ?? PERMISSION_PRESET_CUSTOM);
-    const preset =
-      name === PERMISSION_PRESET_CUSTOM
-        ? t('permissions.preset.customRules')
-        : presetLabel(name);
-    return level === PERMISSION_LEVEL_OVERRIDE
-      ? t('permissions.preset.useInherited', { preset })
-      : t('permissions.preset.useDefault', { preset });
+  // The preset that applies without own rules at this level; it is the option
+  // marked "(default)". Inherited custom rules match no preset.
+  function inheritedPresetName(parentRules) {
+    return parentRules === null
+      ? PERMISSION_PRESET_FULL_ACCESS
+      : (result?.inherited_preset ?? PERMISSION_PRESET_CUSTOM);
   }
 
   function buildPresetOptions(definitions, parentRules, selected) {
-    const options =
-      level === PERMISSION_LEVEL_DEFAULT
-        ? []
-        : [
-            {
-              value: PERMISSION_PRESET_INHERIT,
-              label: inheritOptionLabel(parentRules),
-            },
-          ];
-    for (const name of Object.keys(definitions)) {
-      options.push({ value: name, label: presetLabel(name) });
-    }
+    const options = Object.keys(definitions).map((name) => ({
+      value: name,
+      label: presetLabel(name),
+    }));
     if (selected === PERMISSION_PRESET_CUSTOM) {
       options.push({
         value: PERMISSION_PRESET_CUSTOM,
@@ -215,7 +216,13 @@
         disabled: true,
       });
     }
-    return options;
+    if (level === PERMISSION_LEVEL_DEFAULT) return options;
+    const inherited = inheritedPresetName(parentRules);
+    return markDefaultOption(options, {
+      defaultValue: inherited,
+      unsetValue: PERMISSION_PRESET_INHERIT,
+      fallbackLabel: defaultOptionLabel(presetLabel(inherited)),
+    });
   }
 
   function choosePreset(name) {
@@ -241,15 +248,8 @@
     const inherit = base.inherit ?? {};
     const value = baseLabel(part, inherit.value);
     const excluded = base.excluded ?? [];
-    return [
-      {
-        value: INHERIT,
-        label:
-          inherit.source === 'default'
-            ? t('permissions.base.default', { value })
-            : t('permissions.base.inherited', { value }),
-      },
-      ...(base.choices ?? []).map((choice) => {
+    return markDefaultOption(
+      (base.choices ?? []).map((choice) => {
         const narrowed = excluded.includes(choice);
         return {
           value: choice,
@@ -258,7 +258,12 @@
           tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
         };
       }),
-    ];
+      {
+        defaultValue: inherit.value ?? null,
+        unsetValue: INHERIT,
+        fallbackLabel: defaultOptionLabel(value),
+      },
+    );
   }
 
   // An own write base the read that applies narrows (`write: anywhere` here
@@ -361,7 +366,7 @@
   <div class="permission-rules permission-rules--compact" data-permission-rules>
     <Dropdown
       id={`${idPrefix}-preset`}
-      value={presetValue}
+      value={presetChoice}
       options={presetOptions}
       {disabled}
       ariaLabel={t('permissions.title')}
@@ -392,7 +397,7 @@
         <div class="s-row-control">
           <Dropdown
             id={`${idPrefix}-preset`}
-            value={presetValue}
+            value={presetChoice}
             options={presetOptions}
             {disabled}
             ariaLabel={t('permissions.preset')}
@@ -428,7 +433,10 @@
           <div class="s-row-control">
             <Dropdown
               id={`${idPrefix}-${part}`}
-              value={own?.[part] ?? INHERIT}
+              value={defaultChoiceValue(own?.[part], {
+                defaultValue: base.inherit?.value ?? null,
+                unsetValue: INHERIT,
+              })}
               options={baseOptions(part, base)}
               {disabled}
               invalid={problems.length > 0}
