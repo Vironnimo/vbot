@@ -13,6 +13,7 @@ from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.prompts import SkillPromptRegistry
 from core.runtime._configuration import _resolve_resources_path
 from core.runtime._recall import text_embedding_binding
+from core.runtime._setup import observe_setup
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.settings import settings_values_equal
 from core.settings.normalizers import normalize_debug_settings
@@ -145,6 +146,8 @@ async def apply_settings_change(
         _LOGGER.info("Debug Mode %s", "enabled" if debug_enabled else "disabled")
 
     extension_layer_changed = rebuild_extensions or bool(newly_disabled)
+    if _agent_defaults(previous) != _agent_defaults(current):
+        await runtime.chat_sessions.run_async(observe_setup, runtime, actor="settings")
     return SettingsChangeEffects(
         commands_changed=extension_layer_changed,
         skills_changed=extension_layer_changed or skills_changed,

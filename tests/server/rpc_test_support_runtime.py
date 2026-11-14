@@ -540,7 +540,9 @@ def provider_runtime_for(runtime: Any) -> ProviderRuntime:
 
 
 class StubRuntime:
-    def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
+    def __init__(
+        self, tmp_path: Path, adapter: StubAdapter, *, initial_agent: StubAgent | None = None
+    ) -> None:
         self._started = True
         self._startup_id = "stub-startup"
         self._provider_runtime: ProviderRuntime | None = None
@@ -549,7 +551,9 @@ class StubRuntime:
         self.storage = StorageManager(tmp_path)
         self.build = BuildIdentity("0.4.4", "a" * 40, branch="main")
         self.agents = StubAgents(
-            StubAgent(id="coder", allowed_tools=["*"]),
+            initial_agent
+            if initial_agent is not None
+            else StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
         self.memory = MemoryService(history_root=self.storage.layout.agents)
@@ -957,8 +961,12 @@ def make_state(
     adapter: StubAdapter,
     *,
     compaction_service: Any | None = None,
+    initial_agent: StubAgent | None = None,
 ) -> SimpleNamespace:
-    runtime: Any = StubRuntime(tmp_path, adapter)
+    from core.runtime._setup import observe_setup
+
+    runtime: Any = StubRuntime(tmp_path, adapter, initial_agent=initial_agent)
+    observe_setup(runtime, actor="startup")
     chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     chat_loop = build_chat_loop(runtime, compaction_service=compaction_service)

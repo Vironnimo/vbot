@@ -247,6 +247,10 @@ def uninstall(
                         f"{result.message}"
                     )
             removed_data = False
+            if mode is not RemovalMode.DATA:
+                from cli.application.services import remove_for_uninstall
+
+                remove_for_uninstall(install)
             if mode in {RemovalMode.DATA, RemovalMode.ALL}:
                 assert data is not None  # Validated before any changes above.
                 try:
@@ -369,6 +373,9 @@ def begin_removal(install: Installation) -> dict[str, Any]:
                     "Close remaining vBot Desktop windows and commands before removal: "
                     f"{executable} (PID {process.pid})"
                 )
+        from cli.application.services import remove_for_uninstall
+
+        remove_for_uninstall(install)
         write_json(
             contained(install.root, "removal-pending.json"),
             {"schema_version": 1, "pid": parent.pid, "process_created": process_started(parent)},

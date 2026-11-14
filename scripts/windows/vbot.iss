@@ -54,6 +54,11 @@ Name: "{group}\vBot"; Filename: "{app}\vBot.exe"
 Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "desktop"; AppUserModelID: "vBot.Desktop"
 #endif
 
+[Run]
+#if InstallShape != "desktop-client"
+Filename: "{app}\vBot.exe"; Parameters: "setup --browser --if-needed"; Description: "Open the guided setup"; Flags: postinstall skipifsilent runhidden
+#endif
+
 [UninstallDelete]
 ; Installation accepts only an empty folder and keeps server data outside it,
 ; so everything the application wrote there since belongs to it.

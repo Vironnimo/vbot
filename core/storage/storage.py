@@ -75,6 +75,7 @@ from core.settings.paths import (
     apply_settings_patch,
 )
 from core.settings.settings import SETTINGS_UPDATE_SECTIONS
+from core.settings.setup_state import SetupStateStore
 from core.storage.errors import SettingsConflictError, StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
@@ -127,6 +128,7 @@ class StorageManager:
         # The last loaded Settings as JSON, served while the file cannot be read.
         self._settings_last_loaded: str | None = None
         self._settings_revision = 0
+        self.setup = SetupStateStore(self.data_dir)
         self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,

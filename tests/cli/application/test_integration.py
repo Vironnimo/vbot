@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli.application import integration
+from cli.application import integration, services
 from cli.application.autostart import UNIT_NAME, CommandRun, autostart, owned_unit, user_unit_dir
 from cli.application.integration import RemovalMode, request_host_exit, uninstall
 from cli.application.state import ApplicationError, Installation
@@ -115,13 +115,16 @@ def test_host_exit_requests_only_the_exact_owned_host_process(
 
 @pytest.mark.parametrize("stopped", [True, False], ids=["stopped", "stop-fails"])
 def test_uninstall_launches_only_after_the_exact_server_stopped(
-    tmp_path: Path, stopped: bool
+    tmp_path: Path, stopped: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install = _install(tmp_path / "app")
     uninstaller = install.root / "unins000.exe"
     uninstaller.write_bytes(b"exe")
     uninstaller.with_suffix(".dat").write_bytes(b"data")
     events: list[str] = []
+    monkeypatch.setattr(
+        services, "remove_for_uninstall", lambda _: events.append("remove-services")
+    )
 
     def stop(candidate: Installation) -> SimpleNamespace:
         events.append(f"stop:{candidate.server_port}")
@@ -137,7 +140,11 @@ def test_uninstall_launches_only_after_the_exact_server_stopped(
             launcher=lambda path: events.append(f"launch:{path.name}"),
         )
 
-    assert events == ["exit-host", "stop:8420", *(["launch:unins000.exe"] if stopped else [])]
+    assert events == [
+        "exit-host",
+        "stop:8420",
+        *(["remove-services", "launch:unins000.exe"] if stopped else []),
+    ]
     if stopped:
         assert result["data_preserved"] is True
 

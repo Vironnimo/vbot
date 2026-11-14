@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -130,6 +131,34 @@ def _calls(environment: dict[str, str]) -> list[str]:
     return log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
 
 
+@pytest.mark.parametrize("mode", ["auto", "terminal"])
+def test_interactive_installer_only_automatically_opens_pending_setup(
+    tmp_path: Path, mode: str
+) -> None:
+    terminal = shutil.which("script")
+    if terminal is None:
+        pytest.skip("the terminal driver is unavailable")
+    environment = _environment(tmp_path)
+    _publish(tmp_path / "web", "latest/download", _package(tmp_path / "package.zip"))
+    result = subprocess.run(
+        [
+            terminal,
+            "--quiet",
+            "--return",
+            "--command",
+            shlex.join(["bash", str(INSTALLER), "--setup", mode]),
+            "/dev/null",
+        ],
+        env=environment,
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _calls(environment)[-1] == ("vbot setup --if-needed" if mode == "auto" else "vbot setup")
+
+
 @pytest.mark.parametrize(
     ("arguments", "base", "asset_base", "channel", "autostart", "digest"),
     [
@@ -162,6 +191,24 @@ def _calls(environment: dict[str, str]) -> list[str]:
             False,
             None,
             id="bare-version",
+        ),
+        pytest.param(
+            ("--setup", "browser", "--no-autostart"),
+            "latest/download",
+            "download/v1.2.3",
+            "release",
+            False,
+            None,
+            id="browser-setup-without-autostart",
+        ),
+        pytest.param(
+            ("--setup", "later"),
+            "latest/download",
+            "download/v1.2.3",
+            "release",
+            True,
+            None,
+            id="deferred-setup",
         ),
     ],
 )
@@ -203,6 +250,8 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
             f"loginctl enable-linger {_user()}",
             "vbot server start",
         ]
+    elif "browser" in arguments:
+        assert vbot == ["vbot server start", "vbot setup --browser"]
     else:
         assert vbot == []
 

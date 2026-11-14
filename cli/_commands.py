@@ -184,6 +184,16 @@ def run(
 
         return dispatch_tui_command(args, instance)
 
+    if args.area == "setup":
+        from cli._dispatch_setup import dispatch_setup_command
+
+        return dispatch_setup_command(args, instance)
+
+    if args.area == "service":
+        from cli._dispatch_service import dispatch_service_command
+
+        return dispatch_service_command(args, instance)
+
     if args.area == "agent":
         from cli import agent_management as agents
         from cli._dispatch_agents import dispatch_agent_command

@@ -77,6 +77,51 @@ def test_public_installers_parse_and_install_sh_help_is_side_effect_free() -> No
         assert result.returncode == 0, result.stderr
 
 
+def test_windows_installer_setup_selection_respects_terminal_and_explicit_modes(
+    tmp_path: Path,
+) -> None:
+    results = _run_powershell(
+        tmp_path,
+        r"""param($Source)
+$ErrorActionPreference = "Stop"
+$Functions = @("Get-GuidedSetupMode")
+"""
+        + _LOAD_INSTALLER_FUNCTIONS
+        + r"""
+$results = @()
+foreach ($mode in @("auto", "terminal", "browser", "later")) {
+    foreach ($console in @($true, $false)) {
+        foreach ($starts in @($true, $false)) {
+            try {
+                $selected = Get-GuidedSetupMode -Requested $mode `
+                    -ConsoleAvailable $console -ServerStarts $starts
+                $results += @{mode=$mode; console=$console; starts=$starts
+                    selected=$selected; refused=$false}
+            } catch {
+                $results += @{mode=$mode; console=$console; starts=$starts
+                    selected=$null; refused=$true}
+            }
+        }
+    }
+}
+ConvertTo-Json -InputObject $results -Compress
+""",
+        str(INSTALL_PS1),
+    )
+    for result in results:
+        mode = result["mode"]
+        refused = mode == "terminal" and not result["console"]
+        assert result["refused"] is refused
+        if refused:
+            continue
+        expected = (
+            ("terminal" if result["console"] and result["starts"] else "later")
+            if mode == "auto"
+            else mode
+        )
+        assert result["selected"] == expected
+
+
 _NATIVE_MODES = (
     "release",
     "main",

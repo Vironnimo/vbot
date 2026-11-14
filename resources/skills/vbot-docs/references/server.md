@@ -1,4 +1,4 @@
-# Server, Access, Paths, Update, Uninstall, Autostart, Desktop, Doctor
+# Server, Access, Setup, Paths, Update, Uninstall, Autostart, Desktop, Doctor
 
 `home`, `server`, `desktop`, `application`, `update`, `uninstall`, `autostart` and `doctor` run on the computer where you call them; run lifecycle commands on the server's computer. Every other area sends its commands to a running server; `data-store` also has local operations (`references/data-store.md`).
 
@@ -44,6 +44,34 @@ vbot server status
 - `start` refuses to launch over a non-vBot process on the target port. Report the conflict instead of stopping that process. Only a development checkout can instead target a different port/data-dir; an installation's server keeps its recorded target.
 - `status` can exit 0 when the server is stopped or a non-vBot process occupies the port. Read the reported state; exit 0 alone does not establish readiness.
 - On a Linux installation with Autostart, these commands control the systemd user unit `vbot.service`. Use them instead of `systemctl` or killing processes.
+
+## Shared first-run setup
+
+```bash
+vbot setup status
+vbot setup finish
+```
+
+`status` reports the server's saved setup state and step, shared by installation, WebUI and TUI. Use `finish` when the user wants to end the guide: it keeps existing settings and defaults for untouched options, and records completion when the initial Agent has a configured Provider and Model, otherwise a skip. A completed or skipped guide stays closed automatically, even if keys expire or Providers and Models are later removed; this status does not prove that an Agent can currently run.
+
+To reopen the guide, give the user `vbot setup` for their terminal or `vbot setup --browser` for their browser. Add `--if-needed` to either command to open only pending setup; completed or skipped setup exits successfully without opening a guide or requiring a terminal. These commands are interactive user entry points; use the area's ordinary management commands for changes from your Run. Reopening does not enable automatic setup again, and the user can end the guide at every step.
+
+## Managed SearXNG
+
+```bash
+vbot service install searxng
+vbot service status searxng
+vbot service stop searxng
+vbot service start searxng
+vbot service update searxng
+vbot service remove searxng
+```
+
+These commands manage SearXNG on the selected installed vBot server; a remote CLI does not install it on its own computer. Install and update reuse local Docker or Podman; pass `--install-prerequisites` to include missing host prerequisites, whose plan `status` displays. On Linux, terminal authorization is available only in a human terminal targeting its own installed server. `--json` never prompts; remote targets and Agent Runs cannot request terminal authorization either. When that authorization is needed, `action_required` includes the command to run on the server. If system authorization, a restart or another host action is needed, give the user the reported instructions and resume the requested action after it is resolved.
+
+An accepted operation runs in the background; read its result with `status` before reporting completion. Its `running` state describes an operation in progress, not whether the SearXNG container is running. Installation selects SearXNG for vBot web search after a successful test search; stopping it leaves that selection in place. Update keeps the old container until the replacement passes its check, restoring it when that check fails.
+
+Remove deletes only vBot's managed containers, keeps the configuration and shared runtime, and restores the previous search selection only while the managed URL is still selected. For an existing external SearXNG service, use `vbot config patch --set web_search.provider searxng --set web_search.searxng.base_url <url>`, replacing `<url>` with the user's service address.
 
 ## Paths
 

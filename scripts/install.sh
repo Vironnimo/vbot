@@ -24,6 +24,7 @@ ACCESS_ARGS=()
 CHANNEL="release"
 VERSION=""
 NO_AUTOSTART=0
+SETUP="auto"
 BIN_DIR="${HOME}/.local/bin"
 
 usage() {
@@ -46,6 +47,8 @@ Options:
   --tls-cert <path>        authenticated: certificate chain file for direct HTTPS
   --tls-key <path>         authenticated: private key file for direct HTTPS
   --no-autostart      Do not register the systemd user unit or start the server
+  --setup <mode>      auto (default), terminal, browser, or later. Auto continues
+                      in this terminal when interactive and the server is started
   -h, --help          Show this help
 USAGE
 }
@@ -84,10 +87,32 @@ while [ "$#" -gt 0 ]; do
         --access | --allow-network | --allow-host | --public-url | --trusted-proxy | --tls-cert | --tls-key)
             require_value "$@"; ACCESS_ARGS+=("$1" "$2"); shift 2 ;;
         --no-autostart) NO_AUTOSTART=1; shift ;;
+        --setup) require_value "$@"; SETUP="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
     esac
 done
+
+case "$SETUP" in
+    auto | terminal | browser | later) ;;
+    *) fail "--setup needs auto, terminal, browser, or later" ;;
+esac
+TERMINAL_AVAILABLE=0
+SETUP_ARGS=(setup)
+if [ -t 1 ] && { [ -t 0 ] || ( : </dev/tty ) 2>/dev/null; }; then
+    TERMINAL_AVAILABLE=1
+fi
+if [ "$SETUP" = "auto" ]; then
+    SETUP_ARGS+=(--if-needed)
+    if [ "$TERMINAL_AVAILABLE" -eq 1 ] && [ "$NO_AUTOSTART" -eq 0 ]; then
+        SETUP="terminal"
+    else
+        SETUP="later"
+    fi
+fi
+if [ "$SETUP" = "terminal" ] && [ "$TERMINAL_AVAILABLE" -eq 0 ]; then
+    fail "--setup terminal needs an interactive terminal; use --setup browser or --setup later"
+fi
 
 [ "$CHANNEL" = "main" ] && [ -n "$VERSION" ] && fail "Choose either --main or --version"
 if [ -n "$VERSION" ]; then
@@ -230,3 +255,24 @@ case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "Open a new login shell so that $BIN_DIR is on your PATH, or run $VBOT directly." ;;
 esac
+
+if [ "$SETUP" != "later" ]; then
+    SETUP_READY=1
+    if [ "$NO_AUTOSTART" -eq 1 ]; then
+        # An explicit setup starts the server once, without registering Autostart.
+        "$VBOT" server start || SETUP_READY=0
+    fi
+    if [ "$SETUP_READY" -eq 1 ]; then
+        if [ "$SETUP" = "browser" ]; then
+            "$VBOT" "${SETUP_ARGS[@]}" --browser || SETUP_READY=0
+        elif [ -t 0 ]; then
+            "$VBOT" "${SETUP_ARGS[@]}" || SETUP_READY=0
+        else
+            # With curl | bash stdin contains this script, not keyboard input.
+            "$VBOT" "${SETUP_ARGS[@]}" </dev/tty || SETUP_READY=0
+        fi
+    fi
+    if [ "$SETUP_READY" -eq 0 ]; then
+        status_line WARN "vBot is installed. Continue its setup with 'vbot setup' or in the WebUI."
+    fi
+fi

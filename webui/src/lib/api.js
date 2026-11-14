@@ -1,6 +1,13 @@
 // Public API boundary. Internal modules own RPC transport, event streams,
 // binary media and domain request adapters; callers import this file.
 export {
+  getSetup,
+  updateSetup,
+  finishSetup,
+  getManagedService,
+  applyManagedService,
+} from './api/setup.js';
+export {
   listExternalSources,
   listExternalSessions,
   readExternalSession,

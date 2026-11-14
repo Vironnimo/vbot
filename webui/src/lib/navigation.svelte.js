@@ -22,6 +22,7 @@
 //   view that is already shown changes nothing.
 
 import { getContext, setContext } from 'svelte';
+import { SvelteURLSearchParams } from 'svelte/reactivity';
 
 const STATE_MARKER = 'vbot.location';
 const STACK_STORAGE_KEY = 'vbot.navigation.stack';
@@ -628,6 +629,26 @@ export function createNavigator({
     return link.target;
   }
 
+  // An explicit setup link reopens the shared guide without resetting its
+  // completion. Consume it once so reloading does not reopen it again.
+  function takeSetupLink() {
+    const location = browserWindow?.location;
+    const query = new SvelteURLSearchParams(location?.search ?? '');
+    if (query.get('setup') !== '1') return false;
+    query.delete('setup');
+    const search = query.toString();
+    try {
+      browserHistory?.replaceState(
+        browserHistory.state,
+        '',
+        `${location.pathname ?? ''}${search ? `?${search}` : ''}${location.hash ?? ''}`,
+      );
+    } catch {
+      // History API unavailable (non-browser environment).
+    }
+    return true;
+  }
+
   // Apply `remap` once to every Location remembered now, for example after
   // an Agent rename; the displayed one is corrected in place. Locations
   // recorded later are taken as they are, so a reused id names its new owner.
@@ -731,6 +752,7 @@ export function createNavigator({
     resolvePendingStart,
     start,
     takeSessionLink,
+    takeSetupLink,
     view,
   };
 }

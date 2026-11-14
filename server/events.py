@@ -94,6 +94,7 @@ RESOURCE_KIND_SKILLS = "skills"
 RESOURCE_KIND_DATA_STORE = "data_store"
 RESOURCE_KIND_EXTENSIONS = "extensions"
 RESOURCE_KIND_ARCHIVE = "archive"
+RESOURCE_KIND_SETUP = "setup"
 #: Paired Devices or pairing decisions changed (``access`` domain).
 RESOURCE_KIND_DEVICES = "devices"
 #: Agent Secrets, Secret Sources or pending Secret requests changed (``secrets`` domain).
@@ -126,6 +127,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
         RESOURCE_KIND_DATA_STORE,
         RESOURCE_KIND_EXTENSIONS,
         RESOURCE_KIND_ARCHIVE,
+        RESOURCE_KIND_SETUP,
         RESOURCE_KIND_DEVICES,
         RESOURCE_KIND_AGENT_SECRETS,
         RESOURCE_KIND_APPLICATION,

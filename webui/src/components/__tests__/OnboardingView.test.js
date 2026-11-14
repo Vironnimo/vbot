@@ -145,9 +145,41 @@ function createServer({ modelsAvailable = true } = {}) {
     connectedConnections: new Set(),
     modelsAvailable,
     lastAgentUpdate: null,
+    setup: {
+      status: 'pending',
+      step: 'provider',
+      agent_id: 'main',
+      auto_show: true,
+    },
   };
   const rpc = (method, params) => {
     switch (method) {
+      case 'setup.get':
+        return Promise.resolve(state.setup);
+      case 'setup.update':
+        state.setup = { ...state.setup, step: params.step };
+        return Promise.resolve(state.setup);
+      case 'setup.finish':
+        state.setup = {
+          ...state.setup,
+          status: state.lastAgentUpdate ? 'completed' : 'skipped',
+          auto_show: false,
+        };
+        return Promise.resolve(state.setup);
+      case 'managed_service.get':
+        return Promise.resolve({
+          id: 'searxng',
+          name: 'SearXNG',
+          available: false,
+          state: 'idle',
+        });
+      case 'skill.inventory':
+        return Promise.resolve({ skills: [] });
+      case 'extensions.list':
+        return Promise.resolve({
+          extensions: [],
+          settings: { disabled: [], config: {} },
+        });
       case 'settings.get': {
         const settings = settingsPayload(state.connected);
         for (const provider of settings.providers.items) {
@@ -258,7 +290,9 @@ async function continueToModels() {
     ),
   );
   document.querySelector('.onboarding-continue').click();
-  flushSync();
+  await waitFor(() =>
+    expect(document.querySelector('.onboarding-model-body')).toBeTruthy(),
+  );
 }
 
 describe('OnboardingView', () => {
@@ -615,46 +649,66 @@ describe('OnboardingView', () => {
     );
     expect(byText('button', 'Start chatting').disabled).toBe(true);
     byText('button', 'Back to Providers').click();
-    flushSync();
-    expect(
-      document.querySelector('.onboarding-provider-row--connected'),
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        document.querySelector('.onboarding-provider-row--connected'),
+      ).toBeTruthy(),
+    );
     expect(document.activeElement).toBe(
       document.querySelector('.onboarding-step-title'),
     );
   });
 
-  it('keeps the selected Model after a failed save and allows retry', async () => {
-    const onComplete = vi.fn();
-    server.state.connected = true;
-    let failSave = true;
-    rpcMock.mockImplementation((method, params) =>
-      method === 'agent.update' && failSave
-        ? Promise.reject(new Error('offline'))
-        : server.rpc(method, params),
-    );
-    mountedComponent = mount(OnboardingView, {
-      target: document.body,
-      props: { onComplete },
-    });
-    await continueToModels();
-    await openModelPicker();
-    byText('.s-dropdown-opt', ':free').click();
-    flushSync();
-    byText('button', 'Start chatting').click();
-    await waitFor(() =>
-      expect(document.querySelector('[role="alert"]')).toBeTruthy(),
-    );
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(document.querySelector('.onboarding-selection')).toBeTruthy();
-    failSave = false;
-    byText('button', 'Start chatting').click();
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(server.state.lastAgentUpdate).toEqual({
-      id: 'main',
-      model: 'openrouter/meta/llama-3-8b:free::api-key',
-    });
-  });
+  it.each(['retry', 'saved-settings'])(
+    'keeps the selected Model after a failed save and allows %s',
+    async (exit) => {
+      const onComplete = vi.fn();
+      const onDismiss = vi.fn();
+      server.state.connected = true;
+      let failSave = true;
+      rpcMock.mockImplementation((method, params) =>
+        method === 'agent.update' && failSave
+          ? Promise.reject(new Error('offline'))
+          : server.rpc(method, params),
+      );
+      mountedComponent = mount(OnboardingView, {
+        target: document.body,
+        props: { onComplete, onDismiss },
+      });
+      await continueToModels();
+      await openModelPicker();
+      byText('.s-dropdown-opt', ':free').click();
+      flushSync();
+      byText('button', 'Start chatting').click();
+      await waitFor(() =>
+        expect(document.querySelector('[role="alert"]')).toBeTruthy(),
+      );
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(document.querySelector('.onboarding-selection')).toBeTruthy();
+      if (exit === 'saved-settings') {
+        const writes = rpcMock.mock.calls.filter(
+          ([method]) => method === 'agent.update',
+        ).length;
+        byText('button', t('onboarding.model.finishSaved')).click();
+        await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+        expect(onComplete).not.toHaveBeenCalled();
+        expect(server.state.lastAgentUpdate).toBeNull();
+        expect(server.state.setup.status).toBe('skipped');
+        expect(
+          rpcMock.mock.calls.filter(([method]) => method === 'agent.update'),
+        ).toHaveLength(writes);
+        expect(rpcMock).toHaveBeenCalledWith('setup.finish');
+        return;
+      }
+      failSave = false;
+      byText('button', 'Start chatting').click();
+      await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+      expect(server.state.lastAgentUpdate).toEqual({
+        id: 'main',
+        model: 'openrouter/meta/llama-3-8b:free::api-key',
+      });
+    },
+  );
 
   it('keeps a selection across a catalog reload and invalidates it when its Connection is removed', async () => {
     server.state.connected = true;
@@ -752,6 +806,243 @@ describe('OnboardingView', () => {
     expect(document.querySelector('.onboarding-view')).toBeNull();
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'agent.update'),
+    ).toBe(false);
+  });
+  it.each(['provider', 'model', 'components', 'services'])(
+    'resumes %s and can finish without configuring the remaining steps',
+    async (step) => {
+      server.state.setup.step = step;
+      const onDismiss = vi.fn();
+      mountedComponent = mount(OnboardingView, {
+        target: document.body,
+        props: { onDismiss },
+      });
+      await waitFor(() =>
+        expect(
+          document.querySelector('[aria-current="step"]')?.textContent,
+        ).toContain(
+          step === 'provider'
+            ? t('onboarding.progress.service')
+            : step === 'model'
+              ? t('onboarding.progress.model')
+              : step === 'components'
+                ? t('onboarding.progress.components')
+                : t('onboarding.progress.services'),
+        ),
+      );
+      byText('button', t('onboarding.dismiss')).click();
+      await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+      expect(server.state.setup.status).toBe('skipped');
+      expect(server.state.lastAgentUpdate).toBeNull();
+      expect(
+        rpcMock.mock.calls.some(
+          ([method]) =>
+            method === 'settings.update' ||
+            method === 'skill.set_disabled' ||
+            method === 'managed_service.apply',
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('keeps the chosen Model when finishing from the header and can continue with optional components', async () => {
+    server.state.connected = true;
+    const onComplete = vi.fn();
+    mountedComponent = mount(OnboardingView, {
+      target: document.body,
+      props: { onComplete },
+    });
+    await continueToModels();
+    await openModelPicker();
+    byText('.s-dropdown-opt', ':free').click();
+    flushSync();
+    byText('button', t('onboarding.model.customize')).click();
+    await waitFor(() =>
+      expect(document.querySelector('.onboarding-components')).toBeTruthy(),
+    );
+    expect(server.state.lastAgentUpdate.model).toBe(
+      'openrouter/meta/llama-3-8b:free::api-key',
+    );
+    expect(server.state.setup.step).toBe('components');
+    expect(onComplete).not.toHaveBeenCalled();
+    const footer = document.querySelector('.onboarding-footer');
+    [...footer.querySelectorAll('button')]
+      .find((button) => button.textContent.includes(t('onboarding.finish')))
+      .click();
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(server.state.setup.status).toBe('completed');
+  });
+  it('changes only selected bundled packages and Extension enablement', async () => {
+    server.state.setup.step = 'components';
+    let disabledSkill = false;
+    let extensions = {
+      disabled: ['other'],
+      config: { other: { keep: 'sentinel' } },
+    };
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'skill.inventory')
+        return Promise.resolve({
+          skills: [
+            {
+              id: 'bundle-one',
+              name: 'Bundled one',
+              description: 'Bundle purpose',
+              source_kind: 'bundled',
+              disabled: disabledSkill,
+            },
+            {
+              id: 'global-one',
+              name: 'User skill',
+              source_kind: 'global',
+              disabled: false,
+            },
+          ],
+        });
+      if (method === 'skill.set_disabled') {
+        disabledSkill = params.disabled;
+        return Promise.resolve({});
+      }
+      if (method === 'extensions.list')
+        return Promise.resolve({
+          extensions: [
+            {
+              name: 'fixture-extension',
+              display_name: 'Fixture Extension',
+              disabled: extensions.disabled.includes('fixture-extension'),
+              status: 'loaded',
+            },
+          ],
+          settings: extensions,
+        });
+      if (method === 'settings.update') {
+        extensions = params.extensions;
+        return Promise.resolve({});
+      }
+      return server.rpc(method, params);
+    });
+    mountedComponent = mount(OnboardingView, { target: document.body });
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-setup-skill="bundle-one"]'),
+      ).toBeTruthy(),
+    );
+    expect(
+      document.querySelector('[data-setup-skill="global-one"]'),
+    ).toBeNull();
+    document
+      .querySelector('[data-setup-skill="bundle-one"] [role="switch"]')
+      .click();
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-setup-skill="bundle-one"] [role="switch"]')
+          .getAttribute('aria-checked'),
+      ).toBe('false'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('skill.set_disabled', {
+      id: 'bundle-one',
+      disabled: true,
+    });
+    document
+      .querySelector(
+        '[data-setup-extension="fixture-extension"] [role="switch"]',
+      )
+      .click();
+    await waitFor(() =>
+      expect(extensions.disabled).toEqual(['other', 'fixture-extension']),
+    );
+    expect(extensions.config).toEqual({ other: { keep: 'sentinel' } });
+    expect(rpcMock).toHaveBeenCalledWith(
+      'settings.update',
+      expect.objectContaining({
+        base: {
+          extensions: {
+            disabled: ['other'],
+            config: { other: { keep: 'sentinel' } },
+          },
+        },
+      }),
+    );
+  });
+
+  it('requires explicit prerequisite consent for managed installation and can finish while it runs', async () => {
+    server.state.setup.step = 'services';
+    const onDismiss = vi.fn();
+    let managed = {
+      id: 'searxng',
+      name: 'SearXNG',
+      available: true,
+      installed: false,
+      state: 'idle',
+      actions: [],
+      plan: {
+        id: 'plan-sentinel',
+        can_install: true,
+        requires_prerequisites: true,
+        steps: [{ id: 'runtime', label: 'Runtime prerequisite sentinel' }],
+      },
+    };
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'managed_service.get') return Promise.resolve(managed);
+      if (method === 'managed_service.apply') {
+        managed = {
+          ...managed,
+          state: 'running',
+          phase: 'installation-sentinel',
+        };
+        return Promise.resolve(managed);
+      }
+      return server.rpc(method, params);
+    });
+    mountedComponent = mount(OnboardingView, {
+      target: document.body,
+      props: { onDismiss },
+    });
+    await waitFor(() =>
+      expect(byText('button', t('onboarding.services.install'))).toBeTruthy(),
+    );
+    expect(byText('button', t('onboarding.services.install')).disabled).toBe(
+      true,
+    );
+    expect(document.body.textContent).toContain(
+      'Runtime prerequisite sentinel',
+    );
+    document.querySelector('.onboarding-prerequisites input').click();
+    flushSync();
+    byText('button', t('onboarding.services.install')).click();
+    await waitFor(() =>
+      expect(rpcMock).toHaveBeenCalledWith('managed_service.apply', {
+        id: 'searxng',
+        action: 'install',
+        plan_id: 'plan-sentinel',
+        allow_prerequisites: true,
+      }),
+    );
+    byText('button', t('onboarding.dismiss')).click();
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledOnce());
+  });
+
+  it('follows shared progress without resetting a completed setup', async () => {
+    const props = reactiveProps({
+      initialSetup: {
+        status: 'completed',
+        step: 'components',
+        agent_id: 'main',
+        auto_show: false,
+      },
+    });
+    mountedComponent = mount(OnboardingView, { target: document.body, props });
+    await waitFor(() =>
+      expect(document.querySelector('.onboarding-components')).toBeTruthy(),
+    );
+    props.initialSetup = { ...props.initialSetup, step: 'services' };
+    await waitFor(() =>
+      expect(document.querySelector('.onboarding-services')).toBeTruthy(),
+    );
+    expect(
+      rpcMock.mock.calls.some(
+        ([method]) => method === 'setup.update' || method === 'setup.finish',
+      ),
     ).toBe(false);
   });
 });

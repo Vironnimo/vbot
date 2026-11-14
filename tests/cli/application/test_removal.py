@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli.application import command, host, integration, operations
+from cli.application import command, host, integration, operations, services
 from cli.application.state import ApplicationError, Installation, Operation, exclusive
 from cli.parser import parse_args
 
@@ -69,6 +69,8 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
 ) -> None:
     install = _install(tmp_path / "app")
     locks: list[tuple[str, int, bool]] = []
+    removed_services: list[Installation] = []
+    monkeypatch.setattr(services, "remove_for_uninstall", removed_services.append)
 
     @contextmanager
     def tracked_lock(
@@ -113,6 +115,7 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
     )
 
     assert integration.begin_removal(install) == {"ok": True, "removal_pending": True}
+    assert removed_services == [install]
     assert locks == [("dispatch", 15, False), ("operation", 0, False)]
     assert json.loads((install.root / "removal-pending.json").read_text(encoding="utf-8")) == {
         "schema_version": 1,

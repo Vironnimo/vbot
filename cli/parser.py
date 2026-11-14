@@ -54,6 +54,8 @@ from cli._parser_operations import (
     _add_performance_parsers,
     _add_statistics_parsers,
 )
+from cli._parser_service import add_service_parser
+from cli._parser_setup import add_setup_parser
 from cli._progress import color_enabled, status_line
 from cli._recovery import format_command
 from core.utils.config import DEFAULT_PORT
@@ -188,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_archive_parsers(subparsers)
     _add_chat_parser(subparsers)
     _add_tui_parser(subparsers)
+    add_setup_parser(subparsers)
+    add_service_parser(subparsers)
     _add_data_store_parsers(subparsers)
     add_external_parsers(subparsers)
     _add_agent_secrets_parsers(subparsers)
@@ -283,6 +287,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             )
     if getattr(args, "area", None) == "chat":
         _check_chat_arguments(parser, args)
+    if args.area == "setup":
+        if args.browser and args.command != "open":
+            parser.error("--browser is only available with vbot setup or vbot setup open")
+        if args.if_needed and args.command != "open":
+            parser.error("--if-needed is only available with vbot setup or vbot setup open")
+        if args.json and args.command == "open":
+            parser.error("--json is only available with vbot setup status or vbot setup finish")
     if getattr(args, "area", None) == "archive" and args.command == "purge":
         _check_archive_purge_selection(parser, args)
     if args.area in {"update", "rollback"}:

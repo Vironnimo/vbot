@@ -1,15 +1,19 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
 
   import {
     getAgent,
     getSettings,
+    getSetup,
+    updateSetup,
+    finishSetup,
     listConnections,
     listModels,
     refreshModelDatabase as refreshModels,
     updateAgent,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
   import {
     AGENT_FORM_MODE_EDIT,
@@ -31,6 +35,8 @@
 
   import ProviderConnectModal from './settings/ProviderConnectModal.svelte';
   import OnboardingProviders from './OnboardingProviders.svelte';
+  import OnboardingComponents from './OnboardingComponents.svelte';
+  import OnboardingServices from './OnboardingServices.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -40,6 +46,8 @@
   const noop = () => {};
   let {
     targetAgentId = ONBOARDING_TARGET_AGENT_ID,
+    initialSetup = null,
+    onSetupChange = noop,
     providerAuthEvent = null,
     modelsRefreshToken = 0,
     onComplete = noop,
@@ -55,7 +63,15 @@
   let settings = $state(null);
   let loadingSettings = $state(true);
   let settingsError = $state('');
-  let step = $state('service');
+  let step = $state('provider');
+  let activeAgentId = $state('');
+  let setupError = $state('');
+  let transitioning = $state(false);
+  let observedSetup = null;
+  let pendingSharedSetup = $state(null);
+  let fieldFocused = $state(false);
+  const autosave = useAutosaveContext();
+  const stepIds = ['provider', 'model', 'components', 'services'];
   let stepHeading = $state();
   let modalScope = $state(null);
   let connectionRevision = $state(0);
@@ -134,11 +150,12 @@
       !modelsError &&
       !settingsError &&
       !loadingSettings &&
-      !assigning,
+      !assigning &&
+      !transitioning,
   );
 
   onMount(() => {
-    void loadSettings();
+    void initialize();
     return () => {
       disposed = true;
       settingsRequest += 1;
@@ -148,6 +165,46 @@
   });
 
   $effect(() => {
+    const shared = initialSetup;
+    if (!shared || shared === observedSetup) return;
+    observedSetup = shared;
+    untrack(() => {
+      pendingSharedSetup = shared;
+    });
+  });
+
+  $effect(() => {
+    if (
+      !pendingSharedSetup ||
+      transitioning ||
+      assigning ||
+      modalScope ||
+      fieldFocused
+    )
+      return;
+    const shared = pendingSharedSetup;
+    pendingSharedSetup = null;
+    untrack(() => {
+      if (stepIds.includes(shared.step) && shared.step !== step) {
+        step = shared.step;
+        if (step === 'model') void loadModels();
+      }
+      activeAgentId = shared.agent_id || targetAgentId;
+    });
+  });
+
+  function reflectFocus() {
+    queueMicrotask(() => {
+      if (!disposed)
+        fieldFocused = Boolean(
+          document.activeElement?.matches(
+            'input, textarea, select, [role="combobox"]',
+          ),
+        );
+    });
+  }
+
+  $effect(() => {
     if (lastModelsRefreshToken === null) {
       lastModelsRefreshToken = modelsRefreshToken;
     } else if (modelsRefreshToken !== lastModelsRefreshToken) {
@@ -155,6 +212,91 @@
       void reflectResourceChange();
     }
   });
+
+  async function initialize() {
+    const settingsRead = loadSettings();
+    try {
+      const state = initialSetup ?? (await getSetup());
+      if (disposed) return;
+      activeAgentId = state.agent_id || targetAgentId;
+      if (stepIds.includes(state.step)) step = state.step;
+    } catch (error) {
+      if (!disposed) setupError = error.message;
+    }
+    await settingsRead;
+    if (!disposed && step === 'model') void loadModels();
+  }
+
+  function stepLabel(id) {
+    if (id === 'provider') return t('onboarding.progress.service');
+    if (id === 'model') return t('onboarding.progress.model');
+    if (id === 'components') return t('onboarding.progress.components');
+    return t('onboarding.progress.services');
+  }
+
+  function stepTitle() {
+    if (step === 'provider') return t('onboarding.step.service.title');
+    if (step === 'model') return t('onboarding.step.model.title');
+    if (step === 'components') return t('onboarding.step.components.title');
+    return t('onboarding.step.services.title');
+  }
+
+  function stepDescription() {
+    if (step === 'provider') return t('onboarding.step.service.subtitle');
+    if (step === 'model') return t('onboarding.step.model.subtitle');
+    if (step === 'components') return t('onboarding.step.components.subtitle');
+    return t('onboarding.step.services.subtitle');
+  }
+
+  async function moveToStep(next) {
+    if (transitioning || assigning || disposed) return false;
+    return autosave.requestTransition(async () => {
+      transitioning = true;
+      setupError = '';
+      try {
+        if (step === 'model' && selectedOption && !(await saveModel()))
+          return false;
+        const result = await updateSetup(next);
+        if (disposed) return false;
+        onSetupChange(result);
+        step = next;
+        if (next === 'model') void loadModels();
+        void focusStep();
+        return true;
+      } catch (error) {
+        if (!disposed) setupError = error.message;
+        return false;
+      } finally {
+        if (!disposed) transitioning = false;
+      }
+    });
+  }
+
+  async function finish(callback = onDismiss, { saveSelection = true } = {}) {
+    if (transitioning || assigning || disposed) return;
+    return autosave.requestTransition(async () => {
+      transitioning = true;
+      setupError = '';
+      try {
+        if (
+          saveSelection &&
+          step === 'model' &&
+          selectedOption &&
+          !(await saveModel())
+        )
+          return false;
+        const result = await finishSetup();
+        if (!disposed) onSetupChange(result);
+        if (!disposed) callback();
+        return true;
+      } catch (error) {
+        if (!disposed) setupError = error.message;
+        return false;
+      } finally {
+        if (!disposed) transitioning = false;
+      }
+    });
+  }
 
   async function loadSettings() {
     const request = ++settingsRequest;
@@ -191,8 +333,7 @@
   }
 
   function goToServiceStep() {
-    step = 'service';
-    void focusStep();
+    void moveToStep('provider');
   }
 
   // The wizard covers every view: Back returns to its first step, and from
@@ -200,7 +341,10 @@
   const navigation = useNavigation();
   $effect(() =>
     navigation?.registerLayer({
-      close: () => (step === 'model' ? goToServiceStep() : onDismiss()),
+      close: () =>
+        step === 'provider'
+          ? finish()
+          : moveToStep(stepIds[stepIds.indexOf(step) - 1]),
     }),
   );
 
@@ -218,9 +362,7 @@
     if (disposed || !connectedProvider || loadingSettings || settingsError)
       return;
     selectModelProvider(connectedProvider);
-    step = 'model';
-    void loadModels();
-    void focusStep();
+    void moveToStep('model');
   }
 
   async function handleConnected() {
@@ -273,10 +415,10 @@
     if (!disposed) void refreshModelDatabase();
   }
 
-  async function startChatting() {
-    if (!canStart) return;
+  async function saveModel() {
+    if (!selectedOption) return false;
     const model = selectedModelValue;
-    const agentId = targetAgentId;
+    const agentId = activeAgentId || targetAgentId;
     assigning = true;
     assignError = '';
     try {
@@ -289,13 +431,14 @@
       );
       if (!result.isValid) {
         assignError = t('onboarding.model.assignError');
-        return;
+        return false;
       }
       await updateAgent(result.payload);
-      if (!disposed) onComplete();
+      return !disposed;
     } catch (error) {
       if (!disposed)
         assignError = `${t('onboarding.model.assignError')} ${error.message}`;
+      return false;
     } finally {
       if (!disposed) assigning = false;
     }
@@ -325,7 +468,12 @@
   >
 {/snippet}
 
-<section class="view onboarding-view active" aria-labelledby="onboarding-title">
+<section
+  class="view onboarding-view active"
+  aria-labelledby="onboarding-title"
+  onfocusin={reflectFocus}
+  onfocusout={reflectFocus}
+>
   <div class="onboarding-scroll">
     <div class="onboarding-layout">
       <header class="onboarding-overview">
@@ -338,43 +486,35 @@
           />
           <h2 id="onboarding-title">{t('onboarding.title')}</h2>
         </div>
-        <Button variant="tertiary" disabled={assigning} onClick={onDismiss}>
+        <Button
+          variant="tertiary"
+          disabled={assigning || transitioning}
+          onClick={() => finish()}
+        >
           {t('onboarding.dismiss')}
         </Button>
       </header>
 
       <nav aria-label={t('onboarding.progress')}>
         <ol class="onboarding-progress">
-          <li
-            class:current={step === 'service'}
-            class:complete={Boolean(connectedProvider)}
-          >
-            <button
-              type="button"
-              aria-current={step === 'service' ? 'step' : undefined}
-              disabled={assigning}
-              onclick={goToServiceStep}
-            >
-              <span class="onboarding-step-number" aria-hidden="true"
-                >{#if connectedProvider}{@render check()}{:else}1{/if}</span
+          {#each stepIds as id, index (id)}
+            <li class:current={step === id}>
+              <button
+                type="button"
+                aria-current={step === id ? 'step' : undefined}
+                disabled={assigning ||
+                  transitioning ||
+                  (id === 'model' && !connectedProvider)}
+                onclick={() =>
+                  id === 'model' ? goToModelStep() : moveToStep(id)}
               >
-              <span>{t('onboarding.progress.service')}</span>
-            </button>
-          </li>
-          <li class:current={step === 'model'}>
-            <button
-              type="button"
-              aria-current={step === 'model' ? 'step' : undefined}
-              disabled={!connectedProvider ||
-                assigning ||
-                loadingSettings ||
-                Boolean(settingsError)}
-              onclick={goToModelStep}
-            >
-              <span class="onboarding-step-number" aria-hidden="true">2</span>
-              <span>{t('onboarding.progress.model')}</span>
-            </button>
-          </li>
+                <span class="onboarding-step-number" aria-hidden="true"
+                  >{index + 1}</span
+                >
+                <span>{stepLabel(id)}</span>
+              </button>
+            </li>
+          {/each}
         </ol>
       </nav>
 
@@ -385,16 +525,16 @@
             bind:this={stepHeading}
             tabindex="-1"
           >
-            {step === 'service'
-              ? t('onboarding.step.service.title')
-              : t('onboarding.step.model.title')}
+            {stepTitle()}
           </h3>
           <p class="onboarding-step-subtitle">
-            {step === 'service'
-              ? t('onboarding.step.service.subtitle')
-              : t('onboarding.step.model.subtitle')}
+            {stepDescription()}
           </p>
         </header>
+
+        {#if setupError}<Banner variant="error" role="alert"
+            >{setupError}</Banner
+          >{/if}
 
         {#if settingsError}
           <Banner variant="error" role="alert">
@@ -402,13 +542,13 @@
             <Button
               variant="secondary"
               disabled={loadingSettings}
-              onClick={step === 'service' ? loadSettings : retryModels}
+              onClick={step === 'provider' ? loadSettings : retryModels}
               >{t('onboarding.retry')}</Button
             >
           </Banner>
         {/if}
 
-        {#if step === 'service'}
+        {#if step === 'provider'}
           {#if loadingSettings && !settings}
             <p class="onboarding-loading" role="status">
               <span class="s-inline-spinner" aria-hidden="true"></span>{t(
@@ -418,7 +558,9 @@
           {:else if settings}
             <OnboardingProviders
               {settings}
-              disabled={loadingSettings || Boolean(settingsError)}
+              disabled={loadingSettings ||
+                transitioning ||
+                Boolean(settingsError)}
               resetToken={connectionRevision}
               onSelect={(scope) => (modalScope = scope)}
             />
@@ -464,7 +606,7 @@
               {t('onboarding.service.continue')}{@render arrow()}
             </Button>
           </footer>
-        {:else}
+        {:else if step === 'model'}
           <div class="onboarding-model-provider">
             {#if usableProviders.length > 1}
               <label for="onboarding-model-provider"
@@ -478,7 +620,7 @@
                   value: provider.id,
                   label: providerName(provider),
                 }))}
-                disabled={assigning}
+                disabled={assigning || transitioning}
                 ariaLabel={t('onboarding.provider')}
                 searchPlaceholder={t('onboarding.service.search')}
                 onValueChange={selectModelProvider}
@@ -530,7 +672,7 @@
                     variant="secondary"
                     class="onboarding-free-filter"
                     aria-pressed={onlyFree}
-                    disabled={assigning}
+                    disabled={assigning || transitioning}
                     onClick={() => {
                       onlyFree = !onlyFree;
                       if (
@@ -549,7 +691,7 @@
                 panelClass="onboarding-model-menu"
                 value={selectedModelValue}
                 options={modelOptions}
-                disabled={assigning}
+                disabled={assigning || transitioning}
                 placeholder={t('onboarding.model.placeholder')}
                 searchPlaceholder={t('onboarding.model.searchPlaceholder')}
                 emptyLabel={onlyFree
@@ -585,25 +727,64 @@
                 </p>
               {/if}
             {/if}
-            {#if assignError}<Banner variant="error" role="alert"
-                >{assignError}</Banner
-              >{/if}
+            {#if assignError}
+              <Banner variant="error" role="alert">
+                {assignError}
+                <p>{t('onboarding.model.finishSavedHelp')}</p>
+                <Button
+                  variant="secondary"
+                  disabled={assigning || transitioning}
+                  onClick={() => finish(onDismiss, { saveSelection: false })}
+                  >{t('onboarding.model.finishSaved')}</Button
+                >
+              </Banner>
+            {/if}
           </div>
 
           <footer class="onboarding-footer">
             <Button
               variant="tertiary"
-              disabled={assigning}
+              disabled={assigning || transitioning}
               onClick={goToServiceStep}>{t('onboarding.model.back')}</Button
             >
             <Button
               variant="primary"
               disabled={!canStart}
               loading={assigning}
-              onClick={startChatting}
+              onClick={() => finish(onComplete)}
               >{assigning
                 ? t('common.saving')
                 : t('onboarding.model.start')}{@render arrow()}</Button
+            >
+            <Button
+              variant="secondary"
+              disabled={!canStart || transitioning}
+              onClick={() => moveToStep('components')}
+              >{t('onboarding.model.customize')}</Button
+            >
+          </footer>
+        {:else}
+          {#if step === 'components'}<OnboardingComponents
+            />{:else}<OnboardingServices />{/if}
+          <footer class="onboarding-footer">
+            <Button
+              variant="tertiary"
+              disabled={transitioning}
+              onClick={() =>
+                moveToStep(step === 'services' ? 'components' : 'provider')}
+              >{t('common.back')}</Button
+            >
+            {#if step === 'components'}<Button
+                variant="secondary"
+                disabled={transitioning}
+                onClick={() => moveToStep('services')}
+                >{t('onboarding.components.continue')}</Button
+              >{/if}
+            <Button
+              variant="primary"
+              disabled={transitioning}
+              onClick={() => finish(onComplete)}
+              >{t('onboarding.finish')}</Button
             >
           </footer>
         {/if}

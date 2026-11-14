@@ -104,6 +104,7 @@ FIRST_SENTENCE_SUMMARY_TOOLS = {"apply_patch", "background_tasks", "edit", "writ
 BUNDLED_SKILLS = [
     "coding-agents",
     "computer-use",
+    "external-history",
     "fact-check",
     "free-models",
     "home-assistant",
@@ -471,6 +472,8 @@ def test_start_bootstraps_main_agent_when_data_dir_is_empty(shared_runtime: Runt
     assert main_agent.name == "Main"
     # The bootstrap creates no Session; the first message to main creates one.
     assert main_agent.current_session_id == ""
+    assert main_agent.model == ""
+    assert shared_runtime.storage.setup.read().status == "pending"
 
 
 def test_start_creates_the_hidden_librarian_that_can_only_maintain_skills(

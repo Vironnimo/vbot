@@ -299,3 +299,28 @@ The source `references/extension-index.md` is replaced by the runtime's generate
 | `The running server fills this reference...` / `This source copy has no instance-specific catalog.` | A source checkout is not evidence of the server's installed Extensions; explains why the fallback has no guide list. |
 | `Use vbot extensions list to inspect...` | Provides an actionable discovery route when reading an uncomposed source Skill. |
 | `For a loaded Extension, ... operations ... --help ...; replace the placeholders with the returned names.` | Names the existing discovery and argument-help paths while avoiding the false claim that disabled or failed Extensions can execute operations. |
+
+## Shared first-run setup
+
+| Text | Reason |
+|---|---|
+| SKILL.md routing row: `Inspect or finish shared first-run setup, help the user reopen the guide, or install and manage SearXNG` | Routes setup-status, dismissal and managed-service requests to the server reference instead of runtime-file edits, Provider reconfiguration or ad-hoc container commands. |
+| `status reports the server's saved setup state and step, shared by installation, WebUI and TUI.` | A browser-local dismissal is not the shared decision; Agents need the server's saved result when the user changes Accessor. |
+| `Use finish when the user wants to end the guide: ...` | Gives the one-call dismissal action while preserving saved choices and distinguishing missing configuration from completed setup. |
+| `A completed or skipped guide stays closed automatically, even if keys expire ...` | The user explicitly requires a durable one-time decision independent of current credentials or Model availability; a terminal setup state cannot be reported as readiness. |
+| `To reopen the guide, give the user vbot setup ... or vbot setup --browser ...` | Gives both human entry points without sending an Agent into a blocking terminal wizard. |
+| `Add --if-needed to either command to open only pending setup; completed or skipped setup exits successfully without opening a guide or requiring a terminal.` | Distinguishes automatic first-run entry from an explicit reopening and preserves the saved decision when installation reuses data. |
+| `These commands are interactive user entry points; use the area's ordinary management commands for changes from your Run.` | Keeps automated setup work on existing non-interactive Provider, Agent, Skill and Extension commands. |
+| `Reopening does not enable automatic setup again, and the user can end the guide at every step.` | Explains why opening the guide does not force other Accessors back into setup or require completing optional selections. |
+| `These commands manage SearXNG on the selected installed vBot server; a remote CLI does not install it on its own computer.` | Stops remote Accessors from installing a disconnected service locally or treating development checkouts as installations. |
+| `Install and update reuse local Docker or Podman; pass --install-prerequisites ...` | Names the scope expansion that installs host prerequisites, instead of implying the normal install command silently changes the host environment. |
+| `On Linux, terminal authorization is available only in a human terminal targeting its own installed server.` | The terminal prerequisite helper verifies the exact installed target before invoking the fixed local package command. |
+| `--json never prompts; remote targets and Agent Runs cannot request terminal authorization either.` | Agents can use structured commands without a password prompt and must hand host authorization to the user. |
+| `When that authorization is needed, action_required includes the command to run on the server.` | Gives the Agent a concrete host action to pass on when its own command cannot authenticate interactively. |
+| `If system authorization, a restart or another host action is needed ...` | A host prerequisite can need the user's OS authorization; the result names the action and the same lifecycle command resumes afterwards. |
+| `An accepted operation runs in the background; read its result with status before reporting completion.` | Prevents an accepted service request being reported as a working search service. |
+| `Its running state describes an operation in progress, not whether the SearXNG container is running.` | The operation and container lifetimes differ; a successful install's operation state is completed while its container runs. |
+| `Installation selects SearXNG for vBot web search after a successful test search; stopping it leaves that selection in place.` | Names the Settings side effect of install and prevents claiming that stop selected a fallback search provider. |
+| `Update keeps the old container until the replacement passes its check, restoring it when that check fails.` | Describes the retained baseline and keeps a failed search check from being mistaken for deletion of the former service. |
+| `Remove deletes only vBot's managed containers, keeps the configuration and shared runtime ...` | Bounds removal to owned resources and explains conditional restoration without overwriting later user choices. |
+| `For an existing external SearXNG service, use vbot config patch ...` | Gives the existing-service path without installing a duplicate container; the address placeholder explicitly comes from the user. |

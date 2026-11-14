@@ -149,12 +149,14 @@ class ConversationApp(App[int]):
         project_id: str | None = None,
         draft_store: DraftStore | None = None,
         restored_drafts: dict[str, JsonObject] | None = None,
+        setup_state: JsonObject | None = None,
     ) -> None:
         super().__init__()
         for theme in THEMES:
             self.register_theme(theme)
         self.theme = DEFAULT_THEME
         self.client = client
+        self.setup_state = setup_state
         self.conversation: Conversation | None = None
         self.render_dirty = False
         self.rendering = False
@@ -203,7 +205,33 @@ class ConversationApp(App[int]):
         self.transcript.placeholder("Choose an Agent or resume a Session.")
         self.set_interval(0.08, self._render_if_dirty)
         self._start(self.navigation.events, group="events", exclusive=True)
-        self._start(self.navigation.bootstrap)
+        self._start(self._bootstrap)
+
+    async def _bootstrap(self) -> None:
+        if self.setup_state == {}:
+            try:
+                self.setup_state = await self.client.rpc("setup.get")
+            except ClientError, OSError:
+                from cli.tui.setup import SetupScreen
+
+                await self.push_screen_wait(SetupScreen(self.client))
+        if self.setup_state and self.setup_state.get("auto_show") is True:
+            from cli.tui.setup import SetupScreen
+
+            await self.push_screen_wait(SetupScreen(self.client, self.setup_state))
+        await self.navigation.bootstrap()
+
+    def action_setup(self) -> None:
+        """Reopen the shared setup without resetting its durable completion."""
+        self._start(self._open_setup)
+
+    async def _open_setup(self) -> None:
+        from cli.tui.setup import SetupScreen
+
+        await self.push_screen_wait(SetupScreen(self.client))
+        self.navigation.roster_loaded = False
+        await self.navigation.load_roster()
+        self._header()
 
     @override
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:

@@ -268,7 +268,34 @@ export default Object.freeze({
     'Open Voice settings for details. The failure was written to the Desktop log.',
   'voice.toast.stopRecordingFailedTitle': 'The recording could not be stopped',
   'onboarding.title': 'Set up vBot',
-  'onboarding.dismiss': 'Explore first',
+  'onboarding.dismiss': 'Finish with current settings',
+  'onboarding.finish': 'Finish setup',
+  'onboarding.progress.components': 'Skills & Extensions',
+  'onboarding.progress.services': 'Services',
+  'onboarding.step.components.title': 'Choose your Skills and Extensions',
+  'onboarding.step.components.subtitle':
+    'Choose the bundled Skills and installed Extensions you want. Unchanged options keep their current settings.',
+  'onboarding.step.services.title': 'Set up optional services',
+  'onboarding.step.services.subtitle':
+    'Keep your current settings, connect an existing service, or let vBot set one up.',
+  'onboarding.components.skills': 'Bundled Skills',
+  'onboarding.components.extensions': 'Extensions',
+  'onboarding.components.toggle': 'Enable {name}',
+  'onboarding.components.continue': 'Continue to services',
+  'onboarding.model.customize': 'Continue with optional setup',
+  'onboarding.services.description':
+    'SearXNG provides web search without a search API key. vBot can install and manage a private instance on the server.',
+  'onboarding.services.background':
+    'You can finish setup while this installation continues.',
+  'onboarding.services.prerequisites':
+    'Install the additional system requirements listed above. Administrator permission or a restart may be needed.',
+  'onboarding.services.install': 'Set up SearXNG',
+  'onboarding.services.update': 'Update SearXNG',
+  'onboarding.services.start': 'Start SearXNG',
+  'onboarding.services.stop': 'Stop SearXNG',
+  'onboarding.services.remove': 'Remove SearXNG',
+  'onboarding.services.other':
+    'Use an existing SearXNG instance or another search provider',
   'onboarding.progress': 'Setup progress',
   'onboarding.progress.service': 'Providers',
   'onboarding.progress.model': 'First Model',
@@ -329,10 +356,13 @@ export default Object.freeze({
   'onboarding.model.help':
     'Models suited to Agent work are shown first. Search by name, or use “Show all models” in the list to see the rest.',
   'onboarding.model.ready':
-    'Start chatting to save this Model for your Agent. You can change it later in Agents.',
+    'Finish now or continue with optional setup to save this Model for your Agent. You can change it later in Agents.',
   'onboarding.model.prompt': 'Choose a Model above to continue.',
   'onboarding.model.start': 'Start chatting',
   'onboarding.model.assignError': 'The Model could not be assigned.',
+  'onboarding.model.finishSaved': 'Finish with saved settings',
+  'onboarding.model.finishSavedHelp':
+    'You can finish using the settings already saved on the server, without retrying this Model selection.',
   'onboarding.model.back': 'Back to Providers',
   'dataStore.acknowledgeFailedTitle': 'Recovery notice still needs attention',
   'dataStore.acknowledgeFailed': 'Refresh the status and try again.',

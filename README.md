@@ -75,7 +75,7 @@ Linux on ARM64 or x86-64, including a Raspberry Pi with the 64-bit Raspberry Pi 
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-When the Installer reports that the server is running, open [http://127.0.0.1:22332/](http://127.0.0.1:22332/) and follow the setup guide to connect a Provider and choose a Model. The same Agents are also a command away in any terminal:
+The Installer can take you through the shared setup in your terminal. You can also open [http://127.0.0.1:22332/](http://127.0.0.1:22332/) or `vbot tui`: unfinished setup appears there with the same saved progress. Connect a Provider and choose a Model to start chatting, or continue to select bundled Skills, Extensions and optional services. You can finish or skip at any step, keep your choices and use defaults for the rest. The same Agents are also a command away in any terminal:
 
 ```bash
 vbot tui                                    # full-screen chat with your Agents
