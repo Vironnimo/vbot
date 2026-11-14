@@ -105,9 +105,11 @@
       Object.values(model.detail.budget ?? {})[0] ??
       null,
   );
+  const limitsSnapshot = $derived(
+    JSON.stringify([limitTarget, savedCardLimits, savedStepLimits]),
+  );
   $effect(() => {
-    void card.revision;
-    void limitTarget;
+    void limitsSnapshot;
     untrack(() => {
       cardLimits = { ...savedCardLimits };
       stepLimits = { ...savedStepLimits };

@@ -408,6 +408,11 @@ class FactoryManagement:
         execution = service.execution
         if name == "card.update":
             require_state(card, {"proposal", "queued"})
+            if card["runtime"].get("queued_action"):
+                raise FactoryError(
+                    "wrong_state",
+                    "This Card has already started. Wait for its queued continuation.",
+                )
             patch: Json = {
                 field: text(arguments, field, maximum=200 if field == "title" else 20000)
                 for field in ("title", "description")

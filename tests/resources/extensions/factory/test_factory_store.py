@@ -61,15 +61,24 @@ async def test_card_transition_output_and_comment_commit_together(
         actor="agent",
         event="changes_requested",
         comment="A comment",
-        output={
-            "step": "review",
-            "step_name": "Review",
-            "kind": "changes",
-            "pass": 1,
-            "participant_id": "review-r1",
-            "findings": ["A note"],
-            "target": "implement",
-        },
+        output=[
+            {
+                "step": "review",
+                "step_name": "Review",
+                "kind": "changes",
+                "pass": 1,
+                "participant_id": "review-r1",
+                "findings": ["A note"],
+                "target": "implement",
+            },
+            {
+                "step": "child",
+                "step_name": "Child",
+                "kind": "work",
+                "pass": 1,
+                "summary": "Started child Card",
+            },
+        ],
         expected_revision=1,
     )
     history = await store.history(card["id"])
@@ -78,12 +87,23 @@ async def test_card_transition_output_and_comment_commit_together(
     output = history["outputs"][0]
     assert (output["step"], output["kind"], output["target"]) == ("review", "changes", "implement")
     assert output["findings"] == ["A note"]
+    assert [item["step"] for item in history["outputs"]] == ["review", "child"]
     assert history["events"][-1]["detail"] == {"previous_state": "queued", "state": "waiting"}
     with pytest.raises(FactoryError) as conflict:
         await store.change(
             card["id"], {"title": "Lost update"}, actor="user", event="updated", expected_revision=1
         )
     assert conflict.value.code == "revision_conflict"
+    assert await store.get_card(card["id"]) == saved
+    assert await store.history(card["id"]) == history
+    with pytest.raises(KeyError):
+        await store.change(
+            card["id"],
+            {"state": "done"},
+            actor="agent",
+            event="submitted",
+            output=[{"step": "do", "step_name": "Do", "kind": "work", "pass": 1}, {}],
+        )
     assert await store.get_card(card["id"]) == saved
     assert await store.history(card["id"]) == history
 

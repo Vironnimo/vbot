@@ -304,6 +304,17 @@ async def test_public_reads_filter_cards_and_name_running_steps(
     assert card["steps"]["review"] == {"status": "running"}
     # Columns an earlier Factory filled from Git stay off the Board.
     assert not {"branch", "head_sha", "recommendation"} & set(card)
+    await factory.store.change(
+        working["id"],
+        {"state": "queued", "runtime": {**working["runtime"], "queued_action": "retry"}},
+        actor="factory",
+        event="retried",
+    )
+    queued = await factory.call({"action": "list", "state": "queued"})
+    assert "running_steps" not in queued["data"]["cards"][0]
+    detail = await factory.call({"action": "get", "id": working["id"]})
+    assert detail["data"]["card"]["steps"]["review"] == {"status": "pending"}
+    assert detail["data"]["card"]["queued_action"] == "retry"
     invalid = await factory.call({"action": "list", "state": "unknown"})
     assert invalid["ok"] is False and invalid["error"]["code"] == "invalid_arguments"
 
@@ -701,6 +712,11 @@ async def test_scheduler_respects_order_and_counts_only_running_steps(
     await factory.service.schedule()
     assert factory.execution.calls == [("start", moved["id"], ""), ("start", first["id"], "")]
     assert (await factory.store.get_card(second["id"]))["state"] == "queued"
+    await factory.operation("card.discard", id=moved["id"])
+    await factory.service.schedule()
+    await factory.settle()
+    assert (await factory.store.get_card(second["id"]))["state"] == "working"
+    assert (await factory.operation("board.get"))["wip"] == {"running": 4, "limit": 4}
 
 
 async def test_scheduler_stops_at_max_waiting_until_user_backlog_shrinks(

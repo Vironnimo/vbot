@@ -46,6 +46,9 @@ CREATE INDEX cards_project_state ON cards(project_id, state);
 CREATE TABLE card_triggers (
  card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, event_json TEXT NOT NULL
 ) STRICT;
+CREATE TABLE trigger_receipts (
+ receipt TEXT PRIMARY KEY
+) STRICT;
 CREATE TABLE outputs (
  id INTEGER PRIMARY KEY, card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
  stage_id TEXT NOT NULL, stage_name TEXT NOT NULL, kind TEXT NOT NULL, lane INTEGER NOT NULL,
@@ -507,6 +510,7 @@ class FactoryStore:
         workflow_id: str = "",
         parent_id: str = "",
         trigger_event: Json | None = None,
+        trigger_receipt: str = "",
     ) -> Json:
         if origin not in ORIGINS:
             raise ValueError("invalid card origin")
@@ -548,6 +552,10 @@ class FactoryStore:
                     "INSERT INTO card_triggers (card_id, event_json) VALUES (?, ?)",
                     (card_id, _dump(trigger_event)),
                 )
+            if trigger_receipt:
+                connection.execute(
+                    "INSERT INTO trigger_receipts (receipt) VALUES (?)", (trigger_receipt,)
+                )
             _event(
                 connection,
                 card_id,
@@ -573,6 +581,17 @@ class FactoryStore:
             return None if row is None else json.loads(row[0])
 
         return await self.database.read_async(read)
+
+    async def received_trigger(self, receipt: str) -> bool:
+        """Whether a fire already created its Card, including a Card since deleted."""
+        return await self.database.read_async(
+            lambda connection: (
+                connection.execute(
+                    "SELECT 1 FROM trigger_receipts WHERE receipt = ?", (receipt,)
+                ).fetchone()
+                is not None
+            )
+        )
 
     async def attention_count(self) -> int:
         return await self.database.read_async(
@@ -617,7 +636,7 @@ class FactoryStore:
         event: str | None,
         detail: Json | None = None,
         comment: str | None = None,
-        output: Json | None = None,
+        output: list[Json] | None = None,
         expected_revision: int | None = None,
     ) -> Json:
         if set(patch) - (_MUTABLE_CARD_FIELDS | {"runtime"}):
@@ -653,20 +672,20 @@ class FactoryStore:
                     "INSERT INTO comments (card_id, at, author, text) VALUES (?, ?, ?, ?)",
                     (card_id, at, actor, comment),
                 )
-            if output is not None:
+            for item in output or []:
                 # Columns of earlier Factory versions stay empty.
                 values = (
                     dict.fromkeys(_OUTPUT_FIELDS, "")
                     | {
-                        field: output.get(field, "")
+                        field: item.get(field, "")
                         for field in ("kind", "participant_id", "summary", "result", "target")
                     }
                     | {
-                        "stage_id": output["step"],
-                        "stage_name": output["step_name"],
+                        "stage_id": item["step"],
+                        "stage_name": item["step_name"],
                         "lane": 0,
-                        "pass": output["pass"],
-                        "findings_json": _dump(output.get("findings", [])),
+                        "pass": item["pass"],
+                        "findings_json": _dump(item.get("findings", [])),
                     }
                 )
                 connection.execute(

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from resources.extensions.factory._triggers import repository_key
+from resources.extensions.factory._triggers import project_repositories, repository_key
 from resources.extensions.factory.store import FactoryError, FactoryStore
 from tests.resources.extensions.factory.factory_test_support import (
     FactoryHarness,
@@ -187,6 +187,104 @@ async def test_schedule_fire_creates_one_card_and_paused_workflows_create_none(
     await factory.service.triggers.fire({**fire, "key": "deleted:daily"})
     assert len(await factory.store.list_cards()) == 1
     await factory.settle()
+
+
+@pytest.mark.parametrize("choice", ["other", "@repository"])
+async def test_trigger_project_resolution_never_falls_back_to_no_project(
+    factory: FactoryHarness, choice: str
+) -> None:
+    definition = push_review()
+    definition["triggers"][0]["project"] = choice
+    saved = (await factory.operation("workflow.save", workflow=definition))["workflow"]
+    factory.host.catalog_data["projects"] = [
+        item for item in factory.host.catalog_data["projects"] if item["id"] != "other"
+    ]
+    await factory.service.triggers.fire(
+        {"key": "pushes:push", "requests": [{"headers": {}, "body": {"task": "Run"}}]}
+    )
+    card = (await factory.store.list_cards())[0]
+    project, problem = await factory.service.resolve_card_project(card, saved)
+    assert project == {} and problem
+    saved["project_id"] = "project"
+    project, problem = await factory.service.resolve_card_project(card, saved)
+    assert project["id"] == "project" and not problem
+    await factory.settle()
+
+
+async def test_disabled_trigger_cannot_fire_an_enabled_workflow(factory: FactoryHarness) -> None:
+    definition = push_review()
+    definition["triggers"][0]["enabled"] = False
+    await factory.operation("workflow.save", workflow=definition)
+    await factory.service.triggers.fire({"key": "pushes:push", "requests": [push()]})
+    assert await factory.store.list_cards() == []
+
+
+async def test_retried_trigger_batch_does_not_duplicate_committed_cards(
+    factory: FactoryHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await factory.operation("workflow.save", workflow=push_review())
+    fire = {
+        "key": "pushes:push",
+        "trigger_id": "cron-test",
+        "requests": [push(), {**push(), "seq": 2}],
+    }
+    create = factory.service.create_triggered
+
+    async def interrupted(*args: Any, **kwargs: Any) -> Json:
+        await create(*args, **kwargs)
+        raise OSError("Stopped after a committed Card")
+
+    monkeypatch.setattr(factory.service, "create_triggered", interrupted)
+    with pytest.raises(OSError):
+        await factory.service.triggers.fire(fire)
+    assert len(await factory.store.list_cards()) == 1
+    monkeypatch.setattr(factory.service, "create_triggered", create)
+    await factory.service.triggers.fire(fire)
+    await factory.service.triggers.fire(fire)
+    assert len(await factory.store.list_cards()) == 2
+    await factory.settle()
+    first = (await factory.store.list_cards())[0]
+    await factory.store.change(first["id"], {"state": "discarded"}, actor="user", event="discarded")
+    await factory.store.delete_card(first["id"])
+    await factory.service.triggers.fire(fire)
+    assert len(await factory.store.list_cards()) == 1
+    await factory.settle()
+
+
+async def test_repository_matching_follows_worktree_git_directories(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    common = tmp_path / "main" / ".git"
+    private = common / "worktrees" / "checkout"
+    private.mkdir(parents=True)
+    (checkout / ".git").write_text("gitdir: ../main/.git/worktrees/checkout\n", encoding="utf-8")
+    (private / "commondir").write_text("../..\n", encoding="utf-8")
+    (common / "config").write_text(
+        '[remote "origin"]\nurl = git@github.com:Octo/App.git\n', encoding="utf-8"
+    )
+    assert project_repositories(str(checkout)) == {"github.com/octo/app"}
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+async def test_trigger_reconciliation_keeps_terminal_and_failed_status(
+    factory: FactoryHarness, status: str
+) -> None:
+    definition = template("single")
+    definition["triggers"] = [{"id": "timer", "type": "schedule", "schedule": "in 1h"}]
+    saved = (await factory.operation("workflow.save", workflow=definition))["workflow"]
+    triggers = host_triggers(factory)
+    current = triggers.items["single:timer"]
+    current.update(status=status, enabled=False)
+    trigger_id = current["id"]
+    await factory.service.triggers.sync()
+    assert current["status"] == status and not current["enabled"]
+    if status == "completed":
+        saved["triggers"][0]["schedule"] = "every 1h"
+        await factory.operation(
+            "workflow.save", workflow=saved, expected_revision=saved["revision"]
+        )
+        assert triggers.items["single:timer"]["id"] != trigger_id
+        assert triggers.items["single:timer"]["status"] == "active"
 
 
 @pytest.mark.parametrize(

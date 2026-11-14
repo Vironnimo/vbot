@@ -106,9 +106,13 @@ class FactoryExecution:
     @staticmethod
     def running(card: Json) -> bool:
         """Whether the Card occupies a WIP slot: one of its Agent steps runs."""
-        return any(
-            state.get("status") == "running"
-            for state in card.get("runtime", {}).get("steps", {}).values()
+        return (
+            card["state"] not in FINAL_STATES
+            and not card.get("runtime", {}).get("queued_action")
+            and any(
+                state.get("status") == "running"
+                for state in card.get("runtime", {}).get("steps", {}).values()
+            )
         )
 
     async def _lookup(self, group_id: str) -> tuple[Json, str]:
@@ -234,7 +238,7 @@ class FactoryExecution:
             state = card["runtime"]["steps"][step_id]
             if not self._owns(state, owner):
                 raise self._error("stale_run")
-            if state["status"] != "running" or card["state"] in FINAL_STATES:
+            if state["status"] != "running" or not self.running(card):
                 raise self._error("wrong_state")
             new_run = context.run_id not in state.get("budget", {}).get("runs", [])
             if await self._check_budget(card, step_id, check_runs=new_run):
@@ -258,7 +262,7 @@ class FactoryExecution:
             state = runtime["steps"][step_id]
             if not self._owns(state, owner):
                 raise self._error("stale_run")
-            if state["status"] != "running" or card["state"] in FINAL_STATES:
+            if state["status"] != "running" or not self.running(card):
                 return (
                     agent_text.limit_refusal(state["limit_hit"])
                     if state.get("limit_hit")
@@ -286,6 +290,8 @@ class FactoryExecution:
         blocker = runtime.get("blocker")
         if blocker:
             return "waiting", str(blocker["reason"])
+        if runtime.get("queued_action"):
+            return "queued", ""
         steps = runtime["steps"]
         order = [step["id"] for step in runtime["workflow"]["steps"]]
         for step_id in order:
@@ -328,6 +334,25 @@ class FactoryExecution:
                 step_state["pending"]["cancel_previous"] = True
             else:
                 stopped.add(step_id)
+        # A continuation after a halt or a child Card needs a new WIP slot.
+        # Persist the prepared inputs, so admission resumes the same snapshot
+        # without replaying the user's action or resetting its counters.
+        if not self.running(card) and any(
+            item["status"] == "running" for item in runtime.get("steps", {}).values()
+        ):
+            limit, _ = self.service.limits()
+            occupied = sum(
+                self.running(item)
+                for item in await self.store.list_cards()
+                if item["id"] != card["id"]
+            )
+            if occupied >= limit:
+                runtime["queued_action"] = {
+                    "accepted": "accept",
+                    "answered": "answer",
+                    "sent_back": "send_back",
+                    "retried": "retry",
+                }.get(event, "resume")
         state, reason = self.derive(runtime)
         saved = await self._change(
             card,
@@ -347,7 +372,11 @@ class FactoryExecution:
         for step_id, state in runtime.get("steps", {}).items():
             if step_id in cancel:
                 self._close_later(card, step_id, cancel=True)
-            elif state["status"] == "running" and state.get("pending"):
+            elif (
+                state["status"] == "running"
+                and state.get("pending")
+                and not runtime.get("queued_action")
+            ):
                 self._launch_later(card, step_id)
             elif state["status"] != "running" and state.get("run"):
                 self._close_later(card, step_id)
@@ -474,6 +503,7 @@ class FactoryExecution:
     ) -> Json:
         """Start every step whose predecessors are done, then save the transition."""
         workflow = runtime["workflow"]
+        updated = {**card, **(patch or {}), "runtime": runtime}
         recordings = list(outputs or [])
         history: Json | None = None
         progressed = True
@@ -491,7 +521,7 @@ class FactoryExecution:
                 if step["kind"] == "workflow":
                     if history is None:
                         history = await self._history(card, recordings)
-                    output = await self._start_child(card, runtime, step, history)
+                    output = await self._start_child(updated, runtime, step, history)
                     if output is not None:
                         recordings.append(output)
                         history["outputs"].append(output)
@@ -499,7 +529,7 @@ class FactoryExecution:
                     continue
                 if history is None:
                     history = await self._history(card, recordings)
-                self._prepare_run(card, runtime, step, history)
+                self._prepare_run(updated, runtime, step, history)
         if recordings:
             extra["output"] = recordings
         return await self._commit(
@@ -516,7 +546,7 @@ class FactoryExecution:
             history["outputs"], workflow, _workflows.ancestors(workflow, step["id"])
         )
         try:
-            child = await self.service.create_child(card, step, earlier)
+            child = await self.service.create_child({**card, "runtime": runtime}, step, earlier)
         except FactoryError as error:
             state["note"] = str(error)
             self._halt(state, "child_failed")
@@ -624,6 +654,7 @@ class FactoryExecution:
             and state.get("status") == "running"
             and not self._quiescing
             and card["state"] not in FINAL_STATES
+            and not card["runtime"].get("queued_action")
         )
 
     async def _launch(self, card_id: str, step_id: str, token: str) -> None:
@@ -776,7 +807,7 @@ class FactoryExecution:
             or state.get("pending")
         ):
             raise self._error("stale_run")
-        if state["status"] != "running" or card["state"] in FINAL_STATES:
+        if state["status"] != "running" or not self.running(card):
             raise self._error("wrong_state")
         return cast(Json, card), step_id
 
@@ -1043,6 +1074,8 @@ class FactoryExecution:
         state = runtime["steps"][target]
         step = _workflows.step(runtime["workflow"], target)
         reason = state.get("reason")
+        if await self._check_budget(card, target, check_runs=True):
+            return cast(Json, await self.store.get_card(card["id"]))
         state["restarts"] = 0
         pending = state.get("pending")
         if reason in {"upgraded", "child_failed"} or (not pending and not state.get("participant")):
@@ -1061,8 +1094,10 @@ class FactoryExecution:
             # A step that judges earlier work starts over with a fresh participant.
             history = await self._history(card, [])
             passes = state.get("passes", 1)
+            budget = deepcopy(state.get("budget", {}))
             self._prepare_run(card, runtime, step, history)
             state["passes"] = passes
+            state["budget"] = budget
         else:
             self._continue_input(state, agent_text.note("keep_working", card, step=step))
         return await self._commit(
@@ -1073,6 +1108,7 @@ class FactoryExecution:
         if card["state"] in FINAL_STATES:
             raise self._error("wrong_state")
         runtime = self._runtime(card)
+        runtime.pop("queued_action", None)
         for state in runtime.get("steps", {}).values():
             state.pop("pending", None)
             if state["status"] == "child" and state.get("child"):
@@ -1105,6 +1141,8 @@ class FactoryExecution:
         if card["state"] != "queued":
             raise self._error("wrong_state")
         runtime = self._runtime(card)
+        if runtime.pop("queued_action", None):
+            return await self._commit(card, runtime, event="started")
         workflow = await self.service.workflow_snapshot(card["workflow_id"])
         if workflow is None:
             runtime["blocker"] = {
@@ -1326,7 +1364,7 @@ class FactoryExecution:
                 and pending.get("participant") != owner.participant_id
             ):
                 raise self._error("stale_run")
-            if state["status"] != "running" or card["state"] in FINAL_STATES:
+            if state["status"] != "running" or not self.running(card):
                 raise self._error("wrong_state")
             new_run = context.run_id not in state.get("budget", {}).get("runs", [])
             if await self._check_budget(card, step_id, check_runs=new_run):
@@ -1445,6 +1483,8 @@ class FactoryExecution:
                 if error.code in {"card_not_found", "stale_run"}:
                     return
                 raise
+            if card["runtime"].get("queued_action"):
+                return
             state = card["runtime"]["steps"][step_id]
             if state.get("pending", {}).get("cancel_previous") and context.run_id == state.get(
                 "run"

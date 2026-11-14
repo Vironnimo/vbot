@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.utils.file_status import is_file_strict
 from core.utils.logging import get_logger
 
 from . import _workflows
@@ -134,9 +135,20 @@ def repository_of(event: Json, raw: Any) -> str:
 
 def project_repositories(cwd: str) -> set[str]:
     """The repositories a Project's folder points at through its Git remotes."""
-    config = Path(cwd) / ".git" / "config"
+    git_dir = Path(cwd) / ".git"
     try:
-        text = config.read_text(encoding="utf-8", errors="replace")
+        if is_file_strict(git_dir):
+            marker = git_dir.read_text(encoding="utf-8").strip()
+            if not marker.startswith("gitdir:"):
+                return set()
+            git_dir = git_dir.parent / marker.removeprefix("gitdir:").strip()
+        try:
+            common = (git_dir / "commondir").read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            pass
+        else:
+            git_dir = git_dir / common
+        text = (git_dir / "config").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return set()
     return {key for url in _REMOTE.findall(text) if (key := repository_key(url))}
@@ -221,6 +233,12 @@ class FactoryTriggers:
             try:
                 if current is None:
                     await triggers.create(key, **values)
+                elif current["status"] in {"completed", "missed"}:
+                    # A completed one-shot stays completed across saves and reloads.
+                    # An explicitly changed schedule creates a new trigger.
+                    if current["schedule"] != values["schedule"]:
+                        await triggers.delete(current["id"])
+                        await triggers.create(key, **values)
                 elif current["schedule_type"] == "webhook" and values["schedule"] != "webhook":
                     # A webhook trigger keeps its URL; a changed type gets a new trigger.
                     await triggers.delete(current["id"])
@@ -230,7 +248,12 @@ class FactoryTriggers:
                     current["enabled"],
                     "webhook" if current["schedule_type"] == "webhook" else current["schedule"],
                 ) != (values["name"], values["enabled"], values["schedule"]):
-                    await triggers.update(current["id"], **values)
+                    updates = dict(values)
+                    if current["status"] == "failed" and values["enabled"]:
+                        # The failure stop survives reconciliation. Pause and enable
+                        # the trigger explicitly to retry it.
+                        updates.pop("enabled")
+                    await triggers.update(current["id"], **updates)
             except ValueError, LookupError:
                 _LOGGER.warning("Factory trigger could not be synced (trigger=%s)", key)
 
@@ -294,7 +317,7 @@ class FactoryTriggers:
             trigger = next(
                 (item for item in workflow["triggers"] if item["id"] == trigger_id), None
             )
-            if trigger is None or not workflow["enabled"]:
+            if trigger is None or not workflow["enabled"] or not trigger["enabled"]:
                 return
             requests = fire.get("requests") or []
             base = {
@@ -303,7 +326,7 @@ class FactoryTriggers:
                 "type": trigger["type"],
                 "fired_at": fire.get("fired_at"),
             }
-            events: list[tuple[Json, str]] = []
+            events: list[tuple[Json, str, str]] = []
             if trigger["type"] == "webhook":
                 for request in requests[-_MAX_CARDS_PER_FIRE:]:
                     condensed = condense(request.get("headers") or {}, request.get("body"))
@@ -316,6 +339,9 @@ class FactoryTriggers:
                                 **({"cut": True} if request.get("cut") else {}),
                             },
                             repository_of(condensed, request.get("body")),
+                            f"{fire['trigger_id']}:request:{request['seq']}"
+                            if fire.get("trigger_id") and "seq" in request
+                            else "",
                         )
                     )
                 skipped = len(requests) - len(events) + int(fire.get("dropped") or 0)
@@ -334,9 +360,14 @@ class FactoryTriggers:
                             ),
                         },
                         "",
+                        f"{fire['trigger_id']}:due:{fire['due_at']}"
+                        if fire.get("trigger_id") and fire.get("due_at")
+                        else "",
                     )
                 )
-            for event, repository in events:
+            for event, repository, receipt in events:
+                if receipt and await store.received_trigger(receipt):
+                    continue
                 project_id, _problem = await self.resolve_project(
                     trigger["project"], workflow, repository
                 )
@@ -349,7 +380,9 @@ class FactoryTriggers:
                     repository=repository
                     if trigger["project"] == _workflows.REPOSITORY_PROJECT
                     else "",
+                    receipt=receipt,
                 )
+            service.request_schedule()
             _LOGGER.info(
                 "Factory trigger fired (workflow=%s trigger=%s cards=%d)",
                 workflow_id,

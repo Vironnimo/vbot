@@ -350,6 +350,7 @@ class Service:
         self.tasks: list[asyncio.Task[Any]] = []
         self.publications: list[tuple[str, list[str], int]] = []
         self.children = 0
+        self.wip_limit = 100
         groups = Groups(self)
 
         async def usage(group_id, run_ids):
@@ -366,6 +367,9 @@ class Service:
 
     def records(self) -> Store:
         return self.store
+
+    def limits(self) -> tuple[int, int]:
+        return self.wip_limit, 0
 
     @property
     def groups(self) -> Groups:
@@ -399,6 +403,7 @@ class Service:
             f"fct_child{self.children}",
             step["workflow"],
             parent_id=card["id"],
+            project_id=card["project_id"],
             title=f"{card['title']} · {step['name']}",
             description="\n\n".join(item["result"] for item in earlier),
         )
@@ -448,6 +453,34 @@ class Service:
 @pytest.fixture
 def service(tmp_path):
     return Service(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_step_hand_ins_and_rework_commit_through_the_real_store(
+    service, factory_store, monkeypatch
+):
+    definition = workflow("implement", implement_steps())
+    await factory_store.save_workflow(definition, expected_revision=0)
+    card = await factory_store.create_card(
+        "repo", "Objective", "Scope", origin="operator", workflow_id="implement"
+    )
+    monkeypatch.setattr(service, "store", factory_store)
+    monkeypatch.setattr(service, "workflow_snapshot", factory_store.get_workflow)
+    async with service.lock:
+        await service.execution.start(card)
+    await service.flush()
+    card = await hand_in(service, "implement", "First result", card_id=card["id"])
+    assert service.state(card, "review")["status"] == "running"
+    async with service.lock:
+        await service.execution.request_changes(
+            await service.tool_context("review", card["id"]), {"findings": ["Fix the edge case"]}
+        )
+    await service.finish("review", card_id=card["id"])
+    await hand_in(service, "implement", "Corrected result", card_id=card["id"])
+    card = await hand_in(service, "review", "Accepted", card_id=card["id"])
+    assert card["state"] == "done"
+    history = await factory_store.history(card["id"])
+    assert [item["kind"] for item in history["outputs"]] == ["work", "changes", "work", "work"]
 
 
 async def started(service: Service, card_id: str = CARD, workflow_id: str = "implement") -> Json:
@@ -825,6 +858,12 @@ async def test_judging_step_is_nudged_within_budget_and_retries_fresh(service):
     card = await service.card()
     assert card["waiting_reason"] == "budget_exhausted"
     async with service.lock:
+        await service.execution.retry(card)
+    await service.flush()
+    card = await service.card()
+    assert card["waiting_reason"] == "budget_exhausted"
+    assert len(service.state(card, "review")["budget"]["runs"]) == 2
+    async with service.lock:
         service.state(card, "review")["limits"] = {"runs": 3}
         await service.execution.retry(card)
     await service.flush()
@@ -837,6 +876,9 @@ async def test_judging_step_is_nudged_within_budget_and_retries_fresh(service):
     ]
     assert "factory_request_changes" in admissions[2][1].content
     assert admissions[3][1].kind == "initial"
+    assert len(service.state(await service.card(), "review")["budget"]["runs"]) == 3
+    await service.finish("review")
+    assert (await service.card())["waiting_reason"] == "budget_exhausted"
     await service.execution.quiesce()
     await service.flush()
 
@@ -905,9 +947,72 @@ async def test_discard_cancels_the_running_steps_without_another_turn(
     await service.flush()
     card = await service.card()
     assert card["state"] == "discarded"
+    assert not service.execution.running(card)
     assert not any("pending" in item for item in card["runtime"]["steps"].values())
     assert not service.groups.open[f"{CARD}.review"]
     assert len(service.groups.admissions) == count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["accept", "answer", "retry", "send_back"])
+async def test_resuming_a_card_waits_for_wip_and_keeps_its_snapshot(service, action):
+    service.wip_limit = 1
+    service.store.workflows["one"] = workflow(
+        "one", [step("do", after=[], approval=action == "accept")]
+    )
+    card = await started(service, workflow_id="one")
+    if action != "accept":
+        if action == "retry":
+            await service.finish("do", "error")
+        else:
+            async with service.lock:
+                await service.execution.report_blocked(
+                    await service.tool_context("do"), {"question": "Which option?"}
+                )
+            await service.finish("do")
+        card = await service.card()
+    service.store.workflows["busy"] = workflow("busy", [step("other", after=[])])
+    await started(service, "fct_busy", "busy")
+    async with service.lock:
+        if action in {"answer", "send_back"}:
+            queued = await getattr(service.execution, action)(card, "Use option A")
+        else:
+            queued = await getattr(service.execution, action)(card)
+    await service.flush()
+    assert queued["state"] == "queued"
+    assert queued["runtime"]["queued_action"] == action
+    assert not service.execution.running(queued)
+    pending = deepcopy(queued["runtime"]["steps"]["do"]["pending"])
+    admissions = len(service.groups.admissions)
+    if action in {"answer", "retry"}:
+        context = await service.context("do")
+        for boundary in ("before_request", "before_model_request"):
+            with pytest.raises(FactoryError) as refused:
+                await getattr(service.execution, boundary)(context)
+            assert refused.value.code == "wrong_state"
+        assert await service.execution.before_tool_call(
+            context, tool_name="read", tool_call_id="late-call"
+        )
+        await service.execution.run_finished(context, outcome="success")
+        assert (await service.card())["runtime"]["steps"]["do"]["pending"] == pending
+    await service.execution.reconcile()
+    await service.flush()
+    assert len(service.groups.admissions) == admissions
+    service.store.workflows["one"]["steps"][0]["task"] = "Unrelated later edit"
+    async with service.lock:
+        await service.execution.discard(await service.card("fct_busy"))
+    await service.flush()
+    async with service.lock:
+        await service.execution.start(await service.card())
+    await service.flush()
+    resumed = await service.card()
+    assert resumed["state"] == "working"
+    assert "queued_action" not in resumed["runtime"]
+    assert len(service.groups.admissions) == admissions + 1
+    assert service.groups.admissions[-1][1].content == pending["content"]
+    assert resumed["runtime"]["workflow"]["steps"][0]["task"] == "Do the step."
+    await service.execution.quiesce()
+    await service.flush()
 
 
 @pytest.mark.asyncio
@@ -1535,6 +1640,23 @@ async def test_workflow_step_waits_for_its_child_card_and_rework_discards_it(ser
     sub = [item for item in outputs if item["step"] == "sub"]
     assert len(sub) == 1 and sub[0]["result"] == "Plan: Plan text"
     assert sub[0]["summary"] == "Wrote Plan text"
+
+
+@pytest.mark.asyncio
+async def test_initial_steps_receive_the_resolved_project(service):
+    service.store.workflows["plan"] = workflow("plan", [step("plan", after=[])])
+    service.store.workflows["parent"] = workflow(
+        "parent",
+        [child_step("child", "plan", after=[]), step("parallel", after=[])],
+        project_id="resolved",
+    )
+    service.store.add(CARD, "parent", project_id="")
+    card = await started(service, workflow_id="parent")
+    child = await service.card(service.state(card, "child")["child"])
+    assert card["project_id"] == child["project_id"] == "resolved"
+    assert '"project_id": "resolved"' in service.groups.admissions[-1][1].content
+    await service.execution.quiesce()
+    await service.flush()
 
 
 @pytest.mark.asyncio

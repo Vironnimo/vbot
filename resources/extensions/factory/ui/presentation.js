@@ -149,6 +149,9 @@ export function queuedActionLabel(action) {
       return t('factory.queued.sendBack');
     case 'retry':
       return t('factory.queued.retry');
+    case 'answer':
+    case 'resume':
+      return t('factory.event.queuedForSlot');
     default:
       return '';
   }

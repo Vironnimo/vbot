@@ -63,7 +63,11 @@ def projection(card: Json) -> Json:
             step_id: {key: state[key] for key in _STEP_FIELDS if state.get(key) not in (None, "")}
             for step_id, state in runtime.get("steps", {}).items()
         }
-    for key in ("note", "legacy"):
+        if runtime.get("queued_action"):
+            for state in value["steps"].values():
+                if state.get("status") == "running":
+                    state["status"] = "pending"
+    for key in ("note", "legacy", "queued_action"):
         if runtime.get(key):
             value[key] = runtime[key]
     if blocker := runtime.get("blocker"):
@@ -292,9 +296,20 @@ class FactoryExtension:
         """
         project_id = workflow["project_id"] or card["project_id"]
         repository = card["runtime"].get("repository", "")
-        if not project_id and repository:
+        choice = card["runtime"].get("trigger_project", "")
+        if not project_id and card["origin"] == "trigger" and not choice:
+            event = await self.records().trigger_event(card["id"]) or {}
+            choice = event.get("missing_project") or next(
+                (
+                    item["project"]
+                    for item in workflow["triggers"]
+                    if item["id"] == event.get("trigger")
+                ),
+                "",
+            )
+        if not project_id and (repository or choice):
             project_id, problem = await self.triggers.resolve_project(
-                _workflows.REPOSITORY_PROJECT, workflow, repository
+                choice or _workflows.REPOSITORY_PROJECT, workflow, repository
             )
             if problem:
                 return {}, problem
@@ -401,6 +416,7 @@ class FactoryExtension:
         title: str,
         project_id: str,
         repository: str,
+        receipt: str = "",
     ) -> Json:
         """A Card for one trigger event; an unknown repository waits for the user at start."""
         description = trigger["task"].strip() or (
@@ -413,8 +429,9 @@ class FactoryExtension:
                 title=title,
                 description=description,
                 origin="trigger",
-                runtime={"repository": repository} if repository and not project_id else {},
+                runtime={"repository": repository, "trigger_project": trigger["project"]},
                 trigger_event=event,
+                trigger_receipt=receipt,
             )
         except FactoryError as error:
             if error.code != "project_not_found":
@@ -426,8 +443,12 @@ class FactoryExtension:
                 title=title,
                 description=description,
                 origin="trigger",
-                runtime={"repository": repository} if repository else {},
+                runtime={
+                    "repository": repository,
+                    "trigger_project": project_id or trigger["project"],
+                },
                 trigger_event=event | {"missing_project": project_id},
+                trigger_receipt=receipt,
             )
 
     async def create_child(self, card: Json, step: Json, earlier: list[Json]) -> Json:
@@ -545,7 +566,8 @@ class FactoryExtension:
         return [
             step["name"]
             for step in (runtime.get("workflow") or {}).get("steps", [])
-            if runtime.get("steps", {}).get(step["id"], {}).get("status") in {"running", "child"}
+            if (status := runtime.get("steps", {}).get(step["id"], {}).get("status")) == "child"
+            or (status == "running" and not runtime.get("queued_action"))
         ]
 
     async def private_tool(self, name: str, context: ToolContext, arguments: Json) -> Json:

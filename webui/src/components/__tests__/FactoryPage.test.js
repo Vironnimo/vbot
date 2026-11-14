@@ -558,11 +558,20 @@ describe('Factory card decisions', () => {
     fill('factory-card-limit-tokens', '1000');
     fill('factory-step-limit-tool_calls', '8');
     await tick();
+    state.cards[0].revision = 2;
+    bridge.invalidate({ resource: 'cards', ids: ['fct-a'], revision: 2 });
+    await settle();
+    expect(document.getElementById('factory-card-limit-tokens').value).toBe(
+      '1000',
+    );
+    expect(document.getElementById('factory-step-limit-tool_calls').value).toBe(
+      '8',
+    );
     button(t('factory.limit.save')).click();
     await settle();
     expect(calls(operation, 'card.limits').at(-1)[1]).toEqual({
       id: 'fct-a',
-      expected_revision: 1,
+      expected_revision: 2,
       card_limits: { tokens: 1000 },
       step: 'implement',
       step_limits: { tool_calls: 8 },
