@@ -97,7 +97,7 @@ Card detail shows each waiting step with its own Accept/Answer/Retry, Card-level
 
 ## Agent-facing text
 
-Before changing Factory text in `agent_text.py`, `_workflows.py`, the operation descriptions in `_values.py` or the Factory section of `vbot-docs/references/extension-usage.md`, read `extensions/factory-agent-facing-text.md` for sentence reasons. System rules, the step's task and continuation data remain separated and labeled; continuations become canonical notes, never fabricated user instructions.
+Before changing Factory text in `agent_text.py`, `_workflows.py`, the operation descriptions in `_values.py` or `resources/extensions/factory/docs/usage.md`, read `extensions/factory-agent-facing-text.md` for sentence reasons. System rules, the step's task and continuation data remain separated and labeled; continuations become canonical notes, never fabricated user instructions.
 
 ## Verification routes
 

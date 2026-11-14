@@ -6,6 +6,8 @@ import re
 import zipfile
 from pathlib import Path
 
+from core.extensions import ExtensionRegistry
+from core.skills._documentation import compose_vbot_docs
 from core.skills.skills import SkillRegistry
 from tests.core.tools.skill_test_support import SkillTool
 
@@ -84,7 +86,7 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
         "SKILL.md",
         "references/extensions.md",
         "references/extension-pages.md",
-        "references/extension-usage.md",
+        "references/extension-index.md",
     ):
         for target in local_markdown_links(package / relative):
             resolved = (package / relative).parent.joinpath(target).resolve()
@@ -99,7 +101,7 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     resources = [
         "references/extensions.md",
         "references/extension-pages.md",
-        "references/extension-usage.md",
+        "references/extension-index.md",
         "assets/extensions/guard_bash.py",
         "assets/extensions/word_count.py",
         "assets/extensions/workflow_command/extension.py",
@@ -109,6 +111,35 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     assert activated["data"]["status"] == "loaded"
     assert set(resources) <= set(activated["data"]["resource_files"]["files"])
     assert_files_readable_through_the_tool(tool, "vbot-docs", resources)
+
+
+def test_bundled_extension_guides_are_readable_from_the_composed_skill(tmp_path: Path) -> None:
+    bundled = PROJECT_ROOT / "resources" / "extensions"
+    extensions = ExtensionRegistry.load(
+        tmp_path / "extensions",
+        bundled_dir=bundled,
+        disabled={directory.name for directory in bundled.iterdir() if directory.is_dir()},
+    )
+    records = extensions.records()
+    assert records and all(record.status == "disabled" for record in records)
+    package = compose_vbot_docs(SKILLS_ROOT / "vbot-docs", tmp_path / "cache", records)
+    assert package is not None
+    tool = SkillTool(tmp_path, SkillRegistry.load(package))
+    activated = tool.call({"name": "vbot-docs"})
+    resources = activated["data"]["resource_files"]["files"]
+    index = tool.call({"name": "vbot-docs", "file_path": "references/extension-index.md"})
+    for record in records:
+        assert record.manifest is not None and record.manifest.documentation, record.name
+        for guide in record.manifest.documentation:
+            path = f"references/extensions/{record.name}/{guide.path}"
+            assert path in resources
+            result = tool.call({"name": "vbot-docs", "file_path": path})
+            assert result["data"]["content"] == (record.root_path / guide.path).read_text(
+                encoding="utf-8"
+            )
+    assert index["data"]["status"] == "file_loaded"
+    for target in local_markdown_links(package / "references/extension-index.md"):
+        assert (package / "references" / target).is_file(), target
 
 
 def test_retired_browser_is_preserved_outside_discovery_roots() -> None:

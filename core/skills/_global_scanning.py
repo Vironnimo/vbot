@@ -9,13 +9,27 @@ from pathlib import Path
 from typing import Any
 
 from core.extensions import ExtensionRegistry
+from core.skills._documentation import clear_documentation_cache, compose_vbot_docs
+from core.skills._packages import PackageError
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage import StorageManager
+from core.storage.layout import DataDirectoryLayout
+from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.log_conditions import LoggedConditions
 
 _SKILLS_DIRNAME = "skills"
 
 _AGENTS_DIRNAME = "agents"
+_DOCUMENTATION_FAILURES = LoggedConditions()
+
+
+@dataclass(frozen=True)
+class PreparedGlobalSkills:
+    """One scan and its immutable documentation package, published together."""
+
+    registry: SkillRegistry
+    docs_path: Path | None
 
 
 @dataclass(frozen=True)
@@ -30,6 +44,8 @@ class _GlobalRoot:
     root: Path
     kind: str
     location: str | None = None
+    # A package-root scan belongs to its containing home for Skill Policy.
+    home: Path | None = None
 
 
 def _global_roots(
@@ -38,14 +54,15 @@ def _global_roots(
     settings: dict[str, object],
     extensions: ExtensionRegistry | None,
     logger: Any,
+    docs_path: Path | None = None,
 ) -> list[_GlobalRoot]:
     """Return the global Skill scan roots in first-found-wins precedence order.
 
     Every global source outranks the bundled Skills: the user's own global home
     (``<data_dir>/skills``) first, then the configured ``skill_directories`` in
     their listed order, then each loaded Extension's ``skills/`` folder, and the
-    bundled ``resources/skills`` last. :func:`_origin_layers` relies on the bundled
-    root being the final entry.
+    bundled Skills last. A prepared vbot-docs package replaces only its bundled
+    source package; the other bundled Skills keep their installation paths.
     """
     raw_directories = settings.get("skill_directories", [])
     folders: list[_GlobalRoot] = []
@@ -70,8 +87,29 @@ def _global_roots(
         _GlobalRoot(storage.data_dir / _SKILLS_DIRNAME, "home"),
         *folders,
         *extension_roots,
-        _GlobalRoot(resources_path / _SKILLS_DIRNAME, "bundled"),
+        *_bundled_roots(resources_path / _SKILLS_DIRNAME, docs_path),
     ]
+
+
+def _bundled_roots(root: Path, docs_path: Path | None) -> list[_GlobalRoot]:
+    if docs_path is None:
+        return [_GlobalRoot(root, "bundled")]
+    try:
+        packages = sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError:
+        # Let the ordinary scan retain its root-level access diagnostic.
+        return [_GlobalRoot(root, "bundled")]
+    roots: list[_GlobalRoot] = []
+    for candidate in packages:
+        package = docs_path if candidate.name == "vbot-docs" else candidate
+        try:
+            if not is_dir_strict(package) or not is_file_strict(package / "SKILL.md"):
+                continue
+        except OSError:
+            # Keep an unreadable package for the owning scanner's diagnostic.
+            pass
+        roots.append(_GlobalRoot(package, "bundled", home=package.parent))
+    return roots
 
 
 def _package_exclusions(
@@ -91,16 +129,15 @@ def _package_exclusions(
             continue
         for root in roots:
             if root.kind == ref.source and root.location == ref.location:
-                excluded.add((root.root.resolve(), ref.name))
-                break
+                excluded.add(((root.home or root.root).resolve(), ref.name))
     return frozenset(excluded)
 
 
-def _origin_layers(scan_roots: list[Path]) -> list[str | None]:
-    """Return the origin tags parallel to :func:`_global_roots` (bundled last)."""
-    origins: list[str | None] = [SKILL_ORIGIN_GLOBAL for _ in scan_roots[:-1]]
-    origins.append(SKILL_ORIGIN_BUNDLED)
-    return origins
+def _origin_layers(roots: list[_GlobalRoot]) -> list[str | None]:
+    """Return each root's origin without depending on how many packages it holds."""
+    return [
+        SKILL_ORIGIN_BUNDLED if root.kind == "bundled" else SKILL_ORIGIN_GLOBAL for root in roots
+    ]
 
 
 def load_global_skill_registry(
@@ -112,16 +149,38 @@ def load_global_skill_registry(
     extensions: ExtensionRegistry | None,
     disabled_packages: Iterable[SkillPackageRef],
     logger: Any,
-) -> SkillRegistry:
+    reset_documentation_cache: bool = False,
+) -> PreparedGlobalSkills:
     environment = dict(fallback_environment)
     environment.update(os.environ)
-    global_roots = _global_roots(storage, resources_path, settings, extensions, logger)
+    source = resources_path / _SKILLS_DIRNAME / "vbot-docs"
+    cache_root = DataDirectoryLayout(storage.data_dir).skill_documentation
+    condition = (source, cache_root)
+    try:
+        if reset_documentation_cache:
+            clear_documentation_cache(cache_root)
+        docs_path = compose_vbot_docs(
+            source, cache_root, extensions.records() if extensions is not None else ()
+        )
+    except (OSError, PackageError) as error:
+        # A failed build never selects a previous generation. The original
+        # bundled package remains inspectable and the normal scanner diagnoses
+        # any unreadable source; other Skills still load.
+        docs_path = None
+        if _DOCUMENTATION_FAILURES.started(condition, type(error).__name__):
+            logger.warning(
+                "Could not assemble Extension documentation (error=%s)", type(error).__name__
+            )
+    else:
+        if _DOCUMENTATION_FAILURES.ended(condition):
+            logger.info("Restored Extension documentation assembly")
+    global_roots = _global_roots(storage, resources_path, settings, extensions, logger, docs_path)
     roots = [root.root for root in global_roots]
-    return SkillRegistry.load(
+    registry = SkillRegistry.load(
         roots[0],
         extra_dirs=roots[1:],
         environment=environment,
-        origins=_origin_layers(roots),
+        origins=_origin_layers(global_roots),
         package_sources=[(root.kind, root.location) for root in global_roots],
         excluded_packages=_package_exclusions(
             global_roots,
@@ -129,3 +188,4 @@ def load_global_skill_registry(
             disabled_packages,
         ),
     )
+    return PreparedGlobalSkills(registry, docs_path)

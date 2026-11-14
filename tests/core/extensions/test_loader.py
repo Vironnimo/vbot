@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from core.extensions import API_VERSION, ExtensionRegistry, purge_extension_modules
+from core.extensions import (
+    API_VERSION,
+    ExtensionDocumentation,
+    ExtensionRegistry,
+    purge_extension_modules,
+)
 from tests.core.extensions.extension_test_support import (
     fire_run_start,
     marker_lines,
@@ -194,6 +199,7 @@ def test_each_load_failure_fails_only_its_extension(
     write_package(root, "bad_utf8", noop)
     (root / "bad_utf8" / "extension.json").write_bytes(b"\xff")
     write_package(root, "bad_version", noop, manifest={"version": 123})
+    write_package(root, "bad_unicode", noop, manifest={"description": "\ud800"})
     unavailable = write_package(
         root,
         "unreadable_manifest",
@@ -236,6 +242,7 @@ def test_each_load_failure_fails_only_its_extension(
         "bad_json": "invalid JSON",
         "bad_utf8": "not valid UTF-8",
         "bad_version": "version must be a string",
+        "bad_unicode": "valid Unicode text",
         "unreadable_manifest": "cannot read extension.json",
         "future": "api_version",
         "import_boom": "import failed: import boom",
@@ -253,6 +260,117 @@ def test_each_load_failure_fails_only_its_extension(
     assert marker_lines(marker) == ["healthy"]
     # A newer api_version is refused before import: the module body never ran.
     assert marker_lines(imported) == []
+
+
+@pytest.mark.parametrize("state", ["loaded", "disabled", "import", "register", "future", "entry"])
+def test_manifest_documentation_survives_unavailable_code_without_reading_shadowed_copies(
+    tmp_path: Path, deny_access: Callable[[Path], None], state: str
+) -> None:
+    root, bundled = tmp_path / "extensions", tmp_path / "bundled"
+    imported = tmp_path / "imported.txt"
+    source = _import_marker_source("documented", imported)
+    if state == "import":
+        source = "raise RuntimeError('import failed')\n"
+    elif state == "register":
+        source = "def register(api):\n    raise RuntimeError('registration failed')\n"
+    documents = [
+        {"path": "docs/setup.md", "title": "Setup", "description": "Configure the service."},
+        {"path": "docs/cli.md", "title": "CLI", "description": "Use its operations."},
+    ]
+    package = write_package(
+        root,
+        "documented",
+        source,
+        manifest={
+            "api_version": API_VERSION + (state == "future"),
+            "documentation": documents,
+        },
+    )
+    if state == "entry":
+        deny_access(package / "__init__.py")
+    # A later manifest must not replace, enrich or fail the winning declaration.
+    write_package(bundled, "documented", _RAISES_ON_IMPORT, manifest="invalid JSON")
+
+    registry = ExtensionRegistry.load(
+        root, disabled={"documented"} if state == "disabled" else set(), bundled_dir=bundled
+    )
+
+    winner, shadowed = registry.records()
+    assert winner.status == (state if state in {"loaded", "disabled"} else "failed")
+    assert winner.manifest is not None
+    assert winner.manifest.documentation == tuple(
+        ExtensionDocumentation(**item) for item in documents
+    )
+    assert (shadowed.status, shadowed.manifest, shadowed.error) == ("overridden", None, None)
+    assert marker_lines(imported) == (["documented"] if state == "loaded" else [])
+
+
+@pytest.mark.parametrize(
+    "documentation",
+    [
+        None,
+        {},
+        ["docs/cli.md"],
+        [{"path": "docs/cli.md", "title": "CLI"}],
+        [{"path": "docs/cli.md", "title": " ", "description": "Use the CLI."}],
+        [{"path": "docs/cli.md", "title": "\ud800", "description": "Use the CLI."}],
+        [{"path": "docs/cli.md", "title": "CLI", "description": "\ud800"}],
+        [{"path": "docs/\ud800.md", "title": "CLI", "description": "Use the CLI."}],
+        [
+            {"path": "docs/cli.md", "title": "CLI", "description": "Use the CLI."},
+            {"path": "docs/CLI.md", "title": "CLI", "description": "Same path on Windows."},
+        ],
+    ],
+)
+def test_invalid_documentation_metadata_isolated_without_importing_disabled_code(
+    tmp_path: Path, documentation: object
+) -> None:
+    root = tmp_path / "extensions"
+    for name in ("active", "disabled"):
+        write_package(root, name, _RAISES_ON_IMPORT, manifest={"documentation": documentation})
+    write_extension(root, "healthy", "def register(api):\n    pass\n")
+
+    registry = ExtensionRegistry.load(root, disabled={"disabled"})
+
+    assert [(item.name, item.status) for item in registry.records()] == [
+        ("active", "failed"),
+        ("disabled", "disabled"),
+        ("healthy", "loaded"),
+    ]
+    for name in ("active", "disabled"):
+        item = record(registry, name)
+        assert item.manifest is None
+        assert item.error and "documentation" in item.error
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../outside.md",
+        "/absolute.md",
+        "C:/docs/cli.md",
+        "docs\\cli.md",
+        "docs//cli.md",
+        "./docs/cli.md",
+        "docs/NUL.md",
+        "docs/cli.txt",
+    ],
+)
+def test_documentation_paths_are_portable_confined_markdown_files(
+    tmp_path: Path, path: str
+) -> None:
+    root = tmp_path / "extensions"
+    write_package(
+        root,
+        "bad_path",
+        _RAISES_ON_IMPORT,
+        manifest={"documentation": [{"path": path, "title": "CLI", "description": "Use the CLI."}]},
+    )
+
+    item = record(ExtensionRegistry.load(root), "bad_path")
+
+    assert item.status == "failed"
+    assert item.error and "documentation[0].path" in item.error
 
 
 def test_purge_removes_only_the_extension_namespace() -> None:

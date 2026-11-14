@@ -120,6 +120,7 @@ from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.statistics import StatisticsIndex
+from core.storage.layout import DataDirectoryLayout
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import ancestors
@@ -535,7 +536,7 @@ def bootstrap(runtime: Runtime) -> None:
         # under ``<extension>/skills/``, which ``_global_roots`` folds into the
         # global pool, so the extension layer must be in place first.
         runtime._skill_policy = SkillPolicyService(runtime._storage)
-        runtime._skills = load_global_skill_registry(
+        prepared_skills = load_global_skill_registry(
             storage=runtime._storage,
             resources_path=resources_path,
             settings=settings,
@@ -543,7 +544,9 @@ def bootstrap(runtime: Runtime) -> None:
             extensions=runtime._extensions,
             disabled_packages=runtime._skill_policy.load().disabled_packages,
             logger=runtime.logger,
+            reset_documentation_cache=True,
         )
+        runtime._skills = prepared_skills.registry
         invalid_skill_count = len(runtime._skills.invalid_diagnostics())
         if invalid_skill_count > 0:
             runtime.logger.warning(
@@ -561,7 +564,10 @@ def bootstrap(runtime: Runtime) -> None:
         # The agent skill-authoring write core refuses the bundled skills root;
         # ``skill_manage`` writes only the calling agent's private home.
         runtime._skill_authoring = SkillAuthoringService(
-            protected_roots=[resources_path / _SKILLS_DIRNAME],
+            protected_roots=[
+                resources_path / _SKILLS_DIRNAME,
+                DataDirectoryLayout(runtime._storage.data_dir).skill_documentation,
+            ],
         )
         register_skill_manage_tool(
             runtime._tools,
@@ -586,6 +592,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._skill_runtime = SkillRuntime(
             registry=runtime._skills,
+            docs_path=prepared_skills.docs_path,
             policy=runtime._skill_policy,
             storage=runtime._storage,
             agents=runtime._agents,

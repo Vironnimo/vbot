@@ -4,6 +4,18 @@ Why each sentence of the Agent-facing text the Skills domain owns exists: the Sk
 
 Repository Profile Skill preloads reuse the existing `skill_content` wrapper and expand `{baseDir}` to the absolute Skill directory. The injected `Skill directory: {absolute_path}` line gives relative script and resource references their package base before any Skill Tool call; it is included only with a selected, available preload. The Profile body remains repository-authored text. Projects owns the preload selection and reports an absent or unavailable Skill instead of pretending it loaded.
 
+## Generated Extension documentation index
+
+`core/skills/_documentation.py` builds only the separate `vbot-docs` reference index. The Skill's main instructions retain a fixed reference; its routing and source fallback reasons are in `cli/agent-facing-text.md`. Extensions own their guide prose and the titles/descriptions they declare in their manifests (`extensions/agent-facing-text.md`).
+
+| Text | Reason |
+|---|---|
+| `Read the guide for your task with the skill Tool, name vbot-docs, and the file path displayed in its link.` | The displayed path is package-relative for the existing Skill read API; the Markdown href is relative to the index so ordinary Markdown viewers also open the right file. Prevents a Model from guessing a path or using the index-relative href as a Skill argument. |
+| `Disabled or failed Extensions keep their guides for setup and troubleshooting; their commands can be unavailable until the Extension loads successfully.` | Documentation remains discoverable without successful Extension import, while operational CLI help is available only for a loaded operation catalog. Prevents treating a documentation link as execution readiness. |
+| `Status: ...` | Distinguishes installed-but-disabled or failed Extensions from loaded ones using the registry's current published scan. |
+| `No usage guides declared.` / `No Extensions discovered.` | Makes an empty guide set or installation explicit rather than leaving the Agent to infer missing output. |
+| `Unavailable: ...` and its bounded missing/access/encoding/path/size reasons | Keeps a declared but unusable guide visible without publishing a broken link, copying another file, or leaking arbitrary exception details. The remaining guides stay readable. |
+
 ## Bundled fact-check Skill
 
 `resources/skills/fact-check/SKILL.md` is a playbook over existing research and image-reading capabilities, with no registered Tool or helper script. User requirement (2026-10-31): explicit verification requests for claims in text, linked articles and screenshots; ordinary research and media authenticity are outside its scope. It uses the ordinary bundled Skill discovery and allowlist policy. Methodological basis: [AFP's fact-checking method](https://faktencheck.afp.com/Wie-wir-arbeiten), especially original evidence, context, independent corroboration and transparent sourcing; the Skill also handles unresolved claims instead of requiring a publishable debunk.

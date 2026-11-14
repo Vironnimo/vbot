@@ -1,1 +1,13 @@
-{"name":"Computer Use","version":"2.1.0","description":"Operate desktop applications on the selected computer: the server or a connected Desktop app. The selected computer needs a signed-in Windows desktop. Requires explicit permission per Agent and can ask before each app.","api_version":21}
+{
+  "name": "Computer Use",
+  "version": "2.1.0",
+  "description": "Operate desktop applications on the selected computer: the server or a connected Desktop app. The selected computer needs a signed-in Windows desktop. Requires explicit permission per Agent and can ask before each app.",
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Computer Use setup",
+      "description": "Configure desktop access, Tool opt-ins and per-app approval for the selected Computer."
+    }
+  ]
+}

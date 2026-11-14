@@ -4,7 +4,7 @@ Placement additions in `references/agents.md` and CLI help:
 
 | Text | Reason |
 |---|---|
-| `vbot-docs` routing row includes Software Factory | Finds the bundled workflow when the user asks for managed coding work instead of Extension authoring. The new usage section's sentence reasons are in `extensions/factory-agent-facing-text.md`. |
+| `vbot-docs` routing row `Use or configure an installed Extension, its CLI operations and setup` points to `references/extension-index.md`, then the requested guide. | User decision 2026-11-14: the main Skill holds one stable pointer, while the separate generated index discovers installed Extensions and their declared guides without a hard-coded list. Factory guide reasons remain in `extensions/factory-agent-facing-text.md`. |
 | `agent create\|update --placement chat\|helper\|private chooses where an Identity Agent appears.` | Exposes the same placement mutation as the Agents editor. |
 | `Omit it to create a Chat Agent or keep an existing Agent's placement.` | Distinguishes create's default from update's sparse semantics. |
 | `With private, pass --owner <agent-id> naming a Chat Agent; omit --owner for the other placements.` | Prevents incomplete or contradictory calls. |
@@ -36,7 +36,7 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 | `references/channels.md`: `Do not infer trusted names from an untrusted mail.` | A forged header can supply any name, so copying it would defeat the trust setting. |
 | `references/channels.md`: `An empty list authenticates no sender, including on an existing Channel; ... clears the list.` | Existing configurations remain readable but no longer authenticate arbitrary headers; names the setup consequence and the clear operation. |
 | `references/channels.md`: `vBot answers a mail only when a trusted receiving server verified the sender's domain ...; this proves the domain, not the individual mailbox's identity.` | DKIM/DMARC alignment is domain evidence and cannot establish local-part ownership. |
-| `references/mcp.md`: `Include "base":null for a new connection; for an edit, include "base" with the unmodified configuration from status.` / conflict recovery sentence | A separate read cannot prevent a competing create or edit from winning before save. The optional baseline is checked atomically by the MCP owner; the instruction preserves the read value instead of sending the edited draft as its own baseline (`test_mcp_management.py`, `mcpSettings.test.js`). |
+| `resources/extensions/mcp/docs/usage.md`: `Include "base":null for a new connection; for an edit, include "base" with the unmodified configuration from status.` / conflict recovery sentence | A separate read cannot prevent a competing create or edit from winning before save. The optional baseline is checked atomically by the MCP owner; the instruction preserves the read value instead of sending the edited draft as its own baseline (`test_mcp_management.py`, `mcpSettings.test.js`). |
 | Librarian `undo` help, exact `--started-at` argument and `Undo: vbot librarian undo ...` status hint | Identifies one retained pass rather than guessing the latest one; a pass can change several Skill homes whose revision ids collide, so reverting them in only the curated Agent's home is incorrect. The hint retains the selected server. |
 | Librarian owner-qualified revision names, `recorded changes of the last pass` and `Librarian pass of ... at ... undone` | Same-named shared Skills remain distinguishable, and a successful undo cannot make historical pass records look like a new set of writes. |
 | `references/skills.md`: Librarian status/undo instructions, including exact start timestamps, foreign homes and historical details after undo | Gives Agents the whole-pass operation and the source of its identity; avoids the former single-home revision recipe and distinguishes recorded history from current effects. |
@@ -289,3 +289,13 @@ The bundled `vbot-docs/references/projects-sessions.md` teaches minimal Project 
 | Summary page header, shortened-content note and no-visible-Result label | Makes chronology, omissions and unfinished calls explicit in the evidence the Agent reads. |
 | Usage own/descendant/tree/combined labels and USD note | Names attribution and disjoint cost categories; partial/unknown amounts cannot look free. |
 | `recorded-result=running` and Command id, plus the Session-search reference explanation that this is a recorded result | Distinguishes Tool invocation completion from background command completion without claiming a historical result is live state. |
+
+## Extension index fallback
+
+The source `references/extension-index.md` is replaced by the runtime's generated catalog in the composed `vbot-docs` package; it contains no Extension names.
+
+| Text | Reason |
+|---|---|
+| `The running server fills this reference...` / `This source copy has no instance-specific catalog.` | A source checkout is not evidence of the server's installed Extensions; explains why the fallback has no guide list. |
+| `Use vbot extensions list to inspect...` | Provides an actionable discovery route when reading an uncomposed source Skill. |
+| `For a loaded Extension, ... operations ... --help ...; replace the placeholders with the returned names.` | Names the existing discovery and argument-help paths while avoiding the false claim that disabled or failed Extensions can execute operations. |

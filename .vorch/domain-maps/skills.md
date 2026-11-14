@@ -12,6 +12,8 @@ Not owned here: the `skill` Tool's modes, activation payload, paging and path ru
 
 **Extension Skills.** Each loaded Extension's `skills/` folder (folders only, no code) joins the global scan roots, so its Skills are read-only **global** Skills without allowlist bypass (allowed per Agent, or by a Project's `skills_global_enabled`); the pool refreshes on Extension enable/disable/reload.
 
+The bundled `vbot-docs` package is assembled with the Extension documentation index and manifest-declared usage guides, retaining ordinary bundled Skill policy and precedence. This is documentation inside one Skill, independent of Extension Skills (`skills/loading.md` -> Extension documentation).
+
 **Scoped pool.** `runtime.skills_for(project_id, identity_agent_id=None)` merges the layers with first-found-wins precedence **own > project > shared > global > bundled**: private Skills are always allowed for their owner unless its Agent Skill Exclusions name them, the effective Project set is always allowed inside active Project Context, shared Skills insert between Project and global layers (each owner's resolved packages, never a whole home), and the Agent's `allowed_skills` minus its exclusions governs everything else. Project Agents receive the Project-derived set through their resolved allowlist. Live Runs, compaction, preview, activation and autocomplete share this policy. Shared Skills never enter the receiver's always-allowed set. Scans and caches: `skills/loading.md`.
 
 Skills are playbooks, not Tools: a script-backed bundled Skill registers no Tool; its required binary gates visibility, activation supplies the script path and contract, and the Agent runs it through `bash`.

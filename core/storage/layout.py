@@ -91,6 +91,11 @@ class DataDirectoryLayout:
         return self.artifacts / "performance"
 
     @property
+    def skill_documentation(self) -> Path:
+        """Disposable composed vbot-docs generations, owned by Skills."""
+        return self.artifacts / "skill-docs"
+
+    @property
     def temporary(self) -> Path:
         return self.artifacts / "temp"
 

@@ -21,6 +21,7 @@ from core.projects import (
 from core.skills._global_scanning import (
     _AGENTS_DIRNAME,
     _SKILLS_DIRNAME,
+    PreparedGlobalSkills,
     _global_roots,
     _GlobalRoot,
     _origin_layers,
@@ -100,8 +101,10 @@ class SkillRuntime:
         logger: Any,
         reload_skills: Callable[[], None],
         authoring: SkillAuthoringService | None = None,
+        docs_path: Path | None = None,
     ) -> None:
         self._skills = registry
+        self._docs_path = docs_path
         # Answers provenance, pins and archives of the writable homes; without it
         # the inventory carries no records and no archive.
         self._authoring = authoring
@@ -176,9 +179,15 @@ class SkillRuntime:
         self._extensions = extensions
         self._logger = logger
 
-    def replace_registry(self, registry: SkillRegistry) -> None:
+    @property
+    def docs_path(self) -> Path | None:
+        """The documentation generation installed with the current global scan."""
+        return self._docs_path
+
+    def replace_registry(self, prepared: PreparedGlobalSkills) -> None:
         with self._cache_lock:
-            self._skills = registry
+            self._skills = prepared.registry
+            self._docs_path = prepared.docs_path
             self.invalidate_project_skills()
 
     def reload_environment(self, fallback_environment: dict[str, str]) -> None:
@@ -192,7 +201,7 @@ class SkillRuntime:
             for registry in self._agent_skills.values():
                 registry.reload_environment(environment)
 
-    def load_global_registry(self) -> SkillRegistry:
+    def load_global_registry(self) -> PreparedGlobalSkills:
         return load_global_skill_registry(
             storage=self._storage,
             resources_path=self._resources_path,
@@ -216,7 +225,12 @@ class SkillRuntime:
 
     def _global_roots(self, settings: dict[str, object]) -> list[_GlobalRoot]:
         return _global_roots(
-            self._storage, self._resources_path, settings, self._extensions, self._logger
+            self._storage,
+            self._resources_path,
+            settings,
+            self._extensions,
+            self._logger,
+            self._docs_path,
         )
 
     def agent_skills_dir(self, agent_id: str) -> Path:
@@ -757,7 +771,7 @@ class SkillRuntime:
         )
         origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
-        origins.extend(_origin_layers(scan_roots))
+        origins.extend(_origin_layers(global_roots))
         package_sources.extend((root.kind, root.location) for root in global_roots)
         # First-found-wins ordering makes agent skills win over project, project over
         # shared, shared over bundled. The agent's own skills are always-allowed for
@@ -1017,7 +1031,7 @@ class SkillRuntime:
             scan_roots,
             environment,
             project_origin=project_skill_origin(project.display_name),
-            bundled_origins=_origin_layers(scan_roots),
+            bundled_origins=_origin_layers(global_roots),
             bundled_package_sources=[(root.kind, root.location) for root in global_roots],
             excluded_packages=self._disabled_packages(global_roots),
             scan=scan,

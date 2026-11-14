@@ -44,6 +44,7 @@ from core.prompts import (
     ProjectPromptContext,
     RenderedBlock,
 )
+from core.skills.policy import SkillPackageRef
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner, session_artifact_dirs
 from core.utils.config import VBOT_ROOT
@@ -209,13 +210,29 @@ def session_permissions(
     )
 
 
-def _skill_dirs(skill_registry: SkillRegistry, allowed_skills: Sequence[str] | None) -> list[Path]:
+def _skill_dirs(
+    skill_registry: SkillRegistry, allowed_skills: Sequence[str] | None, data_dir: Path
+) -> list[Path]:
     skills = (
         skill_registry.list_all()
         if allowed_skills is None
         else skill_registry.filter_allowed(list(allowed_skills))
     )
-    return [skill.path.parent if skill.path.suffix else skill.path for skill in skills]
+    directories: list[Path] = []
+    documentation = DataDirectoryLayout(data_dir).skill_documentation.resolve()
+    for skill in skills:
+        package = skill.path.parent if skill.path.suffix else skill.path
+        if (
+            skill.package_ref == SkillPackageRef("bundled", "vbot-docs")
+            and package.name == "vbot-docs"
+            and package.parent.parent == documentation
+        ):
+            # This reserved cache holds only generations of the same allowed
+            # bundled package. A live Skill read can return a newer generation
+            # during this Run; retain reads across generations, never writes.
+            package = documentation
+        directories.append(package)
+    return directories
 
 
 async def _session_overrides(
@@ -368,7 +385,7 @@ def _build_run_permissions(
         data_dir,
         owner=address,
         scratch_root=scratch_root,
-        skill_dirs=_skill_dirs(skill_registry, permissions.allowed_skills),
+        skill_dirs=_skill_dirs(skill_registry, permissions.allowed_skills, data_dir),
         loopback_port=port,
         own_hosts=own_hosts,
     )

@@ -1,6 +1,6 @@
 # Factory Agent-facing text
 
-The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`; the task texts of the bundled Workflow templates live in `resources/extensions/factory/_workflows.py`; the management operation descriptions live in `resources/extensions/factory/_values.py`; the usage section lives in `resources/skills/vbot-docs/references/extension-usage.md`. These are preventive reasons unless a concrete evaluation is named. Contracts and owners: `extensions/factory.md`.
+The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`; the task texts of the bundled Workflow templates live in `resources/extensions/factory/_workflows.py`; the management operation descriptions live in `resources/extensions/factory/_values.py`; the usage guide lives in `resources/extensions/factory/docs/usage.md`. These are preventive reasons unless a concrete evaluation is named. Contracts and owners: `extensions/factory.md`.
 
 ## Participant instructions and input
 

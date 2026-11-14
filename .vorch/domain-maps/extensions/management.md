@@ -14,9 +14,11 @@ A registration that cancels itself fails only its Extension. Cancelling a loader
 
 `ExtensionRecord` retains every discovered result in load order: identity and paths, `status`, load `error`, optional manifest, collected declarations, non-fatal `capability_errors`, and `overridden_by` for shadowed copies. `records()` includes all statuses; `diagnostics()` includes only failed records.
 
-The load path must preserve first-wins root shadowing before import. Overridden copies are not imported and their manifests are not read. Disabled winners are recorded without import but still shadow later roots.
+The load path must preserve first-wins root shadowing before import. Overridden copies are not imported and their manifests are not read. Disabled winners read their manifests without import and still shadow later roots; malformed metadata retains the disabled status with an error.
 
 A missing `extension.json` is optional; an unavailable or unreadable manifest fails its Extension before import, so its API-version requirement cannot disappear on an I/O failure.
+
+`ExtensionManifest.documentation` retains the manifest's optional `documentation` list as immutable `ExtensionDocumentation` declarations. Each entry names one usage document with its title and when-to-read description. Paths are portable Extension-root-relative Markdown paths; traversal, absolute or Windows-reserved components and case-insensitive duplicate paths fail manifest validation. Manifest text must be encodable as UTF-8, including decoded JSON escapes, so one malformed label cannot break the composed index. Declaration parsing performs no document reads: the Skill composer owns source availability, link containment and UTF-8 validation (`skills/loading.md`). Valid metadata survives import, registration, entry-point and newer-API failures, keeping setup and recovery instructions discoverable. These declarations describe documentation, not Extension Skills, and never import code to read a disabled Extension's help. Coverage: `tests/core/extensions/test_loader.py`.
 
 ## API versions
 
@@ -40,6 +42,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 
 - v27: optional required `before_tool_call` and `before_model_request` Session-owner admission callbacks and owner-scoped `host.execution_usage(group_id, run_ids=None)` reads of settled canonical consumption (`extensions/host.md`). Group usage accepts optional `query.run_ids` for exact retained Run slices.
 - v28: `host.triggers`, Extension-owned schedules and webhooks backed by Cron whose fires call an Extension handler instead of starting a Run (`extensions/host.md` -> Triggers).
+- v29: manifest-declared usage documents composed into `vbot-docs`, including documentation of disabled and failed Extensions (`Discoverable shapes and manifests` above).
 
 API 24 also preserves actionable management-refusal codes through `ExtensionOperationError(code, message)` (`core/extensions/operations.py`). `extensions.operation` maps this explicit type to the same RPC code/message; ordinary `ValueError`, even with an unrelated `.code` attribute, remains `invalid_request`. Extensions retain ownership of their domain codes and recovery choices (`test_extensions_methods.py::test_extension_operation_error_boundary`).
 
