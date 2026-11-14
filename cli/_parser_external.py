@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from cli._parser_common import _add_command_parser
+from cli._parser_common import AREA_HELP, _add_command_parser
 
 SOURCES = ("codex", "claude-code", "opencode", "hermes", "openclaw")
 
 
 def add_external_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    group = subparsers.add_parser(
-        "external", help="Read external Sessions and Memories or import them into vBot"
-    )
+    group = subparsers.add_parser("external", help=AREA_HELP["external"])
     commands = group.add_subparsers(dest="command", required=True)
     for name, description in (
         ("sources", "List supported sources and their default paths on the server"),

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-from cli._parser_common import _add_command_parser
+from cli._parser_common import AREA_HELP, _add_command_parser
 
 
 def add_service_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser("service", help="Manage optional services installed by vBot")
+    parser = subparsers.add_parser("service", help=AREA_HELP["service"])
     actions = parser.add_subparsers(dest="command", required=True)
     descriptions = {
         "status": "Show an optional service's state, installation plan and pending work",

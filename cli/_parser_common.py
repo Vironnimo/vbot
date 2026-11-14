@@ -103,6 +103,9 @@ AGENT_SECRET_SINKS = ("environment", "terminal", "files", "typing", "external_to
 
 
 AREA_HELP = {
+    "setup": "Open guided setup, show its saved status, or finish it with current settings",
+    "service": "Manage optional services installed by vBot",
+    "external": "Read external Sessions and Memories or import them into vBot",
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
     "home": "Show the application and data directories",

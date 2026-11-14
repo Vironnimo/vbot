@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from cli._parser_common import _add_target_arguments
+from cli._parser_common import AREA_HELP, _add_target_arguments
 
 
 def add_setup_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser(
         "setup",
-        help="Open guided setup, show its saved status, or finish it with current settings",
+        help=AREA_HELP["setup"],
         description=(
             "Open the shared guided setup in an interactive terminal. Use --browser to open "
             "the WebUI instead. setup status and setup finish never ask for input. "
