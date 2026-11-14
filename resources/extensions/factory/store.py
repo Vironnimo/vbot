@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from typing import Any
 
@@ -11,41 +12,40 @@ from core.extensions.operations import ExtensionOperationError
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
+from . import agent_text
+
 type Json = dict[str, Any]
 
-STATES = frozenset(
-    {"proposal", "queued", "working", "reviewing", "waiting", "integrating", "done", "discarded"}
-)
-ACTIVE_STATES = frozenset({"working", "reviewing", "integrating"})
+STATES = frozenset({"proposal", "queued", "working", "waiting", "done", "discarded"})
 FINAL_STATES = frozenset({"done", "discarded"})
+ORIGINS = frozenset({"operator", "user", "automation", "agent", "trigger", "workflow"})
+#: Version of a Card's runtime: per-step execution state.
+RUNTIME_VERSION = 2
 DATABASE_NAME = "factory"
-# Tables evolve additively: a changed object gets a new name. ``setups`` replaces
-# the role-based ``project_setups`` and ``outputs`` replaces ``reviews``; the
-# ``workflows`` migration copies both into the new tables once. An output row's
-# ``stage_id``/``stage_name`` hold the step; ``target`` the step it sends back to.
+# Tables evolve additively: a changed object gets a new name. ``workflows``
+# holds the global Workflows that replaced the per-Project ``setups`` (still on
+# disk for the migration); the shared template Library is gone and its tables
+# stay inert. An output row's ``stage_id``/``stage_name`` hold the step and
+# ``target`` the step it sends back to.
 SCHEMA_SQL = """
-CREATE TABLE setups (
- project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
- workflows_json TEXT NOT NULL DEFAULT '[]', default_workflow TEXT NOT NULL DEFAULT '',
- turn_budget INTEGER NOT NULL DEFAULT 30, base_branch TEXT NOT NULL DEFAULT 'main',
- integration_check TEXT NOT NULL DEFAULT 'merged',
+CREATE TABLE workflows (
+ id TEXT PRIMARY KEY, position REAL NOT NULL, definition_json TEXT NOT NULL,
  revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
 ) STRICT;
 CREATE TABLE cards (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
  description TEXT NOT NULL, origin TEXT NOT NULL, origin_session TEXT NOT NULL DEFAULT '',
  origin_run TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, waiting_reason TEXT NOT NULL DEFAULT '',
- position REAL NOT NULL, round INTEGER NOT NULL DEFAULT 0,
- branch TEXT NOT NULL DEFAULT '', base TEXT NOT NULL DEFAULT '', base_sha TEXT NOT NULL DEFAULT '',
- head_sha TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
- checks TEXT NOT NULL DEFAULT '',
- recommendation TEXT NOT NULL DEFAULT '', integration_reference TEXT NOT NULL DEFAULT '',
+ position REAL NOT NULL, summary TEXT NOT NULL DEFAULT '',
  group_id TEXT NOT NULL UNIQUE, runtime_json TEXT NOT NULL DEFAULT '{}',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- finished_at TEXT, workflow_id TEXT NOT NULL DEFAULT '', turns INTEGER NOT NULL DEFAULT 0
+ finished_at TEXT, workflow_id TEXT NOT NULL DEFAULT '', parent_id TEXT NOT NULL DEFAULT ''
 ) STRICT;
 CREATE INDEX cards_state_position ON cards(state, position, id);
 CREATE INDEX cards_project_state ON cards(project_id, state);
+CREATE TABLE card_triggers (
+ card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, event_json TEXT NOT NULL
+) STRICT;
 CREATE TABLE outputs (
  id INTEGER PRIMARY KEY, card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
  stage_id TEXT NOT NULL, stage_name TEXT NOT NULL, kind TEXT NOT NULL, lane INTEGER NOT NULL,
@@ -68,16 +68,6 @@ CREATE TABLE comments (
  at TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
-CREATE TABLE library_templates (
- id TEXT PRIMARY KEY, kind TEXT NOT NULL, revision INTEGER NOT NULL,
- latest_version INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-) STRICT;
-CREATE TABLE library_versions (
- template_id TEXT NOT NULL REFERENCES library_templates(id), version INTEGER NOT NULL,
- name TEXT NOT NULL, description TEXT NOT NULL, workflow_json TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(template_id, version)
-) STRICT;
 """
 _OUTPUT_FIELDS = (
     "stage_id",
@@ -98,11 +88,7 @@ _OUTPUT_FIELDS = (
     "findings_json",
     "target",
 )
-_OUTPUT_COLUMNS = (
-    "id",
-    *_OUTPUT_FIELDS,
-    "created_at",
-)
+_OUTPUT_COLUMNS = ("id", *_OUTPUT_FIELDS, "created_at")
 
 
 def _output(row: sqlite3.Row) -> Json:
@@ -128,176 +114,192 @@ def _output(row: sqlite3.Row) -> Json:
         "participant_id": value["participant_id"],
         "summary": value["summary"],
         "result": result,
-        "checks": value["checks"],
         "branch": value["branch"],
-        "base": value["base"],
-        "base_sha": value["base_sha"],
-        "head_sha": value["head_sha"],
         "findings": json.loads(value["findings_json"]),
         "target": value["target"],
         "created_at": value["created_at"],
     }
 
 
-def _migrate_workflows(connection: sqlite3.Connection) -> None:
-    """Copy role-based setups and reviews into Workflows and outputs (idempotent)."""
-    from ._workflows import legacy_workflow
+def _dump(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
+
+def _short_id(prefix: str) -> str:
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    return prefix + "".join(secrets.choice(alphabet) for _ in range(7))
+
+
+def _upgraded_runtime(old: Json, workflow: Json) -> Json:
+    """A started Card's per-step runtime; the Card waits for the user.
+
+    Steps handed in stay done; the step that was in progress waits for the user
+    to Retry it, because its Run cannot resume across the change of execution
+    groups. A Card that waited for acceptance still does.
+    """
+    done = set(old.get("done", []))
+    current = old.get("step", "")
+    steps: Json = {}
+    for step in workflow["steps"]:
+        if step["id"] in done:
+            steps[step["id"]] = {"status": "done", "passes": 1}
+        else:
+            steps[step["id"]] = {"status": "pending"}
+    runtime: Json = {
+        "version": RUNTIME_VERSION,
+        "workflow": workflow,
+        "cwd": old.get("cwd", ""),
+        "steps": steps,
+        "budget": {
+            "runs": list(old.get("budget", {}).get("runs", [])),
+            "tool_calls": int(old.get("budget", {}).get("tool_calls", 0)),
+        },
+    }
+    if old.get("card_limits") is not None:
+        runtime["card_limits"] = old["card_limits"]
+    if all(item["status"] == "done" for item in steps.values()):
+        return runtime
+    target = current if current in steps and current not in done else None
+    if target is None:
+        target = next(step["id"] for step in workflow["steps"] if step["id"] not in done)
+    steps[target] = {
+        "status": "waiting",
+        "reason": "upgraded",
+        "note": agent_text.error_message("workflow_upgrade"),
+    }
+    return runtime
+
+
+def _migrate_global_workflows(connection: sqlite3.Connection) -> None:
+    """Turn each Project setup's Workflows into global Workflows (idempotent).
+
+    A copied Workflow keeps its Project fixed, waits for final acceptance like
+    every Card did before, and keeps its id unless another Project's Workflow
+    took it. Cards follow the renamed ids; started unfinished Cards move to the
+    per-step runtime.
+    """
     tables = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    if "project_setups" in tables:
-        cursor = connection.execute(
-            "SELECT project_id, enabled, worker_profile, worker_model, worker_effort, "
-            "reviewer_profile, reviewer_model, reviewer_effort, review_rounds, turn_budget, "
-            "base_branch, integration_check, revision, updated_at, worker_source, "
-            "reviewer_source FROM project_setups"
-        )
-        columns = [column[0] for column in cursor.description]
-        for row in cursor.fetchall():
-            values = dict(zip(columns, tuple(row), strict=True))
-            workflow = legacy_workflow(values)
-            connection.execute(
-                "INSERT OR IGNORE INTO setups (project_id, enabled, workflows_json, "
-                "default_workflow, turn_budget, base_branch, integration_check, revision, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    values["project_id"],
-                    values["enabled"],
-                    _dump([workflow]),
-                    workflow["id"],
-                    values["turn_budget"],
-                    values["base_branch"],
-                    values["integration_check"],
-                    values["revision"],
-                    values["updated_at"],
-                ),
-            )
-    if "reviews" in tables and not connection.execute("SELECT 1 FROM outputs LIMIT 1").fetchone():
-        connection.execute(
-            "INSERT INTO outputs (card_id, stage_id, stage_name, kind, lane, pass, "
-            "participant_id, verdict, recommendation, findings_json, head_sha, created_at) "
-            "SELECT card_id, 'review', 'Review', kind, 0, round, participant_id, verdict, "
-            "recommendation, findings_json, reviewed_head_sha, created_at FROM reviews "
-            "WHERE card_id IN (SELECT id FROM cards) ORDER BY created_at"
-        )
-
-
-def _migrate_steps(connection: sqlite3.Connection) -> None:
-    """Rewrite setups whose Workflows still hold stages as steps (idempotent)."""
-    from ._workflows import from_stages
-
-    rows = connection.execute("SELECT project_id, workflows_json FROM setups").fetchall()
-    for project_id, raw in rows:
-        workflows = json.loads(raw)
-        if not any(isinstance(item, dict) and "stages" in item for item in workflows):
-            continue
-        converted = [
-            from_stages(item) if isinstance(item, dict) and "steps" not in item else item
-            for item in workflows
-        ]
-        connection.execute(
-            "UPDATE setups SET workflows_json = ? WHERE project_id = ?",
-            (_dump(converted), project_id),
-        )
-
-
-def _execution_runs(
-    connection: sqlite3.Connection, card_id: str, runtime: Json
-) -> tuple[list[str], list[str]]:
-    """Recover Step boundaries from transitions, never from resettable legacy turns."""
-    runs: list[str] = []
-    step_runs: list[str] = []
-    step = None
-    for event, raw in connection.execute(
-        "SELECT event, detail_json FROM card_events WHERE card_id = ? ORDER BY id", (card_id,)
-    ):
-        detail = json.loads(raw)
-        if (
-            event
-            in {
-                "started",
-                "submitted",
-                "changes_requested",
-                "sent_back",
-                "accepted",
-                "recovered_initial",
-            }
-            and detail.get("state") == "working"
-            and detail.get("step")
-        ):
-            step, step_runs = detail["step"], []
-        if event in {"run_admitted", "run_observed", "run_failed", "retry_reconciled"}:
-            run_id = detail.get("run_id")
-            if run_id and run_id not in runs:
-                runs.append(run_id)
-                step_runs.append(run_id)
-    return runs, step_runs if step == runtime.get("step") else []
-
-
-def _migrate_limits(connection: sqlite3.Connection) -> None:
-    """Keep earlier configured Run caps, while new definitions default to unlimited."""
-    for project_id, raw, turns in connection.execute(
-        "SELECT project_id, workflows_json, turn_budget FROM setups"
+    if connection.execute("SELECT 1 FROM workflows LIMIT 1").fetchone():
+        return
+    ids: dict[tuple[str, str], str] = {}
+    defaults: dict[str, str] = {}
+    snapshots: dict[str, Json] = {}
+    if "setups" in tables:
+        taken_ids: set[str] = set()
+        taken_names: set[str] = set()
+        position = 0.0
+        now = utc_now_timestamp()
+        for project_id, enabled, raw, default in connection.execute(
+            "SELECT project_id, enabled, workflows_json, default_workflow FROM setups "
+            "ORDER BY project_id"
+        ).fetchall():
+            workflows = [item for item in json.loads(raw) if isinstance(item, dict)]
+            workflows.sort(key=lambda item: item.get("id") != default)
+            for old in workflows:
+                if not isinstance(old.get("steps"), list) or not old["steps"]:
+                    continue
+                workflow_id = str(old.get("id") or "")
+                if not workflow_id or workflow_id in taken_ids:
+                    workflow_id = _short_id("w")
+                    while workflow_id in taken_ids:
+                        workflow_id = _short_id("w")
+                name = str(old.get("name") or "Workflow")
+                if name.casefold() in taken_names:
+                    name = f"{name} ({project_id})"
+                    while name.casefold() in taken_names:
+                        name += " 2"
+                taken_ids.add(workflow_id)
+                taken_names.add(name.casefold())
+                definition = {
+                    "id": workflow_id,
+                    "name": name,
+                    "description": str(old.get("description") or ""),
+                    "enabled": bool(enabled),
+                    "project_id": project_id,
+                    "final_approval": True,
+                    "steps": [
+                        {**step, "kind": "agent"} for step in old["steps"] if isinstance(step, dict)
+                    ],
+                    "triggers": [],
+                }
+                if old.get("limits"):
+                    definition["limits"] = old["limits"]
+                position += 1
+                connection.execute(
+                    "INSERT INTO workflows (id, position, definition_json, revision, updated_at) "
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (workflow_id, position, _dump(definition), now),
+                )
+                ids[(project_id, str(old.get("id") or ""))] = workflow_id
+                defaults.setdefault(project_id, workflow_id)
+                snapshots[workflow_id] = definition
+    for card_id, project_id, workflow_id, state, raw in connection.execute(
+        "SELECT id, project_id, workflow_id, state, runtime_json FROM cards"
     ).fetchall():
-        workflows = json.loads(raw)
-        for workflow in workflows:
-            for step in workflow.get("steps", []):
-                step.setdefault("limits", {"runs": turns} if turns > 0 else {})
-        connection.execute(
-            "UPDATE setups SET workflows_json = ? WHERE project_id = ?",
-            (_dump(workflows), project_id),
+        old = json.loads(raw)
+        new_workflow = ids.get((project_id, workflow_id)) or (
+            workflow_id or defaults.get(project_id, workflow_id)
         )
-    for card_id, raw in connection.execute("SELECT id, runtime_json FROM cards").fetchall():
-        runtime = json.loads(raw)
-        cap = runtime.get("settings", {}).pop("turn_budget", 0)
-        for step in runtime.get("workflow", {}).get("steps", []):
-            step.setdefault("limits", {"runs": cap} if cap > 0 else {})
-        runs, step_runs = _execution_runs(connection, card_id, runtime)
-        runtime.setdefault(
-            "budget",
-            {
-                "runs": runs,
-                "step_runs": step_runs,
-                "import_tool_usage": bool(runtime.get("workflow")),
-            },
-        )
-        connection.execute(
-            "UPDATE cards SET runtime_json = ? WHERE id = ?", (_dump(runtime), card_id)
-        )
-
-
-def _repair_limit_history(connection: sqlite3.Connection) -> None:
-    """Repair Cards already opened by the first limits migration without losing live counts."""
-    for card_id, raw in connection.execute("SELECT id, runtime_json FROM cards").fetchall():
-        runtime = json.loads(raw)
-        budget = runtime.get("budget")
-        if not budget or not runtime.get("workflow"):
+        if old.get("version") == RUNTIME_VERSION:
             continue
-        roots, current_roots = _execution_runs(connection, card_id, runtime)
-        previous = budget.get("step_runs", [])
-        # Child Runs observed since the upgrade have no Factory admission event.
-        current = list(dict.fromkeys(current_roots + [run for run in previous if run not in roots]))
-        if current != previous and not budget.get("import_tool_usage"):
-            budget["step_tool_adjustment"] = {
-                "add": [run for run in current if run not in previous],
-                "remove": [run for run in previous if run not in current],
+        started = isinstance(old.get("workflow"), dict) and old["workflow"].get("steps")
+        patch_state = state
+        if state in FINAL_STATES:
+            runtime: Json = {"version": RUNTIME_VERSION, "cwd": old.get("cwd", ""), "legacy": True}
+            if started:
+                runtime["workflow"] = {
+                    **old["workflow"],
+                    "steps": [{**step, "kind": "agent"} for step in old["workflow"]["steps"]],
+                }
+        elif started:
+            snapshot = {
+                **old["workflow"],
+                "id": new_workflow,
+                "project_id": project_id,
+                "final_approval": True,
+                "enabled": True,
+                "triggers": [],
+                "steps": [{**step, "kind": "agent"} for step in old["workflow"]["steps"]],
             }
-        budget["runs"] = list(dict.fromkeys(roots + budget.get("runs", [])))
-        budget["step_runs"] = current
+            runtime, patch_state = _upgraded_runtime(old, snapshot), "waiting"
+            if old.get("card_limits") is None and old["workflow"].get("limits"):
+                runtime["card_limits"] = old["workflow"]["limits"]
+        else:
+            runtime = {"version": RUNTIME_VERSION, "cwd": old.get("cwd", "")}
+            patch_state = "queued" if state != "proposal" else state
+        waiting_reason = ""
+        if patch_state == "waiting":
+            steps = runtime.get("steps", {})
+            waiting_reason = (
+                "upgraded"
+                if any(item.get("reason") == "upgraded" for item in steps.values())
+                else "finished"
+            )
         connection.execute(
-            "UPDATE cards SET runtime_json = ? WHERE id = ?", (_dump(runtime), card_id)
+            "UPDATE cards SET workflow_id = ?, state = ?, waiting_reason = ?, runtime_json = ? "
+            "WHERE id = ?",
+            (
+                new_workflow,
+                patch_state,
+                waiting_reason if patch_state == "waiting" else "",
+                _dump(runtime),
+                card_id,
+            ),
         )
 
 
-# ``steps`` changes the meaning of saved Workflows; older code would misread them.
+# Every migration an earlier Factory recorded stays declared: an undeclared
+# ``breaks_older`` migration makes the database refuse to open. Their data
+# steps are folded into ``global_workflows``, which reads any earlier setup.
 MIGRATIONS = (
-    Migration("workflows", apply=_migrate_workflows),
-    Migration("steps", breaks_older=True, apply=_migrate_steps),
-    # Older Workflow writers would silently drop links to shared templates.
+    Migration("workflows"),
+    Migration("steps", breaks_older=True),
     Migration("library_links", breaks_older=True),
-    Migration("execution_limits", breaks_older=True, apply=_migrate_limits),
-    Migration("execution_limit_history", breaks_older=True, apply=_repair_limit_history),
+    Migration("execution_limits", breaks_older=True),
+    Migration("execution_limit_history", breaks_older=True),
+    Migration("global_workflows", breaks_older=True, apply=_migrate_global_workflows),
 )
 
 _CARD_FIELDS = (
@@ -311,16 +313,7 @@ _CARD_FIELDS = (
     "state",
     "waiting_reason",
     "position",
-    "round",
-    "turns",
-    "branch",
-    "base",
-    "base_sha",
-    "head_sha",
     "summary",
-    "checks",
-    "recommendation",
-    "integration_reference",
     "group_id",
     "runtime_json",
     "revision",
@@ -328,40 +321,18 @@ _CARD_FIELDS = (
     "updated_at",
     "finished_at",
     "workflow_id",
-)
-_SETUP_FIELDS = (
-    "project_id",
-    "enabled",
-    "workflows_json",
-    "default_workflow",
-    "revision",
-    "updated_at",
-)
-_SETUP_KEYS = (
-    "project_id",
-    "enabled",
-    "workflows",
-    "default_workflow",
-    "revision",
-    "updated_at",
+    "parent_id",
 )
 _CARD_COLUMNS = ", ".join(_CARD_FIELDS)
-_SETUP_COLUMNS = ", ".join(_SETUP_FIELDS)
-_TEMPLATE_COLUMNS = (
-    "t.id, t.kind, t.revision, t.latest_version, t.archived, t.created_at, t.updated_at, "
-    "v.version, v.name, v.description"
-)
-_MUTABLE_CARD_FIELDS = set(_CARD_FIELDS) - {
-    "id",
+_MUTABLE_CARD_FIELDS = {
     "project_id",
-    "origin",
-    "origin_session",
-    "origin_run",
-    "group_id",
-    "created_at",
-    "runtime_json",
-    "updated_at",
-    "revision",
+    "title",
+    "description",
+    "state",
+    "waiting_reason",
+    "position",
+    "summary",
+    "finished_at",
 }
 
 
@@ -372,53 +343,15 @@ class FactoryError(ExtensionOperationError):
         super().__init__(code, message)
 
 
-def _dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-
-
 def _card(row: sqlite3.Row) -> Json:
     value = dict(row)
     value["runtime"] = json.loads(value.pop("runtime_json"))
     return value
 
 
-def _setup(row: sqlite3.Row) -> Json:
-    value = dict(row)
-    value["enabled"] = bool(value["enabled"])
-    value["workflows"] = json.loads(value.pop("workflows_json"))
-    return value
-
-
-def _template(row: sqlite3.Row) -> Json:
-    value = dict(row)
-    value["archived"] = bool(value["archived"])
-    if "workflow_json" in value:
-        value["workflow"] = json.loads(value.pop("workflow_json"))
-    return value
-
-
-def _get_template(connection: sqlite3.Connection, template_id: str, version: int | None) -> Json:
-    row = connection.execute(
-        f"SELECT {_TEMPLATE_COLUMNS}, v.workflow_json FROM library_templates t "
-        "JOIN library_versions v ON v.template_id = t.id "
-        "AND v.version = COALESCE(?, t.latest_version) WHERE t.id = ?",
-        (version, template_id),
-    ).fetchone()
-    if row is None:
-        raise FactoryError(
-            "template_not_found",
-            f"Template {template_id!r}"
-            + (f" version {version}" if version is not None else "")
-            + " does not exist. Read library.list or library.get to choose an existing version.",
-        )
-    value = _template(row)
-    value["versions"] = [
-        item[0]
-        for item in connection.execute(
-            "SELECT version FROM library_versions WHERE template_id = ? ORDER BY version DESC",
-            (template_id,),
-        )
-    ]
+def _workflow(row: sqlite3.Row) -> Json:
+    value: Json = json.loads(row["definition_json"])
+    value.update(revision=row["revision"], updated_at=row["updated_at"])
     return value
 
 
@@ -431,6 +364,18 @@ def _get(connection: sqlite3.Connection, card_id: str) -> Json:
             "card_not_found", f"Card {card_id!r} does not exist. List the Board to choose a Card."
         )
     return _card(row)
+
+
+def _get_workflow(connection: sqlite3.Connection, workflow_id: str) -> Json:
+    row = connection.execute(
+        "SELECT definition_json, revision, updated_at FROM workflows WHERE id = ?", (workflow_id,)
+    ).fetchone()
+    if row is None:
+        raise FactoryError(
+            "workflow_not_found",
+            f"Workflow {workflow_id!r} does not exist. List the Workflows to choose one.",
+        )
+    return _workflow(row)
 
 
 def _event(
@@ -448,188 +393,106 @@ class FactoryStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    async def list_templates(
-        self, *, include_archived: bool = False, after: str = "", limit: int = 50
-    ) -> Json:
-        def read(connection: sqlite3.Connection) -> Json:
-            rows = connection.execute(
-                f"SELECT {_TEMPLATE_COLUMNS} FROM library_templates t "
-                "JOIN library_versions v ON v.template_id = t.id AND v.version = t.latest_version "
-                "WHERE t.id > ? AND (? OR t.archived = 0) ORDER BY t.id LIMIT ?",
-                (after, int(include_archived), limit + 1),
-            ).fetchall()
-            values = [_template(row) for row in rows[:limit]]
-            return {
-                "templates": values,
-                "next_cursor": values[-1]["id"] if len(rows) > limit else "",
-            }
+    # Workflows
 
-        return await self.database.read_async(read)
-
-    async def get_template(self, template_id: str, version: int | None = None) -> Json:
-        return await self.database.read_async(
-            lambda connection: _get_template(connection, template_id, version)
-        )
-
-    async def publish_template(self, values: Json, *, expected_revision: int) -> Json:
-        """Append a version without changing any Project's adopted copy."""
-        at = utc_now_timestamp()
-
-        def write(connection: sqlite3.Connection) -> Json:
-            template_id = values.get("id")
-            if template_id:
-                previous = _get_template(connection, template_id, None)
-                if expected_revision != previous["revision"]:
-                    raise FactoryError(
-                        "revision_conflict",
-                        "The template changed elsewhere. Read library.get before publishing.",
-                    )
-                if previous["archived"]:
-                    raise FactoryError(
-                        "template_archived",
-                        "The template is archived. Restore it before publishing another version.",
-                    )
-                if values["kind"] != previous["kind"]:
-                    raise FactoryError(
-                        "template_kind_changed",
-                        "A template keeps its kind. Publish a separate template for another kind.",
-                    )
-                version = previous["latest_version"] + 1
-                connection.execute(
-                    "UPDATE library_templates SET revision = revision + 1, latest_version = ?, "
-                    "updated_at = ? WHERE id = ?",
-                    (version, at, template_id),
-                )
-            else:
-                if expected_revision != 0:
-                    raise FactoryError(
-                        "revision_conflict", "A new template has revision 0. Supply 0 or omit it."
-                    )
-                version = 1
-
-                def claim(candidate: str) -> bool:
-                    cursor = connection.execute(
-                        "INSERT OR IGNORE INTO library_templates "
-                        "(id, kind, revision, latest_version, archived, created_at, updated_at) "
-                        "VALUES (?, ?, 1, 1, 0, ?, ?)",
-                        (candidate, values["kind"], at, at),
-                    )
-                    return cursor.rowcount == 1
-
-                template_id = new_id("ftpl", claim=claim)
-            connection.execute(
-                "INSERT INTO library_versions "
-                "(template_id, version, name, description, workflow_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    template_id,
-                    version,
-                    values["name"],
-                    values["description"],
-                    _dump(values["workflow"]),
-                    at,
-                ),
-            )
-            return _get_template(connection, template_id, None)
-
-        return await self.database.write_async(write)
-
-    async def archive_template(
-        self, template_id: str, *, expected_revision: int, archived: bool = True
-    ) -> Json:
-        """Hide a template from insertion while keeping versions and Project links readable."""
-        at = utc_now_timestamp()
-
-        def write(connection: sqlite3.Connection) -> Json:
-            previous = _get_template(connection, template_id, None)
-            if expected_revision != previous["revision"]:
-                raise FactoryError(
-                    "revision_conflict",
-                    "The template changed elsewhere. Read library.get before "
-                    "archiving or restoring.",
-                )
-            if previous["archived"] != archived:
-                connection.execute(
-                    "UPDATE library_templates SET archived = ?, revision = revision + 1, "
-                    "updated_at = ? WHERE id = ?",
-                    (int(archived), at, template_id),
-                )
-            return _get_template(connection, template_id, None)
-
-        return await self.database.write_async(write)
-
-    async def list_setups(self) -> list[Json]:
+    async def list_workflows(self) -> list[Json]:
         return await self.database.read_async(
             lambda connection: [
-                _setup(row)
+                _workflow(row)
                 for row in connection.execute(
-                    f"SELECT {_SETUP_COLUMNS} FROM setups ORDER BY project_id"
+                    "SELECT definition_json, revision, updated_at FROM workflows "
+                    "ORDER BY position, id"
                 )
             ]
         )
 
-    async def get_setup(self, project_id: str) -> Json:
-        def read(connection: sqlite3.Connection) -> Json:
-            row = connection.execute(
-                f"SELECT {_SETUP_COLUMNS} FROM setups WHERE project_id = ?", (project_id,)
-            ).fetchone()
-            if row is None:
-                raise FactoryError(
-                    "setup_not_found",
-                    f"Project {project_id!r} has no Factory setup. Configure it in Setups first.",
-                )
-            return _setup(row)
+    async def get_workflow(self, workflow_id: str) -> Json:
+        return await self.database.read_async(
+            lambda connection: _get_workflow(connection, workflow_id)
+        )
 
-        return await self.database.read_async(read)
-
-    async def save_setup(self, values: Json, *, expected_revision: int | None = None) -> Json:
+    async def save_workflow(self, definition: Json, *, expected_revision: int | None) -> Json:
+        """Insert or replace a Workflow; ``expected_revision`` 0 creates it."""
         at = utc_now_timestamp()
+        workflow_id = definition["id"]
 
         def write(connection: sqlite3.Connection) -> Json:
-            previous = connection.execute(
-                f"SELECT {_SETUP_COLUMNS} FROM setups WHERE project_id = ?",
-                (values["project_id"],),
+            row = connection.execute(
+                "SELECT revision FROM workflows WHERE id = ?", (workflow_id,)
             ).fetchone()
-            revision = int(previous["revision"]) if previous is not None else 0
+            revision = int(row[0]) if row is not None else 0
             if expected_revision is not None and expected_revision != revision:
                 raise FactoryError(
                     "revision_conflict",
-                    "The setup changed elsewhere. Refresh it before saving your changes.",
+                    "The Workflow changed elsewhere. Refresh it before saving your changes.",
                 )
-            saved = {**values, "revision": revision + 1, "updated_at": at}
-            saved["enabled"] = int(saved["enabled"])
-            saved["workflows_json"] = _dump(saved.pop("workflows"))
-            assignments = ", ".join(
-                f"{name} = excluded.{name}" for name in _SETUP_FIELDS if name != "project_id"
-            )
-            connection.execute(
-                f"INSERT INTO setups ({_SETUP_COLUMNS}) "
-                f"VALUES ({', '.join('?' for _ in _SETUP_FIELDS)}) "
-                f"ON CONFLICT(project_id) DO UPDATE SET {assignments}",
-                tuple(saved[name] for name in _SETUP_FIELDS),
-            )
-            saved["enabled"] = bool(saved["enabled"])
-            saved["workflows"] = json.loads(saved.pop("workflows_json"))
-            return {name: saved[name] for name in (*_SETUP_KEYS,)}
+            for other_id, raw in connection.execute(
+                "SELECT id, definition_json FROM workflows WHERE id != ?", (workflow_id,)
+            ):
+                if json.loads(raw)["name"].casefold() == definition["name"].casefold():
+                    raise FactoryError(
+                        "workflow_name_taken",
+                        f"Workflow {other_id} already has the name {definition['name']!r}. "
+                        "Choose another name.",
+                    )
+            stored = {
+                key: value
+                for key, value in definition.items()
+                if key not in {"revision", "updated_at"}
+            }
+            if row is None:
+                position = connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM workflows"
+                ).fetchone()[0]
+                connection.execute(
+                    "INSERT INTO workflows (id, position, definition_json, revision, updated_at) "
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (workflow_id, position, _dump(stored), at),
+                )
+            else:
+                connection.execute(
+                    "UPDATE workflows SET definition_json = ?, revision = revision + 1, "
+                    "updated_at = ? WHERE id = ?",
+                    (_dump(stored), at, workflow_id),
+                )
+            return _get_workflow(connection, workflow_id)
 
         return await self.database.write_async(write)
 
-    async def delete_setup(self, project_id: str) -> None:
+    async def delete_workflow(self, workflow_id: str) -> None:
+        """Delete a Workflow no other Workflow starts; started Cards keep their snapshot."""
+
         def write(connection: sqlite3.Connection) -> None:
-            active = connection.execute(
-                "SELECT id FROM cards WHERE project_id = ? "
-                "AND state NOT IN ('done', 'discarded') LIMIT 1",
-                (project_id,),
-            ).fetchone()
-            if active is not None:
+            _get_workflow(connection, workflow_id)
+            for raw in connection.execute(
+                "SELECT definition_json FROM workflows WHERE id != ?", (workflow_id,)
+            ):
+                other = json.loads(raw[0])
+                if any(
+                    step.get("kind") == "workflow" and step.get("workflow") == workflow_id
+                    for step in other["steps"]
+                ):
+                    raise FactoryError(
+                        "workflow_in_use",
+                        f"Workflow {other['name']!r} starts this Workflow in one of its steps. "
+                        "Change that step before deleting this Workflow.",
+                    )
+            queued = connection.execute(
+                "SELECT COUNT(*) FROM cards WHERE workflow_id = ? "
+                "AND state IN ('proposal', 'queued')",
+                (workflow_id,),
+            ).fetchone()[0]
+            if queued:
                 raise FactoryError(
-                    "setup_in_use",
-                    "This Project has unfinished Cards. "
-                    "Finish or discard them before deleting its setup.",
+                    "workflow_in_use",
+                    f"{queued} Card(s) wait to start with this Workflow. "
+                    "Discard them or let them start before deleting it.",
                 )
-            connection.execute("DELETE FROM setups WHERE project_id = ?", (project_id,))
+            connection.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
 
         await self.database.write_async(write)
+
+    # Cards
 
     async def create_card(
         self,
@@ -642,8 +505,10 @@ class FactoryStore:
         origin_run: str = "",
         runtime: Json | None = None,
         workflow_id: str = "",
+        parent_id: str = "",
+        trigger_event: Json | None = None,
     ) -> Json:
-        if origin not in {"operator", "user", "automation", "agent"}:
+        if origin not in ORIGINS:
             raise ValueError("invalid card origin")
         at = utc_now_timestamp()
 
@@ -656,7 +521,7 @@ class FactoryStore:
                     "INSERT OR IGNORE INTO cards "
                     "(id, project_id, title, description, origin, origin_session, "
                     "origin_run, state, position, group_id, runtime_json, created_at, updated_at, "
-                    "workflow_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "workflow_id, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         card_id,
                         project_id,
@@ -668,22 +533,28 @@ class FactoryStore:
                         "proposal" if origin == "agent" else "queued",
                         position,
                         card_id,
-                        _dump(runtime or {}),
+                        _dump({"version": RUNTIME_VERSION, **(runtime or {})}),
                         at,
                         at,
                         workflow_id,
+                        parent_id,
                     ),
                 )
                 return cursor.rowcount == 1
 
             card_id = new_id("fct", claim=claim)
+            if trigger_event is not None:
+                connection.execute(
+                    "INSERT INTO card_triggers (card_id, event_json) VALUES (?, ?)",
+                    (card_id, _dump(trigger_event)),
+                )
             _event(
                 connection,
                 card_id,
                 at,
-                "user" if origin != "agent" else "factory",
+                "user" if origin in {"operator", "user"} else "factory",
                 "created",
-                {"origin": origin},
+                {"origin": origin, **({"parent": parent_id} if parent_id else {})},
             )
             return _get(connection, card_id)
 
@@ -691,6 +562,17 @@ class FactoryStore:
 
     async def get_card(self, card_id: str) -> Json:
         return await self.database.read_async(lambda connection: _get(connection, card_id))
+
+    async def trigger_event(self, card_id: str) -> Json | None:
+        """The trigger event that created a Card, if any."""
+
+        def read(connection: sqlite3.Connection) -> Json | None:
+            row = connection.execute(
+                "SELECT event_json FROM card_triggers WHERE card_id = ?", (card_id,)
+            ).fetchone()
+            return None if row is None else json.loads(row[0])
+
+        return await self.database.read_async(read)
 
     async def attention_count(self) -> int:
         return await self.database.read_async(
@@ -755,14 +637,14 @@ class FactoryStore:
             if "runtime" in changes:
                 changes["runtime_json"] = _dump(changes.pop("runtime"))
             changes.update(revision=previous["revision"] + 1, updated_at=at)
-            if patch.get("state") in FINAL_STATES:
+            if patch.get("state") in FINAL_STATES and previous["state"] not in FINAL_STATES:
                 changes["finished_at"] = at
             connection.execute(
                 f"UPDATE cards SET {', '.join(f'{name} = ?' for name in changes)} WHERE id = ?",
                 (*changes.values(), card_id),
             )
             event_detail = dict(detail or {})
-            if "state" in patch:
+            if "state" in patch and patch["state"] != previous["state"]:
                 event_detail.update(previous_state=previous["state"], state=patch["state"])
             if event is not None:
                 _event(connection, card_id, at, actor, event, event_detail)

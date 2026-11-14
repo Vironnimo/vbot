@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from core.extensions import ExtensionAPI
 from core.tools import ToolContext, ToolDisplay
 
-from ._values import OPERATION_DESCRIPTIONS, OPERATION_SCHEMAS
+from ._values import OPERATION_DESCRIPTIONS, OPERATION_SCHEMAS, SECRET_OPERATIONS
 from .agent_text import PRIVATE_TOOLS, PUBLIC_DESCRIPTION, PUBLIC_PARAMETERS
 
 type Json = dict[str, Any]
@@ -72,6 +72,7 @@ def register(api: ExtensionAPI) -> None:
             OPERATION_DESCRIPTIONS.get(name, name.replace(".", " ")),
             parameters,
             _operation_handler(service, name),
+            secret=name in SECRET_OPERATIONS,
         )
 
 

@@ -36,6 +36,9 @@ async def test_extension_triggers_are_owner_bound_and_retire_with_their_registra
         paused = await triggers.update(created["id"], enabled=False, name="Nightly run")
         assert (paused["enabled"], paused["name"]) == (False, "Nightly run")
         assert [item["id"] for item in triggers.list()] == [created["id"]]
+        triggers.check_schedule("webhook")
+        with pytest.raises(ValueError):
+            triggers.check_schedule("every blue moon")
         # Another Extension and the user's Cron surfaces do not see it.
         assert factory.triggers.list() == []
         with pytest.raises(CronJobNotFoundError):

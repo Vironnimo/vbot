@@ -1,17 +1,17 @@
-"""The Factory's persisted Card, audit history and setup revision contracts."""
+"""The Factory's persisted Card, audit history and Workflow revision contracts."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.database import DatabaseFormatError, open_offline_database
 from core.extensions.databases import extension_database_spec
-from resources.extensions.factory._values import SETUP_DEFAULTS
-from resources.extensions.factory._workflows import templates
+from resources.extensions.factory._workflows import normalize, templates
 from resources.extensions.factory.store import (
     DATABASE_NAME,
     MIGRATIONS,
@@ -20,16 +20,32 @@ from resources.extensions.factory.store import (
     FactoryStore,
 )
 
+type Json = dict[str, Any]
+
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.mark.parametrize("origin", ["operator", "user", "automation", "agent"])
+def workflow(template_id: str, **changes: Any) -> Json:
+    found = next(item for item in templates() if item["id"] == template_id)
+    return normalize({**found, **changes})
+
+
+@pytest.mark.parametrize("origin", ["operator", "user", "automation", "agent", "trigger"])
 async def test_card_origin_and_atomic_history(factory_store: FactoryStore, origin: str) -> None:
     store = factory_store
-    card = await store.create_card("project", "Objective", "Acceptance criteria", origin=origin)
+    event = {"workflow_id": "single", "trigger": "push", "request": {"ref": "main"}}
+    card = await store.create_card(
+        "project",
+        "Objective",
+        "Acceptance criteria",
+        origin=origin,
+        workflow_id="single",
+        trigger_event=event if origin == "trigger" else None,
+    )
     assert card["state"] == ("proposal" if origin == "agent" else "queued")
-    assert card["group_id"] == card["id"]
+    assert card["group_id"] == card["id"] and card["workflow_id"] == "single"
     assert (await store.history(card["id"]))["events"][0]["detail"] == {"origin": origin}
+    assert await store.trigger_event(card["id"]) == (event if origin == "trigger" else None)
     assert await store.list_cards(project_id="other") == []
     assert await store.list_cards(project_id="project", state=card["state"]) == [card]
 
@@ -72,85 +88,47 @@ async def test_card_transition_output_and_comment_commit_together(
     assert await store.history(card["id"]) == history
 
 
-async def test_setup_revisions_and_unfinished_card_lifetime(factory_store: FactoryStore) -> None:
+async def test_workflow_revisions_names_and_use(factory_store: FactoryStore) -> None:
     store = factory_store
-    setup = {**SETUP_DEFAULTS, "project_id": "project", "workflows": templates()}
-    saved = await store.save_setup(setup, expected_revision=0)
-    assert saved["revision"] == 1
-    assert saved["workflows"] == templates()
-    with pytest.raises(FactoryError):
-        await store.save_setup(setup, expected_revision=0)
-    assert await store.list_setups() == [saved]
-    card = await store.create_card("project", "Objective", "Scope", origin="agent")
-    with pytest.raises(FactoryError) as in_use:
-        await store.delete_setup("project")
-    assert in_use.value.code == "setup_in_use"
+    implement = await store.save_workflow(workflow("implement"), expected_revision=0)
+    assert (implement["revision"], implement["steps"]) == (1, workflow("implement")["steps"])
+    with pytest.raises(FactoryError) as conflict:
+        await store.save_workflow(workflow("implement"), expected_revision=0)
+    assert conflict.value.code == "revision_conflict"
+    with pytest.raises(FactoryError) as taken:
+        await store.save_workflow(workflow("plan", name="implement"), expected_revision=0)
+    assert taken.value.code == "workflow_name_taken"
+    parent = workflow("single", id="parent", name="Parent")
+    parent["steps"].append(
+        {"id": "child", "name": "Child", "kind": "workflow", "after": ["do"], "approval": False}
+        | {"workflow": "implement", "wait": True, "task": ""}
+    )
+    await store.save_workflow(parent, expected_revision=0)
+    renamed = await store.save_workflow(
+        {**workflow("implement"), "name": "Build"}, expected_revision=1
+    )
+    assert renamed["revision"] == 2
+    assert [item["id"] for item in await store.list_workflows()] == ["implement", "parent"]
+    with pytest.raises(FactoryError) as started:
+        await store.delete_workflow("implement")
+    assert started.value.code == "workflow_in_use"
+    await store.delete_workflow("parent")
+    card = await store.create_card(
+        "project", "Objective", "Scope", origin="agent", workflow_id="implement"
+    )
+    with pytest.raises(FactoryError) as queued:
+        await store.delete_workflow("implement")
+    assert queued.value.code == "workflow_in_use"
     with pytest.raises(FactoryError):
         await store.delete_card(card["id"])
     final = await store.change(card["id"], {"state": "discarded"}, actor="user", event="discarded")
     assert final["finished_at"] is not None
-    await store.delete_setup("project")
+    await store.delete_workflow("implement")
     await store.delete_card(card["id"])
-    assert await store.list_cards() == [] and await store.list_setups() == []
-
-
-async def test_library_versions_survive_archival_and_reject_stale_changes(
-    factory_store: FactoryStore,
-) -> None:
-    store = factory_store
-    values = {
-        "kind": "workflow",
-        "name": "Reusable plan",
-        "description": "Shared",
-        "workflow": templates()[1],
-    }
-    first = await store.publish_template(values, expected_revision=0)
-    changed = {**values, "id": first["id"], "name": "Reviewed plan"}
-    second = await store.publish_template(changed, expected_revision=1)
-    assert second["version"] == 2 and second["versions"] == [2, 1]
-    original = await store.get_template(first["id"], 1)
-    assert (original["name"], original["workflow"]) == (first["name"], first["workflow"])
-    assert original["latest_version"] == 2
-    with pytest.raises(FactoryError) as stale:
-        await store.publish_template(changed, expected_revision=1)
-    assert stale.value.code == "revision_conflict"
-    assert (await store.get_template(first["id"]))["versions"] == [2, 1]
-    with pytest.raises(FactoryError) as changed_kind:
-        await store.publish_template({**changed, "kind": "step"}, expected_revision=2)
-    assert changed_kind.value.code == "template_kind_changed"
-    archived = await store.archive_template(first["id"], expected_revision=2)
-    assert archived["archived"] and archived["version"] == 2 and archived["revision"] == 3
-    assert (await store.list_templates())["templates"] == []
-    listed = (await store.list_templates(include_archived=True))["templates"]
-    assert len(listed) == 1 and listed[0]["id"] == first["id"]
-    assert "workflow" not in listed[0]
-    assert (await store.get_template(first["id"], 1))["workflow"] == first["workflow"]
-    with pytest.raises(FactoryError) as hidden:
-        await store.publish_template(changed, expected_revision=3)
-    assert hidden.value.code == "template_archived"
-    restored = await store.archive_template(first["id"], expected_revision=3, archived=False)
-    assert not restored["archived"] and restored["revision"] == 4
-    assert (
-        await store.archive_template(first["id"], expected_revision=4, archived=False)
-    ) == restored
-    assert (await store.get_template(first["id"]))["versions"] == [2, 1]
-
-
-async def test_library_listing_pages_without_duplicate_or_missing_templates(
-    factory_store: FactoryStore,
-) -> None:
-    expected = []
-    for index in range(3):
-        template = await factory_store.publish_template(
-            {"kind": "workflow", "name": str(index), "description": "", "workflow": templates()[0]},
-            expected_revision=0,
-        )
-        expected.append(template["id"])
-    first = await factory_store.list_templates(limit=2)
-    assert len(first["templates"]) == 2 and first["next_cursor"]
-    second = await factory_store.list_templates(limit=2, after=first["next_cursor"])
-    assert len(second["templates"]) == 1 and not second["next_cursor"]
-    assert [item["id"] for item in first["templates"] + second["templates"]] == sorted(expected)
+    assert await store.list_cards() == [] and await store.list_workflows() == []
+    with pytest.raises(FactoryError) as missing:
+        await store.get_workflow("implement")
+    assert missing.value.code == "workflow_not_found"
 
 
 async def test_backlog_moves_are_stable_and_audited(factory_store: FactoryStore) -> None:
@@ -168,81 +146,66 @@ async def test_backlog_moves_are_stable_and_audited(factory_store: FactoryStore)
     assert (await store.history(cards[0]["id"]))["events"][-1]["event"] == "moved"
 
 
-_ROLE_SCHEMA = """
-CREATE TABLE project_setups (
+_SETUPS_SCHEMA = """
+CREATE TABLE setups (
  project_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
- worker_profile TEXT NOT NULL, worker_model TEXT NOT NULL DEFAULT '',
- worker_effort TEXT NOT NULL DEFAULT '', reviewer_profile TEXT NOT NULL,
- reviewer_model TEXT NOT NULL DEFAULT '', reviewer_effort TEXT NOT NULL DEFAULT '',
- review_rounds INTEGER NOT NULL DEFAULT 2, turn_budget INTEGER NOT NULL DEFAULT 30,
- base_branch TEXT NOT NULL DEFAULT 'main', integration_check TEXT NOT NULL DEFAULT 'merged',
- revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
- worker_source TEXT NOT NULL DEFAULT 'team', reviewer_source TEXT NOT NULL DEFAULT 'team'
-) STRICT;
-CREATE TABLE reviews (
- card_id TEXT NOT NULL, round INTEGER NOT NULL,
- kind TEXT NOT NULL, participant_id TEXT NOT NULL, verdict TEXT NOT NULL,
- recommendation TEXT NOT NULL, findings_json TEXT NOT NULL, reviewed_head_sha TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(card_id, round, participant_id)
+ workflows_json TEXT NOT NULL DEFAULT '[]', default_workflow TEXT NOT NULL DEFAULT '',
+ turn_budget INTEGER NOT NULL DEFAULT 30, base_branch TEXT NOT NULL DEFAULT 'main',
+ integration_check TEXT NOT NULL DEFAULT 'merged',
+ revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
 ) STRICT;
 """
 
 
-def _stage_workflow() -> dict[str, object]:
-    """A Workflow as the stage-based Factory saved it."""
-    lane = {"source": "agent", "agent": "coder", "model": "", "effort": ""}
-    return {
-        "id": "staged",
-        "name": "Staged",
-        "description": "",
-        "stages": [
-            {
-                "id": "implement",
-                "name": "Implement",
-                "kind": "work",
-                "output": "changes",
-                "approval": False,
-                "instructions": "",
-                "lanes": [lane],
-            },
-            {
-                "id": "review",
-                "name": "Review",
-                "kind": "review",
-                "target": "implement",
-                "rounds": 3,
-                "approval": False,
-                "instructions": "",
-                "lanes": [{**lane, "agent": "critic"}],
-            },
-        ],
-    }
+def _setup_workflows() -> list[Json]:
+    """Per-Project Workflows as the step-based Factory saved them."""
+    steps = [
+        {key: value for key, value in step.items() if key != "kind"}
+        | {"agent": "coder", "limits": {"runs": 30}}
+        for step in workflow("implement")["steps"]
+    ]
+    implement = {"id": "implement", "name": "Implement", "description": "", "steps": steps}
+    plan = {"id": "plan", "name": "Plan", "description": "", "steps": steps[:1]}
+    return [plan, implement]
 
 
-async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_path: Path) -> None:
-    old = extension_database_spec(tmp_path, "factory", DATABASE_NAME, _ROLE_SCHEMA + SCHEMA_SQL)
+async def test_project_setups_become_global_workflows_and_cards_follow(tmp_path: Path) -> None:
+    old = extension_database_spec(
+        tmp_path, "factory", DATABASE_NAME, _SETUPS_SCHEMA + SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+    )
     database = open_offline_database(old)
-    card = await FactoryStore(database).create_card("project", "Objective", "Scope", origin="user")
+    store = FactoryStore(database)
+    queued = await store.create_card("project", "Queued", "Scope", origin="user")
+    started = await store.create_card("project", "Started", "Scope", origin="user")
+    finished = await store.create_card("other", "Finished", "Scope", origin="user")
+    snapshot = _setup_workflows()[1]
 
     def seed(connection: sqlite3.Connection) -> None:
-        connection.execute(
-            "INSERT INTO project_setups (project_id, worker_profile, worker_model, "
-            "reviewer_profile, review_rounds, turn_budget, revision, updated_at, "
-            "reviewer_source) VALUES ('project', 'coder', 'test/worker', 'critic', 4, 12, 3, "
-            "'2026-01-01T00:00:00Z', 'agent')"
-        )
-        connection.execute(
-            "INSERT INTO reviews VALUES (?, 1, 'review', 'reviewer-1', 'approve', "
-            "'Accept it.', '[]', 'abc', '2026-01-01T00:00:00Z')",
-            (card["id"],),
-        )
-        connection.execute(
-            "INSERT INTO setups (project_id, enabled, workflows_json, default_workflow, "
-            "turn_budget, base_branch, integration_check, revision, updated_at) "
-            "VALUES ('staged', 1, ?, 'staged', 30, 'main', 'merged', 1, "
-            "'2026-01-01T00:00:00Z')",
-            (json.dumps([_stage_workflow()]),),
-        )
+        for project_id in ("project", "other"):
+            connection.execute(
+                "INSERT INTO setups (project_id, enabled, workflows_json, default_workflow, "
+                "revision, updated_at) VALUES (?, ?, ?, 'implement', 3, '2026-01-01T00:00:00Z')",
+                (project_id, int(project_id == "project"), json.dumps(_setup_workflows())),
+            )
+        for card, state, runtime in (
+            (queued, "queued", {"cwd": ""}),
+            (
+                started,
+                "working",
+                {
+                    "workflow": snapshot,
+                    "done": ["implement"],
+                    "step": "review",
+                    "budget": {"runs": ["one", "two"], "tool_calls": 4},
+                },
+            ),
+            (finished, "done", {"workflow": snapshot, "done": ["implement", "review"]}),
+        ):
+            connection.execute(
+                "UPDATE cards SET state = ?, workflow_id = 'implement', runtime_json = ? "
+                "WHERE id = ?",
+                (state, json.dumps(runtime), card["id"]),
+            )
 
     database.write(seed)
     database.close()
@@ -252,121 +215,45 @@ async def test_role_and_stage_based_setups_and_reviews_migrate_into_steps(tmp_pa
     database = open_offline_database(spec)
     try:
         store = FactoryStore(database)
-        setup = await store.get_setup("project")
-        workflow = setup["workflows"][0]
-        assert (
-            setup["default_workflow"],
-            workflow["steps"][0]["limits"]["runs"],
-            setup["revision"],
-        ) == (
-            workflow["id"],
-            12,
-            3,
+        workflows = await store.list_workflows()
+        # Each Project's default comes first; a later copy of an id or name gets a new one.
+        assert [(item["name"], item["project_id"], item["enabled"]) for item in workflows] == [
+            ("Implement", "other", False),
+            ("Plan", "other", False),
+            ("Implement (project)", "project", True),
+            ("Plan (project)", "project", True),
+        ]
+        assert [item["id"] for item in workflows][:2] == ["implement", "plan"]
+        renamed = workflows[2]
+        assert renamed["id"] not in {"implement", "plan"}
+        assert all(item["final_approval"] and item["triggers"] == [] for item in workflows)
+        assert [step["kind"] for step in renamed["steps"]] == ["agent"] * 3
+        assert renamed["steps"][0]["limits"] == {"runs": 30}
+        cards = {card["title"]: card for card in await store.list_cards()}
+        assert (cards["Queued"]["state"], cards["Queued"]["workflow_id"]) == (
+            "queued",
+            renamed["id"],
         )
-        implement, review, integrate = workflow["steps"]
-        # Integration after acceptance became a step that waits for approval.
-        assert (integrate["after"], integrate["approval"], integrate["agent"]) == (
-            [review["id"]],
-            True,
-            "coder",
-        )
-        assert (implement["source"], implement["agent"], implement["model"]) == (
-            "team",
-            "coder",
-            "test/worker",
-        )
-        assert (review["source"], review["agent"]) == ("agent", "critic")
-        # Four review passes allowed three send-backs.
-        assert (review["returns_to"], review["rounds"]) == (implement["id"], 3)
-        output = (await store.history(card["id"]))["outputs"][0]
-        assert (output["participant_id"], output["kind"], output["result"]) == (
-            "reviewer-1",
-            "work",
-            "Accept it.",
-        )
-        implement, review, integrate = (await store.get_setup("staged"))["workflows"][0]["steps"]
-        assert (integrate["after"], integrate["approval"]) == (["review"], True)
-        assert (implement["id"], implement["agent"], implement["returns_to"]) == (
-            "implement",
-            "coder",
-            "",
-        )
-        assert (review["after"], review["returns_to"], review["rounds"]) == (
-            ["implement"],
-            "implement",
-            2,
-        )
-    finally:
-        database.close()
-    # Old writers cannot discard limits or ignore a pending consumption repair.
-    for migrations in (MIGRATIONS[:-2], MIGRATIONS[:-1]):
-        older_writer = extension_database_spec(
-            tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=migrations
-        )
-        with pytest.raises(DatabaseFormatError):
-            open_offline_database(older_writer)
-
-
-@pytest.mark.parametrize("already_upgraded", [False, True])
-@pytest.mark.parametrize("checkpoint", [False, True])
-async def test_limit_migration_keeps_retries_and_answers_in_the_same_step(
-    tmp_path: Path, already_upgraded: bool, checkpoint: bool
-) -> None:
-    previous_spec = extension_database_spec(
-        tmp_path,
-        "factory",
-        DATABASE_NAME,
-        SCHEMA_SQL,
-        migrations=MIGRATIONS[:-1] if already_upgraded else MIGRATIONS[:-2],
-    )
-    database = open_offline_database(previous_spec)
-    store = FactoryStore(database)
-    card = await store.create_card("project", "Objective", "Scope", origin="user")
-    runtime = {
-        "workflow": {"steps": [{"id": "plan"}, {"id": "implement"}, {"id": "review"}]},
-        "settings": {"turn_budget": 9},
-        "step": "review" if checkpoint else "implement",
-    }
-    if already_upgraded:
-        runtime["budget"] = {
-            "runs": ["plan", "first", "answered"],
-            "step_runs": ["answered"],
-            "tool_calls": 20,
-            "step_tool_calls": 3,
+        assert cards["Queued"]["runtime"] == {"version": 2, "cwd": ""}
+        upgraded = cards["Started"]
+        assert (upgraded["state"], upgraded["waiting_reason"]) == ("waiting", "upgraded")
+        runtime = upgraded["runtime"]
+        assert runtime["workflow"]["id"] == renamed["id"]
+        assert {key: value["status"] for key, value in runtime["steps"].items()} == {
+            "implement": "done",
+            "review": "waiting",
+            "integrate": "pending",
         }
-    for event, detail in (
-        ("started", {"step": "plan", "state": "working"}),
-        ("run_admitted", {"run_id": "plan"}),
-        ("submitted", {"step": "implement", "state": "working"}),
-        ("run_admitted", {"run_id": "first"}),
-        ("answered", {"state": "working"}),
-        ("run_admitted", {"run_id": "answered"}),
-        # A judging Step's Retry also records a step id but starts no new budget.
-        ("retried", {"step": "implement", "state": "working"}),
-        ("run_failed", {"run_id": "failed-before-request"}),
-    ):
-        await store.change(card["id"], {}, actor="factory", event=event, detail=detail)
-    await store.change(
-        card["id"], {"turns": 1, "runtime": runtime}, actor="factory", event="test_seed"
-    )
-    database.close()
-    spec = extension_database_spec(
-        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS
-    )
-    database = open_offline_database(spec)
-    try:
-        budget = (await FactoryStore(database).get_card(card["id"]))["runtime"]["budget"]
-        assert budget["runs"] == ["plan", "first", "answered", "failed-before-request"]
-        assert budget["step_runs"] == (
-            [] if checkpoint else ["first", "answered", "failed-before-request"]
-        )
-        if already_upgraded:
-            assert budget["tool_calls"] == 20 and budget["step_tool_calls"] == 3
-            assert budget["step_tool_adjustment"] == {
-                "add": [] if checkpoint else ["first", "failed-before-request"],
-                "remove": ["answered"] if checkpoint else [],
-            }
-        else:
-            assert budget["import_tool_usage"] is True
+        assert runtime["steps"]["review"]["reason"] == "upgraded"
+        assert runtime["budget"] == {"runs": ["one", "two"], "tool_calls": 4}
+        legacy = cards["Finished"]
+        assert (legacy["state"], legacy["runtime"]["legacy"]) == ("done", True)
+        assert legacy["runtime"]["workflow"]["steps"][0]["kind"] == "agent"
     finally:
         database.close()
+    # Older writers would misread the per-step runtime.
+    older_writer = extension_database_spec(
+        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+    )
+    with pytest.raises(DatabaseFormatError):
+        open_offline_database(older_writer)

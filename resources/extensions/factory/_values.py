@@ -9,48 +9,51 @@ from .store import FactoryError
 
 type Json = dict[str, Any]
 
-SETUP_DEFAULTS: Json = {
-    "enabled": True,
-    "workflows": [],
-    "default_workflow": "",
-}
 _STEP = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
-        "limits": LIMIT_SCHEMA,
         "name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["agent", "workflow"]},
+        "after": {"type": "array", "items": {"type": "string"}},
+        "approval": {"type": "boolean"},
+        "limits": LIMIT_SCHEMA,
         "source": {"type": "string", "enum": ["agent", "team"]},
         "agent": {"type": "string"},
         "model": {"type": "string"},
         "effort": {"type": "string"},
         "task": {"type": "string"},
-        "after": {"type": "array", "items": {"type": "string"}},
-        "approval": {"type": "boolean"},
         "returns_to": {"type": "string"},
         "rounds": {"type": "integer", "minimum": 1, "maximum": 20},
+        "workflow": {"type": "string"},
+        "wait": {"type": "boolean"},
     },
 }
-_WORKFLOW = {
+_TRIGGER = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
-        "limits": LIMIT_SCHEMA,
-        "name": {"type": "string"},
-        "description": {"type": "string"},
-        "steps": {"type": "array", "items": _STEP},
-        "sources": {"type": "array", "items": {"type": "object"}},
+        "type": {"type": "string", "enum": ["schedule", "webhook"]},
+        "schedule": {"type": "string"},
+        "enabled": {"type": "boolean"},
+        "project": {"type": "string"},
+        "title": {"type": "string"},
+        "task": {"type": "string"},
     },
 }
-SETUP_PROPERTIES: Json = {
-    "project_id": {"type": "string", "minLength": 1},
-    "enabled": {"type": "boolean"},
-    "workflows": {
-        "type": "array",
-        "items": _WORKFLOW,
+WORKFLOW_SCHEMA: Json = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "enabled": {"type": "boolean"},
+        "project_id": {"type": "string"},
+        "final_approval": {"type": "boolean"},
+        "limits": LIMIT_SCHEMA,
+        "steps": {"type": "array", "items": _STEP},
+        "triggers": {"type": "array", "items": _TRIGGER},
     },
-    "default_workflow": {"type": "string"},
-    "expected_revision": {"type": "integer", "minimum": 0},
 }
 
 
@@ -64,18 +67,9 @@ def schema(properties: Json, required: tuple[str, ...] = ()) -> Json:
 
 
 _ID = {"id": {"type": "string", "minLength": 1}}
-_PROJECT = {"project_id": {"type": "string", "minLength": 1}}
+_PROJECT = {"project_id": {"type": "string"}}
 _REVISION = {"expected_revision": {"type": "integer", "minimum": 1}}
-_VERSION = {"version": {"type": "integer", "minimum": 1}}
-_UPDATE = {
-    "workflow": _WORKFLOW,
-    "source_id": {"type": "string", "minLength": 1},
-    **_VERSION,
-    "resolutions": {
-        "type": "object",
-        "additionalProperties": {"type": "string", "enum": ["local", "template"]},
-    },
-}
+_STEP_CHOICE = {"step": {"type": "string"}}
 OPERATION_SCHEMAS: dict[str, Json] = {
     "catalog": schema({}),
     "board.get": schema(_PROJECT),
@@ -87,113 +81,72 @@ OPERATION_SCHEMAS: dict[str, Json] = {
             "description": {"type": "string"},
             "workflow": {"type": "string"},
         },
-        ("project_id", "title", "description"),
+        ("title", "description"),
     ),
     "card.update": schema(
         {**_ID, **_REVISION, "title": {"type": "string"}, "description": {"type": "string"}},
         ("id",),
     ),
     "card.limits": schema(
-        {**_ID, **_REVISION, "card_limits": LIMIT_SCHEMA, "step_limits": LIMIT_SCHEMA},
+        {
+            **_ID,
+            **_REVISION,
+            **_STEP_CHOICE,
+            "card_limits": LIMIT_SCHEMA,
+            "step_limits": LIMIT_SCHEMA,
+        },
         ("id", "expected_revision"),
     ),
     "card.move": schema({**_ID, "position": {"type": "number"}}, ("id", "position")),
-    "card.accept": schema({**_ID, **_REVISION}, ("id", "expected_revision")),
+    "card.accept": schema({**_ID, **_REVISION, **_STEP_CHOICE}, ("id", "expected_revision")),
     "card.send_back": schema(
-        {**_ID, "comment": {"type": "string"}, "step": {"type": "string"}}, ("id", "comment")
+        {**_ID, **_STEP_CHOICE, "comment": {"type": "string"}}, ("id", "comment")
     ),
-    "card.answer": schema({**_ID, "text": {"type": "string"}}, ("id", "text")),
+    "card.answer": schema({**_ID, **_STEP_CHOICE, "text": {"type": "string"}}, ("id", "text")),
+    "card.retry": schema({**_ID, **_STEP_CHOICE}, ("id",)),
     **{
         f"card.{action}": schema(_ID, ("id",))
-        for action in (
-            "approve_proposal",
-            "discard",
-            "delete",
-            "retry",
-        )
+        for action in ("approve_proposal", "discard", "delete")
     },
-    "setup.list": schema({}),
-    "setup.get": schema(_PROJECT, ("project_id",)),
-    "setup.update": schema(SETUP_PROPERTIES, ("project_id",)),
-    "setup.preview": schema(SETUP_PROPERTIES, ("project_id",)),
-    "setup.delete": schema(_PROJECT, ("project_id",)),
-    "library.list": schema(
-        {
-            "include_archived": {"type": "boolean"},
-            "after": {"type": "string"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
-        }
-    ),
-    "library.get": schema({**_ID, **_VERSION}, ("id",)),
-    "library.publish": schema(
-        {
-            **_ID,
-            "expected_revision": {"type": "integer", "minimum": 0},
-            "name": {"type": "string", "minLength": 1, "maxLength": 80},
-            "description": {"type": "string", "maxLength": 2000},
-            "kind": {"type": "string", "enum": ["step", "sequence", "workflow"]},
-            "workflow": _WORKFLOW,
-        },
-        ("name", "kind", "workflow"),
-    ),
-    "library.archive": schema(
-        {**_ID, **_REVISION, "archived": {"type": "boolean"}}, ("id", "expected_revision")
-    ),
-    "library.extract": schema(
-        {
-            "workflow": _WORKFLOW,
-            "step_ids": {"type": "array", "items": {"type": "string"}},
-            "source_id": {"type": "string"},
-        },
+    "workflow.list": schema({}),
+    "workflow.get": schema(_ID, ("id",)),
+    "workflow.save": schema(
+        {"workflow": WORKFLOW_SCHEMA, "expected_revision": {"type": "integer", "minimum": 0}},
         ("workflow",),
     ),
-    "library.insert": schema(
-        {
-            **_ID,
-            **_VERSION,
-            "workflow": _WORKFLOW,
-            "after": {"type": "array", "items": {"type": "string"}},
-        },
-        ("id",),
+    "workflow.preview": schema({"workflow": WORKFLOW_SCHEMA}, ("workflow",)),
+    "workflow.delete": schema(_ID, ("id",)),
+    "workflow.secret": schema(
+        {**_ID, "trigger": {"type": "string", "minLength": 1}, "rotate": {"type": "boolean"}},
+        ("id", "trigger"),
     ),
-    "library.link": schema(
-        {
-            **_ID,
-            **_VERSION,
-            "workflow": _WORKFLOW,
-            "step_ids": {"type": "array", "items": {"type": "string"}},
-            "replace_sources": {"type": "boolean"},
-        },
-        ("id", "workflow"),
-    ),
-    "library.preview_update": schema(_UPDATE, ("workflow", "source_id")),
-    "library.apply_update": schema(_UPDATE, ("workflow", "source_id", "version")),
 }
+SECRET_OPERATIONS = frozenset({"workflow.secret"})
 
 OPERATION_DESCRIPTIONS = {
-    "card.limits": "Replace the Card or current Step execution limits of a waiting Card. "
-    "Omit a scope to keep its limits; use {} to remove all limits in that scope. "
-    "Consumption is retained. Resume with card.retry after a budget pause.",
-    "library.list": "List shared templates in id order. Omit include_archived to hide archived "
-    "templates; continue with next_cursor as after.",
-    "library.get": "Read a template and its version numbers. Omit version for the latest version.",
-    "library.publish": "Publish an immutable template version. Omit id for a new template; "
-    "for an existing template supply its expected_revision. Project copies stay unchanged.",
-    "library.archive": "Archive a template while retaining its versions and Project copies. "
-    "Set archived to false to restore it.",
-    "library.extract": "Prepare a template draft from a Workflow or selected step_ids. "
-    "Supply source_id to preserve the original template's step identities when publishing "
-    "another version. Nothing is saved.",
-    "library.insert": "Insert a linked template into a Workflow draft. Omit workflow to create "
-    "a Workflow; omit after to append, or pass [] to insert at the beginning. Nothing is saved.",
-    "library.link": "Link existing steps to the template published from them without inserting "
-    "copies. Omit step_ids for the whole Workflow. Set replace_sources to true to replace "
-    "existing links fully covered by the selection; partial overlaps are refused. "
-    "Returns a draft; nothing is saved.",
-    "library.preview_update": "Preview adopting a template version in a Workflow draft. "
-    "Omit version for latest; choose local or template for each conflict id in resolutions.",
-    "library.apply_update": "Resolve adoption of the exact previewed version, refusing unresolved "
-    "conflicts. Returns a Workflow draft; save it with setup.update and its expected_revision.",
+    "board.get": "List the Board's Cards; project_id narrows it to one Project.",
+    "card.create": "Create a queued Card. Omit workflow for the first enabled Workflow; omit "
+    "project_id for a Card without a Project, or when the Workflow fixes its Project.",
+    "card.limits": "Replace the Card or one step's execution limits of a waiting Card. "
+    "Omit a scope to keep its limits; use {} to remove all limits in that scope; step_limits "
+    "needs step. Consumption is retained. Resume with card.retry after a budget pause.",
+    "card.accept": "Approve the waiting step named in step (or the first waiting one), overrule "
+    "a step that kept sending work back, or accept a finished Card.",
+    "card.send_back": "Rework the step named in step (default: the step a waiting step sends "
+    "work back to, or the last step) with your comment; the steps after it run again.",
+    "card.answer": "Answer the question of the step named in step (default: the first blocked "
+    "step).",
+    "card.retry": "Retry the failed, interrupted or paused step named in step (default: the first "
+    "one), or a Card that could not start.",
+    "workflow.list": "List the global Workflows with their triggers' state.",
+    "workflow.get": "Read one Workflow and its steps' effective Models.",
+    "workflow.save": "Create a Workflow (omit expected_revision or use 0) or replace a saved one "
+    "(its id and expected_revision). Triggers are created, changed or removed with it.",
+    "workflow.preview": "Resolve each Agent step's effective Model for an unsaved Workflow.",
+    "workflow.delete": "Delete a Workflow and its triggers. Refused while another Workflow starts "
+    "it or Cards wait to start with it.",
+    "workflow.secret": "Read a webhook trigger's secret for the sender's settings; rotate "
+    "replaces it first.",
 }
 
 

@@ -74,17 +74,18 @@ def step_input(
     earlier: list[Json],
     findings: list[Json],
     note: Json,
+    trigger: Json | None = None,
 ) -> str:
     """The first message of a step's participant."""
     workflow = card["runtime"]["workflow"]
-    position = next(
-        index for index, item in enumerate(workflow["steps"], 1) if item["id"] == step["id"]
-    )
     heading = (
-        f"Do step {json.dumps(step['name'])} ({position} of {len(workflow['steps'])}) of the "
-        f"Factory workflow {json.dumps(workflow['name'])} for this Card."
+        f"Do step {json.dumps(step['name'])} of the Factory workflow "
+        f"{json.dumps(workflow['name'])} for this Card."
     )
-    parts = [heading, _data("Card", _card(card)), _data("User comments", comments)]
+    parts = [heading, _data("Card", _card(card))]
+    if trigger:
+        parts.append(_data("Event that created the Card", trigger))
+    parts.append(_data("User comments", comments))
     if earlier:
         parts.append(_data("Results of earlier steps", [output_view(item) for item in earlier]))
     if findings:
@@ -175,8 +176,9 @@ PUBLIC_PARAMETERS: Json = {
         "project": {
             "type": "string",
             "description": (
-                "Required for create: a Project id with an enabled Factory setup. "
-                "Omit for list to include every Project."
+                "For create: the Project id the work belongs to. Omit when the work needs no "
+                "Project or the workflow always uses its own. "
+                "For list: omit to include every Project."
             ),
         },
         "title": {"type": "string", "description": "Required for create."},
@@ -190,8 +192,8 @@ PUBLIC_PARAMETERS: Json = {
         "workflow": {
             "type": "string",
             "description": (
-                "For create: the name of one of the Project's Factory workflows, such as Plan "
-                "or Implement. Omit to use the Project's default workflow."
+                "For create: the name of a Factory workflow, such as Plan or Implement. "
+                "Omit to use the first enabled workflow."
             ),
         },
         "state": {
@@ -330,9 +332,17 @@ ERROR_MESSAGES = {
         "Inspect its participant Session and retry deletion when ready."
     ),
     "workflow_upgrade": (
-        "This Card started under an earlier Factory version and cannot resume where it stopped. "
-        "Its results are kept: Accept continues with its next step or finishes it, and Send back "
-        "reworks a step with your guidance."
+        "This step was in progress when the Factory was updated and cannot resume where it "
+        "stopped. The Card's results are kept: Retry runs the step again, and Send back reworks "
+        "a step with your guidance."
+    ),
+    "child_discarded": (
+        "Card {card}, which this step started, was discarded. Retry starts a new one, or send "
+        "this Card back with your guidance."
+    ),
+    "workflow_missing": (
+        "Workflow {workflow} no longer exists. Create it again or discard this Card; Retry "
+        "starts the Card once the Workflow exists."
     ),
 }
 

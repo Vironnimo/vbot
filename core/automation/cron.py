@@ -618,7 +618,7 @@ class CronService:
         ISO instant, or ``webhook``. Each fire calls the Extension's handler
         (:meth:`set_owner_handler`) with a :class:`CronFire`.
         """
-        parsed = self._owned_schedule(schedule)
+        parsed = self.parse_owned_schedule(schedule)
         return await self.create_job(
             agent_id="",
             name=name,
@@ -646,7 +646,7 @@ class CronService:
         if name is not None:
             fields["name"] = name
         if schedule is not None:
-            parsed = self._owned_schedule(schedule)
+            parsed = self.parse_owned_schedule(schedule)
             if parsed.schedule_type != current.schedule_type or (
                 _schedule.format_schedule(current) != schedule.strip()
             ):
@@ -660,7 +660,8 @@ class CronService:
                 fields["status"] = status
         return await self.update_job(job_id, owner=owner, actor=f"extension:{owner}", **fields)
 
-    def _owned_schedule(self, schedule: str) -> ParsedSchedule:
+    def parse_owned_schedule(self, schedule: str) -> ParsedSchedule:
+        """Parse a schedule an Extension trigger may use; raise CronJobValidationError otherwise."""
         parsed = self.parse_schedule(schedule)
         if parsed.schedule_type not in OWNED_SCHEDULE_TYPES:
             raise CronJobValidationError(

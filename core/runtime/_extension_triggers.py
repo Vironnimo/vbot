@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from core.automation.cron import CronFire, CronJob, CronOwner, CronService
+from core.automation.cron import CronFire, CronJob, CronOwner, CronService, CronServiceError
 from core.utils.logging import get_logger
 
 #: What an Extension's handler receives for each fire: ``CronFire.to_dict()``.
@@ -98,6 +98,14 @@ class ExtensionTriggers:
         """
         self._require_current()
         self._handlers.set(self._identity, handler)
+
+    def check_schedule(self, schedule: str) -> None:
+        """Raise ValueError with a readable reason when a trigger cannot use ``schedule``."""
+        self._require_current()
+        try:
+            self._cron.parse_owned_schedule(schedule)
+        except CronServiceError as error:
+            raise ValueError(str(error)) from error
 
     def list(self) -> list[dict[str, Any]]:
         self._require_current()
