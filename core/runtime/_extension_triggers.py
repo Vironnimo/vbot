@@ -167,7 +167,7 @@ class ExtensionTriggers:
             "id": job.id,
             "key": job.owner.key,
             "name": job.name,
-            "schedule": self._cron.format_schedule(job),
+            "schedule": job.owner_schedule or self._cron.format_schedule(job),
             "schedule_type": job.schedule_type,
             "enabled": job.status == "active",
             "status": job.status,

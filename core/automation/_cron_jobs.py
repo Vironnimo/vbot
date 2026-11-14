@@ -160,6 +160,7 @@ _MUTABLE_FIELDS = frozenset(
         "email",
         "permission_ceiling",
         "notification_policy",
+        "owner_schedule",
     )
 )
 
@@ -736,6 +737,8 @@ class CronJob:
     run_overrides: AgentOverrides | None = None
     # The Extension a job belongs to; its fires call that Extension instead of starting a Run.
     owner: CronOwner | None = None
+    # Preserve relative source expressions across Extension reconciliation.
+    owner_schedule: str | None = None
     # Retain the container even when only future fields remain after known settings clear.
     _run_overrides_unknown: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -784,7 +787,8 @@ class CronJob:
         data = self.to_dict()
         scope = {
             key: data[key]
-            for key in _MUTABLE_FIELDS - {"name", "notification_policy", "status", "remaining_runs"}
+            for key in _MUTABLE_FIELDS
+            - {"name", "notification_policy", "status", "remaining_runs", "owner_schedule"}
             if key in data
         }
         scope["id"] = self.id
@@ -867,6 +871,8 @@ class CronJob:
             # An Extension's trigger has neither an Agent nor a prompt.
             del data["agent_id"], data["prompt"]
             data["owner"] = self.owner.to_dict()
+            if self.owner_schedule is not None:
+                data["owner_schedule"] = self.owner_schedule
         if self.run_overrides is not None or self._run_overrides_unknown:
             data["run_overrides"] = {
                 **deepcopy(self._run_overrides_unknown),
@@ -972,6 +978,7 @@ class CronJob:
             ),
             operator_approval=payload.get("operator_approval"),
             owner=None if payload.get("owner") is None else CronOwner.from_dict(payload["owner"]),
+            owner_schedule=payload.get("owner_schedule"),
         )
 
 
@@ -1386,6 +1393,8 @@ def normalize_job_fields(job: CronJob) -> None:
     if job.owner is not None:
         _normalize_owned_job(job)
         return
+    if job.owner_schedule is not None:
+        raise CronJobValidationError("owner_schedule requires an Extension owner")
     if not isinstance(job.agent_id, str) or not is_valid_agent_id(job.agent_id.strip()):
         raise CronJobValidationError(
             "agent_id must be 1-64 characters using only letters, numbers, hyphen, or underscore"
@@ -1523,6 +1532,10 @@ def _normalize_owned_job(job: CronJob) -> None:
     """An Extension's job has a name and a schedule, and nothing that starts a Run."""
     if not isinstance(job.owner, CronOwner):
         raise CronJobValidationError("owner must name an Extension and a key")
+    if job.owner_schedule is not None and (
+        not isinstance(job.owner_schedule, str) or not job.owner_schedule.strip()
+    ):
+        raise CronJobValidationError("owner_schedule must be a non-empty string")
     if not isinstance(job.name, str) or not job.name.strip():
         raise CronJobValidationError("name must be a non-empty string")
     job.name = job.name.strip()

@@ -462,6 +462,7 @@ class CronService:
         permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
         owner: CronOwner | None = None,
+        owner_schedule: str | None = None,
     ) -> CronJob:
         """Create and persist a new cron job.
 
@@ -521,6 +522,7 @@ class CronService:
                 email=email,
                 permission_ceiling=permission_ceiling,
                 owner=owner,
+                owner_schedule=owner_schedule,
             )
             self._validate_job(job, validate_references=False)
             self._check_watch_available(job)
@@ -626,6 +628,7 @@ class CronService:
             status=status,
             remaining_runs=remaining_runs,
             owner=owner,
+            owner_schedule=schedule.strip(),
             actor=f"extension:{owner.extension}",
             **parsed.as_job_fields(),  # type: ignore[arg-type]
         )
@@ -645,12 +648,19 @@ class CronService:
         fields: dict[str, Any] = {}
         if name is not None:
             fields["name"] = name
-        if schedule is not None:
+        if schedule is not None and schedule.strip() != (
+            current.owner_schedule or _schedule.format_schedule(current)
+        ):
             parsed = self.parse_owned_schedule(schedule)
-            if parsed.schedule_type != current.schedule_type or (
-                _schedule.format_schedule(current) != schedule.strip()
-            ):
+            fields["owner_schedule"] = schedule.strip()
+            same_interval = (
+                parsed.schedule_type == current.schedule_type == "interval"
+                and parsed.interval_seconds == current.interval_seconds
+            )
+            if not same_interval:
                 fields.update(parsed.as_job_fields())
+                if parsed.schedule_type != current.schedule_type:
+                    fields["remaining_runs"] = 1 if parsed.schedule_type == "once" else None
         if status is not None:
             if status not in {"active", "paused"}:
                 raise CronJobValidationError("status must be active or paused")
@@ -1830,6 +1840,7 @@ def _new_check(before: CronJob, after: CronJob, *, rename: bool = False) -> bool
 #: What an Extension's trigger can change after it was created.
 _OWNED_MUTABLE_FIELDS = frozenset(
     (
+        "owner_schedule",
         "name",
         "status",
         "remaining_runs",

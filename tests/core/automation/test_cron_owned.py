@@ -178,3 +178,30 @@ async def test_an_owned_trigger_survives_a_restart_and_validates_without_an_agen
     assert reloaded.project_occurrences(clock.now, clock.now + timedelta(days=14)).occurrences == []
     report = validate_cron_jobs_file(tmp_path / "cron" / "jobs.json")
     assert report.diagnostics == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schedule", ["in 1h", "every 60m"])
+async def test_reconciling_an_owned_schedule_preserves_its_due_time_after_restart(
+    tmp_path: Path, clock: _Clock, schedule: str
+) -> None:
+    service, _ = make_service(tmp_path)
+    job = await service.create_owned_job(
+        CronOwner("factory", "step:timer"), name="Timer", schedule=schedule
+    )
+    due = service.next_fire_at(job)
+    clock.now += timedelta(minutes=10)
+    reloaded, _ = make_service(tmp_path)
+    updated = await reloaded.update_owned_job(
+        "factory", job.id, name="Renamed", schedule=schedule, status="active"
+    )
+    assert updated.owner_schedule == schedule
+    assert reloaded.next_fire_at(updated) == due
+    if schedule.startswith("every"):
+        equivalent = await reloaded.update_owned_job("factory", job.id, schedule="every 1h")
+        assert equivalent.interval_anchor_at == job.interval_anchor_at
+    changed = await reloaded.update_owned_job("factory", job.id, schedule="in 2h")
+    assert changed.schedule_type == "once" and changed.remaining_runs == 1
+    recurring = await reloaded.update_owned_job("factory", job.id, schedule="every 1h")
+    assert recurring.schedule_type == "interval" and recurring.remaining_runs is None
+    assert validate_cron_jobs_file(tmp_path / "cron" / "jobs.json").diagnostics == ()
