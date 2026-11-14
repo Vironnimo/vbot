@@ -15,15 +15,13 @@ export function createFactoryPageModel(bridgeClient) {
   let route = $state('');
   let catalog = $state({});
   let templates = $state([]);
-  let library = $state([]);
-  let selectedTemplate = $state(null);
-  let templateDrafts = $state({});
+  let triggersAvailable = $state(true);
   let cards = $state([]);
-  let setups = $state([]);
+  let workflows = $state([]);
   let detail = $state(null);
-  let selectedSetup = $state(null);
-  let setupEffectiveModels = $state({});
-  let setupGeneration = $state(0);
+  let selectedWorkflow = $state(null);
+  let workflowEffectiveModels = $state({});
+  let newTemplate = $state('');
   let projectFilter = $state('');
   let showDiscarded = $state(false);
   let wip = $state({ running: 0, limit: 0 });
@@ -36,33 +34,27 @@ export function createFactoryPageModel(bridgeClient) {
   let disposed = false;
   let boardRequest = 0;
   let detailRequest = 0;
-  let setupRequest = 0;
-  let templateRequest = 0;
-  let libraryRequest = 0;
+  let workflowRequest = 0;
   let refreshPromise = null;
   let refreshAgain = false;
   let fullRefresh = false;
-  let refreshSetups = false;
+  let refreshWorkflows = false;
   let pickers = 0;
   let heldCatalog = null;
 
   const view = $derived(
     route.startsWith('/card/')
       ? 'card'
-      : route.startsWith('/setups')
-        ? 'setups'
-        : route.startsWith('/library')
-          ? 'library'
-          : 'board',
+      : route.startsWith('/workflows')
+        ? 'workflows'
+        : 'board',
   );
   const cardId = $derived(
     view === 'card' ? decodePart(route.split('/')[2]) : '',
   );
-  const setupId = $derived(
-    view === 'setups' ? decodePart(route.split('/')[2]) : '',
-  );
-  const templateId = $derived(
-    view === 'library' ? decodePart(route.split('/')[2]) : '',
+  // A saved Workflow's id, or 'new' while the user creates one.
+  const workflowId = $derived(
+    view === 'workflows' ? decodePart(route.split('/')[2]) : '',
   );
   const call = (operation, args = {}) => client.operation(operation, args);
 
@@ -86,6 +78,7 @@ export function createFactoryPageModel(bridgeClient) {
     const result = await call('catalog');
     if (disposed) return;
     templates = result.templates ?? [];
+    triggersAvailable = result.triggers_available !== false;
     if (pickers) heldCatalog = result.catalog ?? {};
     else catalog = result.catalog ?? {};
   }
@@ -103,34 +96,9 @@ export function createFactoryPageModel(bridgeClient) {
     wip = result.wip ?? { running: 0, limit: 0 };
   }
 
-  async function loadSetups() {
-    const result = await call('setup.list');
-    if (!disposed) setups = result.setups ?? [];
-  }
-
-  async function loadLibrary() {
-    const request = ++libraryRequest;
-    const entries = [];
-    let after = '';
-    do {
-      const result = await call('library.list', {
-        include_archived: true,
-        limit: 100,
-        ...(after ? { after } : {}),
-      });
-      entries.push(...(result.templates ?? []));
-      after = result.next_cursor ?? '';
-    } while (after && !disposed && request === libraryRequest);
-    if (!disposed && request === libraryRequest) library = entries;
-  }
-
-  async function loadTemplate() {
-    const id = templateId;
-    if (!id || id === 'new') return;
-    const request = ++templateRequest;
-    const result = await call('library.get', { id });
-    if (!disposed && request === templateRequest && id === templateId)
-      selectedTemplate = result.template;
+  async function loadWorkflows() {
+    const result = await call('workflow.list');
+    if (!disposed) workflows = result.workflows ?? [];
   }
 
   async function loadDetail() {
@@ -158,38 +126,51 @@ export function createFactoryPageModel(bridgeClient) {
       detail = result;
   }
 
-  async function loadSetup() {
-    const id = setupId;
-    if (!id) return;
-    const request = ++setupRequest;
-    const result = await call('setup.get', { project_id: id });
-    if (disposed || request !== setupRequest || id !== setupId) return;
-    selectedSetup = result.setup ?? null;
-    setupEffectiveModels = result.effective_models ?? {};
+  async function loadWorkflow() {
+    const id = workflowId;
+    if (!id || id === 'new') return;
+    const request = ++workflowRequest;
+    let result;
+    try {
+      result = await call('workflow.get', { id });
+    } catch (cause) {
+      if (
+        cause?.code === 'workflow_not_found' &&
+        !disposed &&
+        request === workflowRequest &&
+        id === workflowId
+      ) {
+        selectedWorkflow = null;
+        await client.replaceRoute('/workflows');
+        return;
+      }
+      throw cause;
+    }
+    if (disposed || request !== workflowRequest || id !== workflowId) return;
+    selectedWorkflow = result.workflow ?? null;
+    workflowEffectiveModels = result.effective_models ?? {};
   }
 
   // Coalesce invalidations, including a change received while reads run. A
   // mutation is never replayed by reconnect or refresh recovery.
-  function refresh({ full = false, setupsChanged = false } = {}) {
+  function refresh({ full = false, workflowsChanged = false } = {}) {
     refreshAgain = true;
     fullRefresh ||= full;
-    refreshSetups ||= full || setupsChanged;
+    refreshWorkflows ||= full || workflowsChanged;
     if (refreshPromise) return refreshPromise;
     refreshPromise = (async () => {
       while (refreshAgain && !disposed) {
         refreshAgain = false;
         const readCatalog = fullRefresh;
-        const readSetups = refreshSetups;
+        const readWorkflows = refreshWorkflows;
         fullRefresh = false;
-        refreshSetups = false;
+        refreshWorkflows = false;
         try {
           await Promise.all([
             loadBoard(),
             loadDetail(),
-            ...(readSetups ? [loadSetups(), loadSetup()] : []),
-            ...(readCatalog
-              ? [loadCatalog(), loadLibrary(), loadTemplate()]
-              : []),
+            ...(readWorkflows ? [loadWorkflows(), loadWorkflow()] : []),
+            ...(readCatalog ? [loadCatalog()] : []),
           ]);
           if (!disposed) refreshError = '';
         } catch (cause) {
@@ -209,8 +190,7 @@ export function createFactoryPageModel(bridgeClient) {
       next === '' ||
       next === '/' ||
       /^\/card\/[^/]+$/.test(next) ||
-      /^\/setups(?:\/[^/]+)?$/.test(next) ||
-      /^\/library(?:\/[^/]+)?$/.test(next);
+      /^\/workflows(?:\/[^/]+)?$/.test(next);
     if (!valid) {
       await client.replaceRoute('');
       next = '';
@@ -218,28 +198,22 @@ export function createFactoryPageModel(bridgeClient) {
     const normalized = next === '/' ? '' : next;
     if (route === normalized && connected) return;
     const previousCard = cardId;
-    const previousSetup = setupId;
-    const previousTemplate = templateId;
+    const previousWorkflow = workflowId;
     route = normalized;
     error = '';
     if (cardId !== previousCard) detail = null;
-    if (setupId !== previousSetup) {
-      selectedSetup = null;
-      setupEffectiveModels = {};
+    if (workflowId !== previousWorkflow) {
+      selectedWorkflow = null;
+      workflowEffectiveModels = {};
     }
-    if (templateId !== previousTemplate) selectedTemplate = null;
-    // Projects and Agents change outside the page; setups read them fresh.
-    if (
-      load &&
-      (normalized.startsWith('/setups') || normalized.startsWith('/library'))
-    )
+    // Projects and Agents change outside the page; the editor reads them fresh.
+    if (load && normalized.startsWith('/workflows'))
       void loadCatalog().catch(() => {});
-    if (!load || (!cardId && !setupId && !templateId)) return;
+    if (!load || (!cardId && (!workflowId || workflowId === 'new'))) return;
     detailLoading = true;
     try {
       if (cardId) await loadDetail();
-      if (setupId) await loadSetup();
-      if (templateId) await loadTemplate();
+      if (workflowId) await loadWorkflow();
     } catch (cause) {
       if (!disposed && route === normalized) error = failureText(cause);
     } finally {
@@ -274,22 +248,14 @@ export function createFactoryPageModel(bridgeClient) {
     cards = cards.map((entry) => (entry.id === card.id ? card : entry));
   }
 
-  function acceptSavedSetup(setup, effectiveModels) {
-    if (setupId === setup.project_id) selectedSetup = setup;
-    if (setupId === setup.project_id && effectiveModels)
-      setupEffectiveModels = effectiveModels;
-    setups = [
-      ...setups.filter((entry) => entry.project_id !== setup.project_id),
-      setup,
-    ];
-  }
-
-  function acceptSavedTemplate(template) {
-    if (templateId === template.id) selectedTemplate = template;
-    library = [
-      ...library.filter((entry) => entry.id !== template.id),
-      template,
-    ];
+  function acceptSavedWorkflow(workflow, effectiveModels) {
+    if (workflowId === workflow.id) {
+      selectedWorkflow = workflow;
+      if (effectiveModels) workflowEffectiveModels = effectiveModels;
+    }
+    workflows = workflows.some((entry) => entry.id === workflow.id)
+      ? workflows.map((entry) => (entry.id === workflow.id ? workflow : entry))
+      : [...workflows, workflow];
   }
 
   async function mutate(operation, args) {
@@ -300,14 +266,15 @@ export function createFactoryPageModel(bridgeClient) {
       const result = await call(operation, args);
       if (disposed) return null;
       if (result.card) acceptSavedCard(result.card);
-      if (result.setup) acceptSavedSetup(result.setup, result.effective_models);
+      if (result.workflow)
+        acceptSavedWorkflow(result.workflow, result.effective_models);
       if (operation === 'card.delete') await client.replaceRoute('');
-      if (operation === 'setup.delete') {
-        selectedSetup = null;
-        setupEffectiveModels = {};
-        setupGeneration += 1;
+      if (operation === 'workflow.delete') {
+        workflows = workflows.filter((entry) => entry.id !== args.id);
+        selectedWorkflow = null;
+        await client.replaceRoute('/workflows');
       }
-      await refresh({ setupsChanged: operation.startsWith('setup.') });
+      await refresh({ workflowsChanged: operation.startsWith('workflow.') });
       return result;
     } catch (cause) {
       if (!disposed) error = failureText(cause);
@@ -365,8 +332,8 @@ export function createFactoryPageModel(bridgeClient) {
     });
     const offInvalidation = client.onInvalidation(({ change } = {}) => {
       void refresh({
-        full: !change || change?.resource === 'library',
-        setupsChanged: change?.resource === 'setups',
+        full: !change,
+        workflowsChanged: change?.resource === 'workflows',
       });
     });
     if (client.context) {
@@ -392,16 +359,7 @@ export function createFactoryPageModel(bridgeClient) {
     filterProject,
     pickerOpen,
     acceptSavedCard,
-    acceptSavedSetup,
-    acceptSavedTemplate,
-    loadLibrary,
-    getTemplateDraft: (id) => templateDrafts[id],
-    keepTemplateDraft: (id, draft) => {
-      templateDrafts[id] = draft;
-    },
-    clearTemplateDraft: (id) => {
-      delete templateDrafts[id];
-    },
+    acceptSavedWorkflow,
     openSession,
     get route() {
       return route;
@@ -412,17 +370,8 @@ export function createFactoryPageModel(bridgeClient) {
     get cardId() {
       return cardId;
     },
-    get setupId() {
-      return setupId;
-    },
-    get templateId() {
-      return templateId;
-    },
-    get library() {
-      return library;
-    },
-    get selectedTemplate() {
-      return selectedTemplate;
+    get workflowId() {
+      return workflowId;
     },
     get catalog() {
       return catalog;
@@ -430,17 +379,27 @@ export function createFactoryPageModel(bridgeClient) {
     get templates() {
       return templates;
     },
+    get triggersAvailable() {
+      return triggersAvailable;
+    },
+    // The template a Workflow created on /workflows/new starts from.
+    get newTemplate() {
+      return newTemplate;
+    },
+    set newTemplate(value) {
+      newTemplate = value;
+    },
     get cards() {
       return cards;
     },
-    get setups() {
-      return setups;
+    get workflows() {
+      return workflows;
     },
     get detail() {
       return detail;
     },
-    get selectedSetup() {
-      return selectedSetup;
+    get selectedWorkflow() {
+      return selectedWorkflow;
     },
     get projectFilter() {
       return projectFilter;
@@ -451,11 +410,8 @@ export function createFactoryPageModel(bridgeClient) {
     set showDiscarded(value) {
       showDiscarded = value;
     },
-    get setupEffectiveModels() {
-      return setupEffectiveModels;
-    },
-    get setupGeneration() {
-      return setupGeneration;
+    get workflowEffectiveModels() {
+      return workflowEffectiveModels;
     },
     get wip() {
       return wip;

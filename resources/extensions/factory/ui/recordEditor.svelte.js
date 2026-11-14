@@ -37,7 +37,7 @@ export function createRecordEditor(options) {
       baseline = options.project(record);
       revision = 0;
       exists = false;
-      notice = t('factory.setupDeleted');
+      notice = t('factory.recordDeleted');
       return;
     }
     const saved = options.project(record);

@@ -1,114 +1,18 @@
 export default {
   'factory.title': 'Software Factory',
   'factory.board': 'Board',
-  'factory.setups': 'Project setups',
-  'factory.library': 'Library',
-  'factory.library.help':
-    'Reusable steps, step sequences and Workflows for every Project.',
-  'factory.library.new': 'New template',
-  'factory.library.emptyList':
-    'No templates yet. Create one here or save steps from a Project setup.',
-  'factory.library.choose': 'Choose a template',
-  'factory.library.chooseHelp':
-    'Publish reusable work once, then adapt it in each Project.',
-  'factory.library.kindStep': 'Single step',
-  'factory.library.kindSequence': 'Step sequence',
-  'factory.library.kindWorkflow': 'Complete Workflow',
-  'factory.library.kind': 'Template type',
-  'factory.library.name': 'Template name',
-  'factory.library.template': 'Template',
-  'factory.library.nameRequired': 'Enter a name for the template.',
-  'factory.library.singleStepRequired':
-    'A single-step template contains exactly one step.',
-  'factory.library.version': 'Version {version}',
-  'factory.library.publish': 'Publish template',
-  'factory.library.publishVersion': 'Publish new version',
-  'factory.library.publishHelp':
-    'Edits form an unpublished draft, retained while you navigate this page. Publishing creates a version; Projects choose when to adopt it.',
-  'factory.library.agentHelp':
-    'Agents and Models can be left unset here and chosen when the template is used in a Project.',
-  'factory.library.discardDraft': 'Discard draft',
-  'factory.library.newerDraft':
-    'This template changed elsewhere. Your unpublished draft is still here. Reload the latest version before publishing.',
-  'factory.library.reload': 'Reload latest version',
-  'factory.library.archive': 'Archive template',
-  'factory.library.restore': 'Restore template',
-  'factory.library.archived': 'Archived',
-  'factory.library.showArchived': 'Show archived templates',
-  'factory.library.archivedHelp':
-    'This template is archived. Existing uses and versions remain available. Restore it to publish again.',
-  'factory.library.archiveHelp':
-    'Existing Project uses and published versions are kept. Archived templates are hidden when choosing a new template.',
-  'factory.library.history': 'Published versions',
-  'factory.library.selectVersion': 'Choose a version to inspect',
-  'factory.library.saveTemplate': 'Save to Library',
-  'factory.library.destination': 'Publish as',
-  'factory.library.sourceUse': 'Template use to publish from',
-  'factory.library.selectSource':
-    'Choose which use of this template to publish from.',
-  'factory.library.sourceNumber': 'Use {number}',
-  'factory.library.partialReplacement':
-    'Select every remaining step from an existing Library use before saving it as a new template.',
-  'factory.library.replaceLinks':
-    'This selection will use the new template in place of its current Library links.',
-  'factory.library.newVersion': 'Publish a new version',
-  'factory.library.stepsToSave': 'Steps to include',
-  'factory.library.selectSteps': 'Select at least one step.',
-  'factory.library.consecutiveHelp':
-    'Choose consecutive steps. Connections to steps outside the selection stay in the Project.',
-  'factory.library.publishExistingHelp':
-    'This publishes a new shared version. Existing Project uses keep their version until they adopt the update.',
-  'factory.library.publishLinkedHelp':
-    'The selected work is published and connected to its Library template in this Project.',
-  'factory.library.publishedUnlinked':
-    'The template was published, but the Project draft changed meanwhile. Insert the template from the Library to use it, or publish again from the current draft.',
-  'factory.library.insert': 'Insert from Library',
-  'factory.library.position': 'Insert position',
-  'factory.library.atStart': 'At the beginning',
-  'factory.library.atEnd': 'At the end',
-  'factory.library.afterStep': 'After {name}',
-  'factory.library.linkedHelp':
-    'This use stays connected to the published version. Adapt its steps here and review future updates before adopting them.',
-  'factory.library.draftChanged':
-    'The Workflow changed while this preview was open. Close it and try again with the current Workflow.',
-  'factory.library.linkedTemplates': 'Library templates in this Workflow',
-  'factory.library.upToDate': 'Up to date',
-  'factory.library.reviewUpdate': 'Review version {version}',
-  'factory.library.updateTitle': 'Update {name} to version {version}',
-  'factory.library.updateHelp':
-    'Your Project adaptations are kept. Choose which value to keep where both the Project and template changed. Started Cards keep their original Workflow.',
-  'factory.library.applyUpdate': 'Adopt update',
-  'factory.library.conflicts': 'Changes needing your choice',
-  'factory.library.changes': 'Template changes',
-  'factory.library.noChanges': 'No content changes in this version.',
-  'factory.library.localValue': 'This Project',
-  'factory.library.templateValue': 'New template version',
-  'factory.library.baseValue': 'Previously adopted version',
-  'factory.library.chooseResolution': 'Choose a value',
-  'factory.library.keepLocal': 'Keep Project value',
-  'factory.library.useTemplate': 'Use template value',
-  'factory.library.resolveField': 'Resolve {field}',
-  'factory.library.agentSource': 'Agent source',
-  'factory.library.structure': 'Step structure and order',
-  'factory.library.absent': 'Not present',
-  'factory.library.empty': 'Empty',
-  'factory.library.yes': 'Yes',
-  'factory.library.no': 'No',
   'factory.newCard': 'New card',
   'factory.createCard': 'Create card',
   'factory.project': 'Project',
   'factory.allProjects': 'All Projects',
-  'factory.selectProject': 'Select a Project',
   'factory.workflow': 'Workflow',
   'factory.cardTitle': 'Title',
   'factory.description': 'Objective and acceptance criteria',
   'factory.createHelp':
-    'New cards enter the backlog and start automatically when their Project is enabled and a WIP slot is free.',
-  'factory.noEnabledProjects': 'Enable a Project setup before creating a card.',
+    'New cards enter the backlog and start automatically when a WIP slot is free.',
   'factory.titleRequired': 'Enter a title for the card.',
   'factory.descriptionRequired':
     'Describe the objective and acceptance criteria.',
-  'factory.projectRequired': 'Choose a Project.',
   'factory.running': '{running} of {limit} cards running',
   'factory.waitingCount': '{count} waiting for you',
   'factory.showDiscarded': 'Show discarded cards',
@@ -124,9 +28,8 @@ export default {
   'factory.state.waiting': 'Waiting for you',
   'factory.state.done': 'Done',
   'factory.state.discarded': 'Discarded',
-  'factory.reason.checkpoint':
-    'Waiting for your approval to start the next step',
-  'factory.reason.finished': 'Workflow finished — ready for your decision',
+  'factory.reason.checkpoint': 'A step waits for your approval to start',
+  'factory.reason.finished': 'Workflow finished — waiting for your acceptance',
   'factory.reason.noAgreement': 'Automatic send-back limit reached',
   'factory.reason.blocked': 'An Agent needs your answer',
   'factory.reason.budget': 'Turn budget reached',
@@ -142,8 +45,6 @@ export default {
   'factory.moveUp': 'Move {title} up',
   'factory.moveDown': 'Move {title} down',
   'factory.workflowHeading': 'Workflow: {name}',
-  'factory.question': 'Question for you',
-  'factory.waitingNote': 'Why this needs you',
   'factory.latestSummary': 'Latest summary',
   'factory.outputs': 'Step results',
   'factory.document': 'Document',
@@ -204,7 +105,7 @@ export default {
   'factory.approveProposal': 'Approve proposal',
   'factory.sendBack': 'Send back',
   'factory.answer': 'Answer',
-  'factory.retry': 'Retry failed step',
+  'factory.retry': 'Retry',
   'factory.discard': 'Discard card',
   'factory.delete': 'Delete card',
   'factory.sendBackTitle': 'Send this card back for rework',
@@ -225,35 +126,19 @@ export default {
   'factory.discardDraft': 'Discard draft',
   'factory.saveConflict':
     'This record changed elsewhere. Conflicting fields now show the saved values; your other edits were kept.',
-  'factory.setupDeleted':
-    'This setup was deleted elsewhere. Your draft is kept, but creating the setup again requires an explicit Create setup action.',
-  'factory.invalid.noWorkflow': 'Add a Workflow to the setup.',
   'factory.invalid.workflowName': 'Give every Workflow a name.',
   'factory.invalid.workflowNameTaken':
-    'Two Workflows are named “{name}”. Rename one.',
+    'Another Workflow is already named “{name}”. Rename this one.',
   'factory.invalid.rounds':
-    '{location}: enter a whole number of automatic send-backs from 1 to 20.',
-  'factory.setupHelp':
-    'Workflows carry each card through steps. Choose what each Agent does, which results it receives, and where your approval is required.',
-  'factory.noProjects': 'Register a Project to configure its Factory setup.',
-  'factory.noSetups':
-    'Choose a Project to configure its Workflows and execution limits.',
-  'factory.projects': 'Projects',
-  'factory.chooseProject': 'Choose a Project',
-  'factory.boardEmpty': 'No Project is set up yet',
+    '{step}: enter a whole number of automatic send-backs from 1 to 20.',
+  'factory.boardEmpty': 'No Workflow yet',
   'factory.boardEmptyHelp':
-    'Set up the Workflows and Agents for a Project, then create cards for it.',
-  'factory.setUpProject': 'Set up a Project',
+    'Create a Workflow: its steps, Agents and triggers. Then create cards for it or let its triggers create them.',
   'factory.enabled': 'Enabled',
-  'factory.disabled': 'Disabled',
-  'factory.notConfigured': 'Not configured',
-  'factory.enableSetup': 'Factory active for this Project',
-  'factory.enableSetupHelp':
-    'Cards can be created for this Project, and queued cards start automatically when a slot is free.',
   'factory.workflows': 'Workflows',
   'factory.workflowsHelp':
-    'A card runs through one Workflow. New cards use the default Workflow unless you choose another.',
-  'factory.addWorkflow': 'Add Workflow…',
+    'A Workflow carries a card through its steps. Triggers create cards on a schedule or when a webhook is called, such as a GitHub push.',
+  'factory.addWorkflow': 'New Workflow…',
   'factory.blankWorkflow': 'Blank Workflow',
   'factory.blankWorkflowHelp': 'A single step to build on',
   'factory.templates': 'Templates',
@@ -261,16 +146,12 @@ export default {
   'factory.unnamedWorkflow': 'Unnamed Workflow',
   'factory.numberedName': '{name} {number}',
   'factory.copyName': '{name} copy',
-  'factory.defaultWorkflowTab': '{name} (default)',
   'factory.workflowName': 'Name',
   'factory.workflowDescription': 'Description',
-  'factory.defaultWorkflow': 'Default',
-  'factory.makeDefault': 'Make default',
-  'factory.duplicateWorkflow': 'Duplicate',
   'factory.deleteWorkflow': 'Delete Workflow',
   'factory.deleteWorkflowTitle': 'Delete the Workflow “{name}”?',
   'factory.deleteWorkflowHelp':
-    'Cards that already started keep their copy of it. Queued cards that chose it start with the default Workflow.',
+    'Cards that already started keep their copy of it. Its triggers stop.',
   'factory.remove': 'Remove',
   'factory.agent': 'Agent',
   'factory.selectAgent': 'Select an Agent',
@@ -301,14 +182,9 @@ export default {
   'factory.limit.stepHelp':
     'Each rework starts a new Step budget. The Card keeps counting across all Steps and rework. Pausing or retrying does not reset consumption.',
   'factory.limit.resume':
-    'Increase or clear the reached limit, then Retry. Consumption is retained. These changes apply to this Card; Step changes apply to its current execution.',
+    'Increase or clear the reached limit, then Retry. Consumption is retained. These changes apply to this Card only.',
   'factory.invalid.limits':
     'Use non-negative whole numbers for Runs, Tool calls and Tokens, and a non-negative USD amount for cost. Leave blank or enter 0 for unlimited.',
-  'factory.createSetup': 'Create setup',
-  'factory.deleteSetup': 'Delete setup',
-  'factory.deleteSetupTitle': 'Delete setup for “{project}”?',
-  'factory.deleteSetupHelp':
-    'New cards will no longer start for this Project. The server refuses deletion while cards are active.',
   'factory.history': 'Session history',
   'factory.noHistory': 'No Session activity yet.',
   'factory.olderHistory': 'Load older messages',
@@ -321,12 +197,10 @@ export default {
   'factory.queued.retry': 'Queued to retry',
   'factory.error.unavailable':
     'Factory is unavailable. Wait for the Extension to load, then retry.',
-  'factory.error.projectDisabled':
-    'Enable this Project’s Factory setup before creating cards.',
   'factory.error.projectMissing':
     'This Project is unavailable. Choose an existing Project.',
   'factory.error.invalidWorkflow':
-    'A Workflow in this setup is incomplete. Check its steps.',
+    'This Workflow is incomplete. Check its steps.',
   'factory.error.profileMissing':
     'A selected Agent is unavailable. Choose an available Agent for each step.',
   'factory.error.modelMissing':
@@ -336,11 +210,7 @@ export default {
   'factory.error.invalidEffort':
     'A selected thinking effort is unavailable. Choose another one.',
   'factory.error.workflowMissing':
-    'This Workflow no longer exists in the Project’s setup. Choose another one.',
-  'factory.error.setupMissing':
-    'This Project has no Factory setup. Create its setup first.',
-  'factory.error.setupInUse':
-    'This setup cannot be deleted while its Project has active cards.',
+    'This Workflow no longer exists. Choose another one.',
   'factory.error.cardNotFinal': 'Discard this card before deleting it.',
   'factory.error.conflict':
     'This record changed elsewhere. Refresh it before trying again.',
@@ -361,11 +231,10 @@ export default {
     'Shorten the title to 200 characters and other text to 20,000 characters.',
   'factory.error.unknownAction':
     'This action is unavailable. Reload the Factory page.',
-  'factory.location.step': '{workflow} / {step}',
   'factory.stepPosition': 'Step {position}',
   'factory.steps': 'Steps',
   'factory.stepsHelp':
-    'Steps run one after another. Each step gets the results of the steps it comes after. Click a step to edit it.',
+    'A step starts once the steps it comes after are done, so steps without a common predecessor run in parallel. Each step gets the results of the steps it comes after. Click a step to edit it.',
   'factory.addStep': 'Add step',
   'factory.stepName': 'Step name',
   'factory.stepTask': 'Task',
@@ -386,7 +255,6 @@ export default {
   'factory.moveStepDown': 'Move {step} down',
   'factory.removeStep': 'Remove {step}',
   'factory.stepStatus.done': 'Done',
-  'factory.stepStatus.current': 'In progress',
   'factory.stepStatus.waiting': 'Waiting for you',
   'factory.stepStatus.pending': 'Not started',
   'factory.diagram.label': 'Steps of {name}',
@@ -395,10 +263,114 @@ export default {
   'factory.diagram.returns': 'back, up to {rounds}x',
   'factory.invalid.noSteps': '{workflow} has no steps. Add a step.',
   'factory.invalid.stepName': 'Give step {position} of {workflow} a name.',
-  'factory.invalid.stepNameTaken': '{location}: another step has this name.',
-  'factory.invalid.stepAgent': '{location}: choose an Agent.',
-  'factory.invalid.stepTask': '{location}: describe the task.',
+  'factory.invalid.stepNameTaken':
+    'Another step is already named “{step}”. Rename one.',
+  'factory.invalid.stepAgent': '{step}: choose an Agent.',
+  'factory.invalid.stepTask': '{step}: describe the task.',
   'factory.error.invalidStep':
     'The card cannot go back to that step. Choose one of its steps.',
   'factory.event.pendingDropped': 'Queued turn dropped',
+  'factory.workflowRequired': 'Choose a Workflow.',
+  'factory.noEnabledWorkflows':
+    'Create or enable a Workflow before creating a card.',
+  'factory.selectWorkflow': 'Select a Workflow',
+  'factory.noProject': 'No Project',
+  'factory.workflowFixesProject':
+    'This Workflow always works in its own Project.',
+  'factory.createFirstWorkflow': 'Create a Workflow',
+  'factory.chooseWorkflow': 'Choose a Workflow',
+  'factory.noWorkflows': 'No Workflows yet.',
+  'factory.copyWorkflow': 'Copy of a Workflow',
+  'factory.paused': 'Paused',
+  'factory.anyProject': 'Any Project',
+  'factory.anyProjectHelp': 'The card or trigger chooses the Project, or none',
+  'factory.projectUnavailable': 'Unavailable Project',
+  'factory.workflowProjectHelp':
+    'With a Project, every card of this Workflow works in it and steps can use its Team. Without one, the card or trigger chooses the Project.',
+  'factory.triggerCount': '{count} triggers',
+  'factory.enableWorkflow': 'Workflow active',
+  'factory.enableWorkflowHelp':
+    "Only active Workflows take new cards; a paused Workflow's triggers do not fire.",
+  'factory.createWorkflow': 'Create Workflow',
+  'factory.recordDeleted':
+    'This Workflow was deleted elsewhere. Your draft is kept; Create Workflow saves it again.',
+  'factory.finalApproval': 'Wait for my acceptance when all steps are done',
+  'factory.finalApprovalHelp':
+    'Without it, a card is done as soon as its last step is done.',
+  'factory.kind.agent': 'Agent does a task',
+  'factory.kind.workflow': 'Start another Workflow',
+  'factory.stepKind': 'Step type',
+  'factory.stepWorkflow': 'Workflow to start',
+  'factory.workflowUnavailable': 'Unavailable Workflow',
+  'factory.stepWait': "Wait until that Workflow's card is done",
+  'factory.stepWorkflowHelp':
+    'The step creates a card for that Workflow with the results of the steps before it. Without waiting, the step is done as soon as the card is created.',
+  'factory.stepChildTask': 'Task for the new card',
+  'factory.stepChildTaskPlaceholder':
+    "What the new card should achieve; leave empty to pass on this card's objective",
+  'factory.teamNeedsProject':
+    'Team Agents need a Project. Give this Workflow a Project or choose another Agent.',
+  'factory.invalid.stepWorkflow': '{step}: choose the Workflow to start.',
+  'factory.invalid.teamWithoutProject':
+    '{step}: a Team Agent needs a Project. Give the Workflow a Project.',
+  'factory.invalid.schedule': 'Trigger {position}: enter when it runs.',
+  'factory.stepStatus.running': 'Working',
+  'factory.stepStatus.child': 'Waiting for its Workflow',
+  'factory.stepStatus.approval': 'Waiting for your approval',
+  'factory.triggers': 'Triggers',
+  'factory.triggersHelp':
+    'Triggers create cards for this Workflow by themselves: on a schedule, or when a webhook such as a GitHub push calls it.',
+  'factory.triggersUnavailable':
+    'Triggers are unavailable in this vBot. Cards can still be created by hand.',
+  'factory.addSchedule': 'Add schedule',
+  'factory.addWebhook': 'Add webhook',
+  'factory.trigger.enabled': 'Trigger active',
+  'factory.trigger.remove': 'Remove trigger',
+  'factory.trigger.type': 'Type',
+  'factory.trigger.schedule': 'Schedule',
+  'factory.trigger.webhook': 'Webhook',
+  'factory.trigger.when': 'When',
+  'factory.trigger.whenHelp':
+    'A cron expression such as 0 9 * * 1-5 (weekdays at 9:00), or an interval such as every 2h.',
+  'factory.trigger.noProject': 'No Project',
+  'factory.trigger.repositoryProject': 'Project of the repository',
+  'factory.trigger.repositoryProjectHelp':
+    "The Project whose Git remote matches the event's repository",
+  'factory.trigger.title': 'Card title',
+  'factory.trigger.task': 'Task for each card',
+  'factory.trigger.taskPlaceholder':
+    "What each card should achieve; the event's details are added for webhooks",
+  'factory.trigger.url': 'Payload URL',
+  'factory.trigger.secret': 'Secret',
+  'factory.trigger.showSecret': 'Show secret',
+  'factory.trigger.rotate': 'New secret',
+  'factory.trigger.rotateTitle': 'Create a new secret?',
+  'factory.trigger.rotateHelp':
+    'Calls signed with the old secret are refused from now on. Enter the new secret wherever the webhook is configured.',
+  'factory.trigger.webhookHelp':
+    "GitHub: Settings → Webhooks → Add webhook. Paste the Payload URL, choose application/json, paste the secret and pick the events, such as Just the push event. GitHub must be able to reach this vBot's address.",
+  'factory.trigger.saveForUrl':
+    "The webhook's URL and secret appear once the Workflow is saved.",
+  'factory.trigger.next': 'Next: {time}.',
+  'factory.trigger.last': 'Last: {time}.',
+  'factory.trigger.paused': 'Paused.',
+  'factory.triggerEvent': 'Trigger event',
+  'factory.childCards': 'Cards started by this card',
+  'factory.parentCard': 'Started by card',
+  'factory.limit.save': 'Save limits',
+  'factory.limit.stepChoice': 'Step',
+  'factory.reason.upgraded': 'The step must start again after an update',
+  'factory.reason.childFailed': "The started Workflow's card was discarded",
+  'factory.reason.workflowMissing': 'Its Workflow no longer exists',
+  'factory.reason.projectUnresolved':
+    "No Project matches the event's repository",
+  'factory.origin.trigger': 'Trigger',
+  'factory.origin.workflow': 'Workflow step',
+  'factory.error.workflowInUse':
+    'Other Workflows start this Workflow. Remove those steps first.',
+  'factory.error.triggerMissing':
+    'This trigger no longer exists. Save the Workflow, then try again.',
+  'factory.event.childFinished': 'Started card finished',
+  'factory.event.childDiscarded': 'Started card discarded',
+  'factory.event.limitsUpdated': 'Limits changed',
 };

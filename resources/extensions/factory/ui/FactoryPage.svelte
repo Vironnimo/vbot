@@ -1,8 +1,7 @@
 <script module>
   const loadBoard = () => import('./FactoryBoard.svelte');
   const loadDetail = () => import('./CardDetail.svelte');
-  const loadSetups = () => import('./FactorySetups.svelte');
-  const loadLibrary = () => import('./FactoryLibrary.svelte');
+  const loadWorkflows = () => import('./FactoryWorkflows.svelte');
 </script>
 
 <script>
@@ -63,14 +62,9 @@
         onClick={() => navigate('')}>{t('factory.board')}</Button
       >
       <Button
-        variant={model.view === 'library' ? 'secondary' : 'tertiary'}
-        aria-current={model.view === 'library' ? 'page' : undefined}
-        onClick={() => navigate('/library')}>{t('factory.library')}</Button
-      >
-      <Button
-        variant={model.view === 'setups' ? 'secondary' : 'tertiary'}
-        aria-current={model.view === 'setups' ? 'page' : undefined}
-        onClick={() => navigate('/setups')}>{t('factory.setups')}</Button
+        variant={model.view === 'workflows' ? 'secondary' : 'tertiary'}
+        aria-current={model.view === 'workflows' ? 'page' : undefined}
+        onClick={() => navigate('/workflows')}>{t('factory.workflows')}</Button
       >
     </nav>
     <span class="factory-wip" role="status"
@@ -114,14 +108,8 @@
       {:else if model.detailLoading}
         <p class="factory-loading" role="status">{t('common.loading')}</p>
       {:else}<p>{t('factory.cardMissing')}</p>{/if}
-    {:else if model.view === 'library'}
-      <LazyContent load={loadLibrary}
-        >{#snippet children(Component)}<div use:routeScroll={model.route}>
-            <Component {model} onNavigate={navigate} />
-          </div>{/snippet}</LazyContent
-      >
     {:else}
-      <LazyContent load={loadSetups}
+      <LazyContent load={loadWorkflows}
         >{#snippet children(Component)}<div use:routeScroll={model.route}>
             <Component {model} onNavigate={navigate} />
           </div>{/snippet}</LazyContent

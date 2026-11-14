@@ -6,13 +6,16 @@ export function failureText(cause) {
   switch (cause?.code) {
     case 'factory_unavailable':
       return t('factory.error.unavailable');
-    case 'project_not_enabled':
-      return t('factory.error.projectDisabled');
     case 'project_not_found':
       return t('factory.error.projectMissing');
-    // Setup validation names the Workflow and step at fault; only the
-    // server knows which Agents and Models are available to it.
+    // Workflow validation names the step at fault; only the server knows
+    // which Agents and Models are available to it.
     case 'invalid_workflow':
+    case 'invalid_schedule':
+    case 'invalid_limits':
+    case 'workflow_name_taken':
+    case 'project_mismatch':
+    case 'too_deep':
       return cause?.message || t('factory.error.invalidWorkflow');
     case 'profile_not_found':
       return cause?.message || t('factory.error.profileMissing');
@@ -24,12 +27,14 @@ export function failureText(cause) {
       return cause?.message || t('factory.error.invalidEffort');
     case 'workflow_not_found':
       return t('factory.error.workflowMissing');
+    case 'workflow_in_use':
+      return cause?.message || t('factory.error.workflowInUse');
+    case 'trigger_not_found':
+      return t('factory.error.triggerMissing');
+    case 'triggers_unavailable':
+      return t('factory.triggersUnavailable');
     case 'invalid_step':
       return cause?.message || t('factory.error.invalidStep');
-    case 'setup_not_found':
-      return t('factory.error.setupMissing');
-    case 'setup_in_use':
-      return t('factory.error.setupInUse');
     case 'card_not_found':
       return t('factory.cardMissing');
     case 'card_not_final':
@@ -41,6 +46,7 @@ export function failureText(cause) {
     case 'phase_queued':
       return t('factory.error.phaseQueued');
     case 'invalid_state':
+    case 'wrong_state':
       return t('factory.error.stateChanged');
     case 'not_acceptable':
       return t('factory.error.notAcceptable');
@@ -105,25 +111,35 @@ export function waitingLabel(reason) {
       return t('factory.reason.runFailed');
     case 'restart':
       return t('factory.reason.restart');
+    case 'upgraded':
+      return t('factory.reason.upgraded');
+    case 'child_failed':
+      return t('factory.reason.childFailed');
+    case 'workflow_missing':
+      return t('factory.reason.workflowMissing');
+    case 'project_unresolved':
+      return t('factory.reason.projectUnresolved');
     default:
       return reason ?? '';
   }
 }
 
-export const ACCEPTABLE_REASONS = ['checkpoint', 'finished', 'no_agreement'];
+// Why a step waits for the user, and what the user can do about it.
+const STEP_ACCEPT = ['checkpoint', 'no_agreement'];
+const STEP_RETRY = [
+  'run_failed',
+  'restart',
+  'budget_exhausted',
+  'upgraded',
+  'child_failed',
+];
 
-// What accepting does depends on why the Card waits: start the step that
-// waits for approval, overrule a step out of rounds, or finish the Card.
-export function acceptLabel(card) {
-  switch (card?.waiting_reason) {
-    case 'checkpoint':
-      return t('factory.acceptCheckpoint', { step: card.step?.name ?? '' });
-    case 'no_agreement':
-      return t('factory.acceptAnyway');
-    default:
-      return t('factory.acceptDone');
-  }
-}
+// What accepting a step does: start the step that waits for approval, or
+// overrule a step that ran out of rounds.
+export const stepAcceptLabel = (step) =>
+  step.reason === 'checkpoint'
+    ? t('factory.acceptCheckpoint', { step: step.name })
+    : t('factory.acceptAnyway');
 
 export function queuedActionLabel(action) {
   switch (action) {
@@ -148,6 +164,10 @@ export function originLabel(origin) {
       return t('factory.origin.automation');
     case 'agent':
       return t('factory.origin.agent');
+    case 'trigger':
+      return t('factory.origin.trigger');
+    case 'workflow':
+      return t('factory.origin.workflow');
     default:
       return origin ?? '';
   }
@@ -156,18 +176,47 @@ export function originLabel(origin) {
 export const participantName = (participant) =>
   participant.display_name || participantId(participant) || '';
 
-// A Card's Workflow: its snapshot once started, else the setup's Workflow
-// it will start with.
-export function cardWorkflow(card, setups) {
+// A Card's Workflow: its snapshot once started, else the Workflow it will
+// start with.
+export function cardWorkflow(card, workflows = []) {
   if (card?.workflow) return card.workflow;
-  const setup = setups?.find((entry) => entry.project_id === card?.project_id);
-  const workflows = setup?.workflows ?? [];
   return (
-    workflows.find((workflow) => workflow.id === card?.workflow_id) ??
-    workflows.find((workflow) => workflow.id === setup?.default_workflow) ??
-    null
+    workflows.find((workflow) => workflow.id === card?.workflow_id) ?? null
   );
 }
+
+// Each step of a started Card with its state in this Card's run.
+export function cardSteps(card) {
+  return (card?.workflow?.steps ?? []).map((step) => {
+    const state = card.steps?.[step.id] ?? {};
+    const status = state.status ?? 'pending';
+    return {
+      ...step,
+      ...state,
+      status,
+      reason: status === 'approval' ? 'checkpoint' : (state.reason ?? ''),
+    };
+  });
+}
+
+// The steps that work or wait right now.
+export const activeSteps = (card) =>
+  cardSteps(card).filter((step) =>
+    ['running', 'child', 'waiting', 'approval'].includes(step.status),
+  );
+
+// The steps that wait for the user, each with what the user can do.
+export const waitingSteps = (card) =>
+  card?.state === 'waiting'
+    ? cardSteps(card)
+        .filter((step) => ['waiting', 'approval'].includes(step.status))
+        .map((step) => ({
+          ...step,
+          accept: STEP_ACCEPT.includes(step.reason),
+          answer: step.reason === 'blocked',
+          retry: STEP_RETRY.includes(step.reason),
+        }))
+    : [];
 
 export function eventLabel(event) {
   switch (event) {
@@ -237,6 +286,12 @@ export function eventLabel(event) {
       return t('factory.event.cleanupFailed');
     case 'workflow_upgrade':
       return t('factory.event.workflowUpgrade');
+    case 'child_finished':
+      return t('factory.event.childFinished');
+    case 'child_discarded':
+      return t('factory.event.childDiscarded');
+    case 'limits_updated':
+      return t('factory.event.limitsUpdated');
     default:
       return (event ?? '').replaceAll('_', ' ');
   }
@@ -269,18 +324,21 @@ export function boardColumns(cards, showDiscarded = false) {
     .filter((column) => column.id !== 'proposals' || column.cards.length > 0);
 }
 
+// The Card's own actions; a step that waits for the user has its own
+// (`waitingSteps`). A blocked Card could not start or go on as a whole, such
+// as when its Workflow is gone; Retry starts it again.
 export function cardActions(card) {
   const waiting = card?.state === 'waiting';
+  const steps = waitingSteps(card);
+  const blocked =
+    waiting &&
+    card.waiting_reason !== 'finished' &&
+    !steps.some((step) => step.reason === card.waiting_reason);
   return {
     approve: card?.state === 'proposal',
-    accept: waiting && ACCEPTABLE_REASONS.includes(card.waiting_reason),
-    answer: waiting && card.waiting_reason === 'blocked',
-    retry:
-      waiting &&
-      ['run_failed', 'restart', 'budget_exhausted'].includes(
-        card.waiting_reason,
-      ),
-    sendBack: waiting && card.waiting_reason !== 'blocked',
+    accept: waiting && card.waiting_reason === 'finished',
+    retry: blocked,
+    sendBack: waiting && !blocked,
     discard: Boolean(card) && !finalCard(card),
     delete: finalCard(card),
   };
@@ -329,23 +387,21 @@ export function usageSummary(usage = {}) {
 }
 
 // Where a send-back without a chosen step goes, as the server decides it:
-// the current step, or the last finished one, or the step either of them
-// sends work back to.
+// the first waiting step, else the last step nothing comes after, or the
+// step that one sends work back to.
 export function sendBackDefault(card, workflow) {
   const steps = workflow?.steps ?? [];
-  const done = card?.done_steps ?? [];
-  let current = steps.find((step) => step.id === card?.step?.id);
-  if (!current || !done.includes(current.id))
-    current = steps.filter((step) => done.includes(step.id)).at(-1) ?? steps[0];
+  const current =
+    steps.find((step) => card?.steps?.[step.id]?.status === 'waiting') ??
+    steps
+      .filter((step) => !steps.some((other) => other.after?.includes(step.id)))
+      .at(-1);
   const id = current?.returns_to || current?.id;
   return steps.find((step) => step.id === id) ?? null;
 }
 
 // A step's place in a Card's run, for the flow diagram.
 export function stepStatus(card, step) {
-  if (card?.state === 'done' || card?.done_steps?.includes(step.id))
-    return 'done';
-  if (card?.step?.id !== step.id || card?.state === 'discarded')
-    return 'pending';
-  return card.state === 'waiting' ? 'waiting' : 'current';
+  if (card?.state === 'done') return 'done';
+  return card?.steps?.[step.id]?.status ?? 'pending';
 }

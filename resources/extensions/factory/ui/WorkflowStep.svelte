@@ -19,19 +19,21 @@
   } from '../../../../webui/src/lib/agentForm.js';
   import { repairSteps, returnTargets, stepName } from './workflows.js';
 
-  // One step of the edited Workflow: who does it, what it does and when it
-  // starts. It edits the draft object it gets; `resolve(step)` is the step's
-  // effective Model: '' when its Agent has none, undefined while unknown.
+  // One step of the edited Workflow: what it does and when it starts. An
+  // Agent step names its Agent and task; a Workflow step names the Workflow
+  // it starts as a child Card. It edits the draft object it gets;
+  // `resolve(step)` is the step's effective Model: '' when its Agent has
+  // none, undefined while unknown. `project` is the Workflow's Project, if any.
   let {
     workflow,
     step = $bindable(),
     index,
-    project,
+    project = null,
+    workflows = [],
     model,
     resolve,
     onMove,
     onRemove,
-    requireAgent = true,
   } = $props();
   let showAllModels = $state(false);
   const prefix = $derived(`factory-${step.id}`);
@@ -39,16 +41,39 @@
   const earlier = $derived(workflow.steps.slice(0, index));
   const targets = $derived(returnTargets(workflow.steps, index));
   const agents = $derived(model.catalog.agents ?? []);
-  const team = $derived(project.agent_profiles ?? []);
+  const team = $derived(project?.agent_profiles ?? []);
   const models = $derived(model.catalog.models ?? []);
   const name = $derived(stepName(step, index));
   const resolved = $derived(resolve(step));
+  const kindOptions = [
+    { value: 'agent', label: t('factory.kind.agent') },
+    { value: 'workflow', label: t('factory.kind.workflow') },
+  ];
+  const workflowOptions = $derived.by(() => {
+    const options = workflows
+      .filter((item) => item.id !== workflow.id)
+      .map((item) => ({
+        value: item.id,
+        label: item.name,
+        secondaryLabel: item.description,
+      }));
+    if (step.workflow && !options.some((item) => item.value === step.workflow))
+      options.push({
+        value: step.workflow,
+        label: step.workflow,
+        secondaryLabel: t('factory.workflowUnavailable'),
+        disabled: true,
+      });
+    return [{ value: '', label: t('factory.selectWorkflow') }, ...options];
+  });
   const targetOptions = $derived([
     { value: '', label: t('factory.returnsNowhere') },
-    ...targets.map((item) => ({
-      value: item.id,
-      label: stepName(item, workflow.steps.indexOf(item)),
-    })),
+    ...targets
+      .filter((item) => item.kind === 'agent')
+      .map((item) => ({
+        value: item.id,
+        label: stepName(item, workflow.steps.indexOf(item)),
+      })),
   ]);
   // Judging work with the Model that did it is less independent.
   const sameModel = $derived.by(() => {
@@ -63,6 +88,16 @@
           .filter((item) => item === id || step.after.includes(item))
       : step.after.filter((item) => item !== id);
     repairSteps(workflow.steps);
+  }
+
+  function selectKind(value) {
+    step.kind = value;
+    // A Workflow step neither judges earlier work nor takes work sent back.
+    if (value === 'workflow') {
+      step.returns_to = '';
+      for (const item of workflow.steps)
+        if (item.returns_to === step.id) item.returns_to = '';
+    }
   }
 
   // One picker over every Agent: the Identity Agents, then the Project's
@@ -80,7 +115,7 @@
       ...team.map((profile) => ({
         value: `team:${profile.id}`,
         label: profile.name,
-        group: t('factory.teamGroup', { project: project.name }),
+        group: t('factory.teamGroup', { project: project?.name ?? '' }),
       })),
     ];
     if (agentValue && !options.some((option) => option.value === agentValue))
@@ -137,6 +172,7 @@
 <article
   class="factory-step"
   data-step-id={step.id}
+  data-step-kind={step.kind}
   aria-labelledby={`${prefix}-heading`}
 >
   <header class="factory-step-header">
@@ -168,7 +204,7 @@
   </header>
 
   <div class="factory-fields">
-    <div class="factory-field factory-field--wide">
+    <div class="factory-field">
       <label for={`${prefix}-name`}>{t('factory.stepName')}</label><TextField
         id={`${prefix}-name`}
         maxlength="80"
@@ -176,81 +212,135 @@
         onInput={(value) => (step.name = value)}
       />
     </div>
-  </div>
-
-  <div class="factory-step-agent">
     <div class="factory-field">
-      <label id={`${prefix}-agent-label`} for={`${prefix}-agent`}
-        >{t('factory.agent')}</label
+      <label id={`${prefix}-kind-label`} for={`${prefix}-kind`}
+        >{t('factory.stepKind')}</label
       >
       <Dropdown
-        id={`${prefix}-agent`}
-        ariaLabelledby={`${prefix}-agent-label`}
-        value={agentValue}
-        options={agentOptions}
-        invalid={requireAgent && !step.agent}
+        id={`${prefix}-kind`}
+        ariaLabelledby={`${prefix}-kind-label`}
+        value={step.kind}
+        options={kindOptions}
         onOpenChange={model.pickerOpen}
-        onValueChange={selectAgent}
+        onValueChange={selectKind}
       />
     </div>
+  </div>
+
+  {#if step.kind === 'workflow'}
     <div class="factory-field">
-      <label id={`${prefix}-model-label`} for={`${prefix}-model`}
-        >{t('factory.model')}</label
-      >
-      <SearchableDropdown
-        id={`${prefix}-model`}
-        ariaLabelledby={`${prefix}-model-label`}
-        value={step.model}
-        options={visibleModels}
-        placeholder={t('factory.inheritModel')}
-        searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
-        emptyLabel={t('agents.form.modelSearchEmpty')}
-        footerActionLabel={modelFilterFooterLabel({
-          showAll: showAllModels,
-          hiddenCount: allModels.length - visibleModels.length,
-        })}
-        onFooterAction={() => (showAllModels = !showAllModels)}
-        onOpenChange={model.pickerOpen}
-        onValueChange={selectModel}
-      />
-    </div>
-    <div class="factory-field">
-      <label id={`${prefix}-effort-label`} for={`${prefix}-effort`}
-        >{t('factory.effort')}</label
+      <label id={`${prefix}-workflow-label`} for={`${prefix}-workflow`}
+        >{t('factory.stepWorkflow')}</label
       >
       <Dropdown
-        id={`${prefix}-effort`}
-        ariaLabelledby={`${prefix}-effort-label`}
-        value={step.effort}
-        options={effortOptions}
-        onValueChange={(value) => (step.effort = value)}
+        id={`${prefix}-workflow`}
+        ariaLabelledby={`${prefix}-workflow-label`}
+        value={step.workflow}
+        options={workflowOptions}
+        invalid={!step.workflow}
+        onOpenChange={model.pickerOpen}
+        onValueChange={(value) => (step.workflow = value)}
       />
     </div>
-  </div>
-  {#if step.agent && resolved === ''}<p
-      class="factory-field-error"
-      role="status"
+    <Checkbox
+      id={`${prefix}-wait`}
+      checked={step.wait}
+      onChange={(value) => (step.wait = value)}
+      >{t('factory.stepWait')}</Checkbox
     >
-      {t('factory.modelUnresolved')}
-    </p>{:else if step.agent && !step.model && resolved}<p
-      class="factory-help"
-      data-effective-model
-    >
-      {t('factory.effectiveModel', { model: resolved })}
-    </p>{/if}
+    <p class="factory-help">{t('factory.stepWorkflowHelp')}</p>
+    <div class="factory-field factory-step-task">
+      <label for={`${prefix}-task`}>{t('factory.stepChildTask')}</label
+      ><TextArea
+        id={`${prefix}-task`}
+        maxlength="20000"
+        rows={3}
+        autoGrow
+        placeholder={t('factory.stepChildTaskPlaceholder')}
+        value={step.task}
+        onInput={(value) => (step.task = value)}
+      />
+    </div>
+  {:else}
+    <div class="factory-step-agent">
+      <div class="factory-field">
+        <label id={`${prefix}-agent-label`} for={`${prefix}-agent`}
+          >{t('factory.agent')}</label
+        >
+        <Dropdown
+          id={`${prefix}-agent`}
+          ariaLabelledby={`${prefix}-agent-label`}
+          value={agentValue}
+          options={agentOptions}
+          invalid={!step.agent}
+          onOpenChange={model.pickerOpen}
+          onValueChange={selectAgent}
+        />
+      </div>
+      <div class="factory-field">
+        <label id={`${prefix}-model-label`} for={`${prefix}-model`}
+          >{t('factory.model')}</label
+        >
+        <SearchableDropdown
+          id={`${prefix}-model`}
+          ariaLabelledby={`${prefix}-model-label`}
+          value={step.model}
+          options={visibleModels}
+          placeholder={t('factory.inheritModel')}
+          searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+          emptyLabel={t('agents.form.modelSearchEmpty')}
+          footerActionLabel={modelFilterFooterLabel({
+            showAll: showAllModels,
+            hiddenCount: allModels.length - visibleModels.length,
+          })}
+          onFooterAction={() => (showAllModels = !showAllModels)}
+          onOpenChange={model.pickerOpen}
+          onValueChange={selectModel}
+        />
+      </div>
+      <div class="factory-field">
+        <label id={`${prefix}-effort-label`} for={`${prefix}-effort`}
+          >{t('factory.effort')}</label
+        >
+        <Dropdown
+          id={`${prefix}-effort`}
+          ariaLabelledby={`${prefix}-effort-label`}
+          value={step.effort}
+          options={effortOptions}
+          onValueChange={(value) => (step.effort = value)}
+        />
+      </div>
+    </div>
+    {#if step.source === 'team' && !project}<p
+        class="factory-field-error"
+        role="status"
+      >
+        {t('factory.teamNeedsProject')}
+      </p>{:else if step.agent && resolved === ''}<p
+        class="factory-field-error"
+        role="status"
+      >
+        {t('factory.modelUnresolved')}
+      </p>{:else if step.agent && !step.model && resolved}<p
+        class="factory-help"
+        data-effective-model
+      >
+        {t('factory.effectiveModel', { model: resolved })}
+      </p>{/if}
 
-  <div class="factory-field factory-step-task">
-    <label for={`${prefix}-task`}>{t('factory.stepTask')}</label><TextArea
-      id={`${prefix}-task`}
-      maxlength="20000"
-      rows={4}
-      autoGrow
-      invalid={!step.task.trim()}
-      placeholder={t('factory.stepTaskPlaceholder')}
-      value={step.task}
-      onInput={(value) => (step.task = value)}
-    />
-  </div>
+    <div class="factory-field factory-step-task">
+      <label for={`${prefix}-task`}>{t('factory.stepTask')}</label><TextArea
+        id={`${prefix}-task`}
+        maxlength="20000"
+        rows={4}
+        autoGrow
+        invalid={!step.task.trim()}
+        placeholder={t('factory.stepTaskPlaceholder')}
+        value={step.task}
+        onInput={(value) => (step.task = value)}
+      />
+    </div>
+  {/if}
 
   <fieldset class="factory-step-start">
     <legend>{t('factory.stepStarts')}</legend>
@@ -277,7 +367,7 @@
     >
   </fieldset>
 
-  {#if index > 0}
+  {#if index > 0 && step.kind === 'agent'}
     <div class="factory-fields">
       <div class="factory-field">
         <label id={`${prefix}-returns-label`} for={`${prefix}-returns`}
@@ -287,11 +377,11 @@
           ariaLabelledby={`${prefix}-returns-label`}
           value={step.returns_to}
           options={targetOptions}
-          disabled={!targets.length}
+          disabled={targetOptions.length < 2}
           onValueChange={(value) => (step.returns_to = value)}
         />
         <p class="factory-help">
-          {targets.length
+          {targetOptions.length > 1
             ? t('factory.stepReturnsHelp')
             : t('factory.stepReturnsNone')}
         </p>
@@ -319,14 +409,15 @@
   {#if sameModel}<p class="factory-step-warning" role="status">
       {t('factory.sameModel')}
     </p>{/if}
+  {#if step.kind === 'agent'}
+    <LimitsEditor
+      bind:value={step.limits}
+      prefix={`${prefix}-limit`}
+      label={t('factory.limit.step')}
+    />
+    <p class="factory-help">{t('factory.limit.stepHelp')}</p>
+  {/if}
 </article>
-
-<LimitsEditor
-  bind:value={step.limits}
-  prefix={`${prefix}-limit`}
-  label={t('factory.limit.step')}
-/>
-<p class="factory-help">{t('factory.limit.stepHelp')}</p>
 
 <style>
   .factory-step {
@@ -395,9 +486,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px 18px;
-  }
-  .factory-field--wide {
-    grid-column: 1 / -1;
   }
   .factory-field-error {
     margin: 0;

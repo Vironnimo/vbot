@@ -2,9 +2,10 @@
   import { t } from '../../../../webui/src/lib/i18n.js';
   import { stepColumns, stepName } from './workflows.js';
 
-  // A Workflow as a flow: steps left to right by what they come after,
-  // arrows for `after`, dashed arrows below for sending work back. The setup
-  // editor passes `onSelect` and gets buttons; a Card passes `status`.
+  // A Workflow as a flow: steps left to right by what they come after, so
+  // parallel steps stand in one column; arrows for `after`, dashed arrows
+  // below for sending work back. The Workflow editor passes `onSelect` and
+  // gets buttons; a Card passes `status`, a step's status in its run.
   let {
     workflow,
     agentLabel = () => '',
@@ -76,8 +77,12 @@
     switch (value) {
       case 'done':
         return t('factory.stepStatus.done');
-      case 'current':
-        return t('factory.stepStatus.current');
+      case 'running':
+        return t('factory.stepStatus.running');
+      case 'child':
+        return t('factory.stepStatus.child');
+      case 'approval':
+        return t('factory.stepStatus.approval');
       case 'waiting':
         return t('factory.stepStatus.waiting');
       default:
@@ -144,7 +149,10 @@
           data-step-id={step.id}
           data-step-status={state || undefined}
           data-selected={selectedId === step.id || undefined}
-          aria-current={state === 'current' || state === 'waiting'
+          data-step-kind={step.kind}
+          aria-current={['running', 'child', 'waiting', 'approval'].includes(
+            state,
+          )
             ? 'step'
             : undefined}
           style:left={`${at.x}px`}
@@ -265,10 +273,18 @@
   [data-step-status='done'] .factory-node-body {
     background: var(--surface-3);
   }
-  [data-step-status='current'] .factory-node-body,
-  [data-step-status='waiting'] .factory-node-body {
+  [data-step-status='running'] .factory-node-body,
+  [data-step-status='child'] .factory-node-body {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  }
+  [data-step-status='waiting'] .factory-node-body,
+  [data-step-status='approval'] .factory-node-body {
+    border-color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 12%, var(--surface));
+  }
+  [data-step-kind='workflow'] .factory-node-body {
+    border-style: dashed;
   }
   [data-step-status='pending'] .factory-node-body strong {
     color: var(--text-med);
