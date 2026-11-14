@@ -11,19 +11,21 @@ import threading
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.extensions._api import ExtensionAPI
 from core.extensions._callbacks import detach_extension_task
 from core.extensions._declarations import (
     API_VERSION,
+    ExtensionDocumentation,
     ExtensionManifest,
     ExtensionRecord,
     PageDeclaration,
     _diagnose_capability,
 )
 from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.ids import is_reserved_name
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("extensions")
@@ -118,12 +120,25 @@ def _register_extension(
     the extension's live reads see only its own config / all credentials.
     """
     name = discovered.name
-    if name in disabled_names:
+    disabled = name in disabled_names
+    manifest: ExtensionManifest | None = None
+    if discovered.root_path != discovered.entry_path:
+        try:
+            manifest = _load_manifest(discovered.root_path)
+        except _ManifestError as exc:
+            _LOGGER.error("Extension %r manifest invalid: %s", name, exc, exc_info=True)
+            return _failed_record(discovered, str(exc), disabled=disabled)
+
+    # Documentation and display metadata remain readable while the code is
+    # disabled or cannot load. Only the winning copy reaches this function.
+    if disabled:
         return ExtensionRecord(
             name=name,
             root_path=discovered.root_path,
             entry_path=discovered.entry_path,
             status="disabled",
+            manifest=manifest,
+            error=discovered.error,
         )
 
     if discovered.error is not None:
@@ -133,26 +148,21 @@ def _register_extension(
             discovered.entry_path,
             discovered.error,
         )
-        return _failed_record(discovered, f"discovery failed: {discovered.error}")
+        return _failed_record(
+            discovered, f"discovery failed: {discovered.error}", manifest=manifest
+        )
 
-    manifest: ExtensionManifest | None = None
-    if discovered.root_path != discovered.entry_path:
-        try:
-            manifest = _load_manifest(discovered.root_path)
-        except _ManifestError as exc:
-            _LOGGER.error("Extension %r manifest invalid: %s", name, exc, exc_info=True)
-            return _failed_record(discovered, str(exc))
-        if (
-            manifest is not None
-            and manifest.api_version is not None
-            and manifest.api_version > API_VERSION
-        ):
-            message = (
-                f"manifest api_version {manifest.api_version} is newer than supported "
-                f"API_VERSION {API_VERSION}"
-            )
-            _LOGGER.error("Extension %r %s", name, message)
-            return _failed_record(discovered, message, manifest=manifest)
+    if (
+        manifest is not None
+        and manifest.api_version is not None
+        and manifest.api_version > API_VERSION
+    ):
+        message = (
+            f"manifest api_version {manifest.api_version} is newer than supported "
+            f"API_VERSION {API_VERSION}"
+        )
+        _LOGGER.error("Extension %r %s", name, message)
+        return _failed_record(discovered, message, manifest=manifest)
 
     try:
         module = _import_extension_module(discovered)
@@ -205,12 +215,13 @@ def _failed_record(
     error: str,
     *,
     manifest: ExtensionManifest | None = None,
+    disabled: bool = False,
 ) -> ExtensionRecord:
     return ExtensionRecord(
         name=discovered.name,
         root_path=discovered.root_path,
         entry_path=discovered.entry_path,
-        status="failed",
+        status="disabled" if disabled else "failed",
         error=error,
         manifest=manifest,
     )
@@ -377,6 +388,7 @@ def _load_manifest(directory: Path) -> ExtensionManifest | None:
         description=_manifest_optional_str(raw, "description"),
         api_version=api_version,
         display_name=_manifest_optional_str(raw, "name"),
+        documentation=_manifest_documentation(raw),
     )
 
 
@@ -384,7 +396,49 @@ def _manifest_optional_str(raw: dict[str, Any], key: str) -> str | None:
     value = raw.get(key)
     if value is not None and not isinstance(value, str):
         raise _ManifestError(f"{key} must be a string")
+    if value is not None:
+        _validate_manifest_text(value, key)
     return value
+
+
+def _validate_manifest_text(value: str, key: str) -> None:
+    """JSON escapes can carry lone surrogates that no UTF-8 document can retain."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise _ManifestError(f"{key} must be valid Unicode text") from exc
+
+
+def _manifest_documentation(raw: dict[str, Any]) -> tuple[ExtensionDocumentation, ...]:
+    """Validate declared document identities; the Skill composer owns file reads."""
+    declarations = raw.get("documentation", [])
+    if not isinstance(declarations, list):
+        raise _ManifestError("documentation must be an array")
+    documents: list[ExtensionDocumentation] = []
+    paths: set[str] = set()
+    for index, entry in enumerate(declarations):
+        field = f"documentation[{index}]"
+        if not isinstance(entry, dict):
+            raise _ManifestError(f"{field} must be an object")
+        values: dict[str, str] = {}
+        for key in ("path", "title", "description"):
+            value = entry.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise _ManifestError(f"{field}.{key} must be a non-empty string")
+            _validate_manifest_text(value, f"{field}.{key}")
+            values[key] = value
+        path = values["path"]
+        parts = path.split("/")
+        if (
+            any(part in {"", ".", ".."} or is_reserved_name(part) for part in parts)
+            or PurePosixPath(path).suffix.lower() != ".md"
+        ):
+            raise _ManifestError(f"{field}.path must be a portable relative Markdown path")
+        if path.casefold() in paths:
+            raise _ManifestError(f"{field}.path duplicates another documentation path")
+        paths.add(path.casefold())
+        documents.append(ExtensionDocumentation(**values))
+    return tuple(documents)
 
 
 def _ensure_extension_parent_package() -> None:

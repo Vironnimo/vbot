@@ -2,7 +2,7 @@
 
 An Extension is Python code that runs inside vBot's process and adds hooks, Commands, Tools, prompt blocks, settings, pages and more, all declared through one `register(api)` function. Extensions run with the full rights of vBot itself, without a sandbox: install only code you would run by hand.
 
-This covers creating and changing an Extension. Settings and enable/disable of an installed one: [configuration.md](configuration.md#extensions); MCP: [mcp.md](mcp.md); Swarm and Computer Use: [extension-usage.md](extension-usage.md); a page or Extension-owned Sessions: [extension-pages.md](extension-pages.md) after this file.
+This covers creating and changing an Extension. Settings and enable/disable of an installed one: [configuration.md](configuration.md#extensions); usage and CLI guides for installed Extensions: [extension-index.md](extension-index.md); a page or Extension-owned Sessions: [extension-pages.md](extension-pages.md) after this file.
 
 Paths beginning with `core/`, `resources/` or `webui/` are relative to the `vbot_root` that `vbot home` prints on the server's computer.
 
@@ -320,9 +320,37 @@ A package or directory Extension can add an `extension.json`; it is never requir
 }
 ```
 
-The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 28. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`).
+The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 29. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`); 29 [usage documentation](#usage-documentation).
 
 `config_documents` maps file patterns in your Extension's state directory to `module:function` validators, for example `"config_documents": {"connections.json": "config:validate_connections_file"}`. A validator receives the file's absolute `Path` and returns a `core.config_validation.JsonValidationReport`. `vbot doctor config` loads only that module, without your `__init__`, `register` or startup, also while the Extension is disabled; keep the module independent of registration.
+
+## Usage documentation
+
+Declare one or more usage guides in your `extension.json` so Agents can find them through the Extension index in the `vbot-docs` Skill:
+
+```json
+{
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/setup.md",
+      "title": "Setup",
+      "description": "Connect the service and configure access."
+    },
+    {
+      "path": "docs/usage.md",
+      "title": "CLI workflows",
+      "description": "Run common tasks with this Extension's CLI operations."
+    }
+  ]
+}
+```
+
+Each entry requires a non-empty `title` and `description`, plus a portable relative `path` to a UTF-8 Markdown file inside your Extension directory. Use `/` separators and unique `.md` paths without `..`, symbolic links or reserved path names. The description tells an Agent which task needs that guide; write the guide with the Extension and declare every guide you link to. Links between declared guides keep their relative paths.
+
+vBot includes these guides in `vbot-docs` under `references/extensions/<extension-name>/<path>` and lists them in `references/extension-index.md`. The index records the Extension's load status; valid documentation stays readable while the Extension is disabled or its code fails to load. Editing a guide or its declaration takes effect after `vbot extensions reload`.
+
+Explain setup, task workflows and complete CLI examples in the guides; let each operation's `--help` describe its current arguments. These are reference files of `vbot-docs`, not separately discoverable Skills.
 
 ## Notifications
 

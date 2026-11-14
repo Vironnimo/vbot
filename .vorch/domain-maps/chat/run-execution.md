@@ -128,6 +128,8 @@ Speech-to-text of each selected steering item runs once before its Session write
 
 Chat and External Runs bind `ToolContext` to the Run manager's live approval requests and a fresh Rules/Computer resolver. After a decision and at handler admission the exact prepared accesses are checked again; approval is call-local and cancellation removes the request (`permissions/approvals.md`).
 
+An allowed bundled `vbot-docs` package under this data directory's generated documentation cache grants read access to that reserved cache, so a live Skill read can return a newer immutable generation during the same Run. The exact bundled package identity and generated location are both required; user overrides and withheld Skills grant no cache-wide access, writes stay protected, and explicit read denies still apply (`test_chat_run_permissions.py`).
+
 ## Agent-facing text
 
 Each sentence of `STEERING_SYSTEM_REMINDER` (`_queued_input.py`) applies to the immediately following User message, not to later turns.

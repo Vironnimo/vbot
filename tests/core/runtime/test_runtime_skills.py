@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,9 @@ import pytest
 
 from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SKILL_ORIGIN_AGENT, SKILL_ORIGIN_GLOBAL, SkillRegistry
+from core.storage.layout import DataDirectoryLayout
 from core.tools import ToolContext, tool_failure
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
@@ -579,6 +582,99 @@ def test_malformed_skill_policy_does_not_break_startup(config: Config) -> None:
         assert any(
             "Cannot read skill policy" in message
             for message in runtime.skill_policy.validation_diagnostics()
+        )
+    finally:
+        runtime.stop()
+
+
+def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access(
+    config: Config, tmp_path: Path
+) -> None:
+    resources = tmp_path / "resources"
+    source = write_skill(resources / "skills", "vbot-docs", "Bundled documentation fixture.")
+    other = write_skill(resources / "skills", "other", "Other bundled fixture.")
+    extension = config.data_dir / "extensions" / "manual-fixture"
+    extension.joinpath("docs").mkdir(parents=True)
+    extension.joinpath("__init__.py").write_text("raise AssertionError('disabled import')\n")
+    extension.joinpath("extension.json").write_text(
+        json.dumps(
+            {
+                "description": "Documentation fixture.",
+                "documentation": [
+                    {"path": "docs/use.md", "title": "Use", "description": "Use the CLI."}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    extension.joinpath("docs/use.md").write_text("# Test-owned usage sentinel\n", encoding="utf-8")
+    write_settings(config.data_dir, {"extensions": {"disabled": ["manual-fixture"]}})
+    runtime = Runtime(
+        Config(data_dir=config.data_dir, overrides={"RESOURCES_PATH": str(resources)})
+    )
+    runtime.start()
+    try:
+        docs = runtime.skills.get("vbot-docs")
+        assert docs.origin == "bundled"
+        assert docs.package_ref == SkillPackageRef("bundled", "vbot-docs")
+        assert docs.path.is_relative_to(DataDirectoryLayout(config.data_dir).skill_documentation)
+        assert docs.path != source / "SKILL.md"
+        assert docs.path.read_bytes() == source.joinpath("SKILL.md").read_bytes()
+        assert runtime.skills.get("other").path == other / "SKILL.md"
+        assert runtime.skills.get("other").origin == "bundled"
+        guide = "references/extensions/manual-fixture/docs/use.md"
+        assert docs.path.parent.joinpath(guide).read_text(encoding="utf-8") == (
+            "# Test-owned usage sentinel\n"
+        )
+        assert "manual-fixture" in docs.path.parent.joinpath(
+            "references/extension-index.md"
+        ).read_text(encoding="utf-8")
+        assert not source.joinpath("references/extension-index.md").exists()
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        runtime.projects.create("p", "P", repo)
+        write_agent_skill(config.data_dir, "main", "private", "Private scope fixture.")
+        for project_id, agent_id in [("p", None), (None, "main"), ("p", "main")]:
+            assert runtime.skills_for(project_id, agent_id).get("vbot-docs").path == docs.path
+
+        inventory = runtime.skill_inventory()
+        [entry] = [item for item in inventory["skills"] if item["name"] == "vbot-docs"]
+        assert entry["source_kind"] == "bundled"
+        assert entry["editable_scope"] is None
+        assert entry["package"] == {"source": "bundled", "name": "vbot-docs", "location": None}
+        for scope in [*inventory["agents"], *inventory["projects"]]:
+            [access] = [item for item in scope["skills"] if item["name"] == "vbot-docs"]
+            assert access["package_id"] == entry["id"]
+
+        runtime.set_skill_package_disabled(entry["id"], disabled=True)
+        runtime.reload_skills()
+        for project_id, agent_id in [(None, None), ("p", None), (None, "main"), ("p", "main")]:
+            with pytest.raises(KeyError):
+                runtime.skills_for(project_id, agent_id).get("vbot-docs")
+        [disabled] = [
+            item for item in runtime.skill_inventory()["skills"] if item["name"] == "vbot-docs"
+        ]
+        assert disabled["disabled"] is True
+        runtime.set_skill_package_disabled(disabled["id"], disabled=False)
+        override = write_skill(runtime.global_skills_dir, "vbot-docs", "User documentation.")
+        runtime.reload_skills()
+        assert runtime.skills.get("vbot-docs").path == override / "SKILL.md"
+        bundled_id = _package_id(runtime, "vbot-docs", "Bundled documentation fixture.")
+        extension.joinpath("docs/use.md").write_text("# Updated usage sentinel\n", encoding="utf-8")
+        asyncio.run(runtime.reload_skills_async(only_if_changed=True))
+        assert runtime.skills.get("vbot-docs").path == override / "SKILL.md"
+        # The active catalog remains the user override, but inventory and future
+        # scoped scans must still use the newly prepared bundled generation.
+        assert _package_id(runtime, "vbot-docs", "Bundled documentation fixture.") != bundled_id
+        runtime.set_skill_package_disabled(
+            _package_id(runtime, "vbot-docs", "User documentation."), disabled=True
+        )
+        runtime.reload_skills()
+        current_docs = runtime.skills.get("vbot-docs").path.parent
+        assert current_docs != docs.path.parent
+        assert (
+            current_docs.joinpath(guide).read_text(encoding="utf-8") == "# Updated usage sentinel\n"
         )
     finally:
         runtime.stop()

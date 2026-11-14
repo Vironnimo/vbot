@@ -2,5 +2,12 @@
   "name": "Software Factory",
   "description": "Isolated work, independent review and a Kanban inbox for your decisions.",
   "version": "1.0.0",
-  "api_version": 28
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Software Factory",
+      "description": "Create and manage Workflows, Cards, triggers, reviews and execution budgets through the CLI."
+    }
+  ]
 }

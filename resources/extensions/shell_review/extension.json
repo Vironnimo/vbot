@@ -2,5 +2,12 @@
   "name": "Shell Review",
   "description": "Review shell commands against the user's request with the selected Decision Model.",
   "version": "1.0.0",
-  "api_version": 23
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Shell Review configuration and preview",
+      "description": "Configure shell authorization review and preview a judgment without executing the command."
+    }
+  ]
 }

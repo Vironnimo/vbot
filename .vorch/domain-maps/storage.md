@@ -18,6 +18,8 @@ Current code reads only the canonical paths; there is no dual-read of an older l
 
 Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. Databases an Extension opens through `host.open_database` live there as canonical kernel databases `<name>.db` (`database.md`, `extensions/databases.md`). The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions/host.md`, `sessions.md`).
 
+Skills owns the disposable composed documentation packages at `DataDirectoryLayout.skill_documentation` (`artifacts/skill-docs/`), created on demand outside the user Skill home and installation. Bootstrap clears prior generations before Skills acquire readers; reloads retain old generations for existing readers (`skills/loading.md`).
+
 ## Temporary files
 
 Conversation Scratch Areas (`artifacts/temp/scratch/`) and their bookkeeping (`artifacts/temp/scratch-state/`) belong to the Tools owner and are not `TemporaryFileManager` categories (`tools/scratch.md`).

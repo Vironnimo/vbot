@@ -21,6 +21,9 @@ from core.permissions import (
 )
 from core.projects import AgentOverrides
 from core.sessions import SUBAGENT_PARENT_META_KEY, SessionAddress, is_prompt_block_change_note
+from core.skills.policy import SkillPackageRef
+from core.skills.skills import SkillMetadata, SkillRegistry
+from core.storage.layout import DataDirectoryLayout
 from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -137,6 +140,61 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
     assert f"`Read({workspace.as_posix()}/secrets/**)`" in prompt
     assert "`docs.example`" in prompt and "`blocked.example`" in prompt
     assert "Web(" not in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["bundled", "home", "withheld"])
+async def test_generated_documentation_read_grants_follow_only_an_authorized_bundled_package(
+    tmp_path: Path, source: str
+) -> None:
+    cache = DataDirectoryLayout(tmp_path / "data").skill_documentation
+    previous = cache / ("a" * 64) / "vbot-docs"
+    current = cache / ("b" * 64) / "vbot-docs"
+    denied_file = current / "private.md"
+
+    def registry(package: Path) -> SkillRegistry:
+        return SkillRegistry(
+            {
+                "vbot-docs": SkillMetadata(
+                    "vbot-docs",
+                    "Documentation fixture.",
+                    package / "SKILL.md",
+                    package_ref=SkillPackageRef(
+                        "home" if source == "home" else "bundled", "vbot-docs"
+                    ),
+                )
+            }
+        )
+
+    def reload() -> None:
+        if len(seen) == 1:
+            # The Skill Tool resolves this new registry, while this active Run
+            # retains the Skill-directory grants admitted before its first call.
+            runtime.skills = registry(current)
+
+    runtime, seen = _runtime(
+        tmp_path,
+        {"read": "work_area", "write": "work_area", "deny": [f"Read({denied_file.as_posix()})"]},
+        turns=[tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
+        on_call=reload,
+    )
+    runtime.skills = registry(previous)
+    runtime.agents._agent = replace(
+        runtime.agents._agent, allowed_skills=[] if source == "withheld" else ["vbot-docs"]
+    )
+
+    await build_chat_loop(runtime).send("coder", "Read the documentation", session_id="s1")
+
+    first, second = seen
+    assert first.permissions is second.permissions
+    assert (second.permissions.check_path(current / "usage.md", "read") is None) == (
+        source == "bundled"
+    )
+    # The grant is read-only, deny rules still win, and sibling application data
+    # never becomes readable even when a newer documentation generation does.
+    assert second.permissions.check_path(current / "usage.md", "write") is not None
+    assert second.permissions.check_path(denied_file, "read") is not None
+    assert second.permissions.check_path(cache.parent / "private.md", "read") is not None
 
 
 @pytest.mark.asyncio

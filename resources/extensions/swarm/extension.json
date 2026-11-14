@@ -1,1 +1,13 @@
-{"name":"Swarms","version":"1.0.0","description":"Peer collaboration with independent Sessions and a shared Board.","api_version":20}
+{
+  "name": "Swarms",
+  "version": "1.0.0",
+  "description": "Peer collaboration with independent Sessions and a shared Board.",
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Swarm",
+      "description": "Configure profiles, start peer collaboration and manage Swarms, their Board and Wiki through the CLI."
+    }
+  ]
+}

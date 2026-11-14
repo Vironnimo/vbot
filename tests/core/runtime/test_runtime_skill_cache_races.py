@@ -13,6 +13,7 @@ import pytest
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime import _settings as runtime_settings
 from core.runtime.runtime import Runtime
+from core.skills._global_scanning import PreparedGlobalSkills
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
 from core.utils.config import Config
@@ -50,7 +51,7 @@ def _pause_first_global_scan(
     owner = runtime._skill_operations()  # noqa: SLF001 - the worker scan seam.
     original_load = owner.load_global_registry
 
-    def paused_load() -> SkillRegistry:
+    def paused_load() -> PreparedGlobalSkills:
         if not first.acquire(blocking=False):
             return original_load()
         # Fail on a synchronous path instead of blocking the loop that must release.
@@ -69,15 +70,22 @@ def _pause_first_global_scan(
 async def test_older_skill_scan_cannot_overwrite_newer_policy(
     config: Config, monkeypatch: pytest.MonkeyPatch, newer_reload: str
 ) -> None:
+    resources = config.data_dir.parent / "resources"
+    source = write_skill(resources / "skills", "vbot-docs", "Documentation race fixture.")
+    reference = source / "references" / "version.md"
+    reference.parent.mkdir()
+    reference.write_text("before\n", encoding="utf-8")
+    config = Config(data_dir=config.data_dir, overrides={"RESOURCES_PATH": str(resources)})
     write_skill(config.data_dir / "skills", RELOADED_SKILL_NAME, "Reload race fixture.")
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
+    previous_docs = runtime.skills.get("vbot-docs").path.parent
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
     owner = runtime._skill_operations()  # noqa: SLF001 - the worker scan seam.
     paused_load = owner.load_global_registry
     scans: list[None] = []
 
-    def counted_load() -> SkillRegistry:
+    def counted_load() -> PreparedGlobalSkills:
         scans.append(None)
         return paused_load()
 
@@ -87,6 +95,7 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
     try:
         await asyncio.wait_for(entered.wait(), 5)
         runtime.skill_policy.set_package_disabled(RELOADED_PACKAGE, disabled=True)
+        reference.write_text("after\n", encoding="utf-8")
         if newer_reload == "sync":
             runtime.reload_skills()
             latest = runtime.skills
@@ -113,6 +122,16 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
             runtime.skills.get(RELOADED_SKILL_NAME)
         with pytest.raises(KeyError):
             runtime.skills_for(None, "main").get(RELOADED_SKILL_NAME)
+        current_docs = runtime.skills.get("vbot-docs").path.parent
+        assert current_docs != previous_docs
+        assert (
+            current_docs.joinpath("references/version.md").read_text(encoding="utf-8") == "after\n"
+        )
+        assert (
+            previous_docs.joinpath("references/version.md").read_text(encoding="utf-8")
+            == "before\n"
+        )
+        assert runtime.skills_for(None, "main").get("vbot-docs").path.parent == current_docs
     finally:
         release.set()
         await asyncio.gather(older, *newer, return_exceptions=True)
@@ -402,13 +421,13 @@ async def test_extension_skill_scan_yields_and_settles_before_shutdown(
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
     original_apply = runtime_settings.publish_skills
 
-    def install(target: Runtime, skills: SkillRegistry, *, generation: object) -> None:
+    def install(target: Runtime, prepared: PreparedGlobalSkills, *, generation: object) -> None:
         assert target is runtime
         assert threading.get_ident() == loop_thread
         assert runtime._started  # noqa: SLF001
-        original_apply(runtime, skills, generation=generation)
-        assert runtime.skills is skills
-        installed.append(skills)
+        original_apply(runtime, prepared, generation=generation)
+        assert runtime.skills is prepared.registry
+        installed.append(prepared.registry)
 
     async def load_no_extensions(*_args: object, **_kwargs: object) -> ExtensionRegistry:
         return ExtensionRegistry()

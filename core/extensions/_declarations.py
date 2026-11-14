@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 28
+API_VERSION = 29
 # Menu icons a page may declare; the WebUI draws each (``AppShell.svelte``).
 PAGE_ICONS = frozenset({"network", "panel", "grid", "sparkles", "factory"})
 HookHandler = Callable[..., Any]
@@ -106,6 +106,15 @@ class ToolCallDecision:
 
 
 @dataclass(frozen=True)
+class ExtensionDocumentation:
+    """One manifest-declared usage document, relative to its Extension root."""
+
+    path: str
+    title: str
+    description: str
+
+
+@dataclass(frozen=True)
 class ExtensionManifest:
     """Optional ``extension.json`` enrichment for a directory-form extension.
 
@@ -118,6 +127,7 @@ class ExtensionManifest:
     description: str | None = None
     api_version: int | None = None
     display_name: str | None = None
+    documentation: tuple[ExtensionDocumentation, ...] = ()
 
 
 @dataclass(frozen=True)

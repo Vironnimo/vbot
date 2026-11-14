@@ -17,7 +17,7 @@ from core.runtime._workers import _RUNTIME_WORKERS
 from core.settings import settings_values_equal
 from core.settings.normalizers import normalize_debug_settings
 from core.settings.settings import effective_timezone_name
-from core.skills.skills import SkillRegistry
+from core.skills._global_scanning import PreparedGlobalSkills
 from core.tools import register_skill_manage_tool, register_skill_tool
 from core.utils.logging import get_logger
 from core.utils.workers import SharedRefresh
@@ -212,7 +212,8 @@ async def _rescan_skills(runtime: Runtime) -> None:
     owner = runtime._skill_operations()
     generation = runtime._skill_reload_generation = object()
     credential_snapshot = runtime._fallback_environment
-    skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)
+    prepared = await _RUNTIME_WORKERS.run(owner.load_global_registry)
+    skills = prepared.registry
     if credential_snapshot is not runtime._fallback_environment:
         # A credential reload updates held registries while the scan runs.
         # Rebase its environment without discarding newly scanned packages.
@@ -225,18 +226,19 @@ async def _rescan_skills(runtime: Runtime) -> None:
         not runtime._skill_reload_required
         and runtime._skills is not None
         and runtime._skills.same_catalog(skills)
+        and owner.docs_path == prepared.docs_path
     ):
         return
-    publish_skills(runtime, skills, generation=generation)
+    publish_skills(runtime, prepared, generation=generation)
 
 
-def publish_skills(runtime: Runtime, skills: SkillRegistry, *, generation: object) -> None:
+def publish_skills(runtime: Runtime, prepared: PreparedGlobalSkills, *, generation: object) -> None:
     """Install a fully built Skill registry and refresh its loop-owned consumers."""
     if not runtime._started or generation is not runtime._skill_reload_generation:
         return
     runtime._skill_reload_required = False
-    runtime._skills = skills
-    runtime._skill_operations().replace_registry(skills)
+    runtime._skills = prepared.registry
+    runtime._skill_operations().replace_registry(prepared)
     invalid_skill_count = len(runtime._skills.invalid_diagnostics())
     if runtime.logger is not None:
         # Routine cache maintenance (fires on every project open), not an event.

@@ -2,5 +2,12 @@
   "name": "1Password",
   "description": "Use items of your 1Password vaults as Agent Secrets, read through the 1Password CLI with a service account.",
   "version": "1.0.0",
-  "api_version": 17
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "1Password setup",
+      "description": "Configure a 1Password service account and use its vault items as Agent Secrets."
+    }
+  ]
 }

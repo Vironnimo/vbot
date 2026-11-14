@@ -39,7 +39,7 @@ class SkillInventory:
         resolve: Callable[[Path], Path] = Path.resolve,
     ) -> list[_ManagerSource]:
         global_roots = self._owner._global_roots(self._owner._storage.load_settings())
-        origins = _origin_layers([root.root for root in global_roots])
+        origins = _origin_layers(global_roots)
         sources = [
             _ManagerSource(root.root, origin, None, None, root.kind, root.location)
             for root, origin in zip(global_roots, origins, strict=True)

@@ -2,5 +2,12 @@
   "name": "KeePassXC",
   "description": "Use entries of a local KeePassXC database as Agent Secrets, read through keepassxc-cli.",
   "version": "1.0.0",
-  "api_version": 17
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "KeePassXC setup",
+      "description": "Configure a KeePassXC database and use its entries as Agent Secrets."
+    }
+  ]
 }

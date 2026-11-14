@@ -24,6 +24,14 @@ Shared layers are package roots inserted between the Project and global layers i
 
 `core.skills.resolve_package_resource(root, resource)` resolves a portable package-relative resource, refusing generated/internal paths and resolved escapes before the reader checks existence or content. It preserves confined redirects; read/paging errors remain with the Tool.
 
+## Extension documentation
+
+The global Skill scan composes the bundled `vbot-docs` package through `_documentation.py` into an immutable generation under `DataDirectoryLayout.skill_documentation` (`artifacts/skill-docs/`). Its base files remain bundled sources; a fixed reference points to the generated Extension index and the Extension-owned usage documents declared by manifests (`extensions/management.md`). Original installation files are never rewritten, and the ordinary Skill Tool and file-search paths read the generated files without a special protocol.
+
+`PreparedGlobalSkills` carries the global registry and documentation generation together. Bootstrap clears the disposable cache before the initial build; reloads retain older generations for readers that already have absolute paths. Runtime publishes the generation with the registry under its existing reload guard. Scoped registries and the human inventory reuse that published generation and never rebuild documentation themselves. An unchanged-catalog refresh still publishes when the documentation generation changed, including when a user package shadows `vbot-docs`.
+
+Only `vbot-docs` is copied. The remaining bundled packages retain their installation paths and every bundled package retains its source identity, origin, disable policy, allowlist filtering and precedence. `_global_scanning.py` supplies explicit package roots for this bundled layer and maps policy exclusions to their containing homes. The assembled package is read-only to Skill authoring. A base-package or cache failure falls back to the original bundled source, with a diagnostic log, never to an older generated index; other Skills remain loadable.
+
 ## Catalog rendering
 
 `core/skills/skills.py::format_skill_catalog_entries` renders prompt-facing metadata as origin headings with one `- name: description` line per Skill inside an `<available_skills>` boundary (`core/prompts/_formatting.py` wraps it for the `core:skills` block, `prompts.md`) - the same text as the `skill` Tool's no-argument list and the shape of the new-Skill System Reminder:

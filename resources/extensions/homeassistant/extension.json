@@ -2,5 +2,12 @@
   "name": "Home Assistant",
   "description": "Control and inspect a Home Assistant instance via its REST API.",
   "version": "1.0.0",
-  "api_version": 3
+  "api_version": 29,
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Home Assistant setup",
+      "description": "Connect Home Assistant, configure its token and identify the Tools for entity and service work."
+    }
+  ]
 }

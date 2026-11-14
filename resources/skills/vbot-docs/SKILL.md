@@ -31,8 +31,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Provider keys, logins and limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
-| Use bundled Software Factory, Swarm or Computer Use, or connect KeePassXC or 1Password as a source for Agent Secrets | `references/extension-usage.md` |
-| MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
+| Use or configure an installed Extension, its CLI operations and setup | `references/extension-index.md`, then the guide for the requested task |
 | Channels (Telegram, Discord, Slack, Mattermost, WhatsApp, email): first setup, tokens, allowed chats, group access | `references/channels.md` |
 | Automations: scheduled Runs, change checks and Webhooks | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
