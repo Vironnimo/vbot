@@ -404,7 +404,7 @@ class FactoryExtension:
     ) -> Json:
         """A Card for one trigger event; an unknown repository waits for the user at start."""
         description = trigger["task"].strip() or (
-            f"Do what Workflow {workflow['name']!r} does for this trigger event."
+            f"Do what Workflow {workflow['name']!r} does for the event that created this Card."
         )
         try:
             return await self._new_card(

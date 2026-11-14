@@ -51,10 +51,10 @@ REVIEW_TASK = (
     "concrete findings."
 )
 PUSH_REVIEW_TASK = (
-    "Review the commits of the push described in the trigger event without changing files "
-    "or branches. Check out nothing; read the commits with git. Judge correctness, risks "
-    "and whether the change follows the Project conventions. Hand in your findings as "
-    "result, most important first."
+    "Review the commits of the push described in the event that created the Card, without "
+    "changing files or branches: fetch and read them with git, but check out nothing. Judge "
+    "correctness, risks and whether the change follows the Project conventions. Hand in your "
+    "findings as result, most important first."
 )
 PLAN_TASK = (
     "Write an implementation plan for the Card: the approach, the parts it changes, the "
