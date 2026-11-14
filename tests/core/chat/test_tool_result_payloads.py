@@ -53,7 +53,7 @@ def _payload_rows(runtime: Any) -> list[tuple[Any, ...]]:
         return [
             tuple(row)
             for row in connection.execute(
-                "SELECT c.call_id, p.payload_id, p.owner_name, p.payload_json "
+                "SELECT c.call_id, p.payload_id, p.owner_name "
                 "FROM tool_result_payloads AS p JOIN tool_calls AS c ON c.call_key = p.call_key "
                 "ORDER BY p.payload_key"
             )
@@ -87,14 +87,17 @@ async def test_attached_payload_is_stored_with_its_tool_result(tmp_path) -> None
     first, second = _tool_results(runtime)["call-one"]["data"]["saved"]
     assert first.startswith("res_") and len(first) == len("res_") + 16
     assert _payload_rows(runtime) == [
-        ("call-one", first, "owner", '{"rows":[1,2,3]}'),
-        ("call-one", second, "owner", '"second"'),
+        ("call-one", first, "owner"),
+        ("call-one", second, "owner"),
     ]
     sessions = runtime.chat_sessions
     assert await sessions.tool_result_payload_async(_ADDRESS, first, owner_name="owner") == {
         "rows": [1, 2, 3]
     }
     assert await sessions.tool_result_payload_async(_ADDRESS, first, owner_name="other") is None
+    assert (
+        await sessions.tool_result_payload_async(_ADDRESS, second, owner_name="owner") == "second"
+    )
     # The call is over: a late attach cannot reach history any more.
     with pytest.raises(RuntimeError, match="only while the Tool call runs"):
         contexts[0].attach_result_payload("late")
@@ -147,11 +150,16 @@ async def test_a_failed_call_keeps_no_payload_and_built_in_tools_own_theirs(tmp_
     assert results["core-call"]["ok"] is True
     kept = results["failed-call"]["error"]["message"]
     rows = _payload_rows(runtime)
-    assert rows[0] == ("failed-call", kept, "owner", '{"kept":true}')
+    assert rows[0] == ("failed-call", kept, "owner")
     # A built-in Tool owns its payload under the reserved ``tool:<name>`` owner.
-    assert [(row[0], row[2], row[3]) for row in rows[1:]] == [
-        ("core-call", "tool:core_tool", '{"core":true}')
-    ]
+    assert [(row[0], row[2]) for row in rows[1:]] == [("core-call", "tool:core_tool")]
+    sessions = runtime.chat_sessions
+    assert await sessions.tool_result_payload_async(_ADDRESS, kept, owner_name="owner") == {
+        "kept": True
+    }
+    assert await sessions.tool_result_payload_async(
+        _ADDRESS, rows[1][1], owner_name="tool:core_tool"
+    ) == {"core": True}
 
 
 @pytest.mark.asyncio
