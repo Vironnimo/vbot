@@ -10,6 +10,7 @@
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
 
   let settings = $state(null);
   let service = $state(null);
@@ -107,12 +108,11 @@
         </ul>
       {/if}
       {#if service.plan?.requires_prerequisites}
-        <label class="onboarding-prerequisites"
-          ><input
-            type="checkbox"
-            bind:checked={allowPrerequisites}
-            disabled={applying}
-          />{t('onboarding.services.prerequisites')}</label
+        <Checkbox
+          class="onboarding-prerequisites"
+          checked={allowPrerequisites}
+          onChange={(checked) => (allowPrerequisites = checked)}
+          disabled={applying}>{t('onboarding.services.prerequisites')}</Checkbox
         >
       {/if}
       <div class="onboarding-service-actions">

@@ -1007,7 +1007,9 @@ describe('OnboardingView', () => {
     expect(document.body.textContent).toContain(
       'Runtime prerequisite sentinel',
     );
-    document.querySelector('.onboarding-prerequisites input').click();
+    document
+      .querySelector('.onboarding-prerequisites[role="checkbox"]')
+      .click();
     flushSync();
     byText('button', t('onboarding.services.install')).click();
     await waitFor(() =>

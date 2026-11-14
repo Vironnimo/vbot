@@ -160,6 +160,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "devices",
         "agent_secrets",
         "application",
+        "setup",
     } == ALLOWED_RESOURCE_KINDS
 
 

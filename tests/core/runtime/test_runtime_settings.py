@@ -83,6 +83,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "commands_changed": False,
     "skills_changed": False,
     "agents_changed": False,
+    "setup_observations": 0,
 }
 _SKILLS: dict[str, Any] = {"skill_directories": ["~/extra-skills"]}
 _RECALL: dict[str, Any] = {"recall": {"backend": "sqlite_fts"}}
@@ -250,7 +251,7 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
                 }
             },
             (),
-            {"agents_changed": True},
+            {"agents_changed": True, "setup_observations": 1},
             id="agent-defaults",
         ),
         # A changed retention period wakes the archive's retention sweep.
@@ -272,6 +273,7 @@ def test_settings_changes_refresh_only_their_live_services(
     shared_runtime._startup_id = "settings-fixture"
     shared_runtime._started = True
     shared_runtime.extensions.fire_config_change = AsyncMock()
+    shared_runtime.chat_sessions.run_async = AsyncMock()
     extension_reload = AsyncMock()
     disabled_change = AsyncMock()
     skills_reload = AsyncMock()
@@ -318,6 +320,7 @@ def test_settings_changes_refresh_only_their_live_services(
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
         "agents_changed": effects.agents_changed,
+        "setup_observations": shared_runtime.chat_sessions.run_async.await_count,
     } == {**_NO_EFFECTS, **expected}
 
 
