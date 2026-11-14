@@ -7,8 +7,8 @@ This guide covers installing, configuring, using, operating, and integrating vBo
 A new installation takes three steps:
 
 1. Run the standard Installer for your operating system.
-2. Open `http://127.0.0.1:22332/` after the Installer reports that the server is running.
-3. Use the setup guide to connect a Provider or OAuth subscription, choose a Model, and send the first message in the Session vBot created for you.
+2. Use the shared setup offered by the Installer, or open `http://127.0.0.1:22332/` or `vbot tui` after the server starts.
+3. Connect a Provider or subscription and choose a Model, then finish and send your first message. You can continue to select optional components, or skip the guide at any step and configure everything yourself.
 
 | I want to… | Go to |
 |---|---|
@@ -71,7 +71,7 @@ The Installer needs only `curl` and `python3`; the package brings its own CPytho
 
 Linux packages contain the server only. Use the WebUI in a browser, or connect a Windows Desktop Client from another computer.
 
-After either installation, open `http://127.0.0.1:22332/` once the Installer reports that the server is running. The first-run setup is described in [First-run setup](#first-run-setup).
+Both Installers offer unfinished shared setup when run in an interactive terminal. Use `-Setup browser` on Windows or `--setup browser` on Linux to open it in the browser, or `-Setup later` / `--setup later` to leave it for your next WebUI or TUI visit. Deferring setup does not mark it as skipped. Automatic setup, including the Windows graphical Installer's browser action, stays closed when retained data already records completion or a skip; explicitly choosing terminal or browser setup reopens the guide. The first-run setup is described in [First-run setup](#first-run-setup).
 
 As with any `curl | bash` or `irm | iex` command, inspect [install.sh](scripts/install.sh) or [install.ps1](scripts/install.ps1) and run the downloaded file locally if you do not want to execute network content directly.
 
@@ -113,7 +113,8 @@ Windows options are passed through the ScriptBlock form:
 | `-Port <port>` | Server port; default `22332` |
 | `-Desktop` | Install Server + Desktop |
 | `-DesktopClient` | Install only the Desktop Client for an existing remote server |
-| `-NoAutostart` | Register no logon task; the server is not started |
+| `-NoAutostart` | Register no logon task; start the server only when `-Setup terminal` or `-Setup browser` is explicitly selected |
+| `-Setup <mode>` | `auto` (default) opens setup in an interactive terminal after server startup; `terminal` or `browser` selects its surface; `later` defers setup without changing its saved status |
 | `-AllowElevatedInstall` | Allow an elevated PowerShell; for disposable automation only, never for a persistent installation |
 
 <details>
@@ -139,7 +140,8 @@ Linux options are passed after `bash -s --`:
 | `--host <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
 | `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--allow-host`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
 | `--port <port>` | Server port; default `22332` |
-| `--no-autostart` | Do not register the systemd user unit or start the server |
+| `--no-autostart` | Register no systemd user unit; start the server only when `--setup terminal` or `--setup browser` is explicitly selected |
+| `--setup <mode>` | `auto` (default) opens setup in an interactive terminal after server startup; `terminal` or `browser` selects its surface; `later` defers setup without changing its saved status |
 | `-h`, `--help` | Show Installer help |
 
 <details>
@@ -155,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 
 A selected release determines the initial installation, not a permanent version pin: subsequent `vbot update` calls follow the release channel. Both Installers verify that the downloaded release identity names the requested version and channel.
 
-Both Installers report each step with a status label; `NO_COLOR=1` disables color. When the Windows Installer fails, it prints the path of its technical log. With `-NoAutostart` or `--no-autostart`, start the server yourself with `vbot server start`.
+Both Installers report each step with a status label; `NO_COLOR=1` disables color. When the Windows Installer fails, it prints the path of its technical log. Automatic setup is deferred when the server is not started or no interactive terminal is available. To suppress the guide during automated installation, pass `-Setup later` or `--setup later`. With `-NoAutostart` or `--no-autostart`, explicitly choosing terminal or browser setup starts the server once without registering Autostart; otherwise start it yourself with `vbot server start`, then run `vbot setup` when you want the guide.
 
 ### Server access
 
@@ -218,7 +220,7 @@ A Git clone of this repository is a development checkout, not an installation. S
 
 - **Windows:** 64-bit Windows on x86-64 and a normal user account.
 - **Linux:** 64-bit Linux on ARM64 (aarch64) or x86-64 with `curl` and `python3`, and systemd for Autostart. A Raspberry Pi needs the 64-bit Raspberry Pi OS; the Installer refuses other architectures.
-- A Provider Connection and Model are required before an Agent can complete a Run, but you configure them after installation in the WebUI setup guide.
+- A Provider Connection and Model are required before an Agent can complete a Run. Configure them in the shared setup or through the normal Provider and Agent settings.
 - Browser automation is optional and uses the bundled `playwright-cli` Skill through the `bash` Tool. Install Node.js 18 or newer, npm, and `@playwright/cli` on the server host when needed; the Skill includes setup instructions. See [Browser automation](resources/skills/playwright-cli/SKILL.md).
 
 ## Updating and uninstalling
@@ -317,12 +319,25 @@ The command refuses while you are inside the installation directory, and refuses
 
 ## First-run setup
 
-Open `http://127.0.0.1:22332/`. vBot has already created an initial Identity Agent and its first Session, so you do not need to create an Agent before getting started.
+Installation, WebUI and TUI share one optional setup guide and one saved progress record for the server. If setup has not been completed or explicitly skipped, the WebUI and TUI open it automatically. vBot has already created an initial Identity Agent and its first Session, so you do not need to create an Agent before getting started.
 
-1. Follow the setup guide to choose a Provider.
+1. Choose a Provider.
 2. Connect an API key, an OAuth subscription, or a keyless local Connection such as Ollama.
 3. Select the Agent's chat Model.
-4. Return to Chat and send a message. A successful response confirms the complete path from the WebUI through vBot to the selected Provider and Model.
+4. Finish and start chatting, or continue to choose bundled Skills, Extensions and optional services.
+
+Every step lets you end the guide, including the first one. Saved choices stay in place; untouched options keep their defaults. Skipping the guide before setting a Provider and Model leaves those for you to configure manually before the first Agent can work. Setup is not a prerequisite for using the normal settings or CLI commands.
+
+Once the initial Agent has a configured Provider and Model, setup stays completed, including when you configured them manually. Explicitly skipping also prevents automatic re-entry. Expired keys, unavailable Models or later removal of Providers do not reopen setup. Reopening the guide yourself keeps your existing settings and does not enable automatic setup again.
+
+Run `vbot setup` to reopen the guide in a terminal, or `vbot setup --browser` to open it in the WebUI. Add `--if-needed` to either command to open only pending setup; completed or skipped setup exits successfully without opening a guide or requiring a terminal. The TUI and WebUI also offer an action to reopen setup. Non-interactive commands use the same server state:
+
+```bash
+vbot setup status
+vbot setup finish
+```
+
+`status` reports the saved state and step. `finish` ends the guide for every Accessor without configuring missing choices: it records completion when the initial Agent is configured, otherwise a skip. A successful chat response, rather than the setup status, confirms that the selected Provider and Model can currently answer.
 
 The WebUI is the recommended place to manage Connections and Accounts because it keeps credentials out of command history. A fresh server installation seeds global Agent defaults with thinking effort `high` and leaves temperature unset, so Agents request their Model's recommended temperature - or none at all, leaving the choice to Provider and API defaults - unless configured more specifically. Installation and updates preserve an existing `settings.json`, so these fresh-install defaults never replace an existing instance's choices.
 
@@ -346,6 +361,31 @@ A key passed to `provider key set` may be retained by shell history. Prefer the 
 A Provider describes an external model service and Adapter behavior. A Connection describes one authentication and endpoint mode under that Provider. An Account is a credential slot on a Connection; the default slot is named `default`, and additional named Accounts can coexist.
 
 API keys resolve from the process environment first and the data directory's Secret Store second; OAuth tokens live in the Secret Store as well (see Credentials and the Secret Store below). A keyless local Connection such as Ollama still has enabled and reachability state even though it has no credential.
+
+### Optional components and services
+
+The guide's components step lets you enable or disable bundled Skills and Extensions. These are the same choices available in the normal managers; leaving the step keeps their current configuration. Optional services are a separate step in the same guide and can also be configured later.
+
+A packaged vBot server can install and manage SearXNG for web search. Setup reuses an existing local Docker or Podman runtime, or offers to install Podman and prepare the required environment. The plan names the additional steps before you approve them. Windows can require a system authorization dialog, WSL 2 and a restart; Linux uses the host's package manager and system authorization. When a host action is needed, follow the displayed instructions and resume setup afterwards. The work takes place on the server computer, even when you open the guide elsewhere.
+
+The managed SearXNG container listens only on the server's loopback address. Setup enables JSON search, runs a test search and then selects the verified service for vBot's web search. You can instead keep another search provider or configure an existing SearXNG URL. Managed installation is unavailable in a development checkout; configuring an existing service is still supported.
+
+The same service controls are available without the guide:
+
+```bash
+vbot service install searxng
+vbot service status searxng
+vbot service stop searxng
+vbot service start searxng
+vbot service update searxng
+vbot service remove searxng
+```
+
+Install and update use existing prerequisites unless you add `--install-prerequisites`; that option permits the missing host setup shown by `service status`. On Linux, a local interactive terminal can run the fixed package-manager command through `sudo` after vBot verifies that the selected server belongs to this installation. The terminal guide temporarily suspends itself for the system password prompt. `--json` never prompts; remote targets and Agent Runs cannot request terminal authorization either. When terminal authorization is unavailable, an `action_required` result includes the command to run on the server.
+
+Service operations run in the background, so read their saved result with `service status` before treating them as finished. Closing the guide does not cancel an accepted operation. After an authorization request, restart or other reported interruption, resolve the host action and repeat the requested service action to resume.
+
+An update keeps the previous container until the replacement passes its search check, and restores it when the check fails. Stopping SearXNG leaves the web-search selection in place. Removing it deletes vBot's managed containers while retaining their configuration, downloaded images and the shared container runtime. Removal restores the previous search configuration only if vBot still uses that managed SearXNG URL; later user changes remain intact.
 
 ### Custom Providers
 
@@ -472,6 +512,7 @@ Other entries appear at the data root when first needed:
 - the canonical databases `sessions.db`, `channels.db`, and `provider-usage.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
 - `snapshots/`, `config-backups/`, `incidents/` and `quarantine/` for data snapshots, configuration backups and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
 - `secrets.json`, the encrypted Secret Store, when the first credential or OAuth token is saved (see Credentials and the Secret Store below);
+- `setup.json`, the shared first-run progress and durable completed or skipped decision;
 - `runtime/` with the control records of a running server, `speech-engines/` after local speech setup, and `embedding-engines/` after a local embedding Model is installed;
 - `pre-generation-1/` only in a data directory converted from vBot 0.4.4 or earlier (see below).
 
@@ -1306,6 +1347,8 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Area | Commands |
 |---|---|
 | Server | `server start`, `server stop`, `server restart`, `server status` |
+| First-run setup | `setup`, `setup --browser`, `setup --if-needed`, `setup status`, `setup finish` |
+| Optional services | `service status`, `service install`, `service start`, `service stop`, `service update`, `service remove` (service id: `searxng`) |
 | Paths | `home [--data-dir ...]` |
 | Desktop | `desktop [--host ... --port ...]` |
 | Installation lifecycle | `update`, `update status`, `update activate`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status`, `application status`, `application channel`, `application dependencies` |
@@ -1354,6 +1397,8 @@ Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and p
 The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. Who may call it depends on the server's access mode ([Server access](#server-access)); `local` and `lan` have no authentication. Treat access as host-level code-execution authority.
 
 Data-store operations exposed through RPC are `data_store.status`, `data_store.snapshot_create`, `data_store.incident_acknowledge`, and `data_store.unregister`. They return safe health and recovery metadata, publish `resource_changed` with kind `data_store` after successful snapshot, acknowledgement, or unregister mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
+
+First-run setup uses `setup.get`, `setup.update` with a `step` (`provider`, `model`, `components` or `services`), and `setup.finish`. Each returns the shared `status`, `step`, target `agent_id` and `auto_show` flag. Completion is durable: moving to a step never resets a completed or skipped guide. Changes publish `resource_changed` with kind `setup`.
 
 ### RPC envelope
 

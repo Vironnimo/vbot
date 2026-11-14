@@ -35,6 +35,7 @@ async def run_tui(
             project_id=project_id,
             draft_store=store,
             restored_drafts=restored,
+            setup_state={},
         )
         try:
             return await app.run_async() or 0

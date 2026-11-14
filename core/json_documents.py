@@ -63,6 +63,7 @@ FORMAT_VERSION_FIELD = "format_version"
 DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
     {
         "settings": "settings.json",
+        "setup": "setup.json",
         "statistics_period": "statistics/period.json",
         "agent": "agents/*/agent.json",
         "agent_order": "agents/order.json",
@@ -97,6 +98,8 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
 #: the snapshot while its blob stays. The device store and the server's recorded
 #: access configuration must never return through a restore: that would revive
 #: revoked devices or a weaker access mode the host replaced.
+#: Setup completion is historical; restoring an earlier configuration must not
+#: reopen a guide the operator completed or explicitly skipped.
 DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
     {
         "attachment_metadata",
@@ -104,6 +107,7 @@ DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
         "access_devices",
         "access_server",
         "computers",
+        "setup",
     }
 )
 

@@ -343,7 +343,7 @@ def test_render_json_document_sorts_nested_keys_after_the_version() -> None:
     assert text.index('"a": [') < text.index('"z"')
 
 
-def test_snapshot_documents_leave_out_blob_sidecars_and_the_access_documents(
+def test_snapshot_documents_leave_out_blob_sidecars_access_and_setup(
     tmp_path: Path,
 ) -> None:
     assert set(DURABLE_DOCUMENTS) >= DOCUMENTS_OUTSIDE_SNAPSHOTS
@@ -354,6 +354,7 @@ def test_snapshot_documents_leave_out_blob_sidecars_and_the_access_documents(
         "access/devices.json",
         "access/computers.json",
         "access/server.json",
+        "setup.json",
     }
     # A restore must never revive a revoked device or a weaker access mode: no
     # data snapshot and no configuration backup holds the access documents.
@@ -361,6 +362,7 @@ def test_snapshot_documents_leave_out_blob_sidecars_and_the_access_documents(
     (tmp_path / "access" / "devices.json").write_text('{"format_version": 1, "devices": []}')
     (tmp_path / "access" / "computers.json").write_text('{"format_version": 1, "computers": []}')
     (tmp_path / "access" / "server.json").write_text('{"format_version": 1}')
+    (tmp_path / "setup.json").write_text('{"format_version": 1, "status": "skipped"}')
     (tmp_path / "settings.json").write_text("{}")
     assert snapshot_document_paths(tmp_path) == ("settings.json",)
     assert configuration_paths(tmp_path) == ("settings.json",)

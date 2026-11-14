@@ -103,6 +103,7 @@ from core.runtime._prompt_blocks import (
     _StorageManagerBlockStore,
 )
 from core.runtime._recall import RecallIntegration
+from core.runtime._setup import observe_setup
 from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
@@ -1034,6 +1035,7 @@ def bootstrap(runtime: Runtime) -> None:
 
         runtime._startup_summary = _summarize_startup(runtime)
         runtime._started = True
+        observe_setup(runtime, actor="startup")
         # Every Run counts its requests with the estimation encoding. Load it off
         # the Event Loop before the first Run needs it, but after the startup
         # work it would slow down by contending for the GIL.

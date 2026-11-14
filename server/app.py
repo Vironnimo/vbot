@@ -122,6 +122,7 @@ from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.portals import PortalServer
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.managed_service_methods import close_services, start_services
 from server.rpc.methods import dispatch_rpc
 
 if TYPE_CHECKING:
@@ -306,6 +307,7 @@ def create_app(
                 resolved_server_bind["listen_port"],
             )
             app_runtime.activate_bootstrap()
+            await start_services(app.state)
             if on_ready is not None:
                 on_ready(app_runtime)
             yield
@@ -327,6 +329,8 @@ def create_app(
                 try:
                     server_logger.debug("Server application stopping")
                     if state_initialized:
+                        with cleanup_step():
+                            await close_services(app.state)
                         with cleanup_step():
                             await _shutdown_live_calls(app.state, server_logger)
                         with cleanup_step():

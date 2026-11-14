@@ -18,6 +18,7 @@ def dispatch_tui_command(args: argparse.Namespace, instance: ServerInstance) -> 
 
     try:
         from cli.tui import run_tui
+        from cli.tui.transport import ClientError
 
         return asyncio.run(
             run_tui(
@@ -31,6 +32,9 @@ def dispatch_tui_command(args: argparse.Namespace, instance: ServerInstance) -> 
         if error.name != "textual" and not str(error.name).startswith("textual."):
             raise
         print("Error: the terminal UI dependency is missing. Install vBot with its cli extra.")
+        return 1
+    except ClientError as error:
+        print(f"Error: {error}")
         return 1
     except KeyboardInterrupt:
         return 0

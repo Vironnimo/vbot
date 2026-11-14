@@ -13,6 +13,7 @@
 // session scope the watcher must match, so App routes it directly rather than
 // through a bare counter.
 export const RESOURCE_TOKEN_MODELS = 'models';
+export const RESOURCE_TOKEN_SETUP = 'setup';
 export const RESOURCE_TOKEN_STATISTICS = 'statistics';
 export const RESOURCE_TOKEN_AGENTS = 'agents';
 export const RESOURCE_TOKEN_MEMORIES = 'memories';
@@ -52,6 +53,7 @@ export const RESOURCE_KIND_MODEL_FAVORITES = 'model_favorites';
 // suggestions (chat.commands) list Skills beside the commands.
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
+  setup: [RESOURCE_TOKEN_SETUP],
   models: [RESOURCE_TOKEN_MODELS],
   statistics: [RESOURCE_TOKEN_STATISTICS],
   providers: [RESOURCE_TOKEN_MODELS, RESOURCE_TOKEN_CREDENTIALS],

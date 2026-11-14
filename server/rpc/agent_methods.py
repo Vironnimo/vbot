@@ -62,6 +62,7 @@ from server.rpc.errors import (
 )
 from server.rpc.event_bridge import publish_archived_sessions, publish_resource_changed
 from server.rpc.payloads import _agent_response
+from server.rpc.setup_methods import observe_configuration
 from server.rpc.validation import (
     _ensure_model_connection_supported,
     _optional_bool,
@@ -198,6 +199,7 @@ def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
         if changes.get("custom_system_prompt_enabled") is True:
             _seed_agent_custom_prompt(state, agent_id)
         agent = state.runtime.agents.get(agent_id)
+        observe_configuration(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _agent_response(state, agent)
@@ -218,6 +220,7 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
         if {"model", "thinking_effort"}.intersection(changes):
             state.runtime.agent_resolver.preserve_agent_sessions(None, agent_id)
         previous_agent = state.runtime.agents.get(agent_id)
+        observe_configuration(state)
         if (
             changes.get("custom_system_prompt_enabled") is True
             and not previous_agent.custom_system_prompt_enabled
@@ -229,6 +232,7 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
             **changes,
         )
         agent = update_result.agent
+        observe_configuration(state)
         changed_field_names = {"tools" if field == "subagent_allow" else field for field in changes}
         changed_fields = sorted(
             field

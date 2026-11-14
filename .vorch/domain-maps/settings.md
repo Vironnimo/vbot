@@ -41,3 +41,4 @@ Read these only when your task matches - not by default.
 
 - Changing one Settings section's or path's contract (update semantics and refusals, live effects per section, Task Model paths, patch pruning of emptied containers, the `base` plumbing, Sub-Agent limits, the installer's `defaults.agent` seed) -> `settings/sections.md`
 - Changing how `settings.json` or any other durable JSON document is versioned, loaded, written, guarded or validated by `doctor config` -> `json-documents.md`
+- Shared first setup, its durable completion/progress or the `setup.*` RPCs -> `settings/setup.md`

@@ -202,8 +202,9 @@ describe('App', () => {
   );
 
   it('keeps a dismissed onboarding hidden while Chat offers the Provider connection', async () => {
-    localStorage.setItem('vbot.onboardingDismissed', '1');
-    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
+    rpcMock.mockImplementation(
+      createOnboardingRpcMock({ connected: false, status: 'skipped' }),
+    );
     mountApp();
 
     await waitForCondition(() => {
@@ -212,24 +213,72 @@ describe('App', () => {
     expect(document.querySelector('.onboarding-view')).toBeFalsy();
   });
 
-  it('drops the onboarding dismissal once a Provider change connects vBot', async () => {
-    localStorage.setItem('vbot.onboardingDismissed', '1');
-    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: false }));
+  it('keeps shared completion after a Provider becomes unavailable', async () => {
+    rpcMock.mockImplementation(
+      createOnboardingRpcMock({ connected: true, status: 'completed' }),
+    );
     const handlers = mountApp();
-    await waitForCondition(() => {
-      expect(document.body.textContent).toContain(t('chat.noProvider.title'));
-    });
-
-    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: true }));
+    await waitForCondition(() =>
+      expect(document.querySelector('.chat-view')).toBeTruthy(),
+    );
+    rpcMock.mockImplementation(
+      createOnboardingRpcMock({ connected: false, status: 'completed' }),
+    );
     handlers.onEvent({
       type: 'resource_changed',
       sequence: 1,
       payload: { kind: 'providers' },
     });
+    await waitForCondition(() =>
+      expect(document.body.textContent).toContain(t('chat.noProvider.title')),
+    );
+    expect(document.querySelector('.onboarding-view')).toBeNull();
+  });
 
-    await waitForCondition(() => {
-      expect(localStorage.getItem('vbot.onboardingDismissed')).toBeNull();
-    });
+  it('persists skipping at the first step and keeps the guide visible when that write fails', async () => {
+    const read = createOnboardingRpcMock({ connected: false });
+    let fail = true;
+    rpcMock.mockImplementation((method, params) =>
+      method === 'setup.finish' && fail
+        ? Promise.reject(new Error('write-failure-sentinel'))
+        : read(method, params),
+    );
+    mountApp();
+    await waitForCondition(() =>
+      expect(document.querySelector('.onboarding-view')).toBeTruthy(),
+    );
+    const finish = () =>
+      [...document.querySelectorAll('button')].find((button) =>
+        button.textContent.includes(t('onboarding.dismiss')),
+      );
+    finish().click();
+    await waitForCondition(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        'write-failure-sentinel',
+      ),
+    );
+    expect(document.querySelector('.onboarding-view')).toBeTruthy();
+    fail = false;
+    finish().click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.onboarding-view')).toBeNull(),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('setup.finish');
+  });
+
+  it('opens an explicit setup link even after completion and consumes the link', async () => {
+    rpcMock.mockImplementation(createOnboardingRpcMock({ connected: true }));
+    window.history.replaceState(null, '', '/?setup=1');
+    mountApp();
+    await waitForCondition(() =>
+      expect(document.querySelector('.onboarding-view')).toBeTruthy(),
+    );
+    expect(new URLSearchParams(window.location.search).has('setup')).toBe(
+      false,
+    );
+    expect(
+      rpcMock.mock.calls.some(([method]) => method === 'setup.finish'),
+    ).toBe(false);
   });
 
   it.each([false, true])(

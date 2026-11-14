@@ -34,6 +34,7 @@ import {
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_DEVICES,
   RESOURCE_TOKEN_MODELS,
+  RESOURCE_TOKEN_SETUP,
   RESOURCE_TOKEN_STATISTICS,
   RESOURCE_TOKEN_PROJECTS,
   RESOURCE_TOKEN_SESSIONS,
@@ -99,6 +100,7 @@ export function createAppControllerState() {
     debugTracesRefreshToken: 0,
     devicesRefreshToken: 0,
     modelsRefreshToken: 0,
+    setupRefreshToken: 0,
     statisticsRefreshToken: 0,
     memoriesRefreshToken: 0,
     projectsRefreshToken: 0,
@@ -347,6 +349,7 @@ export function createAppController({
       ) {
         state.commandStatuses = {};
         state.modelsRefreshToken += 1;
+        state.setupRefreshToken += 1;
         state.statisticsRefreshToken += 1;
         state.memoriesRefreshToken += 1;
         state.projectsRefreshToken += 1;
@@ -490,6 +493,9 @@ export function createAppController({
       }
     }
     const tokenKeys = tokenKeysForKind(kind);
+    if (tokenKeys.includes(RESOURCE_TOKEN_SETUP)) {
+      state.setupRefreshToken += 1;
+    }
     if (tokenKeys.includes(RESOURCE_TOKEN_STATISTICS)) {
       state.statisticsRefreshToken += 1;
     }

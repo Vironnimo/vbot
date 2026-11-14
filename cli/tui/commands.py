@@ -29,6 +29,7 @@ COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("Choose a Session", "sessions", "F2"),
     ("Start a new conversation", "new", "F3"),
     ("Choose Model and thinking effort", "model", "F4"),
+    ("Open setup", "setup", "Providers, Models and optional components"),
     ("Show Sub-Agents and background work", "activity", "F5"),
     ("Open the Queue", "queue", "F6"),
     ("Answer Secret and Extension requests", "requests", "F7"),

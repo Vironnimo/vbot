@@ -1,4 +1,4 @@
-/* First-run setup: one searchable Provider catalog, then the first Model. */
+/* Shared setup: Providers, first Model and optional components and services. */
 .onboarding-view,
 .provider-connect-modal--setup,
 .onboarding-model-menu {
@@ -20,6 +20,49 @@
   scrollbar-gutter: stable;
   scroll-padding-block: 64px 24px;
   padding: var(--onboarding-scroll-inset) 28px;
+}
+.onboarding-component {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-1);
+}
+.onboarding-component > div {
+  min-width: 0;
+}
+.onboarding-component p {
+  color: var(--text-med);
+  margin: 4px 0 0;
+  font-size: var(--fs-body);
+}
+.onboarding-components h4,
+.onboarding-services h4 {
+  margin: 18px 0 8px;
+}
+.onboarding-service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-block: 20px;
+}
+.onboarding-prerequisites {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-block: 16px;
+}
+.onboarding-search-settings {
+  margin-top: 24px;
+}
+.onboarding-search-settings > summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+.onboarding-search-settings > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 .onboarding-layout {
   display: flex;
@@ -59,6 +102,7 @@
   gap: 16px;
   padding: 0;
   margin: 0;
+  flex-wrap: wrap;
 }
 .onboarding-progress li {
   display: flex;
@@ -68,7 +112,7 @@
 .onboarding-progress li + li::before {
   content: '';
   display: block;
-  width: 40px;
+  width: 12px;
   height: 1px;
   background: var(--border-2);
 }

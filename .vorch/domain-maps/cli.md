@@ -4,7 +4,7 @@ Command-line accessor for local server lifecycle, RPC-backed management of a loc
 
 ## Overview
 
-Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, the documented local data-store maintenance paths, and the packaged installation's `application`, `update`, `rollback`, `uninstall`/data reset and `autostart` (`cli/application/`; a development checkout refuses them). Every other command, including `chat`, calls the running server's RPC contract rather than reading or mutating runtime files directly. `tui` opens the interactive Textual accessor (`cli/tui.md`). Ordinary commands are automation-safe: they never open the browser and print explicit status/output. `tui` requires terminal stdin and stdout.
+Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, data-store maintenance, and packaged `application`, `update`, `rollback`, `uninstall`/data reset and `autostart` (`cli/application/`; development checkouts refuse them). Other commands call server RPCs instead of runtime files. `tui` and `setup` explicitly open interactive Textual interfaces (`cli/tui.md`); `setup --browser` explicitly opens the WebUI. Ordinary commands remain automation-safe. Terminal interfaces require terminal stdin and stdout.
 
 ## Terms
 
@@ -63,7 +63,8 @@ Read when the task matches.
 - `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
 - the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
 - the `provider`, `model`, `task-model`, `channel`, `extensions` (including management operations), `prompt`, `log`, `config`, `doctor`, `tool`, `debug`, `performance` or `statistics` commands -> `cli/system-commands.md`
-- full-screen terminal conversations, Textual interactions, terminal transport or TUI recovery -> `cli/tui.md`
+- full-screen terminal conversations, shared setup, Textual interactions, terminal transport or TUI recovery -> `cli/tui.md`
+- optional service provisioning and lifecycle (`service`) -> `cli/application/services.md`
 - the installers, packages and their CI publication, update channels, durable update operations, Autostart or the systemd unit, uninstall, the tray, or extra dependency environments -> `cli/application.md`
 
 - External history reads, imports and continuation -> `external-history.md`

@@ -1,127 +1,89 @@
 import { isOperational } from '$lib/onboarding.js';
 import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
-import { getSettings } from '$lib/api.js';
+import { finishSetup, getSettings, getSetup } from '$lib/api.js';
 import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
 import { applyArchiveSettings } from '$lib/archiveRetention.svelte.js';
 
 export function createAppSetup(context) {
-  // Accessor-local UI state only: whether the user set the first-run wizard
-  // aside this browser. The real trigger stays the live operational state — a
-  // credential removal clears this flag and brings the wizard back on its own.
-  const ONBOARDING_DISMISSED_KEY = 'vbot.onboardingDismissed';
-
-  const readOnboardingDismissed = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return false;
-      }
-      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
-    } catch {
-      return false;
-    }
-  };
-
-  const writeOnboardingDismissed = (dismissed) => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return;
-      }
-      if (dismissed) {
-        localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
-      } else {
-        localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  };
-
-  // Application settings, fetched on mount and re-fetched on a provider/model
-  // change. Drives the first-run onboarding decision. Null until first loaded.
   let settings = $state(null);
-
-  let onboardingDismissed = $state(readOnboardingDismissed());
-
-  // Sticky once shown: the wizard stays until completed/dismissed, so the
-  // connect flip (operational → true) never yanks it before the model step.
+  let setupState = $state(null);
   let onboardingActive = $state(false);
-
-  let lastSettingsModelsToken = null;
-
+  let lastRefreshToken = null;
+  let lastSetupToken = null;
+  let settingsRequest = 0;
+  let setupRequest = 0;
+  let disposed = false;
+  let evaluated = false;
   let operational = $derived(isOperational(settings));
 
-  // Fetch application settings and seed the app-wide appearance from them. Also
-  // the source of the operational state that drives onboarding.
-  const loadAppSettings = async () => {
+  async function loadSetup() {
+    const request = ++setupRequest;
+    try {
+      const result = await getSetup();
+      if (disposed || request !== setupRequest) return;
+      setupState = result;
+      if (!evaluated) {
+        evaluated = true;
+        onboardingActive = result.auto_show === true;
+      }
+      // Completion is durable, but an open guide stays open while the user
+      // chooses optional components after saving their first Model.
+    } catch {
+      // A failed read is not evidence that setup is pending.
+    }
+  }
+
+  async function loadAppSettings() {
+    const request = ++settingsRequest;
+    const setupRead = loadSetup();
     try {
       const result = await getSettings();
+      if (disposed || request !== settingsRequest) return;
       settings = result;
       setApplicationTimeZone(result?.general?.timezone);
       applyAppearanceSettings(result?.appearance);
       applyArchiveSettings(result?.archive);
-      maybeStartOnboarding();
     } catch {
-      // settings RPC unavailable — keep the comfortable defaults and leave the
-      // onboarding decision untriggered (settings stays null).
-    }
-  };
-
-  // The guided setup shows once, on the first successful settings load, when
-  // vBot is not operational and the user has neither dismissed it nor already
-  // navigated elsewhere. It is a one-shot decision (not a reactive latch), so a
-  // late settings response never pops the wizard over a view the user opened in
-  // the meantime; re-entry afterwards is explicit (the "Finish setup" banner).
-  let onboardingEvaluated = false;
-
-  function maybeStartOnboarding() {
-    if (onboardingEvaluated || settings === null) {
-      return;
-    }
-    onboardingEvaluated = true;
-    if (!operational && !onboardingDismissed) {
-      onboardingActive = true;
+      // Keep the last settings projection during a connection failure.
+    } finally {
+      await setupRead;
     }
   }
 
-  // A live operational state clears a stale dismiss, so removing credentials
-  // later re-triggers the wizard on its own.
   $effect(() => {
-    if (operational && onboardingDismissed) {
-      onboardingDismissed = false;
-      writeOnboardingDismissed(false);
-    }
-  });
-
-  // Re-fetch settings on a provider/model change (the same signal that bumps
-  // `modelsRefreshToken`) so the operational state stays live.
-  $effect(() => {
-    if (lastSettingsModelsToken === null) {
-      lastSettingsModelsToken = context.modelsRefreshToken;
-      return;
-    }
-    if (context.modelsRefreshToken !== lastSettingsModelsToken) {
-      lastSettingsModelsToken = context.modelsRefreshToken;
+    const token = context.modelsRefreshToken;
+    if (lastRefreshToken !== null && token !== lastRefreshToken)
       void loadAppSettings();
-    }
+    lastRefreshToken = token;
   });
 
-  const completeOnboarding = () => {
+  $effect(() => {
+    const token = context.setupRefreshToken;
+    if (lastSetupToken !== null && token !== lastSetupToken) void loadSetup();
+    lastSetupToken = token;
+  });
+
+  const closeOnboarding = () => {
     onboardingActive = false;
-    onboardingDismissed = false;
-    writeOnboardingDismissed(false);
-    context.selectView('chat');
+    evaluated = true;
     void loadAppSettings();
   };
 
-  const dismissOnboarding = () => {
-    onboardingActive = false;
-    onboardingDismissed = true;
-    writeOnboardingDismissed(true);
-  };
+  async function dismissOnboarding() {
+    if (!onboardingActive) return true;
+    const result = await finishSetup();
+    if (!disposed) {
+      setupState = result;
+      closeOnboarding();
+    }
+    return true;
+  }
 
   const reopenOnboarding = () => {
+    evaluated = true;
     onboardingActive = true;
   };
+
   return {
     get settings() {
       return settings;
@@ -129,23 +91,31 @@ export function createAppSetup(context) {
     set settings(value) {
       settings = value;
     },
+    get state() {
+      return setupState;
+    },
     get onboardingActive() {
       return onboardingActive;
     },
     get operational() {
       return operational;
     },
-    get loadAppSettings() {
-      return loadAppSettings;
+    loadAppSettings,
+    closeOnboarding,
+    completeOnboarding() {
+      closeOnboarding();
+      context.selectView('chat');
     },
-    get completeOnboarding() {
-      return completeOnboarding;
+    dismissOnboarding,
+    reopenOnboarding,
+    acceptState(result) {
+      setupRequest += 1;
+      setupState = result;
     },
-    get dismissOnboarding() {
-      return dismissOnboarding;
-    },
-    get reopenOnboarding() {
-      return reopenOnboarding;
+    destroy() {
+      disposed = true;
+      settingsRequest += 1;
+      setupRequest += 1;
     },
   };
 }

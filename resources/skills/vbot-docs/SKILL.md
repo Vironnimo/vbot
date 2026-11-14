@@ -38,6 +38,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
 | Logs, Provider traces, instance-wide usage statistics and server performance | `references/diagnostics.md` |
+| Inspect or finish shared first-run setup, help the user reopen the guide, or install and manage SearXNG | `references/server.md` |
 | Server start/stop/restart, update, version selection, rollback, uninstall, Autostart, Desktop, Doctor, access mode, paired devices and user permission approvals, reaching another vBot server and signing in to it | `references/server.md` |
 | Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
 | Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |

@@ -146,10 +146,14 @@
     get modelsRefreshToken() {
       return modelsRefreshToken;
     },
+    get setupRefreshToken() {
+      return appControllerState.setupRefreshToken;
+    },
     get selectView() {
       return openView;
     },
   });
+  onDestroy(() => setup.destroy());
   const desktop = createAppDesktop({
     get connectionState() {
       return connectionState;
@@ -350,8 +354,14 @@
   // The main navigation: a view's last place; the view already shown stays
   // where it is. Leaving first-run setup for another view sets setup aside.
   const openView = (viewId) => {
-    if (viewId !== activeViewId && !setup.operational) {
-      setup.dismissOnboarding();
+    if (setup.onboardingActive) {
+      return setup
+        .dismissOnboarding()
+        .then(() => navigator.open(viewId))
+        .catch((error) => {
+          desktop.showToast({ title: error.message, variant: 'error' });
+          return false;
+        });
     }
     return navigator.open(viewId);
   };
@@ -542,6 +552,7 @@
     // Seed app-wide appearance preferences and the operational state that
     // drives first-run onboarding. Chat appearance preferences are passed to
     // ChatView; the language seed closes the startup-language gap.
+    if (navigator.takeSetupLink()) setup.reopenOnboarding();
     void setup.loadAppSettings();
 
     return () => {
@@ -626,9 +637,10 @@
           <Component
             {providerAuthEvent}
             {modelsRefreshToken}
-            targetAgentId={selection.selectedAgentId || 'main'}
+            initialSetup={setup.state}
+            onSetupChange={setup.acceptState}
             onComplete={setup.completeOnboarding}
-            onDismiss={setup.dismissOnboarding}
+            onDismiss={setup.closeOnboarding}
             onToast={desktop.showToast}
           />
         {/snippet}

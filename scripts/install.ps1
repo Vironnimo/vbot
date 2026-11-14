@@ -31,6 +31,10 @@ param(
     [switch]$Desktop,
     [switch]$DesktopClient,
     [switch]$NoAutostart,
+    # Auto continues in this terminal when interactive. Later leaves first-run
+    # setup available in the WebUI and TUI without opening either now.
+    [ValidateSet("auto", "terminal", "browser", "later")]
+    [string]$Setup = "auto",
     [switch]$AllowElevatedInstall
 )
 
@@ -47,6 +51,26 @@ if ($Main -and -not [string]::IsNullOrWhiteSpace($Version)) {
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive."
 }
+if ($DesktopClient -and $Setup -in @("terminal", "browser")) {
+    throw "A Desktop Client has no local server to set up. Connect it to your existing server."
+}
+
+function Get-GuidedSetupMode {
+    param([string]$Requested, [bool]$ConsoleAvailable, [bool]$ServerStarts)
+    if ($Requested -eq "auto") {
+        if ($ConsoleAvailable -and $ServerStarts) { return "terminal" }
+        return "later"
+    }
+    if ($Requested -eq "terminal" -and -not $ConsoleAvailable) {
+        throw "-Setup terminal needs an interactive terminal. Use -Setup browser or -Setup later."
+    }
+    return $Requested
+}
+
+$consoleAvailable = [Environment]::UserInteractive -and
+    -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+$setupMode = Get-GuidedSetupMode -Requested $Setup -ConsoleAvailable $consoleAvailable `
+    -ServerStarts (-not $NoAutostart -and -not $DesktopClient)
 # Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
 if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
     $Version = "v$Version"
@@ -350,6 +374,24 @@ if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
 
 $shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
 Install-NativeRelease -Tag $Version -Shape $shape -MainBuild ([bool]$Main)
+if ($shape -ne "desktop-client" -and $setupMode -ne "later") {
+    $executable = Join-Path $InstallDir "vBot.exe"
+    try {
+        # Explicit setup can start the server once without enabling Autostart.
+        if ($NoAutostart) {
+            & $executable server start
+            if ($LASTEXITCODE -ne 0) { throw "The server could not start for setup." }
+        }
+        $setupArguments = @("setup")
+        if ($Setup -eq "auto") { $setupArguments += "--if-needed" }
+        if ($setupMode -eq "browser") { $setupArguments += "--browser" }
+        & $executable @setupArguments
+        if ($LASTEXITCODE -ne 0) { throw "The guided setup did not finish." }
+    }
+    catch {
+        Write-Status "WARN" "vBot is installed. Continue its setup with 'vbot setup' or in the WebUI."
+    }
+}
 Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
 # return, unlike exit, keeps an `irm | iex` window open to show the result.
 # A caller running this script sees the last native probe's exit code unless the

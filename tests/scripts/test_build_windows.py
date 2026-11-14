@@ -530,6 +530,10 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
     assert "{param:VBOTDATA|{%USERPROFILE}\\.vbot}" in script
     assert "ExpandConstant('{tmp}\\vbot-payload')" in script
     assert "--shape {#InstallShape}" in script
+    # Interactive Inno users can enter the same browser setup; silent installs
+    # remain automation-safe and let their invoking script select an accessor.
+    assert 'Parameters: "setup --browser --if-needed"' in script
+    assert "Flags: postinstall skipifsilent runhidden" in script
     assert "function PrepareToInstall(var NeedsRestart: Boolean): String;" in script
     assert "FileExists(ExpandConstant('{app}\\application.json'))" in script
     assert "Use vbot update" in script

@@ -194,6 +194,14 @@ export function createAppRpcMock({
       return methods[method](params);
     }
     switch (method) {
+      case 'setup.get':
+      case 'setup.finish':
+        return {
+          status: 'completed',
+          step: 'provider',
+          agent_id: 'main',
+          auto_show: false,
+        };
       case 'agent.list':
         return { agents };
       case 'chat.commands':
@@ -473,7 +481,16 @@ function onboardingSettings(connected) {
 }
 
 // A single `main` Agent that has a Model only when a Provider is connected.
-export function createOnboardingRpcMock({ connected = false } = {}) {
+export function createOnboardingRpcMock({
+  connected = false,
+  status = connected ? 'completed' : 'pending',
+} = {}) {
+  let setup = {
+    status,
+    step: 'provider',
+    agent_id: 'main',
+    auto_show: status === 'pending',
+  };
   return createAppRpcMock({
     agents: [
       {
@@ -493,6 +510,14 @@ export function createOnboardingRpcMock({ connected = false } = {}) {
     ],
     methods: {
       'settings.get': () => onboardingSettings(connected),
+      'setup.get': () => setup,
+      'setup.update': ({ step }) => (setup = { ...setup, step }),
+      'setup.finish': () =>
+        (setup = {
+          ...setup,
+          status: connected ? 'completed' : 'skipped',
+          auto_show: false,
+        }),
       'model.list': () => ({ models: [] }),
       'connection.list': () => ({ connections: [] }),
     },
