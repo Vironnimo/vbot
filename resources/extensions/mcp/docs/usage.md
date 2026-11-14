@@ -4,7 +4,7 @@ All installation commands, application add-ons, processes, working directories, 
 
 ## Configure and enable
 
-All abbreviated commands in this reference start with `vbot extensions run mcp`; for example, `status <id>` means `vbot extensions run mcp status <id>`. Repeat the same target options (`--host`/`--port` or `--url`).
+All abbreviated commands in this reference start with `vbot extensions run mcp`; for example, `status <id>` means `vbot extensions run mcp status <id>`. Repeat the same target options (`--host`/`--port` or `--url`) before `extensions`, for example `vbot --port <port> extensions run mcp list`.
 
 Discover the installed interface with `vbot extensions operations mcp` and `vbot extensions run mcp <operation> --help`. Inspect `list` and `status` before changing an existing connection. Enable the Extension with `vbot extensions enable mcp` if needed. The user can manage the same connections in the WebUI under Settings > Connections > Extensions > MCP.
 
@@ -25,6 +25,18 @@ Enable `mcp_<id>` in the intended Agent or Swarm Tool settings. This is the only
 ## Discover and verify
 
 The connection Tool searches items, describes an exact target, calls it, and reads saved results. Remote Tool schemas arrive in ordinary results when requested. Newly discovered Tools remain reachable through the same connection Tool and its existing Tool policy.
+
+To check an existing connection, take its id from `list`, inspect its configuration and cached catalog, then start a connectivity check:
+
+```bash
+vbot extensions run mcp list
+vbot extensions run mcp status <id>
+vbot extensions run mcp inspect <id> --query "<task words>"
+vbot extensions run mcp test <id>
+vbot extensions run mcp job <job-id>
+```
+
+Replace `<job-id>` with the `job_id` returned by `test` and poll while `state` is `running`. A completed connectivity check verifies catalog access and health; it does not prove that a particular application task works. `inspect` reads the cached catalog without connecting; follow its `next_offset` with `--offset` when another page is needed.
 
 For CLI use, start with `explore <id> --agent <address> --action search` to browse Tools and server guidance. Add `--query '<words>'` to find relevant names and descriptions. If no words match, follow the returned browse action and inspect general-purpose Tools before concluding that a capability is unavailable. Use `--action describe --target '<target>'` before `--action call --target '<target>' --arguments '<json>'`. Use `inspect <id>` to view the discovered catalog without executing an application Tool. Run `test <id>` to check connectivity; inspect what it actually verified, then perform a safe application operation through the intended Agent, such as reading a Blender scene.
 

@@ -17,4 +17,22 @@ The `review` operation previews a judgment even while the `enabled` setting is o
 vbot extensions run shell_review review --help
 ```
 
-Pass the request with `--stdin` as a JSON object containing the real `platform`, `shell`, `cwd`, `command` and `user_requests`; the help describes the additional evidence fields. Preserve what the user actually authorized instead of rewriting it to obtain approval. Read the returned judgment and reason before reporting whether automatic approval would apply.
+Pass the request with `--stdin` as a JSON object containing the real `platform`, `shell`, `cwd`, `command` and `user_requests`; the help describes the additional evidence fields. Preserve what the user actually authorized instead of rewriting it to obtain approval.
+
+For example, this PowerShell pipeline previews a directory listing on Windows:
+
+```powershell
+@'
+{
+  "platform": "windows",
+  "shell": "powershell",
+  "cwd": "C:/work",
+  "command": "Get-ChildItem -LiteralPath C:/work",
+  "user_requests": ["List the entries in C:/work."]
+}
+'@ | vbot extensions run shell_review review --stdin
+```
+
+Replace the example's directory, command and user request with the actual context; for a Bash command on Linux, use `platform: "linux"` and `shell: "bash"`. The preview uses the configured Decision Model and can incur Model usage even while automatic review is disabled.
+
+Read `decision` and `reason_code`: `allow` with `covered` means the supplied context meets the current threshold; `ask` with `confirmation_needed` means it does not. Other `ask` reasons, such as `missing_authority`, `unavailable` or `timeout`, explain why review could not establish authorization. A successful Model judgment also reports `allow_probability`, `allow_threshold` and `model`; a fallback can omit them.
