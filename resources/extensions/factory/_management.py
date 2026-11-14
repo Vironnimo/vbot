@@ -11,19 +11,20 @@ from typing import TYPE_CHECKING, Any
 from core.agents.temporary import TemporaryAgentConfig
 from core.settings.agent_defaults import normalize_agent_default_value
 from core.tools.availability import ToolAccess
+from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
 from . import _limits, _workflows
-from ._values import SETUP_DEFAULTS, require_state, text
-from .store import ACTIVE_STATES, FINAL_STATES, FactoryError
+from ._values import require_state, text
+from .store import FINAL_STATES, FactoryError
 
 if TYPE_CHECKING:
     from .extension import FactoryExtension
 
 type Json = dict[str, Any]
-ACCEPTABLE = frozenset({"checkpoint", "finished", "no_agreement"})
 _LOGGER = get_logger("extensions.factory")
+_READS = frozenset({"catalog", "board.get", "card.get", "workflow.list", "workflow.get"})
 
 
 class FactoryManagement:
@@ -31,15 +32,20 @@ class FactoryManagement:
         self.service = service
 
     async def operation(self, name: str, arguments: Json) -> Json:
-        if name.startswith("library."):
-            from ._library_management import operation
-
-            return await operation(self.service, name, arguments)
-        if name in {"catalog", "board.get", "card.get", "setup.list", "setup.get", "setup.preview"}:
+        if name in _READS:
             return await self._read(name, arguments)
+        if name == "workflow.preview":
+            return await self._preview(arguments)
+        if name == "workflow.secret":
+            secret = await self.service.triggers.secret(
+                text(arguments, "id"),
+                text(arguments, "trigger"),
+                rotate=arguments.get("rotate") is True,
+            )
+            return {"secret": secret}
         async with self.service.lock:
-            if name.startswith("setup."):
-                return await settle_before_cancelling(self._setup(name, arguments))
+            if name.startswith("workflow."):
+                return await settle_before_cancelling(self._workflow(name, arguments))
             if name == "card.create":
                 card = await settle_before_cancelling(
                     self.service.create_card(arguments, origin="operator")
@@ -56,6 +62,8 @@ class FactoryManagement:
 
         return projection(card)
 
+    # Reads
+
     async def _read(self, name: str, arguments: Json) -> Json:
         service = self.service
         store = service.records()
@@ -64,6 +72,7 @@ class FactoryManagement:
             return {
                 "catalog": await service.host.catalog(),
                 "templates": _workflows.templates(),
+                "triggers_available": service.host.triggers is not None,
             }
         if name == "board.get":
             all_cards = await store.list_cards()
@@ -76,243 +85,329 @@ class FactoryManagement:
                     if project_id is None or card["project_id"] == project_id
                 ],
                 "wip": {
-                    "running": sum(card["state"] in ACTIVE_STATES for card in all_cards),
+                    "running": sum(service.execution.running(card) for card in all_cards),
                     "limit": limit,
                 },
                 "revision": max((card["revision"] for card in all_cards), default=0),
             }
-        if name == "setup.list":
-            return {"setups": await store.list_setups()}
-        if name == "setup.preview":
-            values = {**SETUP_DEFAULTS, **arguments}
-            try:
-                values["workflows"] = _workflows.normalize(values["workflows"])
-            except FactoryError:
-                return {"effective_models": {}}
-            return {"effective_models": await self._effective_models(values)}
-        if name == "setup.get":
-            project_id = text(arguments, "project_id")
-            try:
-                setup = await store.get_setup(project_id)
-            except FactoryError as error:
-                if error.code != "setup_not_found":
-                    raise
-                starter = _workflows.templates()[0]
-                setup = {
-                    "project_id": project_id,
-                    **SETUP_DEFAULTS,
-                    "workflows": [starter],
-                    "default_workflow": starter["id"],
-                    "revision": 0,
-                }
-            return {"setup": setup, "effective_models": await self._effective_models(setup)}
+        if name == "workflow.list":
+            return {
+                "workflows": [
+                    await self._workflow_view(workflow) for workflow in await store.list_workflows()
+                ]
+            }
+        if name == "workflow.get":
+            workflow = await store.get_workflow(text(arguments, "id"))
+            return {
+                "workflow": await self._workflow_view(workflow),
+                "effective_models": (await self._resolve_models(workflow))[0],
+            }
         card = await store.get_card(text(arguments, "id"))
         return await self._detail(card)
+
+    async def _workflow_view(self, workflow: Json) -> Json:
+        status = self.service.triggers.status(workflow["id"])
+        return {
+            **workflow,
+            "triggers": [
+                {**trigger, "status": self._trigger_status(status.get(trigger["id"]))}
+                for trigger in workflow["triggers"]
+            ],
+        }
+
+    @staticmethod
+    def _trigger_status(item: Json | None) -> Json | None:
+        if item is None:
+            return None
+        return {
+            key: item[key]
+            for key in ("status", "next_fire_at", "last_fired_at", "last_outcome", "last_error")
+        } | {"webhook": item["webhook"]}
 
     async def _detail(self, card: Json) -> Json:
         service = self.service
         store = service.records()
         host = service.host
         assert host is not None and host.temporary_agents is not None
-        participants = []
-        after = ""
-        while True:
-            bindings = await host.temporary_agents.list(card["group_id"], after=after, limit=100)
+        groups = host.temporary_agents
+        participants: list[Json] = []
+        runs: list[Json] = []
+        approvals: list[Any] = []
+        usage: list[Json] = []
+        steps = card["runtime"].get("steps", {})
+        for group_id in service.execution.group_ids(card):
+            _card_id, step_id = _workflows.split_group(group_id)
+            bindings = []
+            after = ""
+            while True:
+                page = await groups.list(group_id, after=after, limit=100)
+                bindings.extend(page)
+                if len(page) < 100:
+                    break
+                after = page[-1].participant_id
+            if not bindings:
+                continue
+            run_ids = (
+                steps.get(step_id, {}).get("runs", {})
+                if step_id
+                else card["runtime"].get("runs", {})
+            )
+            owned = await groups.owned_runs(group_id, list(run_ids.values())) if run_ids else {}
             for binding in bindings:
+                run_id = run_ids.get(binding.participant_id)
+                inspected = owned.get(run_id)
+                run = inspected.run if inspected is not None else None
+                status = (
+                    run.status.value
+                    if run is not None
+                    else inspected.record.terminal_status
+                    if inspected is not None
+                    else None
+                )
                 participants.append(
                     {
                         "participant_id": binding.participant_id,
+                        "step": step_id,
                         "address": asdict(binding.address),
                         "display_name": binding.config.get("name", binding.participant_id),
                         "model": binding.config.get("model", ""),
+                        "lifecycle_run_id": run_id,
+                        "run_active": status in {"pending", "running", "cancelling"},
+                        "state": status,
                     }
                 )
-            if len(bindings) < 100:
-                break
-            after = bindings[-1].participant_id
-        run_ids = card["runtime"].get("runs", {})
-        owned = (
-            await host.temporary_agents.owned_runs(card["group_id"], list(run_ids.values()))
-            if run_ids
-            else {}
-        )
-        runs = []
-        for participant in participants:
-            run_id = run_ids.get(participant["participant_id"])
-            inspected = owned.get(run_id)
-            run = inspected.run if inspected is not None else None
-            status = (
-                run.status.value
-                if run is not None
-                else inspected.record.terminal_status
-                if inspected is not None
-                else None
-            )
-            participant.update(
-                lifecycle_run_id=run_id,
-                run_active=status in {"pending", "running", "cancelling"},
-                state=status,
-            )
-            if run_id:
-                runs.append(
-                    {
-                        "run_id": run_id,
-                        "participant_id": participant["participant_id"],
-                        "status": status,
-                    }
-                )
-        approvals = (
-            await host.pending_approvals(card["group_id"], list(owned))
-            if host.pending_approvals is not None
-            else {"requests": []}
-        )
+                if run_id:
+                    runs.append(
+                        {
+                            "run_id": run_id,
+                            "participant_id": binding.participant_id,
+                            "step": step_id,
+                            "status": status,
+                        }
+                    )
+            if host.pending_approvals is not None and owned:
+                approvals.extend((await host.pending_approvals(group_id, list(owned)))["requests"])
+            usage.append(await groups.usage(group_id, {}))
+        budgets = {
+            step_id: await service.execution.budget_status(card, step_id, report_all=True)
+            for step_id in steps
+        }
         return {
             "card": {**self._projection(card), "runtime": card["runtime"]},
             **await store.history(card["id"]),
+            "trigger": await store.trigger_event(card["id"]),
+            "children": [
+                self._projection(item)
+                for item in await store.list_cards()
+                if item.get("parent_id") == card["id"]
+            ],
             "participants": participants,
             "runs": runs,
-            "approvals": approvals["requests"],
-            "usage": await host.temporary_agents.usage(card["group_id"], {}),
-            "budget": await service.execution.budget_status(card, report_all=True),
+            "approvals": approvals,
+            "usage": _merge_usage(usage),
+            "budget": budgets,
         }
 
-    async def _setup(self, name: str, arguments: Json) -> Json:
+    # Workflows
+
+    async def _validated(self, raw: Any, *, workflow_id: str = "") -> tuple[Json, Json]:
+        """A normalized Workflow checked against the catalog, and its steps' Models."""
         service = self.service
-        store = service.records()
-        project_id = text(arguments, "project_id")
-        if name == "setup.delete":
-            await store.delete_setup(project_id)
-            self._setup_changed(project_id, 0)
-            _LOGGER.info("Factory setup deleted (project=%s actor=user)", project_id)
-            return {"deleted": True, "project_id": project_id}
-        setups = await store.list_setups()
-        previous = next((setup for setup in setups if setup["project_id"] == project_id), None)
-        values = {
-            **SETUP_DEFAULTS,
-            **(previous or {}),
-            **{key: value for key, value in arguments.items() if key in SETUP_DEFAULTS},
-            "project_id": project_id,
-        }
+        workflow = _workflows.normalize(raw, workflow_id=workflow_id)
         assert service.host is not None and service.host.catalog is not None
         catalog = await service.host.catalog()
-        project = next((item for item in catalog["projects"] if item["id"] == project_id), None)
-        if project is None:
+        projects = {item["id"]: item for item in catalog["projects"]}
+        where = f"Workflow {workflow['name']!r}"
+        if workflow["project_id"] and workflow["project_id"] not in projects:
             raise FactoryError(
                 "project_not_found",
-                "The Project does not exist. Choose a Project from the catalog.",
+                f"{where}: Project {workflow['project_id']!r} does not exist. Choose a Project "
+                "or leave it empty.",
             )
-        values["workflows"] = _workflows.normalize(values["workflows"])
-        if values["default_workflow"] not in {item["id"] for item in values["workflows"]}:
-            values["default_workflow"] = values["workflows"][0]["id"]
-        choices = {
-            "agent": {item["id"] for item in catalog.get("agents", [])},
-            "team": {item["id"] for item in project.get("agent_profiles", [])},
+        for trigger in workflow["triggers"]:
+            choice = trigger["project"]
+            if choice and choice != _workflows.REPOSITORY_PROJECT and choice not in projects:
+                raise FactoryError(
+                    "project_not_found",
+                    f"{where}, trigger {trigger['title'] or trigger['id']!r}: Project {choice!r} "
+                    "does not exist.",
+                )
+        agents = {item["id"] for item in catalog.get("agents", [])}
+        team = {
+            item["id"]
+            for item in projects.get(workflow["project_id"], {}).get("agent_profiles", [])
         }
         models = {item["id"] for item in catalog["models"]}
-        for label, _workflow, lane in _workflows.steps(values["workflows"]):
-            if lane["agent"] not in choices[lane["source"]]:
+        saved = {item["id"] for item in await service.records().list_workflows()}
+        for step in workflow["steps"]:
+            label = f"{where}, step {step['name']!r}"
+            if step["kind"] == "workflow":
+                if step["workflow"] not in saved:
+                    raise FactoryError(
+                        "workflow_not_found",
+                        f"{label}: choose a saved Workflow for it to start.",
+                    )
+                continue
+            if step["source"] == "team" and not workflow["project_id"]:
+                raise FactoryError(
+                    "profile_not_found",
+                    f"{label}: a Team member needs the Workflow's Project. Set the Project or "
+                    "choose an Agent.",
+                )
+            if step["agent"] not in (agents if step["source"] == "agent" else team):
                 raise FactoryError(
                     "profile_not_found",
                     f"{label}: choose an available Agent or a member of the Project's Team.",
                 )
-            if lane["model"] and lane["model"].partition("::")[0] not in models:
+            if step["model"] and step["model"].partition("::")[0] not in models:
                 raise FactoryError(
                     "model_not_found",
                     f"{label}: the Model is unavailable. Choose a Model from the catalog "
                     "or clear it to use the Agent's Model.",
                 )
-            if lane["effort"]:
+            if step["effort"]:
                 try:
-                    lane["effort"] = normalize_agent_default_value(
-                        "thinking_effort", lane["effort"]
+                    step["effort"] = normalize_agent_default_value(
+                        "thinking_effort", step["effort"]
                     )
-                except ValueError as error:
+                except (StorageError, ValueError) as error:
                     raise FactoryError(
                         "invalid_effort", f"{label}: {str(error).rstrip('.')}."
                     ) from error
-        effective, problems = await self._resolve_models(values)
+        service.triggers.check(workflow)
+        effective, problems = await self._resolve_models(workflow)
         if problems:
             label, problem = next(iter(problems.items()))
             raise FactoryError(
                 "model_unresolved",
-                f"{label} cannot run with this setup: {problem}. Choose a Model for it, "
+                f"{label} cannot run: {problem}. Choose a Model for it, "
                 "or give its Agent a usable Model.",
             )
-        saved = await store.save_setup(values, expected_revision=arguments.get("expected_revision"))
-        self._setup_changed(project_id, saved["revision"])
+        return workflow, effective
+
+    async def _preview(self, arguments: Json) -> Json:
+        try:
+            workflow = _workflows.normalize(arguments.get("workflow"))
+        except FactoryError:
+            return {"effective_models": {}}
+        return {"effective_models": (await self._resolve_models(workflow))[0]}
+
+    async def _workflow(self, name: str, arguments: Json) -> Json:
+        service = self.service
+        store = service.records()
+        if name == "workflow.delete":
+            workflow_id = text(arguments, "id")
+            await store.delete_workflow(workflow_id)
+            await service.triggers.sync()
+            self._workflows_changed(workflow_id, 0)
+            _LOGGER.info("Factory Workflow deleted (workflow=%s actor=user)", workflow_id)
+            return {"deleted": True, "id": workflow_id}
+        raw = arguments.get("workflow")
+        expected = arguments.get("expected_revision")
+        workflow_id = ""
+        if expected:
+            workflow_id = raw.get("id", "") if isinstance(raw, dict) else ""
+            await store.get_workflow(str(workflow_id))
+        elif isinstance(raw, dict):
+            # A new Workflow, such as a copied template, never takes over a saved id.
+            taken = {item["id"] for item in await store.list_workflows()}
+            if raw.get("id") in taken:
+                raw = {key: value for key, value in raw.items() if key != "id"}
+        workflow, effective = await self._validated(raw, workflow_id=workflow_id)
+        saved = await store.save_workflow(workflow, expected_revision=expected or 0)
+        await service.triggers.sync()
+        self._workflows_changed(saved["id"], saved["revision"])
         _LOGGER.info(
-            "Factory setup saved (project=%s actor=user revision=%d)", project_id, saved["revision"]
+            "Factory Workflow saved (workflow=%s actor=user revision=%d)",
+            saved["id"],
+            saved["revision"],
         )
         service.request_schedule()
-        return {"setup": saved, "effective_models": effective}
+        return {"workflow": await self._workflow_view(saved), "effective_models": effective}
 
-    async def _effective_models(self, values: Json) -> Json:
-        """Each step's Model by ``workflow/step``; empty marks a step that has none."""
-        return (await self._resolve_models(values))[0]
-
-    async def _resolve_models(self, values: Json) -> tuple[Json, dict[str, str]]:
+    async def _resolve_models(self, workflow: Json) -> tuple[Json, dict[str, str]]:
+        """Each Agent step's Model by ``workflow/step``; empty marks a step that has none."""
         host = self.service.host
         assert host is not None
-        lanes = _workflows.steps(values.get("workflows") or [])
+        lanes = [step for step in workflow["steps"] if step["kind"] == "agent"]
         if host.inspect_prompt is None or host.catalog is None:
-            return {
-                _workflows.model_key(workflow, lane): lane["model"]
-                for _label, workflow, lane in lanes
-            }, {}
-        catalog = await host.catalog()
-        project = next(
-            (item for item in catalog["projects"] if item["id"] == values["project_id"]), None
-        )
-        if project is None:
-            return {}, {}
+            return {_workflows.model_key(workflow, step): step["model"] for step in lanes}, {}
+        project_id = workflow.get("project_id") or None
+        cwd = host.state_dir or host.data_dir
+        if project_id:
+            catalog = await host.catalog()
+            project = next((item for item in catalog["projects"] if item["id"] == project_id), None)
+            if project is None:
+                return {}, {}
+            cwd = Path(project["cwd"])
         result: Json = {}
         problems: dict[str, str] = {}
         resolved: dict[tuple[str, str, str, str], tuple[str, str]] = {}
-        for label, workflow, lane in lanes:
-            if not lane["agent"]:
+        for step in lanes:
+            if not step["agent"]:
                 continue
-            key = (lane["source"], lane["agent"], lane["model"], lane["effort"])
+            key = (step["source"], step["agent"], step["model"], step["effort"])
             if key not in resolved:
                 config = TemporaryAgentConfig(
                     model="",
-                    cwd=Path(project["cwd"]),
+                    cwd=cwd,
                     tool_access=ToolAccess(mode="none"),
                     allowed_skills=[],
                     tools={},
                     name="Factory preview",
-                    **_workflows.profile(lane),
-                    model_override=lane["model"] or None,
-                    thinking_effort_override=lane["effort"] or None,
+                    **_workflows.profile(step),
+                    model_override=step["model"] or None,
+                    thinking_effort_override=step["effort"] or None,
                 )
                 try:
-                    preview = await host.inspect_prompt(config, values["project_id"])
+                    preview = await host.inspect_prompt(config, project_id)
                     resolved[key] = (preview["model"], "")
                 except ValueError as error:
                     # Resolution refuses an Agent without a usable Model; reading
-                    # or previewing a setup still answers for the other steps.
+                    # or previewing a Workflow still answers for the other steps.
                     resolved[key] = ("", str(error).rstrip("."))
             model, problem = resolved[key]
-            result[_workflows.model_key(workflow, lane)] = model
+            result[_workflows.model_key(workflow, step)] = model
             if problem:
-                problems.setdefault(label, problem)
+                problems.setdefault(f"Step {step['name']!r}", problem)
         return result, problems
 
-    def _setup_changed(self, project_id: str, revision: int) -> None:
+    def _workflows_changed(self, workflow_id: str, revision: int) -> None:
         host = self.service.host
         if host is not None and host.publish_change is not None:
-            host.publish_change("setups", [project_id], revision)
+            host.publish_change("workflows", [workflow_id], revision)
+
+    # Card actions
+
+    @staticmethod
+    def _step(card: Json, arguments: Json) -> str:
+        """The step an action names, by id or name; empty when it names none."""
+        value = arguments.get("step") or ""
+        if not isinstance(value, str) or not value.strip():
+            return ""
+        steps = {
+            item["id"]: item["name"]
+            for item in (card["runtime"].get("workflow") or {}).get("steps", [])
+        }
+        if value in steps:
+            return value
+        found = next(
+            (key for key, name in steps.items() if name.casefold() == value.strip().casefold()),
+            None,
+        )
+        if found is None:
+            raise FactoryError(
+                "invalid_step",
+                "Choose one of the Card's steps: " + (", ".join(steps.values()) or "(none)") + ".",
+            )
+        return str(found)
 
     async def _action(self, name: str, card: Json, arguments: Json) -> Json:
         service = self.service
         store = service.records()
+        execution = service.execution
         if name == "card.update":
             require_state(card, {"proposal", "queued"})
-            if card["runtime"].get("pending_action"):
-                raise FactoryError(
-                    "phase_queued",
-                    "This Card is queued to resume an existing phase. "
-                    "Its reviewed objective cannot be edited while it waits for a slot.",
-                )
             patch: Json = {
                 field: text(arguments, field, maximum=200 if field == "title" else 20000)
                 for field in ("title", "description")
@@ -330,14 +425,21 @@ class FactoryManagement:
         elif name == "card.limits":
             require_state(card, {"waiting"})
             runtime = deepcopy(card["runtime"])
-            if not runtime.get("workflow"):
+            if not runtime.get("steps"):
                 raise FactoryError(
                     "wrong_state",
-                    "Configure the Workflow limits in the Project setup before starting this Card.",
+                    "Configure the Workflow's limits on the Workflows page before this Card "
+                    "starts.",
                 )
-            for key in ("card_limits", "step_limits"):
-                if key in arguments:
-                    runtime[key] = _limits.normalize(arguments[key])
+            if "card_limits" in arguments:
+                runtime["card_limits"] = _limits.normalize(arguments["card_limits"])
+            if "step_limits" in arguments:
+                step_id = self._step(card, arguments)
+                if not step_id:
+                    raise FactoryError(
+                        "missing_field", "step_limits needs the step it applies to in step."
+                    )
+                runtime["steps"][step_id]["limits"] = _limits.normalize(arguments["step_limits"])
             for notice in runtime.get("budget_notices", {}).values():
                 notice.pop("pending", None)
             saved = await store.change(
@@ -361,116 +463,29 @@ class FactoryManagement:
             )
         elif name == "card.delete":
             require_state(card, FINAL_STATES)
-            result = await service.execution.delete(card)
-            return result if isinstance(result, dict) else {"deleted": True, "id": card["id"]}
+            return await execution.delete(card)
         elif name == "card.discard":
-            require_state(
-                card,
-                {
-                    "proposal",
-                    "queued",
-                    "working",
-                    "waiting",
-                },
-            )
-            result = await service.execution.discard(card)
-            return (
-                result
-                if isinstance(result, dict) and "card" in result
-                else {"card": self._projection(await store.get_card(card["id"]))}
-            )
+            require_state(card, {"proposal", "queued", "working", "waiting"})
+            saved = await execution.discard(card)
+            return {"card": self._projection(saved)}
         elif name in {"card.accept", "card.send_back", "card.answer", "card.retry"}:
             require_state(card, {"waiting"})
-            action = name.removeprefix("card.")
-            if action == "accept" and arguments.get("expected_revision") != card["revision"]:
-                raise FactoryError(
-                    "revision_conflict",
-                    "The Card changed since you viewed it. Refresh it, review its latest "
-                    "results, then accept that version.",
-                )
-            if action == "accept" and card["waiting_reason"] not in ACCEPTABLE:
-                raise FactoryError(
-                    "not_acceptable",
-                    "This Card has nothing to accept. "
-                    "Answer its question, send it back or retry the failed step.",
-                )
-            if action == "answer" and card["waiting_reason"] != "blocked":
-                raise FactoryError(
-                    "not_blocked",
-                    "The Card has no open question. Use Send back with your comment instead.",
-                )
-            if action == "retry" and card["waiting_reason"] not in {
-                "run_failed",
-                "restart",
-                "budget_exhausted",
-            }:
-                raise FactoryError(
-                    "not_retryable",
-                    "This Card is not in a failed or interrupted phase. "
-                    "Accept it or send it back instead.",
-                )
-            comment = (
-                text(arguments, "text" if action == "answer" else "comment")
-                if action in {"send_back", "answer"}
-                else ""
-            )
-            step = arguments.get("step") or arguments.get("stage") or ""
-            if action == "send_back" and step:
-                workflow = card["runtime"].get("workflow") or {}
-                steps = {item["id"]: item["name"] for item in workflow.get("steps", [])}
-                if step not in steps:
-                    step = next(
-                        (
-                            key
-                            for key, value in steps.items()
-                            if value.casefold() == step.casefold()
-                        ),
-                        step,
-                    )
-                if step not in steps:
+            step = self._step(card, arguments)
+            if name == "card.accept":
+                if arguments.get("expected_revision") != card["revision"]:
                     raise FactoryError(
-                        "invalid_step",
-                        "Send the Card back to one of its steps: "
-                        + (", ".join(steps.values()) or "(none)")
-                        + ".",
+                        "revision_conflict",
+                        "The Card changed since you viewed it. Refresh it, review its latest "
+                        "results, then accept that version.",
                     )
-            action = "send_back" if action == "answer" else action
-            cards = await store.list_cards()
-            limit, _ = service.limits()
-            finishes = False
-            if action == "accept":
-                runtime = card["runtime"]
-                done = [*runtime.get("done", [])]
-                if card["waiting_reason"] == "no_agreement":
-                    done.append(runtime["step"])
-                finishes = _workflows.next_step(runtime["workflow"], done) is None
-            if not finishes and sum(item["state"] in ACTIVE_STATES for item in cards) >= limit:
-                runtime = {
-                    **card["runtime"],
-                    "pending_action": {
-                        "action": action,
-                        "comment": comment,
-                        "step": step,
-                        "comment_recorded": bool(comment),
-                        "waiting_reason": card["waiting_reason"],
-                    },
-                }
-                saved = await store.change(
-                    card["id"],
-                    {"state": "queued", "runtime": runtime},
-                    actor="user",
-                    event="queued_for_slot",
-                    detail={"action": action},
-                    comment=comment or None,
-                )
+                saved = await execution.accept(card, step)
+            elif name == "card.send_back":
+                saved = await execution.send_back(card, text(arguments, "comment"), step)
+            elif name == "card.answer":
+                saved = await execution.answer(card, text(arguments, "text"), step)
             else:
-                if action == "accept":
-                    await service.execution.accept(card)
-                elif action == "send_back":
-                    await service.execution.send_back(card, comment, step)
-                else:
-                    await service.execution.retry(card)
-                return {"card": self._projection(await store.get_card(card["id"]))}
+                saved = await execution.retry(card, step)
+            return {"card": {**self._projection(saved), "runtime": saved["runtime"]}}
         else:
             raise FactoryError(
                 "unknown_operation", "Unknown Factory action. Refresh the operation catalog."
@@ -484,3 +499,19 @@ class FactoryManagement:
                 saved["revision"],
             )
         return {"card": {**self._projection(saved), "runtime": saved["runtime"]}}
+
+
+def _merge_usage(reports: list[Json]) -> Json:
+    """Add the usage reports of a Card's execution groups; nested totals are added too."""
+    total: Json = {}
+    for report in reports:
+        for key, value in report.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                total[key] = total.get(key, 0) + value
+            elif isinstance(value, dict):
+                total[key] = _merge_usage([total.get(key, {}), value])
+            elif key not in total:
+                total[key] = value
+    return total

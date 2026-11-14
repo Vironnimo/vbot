@@ -65,3 +65,10 @@ API 11: `host.oauth_redirects` is the Runtime's `OAuthRedirects` (`core/extensio
 ## Computer routing
 
 API 21: `host.computers` is the Runtime's shared `ComputerRegistry`, or `None` without that service. Extensions resolve a Tool context's selected Computer with `resolve(context, requested_id, capability)` before execution. Local `server` execution stays with the capability owner; remote operations use `call`, or `call_sync` from a native worker, with instance fencing for retained process or desktop state. The host supplies no additional Computer grant: exact Session policy, durable identity, availability and no mutation replay remain the registry's contract (`computers.md`). The bundled Computer Use Extension consumes this service without importing Runtime or transport code (`extensions/computer-use.md`).
+
+## Triggers
+
+API 28: `host.triggers` (`core/runtime/_extension_triggers.py::ExtensionTriggers`, `None` without Cron) lets an Extension own schedules and webhooks without an Agent. Each trigger is a Cron job owned by the Extension (`automation/cron.md` -> Extension triggers) with an Extension-chosen `key`, a `name` and a `schedule` in Cron's language (cron expression, `every <duration>`, `in <duration>`, ISO instant, `webhook`). `create`/`update`/`delete`/`list`/`get` return plain dicts with `enabled`, `next_fire_at`, last outcome and, for webhooks, `webhook: {url, path, reach, last_received_at, waiting, dropped}`; `webhook_secret`/`rotate_webhook_secret` return the secret for the sender's settings.
+
+- `set_handler(handler)` receives each fire as `CronFire.to_dict()`; a handler belongs to the registration that set it, so releasing a retired registration clears it while a newer registration's handler stays (`ExtensionTriggerHandlers`). Every call fails once the registration is no longer current.
+- An Extension sees only its own triggers; another Extension and the user's Cron surfaces get not-found. On startup the triggers of Extensions that are no longer installed are deleted (`archive_uninstalled_owner_groups`). Coverage: `tests/core/runtime/test_runtime_extension_host_triggers.py`.

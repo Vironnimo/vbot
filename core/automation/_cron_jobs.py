@@ -185,6 +185,7 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_delivered_at",
     "dropped_notifications",
     "unread_alert",
+    "owner",
 }
 
 CRON_JOBS_FORMAT_VERSION = 1
@@ -195,11 +196,16 @@ _LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
 _WATCH_KINDS = ("command", "url")
 _WATCH_FIELDS = frozenset((*_WATCH_KINDS, "always"))
 _EMAIL_FIELDS = frozenset(("channel_id", "senders", "subject"))
+_OWNER_FIELDS = frozenset(("extension", "key"))
+#: The schedule types a job that belongs to an Extension can have.
+OWNED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "webhook"))
+_OWNER_KEY_MAX_LENGTH = 200
 RUN_OVERRIDE_FIELDS = frozenset(("model", "thinking_effort", "thinking_effort_default"))
 CRON_JOB_SHAPE = json_object(
     _CRON_JOB_FIELDS,
     {
         "event_progress": json_object(_EVENT_PROGRESS_FIELDS),
+        "owner": json_object(_OWNER_FIELDS),
         "delivery": json_object(_DELIVERY_FIELDS),
         "last_result": json_object(_LAST_RESULT_FIELDS),
         "watch": json_object(_WATCH_FIELDS),
@@ -416,9 +422,22 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         frozenset({"all", "errors", "muted"}),
     )
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
-    _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
+    owner = item.get("owner")
+    if owner is None:
+        _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
+    else:
+        try:
+            CronOwner.from_dict(owner)
+        except CronJobValidationError as error:
+            add_error(diagnostics, f"{item_path}.owner", str(error))
+        if isinstance(owner, dict):
+            warn_unknown_keys(
+                diagnostics, f"{item_path}.owner", owner, _OWNER_FIELDS, "owner field"
+            )
     validate_non_empty_string(diagnostics, f"{item_path}.name", item.get("name"), required=True)
-    validate_non_empty_string(diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True)
+    validate_non_empty_string(
+        diagnostics, f"{item_path}.prompt", item.get("prompt"), required=owner is None
+    )
     validate_allowed_string(
         diagnostics,
         f"{item_path}.schedule_type",
@@ -715,6 +734,8 @@ class CronJob:
     # Absence keeps legacy jobs' Agent-default behavior; explicit None is Workspace.
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     run_overrides: AgentOverrides | None = None
+    # The Extension a job belongs to; its fires call that Extension instead of starting a Run.
+    owner: CronOwner | None = None
     # Retain the container even when only future fields remain after known settings clear.
     _run_overrides_unknown: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -842,6 +863,10 @@ class CronJob:
             data["operator_approval"] = self.operator_approval
         if self.working_project_id is not AGENT_DEFAULT_PROJECT:
             data["working_project_id"] = self.working_project_id
+        if self.owner is not None:
+            # An Extension's trigger has neither an Agent nor a prompt.
+            del data["agent_id"], data["prompt"]
+            data["owner"] = self.owner.to_dict()
         if self.run_overrides is not None or self._run_overrides_unknown:
             data["run_overrides"] = {
                 **deepcopy(self._run_overrides_unknown),
@@ -865,9 +890,9 @@ class CronJob:
         """Create one CronJob from persisted JSON data."""
         return cls(
             id=str(payload["id"]),
-            agent_id=str(payload["agent_id"]),
+            agent_id=str(payload.get("agent_id") or ""),
             name=str(payload["name"]),
-            prompt=str(payload["prompt"]),
+            prompt=str(payload.get("prompt") or ""),
             schedule_type=payload["schedule_type"],
             cron_expression=payload.get("cron_expression"),
             interval_seconds=payload.get("interval_seconds"),
@@ -946,7 +971,37 @@ class CronJob:
                 else deepcopy(dict(payload["permission_ceiling"]))
             ),
             operator_approval=payload.get("operator_approval"),
+            owner=None if payload.get("owner") is None else CronOwner.from_dict(payload["owner"]),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CronOwner:
+    """The Extension a job belongs to and the key that Extension gave it.
+
+    A fire of such a job calls the Extension's fire handler instead of starting
+    a Run; it has no Agent, prompt or delivery.
+    """
+
+    extension: str
+    key: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"extension": self.extension, "key": self.key}
+
+    @classmethod
+    def from_dict(cls, value: Any) -> CronOwner:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("owner must name an Extension and a key")
+        extension = value.get("extension")
+        key = value.get("key")
+        if not isinstance(extension, str) or not extension.strip():
+            raise CronJobValidationError("owner.extension must be a non-empty string")
+        if not isinstance(key, str) or not key or len(key) > _OWNER_KEY_MAX_LENGTH:
+            raise CronJobValidationError(
+                f"owner.key must be a string of 1-{_OWNER_KEY_MAX_LENGTH} characters"
+            )
+        return cls(extension=extension.strip(), key=key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1328,6 +1383,9 @@ def normalize_job_fields(job: CronJob) -> None:
     if not isinstance(job.id, str) or not job.id:
         raise CronJobValidationError("id must be a non-empty string")
 
+    if job.owner is not None:
+        _normalize_owned_job(job)
+        return
     if not isinstance(job.agent_id, str) or not is_valid_agent_id(job.agent_id.strip()):
         raise CronJobValidationError(
             "agent_id must be 1-64 characters using only letters, numbers, hyphen, or underscore"
@@ -1459,6 +1517,51 @@ def normalize_job_fields(job: CronJob) -> None:
                 "watch applies only to a repeating schedule (a cron expression or an "
                 "interval), not to a one-time, event, webhook or email schedule"
             )
+
+
+def _normalize_owned_job(job: CronJob) -> None:
+    """An Extension's job has a name and a schedule, and nothing that starts a Run."""
+    if not isinstance(job.owner, CronOwner):
+        raise CronJobValidationError("owner must name an Extension and a key")
+    if not isinstance(job.name, str) or not job.name.strip():
+        raise CronJobValidationError("name must be a non-empty string")
+    job.name = job.name.strip()
+    if job.schedule_type not in OWNED_SCHEDULE_TYPES:
+        raise CronJobValidationError(
+            "an Extension's trigger runs on a cron expression, an interval, "
+            "a one-time instant or a webhook"
+        )
+    if job.status not in _ALLOWED_STATUSES:
+        raise CronJobValidationError("status must be active, paused, completed, failed, or missed")
+    if (
+        job.agent_id
+        or job.prompt
+        or job.session_id is not None
+        or job.project_id is not None
+        or job.working_project_id is not AGENT_DEFAULT_PROJECT
+        or job.run_overrides is not None
+        or job.delivery is not None
+        or job.watch is not None
+        or job.email is not None
+        or job.permission_ceiling is not None
+    ):
+        raise CronJobValidationError(
+            "an Extension's trigger has no Agent, prompt, Session, Project, delivery, "
+            "watch, email or permission ceiling"
+        )
+    _parse_utc_timestamp(job.created_at, field_name="created_at")
+    for field_name in ("last_fired_at", "last_attempt_at", "last_completed_at", "covered_until"):
+        value = getattr(job, field_name)
+        if value is not None:
+            _parse_utc_timestamp(value, field_name=field_name)
+    if job.remaining_runs is not None and (
+        isinstance(job.remaining_runs, bool)
+        or not isinstance(job.remaining_runs, int)
+        or job.remaining_runs < 0
+    ):
+        raise CronJobValidationError("remaining_runs must be a non-negative integer or null")
+    if job.last_error is not None:
+        job.last_error = _truncate_error(str(job.last_error))
 
 
 _SCHEDULE_FIELDS = (

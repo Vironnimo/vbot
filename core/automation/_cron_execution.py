@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +46,44 @@ class CronRunOutcome:
     succeeded: bool
     admitted: bool
     retry_admission: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CronFire:
+    """One fire of a job that belongs to an Extension, as its fire handler receives it."""
+
+    job_id: str
+    key: str
+    """The key the Extension gave the job."""
+    schedule_type: str
+    fired_at: str
+    """When the fire started, UTC."""
+    due_at: str | None = None
+    """When a scheduled fire was due, UTC; None for a webhook fire."""
+    late_by_seconds: int = 0
+    earlier_missed: int = 0
+    """Earlier due fires this one replaces after vBot did not run."""
+    requests: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    """A webhook fire's requests, oldest first: ``received_at``, ``headers``, ``body``, ``cut``."""
+    dropped: int = 0
+    """Earlier webhook requests dropped before this fire because too many waited."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trigger_id": self.job_id,
+            "key": self.key,
+            "schedule_type": self.schedule_type,
+            "fired_at": self.fired_at,
+            "due_at": self.due_at,
+            "late_by_seconds": self.late_by_seconds,
+            "earlier_missed": self.earlier_missed,
+            "requests": [dict(item) for item in self.requests],
+            "dropped": self.dropped,
+        }
+
+
+#: What an Extension's job fires call; raising counts as a failed fire.
+type OwnerFireHandler = Callable[[CronFire], Awaitable[None]]
 
 
 class _EventFireInvalidatedError(RunAdmissionBlockedError):
@@ -158,6 +197,12 @@ class CronExecution:
                         else ""
                     ),
                 )
+                if latest.owner is not None:
+                    outcome = await self._fire_owned(
+                        latest, owed=owed, late=late, batch=batch, queue=queue
+                    )
+                    admitted = outcome.admitted
+                    return outcome
                 context = _context.run_context(
                     latest,
                     self._owner._timezone,
@@ -335,6 +380,74 @@ class CronExecution:
                 queue.release(job.id, batch)
             self._admitted_once_runs.pop(job.id, None)
             self._owner._executing_jobs.discard(job.id)
+
+    async def _fire_owned(
+        self,
+        job: CronJob,
+        *,
+        owed: _schedule.OwedFire | None,
+        late: _context.LateFire | None,
+        batch: InboxBatch[Any] | None,
+        queue: CronInbox[Any] | None,
+    ) -> CronRunOutcome:
+        """Call the owning Extension's fire handler instead of starting a Run.
+
+        The fire counts as admitted only when the handler returned: a webhook
+        fire's requests are forgotten then and wait for the next attempt
+        otherwise. A missing handler (the Extension is not running) fails the
+        fire without counting toward the failure stop; a handler that raises
+        counts like a failed Run.
+        """
+        assert job.owner is not None
+        handler = self._owner._owner_handler(job)
+        if handler is None:
+            await self._record_trigger_failure(
+                job.id, RuntimeError(f"Extension {job.owner.extension} is not running")
+            )
+            return CronRunOutcome(succeeded=False, admitted=False)
+        firing_once_at = job.run_at if job.schedule_type == "once" else None
+        fire = CronFire(
+            job_id=job.id,
+            key=job.owner.key,
+            schedule_type=job.schedule_type,
+            fired_at=_timing._utc_now_iso(),
+            due_at=None if owed is None else owed.due_at.isoformat(),
+            late_by_seconds=0 if late is None else late.late_by_seconds,
+            earlier_missed=0 if owed is None else owed.earlier_missed,
+            requests=() if batch is None else tuple(item.to_dict() for item in batch.items),
+            dropped=0 if batch is None else batch.dropped,
+        )
+        try:
+            await handler(fire)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            _LOGGER.error(
+                "Cron job fire handler failed (job=%s extension=%s): %s",
+                job.id,
+                job.owner.extension,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            await self._record_run_failure(job.id, error)
+            return CronRunOutcome(succeeded=False, admitted=False)
+        if queue is not None and batch is not None:
+            await settle_before_cancelling(queue.consume(job.id, batch))
+        latest = self._owner._jobs.get(job.id)
+        if latest is None:
+            return CronRunOutcome(succeeded=True, admitted=True)
+        completed_at = _timing._utc_now_iso()
+        latest.last_fired_at = fire.fired_at
+        latest.last_completed_at = completed_at
+        latest.last_outcome = "success"
+        latest.last_error = None
+        latest.consecutive_failures = 0
+        if latest.remaining_runs is not None and not _replacement_once_fire(latest, firing_once_at):
+            latest.remaining_runs = max(latest.remaining_runs - 1, 0)
+        self._owner._jobs[latest.id] = latest
+        await self._persist_after_fire(latest.id)
+        await self._finalize_exhausted_job(latest.id)
+        return CronRunOutcome(succeeded=True, admitted=True)
 
     def _event_context_at_start(
         self, before: CronJob, claimed: CronJob, due: _events.EventDue

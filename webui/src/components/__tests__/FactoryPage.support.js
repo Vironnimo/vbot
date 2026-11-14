@@ -17,6 +17,7 @@ let mounted;
 export const step = (id, name, extra = {}) => ({
   id,
   name,
+  kind: 'agent',
   source: 'team',
   agent: 'builder',
   model: '',
@@ -26,40 +27,48 @@ export const step = (id, name, extra = {}) => ({
   approval: false,
   returns_to: '',
   rounds: 2,
-  limits: {},
   ...extra,
 });
 
-export const setup = {
-  project_id: 'project-a',
+export const workflow = (id, name, steps, extra = {}) => ({
+  id,
   revision: 1,
+  name,
+  description: `test-owned ${name} workflow`,
   enabled: true,
-  workflows: [
-    {
-      id: 'implement',
-      name: 'Implement',
-      description: 'test-owned workflow',
-      steps: [
-        step('implement', 'Implement', { model: 'demo/worker' }),
-        step('review', 'Review', {
-          agent: 'critic',
-          model: 'demo/reviewer',
-          after: ['implement'],
-          returns_to: 'implement',
-        }),
-        step('integrate', 'Integrate', { after: ['review'], approval: true }),
-      ],
-    },
+  project_id: '',
+  final_approval: false,
+  steps,
+  triggers: [],
+  ...extra,
+});
+
+export const implementWorkflow = workflow(
+  'implement',
+  'Implement',
+  [
+    step('implement', 'Implement', { model: 'demo/worker' }),
+    step('review', 'Review', {
+      agent: 'critic',
+      model: 'demo/reviewer',
+      after: ['implement'],
+      returns_to: 'implement',
+    }),
+    step('integrate', 'Integrate', { after: ['review'], approval: true }),
   ],
-  default_workflow: 'implement',
-};
+  { project_id: 'project-a' },
+);
+
+// A global Workflow without a Project of its own.
+export const triageWorkflow = workflow('triage', 'Triage', [
+  step('triage', 'Triage', { source: 'agent', agent: 'planner' }),
+]);
 
 export const templates = [
-  {
-    id: 'plan',
-    name: 'Plan',
-    description: 'test-owned template',
-    steps: [
+  workflow(
+    'plan',
+    'Plan',
+    [
       step('plan', 'Plan', {
         source: 'agent',
         agent: '',
@@ -72,7 +81,8 @@ export const templates = [
         returns_to: 'plan',
       }),
     ],
-  },
+    { revision: undefined, final_approval: true },
+  ),
 ];
 
 // An Agent's own Model: Drafter has none, Critic uses the reviewer Model.
@@ -97,27 +107,71 @@ export function card(id, state = 'queued', extra = {}) {
     title: `Title ${id}`,
     description: `Objective ${id}`,
     project_id: 'project-a',
+    workflow_id: 'implement',
     state,
     origin: 'operator',
     waiting_reason: '',
     position: 1,
     revision: 1,
     group_id: id,
-    done_steps: [],
     runtime: {},
     created_at: '2026-11-07T09:00:00Z',
     ...extra,
   };
 }
 
+// A started Card as the Board projects it: its Workflow snapshot and each
+// step's state, by default pending.
+export function startedCard(id, state, reason, flow, steps = {}, extra = {}) {
+  const states = Object.fromEntries(
+    flow.steps.map((entry) => [
+      entry.id,
+      { status: 'pending', ...(steps[entry.id] ?? {}) },
+    ]),
+  );
+  return card(id, state, {
+    waiting_reason: reason,
+    workflow_id: flow.id,
+    workflow: {
+      id: flow.id,
+      name: flow.name,
+      final_approval: flow.final_approval,
+      steps: flow.steps,
+    },
+    steps: states,
+    runtime: { workflow: flow, steps: states },
+    ...extra,
+  });
+}
+
 const clone = (value) => JSON.parse(JSON.stringify(value));
+// A saved Workflow as the server lists it, with each trigger's status.
+const withStatus = (saved) => ({
+  ...clone(saved),
+  triggers: saved.triggers.map((trigger) => ({
+    ...clone(trigger),
+    status: {
+      status: trigger.enabled ? 'active' : 'paused',
+      next_fire_at: trigger.type === 'schedule' ? '2026-11-09T09:00:00Z' : null,
+      last_fired_at: null,
+      last_outcome: null,
+      last_error: null,
+      webhook:
+        trigger.type === 'webhook'
+          ? {
+              url: `https://vbot.test/hooks/${saved.id}/${trigger.id}`,
+              path: `/hooks/${saved.id}/${trigger.id}`,
+            }
+          : null,
+    },
+  })),
+});
 export function createBridge(initialCards = [card('fct-a')]) {
   const state = {
     cards: clone(initialCards),
-    setups: [clone(setup)],
+    workflows: [clone(implementWorkflow), clone(triageWorkflow)],
+    secrets: {},
     details: {},
-    library: [],
-    libraryVersions: {},
     handlers: {},
   };
   const contexts = new Set();
@@ -132,47 +186,6 @@ export function createBridge(initialCards = [card('fct-a')]) {
     });
   const operation = vi.fn(async (name, args) => {
     if (state.handlers[name]) return state.handlers[name](args);
-    if (name === 'library.list')
-      return { templates: clone(state.library), next_cursor: '' };
-    if (name === 'library.get') {
-      const item = state.library.find((entry) => entry.id === args.id);
-      return {
-        template: clone(
-          args.version
-            ? (state.libraryVersions[`${args.id}:${args.version}`] ?? item)
-            : item,
-        ),
-      };
-    }
-    if (name === 'library.publish') {
-      const previous = state.library.find((entry) => entry.id === args.id);
-      if ((previous?.revision ?? 0) !== args.expected_revision)
-        throw conflict();
-      const version = (previous?.version ?? 0) + 1;
-      const item = {
-        ...clone(args),
-        id: args.id ?? 'flt-new',
-        version,
-        latest_version: version,
-        revision: (previous?.revision ?? 0) + 1,
-        archived: false,
-        versions: [version, ...(previous?.versions ?? [])],
-      };
-      delete item.expected_revision;
-      state.library = [
-        ...state.library.filter((entry) => entry.id !== item.id),
-        item,
-      ];
-      state.libraryVersions[`${item.id}:${version}`] = clone(item);
-      return { template: clone(item) };
-    }
-    if (name === 'library.archive') {
-      const item = state.library.find((entry) => entry.id === args.id);
-      if (item.revision !== args.expected_revision) throw conflict();
-      item.archived = args.archived;
-      item.revision += 1;
-      return { template: clone(item) };
-    }
     const current = state.cards.find((entry) => entry.id === args.id);
     if (name === 'catalog')
       return {
@@ -220,41 +233,49 @@ export function createBridge(initialCards = [card('fct-a')]) {
         },
         revision: 1,
       };
-    if (name === 'setup.list') return { setups: clone(state.setups) };
-    if (name === 'setup.preview')
-      return { effective_models: effectiveModels(args.workflows) };
-    if (name === 'setup.get') {
-      const saved = state.setups.find(
-        (entry) => entry.project_id === args.project_id,
-      );
+    if (name === 'workflow.list')
+      return { workflows: state.workflows.map(withStatus) };
+    if (name === 'workflow.preview')
+      return { effective_models: effectiveModels([args.workflow]) };
+    if (name === 'workflow.get') {
+      const saved = state.workflows.find((entry) => entry.id === args.id);
+      if (!saved)
+        throw Object.assign(new Error('test-owned missing Workflow'), {
+          code: 'workflow_not_found',
+        });
       return {
-        setup: clone(
-          saved ?? { ...setup, project_id: args.project_id, revision: 0 },
-        ),
-        effective_models: effectiveModels(saved?.workflows),
+        workflow: withStatus(saved),
+        effective_models: effectiveModels([saved]),
       };
     }
-    if (name === 'setup.update') {
-      const saved = state.setups.find(
-        (entry) => entry.project_id === args.project_id,
+    if (name === 'workflow.save') {
+      const previous = state.workflows.find(
+        (entry) => entry.id === args.workflow.id,
       );
-      if ((saved?.revision ?? 0) !== args.expected_revision) throw conflict();
-      const next = { ...clone(args), revision: args.expected_revision + 1 };
-      delete next.expected_revision;
-      state.setups = [
-        ...state.setups.filter((entry) => entry.project_id !== args.project_id),
-        next,
-      ];
+      if ((args.expected_revision ?? 0) !== (previous?.revision ?? 0))
+        throw conflict();
+      const next = {
+        ...clone(args.workflow),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      state.workflows = previous
+        ? state.workflows.map((entry) => (entry === previous ? next : entry))
+        : [...state.workflows, next];
       return {
-        setup: clone(next),
-        effective_models: effectiveModels(next.workflows),
+        workflow: withStatus(next),
+        effective_models: effectiveModels([next]),
       };
     }
-    if (name === 'setup.delete') {
-      state.setups = state.setups.filter(
-        (entry) => entry.project_id !== args.project_id,
-      );
-      return { deleted: true };
+    if (name === 'workflow.delete') {
+      state.workflows = state.workflows.filter((entry) => entry.id !== args.id);
+      return { deleted: true, id: args.id };
+    }
+    if (name === 'workflow.secret') {
+      const key = `${args.id}/${args.trigger}`;
+      if (args.rotate || !state.secrets[key])
+        state.secrets[key] =
+          `test-owned-secret-${Object.keys(state.secrets).length + 1}`;
+      return { secret: state.secrets[key] };
     }
     if (name === 'card.get')
       return {
@@ -295,8 +316,10 @@ export function createBridge(initialCards = [card('fct-a')]) {
     }
     if (name === 'card.limits') {
       if (current.revision !== args.expected_revision) throw conflict();
-      for (const field of ['card_limits', 'step_limits'])
-        if (field in args) current.runtime[field] = clone(args[field]);
+      if ('card_limits' in args)
+        current.runtime.card_limits = clone(args.card_limits);
+      if ('step_limits' in args)
+        current.runtime.steps[args.step].limits = clone(args.step_limits);
       current.revision += 1;
       return { card: clone(current) };
     }
@@ -463,6 +486,16 @@ export const calls = (operation, name) =>
 export const actionButtons = () =>
   [...document.querySelectorAll('.factory-card-actions button')].map((node) =>
     node.textContent.trim(),
+  );
+// The buttons of the steps that wait for the user, by step id.
+export const stepButtons = () =>
+  Object.fromEntries(
+    [...document.querySelectorAll('[data-waiting-step]')].map((node) => [
+      node.dataset.waitingStep,
+      [...node.querySelectorAll('button')].map((item) =>
+        item.textContent.trim(),
+      ),
+    ]),
   );
 export { t, tick, flushSync };
 afterEach(async () => {

@@ -48,6 +48,7 @@ from core.runs import (
     RunExecutionOwner,
     RunNotFoundError,
 )
+from core.runtime._extension_triggers import ExtensionTriggerHandlers, ExtensionTriggers
 from core.runtime._shell_review_context import current_input_authority, shell_review_context
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
@@ -218,6 +219,7 @@ class ExtensionHostFactory:
         self.logger = logger
         self._decisions = decisions
         self._cron = cron
+        self._trigger_handlers = None if cron is None else ExtensionTriggerHandlers(cron)
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
         self.databases = ExtensionDatabases(host.data_dir)
@@ -238,6 +240,8 @@ class ExtensionHostFactory:
         for key in tuple(self._deferred_runs):
             if key[0] == identity:
                 self._deferred_runs.pop(key)
+        if self._trigger_handlers is not None:
+            self._trigger_handlers.release(identity)
         await self.databases.release(identity)
 
     def _extension_owner_host(self, identity: Any) -> ExtensionHost:
@@ -321,6 +325,16 @@ class ExtensionHostFactory:
             ),
             load_result_payload=lambda context, payload_id: self._load_result_payload(
                 identity, context, payload_id
+            ),
+            triggers=(
+                None
+                if self._cron is None or self._trigger_handlers is None
+                else ExtensionTriggers(
+                    self._cron,
+                    self._trigger_handlers,
+                    identity,
+                    partial(self._require_registration, identity),
+                )
             ),
         )
 
@@ -428,8 +442,11 @@ class ExtensionHostFactory:
     async def archive_uninstalled_owner_groups(self, installed: frozenset[str]) -> None:
         """Archive the live owner-managed Sessions of every owner not in *installed*.
 
-        A group with active or queued work stays live until the next load.
+        A group with active or queued work stays live until the next load. The
+        triggers of an owner not in *installed* are deleted.
         """
+        if self._trigger_handlers is not None:
+            await self._trigger_handlers.remove_uninstalled(installed)
         for owner_name in await self.chat_sessions.temporary_owners_async():
             if owner_name in installed:
                 continue

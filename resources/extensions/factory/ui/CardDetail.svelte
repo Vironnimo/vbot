@@ -21,9 +21,10 @@
   import { limitsProblem, normalizeLimits } from './limits.js';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import {
-    acceptLabel,
     cardActions,
     cardWorkflow,
+    stepAcceptLabel,
+    waitingSteps,
     editableCard,
     eventLabel,
     stepStatus,
@@ -47,13 +48,18 @@
   const participants = $derived(model.detail.participants ?? []);
   const approvals = $derived(model.detail.approvals ?? []);
   const outputs = $derived(model.detail.outputs ?? []);
-  // The started Card's own Workflow snapshot (with outputs and targets), else
-  // the setup's Workflow it will start with.
+  // The started Card's own Workflow snapshot, else the Workflow it will
+  // start with.
   const workflow = $derived(
-    card.runtime?.workflow ?? cardWorkflow(card, model.setups),
+    card.runtime?.workflow ?? cardWorkflow(card, model.workflows),
   );
   const steps = $derived(workflow?.steps ?? []);
+  const stopped = $derived(waitingSteps(card));
   const defaultTarget = $derived(sendBackDefault(card, workflow));
+  const children = $derived(model.detail.children ?? []);
+  const trigger = $derived(model.detail.trigger ?? null);
+  const stepLabel = (stepId) =>
+    steps.find((step) => step.id === stepId)?.name ?? stepId;
   const activeRuns = $derived(
     (model.detail.runs ?? []).filter((run) =>
       ['pending', 'running', 'cancelling'].includes(run.status),
@@ -65,7 +71,61 @@
   let comment = $state('');
   let commentError = $state('');
   let sendBackStep = $state('');
+  let answerStep = $state('');
   let inspectedId = $state('');
+  // Limits of a running Card: the Card's and one chosen step's, saved with
+  // an explicit button while the Card waits.
+  let limitStep = $state('');
+  let cardLimits = $state({});
+  let stepLimits = $state({});
+  let limitsError = $state('');
+  const limitTarget = $derived(
+    steps.some((step) => step.id === limitStep && step.kind !== 'workflow')
+      ? limitStep
+      : (stopped.find((step) => step.kind !== 'workflow')?.id ??
+          steps.find((step) => step.kind !== 'workflow')?.id ??
+          ''),
+  );
+  const savedCardLimits = $derived(
+    card.runtime?.card_limits ?? card.runtime?.workflow?.limits ?? {},
+  );
+  const savedStepLimits = $derived(
+    card.runtime?.steps?.[limitTarget]?.limits ??
+      steps.find((step) => step.id === limitTarget)?.limits ??
+      {},
+  );
+  const limitsChanged = $derived(
+    JSON.stringify(normalizeLimits(cardLimits)) !==
+      JSON.stringify(normalizeLimits(savedCardLimits)) ||
+      JSON.stringify(normalizeLimits(stepLimits)) !==
+        JSON.stringify(normalizeLimits(savedStepLimits)),
+  );
+  const budget = $derived(
+    model.detail.budget?.[limitTarget] ??
+      Object.values(model.detail.budget ?? {})[0] ??
+      null,
+  );
+  $effect(() => {
+    void card.revision;
+    void limitTarget;
+    untrack(() => {
+      cardLimits = { ...savedCardLimits };
+      stepLimits = { ...savedStepLimits };
+      limitsError = '';
+    });
+  });
+
+  async function saveLimits() {
+    limitsError = limitsProblem(cardLimits) || limitsProblem(stepLimits);
+    if (limitsError) return;
+    await act('card.limits', {
+      expected_revision: card.revision,
+      card_limits: normalizeLimits(cardLimits),
+      ...(limitTarget
+        ? { step: limitTarget, step_limits: normalizeLimits(stepLimits) }
+        : {}),
+    });
+  }
   const inspected = $derived(
     participants.find(
       (participant) => participantId(participant) === inspectedId,
@@ -78,31 +138,17 @@
       return card;
     },
     get editable() {
-      return editableCard(card) || card.state === 'waiting';
+      return editableCard(card);
     },
     project: (record) => ({
       title: record.title ?? '',
       description: record.description ?? '',
-      card_limits:
-        record.runtime?.card_limits ?? record.runtime?.workflow?.limits ?? {},
-      step_limits:
-        record.runtime?.step_limits ??
-        record.runtime?.workflow?.steps.find(
-          (s) => s.id === record.runtime?.step,
-        )?.limits ??
-        {},
     }),
     normalize: (draft) => ({
       title: draft.title.trim(),
       description: draft.description.trim(),
-      card_limits: normalizeLimits(draft.card_limits),
-      step_limits: normalizeLimits(draft.step_limits),
     }),
     validate: (draft) => {
-      if (card.state === 'waiting')
-        return (
-          limitsProblem(draft.card_limits) || limitsProblem(draft.step_limits)
-        );
       return !editableCard(card)
         ? t('factory.editStopped')
         : !draft.title.trim()
@@ -111,24 +157,18 @@
             ? t('factory.descriptionRequired')
             : '';
     },
-    save: async (values, revision, baseline) => {
-      const limits = card.state === 'waiting';
-      return (
-        await model.call(limits ? 'card.limits' : 'card.update', {
+    save: async (values, revision, baseline) =>
+      (
+        await model.call('card.update', {
           id,
           expected_revision: revision,
           ...Object.fromEntries(
             Object.entries(values).filter(
-              ([key, value]) =>
-                (limits
-                  ? ['card_limits', 'step_limits'].includes(key)
-                  : ['title', 'description'].includes(key)) &&
-                JSON.stringify(value) !== JSON.stringify(baseline[key]),
+              ([key, value]) => value !== baseline[key],
             ),
           ),
         })
-      ).card;
-    },
+      ).card,
     read: async () => (await model.call('card.get', { id })).card,
     onSave: (saved) => model.acceptSavedCard(saved),
   });
@@ -147,21 +187,27 @@
     if (await act(`card.${confirm}`)) confirm = '';
   }
 
-  function composeComment(kind) {
+  function composeComment(kind, step = '') {
     compose = kind;
     comment = '';
     commentError = '';
     sendBackStep = '';
+    answerStep = kind === 'answer' ? step : '';
   }
+  const canSend = $derived(
+    compose === 'answer'
+      ? stopped.some((step) => step.id === answerStep && step.answer)
+      : actions.sendBack,
+  );
   async function sendComment() {
-    if (compose === 'answer' ? !actions.answer : !actions.sendBack) return;
+    if (!canSend) return;
     commentError = comment.trim() ? '' : t('factory.commentRequired');
     if (commentError) return;
     if (
       await act(
         `card.${compose}`,
         compose === 'answer'
-          ? { text: comment.trim() }
+          ? { text: comment.trim(), step: answerStep }
           : {
               comment: comment.trim(),
               ...(sendBackStep ? { step: sendBackStep } : {}),
@@ -187,10 +233,7 @@
   }
 
   function outputTitle(output) {
-    const name =
-      output.step_name ||
-      steps.find((step) => step.id === output.step)?.name ||
-      output.step;
+    const name = output.step_name || stepLabel(output.step);
     return output.pass > 1
       ? `${name} · ${t('factory.passNumber', { pass: output.pass })}`
       : name;
@@ -225,8 +268,16 @@
       >← {t('factory.board')}</Button
     >
     <span class="factory-subtle"
-      >{projectName(model.catalog, card.project_id)}</span
+      >{card.project_id
+        ? projectName(model.catalog, card.project_id)
+        : t('factory.noProject')}</span
     >
+    {#if card.parent_id}<Button
+        variant="tertiary"
+        onClick={() =>
+          onNavigate(`/card/${encodeURIComponent(card.parent_id)}`)}
+        >{t('factory.parentCard')} ↗</Button
+      >{/if}
     <div class="factory-card-identity">
       <span class="factory-mono">{card.id}</span><CopyButton text={card.id} />
     </div>
@@ -271,20 +322,48 @@
     </Banner>
   {/if}
 
-  {#if card.state === 'waiting' && card.waiting_reason === 'blocked'}
+  {#each stopped as step (step.id)}
     <section
       class="factory-section factory-decision"
-      aria-labelledby="factory-question"
+      data-waiting-step={step.id}
+      aria-labelledby={`factory-waiting-${step.id}`}
     >
-      <h3 id="factory-question">{t('factory.question')}</h3>
-      <p class="factory-prose">
-        {card.runtime?.question}
-      </p>
+      <h3 id={`factory-waiting-${step.id}`}>
+        {step.name} · {waitingLabel(step.reason)}
+      </h3>
+      {#if step.question}<p class="factory-prose">{step.question}</p>{/if}
+      {#if step.note}<p class="factory-prose">{step.note}</p>{/if}
+      <div class="factory-actions">
+        {#if step.accept}<Button
+            variant="primary"
+            disabled={Boolean(model.pending)}
+            loading={model.pending === 'card.accept'}
+            onClick={() =>
+              act('card.accept', {
+                expected_revision: card.revision,
+                step: step.id,
+              })}>{stepAcceptLabel(step)}</Button
+          >{/if}
+        {#if step.answer}<Button
+            variant="primary"
+            disabled={Boolean(model.pending)}
+            onClick={() => composeComment('answer', step.id)}
+            >{t('factory.answer')}</Button
+          >{/if}
+        {#if step.retry}<Button
+            variant="primary"
+            disabled={Boolean(model.pending)}
+            loading={model.pending === 'card.retry'}
+            onClick={() => act('card.retry', { step: step.id })}
+            >{t('factory.retry')}</Button
+          >{/if}
+      </div>
     </section>
-  {:else if card.state === 'waiting' && card.runtime?.note}
-    <section class="factory-section factory-decision">
-      <h3>{t('factory.waitingNote')}</h3>
-      <p class="factory-prose">{card.runtime.note}</p>
+  {/each}
+  {#if card.state === 'waiting' && !stopped.length && (card.note || actions.retry)}
+    <section class="factory-section factory-decision" data-card-blocked>
+      <h3>{waitingLabel(card.waiting_reason)}</h3>
+      {#if card.note}<p class="factory-prose">{card.note}</p>{/if}
     </section>
   {/if}
 
@@ -303,12 +382,7 @@
         loading={model.pending === 'card.accept'}
         disabled={Boolean(model.pending)}
         onClick={() => act('card.accept', { expected_revision: card.revision })}
-        >{acceptLabel(card)}</Button
-      >{/if}
-    {#if actions.answer}<Button
-        variant="primary"
-        disabled={Boolean(model.pending)}
-        onClick={() => composeComment('answer')}>{t('factory.answer')}</Button
+        >{t('factory.acceptDone')}</Button
       >{/if}
     {#if actions.retry}<Button
         variant="primary"
@@ -343,7 +417,35 @@
       <h3 id="factory-workflow-heading">
         {t('factory.workflowHeading', { name: workflow.name })}
       </h3>
-      <WorkflowDiagram {workflow} status={(step) => stepStatus(card, step)} />
+      <WorkflowDiagram
+        {workflow}
+        agentLabel={(step) =>
+          step.kind === 'workflow'
+            ? t('factory.kind.workflow')
+            : (card.steps?.[step.id]?.passes ?? 0) > 1
+              ? t('factory.passNumber', { pass: card.steps[step.id].passes })
+              : ''}
+        status={card.runtime?.steps ? (step) => stepStatus(card, step) : null}
+      />
+    </section>
+  {/if}
+
+  {#if children.length}
+    <section class="factory-section" aria-labelledby="factory-children-heading">
+      <h3 id="factory-children-heading">{t('factory.childCards')}</h3>
+      <ul class="factory-child-list">
+        {#each children as child (child.id)}<li>
+            <Button
+              variant="tertiary"
+              onClick={() =>
+                onNavigate(`/card/${encodeURIComponent(child.id)}`)}
+              >{child.title}</Button
+            ><span class="factory-help"
+              >{stateLabel(child.state)}{#if child.state === 'waiting'}
+                · {waitingLabel(child.waiting_reason)}{/if}</span
+            >
+          </li>{/each}
+      </ul>
     </section>
   {/if}
 
@@ -471,38 +573,62 @@
         </section>{/if}
     </div>
     <aside class="factory-detail-aside">
-      {#if card.runtime?.workflow}
+      {#if card.runtime?.steps}
         <section class="factory-section" aria-label={t('factory.limit.title')}>
           <h3>{t('factory.limit.title')}</h3>
           <LimitsEditor
-            bind:value={editor.draft.card_limits}
+            bind:value={cardLimits}
             prefix="factory-card-limit"
             label={t('factory.limit.card')}
             disabled={card.state !== 'waiting'}
-            usage={model.detail.budget?.card.usage}
+            usage={budget?.card?.usage}
           />
-          <LimitsEditor
-            bind:value={editor.draft.step_limits}
-            prefix="factory-step-limit"
-            label={t('factory.limit.step')}
-            disabled={card.state !== 'waiting'}
-            usage={model.detail.budget?.step.usage}
-          />
+          {#if limitTarget}
+            <div class="factory-field">
+              <label id="factory-limit-step-label" for="factory-limit-step"
+                >{t('factory.limit.stepChoice')}</label
+              ><Dropdown
+                id="factory-limit-step"
+                ariaLabelledby="factory-limit-step-label"
+                value={limitTarget}
+                options={steps
+                  .filter((step) => step.kind !== 'workflow')
+                  .map((step) => ({ value: step.id, label: step.name }))}
+                onOpenChange={model.pickerOpen}
+                onValueChange={(value) => (limitStep = value)}
+              />
+            </div>
+            <LimitsEditor
+              bind:value={stepLimits}
+              prefix="factory-step-limit"
+              label={t('factory.limit.step')}
+              disabled={card.state !== 'waiting'}
+              usage={budget?.step?.usage}
+            />
+          {/if}
           <p class="factory-help">{t('factory.limit.help')}</p>
           {#if card.state === 'waiting'}
             <p class="factory-help">{t('factory.limit.resume')}</p>
-            <SaveStatus
-              saving={editor.saving}
-              pending={editor.hasChanges()}
-              onClick={editor.save}
-            />
-            {#if editor.error}<Banner variant="error" role="alert"
-                >{editor.error}</Banner
-              >{/if}
-            {#if editor.notice}<Banner variant="warn" role="status"
-                >{editor.notice}</Banner
+            <Button
+              variant="secondary"
+              disabled={!limitsChanged || Boolean(model.pending)}
+              loading={model.pending === 'card.limits'}
+              onClick={saveLimits}>{t('factory.limit.save')}</Button
+            >
+            {#if limitsError}<Banner variant="error" role="alert"
+                >{limitsError}</Banner
               >{/if}
           {/if}
+        </section>
+      {/if}
+      {#if trigger}
+        <section class="factory-section" data-trigger-event>
+          <h3>{t('factory.triggerEvent')}</h3>
+          <pre class="factory-trigger-event">{JSON.stringify(
+              trigger,
+              null,
+              2,
+            )}</pre>
         </section>
       {/if}
       <section class="factory-section" data-usage>
@@ -549,8 +675,10 @@
             >
               <div>
                 <strong>{participantName(participant)}</strong
-                >{#if participant.run_active}<span class="factory-live-label"
-                    >{t('factory.live')}</span
+                >{#if participant.step}<span class="factory-help">
+                    · {stepLabel(participant.step)}</span
+                  >{/if}{#if participant.run_active}<span
+                    class="factory-live-label">{t('factory.live')}</span
                   >{/if}
                 <p class="factory-help factory-mono">{participant.model}</p>
               </div>
@@ -574,10 +702,13 @@
     </aside>
   </div>
   {#if inspected}
-    {#key `${card.group_id}:${inspectedId}`}<LazyContent load={loadSession}
+    {@const groupId = inspected.step
+      ? `${card.id}.${inspected.step}`
+      : card.group_id}
+    {#key `${groupId}:${inspectedId}`}<LazyContent load={loadSession}
         >{#snippet children(Component)}<Component
             client={model.client}
-            groupId={card.group_id}
+            {groupId}
             participant={inspected}
             onError={(message) => (model.error = message)}
             onClose={() => (inspectedId = '')}
@@ -647,6 +778,9 @@
             onInput={(value) => (comment = value)}
           />
         </div>
+        {#if compose === 'answer'}<p class="factory-help">
+            {stopped.find((step) => step.id === answerStep)?.question ?? ''}
+          </p>{/if}
         {#if compose === 'send_back' && steps.length > 1}<div
             class="factory-field"
           >
@@ -685,7 +819,7 @@
       ><Button
         variant="primary"
         loading={Boolean(model.pending)}
-        disabled={compose === 'answer' ? !actions.answer : !actions.sendBack}
+        disabled={!canSend}
         onClick={sendComment}
         >{compose === 'answer'
           ? t('factory.answer')
@@ -743,6 +877,31 @@
   }
   .factory-card-actions {
     margin: 8px 0 26px;
+  }
+  .factory-decision .factory-actions {
+    margin-top: 12px;
+  }
+  .factory-child-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .factory-child-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .factory-trigger-event {
+    margin: 0;
+    font-size: 11px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow: auto;
   }
   .factory-detail-grid {
     display: grid;
