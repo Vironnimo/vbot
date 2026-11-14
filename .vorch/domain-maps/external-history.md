@@ -31,6 +31,8 @@ Unrecognized schemas, malformed transcripts, Hermes cross-Session compression li
 
 Source-format evidence: [Claude Sessions](https://code.claude.com/docs/en/sessions), [Codex app server](https://learn.chatgpt.com/docs/app-server), [OpenCode source](https://github.com/anomalyco/opencode), [Hermes source](https://github.com/NousResearch/hermes-agent), [OpenClaw source](https://github.com/openclaw/openclaw). These are evolving external formats, not vBot's persisted-format compatibility contract.
 
+SQLite projections name the columns discovered in the source snapshot, including unknown and generated visible columns, so raw provenance keeps source fields without depending on column positions.
+
 ## Agent-facing text
 
 This domain owns the bundled reading Skill, CLI import/lookup help and output, historical-entry labels and the import-transition System Reminder. Before changing these texts, read `external-history/agent-facing-text.md` and update the affected sentence reasons.

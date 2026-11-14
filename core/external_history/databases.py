@@ -31,6 +31,17 @@ def tables(db: sqlite3.Connection) -> set[str]:
     return {str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _columns(db: sqlite3.Connection, table: str, *, alias: str = "") -> str:
+    """Name the source's visible columns, preserving unknown fields in raw provenance."""
+    prefix = f'"{alias}".' if alias else ""
+    return ", ".join(
+        prefix + '"' + row[0].replace('"', '""') + '"'
+        for row in db.execute(
+            "SELECT name FROM pragma_table_xinfo(?) WHERE hidden != 1 ORDER BY cid", (table,)
+        )
+    )
+
+
 def _table(source: str, names: set[str]) -> str:
     choices = {
         "hermes": ("sessions",),
@@ -50,7 +61,7 @@ def list_database(source: str, path: Path) -> list[dict[str, Any]]:
     with opened(path) as db:
         table = _table(source, tables(db))
         result = []
-        for item in db.execute(f'SELECT * FROM "{table}"'):
+        for item in db.execute(f'SELECT {_columns(db, table)} FROM "{table}"'):
             row = dict(item)
             identity = str(row.get("id", row.get("session_id", "")))
             updated = row.get(
@@ -79,7 +90,7 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
         table = _table(source, names)
         identity = "session_id" if source == "openclaw" else "id"
         found = db.execute(
-            f'SELECT * FROM "{table}" WHERE "{identity}" = ?', (session_id,)
+            f'SELECT {_columns(db, table)} FROM "{table}" WHERE "{identity}" = ?', (session_id,)
         ).fetchone()
         if found is None:
             raise ExternalHistoryError(
@@ -129,7 +140,8 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
             order = "seq" if modern else "time_created, id"
             messages = []
             for row in db.execute(
-                f'SELECT * FROM "{message_table}" WHERE session_id = ? ORDER BY {order}',
+                f'SELECT {_columns(db, message_table)} FROM "{message_table}" '
+                f"WHERE session_id = ? ORDER BY {order}",
                 (session_id,),
             ):
                 data = json.loads(row["data"])
@@ -163,7 +175,10 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
             records = []
             # The active path keeps original pre-Compaction entries, but excludes
             # abandoned branches. Never replace missing cold payloads with a summary.
-            query = "SELECT event.* FROM transcript_events AS event "
+            query = (
+                f"SELECT {_columns(db, 'transcript_events', alias='event')} "
+                "FROM transcript_events AS event "
+            )
             if "session_transcript_active_events" in names:
                 query += (
                     "JOIN session_transcript_active_events AS active ON "
@@ -220,7 +235,9 @@ def _hermes_display_rows(db: sqlite3.Connection, info: dict[str, Any]) -> list[d
         in [config.get(key) for key in ("_branched_from", "_delegate_from", "_reset_from")]
     )
     if parent_id and not explicit_child:
-        parent = db.execute("SELECT * FROM sessions WHERE id = ?", (parent_id,)).fetchone()
+        parent = db.execute(
+            f"SELECT {_columns(db, 'sessions')} FROM sessions WHERE id = ?", (parent_id,)
+        ).fetchone()
         # Cross-segment compression also has copied tails, summary carriers and
         # withdrawal identities. A raw parent walk cannot reconstruct that display.
         if (
@@ -235,7 +252,8 @@ def _hermes_display_rows(db: sqlite3.Connection, info: dict[str, Any]) -> list[d
     rows = [
         dict(row)
         for row in db.execute(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY id", (info["id"],)
+            f"SELECT {_columns(db, 'messages')} FROM messages WHERE session_id = ? ORDER BY id",
+            (info["id"],),
         )
     ]
     visible = []

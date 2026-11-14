@@ -153,6 +153,11 @@ def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: 
             )
             db.execute("INSERT INTO sessions VALUES ('s', NULL, 'title')")
             db.execute("INSERT INTO messages VALUES (1, 's', 'user', 'hello', ?)", (b"\xff\x00",))
+            db.execute('ALTER TABLE messages ADD COLUMN "source""extra" TEXT DEFAULT \'kept\'')
+            db.execute(
+                "ALTER TABLE messages ADD COLUMN derived TEXT "
+                "GENERATED ALWAYS AS (content || '!') VIRTUAL"
+            )
         elif source == "opencode":
             db.executescript(
                 "CREATE TABLE session_v2 (id TEXT, title TEXT); "
@@ -181,7 +186,11 @@ def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: 
     before = path.read_bytes()
     reader = ExternalHistory()
     assert reader.list(source, path=str(path))["items"][0]["id"] == "s"
-    assert reader.read(source, "s", path=str(path)).entries[0].content == "hello"
+    entry = reader.read(source, "s", path=str(path)).entries[0]
+    assert entry.content == "hello"
+    if source == "hermes":
+        assert entry.raw['source"extra'] == "kept"
+        assert entry.raw["derived"] == "hello!"
     assert path.read_bytes() == before
 
 
