@@ -6,11 +6,9 @@ import logging
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from desktop import _windows, restart
-from desktop.settings import read_window_size
 
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
@@ -80,41 +78,53 @@ def current_page_url(window_holder: list[Any]) -> str | None:
 class WindowState:
     """Track whether the Desktop window is minimized or maximized.
 
-    pywebview reports these only as events. The state brings a minimized,
-    formerly maximized window back maximized (``restore`` always returns to the
-    normal size) and describes the window for a restart.
+    Events bring a minimized, formerly maximized window back maximized
+    (``restore`` always returns to the normal size). Placement snapshots for
+    close and restart prefer the native state and normal restore bounds.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._minimized = False
         self._maximized = False
+        self._normal_size = (1280, 800)
 
-    def track(self, window: Any, initial: str = "normal") -> None:
+    def track(self, window: Any, initial: str = "normal", *, size: tuple[int, int]) -> None:
         with self._lock:
             self._minimized = initial == "minimized"
             self._maximized = initial == "maximized"
+            self._normal_size = size
         window.events.minimized += self._on_minimized
         window.events.maximized += self._on_maximized
         window.events.restored += self._on_restored
+        window.events.resized += self._on_resized
 
     def flags(self) -> tuple[bool, bool]:
         """Return ``(minimized, maximized)``."""
         with self._lock:
             return self._minimized, self._maximized
 
-    def placement(self, window: Any, settings_file: Path | None) -> restart.WindowPlacement:
-        """Describe the window for its restart successor (logical pixels)."""
-        minimized, maximized = self.flags()
+    def placement(self, window: Any) -> restart.WindowPlacement:
+        """Describe the current window with its normal size (logical pixels)."""
+        native = _windows.window_placement(window)
+        if native is not None:
+            return native
+        with self._lock:
+            minimized, maximized = self._minimized, self._maximized
+            width, height = self._normal_size
         if minimized or maximized:
-            # Such a window reports no useful normal size or position; the
-            # successor uses the remembered size and centers.
-            width, height = read_window_size(settings_file) or (window.width, window.height)
+            # Other backends retain the latest normal resize in this lifetime,
+            # never a previous launch's settings or a minimized rectangle.
             state: restart.WindowState = "minimized" if minimized else "maximized"
-            return restart.WindowPlacement(state, int(width), int(height))
+            return restart.WindowPlacement(state, width, height)
         return restart.WindowPlacement(
             "normal", int(window.width), int(window.height), int(window.x), int(window.y)
         )
+
+    def _on_resized(self, width: int, height: int) -> None:
+        with self._lock:
+            if not self._minimized and not self._maximized and width > 0 and height > 0:
+                self._normal_size = (width, height)
 
     def _on_minimized(self) -> None:
         with self._lock:

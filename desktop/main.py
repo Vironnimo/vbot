@@ -321,9 +321,7 @@ def _run_desktop(
             page=page_events,
             active_server=controller.active_target,
             location=lambda: desktop_window.page_location(window_holder, controller),
-            placement=lambda: (
-                window_state.placement(window_holder[0], settings_file) if window_holder else None
-            ),
+            placement=lambda: window_state.placement(window_holder[0]) if window_holder else None,
             shell_busy=lambda: voice.is_busy() or dictation.is_busy(),
             close_window=lambda: window_holder[0].destroy(),
             automatic_hold=lambda: computer_sharing.active_terminals > 0,
@@ -407,7 +405,11 @@ def _run_desktop(
         **placement_kwargs,
     )
     window_holder.append(window)
-    window_state.track(window, placement.state if placement is not None else "normal")
+    window_state.track(
+        window,
+        placement.state if placement is not None else "normal",
+        size=(window_layout.width, window_layout.height),
+    )
     _windows.bind_window_dpi(window, (window_layout.minimum_width, window_layout.minimum_height))
     _windows.allow_server_microphone(
         window, lambda: _windows.url_origin(controller.active_server_url())
@@ -480,7 +482,8 @@ def _run_desktop(
         # Save only size, not position: OS centering keeps the window reachable
         # after a monitor is disconnected or the display layout changes.
         try:
-            write_window_size(window.width, window.height, settings_file)
+            placement = window_state.placement(window)
+            write_window_size(placement.width, placement.height, settings_file)
         except AttributeError, OSError, RuntimeError, ValueError:
             logger.warning("Desktop window size could not be persisted", exc_info=True)
 

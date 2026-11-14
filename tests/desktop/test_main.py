@@ -183,6 +183,8 @@ class FakeWindow:
         self.loaded_html: list[str] = []
         self.width = 1280
         self.height = 800
+        self.x = 40
+        self.y = 60
         self.events = FakeWindowEvents()
         self.focus_calls: list[str] = []
         self.current_url: str | None = None
@@ -213,15 +215,15 @@ class FakeEvent:
     """Small pywebview Event double supporting handler registration and emission."""
 
     def __init__(self) -> None:
-        self.handlers: list[Callable[[], Any]] = []
+        self.handlers: list[Callable[..., Any]] = []
 
-    def __iadd__(self, handler: Callable[[], Any]) -> FakeEvent:
+    def __iadd__(self, handler: Callable[..., Any]) -> FakeEvent:
         self.handlers.append(handler)
         return self
 
-    def emit(self) -> None:
+    def emit(self, *args: Any) -> None:
         for handler in self.handlers:
-            handler()
+            handler(*args)
 
 
 class FakeWindowEvents:
@@ -233,6 +235,7 @@ class FakeWindowEvents:
         self.minimized = FakeEvent()
         self.maximized = FakeEvent()
         self.restored = FakeEvent()
+        self.resized = FakeEvent()
 
 
 class FakeWebview:
@@ -671,15 +674,33 @@ def test_launch_creates_the_window_before_one_gui_loop(tmp_path: Path, icon_exis
     assert fake_webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] is True
 
 
-def test_launch_restores_and_persists_the_window_size(tmp_path: Path) -> None:
+@pytest.mark.parametrize("state", ["normal", "minimized", "maximized", "restored"])
+def test_launch_restores_and_persists_the_window_size(tmp_path: Path, state: str) -> None:
     fake_webview = _launch(tmp_path, settings={"window": {"width": 1400, "height": 900}})
     _, kwargs = fake_webview.created_windows[0]
     assert (kwargs["width"], kwargs["height"]) == (1400, 900)
 
     fake_webview.window.width, fake_webview.window.height = 1500, 920
+    fake_webview.window.events.resized.emit(1500, 920)
+    if state != "normal":
+        getattr(fake_webview.window.events, "maximized" if state == "restored" else state).emit()
+        if state == "restored":
+            fake_webview.window.events.restored.emit()
+        else:
+            # Windows reports a tiny minimized rectangle or the full display,
+            # neither of which may replace the last normal size.
+            fake_webview.window.width, fake_webview.window.height = (
+                (159, 27) if state == "minimized" else (1600, 1000)
+            )
+        fake_webview.window.events.resized.emit(
+            fake_webview.window.width, fake_webview.window.height
+        )
     fake_webview.window.events.closing.emit()
 
     assert _stored(tmp_path)["window"] == {"width": 1500, "height": 920}
+    reopened = _launch(tmp_path)
+    _, kwargs = reopened.created_windows[0]
+    assert (kwargs["width"], kwargs["height"]) == (1500, 920)
 
 
 def test_launch_connects_the_created_window_to_the_saved_server_once_shown(
@@ -1169,18 +1190,20 @@ def test_a_running_desktop_on_its_connection_screen_opens_no_session(
 
 
 @pytest.mark.parametrize("packaged", [True, False], ids=["packaged", "development"])
+@pytest.mark.parametrize("state", ["normal", "minimized", "maximized"])
 def test_a_restart_successor_restores_the_window_its_predecessor_showed(
     tmp_path: Path,
     launch_seams: LaunchSeams,
     monkeypatch: pytest.MonkeyPatch,
     packaged: bool,
+    state: desktop_restart.WindowState,
 ) -> None:
     nonce = "a" * 32
     request = desktop_restart.RestartRequest(
         nonce=nonce,
         server=("nas.lan", 8420),
         location="#settings/desktop",
-        placement=desktop_restart.WindowPlacement("normal", 1200, 700, 40, 60),
+        placement=desktop_restart.WindowPlacement(state, 1200, 700, 40, 60),
     )
     desktop_restart.write_restart_request(tmp_path, request, created_at=time.time())
     if packaged:
@@ -1210,8 +1233,18 @@ def test_a_restart_successor_restores_the_window_its_predecessor_showed(
         return
     assert launch_seams.handoffs == [nonce]
     assert fake_webview.window.loaded_urls == [f"{_webui_url('nas.lan', 8420)}#settings/desktop"]
-    assert (kwargs["width"], kwargs["height"], kwargs["x"], kwargs["y"]) == (1200, 700, 40, 60)
-    assert (kwargs["minimized"], kwargs["maximized"]) == (False, False)
+    assert (kwargs["width"], kwargs["height"]) == (1200, 700)
+    if state == "normal":
+        assert (kwargs["x"], kwargs["y"]) == (40, 60)
+    assert (kwargs["minimized"], kwargs["maximized"]) == (
+        state == "minimized",
+        state == "maximized",
+    )
+    # Closing a successor before it is restored must still keep its handed-over size.
+    if state != "normal":
+        fake_webview.window.width, fake_webview.window.height = 159, 27
+    fake_webview.window.events.closing.emit()
+    assert _stored(tmp_path)["window"] == {"width": 1200, "height": 700}
     # A later successor's handoff goes to the restart, never to the focus.
     instance = launch_seams.instance
     assert instance is not None and instance.on_activate is not None

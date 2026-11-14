@@ -30,6 +30,8 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from desktop.restart import WindowPlacement
+
 logger = logging.getLogger("vbot.desktop")
 
 WEBVIEW2_BROWSER_ARGUMENTS_ENV = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
@@ -194,6 +196,45 @@ def bind_window_dpi(window: Any, minimum_size: tuple[int, int]) -> None:
         window.native.DpiChanged += dpi_changed
 
     window.events.before_show += before_show
+
+
+def window_placement(window: Any) -> WindowPlacement | None:
+    """Read one consistent WinForms placement, including its normal restore size.
+
+    A minimized Form's Size is its tiny taskbar rectangle, and a maximized
+    Form's Size is the monitor size. Neither describes the user's normal
+    window. Read RestoreBounds and DPI together on the GUI thread, without
+    depending on pywebview's asynchronously delivered state events.
+    """
+    if sys.platform != "win32":
+        return None
+    native = getattr(window, "native", None)
+    if native is None:
+        return None
+    placement: WindowPlacement | None = None
+
+    def read() -> None:
+        nonlocal placement
+        state = str(native.WindowState)
+        scale = native.DeviceDpi / 96.0
+        bounds = native.Bounds if state == "Normal" else native.RestoreBounds
+        width, height = round(bounds.Width / scale), round(bounds.Height / scale)
+        if state == "Normal":
+            placement = WindowPlacement(
+                "normal", width, height, round(bounds.X / scale), round(bounds.Y / scale)
+            )
+        else:
+            placement = WindowPlacement(
+                "minimized" if state == "Minimized" else "maximized", width, height
+            )
+
+    if native.InvokeRequired:
+        system = importlib.import_module("System")
+        native.Invoke(system.Action(read))
+    else:
+        # The closing callback already runs on the GUI thread.
+        read()
+    return placement
 
 
 # -- Single instance ----------------------------------------------------------

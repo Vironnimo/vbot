@@ -20,7 +20,7 @@ Windows only, `desktop/_windows.py`: before creating a window, `launch_desktop` 
 
 ## Window sizing
 
-First-run window at roughly 80% of the primary display capped at 1440x960 logical pixels (1280x800 if discovery fails), resize floor 800x600. Normal close persists width/height only (`window: {width, height}` in `<config-dir>/settings.json`); startup restores clamped to the current primary display's work area. The primary screen is the one containing origin (0,0) - never assume `screens[0]` - and is passed via pywebview's `screen=` parameter for correct centering and DPI conversion. Position is deliberately not persisted so OS centering keeps the window reachable after monitor changes.
+First-run window at roughly 80% of the primary display capped at 1440x960 logical pixels (1280x800 if discovery fails), resize floor 800x600. Close persists the normal window's width/height only (`window: {width, height}` in `<config-dir>/settings.json`), also when minimized or maximized; startup restores clamped to the current primary display's work area. Close and update restart use the same `WindowState.placement` snapshot. Windows reads WinForms bounds, state and DPI together on the GUI thread, using `RestoreBounds` outside the normal state: a minimized window's tiny current rectangle and the maximized display size must never replace the user's normal size. Other backends remember normal resize events in memory, seeded from the actual launch size. The primary screen is the one containing origin (0,0) - never assume `screens[0]` - and is passed via pywebview's `screen=` parameter for correct centering and DPI conversion. Position is deliberately not persisted so OS centering keeps the window reachable after monitor changes.
 
 ## Window zoom
 

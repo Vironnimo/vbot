@@ -34,7 +34,7 @@ The old window closes only after step 4. Without the signal within `HANDOFF_TIME
 
 - **Server:** `ConnectionController.active_target()` (the last prepared connect). The connection screen restores as the saved-server default.
 - **Location:** the page URL fragment (`get_current_url()`, only when it belongs to the active server), printable, whitespace-free, at most 2048 characters, starting with `#`. The WebUI owns what a fragment means.
-- **Placement:** logical size and position for a normal window; a minimized or maximized window records only its state and the remembered normal size (its reported position is meaningless, e.g. Windows' -32000), and the successor centers it and opens it in that state. Positions outside -20000..100000 are dropped. The placement is not persisted to `settings.json`; the normal close still stores the size.
+- **Placement:** logical size and position for a normal window; a minimized or maximized window records only its state and its current normal restore size (its reported position is meaningless, e.g. Windows' -32000), and the successor centers it and opens it in that state. `WindowState.placement` reads the current window, never a previous launch's saved size (`desktop/window.md` -> Window sizing). Positions outside -20000..100000 are dropped. The placement is not persisted to `settings.json`; close stores only the normal size.
 
 ## Gotchas
 

@@ -29,6 +29,7 @@ def test_other_platforms_do_not_load_windows_dependencies(monkeypatch, platform)
     _windows.bind_window_dpi(object(), (800, 600))
     assert _windows.bind_window_zoom(object(), lambda: 1.0) is None
     assert _windows.primary_scale() == 1.0
+    assert _windows.window_placement(object()) is None
     importer.assert_not_called()
 
 
@@ -161,6 +162,71 @@ def test_monitor_changes_preserve_logical_resize_floor_after_framework_layout(mo
     native.MinimumSize = Size(0, 0)
     pending.pop()()
     assert native.MinimumSize == Size(0, 0)
+
+
+@pytest.mark.parametrize(
+    ("state", "dpi", "invoke"),
+    [
+        ("Normal", 96, False),
+        ("Normal", 120, True),
+        ("Minimized", 120, True),
+        ("Maximized", 192, False),
+    ],
+)
+def test_window_placement_reads_normal_bounds_and_dpi_on_the_gui_thread(
+    monkeypatch, state, dpi, invoke
+):
+    from desktop.restart import WindowPlacement
+    from desktop.window import WindowState
+
+    monkeypatch.setattr(_windows.sys, "platform", "win32")
+    monkeypatch.setattr(
+        _windows.importlib, "import_module", lambda _: SimpleNamespace(Action=lambda read: read)
+    )
+    scale = dpi / 96
+    normal = SimpleNamespace(X=50 * scale, Y=60 * scale, Width=1500 * scale, Height=920 * scale)
+    other = SimpleNamespace(X=-32000, Y=-32000, Width=159, Height=27)
+    on_gui = not invoke
+
+    class Native:
+        InvokeRequired = invoke
+
+        @property
+        def WindowState(self):  # noqa: N802 - WinForms property
+            assert on_gui
+            return state
+
+        @property
+        def DeviceDpi(self):  # noqa: N802 - WinForms property
+            assert on_gui
+            return dpi
+
+        @property
+        def Bounds(self):  # noqa: N802 - WinForms property
+            assert on_gui
+            return normal if state == "Normal" else other
+
+        @property
+        def RestoreBounds(self):  # noqa: N802 - WinForms property
+            assert on_gui
+            return normal
+
+        def Invoke(self, read):  # noqa: N802 - WinForms method
+            nonlocal on_gui
+            on_gui = True
+            read()
+            on_gui = False
+
+    window = SimpleNamespace(native=Native())
+    # No pywebview state event has arrived. The native snapshot is authoritative.
+    placement = WindowState().placement(window)
+    assert placement == WindowPlacement(
+        state.lower(),
+        1500,
+        920,
+        50 if state == "Normal" else None,
+        60 if state == "Normal" else None,
+    )
 
 
 # -- Single instance -----------------------------------------------------------
