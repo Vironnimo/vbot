@@ -105,6 +105,9 @@ class ExtensionHost:
     input_authority: (
         Callable[[ToolContext], Awaitable[Literal["user", "authorized_task", "none"]]] | None
     ) = None
+    # API v28 owner-bound hosts: this Extension's triggers, Cron jobs whose fires
+    # call it (``core/runtime/_extension_triggers.py``); ``None`` without Cron.
+    triggers: Any | None = None
 
 
 @dataclass(frozen=True)

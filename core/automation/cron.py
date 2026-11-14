@@ -23,7 +23,12 @@ from core.automation._cron_delivery import (
     check_email_channel,
 )
 from core.automation._cron_email import CronEmails
-from core.automation._cron_execution import CronExecution, _missing_session_text
+from core.automation._cron_execution import (
+    CronExecution,
+    CronFire,
+    OwnerFireHandler,
+    _missing_session_text,
+)
 from core.automation._cron_inbox import CronInbox, InboxCounts
 from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
@@ -38,6 +43,7 @@ from core.automation._cron_jobs import (
     MAX_PROJECTED_OCCURRENCES_PER_JOB,
     MAX_STORED_CRON_JOBS,
     MIN_INTERVAL_SECONDS,
+    OWNED_SCHEDULE_TYPES,
     TERMINAL_CRON_JOB_STATUSES,
     CronDelivery,
     CronEmailTrigger,
@@ -47,6 +53,7 @@ from core.automation._cron_jobs import (
     CronJobStatus,
     CronJobValidationError,
     CronOccurrence,
+    CronOwner,
     CronResult,
     CronRunOutcome,
     CronServiceError,
@@ -140,6 +147,8 @@ __all__ = [
     "CronOccurrence",
     "CronResult",
     "CronRunOutcome",
+    "CronFire",
+    "CronOwner",
     "CronServiceError",
     "CronStorageError",
     "CronTargetAgentNotFoundError",
@@ -157,6 +166,7 @@ __all__ = [
     "MAX_PROJECTED_OCCURRENCES_PER_JOB",
     "MAX_STORED_CRON_JOBS",
     "MIN_INTERVAL_SECONDS",
+    "OwnerFireHandler",
     "ParsedSchedule",
     "ScheduleType",
     "TERMINAL_CRON_JOB_STATUSES",
@@ -264,6 +274,8 @@ class CronService:
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
         self._changed_callbacks: set[Callable[[], None]] = set()
         self._failure_alert_callbacks: set[Callable[[CronFailureAlert], None]] = set()
+        # The fire handlers of the Extensions that own jobs, by Extension name.
+        self._owner_handlers: dict[str, OwnerFireHandler] = {}
         self._timezone = _resolve_timezone(tz)
         self._timezone_changed = asyncio.Event()
         # Replaced and set on every calendar change: event jobs recompute their occurrences.
@@ -322,14 +334,15 @@ class CronService:
             return None
         return self._webhooks.status(job)
 
-    async def webhook_secret(self, job_id: str) -> str:
+    async def webhook_secret(self, job_id: str, *, owner: str | None = None) -> str:
         """The secret a webhook job's requests prove.
 
         Raises ``CronJobNotFoundError``, ``CronJobValidationError`` for a job
         without a webhook schedule, and ``CronStorageError`` when the secret
         cannot be read or none is stored (rotating creates a new one).
+        ``owner`` names the Extension whose job it is; None for the user's jobs.
         """
-        self._webhook_job(job_id)
+        self._webhook_job(job_id, owner=owner)
         secret = await self._webhooks.secret(job_id)
         if secret is None:
             raise CronStorageError(
@@ -337,10 +350,12 @@ class CronService:
             )
         return secret
 
-    async def rotate_webhook_secret(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> str:
+    async def rotate_webhook_secret(
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, owner: str | None = None
+    ) -> str:
         """Replace a webhook job's secret; requests proving the old one are refused from now on."""
         async with self._edits:
-            self._webhook_job(job_id)
+            self._webhook_job(job_id, owner=owner)
             secret = await settle_before_cancelling(self._webhooks.issue_secret(job_id))
         _LOGGER.info("Cron webhook secret rotated (job=%s actor=%s)", job_id, actor)
         return secret
@@ -383,11 +398,9 @@ class CronService:
         """Where the webhook requests or mails of a job that runs on arrivals wait."""
         return self._emails if job.schedule_type == "email" else self._webhooks
 
-    def _webhook_job(self, job_id: str) -> CronJob:
+    def _webhook_job(self, job_id: str, *, owner: str | None = None) -> CronJob:
         self._ensure_jobs_loaded()
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+        job = self._owned_job(job_id, owner)
         if job.schedule_type != "webhook":
             raise CronJobValidationError(
                 f"Cron job {job_id} has no webhook: its schedule is not 'webhook'"
@@ -448,6 +461,7 @@ class CronService:
         email: CronEmailTrigger | None = None,
         permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
+        owner: CronOwner | None = None,
     ) -> CronJob:
         """Create and persist a new cron job.
 
@@ -463,6 +477,10 @@ class CronService:
         ``permission_ceiling`` is the creating Session's boundary
         (``PermissionBoundary.to_ceiling_dict(source="cron")``); every fire
         runs under it.
+
+        With ``owner`` the job belongs to an Extension (use
+        :meth:`create_owned_job`): it has no Agent or prompt, and its fires
+        call that Extension's fire handler instead of starting a Run.
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -502,6 +520,7 @@ class CronService:
                 watch=watch,
                 email=email,
                 permission_ceiling=permission_ceiling,
+                owner=owner,
             )
             self._validate_job(job, validate_references=False)
             self._check_watch_available(job)
@@ -513,7 +532,7 @@ class CronService:
             )
             self._reject_past_once_run(job)
             self._validate_capacity(job)
-            if actor == "rpc":
+            if actor == "rpc" and owner is None:
                 job.operator_approval = job.approval_scope()
             self._jobs[job.id] = job
 
@@ -538,9 +557,9 @@ class CronService:
             await settle_before_cancelling(save())
 
         _LOGGER.info(
-            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s%s)",
+            "Cron job created (job=%s %s%s schedule_type=%s status=%s actor=%s%s)",
             job.id,
-            job.agent_id,
+            f"agent={job.agent_id}" if owner is None else f"extension={owner.extension}",
             f" project={job.project_id}" if job.project_id else "",
             job.schedule_type,
             job.status,
@@ -549,8 +568,12 @@ class CronService:
         )
         return self._clone_job(job)
 
-    def list_jobs(self, *, event_id: str | None = None) -> list[CronJob]:
-        """List persisted cron jobs in created order; with ``event_id``, that event's jobs."""
+    def list_jobs(self, *, event_id: str | None = None, owner: str | None = None) -> list[CronJob]:
+        """List persisted cron jobs in created order; with ``event_id``, that event's jobs.
+
+        Without ``owner`` these are the user's jobs; with it, the jobs of that
+        Extension. Neither sees the other's.
+        """
         self._ensure_jobs_loaded(allow_degraded=True)
         if event_id is not None:
             self._event_binding._require_event(event_id)
@@ -558,15 +581,117 @@ class CronService:
         return [
             self._clone_job(job)
             for job in ordered
-            if event_id is None or (job.schedule_type == "event" and job.event_id == event_id)
+            if _owner_name(job) == owner
+            and (event_id is None or (job.schedule_type == "event" and job.event_id == event_id))
         ]
 
-    def get_job(self, job_id: str) -> CronJob:
-        """Get one cron job by id."""
+    def get_job(self, job_id: str, *, owner: str | None = None) -> CronJob:
+        """Get one cron job by id; ``owner`` names the Extension whose job it is."""
         self._ensure_jobs_loaded()
-        if job_id not in self._jobs:
+        return self._clone_job(self._owned_job(job_id, owner))
+
+    def list_all_owned_jobs(self) -> list[CronJob]:
+        """Every Extension's jobs, for cleaning up after removed Extensions."""
+        self._ensure_jobs_loaded(allow_degraded=True)
+        return [self._clone_job(job) for job in self._jobs.values() if job.owner is not None]
+
+    def _owned_job(self, job_id: str, owner: str | None) -> CronJob:
+        """The live job ``job_id`` when it belongs to ``owner`` (None: the user)."""
+        job = self._jobs.get(job_id)
+        if job is None or _owner_name(job) != owner:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
-        return self._clone_job(self._jobs[job_id])
+        return job
+
+    async def create_owned_job(
+        self,
+        owner: CronOwner,
+        *,
+        name: str,
+        schedule: str,
+        status: CronJobStatus = "active",
+        remaining_runs: int | None = None,
+    ) -> CronJob:
+        """Create a job that belongs to an Extension: a trigger with a name and a schedule.
+
+        ``schedule`` uses the schedule language of :meth:`parse_schedule`: a
+        five-field cron expression, ``every <duration>``, ``in <duration>``, an
+        ISO instant, or ``webhook``. Each fire calls the Extension's handler
+        (:meth:`set_owner_handler`) with a :class:`CronFire`.
+        """
+        parsed = self._owned_schedule(schedule)
+        return await self.create_job(
+            agent_id="",
+            name=name,
+            prompt="",
+            status=status,
+            remaining_runs=remaining_runs,
+            owner=owner,
+            actor=f"extension:{owner.extension}",
+            **parsed.as_job_fields(),  # type: ignore[arg-type]
+        )
+
+    async def update_owned_job(
+        self,
+        owner: str,
+        job_id: str,
+        *,
+        name: str | None = None,
+        schedule: str | None = None,
+        status: CronJobStatus | None = None,
+    ) -> CronJob:
+        """Change an Extension's trigger: its name, schedule or status (active or paused)."""
+        self._ensure_jobs_loaded()
+        current = self._owned_job(job_id, owner)
+        fields: dict[str, Any] = {}
+        if name is not None:
+            fields["name"] = name
+        if schedule is not None:
+            parsed = self._owned_schedule(schedule)
+            if parsed.schedule_type != current.schedule_type or (
+                _schedule.format_schedule(current) != schedule.strip()
+            ):
+                fields.update(parsed.as_job_fields())
+        if status is not None:
+            if status not in {"active", "paused"}:
+                raise CronJobValidationError("status must be active or paused")
+            if status != current.status:
+                if current.status in {"completed", "missed"}:
+                    raise CronJobValidationError("A finished trigger cannot be enabled or paused")
+                fields["status"] = status
+        return await self.update_job(job_id, owner=owner, actor=f"extension:{owner}", **fields)
+
+    def _owned_schedule(self, schedule: str) -> ParsedSchedule:
+        parsed = self.parse_schedule(schedule)
+        if parsed.schedule_type not in OWNED_SCHEDULE_TYPES:
+            raise CronJobValidationError(
+                "a trigger runs on a cron expression, every <duration>, in <duration>, "
+                "an ISO instant or webhook"
+            )
+        return parsed
+
+    def set_owner_handler(self, extension: str, handler: OwnerFireHandler | None) -> None:
+        """Set or clear the handler an Extension's job fires call.
+
+        While an Extension has no handler, its jobs' fires fail without counting
+        toward the failure stop and webhook requests keep waiting; setting a
+        handler starts the waiting requests at once.
+        """
+        if handler is None:
+            self._owner_handlers.pop(extension, None)
+            return
+        self._owner_handlers[extension] = handler
+        if not self._started:
+            return
+        for job in tuple(self._jobs.values()):
+            if (
+                _owner_name(job) == extension
+                and job.status == "active"
+                and job.schedule_type == "webhook"
+            ):
+                self._scheduler._restart_job_task(job)
+
+    def _owner_handler(self, job: CronJob) -> OwnerFireHandler | None:
+        return None if job.owner is None else self._owner_handlers.get(job.owner.extension)
 
     def system_timezone_name(self) -> str:
         """Return the configured canonical IANA timezone name."""
@@ -664,6 +789,8 @@ class CronService:
         Identity Session does, independently of its Agent's current default.
         The caller runs these Session reads on the Session database's pool.
         """
+        if job.owner is not None:
+            return False
         if job.project_id is not None:
             return job.project_id == project_id
         if job.session_id is not None and self._sessions is not None:
@@ -684,7 +811,7 @@ class CronService:
     def projection(self) -> CronProjection:
         """Detach scheduled jobs and their bound event records from the live owner."""
         self._ensure_jobs_loaded(allow_degraded=True)
-        jobs = tuple(self._clone_job(job) for job in self._jobs.values())
+        jobs = tuple(self._clone_job(job) for job in self._jobs.values() if job.owner is None)
         events = [
             event for job in jobs if (event := self._event_binding._bound_event(job)) is not None
         ]
@@ -713,9 +840,16 @@ class CronService:
         )
 
     async def update_job(
-        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, owner: str | None = None, **fields: Any
     ) -> CronJob:
-        """Update mutable cron job fields and persist changes."""
+        """Update mutable cron job fields and persist changes.
+
+        ``owner`` names the Extension whose job it is; None for the user's jobs.
+        """
+        self._ensure_jobs_loaded()
+        if self._owned_job(job_id, owner).owner is not None and set(fields) - _OWNED_MUTABLE_FIELDS:
+            joined = ", ".join(sorted(set(fields) - _OWNED_MUTABLE_FIELDS))
+            raise CronJobValidationError(f"An Extension's trigger cannot change: {joined}")
         _job, updated, changed_fields = await self._edit(job_id, fields, actor=actor)
         if set(changed_fields) - {"operator_approval"} == {"status"} and updated.status in {
             "active",
@@ -1245,12 +1379,16 @@ class CronService:
         """Retry retained notifications, including an explicitly checked uncertain send."""
         return await self._notifications.retry(job_id, delivery)
 
-    async def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
-        """Delete one cron job and cancel any active task."""
+    async def delete_job(
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, owner: str | None = None
+    ) -> None:
+        """Delete one cron job and cancel any active task.
+
+        ``owner`` names the Extension whose job it is; None for the user's jobs.
+        """
         async with self._edits:
             self._ensure_jobs_loaded()
-            if job_id not in self._jobs:
-                raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+            self._owned_job(job_id, owner)
 
             removed = self._jobs.pop(job_id)
             # A fire in flight withdraws at once; the claim removal follows the save.
@@ -1278,21 +1416,17 @@ class CronService:
         _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
 
     async def enable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
-        """Set a cron job status to active."""
+        """Set one of the user's cron jobs active."""
         self._ensure_jobs_loaded()
-        existing = self._jobs.get(job_id)
-        if existing is None:
-            raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+        existing = self._owned_job(job_id, None)
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be re-enabled")
         return await self.update_job(job_id, status="active", actor=actor)
 
     async def disable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
-        """Set a cron job status to paused."""
+        """Pause one of the user's cron jobs."""
         self._ensure_jobs_loaded()
-        existing = self._jobs.get(job_id)
-        if existing is None:
-            raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+        existing = self._owned_job(job_id, None)
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be paused")
         return await self.update_job(job_id, status="paused", actor=actor)
@@ -1475,6 +1609,8 @@ class CronService:
 
     def _missing_target(self, job: CronJob) -> str | None:
         """Say which part of the job's target no longer exists, if one does; blocking."""
+        if job.owner is not None:
+            return None
         target = format_agent_address(job.agent_id, job.project_id)
         if self._agent_resolver is not None:
             agent = None
@@ -1555,6 +1691,8 @@ class CronService:
 
     def _validate_references(self, job: CronJob, *, snapshot_new: bool = False) -> None:
         """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""
+        if job.owner is not None:
+            return
         if self._agent_resolver is not None:
             try:
                 kwargs: dict[str, Any] = {}
@@ -1686,3 +1824,25 @@ def _new_check(before: CronJob, after: CronJob, *, rename: bool = False) -> bool
             for name in ("agent_id", "project_id", "working_project_id", "session_id")
         )
     )
+
+
+#: What an Extension's trigger can change after it was created.
+_OWNED_MUTABLE_FIELDS = frozenset(
+    (
+        "name",
+        "status",
+        "remaining_runs",
+        "schedule_type",
+        "cron_expression",
+        "interval_seconds",
+        "interval_anchor_at",
+        "run_at",
+        "event_id",
+        "event_edge",
+        "event_offset_minutes",
+    )
+)
+
+
+def _owner_name(job: CronJob) -> str | None:
+    return None if job.owner is None else job.owner.extension
