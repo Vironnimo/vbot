@@ -1,6 +1,6 @@
 # Factory Agent-facing text
 
-The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`; the task texts of the bundled Workflow templates live in `resources/extensions/factory/_workflows.py`; the usage section lives in `resources/skills/vbot-docs/references/extension-usage.md`. These are preventive reasons unless a concrete evaluation is named. Contracts and owners: `extensions/factory.md`.
+The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`; the task texts of the bundled Workflow templates live in `resources/extensions/factory/_workflows.py`; the management operation descriptions live in `resources/extensions/factory/_values.py`; the usage section lives in `resources/skills/vbot-docs/references/extension-usage.md`. These are preventive reasons unless a concrete evaluation is named. Contracts and owners: `extensions/factory.md`.
 
 ## Participant instructions and input
 
@@ -14,8 +14,9 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | `When the result of step ... needs changes, call factory_request_changes with concrete findings instead of factory_submit_work.` | Only for steps with a send-back target. Names the step the findings go to, so a reviewer of a three-step chain does not send a merge result back to a draft step. |
 | `Check whether findings you or earlier runs of your step sent back were addressed.` | Each run of a send-back step is a fresh participant that sees earlier findings only as data; this connects them to its verdict. |
 | `Your task:` followed by the step's task | The Workflow author's task is the participant's real assignment; it comes after the Factory's rules so the hand-in and base-branch rules still frame it. |
-| `Do step ... (n of m) of the Factory workflow ... for this Card.` | Names the participant's place in the Workflow so it knows what came before and that later steps build on its result. |
+| `Do step ... of the Factory workflow ... for this Card.` | Names the participant's step and Workflow. Steps form a graph with parallel branches (user decision 2026-11-14), so a position such as "2 of 3" would mislead; the results of earlier steps show what came before. |
 | `Card (data)`, `User comments (data)`, `Results of earlier steps (data)`, `Findings your step sent back earlier (data)` | Separates authored instructions from untrusted Card and result text; JSON escapes angle brackets so content cannot close a reminder wrapper. Recorded results of earlier steps are the only way a later step receives a plan, drafts or the branch an implementation named. |
+| `Event that created the Card (data)` | Only on Cards a trigger created. The event (a schedule fire or a webhook delivery such as a GitHub push) is the Card's real input; without it a push review would not know which commits to read. Shown as data because a webhook body comes from outside. |
 | `branch` in a result of an earlier step | Only in hand-ins recorded before the Factory stopped handling Git; without it an Integrate step for such a Card would not know which branch to land. |
 
 ## Continuations
@@ -38,9 +39,9 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | `Create proposed work and read Cards on the Software Factory Board.` | Distinguishes handing work to the Factory from doing it in the calling Session. |
 | `Work starts automatically for the user's requests and authorized automations; your own ideas wait for the user's approval.` | The Agent must know the side effect before create; no opt-in is added because the origin gate contains autonomous proposals. |
 | `Create proposed work and read Software Factory Cards.` | On-demand summary lets an Agent find the capability without loading the participant Tools. |
-| `project`: `Required for create: a Project id with an enabled Factory setup.` / `Omit for list to include every Project.` | A path or display name is not Project identity and cannot select an arbitrary execution folder; the omission rule avoids inventing a filter. |
+| `project`: `For create: the Project id the work belongs to. Omit when the work needs no Project or the workflow always uses its own.` / `For list: omit to include every Project.` | User decision 2026-11-14: Workflows are global and the Project is optional. A path or display name is not Project identity and cannot select an arbitrary execution folder; the omit rules keep an Agent from inventing a Project for work that needs none or whose Workflow fixes one. |
 | `title`: `Required for create.` / `description`: `Required for create: the user's objective and acceptance criteria, without extra requirements.` | Conditional fields cannot be root-required with list/get. In the first real Factory eval, the creator added null/undefined handling absent from the request; the description must keep the user's scope. |
-| `workflow`: `For create: the name of one of the Project's Factory workflows, such as Plan or Implement.` / `Omit to use the Project's default workflow.` | A user who asks for "a plan" or "three drafts" picks a Workflow by its name; the default covers ordinary requests. |
+| `workflow`: `For create: the name of a Factory workflow, such as Plan or Implement.` / `Omit to use the first enabled workflow.` | A user who asks for "a plan" or "three drafts" picks a Workflow by its name; the default covers ordinary requests. |
 | `state`: `For list. Omit for every state.` | The enum carries its values; the text supplies only action scope and omission. |
 | `id`: `Required for get: the Card id from create or list.` | Prevents manufacturing a Card identity from the title. |
 | `Hand in your step's result and end this turn; the Factory starts the next step.` | The participant must stop after handing in; the next step can be another Agent or the user's approval. |
@@ -58,7 +59,9 @@ The Factory's runtime text lives in `resources/extensions/factory/agent_text.py`
 | Refusals name the actual state or field and the allowed next action; `Nothing was changed.` applies only to pre-effect refusals. `participant_required` and `stale_run` name the Card's current step. | A participant must repair the call or stop using obsolete authority, not bypass the Factory. |
 | `invalid_findings`: `... To hand in your assessment without sending work back, call factory_submit_work.` | A reviewer with no findings must not invent one to satisfy the Tool. |
 | `The outcome is not confirmed.` / `Read the Board with factory_card action list before repeating a create call.` / `Read this Card on the Board before repeating the hand-in.` | A publication failure can follow a durable change; reporting rollback would cause a duplicate Card or a replayed hand-in. |
-| `workflow_upgrade`: `This Card started under an earlier Factory version and cannot resume where it stopped.` / `Its results are kept: Accept continues with its next step or finishes it, and Send back reworks a step with your guidance.` | Shown to the user on Cards that ran under role- or stage-based Workflows; it explains why the Card waits and what each action does with the kept results. |
+| `workflow_upgrade`: `This step was in progress when the Factory was updated and cannot resume where it stopped.` / `The Card's results are kept: Retry runs the step again, and Send back reworks a step with your guidance.` | Shown to the user on a step that was running when the `global_workflows` migration moved its Card to the step graph; the participant's position cannot be carried over, so the text explains why the step waits and what each action does with the kept results. |
+| `child_discarded`: `Card ..., which this step started, was discarded. Retry starts a new one, or send this Card back with your guidance.` | A step that starts another Workflow waits for its child Card; when the user discards the child, the step says why it stopped and that Retry starts a new child instead of reviving the discarded one. |
+| `workflow_missing`: `Workflow ... no longer exists. Create it again or discard this Card; Retry starts the Card once the Workflow exists.` | Workflows are global and can be deleted while a queued Card names one; the Card cannot start, and the user needs both ways out. |
 
 Execution budget text (user correction 2026-11-08: participants need consumption and a next action, not directions to the Board UI):
 
@@ -71,7 +74,21 @@ Execution budget text (user correction 2026-11-08: participants need consumption
 | `This Tool call was not run: ...` / `The Factory paused the Card for the user.` | Refusal names the exhausted scope and cap (or unavailable consumption), confirms no effect, and identifies who can resume. It cannot send the participant to change Board settings or retry a call that the budget still blocks. |
 | `The Factory paused this Card because an execution limit was reached.` | Generic budget error states the actual stop reason when there is no Tool-result context; detailed consumption and recovery belong to Card detail. |
 | Usage reference: `Workflows and their Steps can independently limit...` through `...current execution.` | An Agent configuring Factory for the user needs the units, unlimited representation, scope/reset rules and revision-safe management operation; it must not change a Project default when asked to resume one Card. |
-| Management help: `Replace the Card or current Step execution limits...` / `Omit a scope...` / `Consumption is retained...` | Establishes replacement semantics, clearing syntax and the separate resume effect without guessing or losing existing scope settings. |
+| Management help: `Replace the Card or one step's execution limits of a waiting Card.` / `Omit a scope...` / `step_limits needs step.` / `Consumption is retained...` | Establishes replacement semantics, clearing syntax and the separate resume effect without guessing or losing existing scope settings. Parallel steps can wait at once, so a step limit names its step. |
+
+## Management operation descriptions
+
+`OPERATION_DESCRIPTIONS` in `_values.py` are the summaries an Agent reads in the management CLI's help.
+
+| Text | Reason |
+|---|---|
+| `card.create`: `Omit workflow for the first enabled Workflow; omit project_id for a Card without a Project, or when the Workflow fixes its Project.` | The same omit rules as the public Tool, so a script does not invent a Project. |
+| `card.accept` / `card.send_back` / `card.answer` / `card.retry`: `the step named in step (default: ...)` | Several steps can wait at once in a graph; each operation names its default so a call without `step` acts on the expected one. |
+| `card.accept`: `... overrule a step that kept sending work back, or accept a finished Card.` | Accept has three effects depending on what waits; the Agent must not expect it to start an unrelated step. |
+| `card.send_back`: `... the steps after it run again.` | The user can send work back to any step; later steps rerun, so their results do not survive. |
+| `workflow.save`: `Create a Workflow (omit expected_revision or use 0) or replace a saved one (its id and expected_revision). Triggers are created, changed or removed with it.` | A save replaces the whole Workflow with its triggers; without the revision rule an Agent overwrites concurrent page edits, and without the trigger sentence it looks for a separate trigger operation. |
+| `workflow.delete`: `... Refused while another Workflow starts it or Cards wait to start with it.` | Names the refusals so an Agent does not try to delete a Workflow that queued Cards or another Workflow depend on. |
+| `workflow.secret`: `Read a webhook trigger's secret for the sender's settings; rotate replaces it first.` | The secret is not part of `workflow.get`; an Agent setting up a GitHub webhook for the user needs this operation and must not rotate by accident. |
 
 ## Workflow task texts
 
@@ -85,32 +102,29 @@ These are the default `task` values of the bundled templates; the user can edit 
 | Review: `Hand in your assessment and what you would add or change as result, or request changes with concrete findings.` | Makes an approval useful to the user at the next approval step instead of a bare pass. |
 | Plan: `Write an implementation plan for the Card: the approach, the parts it changes, the risks and how to verify the result.` / `Investigate as needed, but do not change files or branches.` / `Hand in the complete plan as result.` | A plan step must not leave changes behind that no later step owns; later steps read only the recorded result. |
 | Merge plans: `Combine the draft plans into one plan.` / `Keep the strongest approach, take the good ideas of the others and resolve their contradictions.` | Independent drafts are only useful when the merge chooses and reconciles rather than concatenates. |
-| Document step converted from an older setup: `Do the work the Card asks for without changing files or branches and hand in the complete document as result.` | Older document stages had their boundary in Factory rules; the converted step carries it in its task. |
+| One Agent: `Do what the Card asks for and hand in the result.` | The one-step template for any task; the Card carries the assignment, so the task adds only the hand-in. |
+| Review pushes: `Review the commits of the push described in the event that created the Card, without changing files or branches: fetch and read them with git, but check out nothing.` / `Judge correctness, risks and whether the change follows the Project conventions.` / `Hand in your findings as result, most important first.` | The step of a webhook-triggered Workflow sees the push only in the event data; checking out the pushed branch would change the Project's working copy under the user. Ordered findings make the result usable without another prompt. |
 | Integrate: `Integrate the reviewed change into the base branch as the Project instructions describe, then clean up the worktree and branch it leaves behind.` | User decision 2026-11-07: integration is an ordinary step behind the user's approval, done the Project's way (merge, PR, rebase). Cleanup is part of it because nothing else removes the worktree. |
 | Integrate: `Name what landed in your summary.` | The Board shows the summary as the Card's final record; without it the user cannot see whether a merge commit or a PR resulted. |
+
+A triggered Card's default description, `Do what Workflow ... does for the event that created this Card.`, applies when the trigger has no task of its own; it points the participant at the event data instead of an empty objective.
 
 ## Usage reference
 
 | Text | Reason |
 |---|---|
 | `Software Factory runs work Cards through a Project's Workflows...` / `It is bundled as factory...` | Gives the purpose, installed identity and durable user inbox without implying the user supervises every turn. |
-| `In Setups, give a registered Project one or more Workflows...` / `A Workflow is a list of steps...` / `Steps run one at a time in list order. A step receives the results of the steps it comes after...` | User decision 2026-11-07: Factory work differs per Project and task, so an Agent configuring or explaining it must know steps, their start conditions, approval, send-back targets and both Agent sources. |
+| `A Workflow is global and can fix a Project...` / `Without one, each Card names its Project or has none, and then works in a folder of its own.` / `Start from templates such as One Agent, Review pushes, Implement, Plan or Plan from drafts.` | User decisions 2026-11-14: Workflows are global and the Project optional; an Agent configuring the Factory must know where a Card without a Project works and that Team steps need a Project. |
+| Step graph passages: parallel steps, approval, send-back targets and steps that start another Workflow | User decision 2026-11-14: steps form a graph; an Agent must know that steps run as soon as the steps they come after are done, and that a starting step waits for its child Card. |
+| `Triggers create Cards for a Workflow by themselves.` / `A schedule takes a cron expression such as ...` / `A webhook gets a URL and a secret; a GitHub webhook ... creates one Card per delivery ...` / `GitHub must reach the vBot address.` | User requirement 2026-11-14: event- and schedule-triggered Workflows. Gives the accepted schedule forms and the GitHub settings an Agent must tell the user; the reachability sentence prevents promising deliveries to a local-only instance. |
 | `The Factory does no Git...` | User decision 2026-11-07; prevents an Agent from expecting the Factory to verify or merge a branch, or a discarded Card to clean up its worktree. |
 | `Cards the user creates...queue automatically...own idea stays a Proposal...` | Makes the origin gate discoverable to an Agent using management or the public Tool. |
-| `A Card runs the Workflow chosen at creation...` | Tells an Agent how to start a plan-only or drafts Card instead of the default. |
+| `A Card runs the Workflow chosen at creation...` | Tells an Agent how to start a plan-only or drafts Card instead of the first enabled Workflow, and that trigger Cards queue like the user's own. |
 | `A step with a send-back target...` / `Its rounds limit...` | Explains automatic rework and its limit, so a configured limit is not mistaken for retroactive changes to running Cards. |
-| `Accept...Send back...Answer...Retry...Discard...` | Names the available actions without instructing an Agent to make a user's acceptance decision itself. |
+| `Each waiting step has its own actions: Accept...Answer...Retry...` / `Accept on the Card finishes it...` / `Send back...` / `Discard stops the Card and the Cards its steps wait for.` | Several steps can wait at once; names which action fits which waiting state and how far Discard reaches, without instructing an Agent to make a user's acceptance decision itself. |
 | `The Extension settings wip_limit...max_waiting...` | Explains idle queued work and why the review inbox does not occupy running slots. |
 | `Waiting Cards and Proposals produce...` | Both states need user attention and count toward the badge; the Board is the durable record, not the toast. |
 | `Permission requests stay in vBot's normal approval UI...` | Factory ownership is not permission to approve the participant's request or widen its rules. |
-| `Page actions and scripts share management operations` and CLI examples / `Use Card and Project ids from those reads.` | Routes automation through the declared owner instead of editing its database, and names the source of opaque ids. |
+| `Page actions and scripts share management operations` and CLI examples / `Use Card, Workflow and Project ids from those reads.` | Routes automation through the declared owner instead of editing its database, and names the source of opaque ids. |
+| `workflow.save replaces the whole Workflow: read it with workflow.get first and pass its expected_revision; omit expected_revision to create one.` / `workflow.secret shows a webhook's secret...` | A partial save would drop steps and triggers; the revision keeps an Agent from overwriting the user's page edits. The secret sentence names the only route to the value GitHub needs. |
 | `Deleting a final Card archives its participant Sessions...` | Makes the retained-history boundary visible before a destructive action. |
-| `The Library holds shared templates...` / `Each publication creates a version...` | User decision 2026-11-07: an Agent can reuse a single step, a step sequence or a Workflow across Projects without copying away its connection to the source; publishing does not change Project uses automatically. |
-| `An update compares the adopted version...` | Prevents an Agent from treating a new publication as a forced replacement of Project edits. |
-| `Archiving a template hides it...` | Distinguishes removing an item from discovery from deleting the versions used by Projects. |
-| `For Library work, use the template id and version...` / `library.extract prepares...` / `library.publish creates...` | Gives the sources of stable references and optimistic revisions and the operations for a shared step, sequence or whole Workflow. |
-| `when revising an existing template, pass its source_id...` / `After publishing from a Project, use library.link...` | Retains stable step identities across publications and connects the originating steps without duplicating them. Publishing alone does not link a Project. |
-| `To replace existing links...pass replace_sources: true...` | Consolidating composed work into one template is deliberate and must cover each affected use; a partial selection cannot silently detach the remaining steps. |
-| `Inserting, linking or updating a Library template returns a Workflow draft...` / `Keep the setup's other Workflows...` | Draft operations do not persist a Project; saving only the returned Workflow as the whole setup would remove unrelated Workflows. |
-| `To adopt an update...` | Pins application to the previewed version and deliberate conflict choices instead of reinterpreting a newer publication at save time. |
-| `These operations use the same implementation...` and Library CLI examples | Makes the UI capability available to Agents through the existing schema-discovered management surface; stdin avoids shell corruption of nested Workflow arguments. |
