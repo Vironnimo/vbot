@@ -16,15 +16,52 @@ Workflows and their Steps can independently limit Runs, Tool calls, input plus o
 - Waiting Cards and Proposals produce a WebUI/tray notification and contribute to the page badge; the Board, not the transient toast, keeps the durable record.
 - Permission requests stay in vBot's normal approval UI; open the linked Session from the Card rather than changing Permission Rules or granting the request yourself.
 
-Page actions and scripts share management operations; each prints its arguments with `--help`, and `--stdin` accepts a JSON argument object without shell quoting:
+## CLI: create, inspect and control Cards
+
+Page actions and scripts share management operations. In the commands below, replace `<workflow-id>` with an id from `workflow.list`, `<card-id>` with an id from `board.get` or `card.create`, and `<title>` and `<objective>` with the requested work:
 
 ```bash
-vbot extensions operations factory
 vbot extensions run factory workflow.list
-vbot extensions run factory workflow.save --help
 vbot extensions run factory board.get
-vbot extensions run factory card.create --help
-vbot extensions run factory card.get --help
+vbot extensions run factory card.create --workflow <workflow-id> --title "<title>" --description "<objective>"
+vbot extensions run factory card.get <card-id>
 ```
 
-Use Card, Workflow and Project ids from those reads. `workflow.save` replaces the whole Workflow: read it with `workflow.get` first and pass its `expected_revision`; omit `expected_revision` to create one. `workflow.secret` shows a webhook's secret for the sender's settings. Deleting a final Card archives its participant Sessions; done and discarded Cards otherwise keep readable Sessions on the Board.
+Omit `--workflow` to choose the first enabled Workflow. Add `--project-id <project-id>` to create work in a Project when the Workflow does not fix one; Project ids come from `catalog`. `board.get --project-id <project-id>` filters the Board. `card.get` returns the Card and its revision, step state, recorded outputs, comments, participant Sessions, approvals and usage.
+
+Every abbreviated command below starts with `vbot extensions run factory`. Choose the action that matches the user's decision and the Card's state; `<step-id>` comes from `card.get`, and `<revision>` is its `card.revision`:
+
+| Task | Command |
+|---|---|
+| Queue a Proposal the user approved | `card.approve_proposal <card-id>` |
+| Accept a waiting step | `card.accept <card-id> --step <step-id> --expected-revision <revision>` |
+| Accept the completed Card | `card.accept <card-id> --expected-revision <revision>` |
+| Return work with the user's feedback | `card.send_back <card-id> --step <step-id> --comment "<feedback>"` |
+| Answer a blocked step's question | `card.answer <card-id> --step <step-id> --text "<answer>"` |
+| Resume a failed, interrupted or paused step | `card.retry <card-id> --step <step-id>` |
+| Discard unfinished work | `card.discard <card-id>` |
+| Delete a done or discarded Card | `card.delete <card-id>` |
+
+For a Card that failed before any step started, use `card.retry <card-id>` without `--step`. On an acceptance revision conflict, read the current Card and its results before accepting that revision. Deleting a final Card archives its participant Sessions; done and discarded Cards otherwise keep readable Sessions on the Board.
+
+`card.update <card-id>` changes `--title` or `--description` only before work starts; pass the current `--expected-revision` to protect the edit. `card.move <card-id> --position <number>` changes Backlog order using the Board's positions; it does not change the lifecycle state. `card.limits` changes a waiting Card's budgets as described above; its `--help` gives the limit fields.
+
+## CLI: create and edit Workflows
+
+`catalog` returns starter `templates` and the configured Agents, Models and Projects in `catalog`. To create a Workflow, choose a template, set its name and each Agent step's `agent` from the catalog, and adjust its tasks, dependencies, Project and triggers for the request. To edit one, read `workflow.get <workflow-id>` and keep its id and all fields outside the requested change.
+
+`workflow.save --stdin` takes a JSON object whose `workflow` is the complete definition. For an edit, include `expected_revision` with the `workflow.revision` from the read; for creation, omit it or use `0`. A save replaces the whole Workflow, including steps and triggers. Write that argument object to a UTF-8 file `<arguments-file>` on the CLI's computer, then send it through stdin:
+
+```powershell
+Get-Content -Raw -Encoding utf8 "<arguments-file>" | vbot extensions run factory workflow.save --stdin
+```
+
+```bash
+vbot extensions run factory workflow.save --stdin < "<arguments-file>"
+```
+
+The same stdin method accepts multiline Card descriptions and other structured operation arguments. `workflow.save --help` gives the definition schema. To inspect effective Models without saving, send just the `workflow` object wrapper to `workflow.preview --stdin`; the result maps each Agent step to its resolved Model, with an empty value when unresolved. A successful save returns the saved Workflow, revision and effective Models.
+
+`workflow.delete <workflow-id>` removes the Workflow and its triggers; it is refused while another Workflow starts it or Cards wait to start with it. `workflow.get` and `workflow.list` show each trigger's status and webhook URL. `workflow.secret --stdin` reads a webhook secret using `{"id":"<workflow-id>","trigger":"<trigger-id>"}`; take the trigger id from that Workflow and add `"rotate":true` only to replace its current secret.
+
+For the current operation catalog, use `vbot extensions operations factory`; append `--help` to an operation for its exact arguments. Put vBot target options before the operation name.

@@ -8,4 +8,24 @@ While an Agent controls the desktop, an orange frame lines the screens, from its
 
 Inspect the configuration with `vbot extensions show computer_use`; set the per-app approval switch with `vbot extensions set computer_use ask_per_app true` or `false`, as requested by the user. These CLI commands configure desktop access; desktop actions themselves use the Computer Use Tools.
 
-Inspect desktop control through `vbot extensions run computer_use control --action status`. To stop the active control when the user asks, use `control --action stop --control-id <control-id>` with the id that status returned, preceded by `vbot extensions run computer_use`. `respond` relays the user's answer to an access request; its `--help` describes the input, and `--stdin` carries the JSON. An Agent does not approve its own access request.
+## Inspect or stop desktop control
+
+Read the active controls, then use the intended Computer's `control_id` to stop it when the user asks:
+
+```bash
+vbot extensions run computer_use control --action status
+vbot extensions run computer_use control --action stop --control-id <control-id>
+```
+
+When the result includes `controls`, select the entry by `computer_id` or `computer_name`; the top-level fields summarize only one Computer. An entry with `active: false` has no active control to stop. Read the returned `active` and `stopping` state after stopping; an in-flight action may still be finishing.
+
+## Relay an access response
+
+`respond` relays the user's answer to a pending access request shown by vBot:
+
+```bash
+vbot extensions run computer_use respond --help
+vbot extensions run computer_use respond --stdin
+```
+
+Pipe a JSON object into the second command with the pending request's id and the user's decision, for example `{"request_id":"<request-id>","response":{"action":"decline"}}`; the accepted actions are `accept`, `decline` and `cancel`. An Agent does not approve its own access request. A request that no longer exists cannot be answered; check the current request dialog instead of replaying the old id.

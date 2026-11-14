@@ -125,6 +125,31 @@ A triggered Card's default description, `Do what Workflow ... does for the event
 | `The Extension settings wip_limit...max_waiting...` | Explains idle queued work and why the review inbox does not occupy running slots. |
 | `Waiting Cards and Proposals produce...` | Both states need user attention and count toward the badge; the Board is the durable record, not the toast. |
 | `Permission requests stay in vBot's normal approval UI...` | Factory ownership is not permission to approve the participant's request or widen its rules. |
-| `Page actions and scripts share management operations` and CLI examples / `Use Card, Workflow and Project ids from those reads.` | Routes automation through the declared owner instead of editing its database, and names the source of opaque ids. |
-| `workflow.save replaces the whole Workflow: read it with workflow.get first and pass its expected_revision; omit expected_revision to create one.` / `workflow.secret shows a webhook's secret...` | A partial save would drop steps and triggers; the revision keeps an Agent from overwriting the user's page edits. The secret sentence names the only route to the value GitHub needs. |
+| `Page actions and scripts share management operations.` / `In the commands below, replace...` and create/read examples. | Gives complete CLI calls and the sources of Card and Workflow ids instead of stopping at operation discovery. |
+| `workflow.save --stdin takes a JSON object whose workflow is the complete definition.` / `For an edit, include expected_revision...` / `A save replaces the whole Workflow, including steps and triggers.` | Names the wrapper and revision source, so a partial save cannot silently drop steps or triggers and an edit does not overwrite a concurrent page change. |
 | `Deleting a final Card archives its participant Sessions...` | Makes the retained-history boundary visible before a destructive action. |
+
+### CLI task recipes
+
+| Text | Reason |
+|---|---|
+| `Omit --workflow to choose the first enabled Workflow.` | Makes the creation default intentional instead of forcing a redundant selection. |
+| `Add --project-id...` / `board.get --project-id...filters the Board.` | Separates the optional creation Project from the Board's read filter and names where ids come from. |
+| `card.get returns the Card and its revision...` | Shows where the current result, step and revision evidence for follow-up decisions lives. |
+| `Every abbreviated command below starts with...` / `Choose the action that matches...` | The task table stays readable while every row has an unambiguous command prefix and the source of step/revision placeholders. |
+| Task table: approve_proposal, accept step/Card, send_back, answer, retry, discard and delete | Turns the previously described UI actions into exact CLI calls with their distinct text, step and revision inputs. |
+| `For a Card that failed before any step started...without --step.` | A startup failure has no step to name; inventing one prevents the retry. |
+| `On an acceptance revision conflict...` | Acceptance applies to the results the user reviewed; a new revision requires inspecting what changed. |
+| `card.update...only before work starts; pass the current --expected-revision...` | Names the operation's state boundary and protects a draft edit from concurrent changes. |
+| `card.move...changes Backlog order...it does not change the lifecycle state.` | A Board move is ordering, not a way to bypass lifecycle decisions. |
+| `card.limits changes a waiting Card's budgets...` | Connects the existing budget explanation to its discoverable argument schema. |
+| `catalog returns starter templates and the configured Agents, Models and Projects...` | Authors need both the Workflow template and valid Agent choices; a template alone has empty Agent selections. |
+| `To create a Workflow, choose a template...` / `To edit one, read workflow.get...` | Distinguishes selecting a creation template from replacing a saved definition and retaining unrelated content. |
+| `Write that argument object to a UTF-8 file...` and PowerShell/Bash stdin examples. | Sends complete JSON without shell-quoting loss, on the CLI machine rather than assuming the server filesystem. |
+| `The same stdin method accepts multiline Card descriptions...` | Prevents inventing a file flag when task text or nested settings do not fit ordinary flags. |
+| `workflow.save --help gives the definition schema.` | Keeps field-level syntax with the registered operation instead of copying a second schema. |
+| `To inspect effective Models without saving...` / `A successful save returns...` | Preview is optional and non-mutating; save itself provides the resulting revision and Model resolution. |
+| `workflow.delete...refused while another Workflow starts it or Cards wait...` | Explains deletion's actual ownership boundary and its likely refusal. |
+| `workflow.get and workflow.list show each trigger's status and webhook URL.` | Names the supported source for setup and trigger diagnosis. |
+| `workflow.secret --stdin...` | This secret-marked operation requires stdin even for a read; trigger id and optional rotation have distinct effects. |
+| `For the current operation catalog...` / `Put vBot target options before the operation name.` | Discovery includes future operations, and the generic argument boundary otherwise interprets target flags as Extension fields. |

@@ -48,9 +48,14 @@ Rows cover the listed additions to the `vbot-docs` authoring references and Exte
 | Computer Use: `The computer_use Extension lets an Agent operate the selected Computer's Windows desktop...` / `The Computer can be the vBot server or a connected Desktop app...` | Corrects the moved guide's server-only description to the existing selected-Computer contract; a headless server can use a shared Windows Desktop. |
 | Computer Use: `Inspect the configuration with vbot extensions show computer_use...` | Provides the actual CLI settings route, retaining the user's choice of whether per-app approval is enabled. |
 | Computer Use: `These CLI commands configure desktop access; desktop actions themselves use the Computer Use Tools.` | Prevents inventing desktop-action CLI operations when configuring the Extension. |
-| Computer Use: `Inspect desktop control through ... control --action status.` | Names the existing CLI read operation for a user's active desktop-control question. |
-| Computer Use: `To stop the active control when the user asks...` | The stop operation needs the exact active control id; a configuration save does not stop control. |
-| Computer Use: `respond relays the user's answer...` / `An Agent does not approve its own access request.` | Distinguishes transporting the user's decision from granting oneself access. |
+| Computer Use: `Read the active controls, then use the intended Computer's control_id...` and full status/stop examples. | Makes the control workflow executable with the exact id from current state. |
+| Computer Use: `When the result includes controls, select the entry...` | The top-level summary may describe another Computer; each desktop has its own stop target. |
+| Computer Use: `An entry with active: false has no active control to stop.` | Prevents inventing an id when no active control is reported. |
+| Computer Use: `Read the returned active and stopping state...` | Stopping input does not imply an in-flight action has already finished. |
+| Computer Use: `respond relays the user's answer to a pending access request shown by vBot...` and help/stdin examples. | Names the actual response operation without inventing a CLI request-list operation. |
+| Computer Use: `Pipe a JSON object into the second command...` | Gives the nested response shape and allowed decisions that generic object help cannot explain. |
+| Computer Use: `An Agent does not approve its own access request.` | Distinguishes transporting the user's decision from granting oneself access. |
+| Computer Use: `A request that no longer exists cannot be answered...` | Directs an expired-response error back to current state rather than retries of a stale request. |
 | Home Assistant: `The homeassistant Extension connects vBot to Home Assistant...` / `Configure it through the CLI or Settings...` | Gives an Agent the purpose and supported setup surfaces before it attempts entity work. |
 | Home Assistant: `Inspect its connection settings` and `vbot extensions show homeassistant`. | Exposes the live declared fields without copying the complete schema into the guide. |
 | Home Assistant: `Set url to the Home Assistant instance's base URL...` | Distinguishes the server root from an API endpoint and identifies the existing default. |
@@ -66,6 +71,63 @@ Rows cover the listed additions to the `vbot-docs` authoring references and Exte
 | Shell Review: `The review operation previews a judgment...` / `It neither executes the command nor grants approval.` | Makes the diagnostic operation usable without promising it changes execution authority. |
 | Shell Review: `Pass the request with --stdin as a JSON object containing...` | Gives the complete required request shape; operation help owns optional fields. |
 | Shell Review: `Preserve what the user actually authorized...` | Prevents rewriting a preview's authority to force the desired answer. |
-| Shell Review: `Read the returned judgment and reason before reporting...` | The returned verdict, not the fact that preview ran, determines what the Agent can claim. |
+| Shell Review: `For example, this PowerShell pipeline previews a directory listing on Windows...` and JSON stdin example. | Shows a complete command without putting nested JSON through shell argument parsing. |
+| Shell Review: `Replace the example's directory, command and user request...` | The preview evaluates the supplied evidence; the example's authorization is not the actual user's authorization. |
+| Shell Review: `The preview uses the configured Decision Model...` | Explains the preview's Model usage despite the automatic-review switch being off. |
+| Shell Review: `Read decision and reason_code...` | Uses the real result fields to distinguish a successful favorable judgment from a request for confirmation. |
+| Shell Review: `Other ask reasons, such as missing_authority...` | A review failure is not the same as a Model deciding that the command needs confirmation. |
+| Shell Review: `A successful Model judgment also reports...` | Fallback results have no probability or Model fields; callers must not assume them. |
+| MCP: `Repeat the same target options...before extensions...` | Flags following an operation belong to its dynamic schema; leading target flags keep follow-up calls on the same server. |
+| MCP: `To check an existing connection, take its id from list...` and full commands. | Gives an executable discovery/check workflow with ids taken from actual results. |
+| MCP: `Replace <job-id> with the job_id returned by test...` | Starting the asynchronous check does not establish its outcome. |
+| MCP: `A completed connectivity check verifies catalog access and health...` | Prevents reporting an application task as verified from a protocol health check alone. |
+| MCP: `inspect reads the cached catalog without connecting...` | Explains offline catalog inspection and how to reach additional result pages. |
 
-Factory and MCP prose moved intact from the central `vbot-docs` references to their Extensions' `docs/usage.md`; Swarm prose also moved intact. KeePassXC and 1Password retain their previous setup guidance in separate owner files, with each shared introduction naming just its owner. Existing Computer Use Tool instructions and its separate workflow Skill are unchanged apart from the guide's corrected selected-Computer setup and explicit CLI settings route above.
+Factory, MCP and Swarm usage guides originated in the central `vbot-docs` references and now include owner-specific CLI workflows. KeePassXC and 1Password retain their previous setup guidance in separate owner files, with each shared introduction naming just its owner. Existing Computer Use Tool instructions and its separate workflow Skill are unchanged apart from the usage guide's setup and CLI management guidance above.
+
+## Swarm CLI recipes
+
+Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/usage.md` (2026-11-14). The operation catalog, parser and schema probe cover the command shapes; no operation handler or Model ran.
+
+| Text | Reason |
+|---|---|
+| `Every abbreviated command below starts with vbot extensions run swarm.` | Gives every compact inline recipe its complete executable prefix. |
+| `Use named --profile-id, --swarm-id and --page-id flags: these ids are not positional arguments.` | Generic positional parsing fills id, request_id or job_id, not these resource fields; a bare resource id can become a receipt instead. |
+| `Replace placeholders with ids from the corresponding read results...` | Prevents invented identities and keeps the complete current schema discoverable without copying it into prose. |
+| `profiles.list returns profile summaries; read a selected profile in full...` | A replacement must start from the full profile rather than a list summary. |
+| `To create one, prepare a JSON argument object...` and the JSON example. | Supplies the profile wrapper, minimum usable structure and explicit null creation revision; those cannot be inferred from command names. |
+| `Replace the name, Model id and server directory...` | The illustrative Model and directory are placeholders, not installed choices. |
+| `The empty allowed list grants no ordinary Tools...` | Prevents silently creating a profile without the Tools its requested work needs. |
+| `To use a Project, replace working_directory...` | A Project id supplies Project Context; merely copying its filesystem path does not. |
+| `Write the argument object to a UTF-8 file...` and the PowerShell/Bash stdin examples. | Sends complete JSON without shell-quoting loss and locates the input on the CLI's computer. |
+| `For an edit, put the complete profile from profiles.get in profile...` | Protects unrelated settings and uses the returned revision to reject competing edits. |
+| `A successful save returns the normalized profile with its id and revision.` | The Agent can take the definitive identity and revision from the result instead of inventing them or rereading. |
+| `profiles.preview --stdin takes...` | Names the preview wrapper and participant-row selection while making clear that no Run starts. |
+| `profiles.delete --profile-id...removes a saved profile; retained Swarms keep their snapshots.` | Distinguishes deletion of a reusable definition from removal of its retained executions. |
+| `For each new mutation that takes request_id, generate a fresh UUID...` | Receipt ids distinguish intentional new mutations from exact retries; reusing an id with changed content conflicts and changing it on retry repeats effects. |
+| `Start with the chosen profile's id and revision and the user's goal:` and the start/read examples. | Gives a complete start call, including its required receipt, with the reads that expose execution state and usage. |
+| `Take swarm-id from the start result or swarms.list.` | The started Swarm identity differs from the reusable profile identity. |
+| `swarms.get returns its participants and saved profile snapshot...` | States the read's content and the bounded read option when the snapshot is unnecessary. |
+| `swarms.events --swarm-id...reads lifecycle events.` | Makes event diagnosis reachable without direct database access. |
+| `Lists and event pages return has_more and a cursor...` | Without continuation, the Agent can incorrectly report that an omitted profile or Swarm does not exist. |
+| `Stop with swarms.stop...and resume with swarms.resume...` | Both lifecycle actions require swarm_id and a request_id even though they change no text. |
+| `Resume can name --participant-id...; omission resumes inactive participants.` | Names the identity source and separates one-participant recovery from the whole inactive group. |
+| `The same participant filter works with swarms.usage.` | Allows a focused usage query instead of reading or attributing the whole group's consumption. |
+| `swarms.delete --swarm-id...permanently removes a stopped Swarm.` | Stop retains the conversation; deletion is a distinct operation with a stopped-state requirement. |
+| `To change delivery for retained work, swarms.settings --stdin takes...` | Supplies the live-settings wrapper rather than directing an Agent to edit a profile that only affects future work. |
+| `Read the current delivery and settings_revision with swarms.get...` | The live settings revision differs from the profile revision; preserving untouched routes avoids unrequested replacement. |
+| `A profile edit affects future Swarms, not this snapshot.` | Makes the retained execution boundary explicit at the live-settings recipe. |
+| `Read discussions and the requested discussion's posts:` and Board read examples. | Gives the two actual operations instead of making an Agent guess a discussion's identity. |
+| `Take discussion-id from board.list; omitting it reads the main discussion.` | Explains both explicit targeting and the useful default without guessing a main-discussion id. |
+| `--message-id...reads one exact post.` | A post id is not a discussion id or numeric paging position. |
+| `A returned cursor continues with older posts; --after...reads newer ones...` | The two paging directions have different continuation values; confusing them skips or rereads posts. |
+| `Post the user's message with board.post...; --reply-to...answers a particular post.` | Provides all required write inputs and distinguishes a new post from an answer. |
+| `For multiline text or a recipients array, use the same JSON stdin method...` | Preserves multiline content and typed recipient arrays without shell escaping. |
+| `These are operator posts: a fresh post can resume a stopped or failed Swarm...` | Posting can start work; it cannot serve as a harmless status probe. |
+| `Find and read Wiki pages:` and Wiki examples. | Exposes Wiki operations through the management surface rather than the participants' private Tools. |
+| `Take page-id and its current revision from Wiki results.` | Both are scoped recorded values needed for later reads and changes. |
+| `--query...searches pages with list, or text in one page with read.` | Defines the search scope so a no-match in one page is not taken as a whole-Wiki result. |
+| `For create, send action, swarm_id, title, complete Markdown content and request_id...` | Supplies the full create wrapper including the receipt and preserves Markdown through stdin. |
+| `update, delete and restore also take page_id and expected_revision...` | Distinguishes the current edit baseline from restore's historical revision and explains whole-content versus passage edits. |
+| `On a conflict, inspect the changed page before reapplying the requested edit.` | A competing edit changes the basis for the mutation; blindly sending a new revision can erase that work. |
+| `Wiki edits send no Board messages; post the returned page link when participants need to notice it.` | A saved knowledge page does not itself deliver a message or wake participants. |
