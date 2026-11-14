@@ -386,6 +386,7 @@ async def on_fire(fire: dict) -> None:
     # earlier_missed, requests (webhook: received_at, headers, body, cut), dropped
     ...
 
+
 host.triggers.set_handler(on_fire)  # in your startup callback; None stops receiving
 trigger = await host.triggers.create("workflow:review", name="Review pushes", schedule="webhook")
 secret = await host.triggers.webhook_secret(trigger["id"])  # for the sender's settings
