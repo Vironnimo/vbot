@@ -11,6 +11,8 @@ import {
 import { formatAgentAddress, qualifyAgentAddress } from '$lib/agentAddress.js';
 import { agentActivityState } from '../agentActivityTooltip.js';
 import { untrack } from 'svelte';
+import { approvalSessions } from '$lib/permissionApprovals.js';
+import { t } from '$lib/i18n.js';
 
 // One displayed-work projection feeds every Chat surface and unread indicator.
 export function createChatViewActivity(context) {
@@ -68,10 +70,13 @@ export function createChatViewActivity(context) {
 
   // The Agent addresses with a Tool call waiting for the user's approval.
   let approvalAddresses = $derived(
-    (context.approvalRequests ?? []).map((request) =>
-      qualifyAgentAddress(request.agent_id, request.project_id),
+    (context.approvalRequests ?? []).flatMap((request) =>
+      approvalSessions(request).map((session) =>
+        qualifyAgentAddress(session.agent_id, session.project_id),
+      ),
     ),
   );
+  const approvalCount = $derived((context.approvalRequests ?? []).length);
 
   // Per Agent address: its status dot, unread results and what its working
   // or waiting Sessions do together (`work`, null while idle). A Tool call
@@ -132,18 +137,31 @@ export function createChatViewActivity(context) {
   let unattendedResultCount = $derived(countUnreadResults(''));
 
   $effect(() => {
-    const count = unattendedResultCount;
+    const count = unattendedResultCount + approvalCount;
     untrack(() => context.onUnattendedResults(count));
   });
 
   $effect(() => {
-    const count = unreadResultCount;
+    const count = unreadResultCount + approvalCount;
+    const approvalLabel =
+      approvalCount === 1
+        ? t('approvals.pendingOne')
+        : t('approvals.pendingMany', { count: approvalCount });
     const indicator =
       count > 0
         ? {
             count,
-            tone: 'unread',
-            label: agentActivityState('unread', count),
+            tone: approvalCount ? 'running' : 'unread',
+            label: approvalCount
+              ? [
+                  approvalLabel,
+                  unreadResultCount
+                    ? agentActivityState('unread', unreadResultCount)
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+              : agentActivityState('unread', count),
           }
         : null;
     untrack(() => context.onNavigationIndicator(indicator));

@@ -118,6 +118,7 @@ MAX_TRACE_LIMIT = 500
 # Desktop notification kinds the Windows tray application shows. Each field is
 # an independent boolean switch; defaults live in ``normalizers.py``.
 NOTIFICATION_FIELDS = (
+    "approval_required",
     "run_completed",
     "run_failed",
     "automation_failed",

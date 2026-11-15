@@ -23,6 +23,10 @@
   // server) reads as all defaults.
   const NOTIFICATION_KINDS = Object.freeze([
     {
+      key: 'approval_required',
+      label: () => t('settings.notifications.approvalRequired'),
+    },
+    {
       key: 'run_completed',
       label: () => t('settings.notifications.runCompleted'),
     },

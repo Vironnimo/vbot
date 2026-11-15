@@ -33,6 +33,9 @@ export default Object.freeze({
   'external.historicalActivity': 'Historical activity',
 
   'approvals.title': 'Permission request',
+  'approvals.pendingOne': '1 approval needs your decision',
+  'approvals.pendingMany': '{count} approvals need your decision',
+  'approvals.review': 'Review approvals',
   'approvals.waiting': 'This Tool call needs your approval',
   'approvals.subAgentWaiting': 'Sub-Agent {agent} needs your approval',
   'approvals.openSession': 'Open Session',

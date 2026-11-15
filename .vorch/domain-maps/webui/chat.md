@@ -138,11 +138,13 @@ Draft and send-history browser storage excludes text containing potential API-ke
 
 ## Permission approvals
 
-Pending approval requests come from App's `permissionApprovals` context (the server snapshot, `webui/app-shell.md`); there is no app-wide banner or review dialog (user decision 2026-11-03).
+Pending approval requests come from App's `permissionApprovals` context (the server snapshot, `webui/app-shell.md`). User decision 2026-11-16: approvals remain allowed in Sub-Agents and must attract attention in the root Chat, including direct children; the display must not depend on seeing their spawn row. There is no app-wide banner or review dialog.
 
+- `ChatPendingApprovals.svelte` keeps a persistent, expandable approval list in the composer tray, containing the shown Session's own requests and every descendant request whose server-provided `ancestors` contains it. Its scroll-bounded cards reuse `ChatApprovalCard` and remain answerable without the spawn row in loaded History. `lib/permissionApprovals.js` matches complete Session addresses and selects root navigation targets.
 - `ChatApprovalCard.svelte` sits right below the Tool row a request waits on (same `run_id` and `tool_call_id`); a Sub-Agent spawn row shows the requests of its Sub-Agent Session (same Agent address and `session_id`) with an `Open Session` link, answerable from the parent. Rows folded into a closed Working group show their cards below the group.
 - The card names each requirement in plain words (`Write to`, `Run`, `Connect to`, ... with `shown` or `target`) and offers `Allow once`, `Allow in this Session` and `Reject`; details (reason, Computer, cwd, resolved path, prepared arguments, redaction note) fold away. `Allow in this Session` exists only with a `session_grant` suggestion and sends its `rules` as `remember`; its menu offers the exact variant and editing the rules (one per line). The card stays until the snapshot drops the request.
-- The Agent bar marks an Agent with a waiting request with status `approval`, which outranks running, waiting and unread; the Session list marks such a Session before its working or waiting dot (`.session-row__approval`).
+- The Agent bar and Session list mark the requesting Session and all its ancestors with approval attention, before working/waiting/unread. Chat's Main menu indicator and unattended Desktop count include each request once, regardless of tree depth. App's persistent approval Toast stays until no request remains and opens the oldest request's root Session.
+- Snapshots retire every copy of a request after a decision or cancellation; a local click alone does not remove it.
 - Tests: `ChatApprovalCard.test.js`, `SessionListDrawer.test.js`, `ChatHeader.test.js`.
 
 ## Composer and inputs

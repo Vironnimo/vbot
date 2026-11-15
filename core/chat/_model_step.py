@@ -291,6 +291,7 @@ class ModelStepBoundary:
             direct_user_input=context.direct_user_input,
             permissions=context.permissions,
             approval_manager=self._dependencies.run_manager,
+            approval_ancestors=self._dependencies.subagent_ancestors,
             approval_refresh_hook=refresh_approval,
             execution=context.execution,
             tool_restriction=context.request.tool_restriction,

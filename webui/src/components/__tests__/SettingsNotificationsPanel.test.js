@@ -18,6 +18,7 @@ const { default: SettingsNotificationsPanel } =
   await import('../settings/SettingsNotificationsPanel.svelte');
 
 const ALL_ON = Object.freeze({
+  approval_required: true,
   run_completed: true,
   run_failed: true,
   automation_failed: true,
@@ -66,6 +67,7 @@ describe('SettingsNotificationsPanel', () => {
         toggle.getAttribute('aria-checked'),
       ]),
     ).toEqual([
+      ['Approval needs your decision', 'true'],
       ['Run completed', 'true'],
       ['Run failed', 'true'],
       ['Automation failed', 'true'],
@@ -75,7 +77,7 @@ describe('SettingsNotificationsPanel', () => {
       ['Extension notifications', 'true'],
     ]);
 
-    toggles[1].click();
+    toggles[2].click();
     flushSync();
     findSaveButton().click();
     flushSync();

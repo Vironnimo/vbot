@@ -428,6 +428,7 @@ class ExternalRun:
             data_root=Path(dependencies.storage.data_dir),
             permissions=permissions,
             approval_manager=dependencies.run_manager,
+            approval_ancestors=dependencies.subagent_ancestors,
             approval_refresh_hook=refresh_approval,
             execution=execution,
             project_cwd=self._project_cwd,

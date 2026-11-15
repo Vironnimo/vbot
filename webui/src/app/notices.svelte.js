@@ -5,6 +5,7 @@ import {
   updateNoticeDismissed,
 } from '$lib/applicationUpdate.js';
 import { t } from '$lib/i18n.js';
+import { approvalRootTarget } from '$lib/permissionApprovals.js';
 
 // App-wide states for the toast stack, the only place for them: nothing
 // app-wide may appear above the view (user decision 2026-11-04). `context`
@@ -77,8 +78,28 @@ export function createAppNotices(context) {
     };
   };
 
+  const approvalNotice = () => {
+    const requests = context.approvalRequests ?? [];
+    if (!requests.length) return null;
+    return {
+      id: 'pending-approvals',
+      variant: 'warn',
+      message:
+        requests.length === 1
+          ? t('approvals.pendingOne')
+          : t('approvals.pendingMany', { count: requests.length }),
+      actions: [
+        {
+          label: t('approvals.review'),
+          onClick: () => context.openSession(approvalRootTarget(requests[0])),
+        },
+      ],
+    };
+  };
+
   const list = $derived(
     [
+      approvalNotice(),
       // A Desktop restart also loads the new WebUI, so it replaces the reload.
       context.restartOffered ? restartNotice() : reloadNotice(),
       updateNotice(),

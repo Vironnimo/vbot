@@ -294,7 +294,7 @@
   margin-left: auto;
 }
 
-.app-shell__nav-indicator--running {
+.app-shell__nav-indicator.app-shell__nav-indicator--running {
   color: var(--amber);
   background: var(--amber-dim);
 }

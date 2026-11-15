@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from cli.application.monitor import MonitorStatus
-from cli.application.notifications import Notifier, Toast, run_toast_kind
+from cli.application.notifications import Notifier, Rpc, Toast, run_toast_kind
 from cli.application.state import Operation
 
 _CONNECTED = MonitorStatus("http://127.0.0.1:8420", "connected", True)
@@ -27,7 +27,7 @@ class _Sink:
         self.dismissed.append(key)
 
 
-def _server(settings: dict[str, bool] | None = None, *, allowed: bool = True):
+def _server(settings: dict[str, bool] | None = None, *, allowed: bool = True) -> Rpc:
     """Answer the RPCs a notifier makes, like a server with one Session."""
 
     async def rpc(method: str, params: dict[str, Any]) -> dict[str, Any] | None:
@@ -75,6 +75,94 @@ def _run_event(event_type: str = "run_completed", **payload: object) -> dict[str
 def _read(run_id: str = "run_1") -> dict[str, Any]:
     scope = {"agent_id": "coder", "session_id": "ses_1", "read_run_id": run_id}
     return {"type": "resource_changed", "payload": {"kind": "sessions", "scope": scope}}
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_approvals_notify_once_open_the_root_and_retire_with_the_snapshot(
+    enabled: bool, depth: int
+):
+    async def scenario() -> None:
+        sink = _Sink()
+        notifier = _notifier(sink, settings={"approval_required": enabled})
+        root = {"agent_id": "coder", "project_id": None, "session_id": "ses_1"}
+        request: dict[str, Any] = {
+            "id": "approval-one",
+            **root,
+            "ancestors": [],
+        }
+        if depth:
+            request.update(agent_id="worker", project_id="team", session_id="child")
+            request["ancestors"] = (
+                [{"agent_id": "middle", "session_id": "middle"}] if depth == 2 else []
+            ) + [root]
+        pending = {"revision": 5, "requests": [request]}
+        notifier.event_received({"type": "connection_ready", "permissions_approvals": pending})
+        await _settle()
+        assert len(sink.shown) == int(enabled)
+        if enabled:
+            [toast] = sink.shown
+            assert toast.kind == "approval_required"
+            assert toast.session == ("coder", "ses_1")
+        # Replayed snapshots and reconnects do not repeat the same request.
+        notifier.event_received({"type": "permissions_approvals", "payload": pending})
+        notifier.event_received(
+            {"type": "permissions_approvals", "payload": {**pending, "revision": 6}}
+        )
+        notifier.event_received(
+            {
+                "type": "connection_ready",
+                "permissions_approvals": {**pending, "revision": 6},
+                "replay_status": "resumed",
+            }
+        )
+        await _settle()
+        assert len(sink.shown) == int(enabled)
+        notifier.event_received(
+            {"type": "permissions_approvals", "payload": {"revision": 7, "requests": []}}
+        )
+        assert "approval:approval-one" in sink.dismissed
+        notifier.event_received({"type": "permissions_approvals", "payload": pending})
+        await _settle()
+        assert len(sink.shown) == int(enabled)
+
+    asyncio.run(scenario())
+
+
+def test_retired_approval_cannot_notify_after_a_slow_settings_read():
+    async def scenario() -> None:
+        sink = _Sink()
+        started, release = asyncio.Event(), asyncio.Event()
+        server = _server()
+
+        async def rpc(method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+            if method == "settings.values":
+                started.set()
+                await release.wait()
+            return await server(method, params)
+
+        notifier = Notifier(sink, rpc, owns_server=True, update_active=lambda: False)
+        notifier.event_received(
+            {
+                "type": "permissions_approvals",
+                "payload": {
+                    "revision": 1,
+                    "requests": [
+                        {"id": "approval-one", "agent_id": "coder", "session_id": "ses_1"}
+                    ],
+                },
+            }
+        )
+        await started.wait()
+        notifier.event_received(
+            {"type": "permissions_approvals", "payload": {"revision": 2, "requests": []}}
+        )
+        release.set()
+        await _settle()
+        assert not sink.shown
+        assert sink.dismissed == ["approval:approval-one"]
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("enabled", [True, False])

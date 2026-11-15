@@ -666,6 +666,12 @@
 
   let extensionNotice = $state.raw(null);
   const appNotices = createAppNotices({
+    get approvalRequests() {
+      return serverUnavailable
+        ? []
+        : appControllerState.permissionApprovals.requests;
+    },
+    openSession: (target) => chatNavigation.openSessionLink(target),
     get applicationUpdate() {
       return availableUpdate(appControllerState.applicationUpdate);
     },

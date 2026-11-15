@@ -232,6 +232,7 @@ class ChatLoopDependencies:
     # nesting limit has none); asked only for Sub-Agent Sessions. Blocking.
     # ``None`` offers the Tool to every Session whose Agent allows it.
     subagent_tool_usable: Callable[[SessionAddress], bool] | None = None
+    subagent_ancestors: Callable[[SessionAddress], Awaitable[list[SessionAddress]]] | None = None
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:

@@ -748,6 +748,10 @@ def bootstrap(runtime: Runtime) -> None:
                 else await service.deliver_background_completions(run, session)
             )
 
+        async def subagent_ancestors(address: SessionAddress) -> list[SessionAddress]:
+            coordinator = runtime._subagent_coordinator
+            return [] if coordinator is None else await coordinator.ancestor_sessions(address)
+
         chat_dependencies = ChatLoopDependencies(
             agent_resolver=runtime._agent_resolver,
             projects=runtime._projects,
@@ -773,6 +777,7 @@ def bootstrap(runtime: Runtime) -> None:
             deliver_background_completions=deliver_background_completions,
             get_command_manager=lambda: runtime._command_manager,
             get_context_command_runner=lambda: runtime._watch_checks,
+            subagent_ancestors=subagent_ancestors,
             subagent_reply_to_user=lambda address, message_id: (
                 runtime._subagent_coordinator.subagent_reply_to_user(address, message_id)
                 if runtime._subagent_coordinator is not None

@@ -91,7 +91,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
             },
             "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
-            "notifications": {"run_completed": False, "server_stopped": True},
+            "notifications": {
+                "approval_required": False,
+                "run_completed": False,
+                "server_stopped": True,
+            },
         }
     )
 
@@ -161,7 +165,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
         },
         "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
-        "notifications": {"run_completed": False, "server_stopped": True},
+        "notifications": {
+            "approval_required": False,
+            "run_completed": False,
+            "server_stopped": True,
+        },
     }
 
 

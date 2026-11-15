@@ -1,4 +1,8 @@
 <script>
+  import {
+    approvalSessions as sessionsForApproval,
+    approvalSessionKey,
+  } from '$lib/permissionApprovals.js';
   import { t } from '$lib/i18n.js';
   import ContributionSurface from './extensions/ContributionSurface.svelte';
   import { portal } from '$lib/dropdownPanel.js';
@@ -37,11 +41,7 @@
   import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import SessionCompactionPolicyDialog from './sessions/SessionCompactionPolicyDialog.svelte';
   import { getContext, untrack } from 'svelte';
-  import {
-    formatAgentAddress,
-    parseAgentAddress,
-    qualifyAgentAddress,
-  } from '$lib/agentAddress.js';
+  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import { createSessionList } from './sessions/list.svelte.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
@@ -119,9 +119,8 @@
   const permissionApprovals = getContext('permissionApprovals');
   let approvalSessions = $derived(
     new Set(
-      (permissionApprovals?.requests ?? []).map(
-        (request) =>
-          `${qualifyAgentAddress(request.agent_id, request.project_id)}::${request.session_id}`,
+      (permissionApprovals?.requests ?? []).flatMap((request) =>
+        sessionsForApproval(request).map(approvalSessionKey),
       ),
     ),
   );

@@ -125,6 +125,11 @@ class ToolRound:
 
         async def request_approval(tool_context, reason, requirements, arguments, cwd):
             suggestion = await _session_grant_suggestion(tool_context.permissions, requirements)
+            ancestors = (
+                await context.approval_ancestors(session.address)
+                if context.approval_ancestors is not None
+                else []
+            )
             payload = {
                 "tool_call_id": tool_context.tool_call_id,
                 "tool_name": tool_context.tool_name,
@@ -143,6 +148,16 @@ class ToolRound:
             if safe_payload["session_grant"] != payload["session_grant"]:
                 # A masked rule would grant something else than it shows.
                 safe_payload["session_grant"] = None
+            # Navigation identities are system-owned, like the Run's address
+            # added by the manager; masking prepared arguments must not change them.
+            safe_payload["ancestors"] = [
+                {
+                    "project_id": address.project_id,
+                    "agent_id": address.agent_id,
+                    "session_id": address.session_id,
+                }
+                for address in ancestors
+            ]
             checks = [key for item in requirements for key in item.suppression_keys()]
             rejected = [item.suppression_key for item in requirements]
             manager = context.approval_manager
