@@ -190,9 +190,6 @@
   overflow-wrap: anywhere;
 }
 /* The import dialog: the pasted setup, then one entry per server. */
-.mcp-import__file {
-  display: none;
-}
 .mcp-import__servers {
   display: grid;
   gap: 12px;

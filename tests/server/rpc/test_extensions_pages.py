@@ -11,8 +11,52 @@ from core.extensions.operations import ExtensionHost
 from core.extensions.services import ExtensionServiceError
 from server.rpc.errors import RpcError
 from server.rpc.extension_presentation import _contribution_operation, _contributions, _page_service
-from server.rpc.extensions_methods import _extension_pages
+from server.rpc.extensions_methods import _extension_pages, _extensions_payload
 from tests.core.extensions.extension_test_support import write_package
+
+
+@pytest.mark.asyncio
+async def test_missing_page_and_dependent_views_recover_in_the_catalog_without_reload(
+    tmp_path: Path,
+) -> None:
+    package = write_package(
+        tmp_path,
+        "fixture",
+        "def register(api):\n"
+        "    api.register_page('board', 'Board', 'index.html')\n"
+        "    for name in ('first', 'second'):\n"
+        "        api.register_contribution(name, surface='settings.sections', kind='view', "
+        "title=name, page='board')\n",
+    )
+    registry = ExtensionRegistry.load(tmp_path)
+    identity = registry.registration_identity("fixture")
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            extensions=registry,
+            storage=SimpleNamespace(
+                load_extensions_settings=lambda: {"config": {}, "disabled": []}
+            ),
+        ),
+        file_delivery=SimpleNamespace(open_extension_page=Mock(return_value={"url": "/page"})),
+    )
+    try:
+        assert (await _contributions(state, {}))["contributions"] == []
+        unavailable = (await _extensions_payload(state))["extensions"][0]["capability_errors"]
+        assert len(unavailable) == 3
+        assert all("unavailable" in message for message in unavailable)
+        assert any("contribution 'first'" in message for message in unavailable)
+        assert any("contribution 'second'" in message for message in unavailable)
+        (package / "index.html").write_text("<!doctype html>", encoding="utf-8")
+        assert (await _extensions_payload(state))["extensions"][0]["capability_errors"] == []
+        assert len((await _contributions(state, {}))["contributions"]) == 2
+        assert registry.registration_identity("fixture") == identity
+        (package / "index.html").unlink()
+        assert (await _extensions_payload(state))["extensions"][0][
+            "capability_errors"
+        ] == unavailable
+        assert (await _contributions(state, {}))["contributions"] == []
+    finally:
+        registry.retire_registration()
 
 
 @pytest.mark.asyncio

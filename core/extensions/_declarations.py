@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from typing import Any, Literal
 
 from core.extensions.contributions import PAGE_ICONS as PAGE_ICONS
@@ -434,16 +435,21 @@ class ExtensionRecord:
     manifest: ExtensionManifest | None = None
     declarations: ExtensionDeclarations = field(default_factory=ExtensionDeclarations)
     # Non-fatal per-capability diagnostics (e.g. a tool name collision skipped a
-    # single tool). The extension still ``loaded``; only that capability dropped.
+    # single tool, or a page whose assets are temporarily unavailable).
     capability_errors: list[str] = field(default_factory=list)
     # The winning record's ``entry_path`` (as a string) when this record was
     # shadowed (``status == "overridden"``); ``None`` for every other status.
     overridden_by: str | None = None
+    _page_availability_errors: dict[str, tuple[str, ...]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    _diagnostic_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
 
 
 def _diagnose_capability(record: ExtensionRecord, message: str) -> None:
     """Record a non-fatal capability diagnostic and log it at ``warning``."""
-    if message in record.capability_errors:
-        return
-    record.capability_errors.append(message)
+    with record._diagnostic_lock:
+        if message in record.capability_errors:
+            return
+        record.capability_errors.append(message)
     _LOGGER.warning("Extension %r %s", record.name, message)

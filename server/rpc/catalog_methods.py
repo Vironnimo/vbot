@@ -29,6 +29,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -42,8 +43,7 @@ _DEFAULT_ALWAYS_LOADED = always_loaded_tools(None)
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "tool.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("tool.list"), "tool.list")
     try:
         # All registered tools (readiness default off): the Tool access editors see
         # every tool and style a not-ready one from the per-tool
@@ -90,8 +90,7 @@ def _validate_tool_relationships(tools: list[Any]) -> None:
 
 
 def _list_skills(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("skill.list"), "skill.list")
     try:
         skills = state.runtime.skills.list_all()
         invalid_skills = state.runtime.skills.invalid_diagnostics()
@@ -113,9 +112,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     # (left out: the Agent's default Project; null: its Workspace). Validated as a
     # request shape before the domain work so a malformed address is a clean
     # client error.
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "working_project_id", "reply_surface"}, "chat.commands"
-    )
+    _reject_unsupported(params, rpc_request_fields("chat.commands"), "chat.commands")
     reply_surface = _chat_reply_surface(params)
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
     session_id = _optional_string(params, "session_id")
@@ -235,9 +232,7 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
     ``directory`` (relative to the root, ``""`` is the root) it carries that
     directory's direct ``entries`` instead, ignored ones included and marked.
     """
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "working_project_id", "directory"}, "files.list"
-    )
+    _reject_unsupported(params, rpc_request_fields("files.list"), "files.list")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     working_project_id = _draft_working_project(params, project_id, session_id)

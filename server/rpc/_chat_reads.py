@@ -47,6 +47,7 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_session_address,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -87,7 +88,7 @@ class _ChatHistoryRead:
 
 async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
     """Read the exact completed Run, even when the Session has already continued."""
-    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "chat.run_result")
+    _reject_unsupported(params, rpc_request_fields("chat.run_result"), "chat.run_result")
     address = _required_session_address(params)
     run_id = _required_string(params, "run_id")
 
@@ -131,10 +132,8 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     which with everything below it is left out (complete each time). A ``before``
     page carries neither a background field nor the Compaction Policy.
     """
-    supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
-    if timeline:
-        supported_fields.add("child_limit")
-    _reject_unsupported(params, supported_fields, "chat.history")
+    method = "chat.timeline" if timeline else "chat.history"
+    _reject_unsupported(params, rpc_request_fields(method), method)
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
@@ -310,7 +309,7 @@ async def _chat_timeline_children(state: Any, params: JsonObject) -> JsonObject:
 
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "run_id", "before", "limit", "history_generation"},
+        rpc_request_fields("chat.timeline_children"),
         "chat.timeline_children",
     )
     address = _required_session_address(params)
@@ -339,7 +338,7 @@ async def _chat_tool_call(state: Any, params: JsonObject) -> JsonObject:
 
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "run_id", "tool_id", "history_generation"},
+        rpc_request_fields("chat.tool_call"),
         "chat.tool_call",
     )
     address = _required_session_address(params)
@@ -518,7 +517,7 @@ async def _with_learning_outcomes(
 
 
 async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.reflections")
+    _reject_unsupported(params, rpc_request_fields("chat.reflections"), "chat.reflections")
     address = _required_session_address(params)
     # Capture running reviews before the durable read. If one finishes during
     # that read, its persisted terminal status wins over the active snapshot.
@@ -657,8 +656,7 @@ def _empty_chat_history(agent_id: str) -> JsonObject:
 
 
 async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {"id", "agent_id", "session_id"}
-    _reject_unsupported(params, supported_fields, "subagent.inspect")
+    _reject_unsupported(params, rpc_request_fields("subagent.inspect"), "subagent.inspect")
     work_id = _required_string(params, "id")
     address = _required_session_address(params)
     try:
@@ -682,7 +680,7 @@ async def _subagent_tree(state: Any, params: JsonObject) -> JsonObject:
     ``session_id``) and the ``parent_id`` of the Sub-Agent it works for,
     ``None`` for a direct Sub-Agent of the Session.
     """
-    _reject_unsupported(params, {"agent_id", "session_id"}, "subagent.tree")
+    _reject_unsupported(params, rpc_request_fields("subagent.tree"), "subagent.tree")
     address = _required_session_address(params)
     try:
         subagents = await state.runtime.subagents.subagents(address)
@@ -705,7 +703,7 @@ async def _subagent_tree(state: Any, params: JsonObject) -> JsonObject:
 
 async def _chat_work(state: Any, params: JsonObject) -> JsonObject:
     """Current stoppable work of the complete Session subtree, without History."""
-    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.work")
+    _reject_unsupported(params, rpc_request_fields("chat.work"), "chat.work")
     address = _required_session_address(params)
     try:
         return cast(

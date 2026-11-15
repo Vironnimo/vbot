@@ -44,6 +44,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -72,12 +73,14 @@ def _performance(state: Any) -> PerformanceService:
 
 
 async def _snapshot(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "performance.snapshot")
+    _reject_unsupported(params, rpc_request_fields("performance.snapshot"), "performance.snapshot")
     return await _performance(state).snapshot()
 
 
 def _recording_start(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"label", "max_seconds"}, "performance.recording_start")
+    _reject_unsupported(
+        params, rpc_request_fields("performance.recording_start"), "performance.recording_start"
+    )
     label = _optional_string(params, "label")
     max_seconds = _optional_positive_integer(params, "max_seconds", max_value=MAX_RECORDING_SECONDS)
     try:
@@ -92,7 +95,9 @@ def _recording_start(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _recording_stop(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "performance.recording_stop")
+    _reject_unsupported(
+        params, rpc_request_fields("performance.recording_stop"), "performance.recording_stop"
+    )
     try:
         return await _performance(state).stop_recording()
     except Exception as exc:
@@ -100,7 +105,9 @@ async def _recording_stop(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _recording_list(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"limit"}, "performance.recording_list")
+    _reject_unsupported(
+        params, rpc_request_fields("performance.recording_list"), "performance.recording_list"
+    )
     limit = _optional_positive_integer(params, "limit", max_value=_MAX_LIST_LIMIT)
     recordings = await _performance(state).list_recordings(
         limit=RETAINED_RECORDINGS if limit is None else limit
@@ -109,13 +116,13 @@ async def _recording_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _heap(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"top"}, "performance.heap")
+    _reject_unsupported(params, rpc_request_fields("performance.heap"), "performance.heap")
     top = _optional_positive_integer(params, "top", max_value=MAX_HEAP_TOP)
     return await _performance(state).heap_census(top=DEFAULT_HEAP_TOP if top is None else top)
 
 
 async def _history(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"since", "until", "limit", "names"}, "performance.history")
+    _reject_unsupported(params, rpc_request_fields("performance.history"), "performance.history")
     since = _optional_timestamp(params, "since")
     until = _optional_timestamp(params, "until")
     limit = _optional_positive_integer(params, "limit", max_value=MAX_HISTORY_WINDOWS)

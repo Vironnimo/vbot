@@ -194,6 +194,59 @@ describe('ContributionSurface operations', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
+  it('matches custom Resource sources locally or across owners, only within the current epoch', async () => {
+    invoke.mockResolvedValue(idle);
+    const { source } = mountSurface();
+    await settle();
+    const publish = (owner = 'computer', overrides = {}) => {
+      for (const listener of listeners)
+        listener({
+          owner,
+          change: {
+            resource: `extension:${owner}:control`,
+            ids: [],
+            revision: 1,
+          },
+          serviceResource: {
+            owner,
+            epoch: 'epoch-a',
+            local_resource: 'control',
+            services: [],
+            ...overrides,
+          },
+        });
+    };
+    publish('other');
+    publish('computer', { epoch: 'retired-epoch' });
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    publish();
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    source.entries = [
+      {
+        ...descriptor,
+        source: { ...descriptor.source, resource: 'extension:other:control' },
+      },
+    ];
+    await settle();
+    const before = invoke.mock.calls.length;
+    publish();
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(before);
+    publish('other');
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(before + 1);
+    // A source without a Resource declaration is not an implicit subscriber.
+    source.entries = [{ ...descriptor, source: { operation: 'read' } }];
+    await settle();
+    const withoutResource = invoke.mock.calls.length;
+    publish();
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(withoutResource);
+  });
+
   it('rejects a source action outside the declared operation allowlist', async () => {
     invoke.mockResolvedValue(stop);
     const { source } = mountSurface();

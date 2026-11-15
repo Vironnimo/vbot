@@ -83,13 +83,29 @@
   });
   $effect(() =>
     registry?.subscribe((change) => {
-      if (change.owner != null && change.owner !== descriptor.extension) return;
-      if (
-        descriptor.source?.resource &&
-        change.change?.resource &&
-        descriptor.source.resource !== change.change.resource
-      )
-        return;
+      if (change.serviceResource) {
+        const resource = descriptor.source?.resource;
+        const publication = change.serviceResource;
+        if (
+          !resource ||
+          publication.epoch !== descriptor.epoch ||
+          (resource !== change.change?.resource &&
+            !(
+              publication.owner === descriptor.extension &&
+              resource === publication.local_resource
+            ))
+        )
+          return;
+      } else {
+        if (change.owner != null && change.owner !== descriptor.extension)
+          return;
+        if (
+          descriptor.source?.resource &&
+          change.change?.resource &&
+          descriptor.source.resource !== change.change.resource
+        )
+          return;
+      }
       void refresh();
     }),
   );

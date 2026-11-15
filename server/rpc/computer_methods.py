@@ -8,11 +8,11 @@ from server.access import ACCESS_DENIED, current_principal
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.validation import _reject_unsupported, rpc_request_fields
 
 
 def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "computers.list takes no parameters")
+    _reject_unsupported(params, rpc_request_fields("computers.list"), "computers.list")
     return {"computers": [item.describe() for item in state.runtime.computers.list()]}
 
 

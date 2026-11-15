@@ -49,6 +49,7 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_string,
     _required_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -61,9 +62,7 @@ _PURGE_IDS_MAX = 100
 
 
 async def _list_entries(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, {"kind", "agent_id", "project_id", "cursor", "limit"}, "archive.list"
-    )
+    _reject_unsupported(params, rpc_request_fields("archive.list"), "archive.list")
     filters = _entry_filter(params)
     cursor = _entry_cursor(params.get("cursor"))
     limit = _optional_positive_integer(params, "limit", max_value=_LIST_LIMIT_MAX) or 50
@@ -82,7 +81,7 @@ async def _list_entries(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _show_entry(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"entry_id", "session_limit"}, "archive.show")
+    _reject_unsupported(params, rpc_request_fields("archive.show"), "archive.show")
     entry_id = _required_string(params, "entry_id")
     session_limit = (
         _optional_positive_integer(params, "session_limit", max_value=_SHOW_SESSION_LIMIT_MAX)
@@ -97,7 +96,7 @@ async def _show_entry(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_agent_lifecycle
 async def _restore_entry(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"entry_id", "target_id"}, "archive.restore")
+    _reject_unsupported(params, rpc_request_fields("archive.restore"), "archive.restore")
     entry_id = _required_string(params, "entry_id")
     target_id = _optional_string(params, "target_id")
     try:
@@ -109,9 +108,7 @@ async def _restore_entry(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _purge_entries(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, {"entry_ids", "all", "kind", "agent_id", "project_id"}, "archive.purge"
-    )
+    _reject_unsupported(params, rpc_request_fields("archive.purge"), "archive.purge")
     purge_all = _optional_bool(params, "all", default=False)
     if purge_all == ("entry_ids" in params):
         raise RpcError(

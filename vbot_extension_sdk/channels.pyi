@@ -37,13 +37,13 @@ class ChannelAdapter(ABC):
         message: str | None,
         platform_target: str,
         *,
-        files: list[FileData] | None = ...,
-        thread_id: str | None = ...,
-        buttons: list[list[InteractionButton]] | None = ...,
+        files: list[FileData] | None = None,
+        thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None: ...
     @abstractmethod
     async def ensure_outbound_session(
-        self, platform_target: str, *, thread_id: str | None = ...
+        self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts: ...
 
 @dataclass(frozen=True)
@@ -52,15 +52,15 @@ class ConversationFacts:
     channel_id: str
     chat_id: str
     user_id: str
-    access_scope_id: str | None = ...
-    sender_role: GroupRole | None = ...
-    member_tools: ToolAccess | None = ...
-    thread_id: str | None = ...
-    kind: Literal["direct", "group"] = ...
-    user_display_name: str | None = ...
-    message_id: str | None = ...
-    mentioned_bot: bool = ...
-    is_reply_to_bot: bool = ...
+    access_scope_id: str | None = None
+    sender_role: GroupRole | None = None
+    member_tools: ToolAccess | None = None
+    thread_id: str | None = None
+    kind: Literal["direct", "group"] = "direct"
+    user_display_name: str | None = None
+    message_id: str | None = None
+    mentioned_bot: bool = False
+    is_reply_to_bot: bool = False
 
 @dataclass(frozen=True)
 class MessageFacts:
@@ -81,8 +81,8 @@ class RouteFacts:
 class ReplyPlanFacts:
     channel_id: str
     platform_target: str
-    reply_to_message_id: str | None = ...
-    thread_id: str | None = ...
+    reply_to_message_id: str | None = None
+    thread_id: str | None = None
 
 @dataclass(frozen=True)
 class FileData:
@@ -107,7 +107,7 @@ class DeniedChatFacts:
     def to_dict(self) -> dict[str, object]: ...
 
 class DeniedChatLog:
-    def __init__(self, limit: int = ...) -> None: ...
+    def __init__(self, limit: int = 20) -> None: ...
     def record(
         self, *, chat_id: str, kind: Literal["direct", "group"], display_name: str | None
     ) -> bool: ...
@@ -120,16 +120,16 @@ class ChannelConfig:
     id: str
     platform: str
     agent_id: str
-    dm_scope: str = ...
+    dm_scope: str = "per_conversation"
     allowed_chat_ids: list[str] = ...
-    token_env_var: str = ...
-    enabled: bool = ...
-    response_mode: str = ...
+    token_env_var: str = ""
+    enabled: bool = True
+    response_mode: str = "mention"
     mention_patterns: list[str] = ...
-    observe_unaddressed: bool = ...
-    app_token_env_var: str = ...
-    server_url: str = ...
-    email: EmailSettings | None = ...
+    observe_unaddressed: bool = False
+    app_token_env_var: str = ""
+    server_url: str = ""
+    email: EmailSettings | None = None
     settings: dict[str, Any] = ...
 
     def to_dict(self) -> dict[str, Any]: ...
@@ -142,13 +142,13 @@ class EmailSettings:
     address: str
     imap_host: str
     smtp_host: str
-    username: str = ...
-    imap_port: int = ...
-    smtp_port: int = ...
-    smtp_security: str = ...
-    folders: tuple[str, ...] = ...
-    require_sender_authentication: bool = ...
-    trusted_authserv_ids: tuple[str, ...] = ...
+    username: str = ""
+    imap_port: int = 993
+    smtp_port: int = 465
+    smtp_security: str = ""
+    folders: tuple[str, ...] = ("INBOX",)
+    require_sender_authentication: bool = True
+    trusted_authserv_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> EmailSettings: ...
@@ -163,12 +163,12 @@ class ChannelError(Exception):
 
     def __init__(
         self,
-        message: str = ...,
+        message: str = "",
         *,
-        retryable: bool = ...,
-        retry_after: float | None = ...,
-        possibly_delivered: bool = ...,
-        user_message: str | None = ...,
+        retryable: bool = False,
+        retry_after: float | None = None,
+        possibly_delivered: bool = False,
+        user_message: str | None = None,
     ) -> None: ...
 
 class ChannelConfigError(ChannelError): ...
@@ -195,9 +195,9 @@ class ChannelConversationEngine:
         conversation_pointers: Any,
         pending_replies: Any,
         observation_inbox: Any,
-        previous_observations: tuple[asyncio.Task[None], ...] = ...,
-        run_button_binding_registry: Any | None = ...,
-        access_registry: Any | None = ...,
+        previous_observations: tuple[asyncio.Task[None], ...] = (),
+        run_button_binding_registry: Any | None = None,
+        access_registry: Any | None = None,
         tool_catalog: Callable[[], Sequence[Any]] = ...,
     ) -> None: ...
     @property
@@ -210,7 +210,7 @@ class ChannelConversationEngine:
     async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts: ...
     async def migrate_group_conversation(self, old_chat_id: str, new_chat_id: str) -> bool: ...
     def should_respond(
-        self, conversation: ConversationFacts, gating_texts: Sequence[str | None] = ...
+        self, conversation: ConversationFacts, gating_texts: Sequence[str | None] = ()
     ) -> bool: ...
     def is_command(self, message_text: str) -> bool: ...
     async def handle_inbound_text(
@@ -218,16 +218,16 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
         message_text: str,
         *,
-        raw_message: Any | None = ...,
-        observed_context: Sequence[tuple[ConversationFacts, str]] = ...,
+        raw_message: Any | None = None,
+        observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool: ...
     async def handle_inbound_media(
         self,
         conversation: ConversationFacts,
         raw_messages: tuple[Any, ...],
         *,
-        companion_text: str | None = ...,
-        observed_context: Sequence[tuple[ConversationFacts, str]] = ...,
+        companion_text: str | None = None,
+        observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool: ...
     async def trigger_internal_reply(
         self, conversation: ConversationFacts, prompt: str
@@ -247,12 +247,12 @@ class ConversationTransport(typing.Protocol):
         platform_target: str,
         text: str,
         *,
-        reply_to_message_id: str | None = ...,
-        thread_id: str | None = ...,
-        buttons: list[list[InteractionButton]] | None = ...,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None: ...
     def activity_indicator(
-        self, platform_target: str, thread_id: str | None = ...
+        self, platform_target: str, thread_id: str | None = None
     ) -> contextlib.AbstractAsyncContextManager[None]: ...
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]: ...
     async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None: ...
@@ -272,8 +272,8 @@ class MediaBlock:
     attachment_id: str
     filename: str
     media_type: str
-    image_reference: int | None = ...
-    transcription: str | None = ...
+    image_reference: int | None = None
+    transcription: str | None = None
 
 @dataclass(frozen=True)
 class FileBlock:
@@ -291,7 +291,7 @@ class FileMentionBlock:
     size_bytes: int | None
 
 class AttachmentStore:
-    def __init__(self, data_dir: Path, *, max_size_bytes: int = ...) -> None: ...
+    def __init__(self, data_dir: Path, *, max_size_bytes: int = 20971520) -> None: ...
     def collect_session_orphans(self, sessions: Any) -> int: ...
     @property
     def max_size_bytes(self) -> int: ...
@@ -311,17 +311,17 @@ class AttachmentRecord:
     size_bytes: int
     stored_at: str
     file_path: str
-    transcription: str | None = ...
+    transcription: str | None = None
 
-GroupRole = Literal["admin", "member"]
+type GroupRole = Literal["admin", "member"]
 
 @dataclass(frozen=True, slots=True)
 class ToolAccess:
-    mode: str = ...
-    allowed: tuple[str, ...] = ...
-    denied: tuple[str, ...] = ...
-    granted: tuple[str, ...] = ...
-    fixed: bool = ...
-    live_call: bool = ...
+    mode: str = "all"
+    allowed: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
+    granted: tuple[str, ...] = ()
+    fixed: bool = False
+    live_call: bool = False
 
     def to_dict(self) -> dict[str, Any]: ...

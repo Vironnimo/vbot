@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -59,6 +60,10 @@ class ExtensionAPI:
     construction (tests), in which case the live reads fall back to the snapshot
     / an empty string.
     """
+
+    config: dict[str, Any]
+    logger: logging.Logger
+    operations: ExtensionOperations
 
     def __init__(
         self,

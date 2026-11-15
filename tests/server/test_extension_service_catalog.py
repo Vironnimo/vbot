@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +17,7 @@ from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceEr
 from core.runtime.runtime import Runtime
 from core.statistics import StatisticsIndex
 from core.utils.config import Config
+from server import extension_services
 from server.events import ServerEventBus
 from server.extension_services import (
     SERVICE_DEFINITIONS,
@@ -22,7 +25,12 @@ from server.extension_services import (
     audit_application_services,
     bind_application_services,
 )
-from server.rpc.methods import METHODS
+from server.rpc import client_methods
+from server.rpc._contracts import PARAMETER_CONTRACTS, RpcParameterContract
+from server.rpc._contracts.common import ServiceDefinition
+from server.rpc.dispatcher import dispatch_method
+from server.rpc.errors import RpcError
+from server.rpc.methods import METHODS, build_method_handlers
 from tests.core.automation.cron_test_support import make_service
 from tests.core.extensions.extension_test_support import write_extension
 from tests.server.rpc_test_support import StubAdapter, make_state, resource_changes
@@ -44,6 +52,8 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
         audit_application_services(
             {name: handler for name, handler in METHODS.items() if name != "agent.list"}
         )
+    with pytest.raises(ValueError):
+        audit_application_services({**METHODS, "agent.list": lambda _state, _params: {}})
     state = SimpleNamespace(runtime=SimpleNamespace(extension_services=ExtensionServiceCatalog()))
     services, close = _bind(state)
     try:
@@ -65,6 +75,72 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
 
 
 @pytest.mark.asyncio
+async def test_every_exposed_rpc_rejects_undeclared_fields_before_domain_admission() -> None:
+    # Exercise actual registered wrappers, including worker/lock/delegated
+    # handlers. No partial signature/source inspection can establish this gate.
+    for name, contract in PARAMETER_CONTRACTS.items():
+        assert contract.service[2]["properties"].keys() | contract.rpc_only_fields.keys() == (
+            contract.request_fields
+        )
+        assert all(reason.strip() for reason in contract.rpc_only_fields.values())
+        with pytest.raises(RpcError) as error:
+            await dispatch_method(object(), name, {"__undeclared_parameter": True}, METHODS)
+        assert error.value.code == "invalid_request", name
+
+
+@pytest.mark.asyncio
+async def test_shared_parameter_additions_reach_rpc_and_services_with_explicit_rpc_only_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Model a future canonical parameter addition at its single owner. The
+    # ordinary RPC and Extension publication must both pick it up, while an
+    # intentionally narrower Service still refuses an explained operator field.
+    name = "client.list"
+    parameters = deepcopy(PARAMETER_CONTRACTS[name].service[2])
+    parameters["properties"]["label"] = {"type": "string"}
+    definition: ServiceDefinition = (name, "query", parameters, ("clients",))
+    contract = RpcParameterContract(
+        definition, {"operator_context": "This field belongs to the authenticated RPC accessor."}
+    )
+    monkeypatch.setitem(PARAMETER_CONTRACTS, name, contract)
+    monkeypatch.setattr(
+        extension_services,
+        "SERVICE_DEFINITIONS",
+        tuple(definition if row[0] == name else row for row in SERVICE_DEFINITIONS),
+    )
+    called = []
+
+    def handler(_state: Any, params: dict[str, Any]) -> dict[str, Any]:
+        called.append(params)
+        return params
+
+    monkeypatch.setattr(client_methods, "method_handlers", lambda: {name: handler})
+    handlers = build_method_handlers()
+    audit_application_services(handlers)
+    catalog = ExtensionServiceCatalog()
+    state = SimpleNamespace(runtime=SimpleNamespace(extension_services=catalog))
+    close = bind_application_services(state, handlers)
+    services = catalog.for_owner(ExtensionRegistrationIdentity("catalog-test", "one"), lambda: None)
+    try:
+        described = next(item for item in services.describe()["services"] if item["name"] == name)
+        assert described["parameters"]["properties"] == {"label": {"type": "string"}}
+        assert await dispatch_method(state, name, {"label": "rpc"}, handlers) == {"label": "rpc"}
+        assert await services.query(name, {"label": "extension"}) == {"label": "extension"}
+        assert await dispatch_method(state, name, {"operator_context": True}, handlers) == {
+            "operator_context": True
+        }
+        with pytest.raises(ExtensionServiceError) as excluded:
+            await services.query(name, {"operator_context": True})
+        assert excluded.value.data["path"] == ["operator_context"]
+        with pytest.raises(RpcError) as undeclared:
+            await dispatch_method(state, name, {"future_unreviewed": True}, handlers)
+        assert undeclared.value.code == "invalid_request"
+        assert called == [{"label": "rpc"}, {"label": "extension"}, {"operator_context": True}]
+    finally:
+        close()
+
+
+@pytest.mark.asyncio
 async def test_custom_resources_refresh_browser_pages_without_exporting_private_scopes(
     tmp_path: Path,
 ) -> None:
@@ -73,8 +149,11 @@ async def test_custom_resources_refresh_browser_pages_without_exporting_private_
         "provider",
         "def register(api):\n"
         "    api.register_resource('items')\n"
+        "    api.register_resource('other')\n"
         "    api.register_service('read', 'query', {'type': 'object'}, "
-        "lambda params: {'items': [1]}, resources=['items'])\n",
+        "lambda params: {'items': [1]}, resources=['items'])\n"
+        "    api.register_service('unrelated', 'query', {'type': 'object'}, "
+        "lambda params: {}, resources=['other'])\n",
     )
     registry = await ExtensionRegistry.aload(tmp_path)
     catalog = ExtensionServiceCatalog()
@@ -84,12 +163,44 @@ async def test_custom_resources_refresh_browser_pages_without_exporting_private_
     )
     consumer, close = _bind(state)
     publisher = catalog.for_owner(registry.registration_identity("provider"), lambda: None)
+    observed = asyncio.Event()
+    observations: list[dict[str, Any]] = []
+
+    def observe(event: dict[str, Any]) -> None:
+        observations.append(event)
+        observed.set()
+
+    subscription = consumer.subscribe(["extension:provider:items"], observe)
     try:
         # Installing the app binding preserves already registered Extension exports.
         assert await consumer.query("extension:provider:read") == {"items": [1]}
         publisher.publish("items", {"record": "private-record"})
-        assert resource_changes(state) == [{"kind": "extensions"}]
+        await asyncio.wait_for(observed.wait(), 1)
+        assert observations == [
+            {
+                "kind": "extension:provider:items",
+                "revision": 1,
+                "scope": {"record": "private-record"},
+            }
+        ]
+        publisher.publish("items")
+        assert resource_changes(state) == []
+        assert [(event["type"], event["payload"]) for event in state.event_bus.events] == [
+            (
+                "extension_resource_changed",
+                {
+                    "owner": "provider",
+                    "epoch": registry.registration_identity("provider").epoch,
+                    "resource": "extension:provider:items",
+                    "local_resource": "items",
+                    "revision": revision,
+                    "services": ["extension:provider:read"],
+                },
+            )
+            for revision in (1, 2)
+        ]
     finally:
+        subscription.close()
         close()
         catalog.close()
 
@@ -307,10 +418,20 @@ async def test_service_settings_provider_and_channel_changes_keep_live_conflict_
                 "platform": "telegram",
                 "agent_id": "service-agent",
                 "enabled": False,
-                "token_env_var": "SERVICE_TEST_TOKEN",
+                "token": "test-owned-channel-credential",
             },
         )
         assert channel["id"] == "service-channel"
+        assert channel["credential"]["saved"] is True
+        assert runtime.storage.load_environment()[channel["token_env_var"]] == (
+            "test-owned-channel-credential"
+        )
+        public_results = {
+            "created": channel,
+            "channels": await services.query("channel.list"),
+            "settings": await services.query("settings.get"),
+        }
+        assert "test-owned-channel-credential" not in json.dumps(public_results)
         await services.execute("channel.update", {"id": "service-channel", "response_mode": "all"})
         assert (await runtime.channel_service.get_channel("service-channel")).response_mode == "all"
         await services.execute("channel.delete", {"id": "service-channel"})

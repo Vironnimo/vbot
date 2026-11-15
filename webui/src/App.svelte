@@ -557,6 +557,7 @@
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onPublicResourceChange: extensions.publicChange,
+    onExtensionResourceChange: extensions.publishResourceChange,
     onExtensionNotification: extensions.notify,
     onPortalsChanged: invalidatePortals,
     onCheckWebuiBuild: checkWebuiBuild,

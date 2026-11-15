@@ -307,6 +307,9 @@
       window: child,
       nonce: newNonce(),
       descriptor: captured,
+      services: Array.isArray(descriptor.services)
+        ? [...descriptor.services]
+        : [],
       ready: false,
       allowedUrls: [],
       autosaveFlushes: new Map(),
@@ -889,7 +892,16 @@
   function forwardInvalidation(next) {
     const context = frameContext;
     if (!context?.ready) return;
-    if (next.owner != null && next.owner !== context.descriptor.owner) return;
+    if (next.serviceResource) {
+      if (
+        next.serviceResource.epoch !== context.descriptor.epoch ||
+        !next.serviceResource.services.some((name) =>
+          context.services.includes(name),
+        )
+      )
+        return;
+    } else if (next.owner != null && next.owner !== context.descriptor.owner)
+      return;
     const invalidation = {
       revision: next.revision ?? null,
       change: validChange(next.change)

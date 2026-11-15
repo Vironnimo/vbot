@@ -54,6 +54,7 @@ from server.rpc.validation import (
     _ensure_model_connection_supported,
     _reject_unsupported,
     _required_string,
+    rpc_request_fields,
 )
 
 if TYPE_CHECKING:
@@ -87,8 +88,7 @@ async def _get_settings_raw(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _get_public_settings(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.values does not accept params")
+    _reject_unsupported(params, rpc_request_fields("settings.values"), "settings.values")
     try:
         values = build_effective_settings(
             await _SETTINGS_READS.run(state.runtime.storage.load_settings)
@@ -100,7 +100,7 @@ async def _get_public_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _settings_catalog(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"prefix"}, "settings.catalog")
+    _reject_unsupported(params, rpc_request_fields("settings.catalog"), "settings.catalog")
     prefix = params.get("prefix")
     if prefix is not None and not isinstance(prefix, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.prefix must be a string")
@@ -140,7 +140,7 @@ async def _settings_catalog(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _get_setting_path(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"path", "allow_missing"}, "settings.get_path")
+    _reject_unsupported(params, rpc_request_fields("settings.get_path"), "settings.get_path")
     path = _required_string(params, "path")
     allow_missing = params.get("allow_missing", False)
     if not isinstance(allow_missing, bool):
@@ -162,7 +162,7 @@ async def _get_setting_path(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"operations"}, "settings.patch")
+    _reject_unsupported(params, rpc_request_fields("settings.patch"), "settings.patch")
     try:
         operations = parse_patch_operations(params.get("operations"))
     except SettingsPathError as exc:
@@ -203,8 +203,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _get_settings(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.get does not accept params")
+    _reject_unsupported(params, rpc_request_fields("settings.get"), "settings.get")
     try:
         return await _settings_response(state)
     except Exception as exc:

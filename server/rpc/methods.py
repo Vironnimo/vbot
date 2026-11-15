@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from functools import wraps
+from typing import TYPE_CHECKING, Any
 
 from server.rpc import (
     access_methods,
@@ -49,6 +50,10 @@ from server.rpc import (
 )
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.dispatcher import dispatch_rpc as _dispatch_rpc_envelope
+from server.rpc.validation import _reject_unsupported
+
+if TYPE_CHECKING:
+    from server.rpc._contracts import RpcParameterContract
 
 JsonObject = dict[str, Any]
 
@@ -101,7 +106,30 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         access_methods,
     ):
         handlers.update(registry.method_handlers())
-    return handlers
+    from server.rpc._contracts import PARAMETER_CONTRACTS
+
+    return {
+        name: _with_parameter_contract(handler, PARAMETER_CONTRACTS[name])
+        if name in PARAMETER_CONTRACTS
+        else handler
+        for name, handler in handlers.items()
+    }
+
+
+def _with_parameter_contract(
+    handler: RpcMethodHandler, contract: RpcParameterContract
+) -> RpcMethodHandler:
+    """Apply the shared wire envelope before any domain or mutation admission."""
+
+    @wraps(handler)
+    def validated(state: Any, params: JsonObject) -> Any:
+        _reject_unsupported(params, contract.request_fields, contract.name)
+        return handler(state, params)
+
+    # Audit the actual registered callable, including wrappers around domain
+    # locks and workers. A source parser cannot prove this for delegated RPCs.
+    validated.__rpc_parameter_contract__ = contract  # type: ignore[attr-defined]
+    return validated
 
 
 METHODS = build_method_handlers()

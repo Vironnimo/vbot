@@ -23,6 +23,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -31,8 +32,7 @@ _LOGGER = get_logger("server.rpc.settings")
 
 
 def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "task_model.settings does not accept params")
+    _reject_unsupported(params, rpc_request_fields("task_model.settings"), "task_model.settings")
     try:
         return {"model_tasks": state.runtime.model_tasks.settings()}
     except Exception as exc:
@@ -40,7 +40,7 @@ def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"model_tasks", "base"}, "task_model.update")
+    _reject_unsupported(params, rpc_request_fields("task_model.update"), "task_model.update")
     try:
         settings_update = parse_settings_update({"model_tasks": params.get("model_tasks")})
         # Like `settings.update`: the caller's view of the bindings it writes,
@@ -74,7 +74,9 @@ async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"task_type"}, "task_model.list_targets")
+    _reject_unsupported(
+        params, rpc_request_fields("task_model.list_targets"), "task_model.list_targets"
+    )
     task_type = _required_string(params, "task_type")
     try:
         targets = state.runtime.model_tasks.list_targets(task_type)
@@ -86,7 +88,7 @@ def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
 def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
     """Report whether one configured Task Model is currently executable."""
 
-    _reject_unsupported(params, {"task_type"}, "task_model.status")
+    _reject_unsupported(params, rpc_request_fields("task_model.status"), "task_model.status")
     task_type = _required_string(params, "task_type")
     try:
         normalized_task_type = validate_task_type(task_type)
@@ -118,7 +120,7 @@ def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"task_type", "target"}, "task_model.options")
+    _reject_unsupported(params, rpc_request_fields("task_model.options"), "task_model.options")
     task_type = _required_string(params, "task_type")
     target = params.get("target")
     if target is not None and (not isinstance(target, str) or not target.strip()):
@@ -148,7 +150,9 @@ def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"task_type", "set", "unset"}, "task_model.patch_options")
+    _reject_unsupported(
+        params, rpc_request_fields("task_model.patch_options"), "task_model.patch_options"
+    )
     task_type = _required_string(params, "task_type")
     set_values = params.get("set", {})
     unset_names = params.get("unset", [])
@@ -214,17 +218,21 @@ def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
 
 def _speech_prepare_transcription(state: Any, params: JsonObject) -> JsonObject:
     """Start loading the bound local STT model because a transcription is coming."""
-    _reject_unsupported(params, set(), "speech.prepare_transcription")
+    _reject_unsupported(
+        params, rpc_request_fields("speech.prepare_transcription"), "speech.prepare_transcription"
+    )
     return {"state": state.runtime.speech.prepare_transcription()}
 
 
 def _local_speech_memory_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "speech.local_memory_status")
+    _reject_unsupported(
+        params, rpc_request_fields("speech.local_memory_status"), "speech.local_memory_status"
+    )
     return dict(state.runtime.speech.local_memory_status())
 
 
 async def _local_speech_unload(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"target"}, "speech.local_unload")
+    _reject_unsupported(params, rpc_request_fields("speech.local_unload"), "speech.local_unload")
     target = params.get("target")
     if not isinstance(target, str) or not target:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a non-empty string")
@@ -247,7 +255,10 @@ def _owned_local_setup(state: Any, target: str) -> Any | None:
 
 
 def _local_target(params: JsonObject, method: str) -> str:
-    _reject_unsupported(params, {"target"}, method)
+    # Restart is an operator-only RPC; all exposed local operations share the
+    # canonical parameter descriptor with their Extension Service.
+    fields = {"target"} if method == "speech.local_setup_restart" else rpc_request_fields(method)
+    _reject_unsupported(params, fields, method)
     target = params.get("target")
     if not isinstance(target, str) or not target.startswith("local/"):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a local target id")
@@ -280,7 +291,11 @@ async def _local_setup_cancel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _local_memory_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "task_model.local_memory_status")
+    _reject_unsupported(
+        params,
+        rpc_request_fields("task_model.local_memory_status"),
+        "task_model.local_memory_status",
+    )
     return {
         "models": [
             model

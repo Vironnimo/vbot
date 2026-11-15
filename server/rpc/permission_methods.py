@@ -50,6 +50,7 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_session_address,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -72,9 +73,7 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
     the rule set of an Agent being created: it inherits the shared default and
     the preview keeps the placeholders of folders the Agent does not have yet.
     """
-    _reject_unsupported(
-        params, {"permission_rules", "agent_id", "new_agent"}, "permissions.validate"
-    )
+    _reject_unsupported(params, rpc_request_fields("permissions.validate"), "permissions.validate")
     if "permission_rules" not in params:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -170,9 +169,7 @@ async def _session_permissions(state: Any, params: JsonObject) -> JsonObject:
     ``session_grants`` are the Session Grants, the allow rules the user added
     while approving Tool calls; the Agent's layer already includes them.
     """
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "working_project_id"}, "permissions.session"
-    )
+    _reject_unsupported(params, rpc_request_fields("permissions.session"), "permissions.session")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     requested = _draft_working_project(params, project_id, session_id)
@@ -330,7 +327,7 @@ def _rules_or_none(stored: dict[str, Any] | None) -> PermissionRules | None:
 
 
 async def _pending_approvals(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "permissions.pending")
+    _reject_unsupported(params, rpc_request_fields("permissions.pending"), "permissions.pending")
     return cast(JsonObject, state.chat_runs.approvals_snapshot())
 
 

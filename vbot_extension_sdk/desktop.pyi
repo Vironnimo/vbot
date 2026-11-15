@@ -15,7 +15,7 @@ DESKTOP_EXTENSION_API_VERSION: Final[int] = 2
 
 class DesktopExtensionAPI:
     def __init__(
-        self, owner: str, *, source: str = ..., revision: str = ..., legacy: bool = ...
+        self, owner: str, *, source: str = "", revision: str = "", legacy: bool = False
     ) -> None: ...
     def register_capability(
         self,
@@ -23,8 +23,8 @@ class DesktopExtensionAPI:
         label: str,
         factory: HandlerFactory,
         *,
-        description: str = ...,
-        available: bool = ...,
+        description: str = "",
+        available: bool = True,
     ) -> None: ...
 
 class ExecutionHandler(typing.Protocol):
@@ -42,9 +42,9 @@ class NativeCapability:
     label: str
     description: str
     factory: HandlerFactory
-    available: bool = ...
-    source: str = ...
-    revision: str = ...
+    available: bool = True
+    source: str = ""
+    revision: str = ""
 
     @property
     def identity(self) -> tuple[str, str]: ...

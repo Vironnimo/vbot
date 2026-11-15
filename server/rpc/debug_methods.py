@@ -39,7 +39,7 @@ from server.rpc.provider_access import (
     _connection_models_endpoint,
     _provider_connection,
 )
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 _logger = logging.getLogger("vbot.server.rpc.debug_methods")
@@ -87,8 +87,7 @@ async def _debug_speech_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _debug_speech_clear(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.speech_clear does not accept params")
+    _reject_unsupported(params, rpc_request_fields("debug.speech_clear"), "debug.speech_clear")
     try:
         await _make_speech_store(state.runtime).clear_async()
         publish_resource_changed(state, RESOURCE_KIND_DEBUG_TRACES)
@@ -204,8 +203,7 @@ async def _debug_status(state: Any, params: JsonObject) -> JsonObject:
     Always available — does not gate on ``debug.enabled`` so the
     frontend can discover the current state.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.status does not accept params")
+    _reject_unsupported(params, rpc_request_fields("debug.status"), "debug.status")
     try:
         runtime = state.runtime
         debug_settings = runtime.storage.load_debug_settings()
@@ -228,8 +226,7 @@ async def _debug_trace_list(state: Any, params: JsonObject) -> JsonObject:
 
     Requires ``debug.enabled`` to be ``true``.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.trace_list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("debug.trace_list"), "debug.trace_list")
     try:
         runtime = state.runtime
         _ensure_debug_enabled(runtime)
@@ -246,7 +243,7 @@ async def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
     Requires ``debug.enabled`` to be ``true``.
     """
     trace_id = _required_string(params, "trace_id")
-    _reject_unsupported(params, {"trace_id"}, "debug.trace_get")
+    _reject_unsupported(params, rpc_request_fields("debug.trace_get"), "debug.trace_get")
     try:
         runtime = state.runtime
         _ensure_debug_enabled(runtime)
@@ -266,8 +263,7 @@ async def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
 
     **Always allowed** — does not gate on ``debug.enabled``.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "debug.trace_clear does not accept params")
+    _reject_unsupported(params, rpc_request_fields("debug.trace_clear"), "debug.trace_clear")
     try:
         runtime = state.runtime
         store = _make_debug_store(runtime)
@@ -290,7 +286,7 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
     """
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
-    _reject_unsupported(params, {"provider_id", "connection_id"}, "debug.model_probe")
+    _reject_unsupported(params, rpc_request_fields("debug.model_probe"), "debug.model_probe")
 
     runtime = state.runtime
     _ensure_debug_enabled(runtime)

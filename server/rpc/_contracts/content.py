@@ -761,6 +761,8 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     ),
 )
 
+RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {}
+
 SERVICE_EXCLUSIONS = {
     "cron.webhook_secret": (
         "Reveals a bearer credential; Extensions use owned triggers or application services."

@@ -33,6 +33,8 @@ PENDING_INPUTS_RESOURCE = "pending_inputs"
 class ExtensionOperationError(ValueError):
     """An expected management refusal with an Extension-owned accessor code."""
 
+    code: str
+
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code

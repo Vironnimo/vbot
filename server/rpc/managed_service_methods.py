@@ -14,7 +14,7 @@ from core.utils.workers import BoundedWorkerPool
 from server.rpc._mutations import require_mutation_available, state_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 from server.update_availability import owning_installation
 
 JsonObject = dict[str, Any]
@@ -192,7 +192,7 @@ def _service_id(params: JsonObject) -> None:
 
 
 async def _get(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "managed_service.get")
+    _reject_unsupported(params, rpc_request_fields("managed_service.get"), "managed_service.get")
     _service_id(params)
     try:
         return await _operations(state).status()
@@ -202,7 +202,7 @@ async def _get(state: Any, params: JsonObject) -> JsonObject:
 
 async def _apply(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
-        params, {"id", "action", "plan_id", "allow_prerequisites"}, "managed_service.apply"
+        params, rpc_request_fields("managed_service.apply"), "managed_service.apply"
     )
     _service_id(params)
     action = _required_string(params, "action")

@@ -25,6 +25,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_agent_address,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -34,26 +35,7 @@ BOOTSTRAP_MODES = frozenset(("once", "always"))
 
 
 async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {
-        "agent_id",
-        "name",
-        "prompt",
-        "schedule_type",
-        "cron_expression",
-        "interval_seconds",
-        "run_at",
-        "event_id",
-        "event_time",
-        "repeat",
-        "session_id",
-        "working_project_id",
-        "run_overrides",
-        "delivery",
-        "notification_policy",
-        "watch",
-        "email",
-    }
-    _reject_unsupported(params, supported_fields, "cron.create")
+    _reject_unsupported(params, rpc_request_fields("cron.create"), "cron.create")
 
     # The target rides the outside ``agent@projekt`` address form, parsed once at
     # the edge into a bare ``agent_id`` plus the optional ``project_id`` stored on
@@ -162,8 +144,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _cron_list(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "cron.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("cron.list"), "cron.list")
 
     try:
         jobs = state.runtime.cron_service.list_jobs()
@@ -177,7 +158,7 @@ def _cron_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_activity(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "cron.activity")
+    _reject_unsupported(params, rpc_request_fields("cron.activity"), "cron.activity")
     try:
         sessions = state.runtime.chat_sessions
         from server.rpc.event_bridge import session_activity_service
@@ -198,7 +179,7 @@ async def _cron_activity(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_runs(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "before", "limit"}, "cron.runs")
+    _reject_unsupported(params, rpc_request_fields("cron.runs"), "cron.runs")
     job_id = _required_string(params, "id")
     before = _optional_positive_integer(params, "before")
     limit = _optional_positive_integer(params, "limit") or 5
@@ -226,7 +207,7 @@ async def _cron_runs(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_mark_read(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "through", "alert_at"}, "cron.mark_read")
+    _reject_unsupported(params, rpc_request_fields("cron.mark_read"), "cron.mark_read")
     job_id = _required_string(params, "id")
     through = _optional_positive_integer(params, "through")
     alert_at = _optional_string(params, "alert_at")
@@ -250,28 +231,7 @@ async def _cron_mark_read(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {
-        "id",
-        "agent_id",
-        "name",
-        "prompt",
-        "schedule_type",
-        "cron_expression",
-        "interval_seconds",
-        "run_at",
-        "event_id",
-        "event_time",
-        "repeat",
-        "session_id",
-        "working_project_id",
-        "run_overrides",
-        "delivery",
-        "notification_policy",
-        "watch",
-        "email",
-        "status",
-    }
-    _reject_unsupported(params, supported_fields, "cron.update")
+    _reject_unsupported(params, rpc_request_fields("cron.update"), "cron.update")
 
     job_id = _required_string(params, "id")
     updates: JsonObject = {}
@@ -377,7 +337,7 @@ async def _cron_rotate_webhook_secret(state: Any, params: JsonObject) -> JsonObj
 
 
 async def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "cron.delete")
+    _reject_unsupported(params, rpc_request_fields("cron.delete"), "cron.delete")
 
     job_id = _required_string(params, "id")
     try:
@@ -388,7 +348,7 @@ async def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "cron.enable")
+    _reject_unsupported(params, rpc_request_fields("cron.enable"), "cron.enable")
 
     job_id = _required_string(params, "id")
     try:
@@ -399,7 +359,7 @@ async def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_retry_delivery(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "delivery"}, "cron.retry_delivery")
+    _reject_unsupported(params, rpc_request_fields("cron.retry_delivery"), "cron.retry_delivery")
     job_id = _required_string(params, "id")
     try:
         service = state.runtime.cron_service
@@ -420,7 +380,9 @@ async def _cron_retry_delivery(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_acknowledge_alert(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "cron.acknowledge_alert")
+    _reject_unsupported(
+        params, rpc_request_fields("cron.acknowledge_alert"), "cron.acknowledge_alert"
+    )
     job_id = _required_string(params, "id")
     try:
         job = await state.runtime.cron_service.acknowledge_alert(job_id, actor="rpc")
@@ -430,7 +392,7 @@ async def _cron_acknowledge_alert(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "cron.disable")
+    _reject_unsupported(params, rpc_request_fields("cron.disable"), "cron.disable")
 
     job_id = _required_string(params, "id")
     try:
@@ -618,7 +580,7 @@ def _email_response(cron_service: Any, job: Any) -> JsonObject | None:
 async def _bootstrap_create(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "name", "prompt", "mode", "session_id"},
+        rpc_request_fields("bootstrap.create"),
         "bootstrap.create",
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
@@ -643,8 +605,7 @@ async def _bootstrap_create(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _bootstrap_list(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "bootstrap.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("bootstrap.list"), "bootstrap.list")
     try:
         jobs = state.runtime.bootstrap_service.list_jobs()
     except Exception as exc:
@@ -655,7 +616,7 @@ def _bootstrap_list(state: Any, params: JsonObject) -> JsonObject:
 async def _bootstrap_update(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"id", "agent_id", "name", "prompt", "mode", "session_id"},
+        rpc_request_fields("bootstrap.update"),
         "bootstrap.update",
     )
     job_id = _required_string(params, "id")
@@ -682,7 +643,7 @@ async def _bootstrap_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _bootstrap_delete(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "bootstrap.delete")
+    _reject_unsupported(params, rpc_request_fields("bootstrap.delete"), "bootstrap.delete")
     job_id = _required_string(params, "id")
     try:
         state.runtime.bootstrap_service.delete_job(job_id, actor="rpc")
@@ -692,7 +653,7 @@ def _bootstrap_delete(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _bootstrap_enable(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "bootstrap.enable")
+    _reject_unsupported(params, rpc_request_fields("bootstrap.enable"), "bootstrap.enable")
     try:
         return _bootstrap_job_response(
             state.runtime.bootstrap_service.enable_job(_required_string(params, "id"), actor="rpc")
@@ -702,7 +663,7 @@ def _bootstrap_enable(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _bootstrap_disable(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "bootstrap.disable")
+    _reject_unsupported(params, rpc_request_fields("bootstrap.disable"), "bootstrap.disable")
     try:
         return _bootstrap_job_response(
             state.runtime.bootstrap_service.disable_job(_required_string(params, "id"), actor="rpc")

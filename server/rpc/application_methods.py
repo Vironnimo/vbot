@@ -18,7 +18,7 @@ from core.utils.server_control import is_authorized_control_token
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 from server.update_availability import UpdateAvailabilityWatch
 
 JsonObject = dict[str, Any]
@@ -184,7 +184,9 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
 
 async def _update_status(state: Any, params: JsonObject) -> JsonObject:
     # Whether the installation's update channel publishes a newer version.
-    _reject_unsupported(params, set(), "application.update_status")
+    _reject_unsupported(
+        params, rpc_request_fields("application.update_status"), "application.update_status"
+    )
     watch: UpdateAvailabilityWatch = state.update_availability
     return await watch.status()
 

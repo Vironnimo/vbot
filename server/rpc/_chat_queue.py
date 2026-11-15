@@ -30,6 +30,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_session_address,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -52,7 +53,7 @@ def _publish_queue_changed(state: Any, address: SessionAddress) -> None:
 
 
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.queue_list")
+    _reject_unsupported(params, rpc_request_fields("chat.queue_list"), "chat.queue_list")
 
     address = _required_session_address(params)
     chat_runs: ChatRunManager = state.chat_runs
@@ -70,7 +71,7 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_steer")
+    _reject_unsupported(params, rpc_request_fields("chat.queue_steer"), "chat.queue_steer")
     address = _required_session_address(params)
     item_id = _required_string(params, "item_id")
     try:
@@ -85,7 +86,7 @@ async def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_remove")
+    _reject_unsupported(params, rpc_request_fields("chat.queue_remove"), "chat.queue_remove")
 
     address = _required_session_address(params)
     item_id = _required_string(params, "item_id")

@@ -24,14 +24,14 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
     _required_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
 
 
 def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "terminal.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("terminal.list"), "terminal.list")
     manager = _terminal_manager(state)
     return {
         "groups": manager.list_groups_for_operator(),
@@ -41,13 +41,12 @@ def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _terminal_programs(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "terminal.programs does not accept params")
+    _reject_unsupported(params, rpc_request_fields("terminal.programs"), "terminal.programs")
     return {"running": await _terminal_manager(state).running_programs_for_operator()}
 
 
 async def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id"}, "terminal.read")
+    _reject_unsupported(params, rpc_request_fields("terminal.read"), "terminal.read")
     try:
         return dict(
             await _terminal_manager(state).read_for_operator(
@@ -59,7 +58,9 @@ async def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_group_create(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"name"}, "terminal.group.create")
+    _reject_unsupported(
+        params, rpc_request_fields("terminal.group.create"), "terminal.group.create"
+    )
     name = _group_name_param(params)
     try:
         group = _terminal_manager(state).create_group_for_operator(name)
@@ -69,7 +70,9 @@ def _terminal_group_create(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_group_rename(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"group_id", "name"}, "terminal.group.rename")
+    _reject_unsupported(
+        params, rpc_request_fields("terminal.group.rename"), "terminal.group.rename"
+    )
     group_id = _required_string(params, "group_id")
     name = _group_name_param(params)
     try:
@@ -82,7 +85,9 @@ def _terminal_group_rename(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_group_delete(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"group_id"}, "terminal.group.delete")
+    _reject_unsupported(
+        params, rpc_request_fields("terminal.group.delete"), "terminal.group.delete"
+    )
     group_id = _required_string(params, "group_id")
     try:
         result = _terminal_manager(state).delete_group_for_operator(group_id)
@@ -97,7 +102,7 @@ def _terminal_group_delete(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_move(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id", "group_id"}, "terminal.move")
+    _reject_unsupported(params, rpc_request_fields("terminal.move"), "terminal.move")
     terminal_id = _required_string(params, "terminal_id")
     if "group_id" not in params:
         raise RpcError(
@@ -114,7 +119,7 @@ def _terminal_move(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_group_order(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"group_id", "order"}, "terminal.group.order")
+    _reject_unsupported(params, rpc_request_fields("terminal.group.order"), "terminal.group.order")
     group_id = _required_string(params, "group_id")
     order = _required_string_list(params, "order")
     try:
@@ -218,7 +223,7 @@ async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _terminal_kill(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id"}, "terminal.kill")
+    _reject_unsupported(params, rpc_request_fields("terminal.kill"), "terminal.kill")
     terminal_id = _required_string(params, "terminal_id")
     try:
         terminal = await _terminal_manager(state).kill_for_operator(terminal_id)
@@ -228,7 +233,7 @@ async def _terminal_kill(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _terminal_forget(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id"}, "terminal.forget")
+    _reject_unsupported(params, rpc_request_fields("terminal.forget"), "terminal.forget")
     terminal_id = _required_string(params, "terminal_id")
     try:
         terminal = _terminal_manager(state).forget_for_operator(terminal_id)

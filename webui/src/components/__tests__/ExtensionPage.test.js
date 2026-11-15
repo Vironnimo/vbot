@@ -499,6 +499,52 @@ describe('ExtensionPage frame bridge', () => {
     expect(invalidations()[1]).not.toHaveProperty('change');
   });
 
+  it('delivers only declared Service Resources across owners and coalesces hidden publications', () => {
+    const page = openPage({
+      initialDescriptor: {
+        ...descriptor,
+        services: ['extension:provider:read'],
+      },
+    });
+    const invalidations = () =>
+      page.posted().filter((data) => data.type === 'vbot.extension.invalidate');
+    let hidden = true;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    const publish = (revision, overrides = {}) =>
+      component.invalidate({
+        owner: 'provider',
+        revision,
+        change: { resource: 'extension:provider:items', ids: [], revision },
+        serviceResource: {
+          owner: 'provider',
+          epoch: 'epoch-a',
+          local_resource: 'items',
+          services: ['extension:provider:read'],
+          ...overrides,
+        },
+      });
+    publish(1);
+    publish(2);
+    publish(3, { services: ['extension:provider:unrelated'] });
+    publish(4, { epoch: 'retired-epoch' });
+    expect(invalidations()).toEqual([]);
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(invalidations()).toEqual([
+      expect.objectContaining({
+        nonce: page.init.nonce,
+        epoch: 'epoch-a',
+        revision: 2,
+        change: { resource: 'extension:provider:items', ids: [], revision: 2 },
+      }),
+    ]);
+    // Reconnect/declaration refresh remains authoritative even when individual
+    // publications were missed or belonged to a different registry epoch.
+    component.invalidate({ owner: null, revision: 5 });
+    expect(invalidations()).toHaveLength(2);
+    expect(invalidations()[1]).not.toHaveProperty('change');
+  });
+
   it.each([
     [
       'reload',

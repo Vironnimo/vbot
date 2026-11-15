@@ -31,29 +31,12 @@ from server.rpc.provider_access import (
     _connection_reachability,
 )
 from server.rpc.statistics_methods import statistics_service
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
 _LOGGER = logging.getLogger("vbot.server.rpc.connection_methods")
 
-MODEL_LIST_FILTER_FIELDS = frozenset(
-    (
-        "provider_id",
-        "capability",
-        "capabilities",
-        "task",
-        "tasks",
-        "task_type",
-        "task_types",
-        "input_modality",
-        "input_modalities",
-        "output_modality",
-        "output_modalities",
-        "min_context_window",
-        "query",
-    )
-)
 
 MODEL_LIST_SORTS = ("name", "usage")
 
@@ -79,7 +62,7 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     when they cannot be read, the list stays in name order with
     ``usage_unavailable``.
     """
-    _reject_unsupported(params, MODEL_LIST_FILTER_FIELDS | {"sort"}, "model.list")
+    _reject_unsupported(params, rpc_request_fields("model.list"), "model.list")
     sort = params.get("sort", "name")
     if sort not in MODEL_LIST_SORTS:
         raise RpcError(
@@ -247,7 +230,7 @@ def _model_access_snapshot(
 async def _get_model(state: Any, params: JsonObject) -> JsonObject:
     """Return the complete public data for one exact Provider Model."""
 
-    _reject_unsupported(params, {"model"}, "model.get")
+    _reject_unsupported(params, rpc_request_fields("model.get"), "model.get")
     model_reference = _required_string(params, "model")
     bare_reference = (
         model_reference.rpartition("::")[0] if "::" in model_reference else model_reference
@@ -313,7 +296,9 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
 async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
     """Drop learned wire facts for a Provider or one of its Models, optionally on one Connection."""
 
-    _reject_unsupported(params, {"model", "connection"}, "model.forget_wire_facts")
+    _reject_unsupported(
+        params, rpc_request_fields("model.forget_wire_facts"), "model.forget_wire_facts"
+    )
     reference = _required_string(params, "model")
     bare_reference = reference.rpartition("::")[0] if "::" in reference else reference
     provider_id, _separator, model_id = bare_reference.partition("/")
@@ -345,7 +330,9 @@ async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
 async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObject:
     """Return provider slugs selectable for OpenRouter globally or per Model."""
 
-    _reject_unsupported(params, {"provider_id", "model_id"}, "provider routing options")
+    _reject_unsupported(
+        params, rpc_request_fields("provider.routing_options"), "provider routing options"
+    )
     provider_id = _required_string(params, "provider_id")
     if provider_id != "openrouter":
         raise RpcError(
@@ -429,9 +416,7 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, {"expected_resources_dir", "provider_id", "target"}, "model refresh"
-    )
+    _reject_unsupported(params, rpc_request_fields("model.refresh_db"), "model refresh")
     try:
         runtime = state.runtime
         target = params.get("target", _MODEL_REFRESH_TARGET_RUNTIME)
@@ -470,7 +455,7 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
 
 async def _model_favorites(state: Any, params: JsonObject) -> JsonObject:
     """Return the Model ids the user marked as favorites, for every Model picker."""
-    _reject_unsupported(params, set(), "model.favorites")
+    _reject_unsupported(params, rpc_request_fields("model.favorites"), "model.favorites")
     try:
         favorites = await _MODEL_READ_WORKERS.run(state.runtime.storage.load_model_favorites)
     except Exception as exc:
@@ -485,7 +470,7 @@ async def _set_model_favorite(state: Any, params: JsonObject) -> JsonObject:
     would lose each other's change. The id need not be in today's catalog: a
     favorite of a Model that left it waits for the Model to return.
     """
-    _reject_unsupported(params, {"model", "favorite"}, "model.set_favorite")
+    _reject_unsupported(params, rpc_request_fields("model.set_favorite"), "model.set_favorite")
     model = _required_string(params, "model").strip()
     favorite = params.get("favorite")
     if not isinstance(favorite, bool):

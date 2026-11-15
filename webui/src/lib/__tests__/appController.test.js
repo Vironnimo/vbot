@@ -659,9 +659,11 @@ describe('App controller', () => {
   it('hands an owner-scoped Extension change to its owner without reloading page descriptors', async () => {
     const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
     const onExtensionChange = vi.fn();
-    const { controller } = setup({
+    const onExtensionResourceChange = vi.fn();
+    const { actions, controller } = setup({
       onReloadExtensionPages,
       onExtensionChange,
+      onExtensionResourceChange,
     });
     const scope = {
       owner: 'swarm',
@@ -674,6 +676,26 @@ describe('App controller', () => {
 
     expect(onExtensionChange).toHaveBeenCalledExactlyOnceWith(scope);
     expect(onReloadExtensionPages).not.toHaveBeenCalled();
+
+    const publication = {
+      owner: 'provider',
+      epoch: 'epoch-a',
+      resource: 'extension:provider:items',
+      local_resource: 'items',
+      revision: 8,
+      services: ['extension:provider:read'],
+    };
+    actions.onPublicResourceChange.mockClear();
+    await controller.handleServerEvent({
+      type: 'extension_resource_changed',
+      payload: publication,
+    });
+    expect(onExtensionResourceChange).toHaveBeenCalledExactlyOnceWith(
+      publication,
+    );
+    expect(onReloadExtensionPages).not.toHaveBeenCalled();
+    expect(onExtensionChange).toHaveBeenCalledOnce();
+    expect(actions.onPublicResourceChange).not.toHaveBeenCalled();
 
     // An Extension reload carries no scope: its page descriptors may differ.
     await controller.handleServerEvent(resourceChanged('extensions'));

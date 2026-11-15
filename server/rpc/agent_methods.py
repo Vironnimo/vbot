@@ -69,6 +69,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
     _validate_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -87,7 +88,7 @@ async def _list_agents(state: Any) -> JsonObject:
 
 
 async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_ids", "expected_revision"}, "agent.reorder")
+    _reject_unsupported(params, rpc_request_fields("agent.reorder"), "agent.reorder")
     agent_ids = _validate_string_list("agent_ids", params.get("agent_ids"))
     expected_revision = params.get("expected_revision")
     if (
@@ -130,7 +131,7 @@ def _agent_list_response(state: Any, listing: Any) -> JsonObject:
 
 
 async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "agent.get")
+    _reject_unsupported(params, rpc_request_fields("agent.get"), "agent.get")
 
     agent_id = _required_string(params, "id")
 
@@ -142,7 +143,9 @@ async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
 
 async def _suggest_agent_description(state: Any, params: JsonObject) -> JsonObject:
     """Draft a description of an Identity Agent with its own Model; nothing is saved."""
-    _reject_unsupported(params, {"id"}, "agent.suggest_description")
+    _reject_unsupported(
+        params, rpc_request_fields("agent.suggest_description"), "agent.suggest_description"
+    )
     agent_id = _required_string(params, "id")
     try:
         description = await state.runtime.suggest_agent_description(agent_id)
@@ -162,7 +165,7 @@ def _soul_response(soul: SoulFile) -> JsonObject:
 
 
 async def _get_agent_soul(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "agent.soul.get")
+    _reject_unsupported(params, rpc_request_fields("agent.soul.get"), "agent.soul.get")
     agent_id = _required_string(params, "id")
     soul = await _run_agent_operation(state, state.runtime.agents.read_soul, agent_id)
     return _soul_response(soul)
@@ -170,7 +173,7 @@ async def _get_agent_soul(state: Any, params: JsonObject) -> JsonObject:
 
 async def _set_agent_soul(state: Any, params: JsonObject) -> JsonObject:
     """Replace SOUL.md at ``revision``; ``soul_conflict`` carries the current file."""
-    _reject_unsupported(params, {"id", "content", "revision"}, "agent.soul.set")
+    _reject_unsupported(params, rpc_request_fields("agent.soul.set"), "agent.soul.set")
     agent_id = _required_string(params, "id")
     content = params.get("content")
     if not isinstance(content, str):
@@ -291,7 +294,7 @@ async def _update_agent(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_agent_lifecycle
 async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "new_id"}, "agent.rename")
+    _reject_unsupported(params, rpc_request_fields("agent.rename"), "agent.rename")
     agent_id = _required_string(params, "id")
     new_agent_id = _required_string(params, "new_id")
     if agent_id == new_agent_id:
@@ -383,7 +386,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     live Agent, then purges that entry outside the lifecycle guard: a long purge
     must not hold the reference lock other mutations wait for.
     """
-    _reject_unsupported(params, {"id", "permanent"}, "agent.delete")
+    _reject_unsupported(params, rpc_request_fields("agent.delete"), "agent.delete")
     _required_string(params, "id")
     permanent = _optional_bool(params, "permanent", default=False)
     result = await _archive_agent(state, params)
@@ -441,34 +444,8 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -> JsonObject:
-    public_fields = {
-        "name",
-        "description",
-        "model",
-        "fallback_models",
-        "memory_prompt_mode",
-        "project_memory_enabled",
-        "temperature",
-        "top_p",
-        "thinking_effort",
-        "tool_access",
-        "allowed_skills",
-        "excluded_skills",
-        "tools",
-        "custom_system_prompt_enabled",
-        "compaction_policy",
-        "tool_loading",
-        "librarian_enabled",
-        "permission_rules",
-        "placement",
-    }
-    if not for_create:
-        public_fields.add("current_session_id")
-        public_fields.add("workspace")
-        public_fields.add("root_project_id")
-        public_fields.add("copy_workspace_identity_files")
-        public_fields.add("subagent_allow")
-        public_fields.add("context_commands")
+    method = "agent.create" if for_create else "agent.update"
+    public_fields = rpc_request_fields(method) - blocked
 
     if "subagent_allow" in params and "tools" in params:
         raise RpcError(

@@ -15,13 +15,13 @@ from typing import Any
 
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
 
 async def _status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "recall.status")
+    _reject_unsupported(params, rpc_request_fields("recall.status"), "recall.status")
     try:
         status = await state.runtime.recall.index_status()
     except Exception as exc:
@@ -30,7 +30,7 @@ async def _status(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _rebuild_index(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "recall.rebuild_index")
+    _reject_unsupported(params, rpc_request_fields("recall.rebuild_index"), "recall.rebuild_index")
     try:
         status = await state.runtime.recall.rebuild_index()
     except Exception as exc:

@@ -1,8 +1,11 @@
 """Bind the Extension service catalog to selected canonical application APIs.
 
 This is an allowlist, not a second RPC dispatcher. Domain handlers keep their
-validation, mutation locks, public projections and change publications. Private
-control, authentication, credentials, approvals and raw Settings are absent.
+validation, mutation locks, public projections and change publications. Trusted
+Extensions can update structured Settings and supply write-only Channel tokens
+through their canonical configuration operations. Raw Settings access, global
+credential management, credential reads, authentication and human approvals are
+excluded; these Services never acquire a human or Device identity.
 """
 
 from __future__ import annotations
@@ -13,13 +16,11 @@ from contextvars import ContextVar
 from typing import Any
 
 from core.extensions.services import ExtensionService, ExtensionServiceError
-from server._extension_service_contracts import content, conversation, system
-from server._extension_service_contracts.common import ServiceDefinition
 from server.access import bound_principal
-from server.events import ALLOWED_RESOURCE_KINDS
+from server.events import ALLOWED_RESOURCE_KINDS, EXTENSION_RESOURCE_CHANGED_EVENT
+from server.rpc._contracts import PARAMETER_CONTRACTS, SERVICE_DEFINITIONS, SERVICE_EXCLUSIONS
 from server.rpc.dispatcher import RpcMethodHandler, dispatch_method
 from server.rpc.errors import RpcError
-from server.rpc.event_bridge import publish_resource_changed
 
 type JsonObject = dict[str, Any]
 
@@ -29,18 +30,6 @@ _SERVICE_INVOCATION: ContextVar[bool] = ContextVar("extension_service_invocation
 def is_extension_service_call() -> bool:
     """Identify nonhuman integration ingress without trusting request parameters."""
     return _SERVICE_INVOCATION.get()
-
-
-SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
-    *conversation.SERVICE_DEFINITIONS,
-    *content.SERVICE_DEFINITIONS,
-    *system.SERVICE_DEFINITIONS,
-)
-SERVICE_EXCLUSIONS: dict[str, str] = {
-    **conversation.SERVICE_EXCLUSIONS,
-    **content.SERVICE_EXCLUSIONS,
-    **system.SERVICE_EXCLUSIONS,
-}
 
 
 def audit_application_services(handlers: Mapping[str, RpcMethodHandler]) -> None:
@@ -62,6 +51,14 @@ def audit_application_services(handlers: Mapping[str, RpcMethodHandler]) -> None
             "Application service audit differs from RPC registry: "
             f"unreviewed={missing}, stale={stale}"
         )
+    uncoupled = sorted(
+        name
+        for name in names
+        if getattr(handlers[name], "__rpc_parameter_contract__", None)
+        is not PARAMETER_CONTRACTS[name]
+    )
+    if uncoupled:
+        raise ValueError(f"Application services lack their canonical RPC field gate: {uncoupled}")
 
 
 @contextmanager
@@ -112,7 +109,9 @@ def bind_application_services(
         resources=ALLOWED_RESOURCE_KINDS,
         exclusions=SERVICE_EXCLUSIONS,
         export_context=extension_service_context,
-        publish_export=lambda _resource, _scope: publish_resource_changed(state, "extensions"),
+        publish_export=lambda event: state.event_bus.publish(
+            EXTENSION_RESOURCE_CHANGED_EVENT, event
+        ),
     )
 
     def close() -> None:

@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import ast
 import importlib
-import inspect
 import os
 import subprocess
 import sys
 import tomllib
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 import pytest
 
 import vbot_extension_sdk as sdk
 from cli.application.payload import app_paths
+from tests.core.extensions.sdk_contract import HOST_CONSTRUCTORS, check_annotations
 
 ROOT = Path(__file__).resolve().parents[3]
 SDK_MODULES = ("", ".providers", ".channels", ".desktop", ".tools", ".commands")
@@ -26,7 +25,8 @@ SDK_MODULES = ("", ".providers", ".channels", ".desktop", ".tools", ".commands")
 def test_sdk_exports_keep_host_identity(suffix: str) -> None:
     public = importlib.import_module(f"vbot_extension_sdk{suffix}")
     for name, owner in public._EXPORTS.items():
-        assert getattr(public, name) is getattr(importlib.import_module(owner), name)
+        module, _, attribute = owner.partition(":")
+        assert getattr(public, name) is getattr(importlib.import_module(module), attribute or name)
         assert name in dir(public)
 
 
@@ -39,48 +39,41 @@ def test_sdk_negotiates_running_host_version() -> None:
         sdk.require_api(True)
 
 
-@pytest.mark.parametrize(
-    ("module", "names"),
-    (
-        ("", ("ExtensionAPI", "ExtensionServices", "ExtensionSubscription")),
-        ("providers", ("ProviderAdapter",)),
-        ("channels", ("ChannelAdapter", "ConversationTransport")),
-        ("desktop", ("DesktopExtensionAPI", "ExecutionHandler")),
-    ),
-)
-def test_sdk_type_declarations_preserve_callable_shapes(
-    module: str, names: tuple[str, ...]
-) -> None:
-    public = importlib.import_module(f"vbot_extension_sdk{'.' + module if module else ''}")
-    stub = ast.parse((ROOT / "vbot_extension_sdk" / f"{module or '__init__'}.pyi").read_text())
-    classes = {node.name: node for node in stub.body if isinstance(node, ast.ClassDef)}
-    for name in names:
-        cls = getattr(public, name)
-        for node in classes[name].body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            actual: Any = getattr(cls, node.name)
-            if isinstance(inspect.getattr_static(cls, node.name), classmethod):
-                actual = actual.__func__
-            if isinstance(actual, property):
-                actual = actual.fget
-            parameters = list(inspect.signature(actual).parameters.values())
-            positional = [*node.args.posonlyargs, *node.args.args]
-            expected = [
-                (arg.arg, index >= len(positional) - len(node.args.defaults))
-                for index, arg in enumerate(positional)
-            ]
-            if node.args.vararg:
-                expected.append((node.args.vararg.arg, False))
-            expected.extend(
-                (arg.arg, default is not None)
-                for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults, strict=True)
-            )
-            if node.args.kwarg:
-                expected.append((node.args.kwarg.arg, False))
-            assert [
-                (p.name, p.default is not inspect.Parameter.empty) for p in parameters
-            ] == expected
+def test_sdk_declarations_match_the_complete_public_contract(tmp_path: Path) -> None:
+    # The distributed declaration is the public projection: implementations can
+    # have extra members, but every offered member and subclass duty is checked.
+    errors, aliases = check_annotations(ROOT)
+    assert not errors, "\n".join(errors)
+    config = tmp_path / "stubtest.ini"
+    config.write_text("[mypy]\npython_version = 3.14\nignore_missing_imports = True\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy.stubtest",
+            "vbot_extension_sdk",
+            "--concise",
+            "--ignore-missing-stub",
+            "--mypy-config-file",
+            str(config),
+        ],
+        cwd=ROOT,
+        env=dict(os.environ, MYPY_CACHE_DIR=str(tmp_path / "cache")),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=25,
+    )
+    # mypy.stubtest currently treats PEP 695 and Literal aliases as runtime
+    # classes. Each exact alias here has already passed structural comparison;
+    # no wildcard suppressions or unchecked alias exemptions are accepted.
+    remaining = [
+        line
+        for line in result.stdout.splitlines()
+        if line.split(" ", 1)[0] not in aliases | HOST_CONSTRUCTORS.keys()
+    ]
+    assert result.returncode in (0, 1), result.stdout + result.stderr
+    assert not remaining and not result.stderr, "\n".join(remaining) + result.stderr
 
 
 def test_sdk_wheel_is_current_dependency_free_and_present_in_payloads() -> None:
@@ -114,6 +107,24 @@ def test_sdk_wheel_is_current_dependency_free_and_present_in_payloads() -> None:
     project = tomllib.loads((ROOT / "sdk/python/pyproject.toml").read_text())["project"]
     assert project["version"] == sdk.SDK_VERSION
     assert project["requires-python"] == ">=3.14,<3.15"
+
+
+def test_sdk_contract_rejects_type_and_implementation_obligation_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vbot_extension_sdk.providers import ProviderAdapter
+
+    monkeypatch.setitem(sdk.ExtensionServices.query.__annotations__, "name", int)
+    monkeypatch.setattr(ProviderAdapter, "__abstractmethods__", {"send", "stream", "aclose", "new"})
+    monkeypatch.setattr(sdk, "ServiceKind", Literal["query", "execute", "new"])
+    monkeypatch.setitem(
+        importlib.import_module("vbot_extension_sdk")._EXPORTS, "Undeclared", "core.extensions"
+    )
+    errors, _ = check_annotations(ROOT)
+    assert any("ExtensionServices.query.name: annotation" in error for error in errors)
+    assert any("ProviderAdapter: abstract subclass obligations differ" in error for error in errors)
+    assert any("ServiceKind: type alias differs" in error for error in errors)
+    assert any("runtime export has no public declaration" in error for error in errors)
 
 
 def test_sdk_native_import_does_not_load_server_stack(tmp_path: Path) -> None:
@@ -187,7 +198,16 @@ async def use(provider: ProviderAdapter, channel: ChannelAdapter, host: Extensio
     assert result.returncode == 0, result.stdout + result.stderr
     consumer.write_text(
         consumer.read_text()
-        + "\nasync def invalid(p: ProviderAdapter) -> None:\n    await p.send([], model_id=123)\n"
+        + """
+from vbot_extension_sdk import ExtensionOperations
+from vbot_extension_sdk.commands import ExtensionCommandContext
+
+async def invalid(p: ProviderAdapter) -> None:
+    await p.send([], model_id=123)
+
+ExtensionOperations("unwired")
+ExtensionCommandContext("unwired")
+"""
     )
     result = subprocess.run(
         command,
@@ -200,3 +220,4 @@ async def use(provider: ProviderAdapter, channel: ChannelAdapter, host: Extensio
     )
     assert result.returncode == 1
     assert "[arg-type]" in result.stdout
+    assert result.stdout.count('expected "Never"') == 2

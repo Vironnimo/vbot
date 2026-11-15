@@ -199,6 +199,7 @@ class ProviderUsageLimitError(ProviderError):
     """
 
     failure_class = "usage_limit"
+    resets_at: datetime | None
 
     def __init__(self, message: str, *, resets_at: datetime | None = None) -> None:
         super().__init__(message, retryable=False)
@@ -225,6 +226,7 @@ class ProviderOutcomeUnknownError(ProviderError):
     """
 
     failure_class = "outcome_unknown"
+    operation_key: str
 
     code = "provider_outcome_unknown"
 

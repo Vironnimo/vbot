@@ -13,18 +13,13 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 _CALENDAR_READS = BoundedWorkerPool(name="calendar-rpc", max_workers=2)
 
-_WINDOW_FIELDS = frozenset({"from", "to"})
 # Texts a call may clear with null or "".
 _TEXT_FIELDS = ("description", "location", "rrule")
-_EVENT_FIELDS = frozenset({"title", "start", "end", "timezone", *_TEXT_FIELDS})
-_CREATE_FIELDS = _EVENT_FIELDS
-_UPDATE_FIELDS = _EVENT_FIELDS | {"id"}
-_DELETE_FIELDS = frozenset({"id"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -33,7 +28,7 @@ def _calendar_service(state: Any) -> CalendarService:
 
 
 async def _calendar_window(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _WINDOW_FIELDS, "calendar.window")
+    _reject_unsupported(params, rpc_request_fields("calendar.window"), "calendar.window")
     service = _calendar_service(state)
     window_start_value = _required_string(params, "from")
     window_end_value = _required_string(params, "to")
@@ -72,7 +67,7 @@ def _window_response(
 
 
 async def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _CREATE_FIELDS, "calendar.create")
+    _reject_unsupported(params, rpc_request_fields("calendar.create"), "calendar.create")
     service = _calendar_service(state)
     fields = _event_fields(params)
     title = _required_string(params, "title")
@@ -89,7 +84,7 @@ async def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
 
 async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
     """Change a whole event, or with an occurrence id one occurrence of a repeating event."""
-    _reject_unsupported(params, _UPDATE_FIELDS, "calendar.update")
+    _reject_unsupported(params, rpc_request_fields("calendar.update"), "calendar.update")
     service = _calendar_service(state)
     item_id = _required_string(params, "id")
     fields = _event_fields(params)
@@ -125,7 +120,7 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
 
 async def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
     """Delete a whole event with its Cron jobs, or with an occurrence id one occurrence."""
-    _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete")
+    _reject_unsupported(params, rpc_request_fields("calendar.delete"), "calendar.delete")
     service = _calendar_service(state)
     item_id = _required_string(params, "id")
     try:

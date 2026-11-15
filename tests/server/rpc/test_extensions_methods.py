@@ -56,13 +56,16 @@ def _noop_handler(*_args: Any, **_kwargs: Any) -> None:
 
 
 class _Registry:
-    """Minimal stand-in for ``ExtensionRegistry`` exposing ``records()``."""
+    """Minimal stand-in for the Extension catalog projection interface."""
 
     def __init__(self, records: list[ExtensionRecord]) -> None:
         self._records = records
 
     def records(self) -> list[ExtensionRecord]:
         return list(self._records)
+
+    def page_declarations(self) -> list[Any]:
+        return []
 
 
 class _Storage:
@@ -372,20 +375,32 @@ async def test_extensions_list_carries_settings_schema_and_secret_state(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("closing", [False, True])
-async def test_extensions_reload_rebuilds_then_returns_the_catalog(closing: bool) -> None:
+@pytest.mark.parametrize("scenario", ["reload", "closing", "replaced_during_projection"])
+async def test_extensions_reload_rebuilds_then_returns_the_catalog(
+    scenario: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state = _state_with_records([_loaded_record()])
-    if closing:
+    if scenario == "closing":
         state.runtime.reload_error = ExtensionUnavailableError("Extension runtime is closing")
+    elif scenario == "replaced_during_projection":
+
+        def replace_during_projection() -> list[Any]:
+            state.runtime.extensions = _Registry([_record("replacement")])
+            return []
+
+        monkeypatch.setattr(
+            state.runtime.extensions, "page_declarations", replace_during_projection
+        )
 
     response = await call(state, "extensions.reload")
 
-    if closing:
+    if scenario == "closing":
         assert response["error"]["code"] == "domain_error"
         assert resource_changes(state) == []
         return
     assert state.runtime.extension_reloads == 1
-    assert [item["name"] for item in response["result"]["extensions"]] == ["guard_bash"]
+    expected = "replacement" if scenario == "replaced_during_projection" else "guard_bash"
+    assert [item["name"] for item in response["result"]["extensions"]] == [expected]
     # The rebuild also rescans Extension Skill folders.
     assert resource_changes(state) == [
         {"kind": "commands"},
@@ -450,8 +465,8 @@ async def test_set_secret_saves_or_clears_the_credential_without_logging_it(
 @pytest.mark.parametrize(
     ("method", "params", "named"),
     [
-        ("extensions.list", {"name": "x"}, "does not accept params"),
-        ("extensions.reload", {"name": "guard_bash"}, "does not accept params"),
+        ("extensions.list", {"name": "x"}, "name"),
+        ("extensions.reload", {"name": "guard_bash"}, "name"),
         (
             "extensions.page_run",
             {"name": "alpha", "group_id": "group", "run_id": "run"},

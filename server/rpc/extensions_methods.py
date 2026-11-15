@@ -27,7 +27,7 @@ from server.rpc.payloads import (
     projected_file_urls,
     remove_opaque_provider_metadata,
 )
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
@@ -47,8 +47,7 @@ async def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
     the WebUI can render a real form. When no extensions loaded (no registry),
     the list is empty.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("extensions.list"), "extensions.list")
     try:
         return await _extensions_payload(state)
     except Exception as exc:
@@ -64,8 +63,7 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
     :func:`_list_extensions`, so the caller sees the new state without a second
     round-trip. Rejects params like ``extensions.list``.
     """
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.reload does not accept params")
+    _reject_unsupported(params, rpc_request_fields("extensions.reload"), "extensions.reload")
     try:
         await state.runtime.reload_extensions()
         payload = await _extensions_payload(state)
@@ -87,6 +85,12 @@ async def _extensions_payload(state: Any) -> JsonObject:
     """
     settings = await _SETTINGS_WORKERS.run(state.runtime.storage.load_extensions_settings)
     registry = state.runtime.extensions
+    if registry is not None:
+        await FILE_PREVIEW_WORKERS.run(registry.page_declarations)
+        # A concurrent reload has its own load-time availability snapshot. This
+        # payload also follows a successful reload mutation, so a replacement
+        # must not turn that committed change into a reported failure.
+        registry = state.runtime.extensions
     config_map = settings["config"]
     records = registry.records() if registry is not None else []
     return {

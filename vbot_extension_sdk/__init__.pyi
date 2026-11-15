@@ -18,15 +18,16 @@ from typing import (
     Any,
     Final,
     Literal,
+    Never,
 )
 
 from ._exports import HostUnavailableError as HostUnavailableError
-from .tools import ToolContext as ToolContext
+from .tools import ToolContext
 
 API_VERSION: Final[int] = 31
-SDK_VERSION: Final[str] = "31.0.0"
+SDK_VERSION: Final[str] = "31.0.1"
 
-def require_api(minimum: int = ..., *, maximum: int | None = ...) -> int: ...
+def require_api(minimum: int = 31, *, maximum: int | None = None) -> int: ...
 
 class ExtensionAPI:
     config: dict[str, Any]
@@ -40,12 +41,12 @@ class ExtensionAPI:
         *,
         config: dict[str, Any],
         logger: Any,
-        config_provider: Callable[[], dict[str, Any]] | None = ...,
-        credential_resolver: Callable[[str], str] | None = ...,
+        config_provider: Callable[[], dict[str, Any]] | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
     ) -> None: ...
     def register_settings(self, fields: list[Any]) -> None: ...
     def register_resource(
-        self, name: str, *, description: str = ..., scope_schema: dict[str, Any] | None = ...
+        self, name: str, *, description: str = "", scope_schema: dict[str, Any] | None = None
     ) -> None: ...
     def register_service(
         self,
@@ -54,8 +55,8 @@ class ExtensionAPI:
         parameters: dict[str, Any],
         handler: Callable[[dict[str, Any]], Any],
         *,
-        resources: Sequence[str] = ...,
-        description: str = ...,
+        resources: Sequence[str] = (),
+        description: str = "",
     ) -> None: ...
     def get_config(self) -> dict[str, Any]: ...
     def on_config_change(
@@ -73,21 +74,21 @@ class ExtensionAPI:
         parameters: dict[str, Any],
         handler: Callable[..., Any],
         *,
-        summary: str | None = ...,
-        internal: bool = ...,
-        catalog_visible: bool = ...,
-        requires_opt_in: bool = ...,
-        display: Any = ...,
-        ready: Callable[[], bool] | None = ...,
-        readiness_hint: str | None = ...,
-        result_schema: dict[str, Any] | None = ...,
-        parallel_safe: bool = ...,
-        open_input_schema: bool = ...,
-        unadvertised_parameters: dict[str, Any] | None = ...,
-        argument_normalizer: Callable[[Any], Any] | None = ...,
-        family: str | None = ...,
-        announce_changes: Sequence[str] = ...,
-        secret_sinks: Mapping[str, str] | None = ...,
+        summary: str | None = None,
+        internal: bool = False,
+        catalog_visible: bool = True,
+        requires_opt_in: bool = False,
+        display: Any = None,
+        ready: Callable[[], bool] | None = None,
+        readiness_hint: str | None = None,
+        result_schema: dict[str, Any] | None = None,
+        parallel_safe: bool = True,
+        open_input_schema: bool = False,
+        unadvertised_parameters: dict[str, Any] | None = None,
+        argument_normalizer: Callable[[Any], Any] | None = None,
+        family: str | None = None,
+        announce_changes: Sequence[str] = (),
+        secret_sinks: Mapping[str, str] | None = None,
     ) -> None: ...
     def register_page(
         self,
@@ -95,9 +96,9 @@ class ExtensionAPI:
         title: str,
         entry: str,
         *,
-        icon: str | dict[str, Any] = ...,
-        navigation: bool = ...,
-        services: Sequence[str] = ...,
+        icon: str | dict[str, Any] = "network",
+        navigation: bool = True,
+        services: Sequence[str] = (),
     ) -> None: ...
     def register_contribution(self, contribution_id: str, **fields: Any) -> None: ...
     def register_session_tool(
@@ -115,10 +116,10 @@ class ExtensionAPI:
         before_request: Callable[..., Any],
         run_finished: Callable[..., Any],
         quiesce: Callable[..., Any],
-        acknowledge_delivery: Callable[..., Any] | None = ...,
-        reconcile_tool_batch: Callable[..., Any] | None = ...,
-        before_tool_call: Callable[..., Any] | None = ...,
-        before_model_request: Callable[..., Any] | None = ...,
+        acknowledge_delivery: Callable[..., Any] | None = None,
+        reconcile_tool_batch: Callable[..., Any] | None = None,
+        before_tool_call: Callable[..., Any] | None = None,
+        before_model_request: Callable[..., Any] | None = None,
     ) -> None: ...
     def register_tool_family(self, family_id: str, label: str) -> None: ...
     def register_command(
@@ -127,22 +128,24 @@ class ExtensionAPI:
         description: str,
         handler: Any,
         *,
-        argument: str = ...,
-        catalog_result: str = ...,
-        execution_mode: str = ...,
-        argument_execution_mode: str | None = ...,
-        unavailable_surfaces: frozenset[str] | set[str] | tuple[str, ...] = ...,
-        argument_hint: str = ...,
+        argument: str = "optional",
+        catalog_result: str = "notice",
+        execution_mode: str = "serialized",
+        argument_execution_mode: str | None = None,
+        unavailable_surfaces: frozenset[str] | set[str] | tuple[str, ...] = (),
+        argument_hint: str = "",
     ) -> None: ...
     def register_recall_backend(self, name: str, factory: Callable[..., Any]) -> None: ...
-    def register_provider(self, definition: Mapping[str, Any], adapter_type: Any = ...) -> None: ...
+    def register_provider(
+        self, definition: Mapping[str, Any], adapter_type: Any = None
+    ) -> None: ...
     def register_channel_platform(
         self,
         platform_id: str,
         label: str,
         factory: Callable[..., Any],
         *,
-        settings_schema: dict[str, Any] | None = ...,
+        settings_schema: dict[str, Any] | None = None,
     ) -> None: ...
     def register_secret_source(self, source: Any) -> None: ...
     def register_interaction_handler(self, prefix: str, handler: Callable[..., Any]) -> None: ...
@@ -150,9 +153,9 @@ class ExtensionAPI:
         self,
         slug: str,
         *,
-        default_text: str | None = ...,
-        render: Callable[..., str] | None = ...,
-        requires_tool: str | None = ...,
+        default_text: str | None = None,
+        render: Callable[..., str] | None = None,
+        requires_tool: str | None = None,
     ) -> None: ...
     def on_startup(self, handler: Any) -> None: ...
     def on_shutdown(self, handler: Any) -> None: ...
@@ -166,43 +169,44 @@ class ExtensionHost:
     store_attachment: Callable[[str, bytes], Any]
     resolve_credential: Callable[[str], str]
     set_credential: Callable[[str, str], None]
-    resolve_cwd: Callable[[str | None, str], Path] | None = ...
-    for_owner: Callable[[Any], ExtensionHost] | None = ...
-    temporary_agents: Any | None = ...
-    state_dir: Path | None = ...
-    catalog: Callable[[], Awaitable[dict[str, Any]]] | None = ...
-    publish_change: Callable[[str, Sequence[str], int], None] | None = ...
-    inspect_prompt: Callable[[Any, str | None], Awaitable[dict[str, Any]]] | None = ...
-    open_database: Callable[..., Awaitable[Any]] | None = ...
-    release_owner: Callable[[Any], Awaitable[None]] | None = ...
-    load_result_payload: Callable[[ToolContext, str], Awaitable[Any]] | None = ...
-    oauth_redirects: Any | None = ...
-    resolve_tool_agent_async: Callable[[ToolContext], Awaitable[Any]] | None = ...
-    capture_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = ...
-    restore_tool_call: Callable[[str], Awaitable[ToolContext | None]] | None = ...
-    deliver_tool_outcome: Callable[[str, str], Awaitable[bool]] | None = ...
-    defer_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = ...
-    resolve_permissions: Callable[[str | None, str], Awaitable[Any]] | None = ...
-    computers: Any | None = ...
-    decide: Callable[[ToolContext | None, dict[str, Any]], Awaitable[dict[str, Any]]] | None = ...
-    review_context: Callable[[ToolContext], Awaitable[dict[str, Any]]] | None = ...
-    notify: Any | None = ...
-    set_page_badge: Callable[[str, int], None] | None = ...
-    pending_approvals: Callable[[str, Sequence[str]], Awaitable[dict[str, Any]]] | None = ...
-    execution_usage: Any | None = ...
+    resolve_cwd: Callable[[str | None, str], Path] | None = None
+    for_owner: Callable[[Any], ExtensionHost] | None = None
+    temporary_agents: Any | None = None
+    state_dir: Path | None = None
+    catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
+    publish_change: Callable[[str, Sequence[str], int], None] | None = None
+    inspect_prompt: Callable[[Any, str | None], Awaitable[dict[str, Any]]] | None = None
+    open_database: Callable[..., Awaitable[Any]] | None = None
+    release_owner: Callable[[Any], Awaitable[None]] | None = None
+    load_result_payload: Callable[[ToolContext, str], Awaitable[Any]] | None = None
+    oauth_redirects: Any | None = None
+    resolve_tool_agent_async: Callable[[ToolContext], Awaitable[Any]] | None = None
+    capture_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
+    restore_tool_call: Callable[[str], Awaitable[ToolContext | None]] | None = None
+    deliver_tool_outcome: Callable[[str, str], Awaitable[bool]] | None = None
+    defer_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
+    resolve_permissions: Callable[[str | None, str], Awaitable[Any]] | None = None
+    computers: Any | None = None
+    decide: Callable[[ToolContext | None, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    review_context: Callable[[ToolContext], Awaitable[dict[str, Any]]] | None = None
+    notify: Any | None = None
+    set_page_badge: Callable[[str, int], None] | None = None
+    pending_approvals: Callable[[str, Sequence[str]], Awaitable[dict[str, Any]]] | None = None
+    execution_usage: Any | None = None
     input_authority: (
         Callable[[ToolContext], Awaitable[Literal["user", "authorized_task", "none"]]] | None
-    ) = ...
-    triggers: Any | None = ...
-    services: ExtensionServices | None = ...
+    ) = None
+    triggers: Any | None = None
+    services: ExtensionServices | None = None
 
-@dataclass
 class ExtensionOperations:
+    # Supplied by ExtensionAPI; private host wiring is not an authoring constructor.
+    def __init__(self, _host: Never) -> None: ...
     name: str
-    operations: dict[str, ManagementOperation] = ...
-    startup: list[Callable[[ExtensionHost], Awaitable[None]]] = ...
-    pending_inputs: Callable[[], list[dict[str, Any]]] | None = ...
-    input_response_operation: str | None = ...
+    operations: dict[str, ManagementOperation]
+    startup: list[Callable[[ExtensionHost], Awaitable[None]]]
+    pending_inputs: Callable[[], list[dict[str, Any]]] | None
+    input_response_operation: str | None
 
     def register(
         self,
@@ -211,7 +215,7 @@ class ExtensionOperations:
         parameters: dict[str, Any],
         handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
         *,
-        secret: bool = ...,
+        secret: bool = False,
     ) -> None: ...
     def describe(self) -> list[dict[str, Any]]: ...
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
@@ -231,7 +235,7 @@ class ManagementOperation:
     description: str
     parameters: dict[str, Any]
     handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-    secret: bool = ...
+    secret: bool = False
 
 class ExtensionOperationError(ValueError):
     code: str
@@ -240,22 +244,22 @@ class ExtensionOperationError(ValueError):
 class ExtensionServices:
     def __init__(self, catalog: Any, owner: Any, require_current: Callable[[], None]) -> None: ...
     def describe(self) -> dict[str, Any]: ...
-    async def query(self, name: str, params: dict[str, Any] | None = ...) -> dict[str, Any]: ...
-    async def execute(self, name: str, params: dict[str, Any] | None = ...) -> dict[str, Any]: ...
+    async def query(self, name: str, params: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    async def execute(self, name: str, params: dict[str, Any] | None = None) -> dict[str, Any]: ...
     def subscribe(
         self,
         resources: Iterable[str],
         handler: Callable[[dict[str, Any]], Any],
         *,
-        on_error: Callable[[dict[str, Any]], Any] | None = ...,
+        on_error: Callable[[dict[str, Any]], Any] | None = None,
     ) -> ExtensionSubscription: ...
-    def publish(self, resource: str, scope: dict[str, Any] | None = ...) -> None: ...
+    def publish(self, resource: str, scope: dict[str, Any] | None = None) -> None: ...
 
 class ExtensionServiceError(ValueError):
     code: str
     data: Any
 
-    def __init__(self, code: str, message: str, data: Any = ...) -> None: ...
+    def __init__(self, code: str, message: str, data: Any = None) -> None: ...
 
 class ExtensionSubscription:
     def __init__(self, subscription: Any) -> None: ...
@@ -291,7 +295,7 @@ class SessionRequestContext:
     run_id: str
     agent_id: str
     session_id: str
-    execution_owner: Any | None = ...
+    execution_owner: Any | None = None
 
 @dataclass(frozen=True)
 class PreparedSessionDelivery:
@@ -299,19 +303,19 @@ class PreparedSessionDelivery:
     content_hash: str
     entries: tuple[str, ...]
     settings_revision: str
-    effect_kind: str = ...
+    effect_kind: str = "before_request"
 
 @dataclass(frozen=True)
 class ToolBatchDecision:
     end: bool
-    continuation: PreparedSessionDelivery | None = ...
+    continuation: PreparedSessionDelivery | None = None
 
 @dataclass(frozen=True)
 class ToolCallDecision:
     effective_input: dict[str, Any]
-    deny_reason: str | None = ...
-    deny_extension: str | None = ...
-    replacement: dict[str, Any] | None = ...
+    deny_reason: str | None = None
+    deny_extension: str | None = None
+    replacement: dict[str, Any] | None = None
 
 class ExtensionUnavailableError(Exception): ...
 
@@ -329,14 +333,14 @@ class InteractionEvent:
     message_id: str
     data: str
     buttons: tuple[tuple[InteractionButton, ...], ...]
-    text: str | None = ...
-    user_display_name: str | None = ...
-    thread_id: str | None = ...
+    text: str | None = None
+    user_display_name: str | None = None
+    thread_id: str | None = None
 
 class InteractionResponder(typing.Protocol):
-    async def answer(self, text: str | None = ..., *, alert: bool = ...) -> None: ...
+    async def answer(self, text: str | None = None, *, alert: bool = False) -> None: ...
     async def edit(
-        self, *, text: str | None = ..., buttons: list[list[InteractionButton]] | None = ...
+        self, *, text: str | None = None, buttons: list[list[InteractionButton]] | None = None
     ) -> None: ...
 
 @dataclass(frozen=True)
@@ -344,10 +348,10 @@ class SettingsFieldDeclaration:
     key: str
     type: str
     label: str
-    description: str | None = ...
-    default: Any = ...
-    required: bool = ...
-    env_key: str | None = ...
+    description: str | None = None
+    default: Any = None
+    required: bool = False
+    env_key: str | None = None
 
 class Database:
     def __init__(
@@ -357,8 +361,8 @@ class Database:
         *,
         database_id: str,
         data_dir: Path | None,
-        workers: Any | None = ...,
-        restore_id: str | None = ...,
+        workers: Any | None = None,
+        restore_id: str | None = None,
     ) -> None: ...
     @property
     def name(self) -> str: ...
@@ -374,18 +378,18 @@ class Database:
     def writer(self) -> sqlite3.Connection: ...
     def read(self) -> contextlib.AbstractContextManager[sqlite3.Connection]: ...
     def write[Result](
-        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = ...
+        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = 20.0
     ) -> Result: ...
     async def run_async[Result](
         self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
     ) -> Result: ...
     async def read_async[Result](
-        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = ...
+        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = 20.0
     ) -> Result: ...
     async def write_async[Result](
-        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = ...
+        self, operation: Callable[[sqlite3.Connection], Result], *, patience_s: float = 20.0
     ) -> Result: ...
-    def backup(self, destination: Path, *, cancelled: Callable[[], bool] | None = ...) -> bool: ...
+    def backup(self, destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool: ...
     def checkpoint(self) -> None: ...
     def verify_read_write(self) -> None: ...
     def health(self) -> Any: ...
@@ -400,5 +404,5 @@ class DatabaseError(Exception): ...
 @dataclass(frozen=True)
 class Migration:
     name: str
-    breaks_older: bool = ...
-    apply: Callable[[sqlite3.Connection], None] | None = ...
+    breaks_older: bool = False
+    apply: Callable[[sqlite3.Connection], None] | None = None

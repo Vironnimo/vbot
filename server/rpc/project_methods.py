@@ -85,6 +85,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
     _validate_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -95,52 +96,6 @@ _MISSING = object()
 # a data snapshot.
 _PROJECT_WORKERS = BoundedWorkerPool(name="project", max_workers=2)
 
-# A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
-# eine cwd"): the chosen format location's presence is surfaced in the scan
-# preview's Team, never a hard add-time requirement, so add only validates that
-# the folder exists and is not already claimed. Sources are detected from the
-# repository unless an explicit ordered selection is supplied.
-_ADD_FIELDS = frozenset(
-    {
-        "cwd",
-        "display_name",
-        "default_agent",
-        "default_model",
-        "default_temperature",
-        "default_thinking_effort",
-        "default_top_p",
-        "sources",
-        "model_mappings",
-        "auto_load",
-        "auto_instructions",
-        "folder_instructions",
-        "memory_enabled",
-        "skills_bundled_enabled",
-        "skills_global_enabled",
-        "skills_project_disabled",
-    }
-)
-_SET_MUTABLE_FIELDS = frozenset(
-    {
-        "cwd",
-        "display_name",
-        "default_agent",
-        "default_model",
-        "default_temperature",
-        "default_thinking_effort",
-        "default_top_p",
-        "sources",
-        "model_mappings",
-        "auto_load",
-        "auto_instructions",
-        "folder_instructions",
-        "memory_enabled",
-        "context_commands",
-        "skills_bundled_enabled",
-        "skills_global_enabled",
-        "skills_project_disabled",
-    }
-)
 # Project fields the Skill inventory shows: the Project's Skill directory and
 # origin label, and which Skills the Project activates.
 _SKILL_INVENTORY_FIELDS = frozenset(
@@ -188,9 +143,14 @@ async def _add_project(state: Any, params: JsonObject) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
+# A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
+# eine cwd"): the chosen format location's presence is surfaced in the scan
+# preview's Team, never a hard add-time requirement, so add only validates that
+# the folder exists and is not already claimed. Sources are detected from the
+# repository unless an explicit ordered selection is supplied.
 def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonObject]:
     """Validate, create and scan one Project on a worker thread."""
-    _reject_unsupported(params, _ADD_FIELDS, "project.add")
+    _reject_unsupported(params, rpc_request_fields("project.add"), "project.add")
 
     cwd = _required_string(params, "cwd")
     if not cwd_exists(cwd):
@@ -266,7 +226,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
 
 
 async def _list_projects(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"include_scan"}, "project.list")
+    _reject_unsupported(params, rpc_request_fields("project.list"), "project.list")
     include_scan = _optional_bool(params, "include_scan", default=False)
     return await _PROJECT_WORKERS.run(_project_list_response, state, include_scan)
 
@@ -298,7 +258,7 @@ async def _reorder_projects(state: Any, params: JsonObject) -> JsonObject:
     changed list or order refuses with ``project_order_conflict``. Answers like
     ``project.list`` without scans.
     """
-    _reject_unsupported(params, {"project_ids", "expected_revision"}, "project.reorder")
+    _reject_unsupported(params, rpc_request_fields("project.reorder"), "project.reorder")
     project_ids = _validate_string_list("project_ids", params.get("project_ids"))
     expected_revision = params.get("expected_revision")
     if (
@@ -342,7 +302,7 @@ def _cached_scan_preview(state: Any, project: Project) -> JsonObject | None:
 
 
 async def _show_project(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"project_id"}, "project.show")
+    _reject_unsupported(params, rpc_request_fields("project.show"), "project.show")
 
     project_id = _required_string(params, "project_id")
     # Open is a full per-project refresh point. The Team is re-scanned on every
@@ -407,12 +367,7 @@ def _update_project_record(
     state: Any, project_id: str, params: JsonObject
 ) -> tuple[Project, list[str]]:
     """Validate and apply one ``project.set`` on a worker thread; return the changed fields."""
-    unsupported_fields = sorted(set(params) - {"project_id"} - _SET_MUTABLE_FIELDS)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported project.set fields: {', '.join(unsupported_fields)}",
-        )
+    _reject_unsupported(params, rpc_request_fields("project.set"), "project.set")
 
     changes = _set_changes(params)
     if "model_mappings" in changes:
@@ -465,9 +420,7 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
     changed. No cache invalidation is needed — ``project.json`` is read fresh on
     every resolve.
     """
-    _reject_unsupported(
-        params, {"project_id", "agent_id", "field", "value"}, "project.set_override"
-    )
+    _reject_unsupported(params, rpc_request_fields("project.set_override"), "project.set_override")
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
@@ -519,7 +472,9 @@ def _clear_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, 
     a no-op success. No cache invalidation is needed — ``project.json`` is read fresh
     on every resolve, so the dropped override takes effect on the next run.
     """
-    _reject_unsupported(params, {"project_id", "agent_id", "field"}, "project.clear_override")
+    _reject_unsupported(
+        params, rpc_request_fields("project.clear_override"), "project.clear_override"
+    )
 
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
@@ -645,7 +600,7 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     """
     _reject_unsupported(
         params,
-        {"project_id", "copy_rooted_agent_identity_files", "permanent"},
+        rpc_request_fields("project.rm"),
         "project.rm",
     )
 
@@ -880,7 +835,7 @@ def _validated_model_mappings(state: Any, value: Any) -> dict[str, str]:
 
 
 def _detect_project(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"cwd"}, "project.detect")
+    _reject_unsupported(params, rpc_request_fields("project.detect"), "project.detect")
     cwd = _optional_string(params, "cwd")
     if not cwd or not cwd_exists(cwd):
         return {"cwd_exists": False, "sources": []}

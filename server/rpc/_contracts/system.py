@@ -29,6 +29,17 @@ from .common import (
 from .conversation import PERMISSION_RULES
 from .settings import MODEL_TASKS, SETTINGS_PATCH, SETTINGS_UPDATE, TASK_OPTIONS
 
+RPC_ONLY_FIELDS = {
+    "provider.custom_save": {
+        "api_key": "Provider credentials are configured through the operator credential surface.",
+    },
+    "model.refresh_db": {
+        "expected_resources_dir": (
+            "Packaged system catalogs are maintained by the serving checkout's operator."
+        ),
+    },
+}
+
 _STRING = string()
 _ID = {**string(), "minLength": 1}
 _STRINGS = array(_STRING)

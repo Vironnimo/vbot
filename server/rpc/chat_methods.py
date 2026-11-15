@@ -85,6 +85,8 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_session_address,
     _required_string,
+    rpc_request_fields,
+    service_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -107,21 +109,7 @@ async def _submit_chat(
     (``session_id``) or a new one (``new_session``, see :func:`_chat_target`).
     """
 
-    _reject_unsupported(
-        params,
-        {
-            "agent_id",
-            "session_id",
-            "new_session",
-            "content",
-            "input_origin",
-            "file_mentions",
-            "reply_surface",
-            "widget_states",
-            "input_id",
-        },
-        method,
-    )
+    _reject_unsupported(params, rpc_request_fields(method), method)
     agent_id, project_id = _required_agent_address(params, "agent_id")
     target = _chat_target(params, agent_id, project_id, state=state)
     content = _parse_chat_content(params, "content")
@@ -136,7 +124,7 @@ async def _submit_chat(
     if is_extension_service_call():
         # Integration calls use the same canonical target and content parsing,
         # but cannot become human input or execute a user's Slash Commands.
-        _reject_unsupported(params, {"agent_id", "session_id", "content"}, method)
+        _reject_unsupported(params, service_request_fields(method), method)
         if not isinstance(target, SessionAddress) or prepared_command is not None:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
@@ -438,7 +426,7 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"run_id", "reason"}, "chat.cancel")
+    _reject_unsupported(params, rpc_request_fields("chat.cancel"), "chat.cancel")
 
     run_id = _required_string(params, "run_id")
     reason = _optional_string(params, "reason")
@@ -458,7 +446,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
 
 async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     """Stop a Session's Run, its background commands and terminals, and its Sub-Agents."""
-    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.stop_all")
+    _reject_unsupported(params, rpc_request_fields("chat.stop_all"), "chat.stop_all")
     address = _required_session_address(params)
     try:
         stopped = await state.runtime.subagents.stop_tree(
@@ -480,7 +468,7 @@ def _session_command(state: Any, params: JsonObject, method: str) -> CommandRepo
     Raises ``command_not_found`` for an unknown or forgotten id, a command of
     another Session and a command still inside its shell call.
     """
-    _reject_unsupported(params, {"session_id", "command_id"}, method)
+    _reject_unsupported(params, rpc_request_fields("chat.command_output"), method)
     session_id = _required_string(params, "session_id")
     command_id = _required_string(params, "command_id")
     commands: CommandManager = state.runtime.command_manager
@@ -558,9 +546,7 @@ async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _control_run_chat(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "run_id", "action", "tool_call_id"}, "chat.control_run"
-    )
+    _reject_unsupported(params, rpc_request_fields("chat.control_run"), "chat.control_run")
     address = _required_session_address(params)
     run_id = _required_string(params, "run_id")
     action = _required_string(params, "action")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from inspect import unwrap
 from types import SimpleNamespace
 from typing import Any
 
@@ -228,7 +229,7 @@ def test_ui_result_rejects_invalid_answers(params: JsonObject) -> None:
 
 def test_live_methods_are_registered() -> None:
     methods = build_method_handlers()
-    assert methods["live.status"] is _status
+    assert unwrap(methods["live.status"]) is _status
     assert methods["live.start"] is _start
     assert methods["live.stop"] is _stop
     assert methods["live.ui_result"] is _ui_result

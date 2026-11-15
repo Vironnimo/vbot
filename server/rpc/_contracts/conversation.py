@@ -1,8 +1,8 @@
-"""Curated service contracts for Agents, Projects, Sessions, Chat and Skills.
+"""Canonical RPC envelopes and Extension schemas for conversation domains.
 
-These describe the canonical RPC owners' accepted public input, not a second
-implementation of their persistence or policy. State-dependent checks (existing
-Models, reference guards, revisions, permission ceilings) remain with those owners.
+RPC and Extension admission share these fields; explicitly reasoned RPC-only
+parameters keep human input and execution grants out of Extension calls. Domain
+handlers retain state-dependent checks and value normalization.
 """
 
 from __future__ import annotations
@@ -1013,6 +1013,45 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "Share or unshare an Identity Agent's private Skill with selected Identity Agents.",
     ),
 )
+
+# These fields belong to the Accessor envelope, but must never be exposed by the
+# Extension facade. Every exception is explicit so new shared fields become
+# visible to Extensions without maintaining a second accepted-field list.
+_CHAT_RPC_ONLY_FIELDS = {
+    "new_session": (
+        "Extensions submit SYSTEM input to existing Sessions; "
+        "Accessors own human new-Session admission."
+    ),
+    "input_origin": (
+        "Speech and live-voice provenance describes human Accessor input, "
+        "not Extension SYSTEM input."
+    ),
+    "file_mentions": (
+        "Accessor file mentions snapshot files into human input; "
+        "Extensions supply explicit content."
+    ),
+    "reply_surface": (
+        "Accessor response routing must not turn Extension SYSTEM input "
+        "into a human command surface."
+    ),
+    "widget_states": (
+        "Widget return state records a human interaction and cannot be claimed by an Extension."
+    ),
+    "input_id": (
+        "Durable Accessor input receipts belong to human submission; "
+        "Extension SYSTEM Runs use their own admission."
+    ),
+}
+RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {
+    "chat.send": dict(_CHAT_RPC_ONLY_FIELDS),
+    "chat.stream": dict(_CHAT_RPC_ONLY_FIELDS),
+    "session.create": {
+        "execution": (
+            "Computer execution grants require an authenticated human principal; "
+            "Extensions cannot create grants."
+        ),
+    },
+}
 
 SERVICE_EXCLUSIONS = {
     "chat.cancel_tool_call": (

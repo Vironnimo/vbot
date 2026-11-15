@@ -37,16 +37,14 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_string,
     _validate_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
 
-_SUPPORTED_FIELDS = {"since", "until", "timezone", "sections", "period"}
-_RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
-
 
 async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _SUPPORTED_FIELDS, "statistics.report")
+    _reject_unsupported(params, rpc_request_fields("statistics.report"), "statistics.report")
 
     since = _optional_utc_timestamp(params, "since")
     until = _optional_utc_timestamp(params, "until")
@@ -70,7 +68,7 @@ async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _statistics_period(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "statistics.period")
+    _reject_unsupported(params, rpc_request_fields("statistics.period"), "statistics.period")
     try:
         return await statistics_service(state).measurement_period_async()
     except Exception as exc:
@@ -78,7 +76,9 @@ async def _statistics_period(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _statistics_period_start(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "statistics.period.start")
+    _reject_unsupported(
+        params, rpc_request_fields("statistics.period.start"), "statistics.period.start"
+    )
     try:
         result = await statistics_service(state).start_measurement_period_async()
     except Exception as exc:
@@ -88,7 +88,9 @@ async def _statistics_period_start(state: Any, params: JsonObject) -> JsonObject
 
 
 async def _statistics_period_clear(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "statistics.period.clear")
+    _reject_unsupported(
+        params, rpc_request_fields("statistics.period.clear"), "statistics.period.clear"
+    )
     try:
         result = await statistics_service(state).clear_measurement_period_async()
     except Exception as exc:
@@ -128,7 +130,7 @@ def _report_sections(params: JsonObject) -> tuple[str, ...] | None:
 async def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        _RUN_ACTIVITY_SUPPORTED_FIELDS,
+        rpc_request_fields("statistics.run_activity"),
         "statistics.run_activity",
     )
     since = _required_utc_timestamp(params, "since")
@@ -215,7 +217,9 @@ async def _statistics_session_usage(state: Any, params: JsonObject) -> JsonObjec
     """
     if "session_ids" in params or "agent_id" not in params:
         return await _statistics_session_usages(state, params)
-    _reject_unsupported(params, {"agent_id", "session_id"}, "statistics.session_usage")
+    _reject_unsupported(
+        params, rpc_request_fields("statistics.session_usage"), "statistics.session_usage"
+    )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
@@ -236,7 +240,7 @@ async def _statistics_session_usage(state: Any, params: JsonObject) -> JsonObjec
 
 async def _statistics_session_usages(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
-        params, {"agent_id", "session_id", "session_ids"}, "statistics.session_usage"
+        params, rpc_request_fields("statistics.session_usage"), "statistics.session_usage"
     )
     if ("session_id" in params) == ("session_ids" in params):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Pass session_id or session_ids")

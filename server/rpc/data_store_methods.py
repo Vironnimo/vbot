@@ -23,7 +23,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, rpc_request_fields
 
 JsonObject = dict[str, Any]
 _DATA_STORE_WORKERS = BoundedWorkerPool(name="data-store", max_workers=2)
@@ -44,7 +44,7 @@ def _status(runtime: Any, data_dir: Path) -> JsonObject:
 
 
 async def _data_store_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"verify_search"}, "data_store.status")
+    _reject_unsupported(params, rpc_request_fields("data_store.status"), "data_store.status")
     verify_search = params.get("verify_search", False)
     if not isinstance(verify_search, bool):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.verify_search must be a boolean")
@@ -77,7 +77,9 @@ def _create_snapshot(runtime: Any, data_dir: Path, reason: str) -> JsonObject:
 
 
 async def _data_store_snapshot_create(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"reason"}, "data_store.snapshot_create")
+    _reject_unsupported(
+        params, rpc_request_fields("data_store.snapshot_create"), "data_store.snapshot_create"
+    )
     reason = params.get("reason", "rpc")
     if not isinstance(reason, str) or reason not in _SNAPSHOT_REASONS:
         raise RpcError(
@@ -100,7 +102,11 @@ def _acknowledge(runtime: Any, data_dir: Path, incident_id: str) -> JsonObject |
 
 
 async def _data_store_incident_acknowledge(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"incident_id"}, "data_store.incident_acknowledge")
+    _reject_unsupported(
+        params,
+        rpc_request_fields("data_store.incident_acknowledge"),
+        "data_store.incident_acknowledge",
+    )
     incident_id = params.get("incident_id")
     if not isinstance(incident_id, str) or not incident_id:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.incident_id must be a non-empty string")
@@ -116,7 +122,9 @@ async def _data_store_incident_acknowledge(state: Any, params: JsonObject) -> Js
 
 
 async def _data_store_unregister(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"name"}, "data_store.unregister")
+    _reject_unsupported(
+        params, rpc_request_fields("data_store.unregister"), "data_store.unregister"
+    )
     name = params.get("name")
     if not isinstance(name, str) or not name:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.name must be a non-empty string")

@@ -38,7 +38,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.learning_methods import _guard_learning_mutation
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
@@ -49,7 +49,7 @@ def _librarian(state: Any) -> LibrarianService:
 
 
 async def _librarian_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id"}, "librarian.status")
+    _reject_unsupported(params, rpc_request_fields("librarian.status"), "librarian.status")
     agent_id = _required_string(params, "agent_id")
     try:
         return await _librarian(state).status(agent_id)
@@ -60,12 +60,12 @@ async def _librarian_status(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _librarian_overview(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "librarian.overview")
+    _reject_unsupported(params, rpc_request_fields("librarian.overview"), "librarian.overview")
     return await _librarian(state).overview()
 
 
 async def _librarian_run(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id"}, "librarian.run")
+    _reject_unsupported(params, rpc_request_fields("librarian.run"), "librarian.run")
     agent_id = _required_string(params, "agent_id")
     try:
         return await _librarian(state).run(agent_id)
@@ -79,7 +79,7 @@ async def _librarian_run(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_learning_mutation
 async def _librarian_undo(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "started_at"}, "librarian.undo")
+    _reject_unsupported(params, rpc_request_fields("librarian.undo"), "librarian.undo")
     agent_id = _required_string(params, "agent_id")
     started_at = _required_string(params, "started_at")
     actor = "extension" if is_extension_service_call() else "rpc"

@@ -57,10 +57,11 @@ export function createAppExtensions(context) {
   // subscriber refreshes everything it shows. An owner names the Extension
   // whose data changed, and `change` the records (`{resource, ids,
   // revision}` from `ExtensionHost.publish_change`).
-  function invalidate(owner, change = null) {
+  function invalidate(owner, change = null, serviceResource = null) {
     const invalidation = Object.freeze({
       owner,
       change,
+      serviceResource,
       revision: ++invalidationRevision,
     });
     for (const listener of [...invalidationListeners]) listener(invalidation);
@@ -86,6 +87,33 @@ export function createAppExtensions(context) {
       ids: scope.ids,
       revision: scope.revision,
     });
+  }
+
+  // Data-only publications retain the Resource identity and dependency names;
+  // they never fetch the Page or Contribution declaration catalogs.
+  function publishResourceChange(event) {
+    if (
+      !event ||
+      !['owner', 'epoch', 'resource', 'local_resource'].every(
+        (key) => typeof event[key] === 'string' && event[key],
+      ) ||
+      !Number.isSafeInteger(event.revision) ||
+      event.revision < 0 ||
+      !Array.isArray(event.services) ||
+      !event.services.every((name) => typeof name === 'string' && name)
+    )
+      return;
+    const serviceResource = Object.freeze({
+      owner: event.owner,
+      epoch: event.epoch,
+      local_resource: event.local_resource,
+      services: Object.freeze([...event.services]),
+    });
+    invalidate(
+      event.owner,
+      { resource: event.resource, ids: [], revision: event.revision },
+      serviceResource,
+    );
   }
 
   // Page descriptors load on every `connection_ready`, the first included,
@@ -286,6 +314,7 @@ export function createAppExtensions(context) {
     },
     subscribeInvalidations,
     publishChange,
+    publishResourceChange,
     notify,
     get pageIndicators() {
       return pageIndicators;
