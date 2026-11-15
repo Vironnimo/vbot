@@ -14,6 +14,7 @@ import { isPlainObject } from './values.js';
 
 // Unwatched answers kept so a card scrolled back into view needs no read.
 const MAX_UNWATCHED_SESSIONS = 20;
+const SEPARATOR = '::';
 
 // Session key -> `{ loaded, error, reverseProxy, portals: { [id]: portal } }`.
 const sessions = $state({});
@@ -27,21 +28,11 @@ const reads = new Map();
 // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, never rendered
 const released = new Set();
 
-const SEPARATOR = '::';
-
 // The Session a Chat timeline's Session key (`<agent address>::<session id>`)
 // names, or null for a draft or a store outside a Chat timeline.
-export function portalSessionAddress(sessionKey) {
-  const key = typeof sessionKey === 'string' ? sessionKey : '';
-  const at = key.indexOf(SEPARATOR);
-  if (at <= 0) return null;
-  const agentId = key.slice(0, at);
-  const sessionId = key.slice(at + SEPARATOR.length);
-  if (!sessionId || sessionId.startsWith('~')) return null;
-  return { agentId, sessionId };
-}
+export { portalSessionAddress } from './chatTimelinePresentation/portals.js';
 
-const keyOf = (agentId, sessionId) => `${agentId}${SEPARATOR}${sessionId}`;
+const keyOf = (agentId, sessionId) => `${agentId}::${sessionId}`;
 
 function listedPortal(portal) {
   if (!isPlainObject(portal) || typeof portal.id !== 'string' || !portal.id) {

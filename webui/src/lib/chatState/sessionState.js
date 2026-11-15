@@ -1,5 +1,5 @@
 import { firstChatAgent } from '../agentPlacement.js';
-import { isTerminalRunEvent } from '../api.js';
+import { isTerminalRunEvent } from '../runEventTypes.js';
 import {
   SESSION_WAITING,
   SESSION_WORKING,

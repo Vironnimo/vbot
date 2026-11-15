@@ -38,6 +38,8 @@ function editor(settings) {
   const state = { draft: { ...settings.debug } };
   const draft = createSettingsDraft({
     settings,
+    submit: updateSettingsMock,
+    reload: getSettingsMock,
     fromSettings: (next) => ({ ...next.debug }),
     read: () => state.draft,
     write: (next) => {

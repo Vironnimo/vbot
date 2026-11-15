@@ -1,5 +1,5 @@
 <script>
-  import { resolvePermissionApproval } from '$lib/api.js';
+  import { getContext } from 'svelte';
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -26,8 +26,11 @@
   let editing = $state(false);
   let draft = $state('');
 
+  const resolveApproval = getContext('permissionApprovals')?.resolve;
   const grant = $derived(request?.session_grant ?? null);
-  const disabled = $derived(busy || sent);
+  const disabled = $derived(
+    busy || sent || typeof resolveApproval !== 'function',
+  );
 
   const ACCESS_VERBS = {
     read: () => t('approvals.need.read'),
@@ -60,11 +63,7 @@
     busy = true;
     error = '';
     try {
-      await resolvePermissionApproval(
-        request.id,
-        decision,
-        remember ? { remember } : {},
-      );
+      await resolveApproval(request.id, decision, remember ? { remember } : {});
       sent = true;
       editing = false;
     } catch (failure) {

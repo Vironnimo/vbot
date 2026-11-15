@@ -127,8 +127,9 @@ async def test_custom_resources_are_owner_scoped_validated_and_detached(tmp_path
             one.publish("items", {"id": 42})
         assert invalid.value.code == "invalid_request"
         assert invalid.value.data["path"] == ["id"]
-        with pytest.raises(ValueError):
+        with pytest.raises(ExtensionServiceError) as invalid_name:
             two.publish("extension:one:items")
+        assert invalid_name.value.code == "invalid_request"
         with pytest.raises(ExtensionServiceError) as missing:
             two.publish("undeclared")
         assert missing.value.code == "resource_not_found"
@@ -151,30 +152,39 @@ async def test_custom_resources_are_owner_scoped_validated_and_detached(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["query", "execute"])
+@pytest.mark.parametrize("retired_owner", ["provider", "consumer"])
 async def test_export_retirement_fences_reads_and_preserves_admitted_action_outcomes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: ServiceKind
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: ServiceKind, retired_owner: str
 ) -> None:
     write_extension(
         tmp_path,
         "provider",
-        "retire = None\n"
+        "entered = None\nfinish = None\n"
         "async def operation(params):\n"
-        "    retire()\n"
+        "    entered.set()\n"
+        "    await finish.wait()\n"
         "    return {'committed': True}\n"
         "def register(api):\n"
         f"    api.register_service('operation', {kind!r}, {{'type': 'object'}}, operation)\n",
     )
+    write_extension(tmp_path, "consumer", "def register(api): pass\n")
     registry = await ExtensionRegistry.aload(tmp_path)
-    monkeypatch.setattr(sys.modules["vbot_ext.provider"], "retire", registry.retire_registration)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(sys.modules["vbot_ext.provider"], "entered", entered)
+    monkeypatch.setattr(sys.modules["vbot_ext.provider"], "finish", finish)
     catalog = ExtensionServiceCatalog()
     catalog.install_exports(registry)
-    services = _owner(catalog, registry, "provider")
+    services = _owner(catalog, registry, "consumer")
+    pending = asyncio.create_task(getattr(services, kind)("extension:provider:operation"))
+    await entered.wait()
+    await registry.deactivate(retired_owner, ToolRegistry())
+    finish.set()
     if kind == "query":
         with pytest.raises(ExtensionServiceError) as retired:
-            await services.query("extension:provider:operation")
+            await pending
         assert retired.value.code == "service_unavailable"
     else:
-        assert await services.execute("extension:provider:operation") == {"committed": True}
+        assert await pending == {"committed": True}
     with pytest.raises(ExtensionServiceError) as unavailable:
         await getattr(services, kind)("extension:provider:operation")
     assert unavailable.value.code == "service_unavailable"

@@ -59,4 +59,9 @@ def test_other_platforms_have_no_badge(monkeypatch: pytest.MonkeyPatch, platform
     monkeypatch.setattr(taskbar_badge.sys, "platform", platform)
 
     assert taskbar_badge.bind_window_badge(object()) is None
-    assert TaskbarBadge().supported is False
+    badge = TaskbarBadge()
+    native = taskbar_badge.bind_window_badge(object())
+    if native is not None:
+        badge.attach(native)
+    assert _bridge(badge).setTaskbarBadge(3) == {"count": 3}
+    assert badge.supported is False

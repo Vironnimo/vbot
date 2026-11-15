@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from copy import deepcopy
+from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,7 +31,7 @@ from server.rpc._contracts import PARAMETER_CONTRACTS, RpcParameterContract
 from server.rpc._contracts.common import ServiceDefinition
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.errors import RpcError
-from server.rpc.methods import METHODS, build_method_handlers
+from server.rpc.methods import METHODS, _ParameterContractHandler, build_method_handlers
 from tests.core.automation.cron_test_support import make_service
 from tests.core.extensions.extension_test_support import write_extension
 from tests.server.rpc_test_support import StubAdapter, make_state, resource_changes
@@ -54,6 +55,24 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
         )
     with pytest.raises(ValueError):
         audit_application_services({**METHODS, "agent.list": lambda _state, _params: {}})
+
+    @wraps(METHODS["agent.list"])
+    def ungated(_state: Any, _params: Any) -> dict[str, Any]:
+        return {}
+
+    ungated.__rpc_parameter_contract__ = PARAMETER_CONTRACTS["agent.list"]  # type: ignore[attr-defined]
+    test_registries: tuple[dict[str, Any], ...] = (
+        {**METHODS, "agent.list": ungated},
+        {name: handler for name, handler in METHODS.items() if name != "permissions.resolve"},
+    )
+    for handlers in test_registries:
+        with pytest.raises(ValueError):
+            bind_application_services(
+                SimpleNamespace(
+                    runtime=SimpleNamespace(extension_services=ExtensionServiceCatalog())
+                ),
+                handlers,
+            )
     state = SimpleNamespace(runtime=SimpleNamespace(extension_services=ExtensionServiceCatalog()))
     services, close = _bind(state)
     try:
@@ -70,6 +89,44 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
             and entry["parameters"]["description"]
             for entry in described["services"]
         )
+    finally:
+        close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "params"),
+    [
+        ("agent.create", {"id": "fixture", "permission_rules": None}),
+        ("agent.update", {"id": "fixture", "tool_access": None}),
+        ("settings.update", {"defaults": {"agent": {"permission_rules": None}}}),
+        ("settings.update", {"providers": {"claude_agent": {"executable_path": "other.exe"}}}),
+        (
+            "project.set_override",
+            {"project_id": "p", "agent_id": "a", "field": "permission_rules", "value": {}},
+        ),
+        ("project.clear_override", {"project_id": "p", "agent_id": "a", "field": "tool_access"}),
+        *[
+            ("settings.patch", {"operations": [{"op": "unset", "path": path}]})
+            for path in (
+                "defaults.agent.permission_rules",
+                'defaults["agent"]["permission_rules"]',
+                "providers.claude_agent.executable_path",
+                'providers["claude_agent"].executable_path',
+            )
+        ],
+    ],
+)
+async def test_services_refuse_operator_configuration_before_domain_admission(
+    name: str, params: dict
+) -> None:
+    services, close = _bind(
+        SimpleNamespace(runtime=SimpleNamespace(extension_services=ExtensionServiceCatalog()))
+    )
+    try:
+        with pytest.raises(ExtensionServiceError) as refused:
+            await services.execute(name, params)
+        assert refused.value.code in {"invalid_request", "operator_required"}
     finally:
         close()
 
@@ -257,7 +314,14 @@ async def test_schema_errors_identify_fields_before_any_canonical_handler_runs(
         return {}
 
     close = bind_application_services(
-        state, dict.fromkeys((entry[0] for entry in SERVICE_DEFINITIONS), handler)
+        state,
+        {
+            **METHODS,
+            **{
+                name: _ParameterContractHandler(handler, PARAMETER_CONTRACTS[name])
+                for name, *_ in SERVICE_DEFINITIONS
+            },
+        },
     )
     services = catalog.for_owner(ExtensionRegistrationIdentity("catalog-test", "one"), lambda: None)
     kind = next(row[1] for row in SERVICE_DEFINITIONS if row[0] == method)

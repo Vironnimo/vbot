@@ -19,6 +19,7 @@
   // (`lib/portals.svelte.js`); the credential in the Portal's address stays
   // in that memory and in the rendered link and frame. The frame keeps the
   // app's own origin (another port) but may not navigate the WebUI's tab.
+  import { getContext } from 'svelte';
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -31,12 +32,7 @@
     portalUrl,
     portalsReachable,
   } from '$lib/chatTimelinePresentation.js';
-  import {
-    closePortal,
-    portalSessionAddress,
-    sessionPortals,
-    watchPortals,
-  } from '$lib/portals.svelte.js';
+  import { portalSessionAddress } from '$lib/chatTimelinePresentation/portals.js';
   import Button from '../ui/Button.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -45,6 +41,7 @@
 
   // Outside a Chat timeline (the Swarm page) no Session names the Portal.
   const viewState = timelineViewState();
+  const portals = getContext('portals');
   // A timeline that unmounts rows scrolled out of view keeps an open
   // preview mounted, so the app inside does not reload.
   const holdMounted = mountHold();
@@ -54,9 +51,11 @@
   let closing = $state(false);
   let closeError = $state('');
 
-  let address = $derived(portalSessionAddress(viewState.sessionKey));
+  let address = $derived(
+    portals ? portalSessionAddress(viewState.sessionKey) : null,
+  );
   let projection = $derived(
-    address ? sessionPortals(address.agentId, address.sessionId) : null,
+    address ? portals.sessionPortals(address.agentId, address.sessionId) : null,
   );
   let listed = $derived(projection?.portals?.[portal.id] ?? null);
   let status = $derived(portalStatus(projection, portal.id));
@@ -83,7 +82,7 @@
   $effect(() => {
     const target = address;
     if (!target) return undefined;
-    return watchPortals(target.agentId, target.sessionId);
+    return portals.watchPortals(target.agentId, target.sessionId);
   });
 
   $effect(() => {
@@ -111,7 +110,7 @@
     closing = true;
     closeError = '';
     try {
-      await closePortal(address.agentId, address.sessionId, portal.id);
+      await portals.closePortal(address.agentId, address.sessionId, portal.id);
       viewState.setOpen(previewKey, false);
     } catch (error) {
       closeError = t('chat.portal.closeFailed', {

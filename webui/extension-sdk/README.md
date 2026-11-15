@@ -97,9 +97,17 @@ services must receive the matching bridge callback: for example, give `PathField
 the client's `listDirectory` function. Direct RPC, filesystem addresses, parent
 DOM access, and native Desktop internals are not page capabilities.
 
+The package build refuses the App transport (`lib/api.js` and its API directory),
+including transitive imports. `createChatController` requires an `operations`
+object; `createSettingsDraft` requires `submit` and `reload` callbacks, including
+its conflict re-read. Bind them to the declared page bridge. Transient PCM speech
+playback requires an explicit `readAudio` callback; ordinary media uses its URL.
+Operator approval controls, live Portal capabilities and App Contribution
+renderers come from the App context and are absent from an isolated page.
+
 The SDK's semantic version describes its public JavaScript imports and component
 contracts. The Extension manifest's `api_version` describes required host
-capabilities; this SDK release targets API 30. UI-only contributions can declare
+capabilities; this SDK release targets API 31. UI-only contributions can declare
 host features without creating a Python module. Optional capabilities must be
 checked against the host's advertised feature set before use. A reload retires
 the old registration and outstanding bridge requests; recreate state from the

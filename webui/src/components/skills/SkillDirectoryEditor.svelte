@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   // The skill-directory rows moved out of Settings: a read-only default
   // directory plus the autosaved additional-directories list. Ported from the
   // retired SettingsSkillsPanel with its exact save semantics.
@@ -29,6 +34,8 @@
   let saving = $state(false);
   let addElement = $state();
   const directoriesDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: getSkillDirectories,
     read: () => skillDirectories,

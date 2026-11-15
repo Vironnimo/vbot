@@ -22,6 +22,60 @@ from core.extensions.services import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exported", [False, True])
+async def test_services_accept_only_bounded_json_objects(
+    tmp_path: Path, exported: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.core.extensions.extension_test_support import write_extension
+
+    catalog = ExtensionServiceCatalog()
+    handler = AsyncMock(return_value={})
+    schema = {"type": "object"}
+    name = "fixture.read"
+    if exported:
+        write_extension(
+            tmp_path,
+            "fixture",
+            "handler = None\n"
+            "async def read(params): return await handler(params)\n"
+            "def register(api):\n"
+            "    api.register_service('read', 'query', {'type': 'object'}, read)\n",
+        )
+        registry = await ExtensionRegistry.aload(tmp_path)
+        import sys
+
+        monkeypatch.setattr(sys.modules["vbot_ext.fixture"], "handler", handler)
+        catalog.install_exports(registry)
+        name = "extension:fixture:read"
+    else:
+        catalog.bind([ExtensionService(name, "query", schema, handler)])
+    services = catalog.for_owner(ExtensionRegistrationIdentity("consumer", "one"), lambda: None)
+    try:
+        for params in ({"value": object()}, {"value": float("nan")}, {"value": "x" * (256 * 1024)}):
+            with pytest.raises(ExtensionServiceError) as invalid:
+                await services.query(name, params)
+            assert invalid.value.code == "invalid_request"
+        handler.assert_not_called()
+        results: tuple[Any, ...] = (
+            [],
+            {"value": object()},
+            {"value": float("nan")},
+            {"value": "x" * (8 * 1024 * 1024)},
+        )
+        for value in results:
+            handler.return_value = value
+            with pytest.raises(ExtensionServiceError) as invalid:
+                await services.query(name)
+            assert invalid.value.code == "invalid_result"
+        handler.return_value = {"value": "x" * (8 * 1024 * 1024 - len('{"value": ""}'))}
+        assert await services.query(name) == handler.return_value
+        handler.return_value = {"value": (1, 2)}
+        assert await services.query(name) == {"value": [1, 2]}
+    finally:
+        catalog.close()
+
+
+@pytest.mark.asyncio
 async def test_services_keep_kinds_schemas_and_binding_identity() -> None:
     catalog = ExtensionServiceCatalog()
     owner = catalog.for_owner(ExtensionRegistrationIdentity("fixture", "one"), lambda: None)
@@ -110,32 +164,48 @@ async def test_validation_reports_field_paths_without_submitted_values(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["query", "execute"])
+@pytest.mark.parametrize("retirement", ["caller", "binding"])
 async def test_retirement_rejects_reads_but_preserves_committed_action_results(
     kind: ServiceKind,
+    retirement: str,
 ) -> None:
     catalog = ExtensionServiceCatalog()
     current = True
+    entered, finish = asyncio.Event(), asyncio.Event()
 
     def require_current() -> None:
         if not current:
             raise ValueError("retired")
 
     async def handler(_params: dict[str, Any]) -> dict[str, Any]:
-        nonlocal current
-        current = False
+        entered.set()
+        await finish.wait()
         return {"committed": True}
 
     owner = catalog.for_owner(ExtensionRegistrationIdentity("fixture", "one"), require_current)
-    catalog.bind([ExtensionService("fixture.operation", kind, {"type": "object"}, handler)])
+    unbind = catalog.bind(
+        [ExtensionService("fixture.operation", kind, {"type": "object"}, handler)]
+    )
+    pending = asyncio.create_task(getattr(owner, kind)("fixture.operation"))
+    await entered.wait()
+    if retirement == "caller":
+        current = False
+    else:
+        unbind()
+    finish.set()
     if kind == "query":
         with pytest.raises(ValueError):
-            await owner.query("fixture.operation")
+            await pending
     else:
-        assert await owner.execute("fixture.operation") == {"committed": True}
-    with pytest.raises(ValueError):
-        owner.describe()
+        assert await pending == {"committed": True}
+    if retirement == "caller":
+        with pytest.raises(ValueError):
+            owner.describe()
+    else:
+        assert owner.describe()["available"] is False
     with pytest.raises(ValueError):
         await owner.execute("fixture.operation")
+    catalog.close()
 
 
 @pytest.mark.asyncio
@@ -168,7 +238,7 @@ async def test_observers_coalesce_scope_and_release_before_late_delivery(tmp_pat
         # Real synchronous lifecycle dispatch runs this on an Extension worker.
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        subscriptions.append(owner.subscribe(["sessions"], observer))
+        subscriptions.append(owner.subscribe(["sessions", "runs"], observer))
 
     declarations.startup.append(startup)
     await registry.fire_startup()
@@ -179,11 +249,17 @@ async def test_observers_coalesce_scope_and_release_before_late_delivery(tmp_pat
     def changes() -> None:
         for index in range(100):
             catalog.publish("sessions", {"session_id": str(index)})
+            catalog.publish("runs", {"run_id": "same"})
 
     # Publishing in the same loop turn makes coalescing deterministic.
     changes()
-    await delivered.wait()
-    assert received == [{"kind": "sessions", "revision": 100}]
+    while len(received) < 2:
+        delivered.clear()
+        await delivered.wait()
+    assert received == [
+        {"kind": "sessions", "revision": 199},
+        {"kind": "runs", "revision": 200, "scope": {"run_id": "same"}},
+    ]
     delivered.clear()
     await asyncio.to_thread(catalog.publish, "sessions", {"session_id": "worker"})
     await delivered.wait()
@@ -192,7 +268,7 @@ async def test_observers_coalesce_scope_and_release_before_late_delivery(tmp_pat
     await asyncio.to_thread(close)
     assert close.status["state"] == "closed"
     catalog.publish("sessions")
-    assert len(received) == 2
+    assert len(received) == 3
     catalog.close()
 
 
@@ -274,7 +350,7 @@ async def test_observer_failure_is_observable_and_recovers_without_blocking_othe
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retire_while_timed_out", [False, True])
 async def test_timeout_retains_latest_invalidation_until_callback_settles(
-    monkeypatch: pytest.MonkeyPatch, retire_while_timed_out: bool
+    monkeypatch: pytest.MonkeyPatch, retire_while_timed_out: bool, tmp_path: Path
 ) -> None:
     catalog = ExtensionServiceCatalog()
     identity = ExtensionRegistrationIdentity("slow", "one")
@@ -306,12 +382,29 @@ async def test_timeout_retains_latest_invalidation_until_callback_settles(
         else:
             recovered.set()
 
-    subscription = catalog.for_owner(identity, lambda: None).subscribe(["runs"], callback)
+    from tests.core.extensions.extension_test_support import write_extension
+
+    write_extension(
+        tmp_path,
+        "slow",
+        "async def read(params): return {}\n"
+        "def register(api):\n"
+        "    api.register_service('read', 'query', {'type': 'object'}, read)\n"
+        "    api.register_service('write', 'execute', {'type': 'object'}, read)\n",
+    )
+    registry = await ExtensionRegistry.aload(tmp_path)
+    catalog.install_exports(registry)
+    services = catalog.for_owner(identity, lambda: None)
+    subscription = services.subscribe(["runs"], callback)
     try:
         catalog.publish("runs")
         await cancelled.wait()
         assert subscription.status["state"] == "degraded"
         assert subscription.status["last_error"]["code"] == "callback_timeout"
+        for kind, name in (("query", "read"), ("execute", "write")):
+            with pytest.raises(ExtensionServiceError) as unavailable:
+                await getattr(services, kind)(f"extension:slow:{name}")
+            assert unavailable.value.code == "callback_unavailable"
         catalog.publish("runs", {"run_id": "first"})
         catalog.publish("runs", {"run_id": "latest"})
         if retire_while_timed_out:

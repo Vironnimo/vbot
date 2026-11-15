@@ -4,8 +4,7 @@
     composeContributions,
     contributionContext,
   } from '$lib/contributions.js';
-  import { useContributions } from '$lib/contributions.svelte.js';
-  import ContributionControl from './ContributionControl.svelte';
+  import { useContributions } from '$lib/contributionContext.js';
 
   let {
     surface,
@@ -15,6 +14,7 @@
     commands = {},
   } = $props();
   const registry = useContributions();
+  const Control = registry?.Control;
   const localContext = $derived(contributionContext(context));
   const entries = $derived(
     composeContributions(
@@ -38,8 +38,8 @@
 {#each entries as entry (entry.id + ':' + (entry.epoch ?? 'core'))}
   {#if entry.render}
     {@render entry.render()}
-  {:else}
-    <ContributionControl
+  {:else if Control}
+    <Control
       descriptor={entry}
       {registry}
       context={localContext}

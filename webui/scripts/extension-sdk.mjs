@@ -112,6 +112,12 @@ export function buildExtensionSdk({ output = extensionSdkRoot } = {}) {
 
   function copySource(file) {
     const absolute = resolve(file);
+    const transport = resolve(sourceRoot, 'lib/api');
+    if (
+      absolute === resolve(sourceRoot, 'lib/api.js') ||
+      inside(transport, absolute)
+    )
+      throw new Error(`SDK imports application transport: ${absolute}`);
     const target = outputPath(absolute);
     if (copied.has(absolute)) return;
     copied.add(absolute);
@@ -142,7 +148,13 @@ export function buildExtensionSdk({ output = extensionSdkRoot } = {}) {
         if (imported) {
           published = slash(relative(dirname(target), outputPath(imported)));
           if (!published.startsWith('.')) published = `./${published}`;
-          copySource(imported);
+          try {
+            copySource(imported);
+          } catch (error) {
+            throw new Error(`${error.message}\nImported by ${absolute}`, {
+              cause: error,
+            });
+          }
         }
         if (published !== specifier)
           replacements.push({ ...reference, published });

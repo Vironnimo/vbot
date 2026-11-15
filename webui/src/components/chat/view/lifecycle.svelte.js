@@ -1,3 +1,4 @@
+import { defaultChatOperations } from '$lib/api/chatOperations.js';
 import { SvelteSet } from 'svelte/reactivity';
 import {
   createChatController,
@@ -295,6 +296,7 @@ export function createChatViewLifecycle(context) {
       chatController.refreshReflections(sourceState),
   });
   const chatController = createChatController({
+    operations: defaultChatOperations(),
     submissionScope: untrack(() => context.draftScope ?? 0),
     chatState,
     preserveSessionSelection: untrack(() => context.preserveSessionSelection),

@@ -210,6 +210,7 @@ def parse_contribution(contribution_id: str, **fields: Any) -> ContributionDecla
         "operations",
         "tone",
         "description",
+        "height",
     }
     if set(fields) - allowed:
         raise ValueError(f"unknown contribution fields: {', '.join(sorted(set(fields) - allowed))}")
@@ -219,6 +220,13 @@ def parse_contribution(contribution_id: str, **fields: Any) -> ContributionDecla
     _text(spec.get("title"), "title", maximum=120)
     if spec.get("kind") not in {"status", "action", "view"}:
         raise ValueError("contribution kind must be status, action or view")
+    if "height" in spec and (
+        spec["kind"] != "view"
+        or isinstance(spec["height"], bool)
+        or not isinstance(spec["height"], int)
+        or not 160 <= spec["height"] <= 1600
+    ):
+        raise ValueError("contribution height must be an integer from 160 to 1600 for a view")
     order = spec.setdefault("order", 0)
     if isinstance(order, bool) or not isinstance(order, (int, float)) or not math.isfinite(order):
         raise ValueError("contribution order must be finite")

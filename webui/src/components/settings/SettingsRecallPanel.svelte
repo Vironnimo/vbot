@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   // The "Conversation search" section, read top to bottom: the search
   // method; for a method that searches by meaning, the embedding Model
   // (chosen in the Model picker; a local Model that is not installed yet
@@ -63,6 +68,8 @@
   let recallSettings = $state(untrack(() => getRecallSettings(settings)));
   let saving = $state(false);
   const recallDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: getRecallSettings,
     read: () => recallSettings,

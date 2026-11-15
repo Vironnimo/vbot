@@ -1,3 +1,5 @@
+import { attachmentUrl, isSpeechPlaybackUrl } from '../mediaUrls.js';
+export { isSpeechPlaybackUrl } from '../mediaUrls.js';
 import {
   rpc,
   RPC_ERROR_INVALID_CLIENT_REQUEST,
@@ -24,8 +26,6 @@ export const getFilePreviewRevision = (token, options = {}) =>
   rpc('file.preview_revision', { token }, options);
 
 const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
-
-const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 
 const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';
 
@@ -494,13 +494,6 @@ async function readSpeechProgress(
   }
 }
 
-export function isSpeechPlaybackUrl(url) {
-  return (
-    typeof url === 'string' &&
-    /^\/api\/speech\/playback\/[a-zA-Z0-9_-]+$/.test(url)
-  );
-}
-
 // Incremental PCM transport. Each frame is two uint32le values (sample rate,
 // byte length), followed by mono PCM16le. A zero rate seals the stream: empty
 // payload means success; a payload is a stable error code. EOF alone fails.
@@ -580,7 +573,7 @@ export function getAttachmentUrl(attachmentId) {
     attachmentId,
     'Attachment id must be a non-empty string',
   );
-  return `${ATTACHMENT_BASE_ENDPOINT}/${attachmentId}`;
+  return attachmentUrl(attachmentId);
 }
 
 function filenameForAudioBlob(audioBlob) {

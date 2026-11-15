@@ -84,8 +84,5 @@
     "cronstrue": "^3.14.0",
     "markdown-it": "^15.0.0",
     "tldts": "^7.4.11"
-  },
-  "vbot": {
-    "extensionApi": 30
   }
 }

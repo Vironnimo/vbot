@@ -110,6 +110,8 @@ def register(api):
     async def handler(params):
         if params.get('retire'):
             api.get_config()['retire']()
+        if params.get('oversized'):
+            return {'value': 'x' * (256 * 1024)}
         return {'items': [{'id': 'one', 'text': 'Current'}]}
     for operation in ('status', 'save', 'dynamic-save'):
         api.operations.register(operation, operation, {'type': 'object'}, handler)
@@ -140,6 +142,9 @@ def register(api):
         "operation": operation,
     }
     assert (await _contribution_operation(state, params))["items"][0]["text"] == "Current"
+    with pytest.raises(RpcError) as oversized:
+        await _contribution_operation(state, {**params, "params": {"oversized": True}})
+    assert oversized.value.code == "invalid_request"
     batch = (await _contribution_sources(state, {"requests": [params, None]}))["results"]
     assert batch[0]["ok"] is (operation == "status")
     assert batch[1]["error"]["code"] == "invalid_request"

@@ -14,6 +14,7 @@
 
   let {
     src = '',
+    readAudio,
     playback = '',
     cancelled = false,
     ariaLabel = t('audio.label'),
@@ -59,7 +60,9 @@
         supplied ??
         (owner
           ? owner.acquire(key, shownSession?.() ?? null)
-          : createAudioPlayback()),
+          : createAudioPlayback({
+              readAudio: readAudio ?? speechOwner?.readAudio,
+            })),
     );
     media = current;
     return () => {

@@ -1,3 +1,4 @@
+import { getSettings as reloadDraftSettings } from '$lib/api.js';
 // The editing owner behind every Task Model binding control in Settings: the
 // scoped binding draft and its autosave, the target lists, the selected
 // targets' option schemas and the option edits. `SettingsSpecializedModelsPanel`
@@ -89,6 +90,7 @@ export function createTaskModelEditor({
   // Counts user edits, so a save that finishes after another edit stays armed.
   let edits = 0;
   const draft = createSettingsDraft({
+    reload: reloadDraftSettings,
     settings: untrack(() => getSettings()),
     fromSettings: scopedBindings,
     read: () => bindings,

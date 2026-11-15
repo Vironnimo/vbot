@@ -97,3 +97,13 @@ export function portalStatus(sessionPortals, id) {
   if (!portal) return PORTAL_STATUS_CLOSED;
   return portal.listening ? PORTAL_STATUS_RUNNING : PORTAL_STATUS_WAITING;
 }
+
+export function portalSessionAddress(sessionKey) {
+  const key = typeof sessionKey === 'string' ? sessionKey : '';
+  const at = key.indexOf('::');
+  if (at <= 0) return null;
+  const agentId = key.slice(0, at);
+  const sessionId = key.slice(at + 2);
+  if (!sessionId || sessionId.startsWith('~')) return null;
+  return { agentId, sessionId };
+}

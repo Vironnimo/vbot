@@ -58,7 +58,7 @@ def test_sdk_declarations_match_the_complete_public_contract(tmp_path: Path) -> 
             str(config),
         ],
         cwd=ROOT,
-        env=dict(os.environ, MYPY_CACHE_DIR=str(tmp_path / "cache")),
+        env=dict(os.environ, MYPY_CACHE_DIR=str(tmp_path.parent / "sdk-mypy-cache")),
         capture_output=True,
         text=True,
         check=False,
@@ -175,7 +175,11 @@ async def use(provider: ProviderAdapter, channel: ChannelAdapter, host: Extensio
 """,
         encoding="utf-8",
     )
-    env = dict(os.environ, MYPYPATH=str(tmp_path / "site"))
+    env = dict(
+        os.environ,
+        MYPYPATH=str(tmp_path / "site"),
+        MYPY_CACHE_DIR=str(tmp_path.parent / "sdk-mypy-cache"),
+    )
     command = [
         sys.executable,
         "-m",
@@ -185,20 +189,12 @@ async def use(provider: ProviderAdapter, channel: ChannelAdapter, host: Extensio
         str(config),
         "--no-error-summary",
         str(consumer),
+        str(tmp_path / "invalid.py"),
     ]
-    result = subprocess.run(
-        command,
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=20,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    consumer.write_text(
-        consumer.read_text()
-        + """
+    invalid = tmp_path / "invalid.py"
+    invalid.write_text(
+        """from consumer import ProviderAdapter
+
 from vbot_extension_sdk import ExtensionOperations
 from vbot_extension_sdk.commands import ExtensionCommandContext
 
@@ -219,5 +215,6 @@ ExtensionCommandContext("unwired")
         timeout=20,
     )
     assert result.returncode == 1
+    assert "consumer.py:" not in result.stdout
     assert "[arg-type]" in result.stdout
     assert result.stdout.count('expected "Never"') == 2

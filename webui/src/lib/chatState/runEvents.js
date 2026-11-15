@@ -1,4 +1,4 @@
-import { isTerminalRunEvent } from '../api.js';
+import { isTerminalRunEvent } from '../runEventTypes.js';
 import {
   applySessionCompletionActivity,
   CHAT_STATUS_RUNNING,

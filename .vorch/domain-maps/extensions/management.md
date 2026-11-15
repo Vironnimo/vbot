@@ -87,7 +87,7 @@ Successful explicit reload and Settings mutations that reload/enable/disable Ext
 
 ## Full reload sequence
 
-`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; quiesce the old registry and retire it (Hooks, interaction handlers, owner hosts, page/management operations and Session capabilities stop reaching old Extensions while the replacement loads; page RPCs fail with a refresh-the-page error, Hooks simply do not fire); detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; archive the owner-managed Sessions of Extensions no longer installed (`extensions/host.md` -> Owner-managed Session lifetime); then await new startup.
+`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; quiesce the old registry and retire it (Hooks, interaction handlers, owner hosts, page/management operations and Session capabilities stop reaching old Extensions while the replacement loads; page RPCs fail with a refresh-the-page error, Hooks simply do not fire); withdraw old Providers under the shared Provider publication admission and drain owned Channels outside it; detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; apply Provider and Channel declarations and reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; archive the owner-managed Sessions of Extensions no longer installed (`extensions/host.md` -> Owner-managed Session lifetime); then await new startup and resume enabled Channels once their registration is ready.
 
 While the runtime is closing, reload and enable/disable changes, like a lookup of an unbound owner host, raise `ExtensionUnavailableError`, an expected `VBotError`: RPC reports it as `domain_error`, and `GET /api/extension-runs/{token}/events` answers 404 for it like an unknown token, instead of an internal error.
 
@@ -104,6 +104,12 @@ invocation, including after a pipeline or worker-admission wait. Retiring a regi
 or disabling an owner therefore prevents its not-yet-started callbacks from running;
 an already running callback may still finish. Coverage: `test_dispatch.py` (retired
 context pipelines and callbacks queued behind an owner's workers).
+
+## Provider and Channel integrations
+
+`core/extensions/_integrations.py` applies Provider declarations to the existing `ProviderRegistry` and Channel platform factories to `ChannelService`; these domains keep execution, state and persistence. Collisions diagnose only the skipped declaration. Exact registration identities fence use and withdrawal, so releasing an old epoch cannot remove a replacement. Channel factories remain unavailable until Extension startup has completed; `resume_channels` then resumes enabled Channels.
+
+Reload, disable and shutdown release integrations before owner shutdown. Provider withdrawal shares the catalog publication admission; Channel drain runs outside that admission through the bounded lifecycle callback owner. A drain past its deadline continues uncancelled after admission is withdrawn, and `ChannelService` keeps its replacement waiting for the old drain. Source: `_integrations.py`, `core/extensions/runtime.py`; domain contracts: `providers.md`, `channels.md`.
 
 ## Startup and shutdown
 

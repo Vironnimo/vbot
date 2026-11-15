@@ -2,6 +2,10 @@
 
 Read when changing the WebUI host of Extension pages or the page client: the frame bridge, page routes and history forwarding, layers, invalidations, Run streams and their recovery, Tool Call cancel, server folder listing, autosave participants, clipboard permission, message caps and page styles. The invariants every WebUI task needs are in `webui.md` -> Ownership; the Extension side of pages (declarations, API versions, page build) is `extensions.md`.
 
+## SDK transport boundary
+
+The SDK source closure excludes `lib/api.js` and the application API directory; `webui/scripts/extension-sdk.mjs` rejects either during packaging, including transitive imports. Shared Chat controllers require `operations`; Settings drafts require `submit` and conflict `reload`. Pure Run event classifications, media addresses and error values are shared without importing network clients. The App supplies permission approval, Portal, path listing and speech playback capabilities through callbacks/context; an isolated page acquires only its declared bridge capabilities.
+
 ## Host and bridge
 
 Extension pages use generic shell routes and `ExtensionPage.svelte`; the opaque frame bridge binds source window, nonce and registration epoch. `extensionPageClient.js` exposes owner operations, declared public domain services, route/toast/context, explicit local UI commands, selected Run/file capabilities and server folder listing. Reload/disposal rejects stale replies and closes subscriptions; reconnect refreshes snapshots without replaying mutations. Domain UI stays under its Extension's `ui/`, built by `scripts/build-extension-pages.mjs` with the shared Vite/Svelte dependencies. Page-owned text lives in the Extension's `ui/i18n.js` catalog under its own key namespace, registered from its `ui/main.js` before mounting; shared core keys stay in the core catalog. Tests: `ExtensionPage.test.js`, `extensionPageClient.test.js` and the independently built fixtures.

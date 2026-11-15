@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -40,6 +45,8 @@
   );
   let saving = $state(false);
   const sessionTitlesDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: normalizeSessionTitleSettings,
     read: () => formValues,

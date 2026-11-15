@@ -1,4 +1,4 @@
-import { getAttachmentUrl } from '$lib/api.js';
+import { attachmentUrl } from '$lib/mediaUrls.js';
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
@@ -61,7 +61,7 @@ export function toolDetailMedia(tool, result) {
       src:
         typeof item.attachment_id === 'string' &&
         ATTACHMENT_ID.test(item.attachment_id)
-          ? getAttachmentUrl(item.attachment_id)
+          ? attachmentUrl(item.attachment_id)
           : null,
       filename: item.filename,
       source: false,

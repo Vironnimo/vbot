@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
@@ -29,6 +34,8 @@
   let draft = $state(untrack(() => getWebFetchSettings(settings)));
   let saving = $state(false);
   const webFetchDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: getWebFetchSettings,
     read: () => draft,

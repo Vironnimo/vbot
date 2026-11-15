@@ -1,39 +1,3 @@
-import {
-  cancelRun as requestCancelRun,
-  cancelToolCall as requestCancelToolCall,
-  controlRun as requestControlRun,
-  editChatMessage as requestEditChatMessage,
-  getSession as requestGetSession,
-  getSessionWork as requestGetSessionWork,
-  getSessionChangeStats as requestGetSessionChangeStats,
-  getStatisticsSessionUsage as requestGetSessionUsage,
-  getSubAgentTree as requestGetSubAgentTree,
-  inspectSubAgentWork as requestInspectSubAgentWork,
-  listAgents as requestListAgents,
-  listChatCommands as requestListChatCommands,
-  listFiles as requestListFiles,
-  listQueue as requestListQueue,
-  listSessionActivity as requestListSessionActivity,
-  listSessions as requestListSessions,
-  loadChatTimeline as requestLoadChatHistory,
-  loadChatTimelineChildren as requestLoadTimelineChildren,
-  loadChatToolCall as requestLoadToolCall,
-  loadCommandOutput as requestLoadCommandOutput,
-  loadLearningChanges as requestLoadLearningChanges,
-  loadReflectionRuns as requestLoadReflectionRuns,
-  markSessionRead as requestMarkSessionRead,
-  removeFromQueue as requestRemoveFromQueue,
-  setSessionAgentOverrides as requestSetSessionAgentOverrides,
-  setSessionFastMode as requestSetSessionFastMode,
-  setSessionExecution as requestSetSessionExecution,
-  showProject as requestShowProject,
-  startChatRun as requestStartChatRun,
-  updateQueueItem as requestUpdateQueueItem,
-  steerQueueItem as requestSteerQueueItem,
-  stopAll as requestStopAll,
-  stopCommand as requestStopCommand,
-  undoLearningChanges as requestUndoLearningChanges,
-} from '../api.js';
 import { t } from '../i18n.js';
 import { markWidgetStatesSent } from '../widgetStates.svelte.js';
 import { createChatHistory } from './historyLoading.js';
@@ -61,46 +25,6 @@ import {
   isSlashCommandCandidate,
 } from './submissions.js';
 
-function defaultChatOperations() {
-  return {
-    cancelRun: (...args) => requestCancelRun(...args),
-    cancelToolCall: (...args) => requestCancelToolCall(...args),
-    controlRun: (...args) => requestControlRun(...args),
-    editChatMessage: (...args) => requestEditChatMessage(...args),
-    inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
-    listAgents: (...args) => requestListAgents(...args),
-    listChatCommands: (...args) => requestListChatCommands(...args),
-    listFiles: (...args) => requestListFiles(...args),
-    listQueue: (...args) => requestListQueue(...args),
-    listSessionActivity: (...args) => requestListSessionActivity(...args),
-    listSessions: (...args) => requestListSessions(...args),
-    getSession: (...args) => requestGetSession(...args),
-    getSessionWork: (...args) => requestGetSessionWork(...args),
-    getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
-    getSessionUsage: (...args) => requestGetSessionUsage(...args),
-    getSubAgentTree: (...args) => requestGetSubAgentTree(...args),
-    loadChatHistory: (...args) => requestLoadChatHistory(...args),
-    loadTimelineChildren: (...args) => requestLoadTimelineChildren(...args),
-    loadToolCall: (...args) => requestLoadToolCall(...args),
-    loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
-    loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
-    loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
-    markSessionRead: (...args) => requestMarkSessionRead(...args),
-    removeFromQueue: (...args) => requestRemoveFromQueue(...args),
-    setSessionAgentOverrides: (...args) =>
-      requestSetSessionAgentOverrides(...args),
-    setSessionFastMode: (...args) => requestSetSessionFastMode(...args),
-    setSessionExecution: (...args) => requestSetSessionExecution(...args),
-    showProject: (...args) => requestShowProject(...args),
-    startChatRun: (...args) => requestStartChatRun(...args),
-    updateQueueItem: (...args) => requestUpdateQueueItem(...args),
-    steerQueueItem: (...args) => requestSteerQueueItem(...args),
-    stopAll: (...args) => requestStopAll(...args),
-    stopCommand: (...args) => requestStopCommand(...args),
-    undoLearningChanges: (...args) => requestUndoLearningChanges(...args),
-  };
-}
-
 // Own Chat's asynchronous lifecycle end-to-end. ChatView supplies only the few
 // navigation/display facts the controller cannot derive from Chat state; RPC
 // sequencing, durable-history reconciliation, Queue updates, run transitions,
@@ -108,7 +32,7 @@ function defaultChatOperations() {
 export function createChatController({
   chatState,
   runStream,
-  operations = defaultChatOperations(),
+  operations,
   // The App's Run event feed (`runEventFeed.svelte.js`); without one this
   // owner applies no Run server events.
   runEvents = null,
@@ -125,6 +49,8 @@ export function createChatController({
   let commandsLoadVersion = 0;
   let agentsLoadVersion = 0;
   let initialHistoryPending = false;
+  if (!operations || typeof operations !== 'object')
+    throw new TypeError('Chat operations are required');
   const submitChat = createChatSubmissions((params) =>
     operations.startChatRun(params),
   );

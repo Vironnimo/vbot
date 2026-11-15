@@ -54,6 +54,8 @@ it('builds an external Extension from the shipped SDK tarball', async () => {
     );
     expect(existsSync(join(installed, 'dist/fonts/OFL.txt'))).toBe(true);
     expect(existsSync(join(installed, 'LICENSE'))).toBe(true);
+    expect(existsSync(join(installed, 'dist/lib/api.js'))).toBe(false);
+    expect(existsSync(join(installed, 'dist/lib/api'))).toBe(false);
     const manifest = JSON.parse(
       readFileSync(join(consumer, 'extension.json'), 'utf8'),
     );
