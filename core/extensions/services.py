@@ -196,7 +196,6 @@ class ExtensionServiceCatalog:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         self._conditions = LoggedConditions()
-        self._capture_loop()
 
     def _capture_loop(self) -> None:
         """Bind observation delivery before callbacks enter a synchronous worker."""
