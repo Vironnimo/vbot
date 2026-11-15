@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,6 +11,7 @@ from typing import Any
 from core.extensions import API_VERSION, ExtensionRegistrationIdentity
 from core.extensions._callbacks import ExtensionHandlerTimeoutError, invoke_isolated_handler
 from core.extensions._declarations import ExtensionUnavailableError
+from core.extensions._service_exports import detached_json
 from core.extensions.contributions import EXTENSION_FEATURES, ContributionDeclaration
 from core.extensions.operations import ExtensionOperationError
 from core.extensions.services import ExtensionServiceError
@@ -112,12 +112,6 @@ async def _contribution_sources(state: Any, params: dict[str, Any]) -> dict[str,
                     description="contribution source read",
                     timeout_seconds=_SOURCE_TIMEOUT_SECONDS,
                 )
-                # A list must not amplify a large single-operation result into
-                # an unbounded batch response. 32 entries total at most 8 MiB.
-                if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode()) > 262_144:
-                    raise RpcError(
-                        RPC_ERROR_INVALID_REQUEST, "Contribution source result exceeds 256 KiB"
-                    )
             return {"ok": True, "result": result}
         except RpcError as exc:
             return {"ok": False, "error": exc.to_dict()}
@@ -185,7 +179,7 @@ async def _invoke_contribution(
         # their definitive result survives a reload or retirement they trigger.
         if declaration.spec.get("source", {}).get("operation") == operation:
             check()
-        return result
+        return dict(detached_json(result))
     except ExtensionOperationError as exc:
         raise RpcError(exc.code, str(exc)) from exc
     except ValueError as exc:

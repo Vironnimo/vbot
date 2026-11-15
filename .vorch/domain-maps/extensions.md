@@ -86,7 +86,7 @@ Read these only when your task matches - not by default.
 - Installing or building the public SDKs, including standalone consumers and Python contracts -> `sdk/python/README.md` and `webui/extension-sdk/README.md` (repository-relative)
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, page declarations, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, `config_documents` validators, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, the managed dependency site, or full reload, or bumping `API_VERSION` -> `extensions/management.md`
-- Changing an owner-bound host capability: native Decisions, temporary execution groups and private Session Tools, prompt inspection, group titles, owner-managed Session removal and archiving, deferred Tool outcomes, Tool result payloads, OAuth browser redirects or Computer routing -> `extensions/host.md`
+- Changing owner-bound Services, Resources, subscriptions, execution groups, Decisions, notifications, prompt inspection, Session lifetime, receipts, Tool payloads, OAuth or Computer routing -> `extensions/host.md`
 - Changing how an Extension opens, migrates, snapshots, restores or unregisters its databases -> `extensions/databases.md`
 - Changing Computer Use, its opt-in Tools, the access mode and app approvals, screenshots and coordinates, the desktop target, or desktop input -> `extensions/computer-use.md`
 - Routing an Extension's native capability to the Session's Computer -> `computers.md`

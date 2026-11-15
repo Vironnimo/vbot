@@ -42,6 +42,7 @@ def test_manifest_only_extension_publishes_owned_ui_without_importing_native_cod
                 "title": "Panel",
                 "kind": "view",
                 "page": "panel",
+                "height": 720,
             }
         ],
     }
@@ -50,6 +51,7 @@ def test_manifest_only_extension_publishes_owned_ui_without_importing_native_cod
     identity = registry.registration_identity("ui_only")
     contribution = registry.current_contribution(identity, "panel")
     assert contribution is not None and contribution.spec["page"] == "panel"
+    assert contribution.spec["height"] == 720
     current_page = registry.current_page(identity, "panel")
     assert current_page is not None
     page, _entry = current_page
@@ -75,6 +77,10 @@ def test_manifest_only_extension_publishes_owned_ui_without_importing_native_cod
         {"action": {"command": "insert", "operation": "insert"}},
         {"icon": {"paths": ["<script>alert(1)</script>"]}},
         {"text": {"context": "credentials"}},
+        {"height": 480},
+        {"kind": "view", "page": "panel", "height": True},
+        {"kind": "view", "page": "panel", "height": 159},
+        {"kind": "view", "page": "panel", "height": 1601},
     ],
 )
 def test_contribution_declarations_reject_unsupported_shapes(fields: dict) -> None:
