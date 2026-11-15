@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { mcpCatalogMark } from '../mcpCatalog.js';
+import { mcpCatalogMark } from '../../../../resources/extensions/mcp/ui/mcpCatalog.js';
 
 const { entries } = JSON.parse(
   readFileSync(

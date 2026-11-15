@@ -1,6 +1,6 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
   import { runTarget, runTitle } from './runPresentation.js';
   import './runDialogs.css';
 

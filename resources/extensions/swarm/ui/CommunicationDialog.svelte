@@ -1,8 +1,8 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
   import DeliverySettings from './DeliverySettings.svelte';
   import { runTitle } from './runPresentation.js';
   import './runDialogs.css';

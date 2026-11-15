@@ -11,11 +11,11 @@
   // shows under that field. `idPrefix` keeps the element ids of several
   // instances apart: a limit's field is `${idPrefix}-${limit.id}`
   // (DELIVERY_LIMITS).
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import { DELIVERY_LIMITS } from './runPresentation.js';
 
   let { value, onChange, errors = {}, disabled = false, idPrefix } = $props();

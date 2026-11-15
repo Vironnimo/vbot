@@ -8,7 +8,6 @@ from cli._parser_common import (
     AREA_HELP,
     CHANNEL_DM_SCOPES,
     CHANNEL_HELP,
-    CHANNEL_PLATFORMS,
     CHANNEL_RESPONSE_MODES,
     MODEL_HELP,
     MODEL_TASK_TYPES,
@@ -35,7 +34,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     add_parser.add_argument("id", metavar="<channel-id>", help="Id for the new channel")
     add_parser.add_argument(
-        "--platform", required=True, choices=CHANNEL_PLATFORMS, help="Messaging platform"
+        "--platform", required=True, help="Messaging platform id from channel list"
     )
     add_parser.add_argument(
         "--agent", required=True, metavar="<agent-id>", help="Agent that handles channel messages"
@@ -59,6 +58,9 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     add_parser.add_argument("--app-token-env", help="Slack Socket Mode app-token variable name")
     add_parser.add_argument("--server-url", help="Mattermost server URL")
+    add_parser.add_argument(
+        "--settings-file", metavar="<path>", help="JSON object with platform settings"
+    )
     _add_email_arguments(add_parser)
     add_parser.add_argument(
         "--disabled", action="store_true", help="Save without starting the connection"
@@ -88,7 +90,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     update_parser.add_argument("id", metavar="<channel-id>", help="Channel id to update")
     update_parser.add_argument(
-        "--platform", choices=CHANNEL_PLATFORMS, help="Replace the messaging platform"
+        "--platform", help="Replace the messaging platform with an id from channel list"
     )
     update_parser.add_argument(
         "--agent", metavar="<agent-id>", help="Replace the Agent that handles channel messages"
@@ -105,6 +107,11 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     update_parser.add_argument(
         "--server-url", metavar="<url>", help="Replace the Mattermost server URL"
+    )
+    update_parser.add_argument(
+        "--settings-file",
+        metavar="<path>",
+        help="Replace all platform settings from a JSON object file",
     )
     _add_email_arguments(update_parser)
     update_parser.add_argument(

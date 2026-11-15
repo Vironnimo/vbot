@@ -1,4 +1,4 @@
-import { tOr } from '../../../../webui/src/lib/i18n.js';
+import { tOr } from '@vbot/extension-sdk/lib/i18n.js';
 import { failureText } from './failureText.js';
 
 // The Swarm editor's prompt preview for one formation row: it requests the

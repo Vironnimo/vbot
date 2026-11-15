@@ -44,6 +44,11 @@ shot-*.png
 # Node / webui
 node_modules/
 webui/dist/
+webui/extension-sdk/dist/
+webui/extension-sdk/LICENSE
+webui/*.tgz
+resources/sdk/*.tgz
+webui/extension-sdk/example/web/
 webui/.previous-build/
 resources/extensions/*/web/
 tests/fixtures/extension-pages/*/web/

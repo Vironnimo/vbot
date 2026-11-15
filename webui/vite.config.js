@@ -4,13 +4,18 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
 import { webuiBuildIdentity } from './scripts/webui-build-identity.mjs';
+import { extensionSdkSourceAliases } from './scripts/extension-sdk.mjs';
 
 export default defineConfig({
   plugins: [svelte(), webuiBuildIdentity()],
   resolve: {
-    alias: {
-      $lib: path.resolve(import.meta.dirname, 'src/lib'),
-    },
+    alias: [
+      ...extensionSdkSourceAliases(),
+      {
+        find: '$lib',
+        replacement: path.resolve(import.meta.dirname, 'src/lib'),
+      },
+    ],
   },
   test: {
     alias: [

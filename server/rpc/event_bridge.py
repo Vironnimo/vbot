@@ -352,6 +352,9 @@ def publish_resource_changed(
     if scope:
         payload["scope"] = scope
     state.event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
+    observer = getattr(state, "extension_resource_observer", None)
+    if observer is not None:
+        observer(kind, scope)
 
 
 async def publish_archived_sessions(

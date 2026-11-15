@@ -25,12 +25,12 @@ from typing import Any, Protocol
 from core.utils.ids import new_id
 from desktop._http import shared_ssl_context
 from desktop.credentials import DeviceTokenStore, StoredComputerIdentity
+from desktop.extensions import ExecutionHandler, HandlerFactory, NativeCapability
 from desktop.server_address import parse_server_address
 from desktop.settings import read_section, update_section
 
 logger = logging.getLogger("vbot.desktop.execution")
 SETTINGS_KEY = "computer_sharing"
-CAPABILITIES = ("terminal", "computer_use")
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_PENDING_CALLS = 64
 MAX_REMEMBERED_CALLS = 4096
@@ -45,14 +45,6 @@ class SharingError(Exception):
         self.error_code = code
 
 
-class ExecutionHandler(Protocol):
-    async def execute(self, operation: str, params: dict[str, Any]) -> dict[str, Any]: ...
-
-    async def disconnected(self) -> None: ...
-
-    async def close(self) -> None: ...
-
-
 class Authorization(Protocol):
     def header(self, server_url: str) -> str | None: ...
 
@@ -65,10 +57,6 @@ class Socket(Protocol):
     async def recv(self) -> str | bytes: ...
 
     async def close(self) -> None: ...
-
-
-type EventSink = Callable[[str, dict[str, Any]], None]
-type HandlerFactory = Callable[[EventSink], ExecutionHandler]
 
 
 @asynccontextmanager
@@ -115,6 +103,8 @@ class ComputerSharing:
         identities: DeviceTokenStore,
         authorization: Authorization,
         factories: Mapping[str, HandlerFactory],
+        capabilities: Mapping[str, NativeCapability] | None = None,
+        extension_records: list[dict[str, Any]] | None = None,
         publish: Callable[[Mapping[str, Any]], None] = lambda _status: None,
         connector: Callable[..., Any] = connect_socket,
         available: Mapping[str, bool] | None = None,
@@ -124,11 +114,21 @@ class ComputerSharing:
         self._identities = identities
         self._authorization = authorization
         self._factories = dict(factories)
+        self._capabilities = (
+            dict(capabilities)
+            if capabilities is not None
+            else {
+                name: NativeCapability(name, "builtin", name, "", factory)
+                for name, factory in factories.items()
+            }
+        )
+        if set(self._capabilities) != set(self._factories):
+            raise ValueError("Native capability declarations must match their factories")
+        self._extension_records = list(extension_records or ())
         self._publish = publish
         self._connector = connector
         self._available = {
-            name: name in factories and (name != "computer_use" or sys.platform == "win32")
-            for name in CAPABILITIES
+            name: declaration.available for name, declaration in self._capabilities.items()
         }
         if available is not None:
             self._available.update(available)
@@ -191,7 +191,10 @@ class ComputerSharing:
                 "name": _computer_name(settings.get("name")),
                 "server_url": self._server_url,
                 "connected": self._connected,
-                "capabilities": _grants(settings, self._origin),
+                "capabilities": _grants(settings, self._origin, self._capabilities),
+                "capability_catalog": [item.describe() for item in self._capabilities.values()],
+                "extensions": [dict(record) for record in self._extension_records],
+                "capability_errors": dict(self._capability_errors),
                 "available": {
                     name: allowed and name not in self._capability_errors
                     for name, allowed in self._available.items()
@@ -309,10 +312,10 @@ class ComputerSharing:
         expected_server: str,
         confirm: Callable[[str, str], bool] | None,
     ) -> dict[str, Any]:
-        if not isinstance(changes, dict) or set(changes) - {"name", *CAPABILITIES}:
+        if not isinstance(changes, dict) or set(changes) - {"name", *self._capabilities}:
             raise SharingError("computer_sharing_invalid", "Invalid computer sharing settings")
         normalized: dict[str, Any] = {}
-        for name in CAPABILITIES:
+        for name in self._capabilities:
             if name in changes:
                 if not isinstance(changes[name], bool):
                     raise SharingError(
@@ -342,9 +345,9 @@ class ComputerSharing:
                     "The selected server changed; open the settings again",
                 )
             origin = self._origin
-            stopping = (
-                normalized.get("terminal") is False and _grants(self._settings, origin)["terminal"]
-            )
+            stopping = normalized.get("terminal") is False and _grants(
+                self._settings, origin, self._capabilities
+            ).get("terminal", False)
             if stopping:
                 self._disabling_terminal = True
         try:
@@ -387,13 +390,20 @@ class ComputerSharing:
                             "Stored computer sharing settings are invalid",
                         )
                     grants.update(
-                        {name: normalized[name] for name in CAPABILITIES if name in normalized}
+                        {
+                            name: normalized[name]
+                            for name in self._capabilities
+                            if name in normalized
+                        }
                     )
                     return settings
 
                 updated = update_section(SETTINGS_KEY, apply, self._settings_path)
                 self._settings = updated
-                if any(_grants(updated, origin).values()):
+                for capability in self._capabilities:
+                    if normalized.get(capability) is False:
+                        self._capability_errors.pop(capability, None)
+                if any(_grants(updated, origin, self._capabilities).values()):
                     self._identities.computer_identity(origin, create=True)
                 self._wake()
         finally:
@@ -438,7 +448,7 @@ class ComputerSharing:
                 with self._lock:
                     origin, server_url = self._origin, self._server_url
                     settings = self._settings
-                    grants = _grants(settings, origin)
+                    grants = _grants(settings, origin, self._capabilities)
                 if self._scope is not None and self._scope.origin != origin:
                     await self._close_scope()
                 enabled = {
@@ -498,25 +508,46 @@ class ComputerSharing:
                 self._changed = None
 
     async def _configure(self, scope: _Scope, enabled: set[str]) -> None:
+        errors: dict[str, str] = {}
         for capability in set(scope.handlers) - enabled:
-            await scope.handlers[capability].close()
-            del scope.handlers[capability]
-        self._capability_errors.clear()
+            removed = scope.handlers.pop(capability)
+            try:
+                await removed.close()
+            except Exception as error:
+                errors[capability] = type(error).__name__
         for capability in sorted(enabled):
-            handler = scope.handlers.get(capability)
-            if handler is None:
+            try:
+                handler = scope.handlers.get(capability)
+                if handler is None:
 
-                def emit(event: str, data: dict[str, Any], cap: str = capability) -> None:
-                    self._emit(scope, cap, event, data)
+                    def emit(event: str, data: dict[str, Any], cap: str = capability) -> None:
+                        self._emit(scope, cap, event, data)
 
-                handler = self._factories[capability](emit)
-                scope.handlers[capability] = handler
-            ready = getattr(handler, "ready", None)
-            if ready is not None:
-                reason = await ready()
-                if reason is not None:
-                    self._capability_errors[capability] = str(reason)
-                    await scope.handlers.pop(capability).close()
+                    handler = self._factories[capability](emit)
+                    scope.handlers[capability] = handler
+                    if not all(
+                        callable(getattr(handler, method, None))
+                        for method in ("execute", "disconnected", "close")
+                    ):
+                        raise TypeError("A capability factory must return an execution handler")
+                ready = getattr(handler, "ready", None)
+                reason = await ready() if ready is not None else None
+                if reason is None:
+                    continue
+                errors[capability] = str(reason)
+            except Exception as error:
+                errors[capability] = type(error).__name__
+            # Failed initialization must not break another capability's native
+            # lifetime or advertise the incomplete handler on the next link.
+            failed = scope.handlers.pop(capability, None)
+            if failed is not None:
+                try:
+                    await failed.close()
+                except Exception as error:
+                    errors[capability] += f"; close: {type(error).__name__}"
+        with self._lock:
+            self._capability_errors = errors
+        self._report()
         if not scope.handlers:
             raise SharingError(
                 "computer_capability_unavailable", "The shared capabilities are unavailable"
@@ -623,7 +654,7 @@ class ComputerSharing:
                 handler, "read_only_operations", ()
             )
             with self._lock:
-                grants = _grants(self._settings, self._origin)
+                grants = _grants(self._settings, self._origin, self._capabilities)
                 if (
                     self._origin != scope.origin
                     or not isinstance(capability, str)
@@ -788,10 +819,12 @@ def _refusal(message: dict[str, Any]) -> SharingError:
     )
 
 
-def _grants(settings: dict[str, Any], origin: str) -> dict[str, bool]:
+def _grants(
+    settings: dict[str, Any], origin: str, capabilities: Mapping[str, NativeCapability]
+) -> dict[str, bool]:
     servers = settings.get("servers")
     grants = servers.get(origin) if isinstance(servers, dict) else None
-    return {name: isinstance(grants, dict) and grants.get(name) is True for name in CAPABILITIES}
+    return {name: isinstance(grants, dict) and grants.get(name) is True for name in capabilities}
 
 
 def _computer_name(value: Any) -> str:

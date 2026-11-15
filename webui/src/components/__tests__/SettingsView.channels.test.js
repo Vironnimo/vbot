@@ -724,6 +724,78 @@ describe('SettingsView Channels', () => {
     ).toBe(input);
   });
 
+  it('configures Extension platforms from the live catalog', async () => {
+    await openChannels({
+      channels: [
+        channelConfig('team', {
+          platform: 'matrix',
+          token_env_var: '',
+          settings: { homeserver: 'https://chat.example', retries: 2 },
+        }),
+      ],
+      channelPlatforms: [
+        {
+          id: 'matrix',
+          label: 'Matrix Chat',
+          settings_schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              homeserver: { type: 'string', title: 'Homeserver' },
+              retries: { type: 'integer', title: 'Retries' },
+            },
+          },
+        },
+      ],
+    });
+    buttonByAriaLabel('Edit channel team').click();
+    flushSync();
+    expect(
+      document.querySelector('#channel-platform-select').textContent,
+    ).toContain('Matrix Chat');
+    const retries = document.querySelector('input[aria-label="Retries"]');
+    expect(retries.value).toBe('2');
+    retries.value = '3';
+    retries.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    buttonByText('Save').click();
+    await waitForCondition(() =>
+      callsTo('channel.update').some(
+        ([, params]) => params.settings?.retries === 3,
+      ),
+    );
+    expect(callsTo('channel.update').at(-1)[1]).toEqual({
+      id: 'team',
+      settings: { homeserver: 'https://chat.example', retries: 3 },
+    });
+  });
+
+  it('keeps an unavailable platform selected while editing its retained disabled Channel', async () => {
+    await openChannels({
+      channels: [
+        channelConfig('team', {
+          platform: 'matrix',
+          enabled: false,
+          token_env_var: '',
+          settings: { homeserver: 'https://chat.example' },
+        }),
+      ],
+      channelPlatforms: [],
+    });
+    buttonByAriaLabel('Edit channel team').click();
+    flushSync();
+    expect(
+      document.querySelector('#channel-platform-select').textContent,
+    ).toContain('matrix');
+    setInputValue('#channel-allowed-chat-ids-input', 'room');
+    buttonByText('Save').click();
+    await waitForCondition(() => callsTo('channel.update').length === 1);
+    expect(callsTo('channel.update')[0][1]).toEqual({
+      id: 'team',
+      allowed_chat_ids: ['room'],
+    });
+  });
+
   it('creates a channel from the inline form', async () => {
     await openChannels({ channels: [] });
 

@@ -1,4 +1,4 @@
-import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+import { createExtensionPageClient } from '@vbot/extension-sdk/client';
 
 const bridge = createExtensionPageClient();
 const root = document.documentElement;

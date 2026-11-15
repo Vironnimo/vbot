@@ -2,13 +2,13 @@
   // One Wiki page as read: number and title, its revision line, the page
   // actions, the version history and the Markdown. WikiPanel owns the page,
   // its history and every request; this component shows them.
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import { formatMoment } from '../../../../webui/src/lib/timeText.js';
-  import Badge from '../../../../webui/src/components/ui/Badge.svelte';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
-  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { formatMoment } from '@vbot/extension-sdk/lib/timeText.js';
+  import Badge from '@vbot/extension-sdk/ui/Badge.svelte';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
+  import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
   import { authorLabel } from './pagePresentation.js';
 
   let {

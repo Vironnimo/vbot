@@ -1,11 +1,12 @@
 import { onMount } from 'svelte';
-import { init, t } from '../../../../webui/src/lib/i18n.js';
-import { createExtensionPageClient } from '../../../../webui/src/lib/extensionPageClient.js';
-import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
+import { init, t } from '@vbot/extension-sdk/lib/i18n.js';
+import { createExtensionPageClient } from '@vbot/extension-sdk/client';
+import { applyExtensionTheme } from '@vbot/extension-sdk/lib/extensionTheme.js';
+import { setApplicationTimeZone } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
 import {
   configureModelFavorites,
   loadModelFavorites,
-} from '../../../../webui/src/lib/modelFavorites.svelte.js';
+} from '@vbot/extension-sdk/lib/modelFavorites.svelte.js';
 import { failureText } from './presentation.js';
 
 // This owner keeps server snapshots and the bridge lifetime. Editors own their
@@ -295,11 +296,7 @@ export function createFactoryPageModel(bridgeClient) {
   function context(next) {
     document.documentElement.lang = init(next.locale);
     setApplicationTimeZone(next.timezone);
-    for (const [name, value] of Object.entries(next.theme ?? {}))
-      document.documentElement.style.setProperty(
-        name.startsWith('--') ? name : `--${name}`,
-        value,
-      );
+    applyExtensionTheme(next.theme);
     if (!connected) {
       connected = true;
       refreshError = '';

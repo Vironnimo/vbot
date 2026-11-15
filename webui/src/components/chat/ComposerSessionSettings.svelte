@@ -18,6 +18,8 @@
   //   takes the rate's place until a step has a measurable rate.
   // - More menu: rarely needed Session settings, so they do not crowd the
   //   row; its dot says one of them differs from the default.
+  import { parseAgentAddress } from '$lib/agentAddress.js';
+  import ContributionSurface from '../extensions/ContributionSurface.svelte';
   import {
     THINKING_EFFORT_OPTIONS,
     effortOptionsForReasoning,
@@ -54,6 +56,8 @@
 
   let {
     view,
+    uiContext = {},
+    commands = {},
     // The Session's newest measured `usage.speed`; null hides it.
     outputSpeed = null,
     outputLatency = null,
@@ -462,7 +466,229 @@
       ],
     };
   }
+  const contributionContext = $derived({
+    ...uiContext,
+    agent_id: parseAgentAddress(view.agentAddress ?? '').agentId,
+    session_id: view.sessionId ?? '',
+    project_id: parseAgentAddress(view.agentAddress ?? '').projectId ?? '',
+    has_session: view.kind !== 'draft',
+  });
 </script>
+
+{#snippet projectContribution()}
+  {#if view.project.editable || view.project.known}
+    <span
+      class="session-settings__field session-settings__field--icon"
+      class:session-settings__field--override={projectChosen}
+      class:session-settings__field--warning={projectMissing}
+    >
+      <svg
+        class="session-settings__icon"
+        viewBox="0 0 16 16"
+        width="13"
+        height="13"
+        aria-hidden="true"
+      >
+        <path
+          d="M2 4.5V12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3H3a1 1 0 0 0-1 1.5z"
+        />
+      </svg>
+      {#if view.project.editable}
+        <Dropdown
+          value={projectValue ?? ''}
+          options={projectOptions}
+          ariaLabel={t('chat.sessionSettings.project')}
+          triggerClass="session-settings__picker"
+          triggerTooltip={projectTooltip}
+          panelMinWidth={200}
+          onValueChange={(next) => onSelectProject(next)}
+        />
+      {:else}
+        <span
+          class="session-settings__value"
+          role="group"
+          aria-label={t('chat.sessionSettings.project')}
+          use:tooltip={projectTooltip}
+        >
+          <span class="session-settings__value-label">{projectLabel}</span>
+        </span>
+      {/if}
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet agentContribution()}
+  {#if view.agent}
+    <span class="session-settings__field session-settings__field--icon">
+      <svg
+        class="session-settings__icon"
+        viewBox="0 0 16 16"
+        width="13"
+        height="13"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="5.5" r="2.5" />
+        <path d="M3 13.5a5 5 0 0 1 10 0" />
+      </svg>
+      <Dropdown
+        value={view.agent.value}
+        options={agentOptions}
+        ariaLabel={t('chat.sessionSettings.agent')}
+        triggerClass="session-settings__picker"
+        triggerTooltip={agentTooltip}
+        panelMinWidth={200}
+        onValueChange={(next) => onSelectAgent(next)}
+      />
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet permissionsContribution()}
+  <SessionPermissionsBadge
+    agentAddress={view.agentAddress}
+    sessionId={view.sessionId}
+    revision={view.revision}
+    workingProjectId={view.kind === 'draft' && !view.project.team
+      ? (view.project.value ?? null)
+      : undefined}
+  />
+{/snippet}
+
+{#snippet moreContribution()}
+  <Button
+    variant="tertiary"
+    icon
+    class="session-settings__more"
+    ariaLabel={t('chat.sessionSettings.more')}
+    tooltip={moreTooltip}
+    aria-haspopup="menu"
+    aria-expanded={moreMenu !== null}
+    onClick={openMoreMenu}
+  >
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="3.5" cy="8" r="1.25" />
+      <circle cx="8" cy="8" r="1.25" />
+      <circle cx="12.5" cy="8" r="1.25" />
+    </svg>
+    {#if moreChanged}
+      <span class="session-settings__more-dot" data-more-changed></span>
+    {/if}
+  </Button>
+{/snippet}
+
+{#snippet performanceContribution()}
+  {#if measureLabel}
+    <span class="session-settings__field session-settings__field--icon">
+      <svg
+        class="session-settings__icon"
+        viewBox="0 0 16 16"
+        width="13"
+        height="13"
+        aria-hidden="true"
+      >
+        <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" />
+        <path d="M8 11.5l2.5-3.5" />
+      </svg>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (The measurement details are keyboard-accessible.) -->
+      <span
+        class="session-settings__value session-settings__value--speed"
+        role="group"
+        tabindex="0"
+        aria-label={speedLabel
+          ? t('chat.sessionSettings.speed')
+          : t('chat.sessionSettings.latency')}
+        use:tooltip={measureTooltip}
+      >
+        <span class="session-settings__value-label">{measureLabel}</span>
+      </span>
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet saveContribution()}
+  <SaveStatus saving={view.saving} pending={view.pending} onClick={view.save} />
+{/snippet}
+
+{#snippet fastContribution()}
+  {#if fastModeVisible}
+    <button
+      type="button"
+      class="session-settings__fast"
+      class:session-settings__fast--enabled={view.fastMode}
+      aria-label={t('chat.sessionSettings.fastMode')}
+      aria-pressed={view.fastMode === true}
+      use:tooltip={fastModeTooltip}
+      onclick={() => onSelectFastMode(!view.fastMode)}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m13 2-10 12h8l-1 8 11-12h-8z" />
+      </svg>
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet modelContribution()}
+  <span
+    class="session-settings__field session-settings__field--model"
+    class:session-settings__field--override={Boolean(view.model)}
+  >
+    <SearchableDropdown
+      value={modelValue}
+      options={modelPickerOptions}
+      ariaLabel={t('chat.sessionSettings.model')}
+      searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+      emptyLabel={t('agents.form.modelSearchEmpty')}
+      triggerClass="session-settings__picker"
+      triggerTooltip={modelTooltip}
+      panelMinWidth={300}
+      footerActionLabel={modelFilterFooter}
+      onFooterAction={() => (showAllModels = !showAllModels)}
+      onOpenChange={(open) => {
+        if (open) {
+          onModelPickerOpen();
+        }
+      }}
+      onValueChange={(next) => onSelectModel(next)}
+    />
+  </span>
+{/snippet}
+
+{#snippet effortContribution()}
+  {#if effortVisible}
+    <span
+      class="session-settings__field session-settings__field--icon"
+      class:session-settings__field--override={Boolean(view.thinkingEffort)}
+    >
+      <svg
+        class="session-settings__icon"
+        viewBox="0 0 16 16"
+        width="13"
+        height="13"
+        aria-hidden="true"
+      >
+        <path
+          d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+        />
+        <path d="M6 13h4" />
+      </svg>
+      <Dropdown
+        value={view.thinkingEffort}
+        options={effortOptions}
+        ariaLabel={t('chat.sessionSettings.thinkingEffort')}
+        triggerClass="session-settings__picker"
+        triggerTooltip={effortTooltip}
+        panelMinWidth={170}
+        onValueChange={(next) => onSelectThinkingEffort(next)}
+      />
+    </span>
+  {/if}
+{/snippet}
 
 <div
   class="session-settings"
@@ -470,201 +696,82 @@
   aria-label={t('chat.sessionSettings.label')}
 >
   <div class="session-settings__start">
-    {#if view.project.editable || view.project.known}
-      <span
-        class="session-settings__field session-settings__field--icon"
-        class:session-settings__field--override={projectChosen}
-        class:session-settings__field--warning={projectMissing}
-      >
-        <svg
-          class="session-settings__icon"
-          viewBox="0 0 16 16"
-          width="13"
-          height="13"
-          aria-hidden="true"
-        >
-          <path
-            d="M2 4.5V12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3H3a1 1 0 0 0-1 1.5z"
-          />
-        </svg>
-        {#if view.project.editable}
-          <Dropdown
-            value={projectValue ?? ''}
-            options={projectOptions}
-            ariaLabel={t('chat.sessionSettings.project')}
-            triggerClass="session-settings__picker"
-            triggerTooltip={projectTooltip}
-            panelMinWidth={200}
-            onValueChange={(next) => onSelectProject(next)}
-          />
-        {:else}
-          <span
-            class="session-settings__value"
-            role="group"
-            aria-label={t('chat.sessionSettings.project')}
-            use:tooltip={projectTooltip}
-          >
-            <span class="session-settings__value-label">{projectLabel}</span>
-          </span>
-        {/if}
-      </span>
-    {/if}
-    {#if view.agent}
-      <span class="session-settings__field session-settings__field--icon">
-        <svg
-          class="session-settings__icon"
-          viewBox="0 0 16 16"
-          width="13"
-          height="13"
-          aria-hidden="true"
-        >
-          <circle cx="8" cy="5.5" r="2.5" />
-          <path d="M3 13.5a5 5 0 0 1 10 0" />
-        </svg>
-        <Dropdown
-          value={view.agent.value}
-          options={agentOptions}
-          ariaLabel={t('chat.sessionSettings.agent')}
-          triggerClass="session-settings__picker"
-          triggerTooltip={agentTooltip}
-          panelMinWidth={200}
-          onValueChange={(next) => onSelectAgent(next)}
-        />
-      </span>
-    {/if}
-    <SessionPermissionsBadge
-      agentAddress={view.agentAddress}
-      sessionId={view.sessionId}
-      revision={view.revision}
-      workingProjectId={view.kind === 'draft' && !view.project.team
-        ? (view.project.value ?? null)
-        : undefined}
+    <ContributionSurface
+      surface="chat.composer.footer.start"
+      context={contributionContext}
+      {commands}
+      builtins={[
+        {
+          id: 'core:session-settings.project',
+          title: t('chat.sessionSettings.project'),
+          order: 10,
+          render: projectContribution,
+        },
+        {
+          id: 'core:session-settings.agent',
+          title: t('chat.sessionSettings.agent'),
+          order: 20,
+          render: agentContribution,
+        },
+        {
+          id: 'core:session-settings.permissions',
+          title: t('permissions.session.title'),
+          order: 30,
+          render: permissionsContribution,
+        },
+        {
+          id: 'core:session-settings.more',
+          title: t('chat.sessionSettings.more'),
+          order: 40,
+          render: moreContribution,
+        },
+        {
+          id: 'core:session-settings.performance',
+          title: t('chat.sessionSettings.speed'),
+          order: 50,
+          render: performanceContribution,
+        },
+      ]}
     />
-    <Button
-      variant="tertiary"
-      icon
-      class="session-settings__more"
-      ariaLabel={t('chat.sessionSettings.more')}
-      tooltip={moreTooltip}
-      aria-haspopup="menu"
-      aria-expanded={moreMenu !== null}
-      onClick={openMoreMenu}
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="14"
-        height="14"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <circle cx="3.5" cy="8" r="1.25" />
-        <circle cx="8" cy="8" r="1.25" />
-        <circle cx="12.5" cy="8" r="1.25" />
-      </svg>
-      {#if moreChanged}
-        <span class="session-settings__more-dot" data-more-changed></span>
-      {/if}
-    </Button>
-    {#if measureLabel}
-      <span class="session-settings__field session-settings__field--icon">
-        <svg
-          class="session-settings__icon"
-          viewBox="0 0 16 16"
-          width="13"
-          height="13"
-          aria-hidden="true"
-        >
-          <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" />
-          <path d="M8 11.5l2.5-3.5" />
-        </svg>
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex (The measurement details are keyboard-accessible.) -->
-        <span
-          class="session-settings__value session-settings__value--speed"
-          role="group"
-          tabindex="0"
-          aria-label={speedLabel
-            ? t('chat.sessionSettings.speed')
-            : t('chat.sessionSettings.latency')}
-          use:tooltip={measureTooltip}
-        >
-          <span class="session-settings__value-label">{measureLabel}</span>
-        </span>
-      </span>
-    {/if}
   </div>
   <div class="session-settings__end">
-    <SaveStatus
-      saving={view.saving}
-      pending={view.pending}
-      onClick={view.save}
+    <ContributionSurface
+      surface="chat.composer.footer.end"
+      context={contributionContext}
+      {commands}
+      builtins={[
+        {
+          id: 'core:session-settings.save',
+          title: t('common.save'),
+          order: 10,
+          render: saveContribution,
+        },
+        {
+          id: 'core:session-settings.fast',
+          title: t('chat.sessionSettings.fastMode'),
+          order: 20,
+          render: fastContribution,
+        },
+        {
+          id: 'core:session-settings.model',
+          title: t('chat.sessionSettings.model'),
+          order: 30,
+          render: modelContribution,
+        },
+        {
+          id: 'core:session-settings.effort',
+          title: t('chat.sessionSettings.thinkingEffort'),
+          order: 40,
+          render: effortContribution,
+        },
+      ]}
     />
-    {#if fastModeVisible}
-      <button
-        type="button"
-        class="session-settings__fast"
-        class:session-settings__fast--enabled={view.fastMode}
-        aria-label={t('chat.sessionSettings.fastMode')}
-        aria-pressed={view.fastMode === true}
-        use:tooltip={fastModeTooltip}
-        onclick={() => onSelectFastMode(!view.fastMode)}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m13 2-10 12h8l-1 8 11-12h-8z" />
-        </svg>
-      </button>
-    {/if}
-    <span
-      class="session-settings__field session-settings__field--model"
-      class:session-settings__field--override={Boolean(view.model)}
-    >
-      <SearchableDropdown
-        value={modelValue}
-        options={modelPickerOptions}
-        ariaLabel={t('chat.sessionSettings.model')}
-        searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
-        emptyLabel={t('agents.form.modelSearchEmpty')}
-        triggerClass="session-settings__picker"
-        triggerTooltip={modelTooltip}
-        panelMinWidth={300}
-        footerActionLabel={modelFilterFooter}
-        onFooterAction={() => (showAllModels = !showAllModels)}
-        onOpenChange={(open) => {
-          if (open) {
-            onModelPickerOpen();
-          }
-        }}
-        onValueChange={(next) => onSelectModel(next)}
-      />
-    </span>
-    {#if effortVisible}
-      <span
-        class="session-settings__field session-settings__field--icon"
-        class:session-settings__field--override={Boolean(view.thinkingEffort)}
-      >
-        <svg
-          class="session-settings__icon"
-          viewBox="0 0 16 16"
-          width="13"
-          height="13"
-          aria-hidden="true"
-        >
-          <path
-            d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-          />
-          <path d="M6 13h4" />
-        </svg>
-        <Dropdown
-          value={view.thinkingEffort}
-          options={effortOptions}
-          ariaLabel={t('chat.sessionSettings.thinkingEffort')}
-          triggerClass="session-settings__picker"
-          triggerTooltip={effortTooltip}
-          panelMinWidth={170}
-          onValueChange={(next) => onSelectThinkingEffort(next)}
-        />
-      </span>
-    {/if}
   </div>
+  <ContributionSurface
+    surface="chat.composer.footer"
+    context={contributionContext}
+    {commands}
+  />
 </div>
 
 <ContextMenu menu={moreMenu} onClose={() => (moreMenu = null)} />

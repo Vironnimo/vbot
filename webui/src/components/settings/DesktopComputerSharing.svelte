@@ -22,7 +22,7 @@
   const nameId = `${componentId}-computer-name`;
   let status = $state(null);
   let baseline = $state(null);
-  let draft = $state({ name: '', terminal: false, computer_use: false });
+  let draft = $state({ name: '' });
   let loadError = $state(false);
   let saveError = $state('');
   let saving = $state(false);
@@ -31,9 +31,26 @@
 
   const values = (next) => ({
     name: next.name,
-    terminal: next.capabilities.terminal,
-    computer_use: next.capabilities.computer_use,
+    ...next.capabilities,
   });
+  const capabilityLabel = (capability) => {
+    const labels = {
+      terminal: t('computers.shareTerminal'),
+      computer_use: t('computers.shareComputerUse'),
+    };
+    return Object.hasOwn(labels, capability.id)
+      ? labels[capability.id]
+      : capability.label;
+  };
+  const capabilityDescription = (capability) => {
+    const descriptions = {
+      terminal: t('computers.shareTerminalHelp'),
+      computer_use: t('computers.shareComputerUseHelp'),
+    };
+    return Object.hasOwn(descriptions, capability.id)
+      ? descriptions[capability.id]
+      : capability.description;
+  };
   const snapshot = () => ({ ...draft, name: draft.name.trim() });
   const changed = () =>
     baseline !== null &&
@@ -141,40 +158,44 @@
         />
       </FormField>
     </div>
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">{t('computers.shareTerminal')}</div>
-        <div class="s-row-desc">{t('computers.shareTerminalHelp')}</div>
-        {#if !status.available.terminal}<div class="s-row-desc">
-            {t('computers.capabilityUnavailable')}
-          </div>{/if}
+    {#each status.capability_catalog as capability (capability.id)}
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">{capabilityLabel(capability)}</div>
+          {#if capabilityDescription(capability)}<div class="s-row-desc">
+              {capabilityDescription(capability)}
+            </div>{/if}
+          {#if status.capability_errors[capability.id]}<div
+              class="s-row-desc"
+              role="status"
+            >
+              {t('computers.capabilityError', {
+                reason: status.capability_errors[capability.id],
+              })}
+            </div>{:else if !status.available[capability.id]}<div
+              class="s-row-desc"
+            >
+              {t('computers.capabilityUnavailable')}
+            </div>{/if}
+        </div>
+        <div class="s-row-control">
+          <Toggle
+            checked={draft[capability.id]}
+            disabled={!status.available[capability.id] && !draft[capability.id]}
+            ariaLabel={capabilityLabel(capability)}
+            onChange={(enabled) => toggle(capability.id, enabled)}
+          />
+        </div>
       </div>
-      <div class="s-row-control">
-        <Toggle
-          checked={draft.terminal}
-          disabled={!status.available.terminal && !draft.terminal}
-          ariaLabel={t('computers.shareTerminal')}
-          onChange={(enabled) => toggle('terminal', enabled)}
-        />
-      </div>
-    </div>
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">{t('computers.shareComputerUse')}</div>
-        <div class="s-row-desc">{t('computers.shareComputerUseHelp')}</div>
-        {#if !status.available.computer_use}<div class="s-row-desc">
-            {t('computers.capabilityUnavailable')}
-          </div>{/if}
-      </div>
-      <div class="s-row-control">
-        <Toggle
-          checked={draft.computer_use}
-          disabled={!status.available.computer_use && !draft.computer_use}
-          ariaLabel={t('computers.shareComputerUse')}
-          onChange={(enabled) => toggle('computer_use', enabled)}
-        />
-      </div>
-    </div>
+    {/each}
+    {#each status.extensions.filter((extension) => extension.status === 'failed' || extension.capability_errors.length) as extension, index (`${extension.name}:${index}`)}
+      <Banner variant="warn"
+        >{t('computers.extensionIssue', {
+          name: extension.name,
+          reason: extension.error || extension.capability_errors.join(', '),
+        })}</Banner
+      >
+    {/each}
     <div class="s-group__block">
       <p class="s-row-desc" role="status">
         {status.connected

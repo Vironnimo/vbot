@@ -830,6 +830,7 @@ async def test_aclose_cancels_work_and_persists_handed_off_traces(
 # Every shutdown step in dependency order, named after the recording services below.
 _ASYNC_SHUTDOWN = (
     "extension_runtime.aclose",
+    "extension_services.close",
     "extension_databases.close",
     "provider_usage.astop",
     "session_activity.aclose",
@@ -868,6 +869,7 @@ _ASYNC_SHUTDOWN = (
 # Synchronous shutdown keeps the order but cannot drain admitted work, Runs or traces.
 _SYNC_SHUTDOWN = (
     "extensions.fire_shutdown_blocking",
+    "extension_services.close",
     "extension_databases.close",
     "provider_usage.stop",
     "channels.stop",
@@ -962,7 +964,10 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
     service = partial(_recording_service, events=events, failures=failures)
     runtime = Runtime(config)
     fakes: dict[str, object] = {
-        "_extension_host_factory": SimpleNamespace(databases=service("extension_databases")),
+        "_extension_host_factory": SimpleNamespace(
+            databases=service("extension_databases"),
+            close_services=service("extension_services").close,
+        ),
         "_storage": SimpleNamespace(temporary_files=service("temporary_files")),
     }
     for attribute, label in (

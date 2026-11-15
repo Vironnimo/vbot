@@ -1,8 +1,8 @@
 # Writing vBot Extensions
 
-An Extension is Python code that runs inside vBot's process and adds hooks, Commands, Tools, prompt blocks, settings, pages and more, all declared through one `register(api)` function. Extensions run with the full rights of vBot itself, without a sandbox: install only code you would run by hand.
+An Extension declares capabilities in a manifest or a Python `register(api)` function, or combines both. Python Extensions run with the full rights of vBot itself, without a sandbox: install only code you would run by hand.
 
-This covers creating and changing an Extension. Settings and enable/disable of an installed one: [configuration.md](configuration.md#extensions); usage and CLI guides for installed Extensions: [extension-index.md](extension-index.md); a page or Extension-owned Sessions: [extension-pages.md](extension-pages.md) after this file.
+This covers creating and changing a server Extension. Settings and enable/disable of an installed one: [configuration.md](configuration.md#extensions); usage and CLI guides for installed Extensions: [extension-index.md](extension-index.md); UI contributions, pages, product services, Providers, Channel platforms and local Desktop code: [extension-platform.md](extension-platform.md); Extension-owned Sessions: [extension-pages.md](extension-pages.md) after this file.
 
 Paths beginning with `core/`, `resources/` or `webui/` are relative to the `vbot_root` that `vbot home` prints on the server's computer.
 
@@ -32,12 +32,13 @@ Extensions live in the data directory's `extensions/` folder; the Settings path 
 | Single file | `<root>/<name>.py` | none |
 | Package | `<root>/<name>/__init__.py` | optional |
 | Directory | `<root>/<name>/extension.py` | optional |
+| Manifest only | `<root>/<name>/extension.json` and any page assets | required |
 
-Nothing needs a server restart. Config values and secrets are read on every call. Code, added or removed Extensions and enabling go through a reload, `vbot extensions reload`: it rebuilds every Extension from disk, the same end state as a fresh server start, and cycles every loaded Extension through shutdown and startup. Disabling stops only that Extension. A disabled Extension is not imported. A failing Extension loads as `failed` with its error and never stops the others.
+Server Extension code changes apply through reload; local Desktop code applies on the next Desktop launch. Config values and secrets are read on every call. Code, added or removed Extensions and enabling go through a reload, `vbot extensions reload`: it rebuilds every Extension from disk, the same end state as a fresh server start, and cycles every loaded Extension through shutdown and startup. Disabling stops only that Extension. A disabled Extension is not imported. A failing Extension loads as `failed` with its error and never stops the others.
 
 ## The entry point: `register(api)`
 
-Every Extension exposes one `register(api)`, synchronous or asynchronous; an asynchronous one must finish within 10 seconds.
+A Python server entry exposes one `register(api)`, synchronous or asynchronous; an asynchronous one must finish within 10 seconds.
 
 ```python
 def register(api):
@@ -53,7 +54,10 @@ def register(api):
 | `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=(), argument_hint="")` | a slash Command |
 | `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
 | `api.register_tool(name, description, parameters, handler, *, summary=None, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, argument_normalizer=None, family=None, announce_changes=())` | an Agent Tool |
-| `api.register_page(page_id, title, entry, *, icon="network")` | an Extension page ([extension-pages.md](extension-pages.md)) |
+| `api.register_page(page_id, title, entry, *, icon="network", navigation=True, services=())` | an Extension page ([extension-pages.md](extension-pages.md)) |
+| `api.register_contribution(contribution_id, **fields)` | a declarative UI contribution ([extension-platform.md](extension-platform.md)) |
+| `api.register_provider(definition, adapter_type=None)` | a Provider definition and optional adapter ([extension-platform.md](extension-platform.md)) |
+| `api.register_channel_platform(platform_id, label, factory, *, settings_schema=None)` | a Channel platform ([extension-platform.md](extension-platform.md)) |
 | `api.register_recall_backend(name, factory)` | a Session recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None, requires_tool=None)` | a System Prompt block |
 | `api.register_interaction_handler(prefix, handler)` | a Channel button handler |
@@ -309,7 +313,7 @@ def register(api):
 
 ## Manifest: `extension.json`
 
-A package or directory Extension can add an `extension.json`; it is never required.
+A Python package or directory Extension can add an `extension.json`; a manifest-only Extension requires it.
 
 ```json
 {
@@ -320,7 +324,7 @@ A package or directory Extension can add an `extension.json`; it is never requir
 }
 ```
 
-The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 29. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`); 29 [usage documentation](#usage-documentation).
+The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 30. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`); 29 [usage documentation](#usage-documentation); 30 [UI contributions, product services, Provider and Channel registration, and local Desktop manifests](extension-platform.md).
 
 `config_documents` maps file patterns in your Extension's state directory to `module:function` validators, for example `"config_documents": {"connections.json": "config:validate_connections_file"}`. A validator receives the file's absolute `Path` and returns a `core.config_validation.JsonValidationReport`. `vbot doctor config` loads only that module, without your `__init__`, `register` or startup, also while the Extension is disabled; keep the module independent of registration.
 

@@ -242,9 +242,11 @@ def _run_desktop(
     from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
     from desktop.execution import ComputerSharing
+    from desktop.extensions import load_desktop_extensions
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
     from desktop.page_permissions import PagePermissions
+    from desktop.settings import read_section
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
     from desktop.system_actions import DesktopSystemActions, guard_page_windows
@@ -297,21 +299,23 @@ def _run_desktop(
     window_holder: list[Any] = []
     window_state = desktop_window.WindowState()
 
-    def terminal_capability(_emit: Any) -> Any:
-        from desktop.terminal_execution import TerminalCapability
-
-        return TerminalCapability()
-
-    def computer_capability(emit: Any) -> Any:
-        from desktop.computer_execution import ComputerExecution
-
-        return ComputerExecution(emit=emit)
+    extension_settings = read_section("extensions", settings_file)
+    disabled_extensions = extension_settings.get("disabled", [])
+    native_extensions = load_desktop_extensions(
+        (
+            desktop_config_directory / "extensions",
+            Path(__file__).resolve().parent.parent / "resources" / "extensions",
+        ),
+        disabled=disabled_extensions,
+    )
 
     computer_sharing = ComputerSharing(
         settings_path=settings_file or desktop_config_directory / SETTINGS_FILE_NAME,
         identities=identities,
         authorization=access,
-        factories={"terminal": terminal_capability, "computer_use": computer_capability},
+        factories=native_extensions.factories,
+        capabilities=native_extensions.capabilities,
+        extension_records=native_extensions.records,
         publish=page_events.publish_computer_sharing,
     )
     desktop_restart = (

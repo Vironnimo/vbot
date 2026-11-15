@@ -6,7 +6,7 @@ import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -20,6 +20,7 @@ from core.chat.streaming import (
     StreamingRepetitionError,
     StreamingVisibleDelta,
 )
+from core.providers.adapter import ProviderAdapter
 from core.providers.errors import (
     NetworkError,
     ProviderError,
@@ -32,6 +33,7 @@ from core.runs import (
     TOOL_CALL_DELTA_EVENT,
 )
 from core.tools import model_names
+from core.utils.errors import ConfigError
 
 JsonObject = dict[str, Any]
 
@@ -734,6 +736,50 @@ class _BreakingStreamAdapter:
 
     def normalize_response(self, response: JsonObject, *, model_id: str) -> JsonObject:
         return {**response, "tool_calls": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_retired_provider_finishes_only_its_admitted_request(fallback: bool) -> None:
+    active = True
+    calls = 0
+
+    def check() -> None:
+        if not active:
+            raise ConfigError("Provider retired")
+
+    class RetiringAdapter(ProviderAdapter):
+        @override
+        async def aclose(self) -> None:
+            pass
+
+        @override
+        async def send(
+            self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
+        ) -> JsonObject:
+            raise AssertionError("A retired Provider cannot start fallback")
+
+        @override
+        async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+            nonlocal active, calls
+            calls += 1
+            active = False
+            if fallback:
+                raise ProviderStreamingUnsupportedError("no stream")
+            yield {"type": "content_delta", "text": "complete"}
+            yield {"type": "finish", "reason": "stop"}
+
+    adapter = RetiringAdapter()
+    adapter.bind_availability(check)
+    if fallback:
+        with pytest.raises(ConfigError, match="retired"):
+            await streaming_module.stream_model_response(adapter, [], model_id="m")
+    else:
+        result = await streaming_module.stream_model_response(adapter, [], model_id="m")
+        assert result["content"] == "complete"
+    with pytest.raises(ConfigError, match="retired"):
+        await streaming_module.stream_model_response(adapter, [], model_id="m")
+    assert calls == 1
 
 
 @pytest.mark.asyncio

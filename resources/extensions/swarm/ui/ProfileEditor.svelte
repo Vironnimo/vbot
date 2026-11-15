@@ -7,27 +7,27 @@
   // components edit the bound draft; this owner keeps the draft, its
   // validation and every save.
   import { onDestroy, tick, untrack } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
-  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
-  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
-  import CompactionPolicyEditor from '../../../../webui/src/components/compaction/CompactionPolicyEditor.svelte';
-  import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
+  import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import PathField from '@vbot/extension-sdk/ui/PathField.svelte';
+  import SaveStatus from '@vbot/extension-sdk/ui/SaveStatus.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
+  import CompactionPolicyEditor from '@vbot/extension-sdk/ui/CompactionPolicyEditor.svelte';
+  import { createDebouncedAutosave } from '@vbot/extension-sdk/lib/autosave.js';
   import {
     DEFAULT_COMPACTION_POLICY,
     buildCompactionPolicyPayload,
     normalizeCompactionPolicy,
-  } from '../../../../webui/src/lib/compactionPolicy.js';
-  import { buildModelSelectOptions } from '../../../../webui/src/lib/modelSelection.js';
+  } from '@vbot/extension-sdk/lib/compactionPolicy.js';
+  import { buildModelSelectOptions } from '@vbot/extension-sdk/lib/modelSelection.js';
   import DeliverySettings from './DeliverySettings.svelte';
   import { failureText } from './failureText.js';
   import ProfileAccess from './ProfileAccess.svelte';

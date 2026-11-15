@@ -3,10 +3,10 @@
 </script>
 
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import LazyContent from '@vbot/extension-sdk/ui/LazyContent.svelte';
   import { projectName } from './presentation.js';
 
   // Every Workflow in one list; the selected one, or a new one, beside it.

@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.extensions.databases import Database, DatabaseError, Migration
     from core.extensions.extensions import (
         API_VERSION,
         CommandDeclaration,
@@ -37,6 +38,12 @@ if TYPE_CHECKING:
         InteractionHandlerDeclaration,
         InteractionResponder,
     )
+    from core.extensions.operations import (
+        ExtensionHost,
+        ExtensionOperations,
+        ManagementOperation,
+    )
+    from core.extensions.services import ExtensionServiceError, ExtensionServices
     from core.extensions.settings_schema import (
         SettingsFieldDeclaration,
         parse_settings_fields,
@@ -44,6 +51,14 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "ExtensionServices": "core.extensions.services",
+    "ExtensionServiceError": "core.extensions.services",
+    "Database": "core.extensions.databases",
+    "DatabaseError": "core.extensions.databases",
+    "Migration": "core.extensions.databases",
+    "ExtensionHost": "core.extensions.operations",
+    "ExtensionOperations": "core.extensions.operations",
+    "ManagementOperation": "core.extensions.operations",
     "API_VERSION": "core.extensions.extensions",
     "CommandDeclaration": "core.extensions.extensions",
     "Deny": "core.extensions.extensions",
@@ -89,6 +104,14 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "ExtensionServices",
+    "ExtensionServiceError",
+    "Database",
+    "DatabaseError",
+    "Migration",
+    "ExtensionHost",
+    "ExtensionOperations",
+    "ManagementOperation",
     "API_VERSION",
     "CHECKLIST_PREFIX",
     "CommandDeclaration",

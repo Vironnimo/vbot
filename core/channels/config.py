@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -66,6 +67,7 @@ _MUTABLE_FIELDS = frozenset(
         "app_token_env_var",
         "server_url",
         "email",
+        "settings",
     )
 )
 
@@ -190,9 +192,11 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         _normalize_channel_id(data.get("id"))
     except ChannelConfigError as error:
         add_error(diagnostics, "$.id", str(error))
-    validate_allowed_string(
-        diagnostics, "$.platform", data.get("platform"), ALLOWED_CHANNEL_PLATFORMS
-    )
+    platform = data.get("platform")
+    if not isinstance(platform, str) or re.fullmatch(r"[a-z][a-z0-9_-]*", platform) is None:
+        add_error(diagnostics, "$.platform", "must be a lowercase platform id")
+    if "settings" in data and not isinstance(data["settings"], dict):
+        add_error(diagnostics, "$.settings", "must be an object")
     _validate_channel_agent_id(diagnostics, "$.agent_id", data.get("agent_id"))
     validate_allowed_string(
         diagnostics,
@@ -201,7 +205,7 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         ALLOWED_CHANNEL_DM_SCOPES,
     )
     _validate_platform_id_list(diagnostics, "$.allowed_chat_ids", data.get("allowed_chat_ids", []))
-    if data.get("platform") != "whatsapp":
+    if data.get("platform") in ALLOWED_CHANNEL_PLATFORMS - {"whatsapp"}:
         validate_non_empty_string(
             diagnostics, "$.token_env_var", data.get("token_env_var"), required=True
         )
@@ -463,6 +467,7 @@ class ChannelConfig:
     server_url: str = ""
     # The mail account of an email Channel; None for every other platform.
     email: EmailSettings | None = None
+    settings: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one channel config to JSON-compatible data."""
@@ -480,6 +485,8 @@ class ChannelConfig:
             "app_token_env_var": self.app_token_env_var,
             "server_url": self.server_url,
         }
+        if self.settings:
+            payload["settings"] = copy.deepcopy(self.settings)
         if self.email is not None:
             payload["email"] = _email_payload(self.email)
         return payload
@@ -496,6 +503,7 @@ class ChannelConfig:
             allowed_chat_ids=list(payload.get("allowed_chat_ids") or []),
             token_env_var=payload.get("token_env_var", ""),
             enabled=payload.get("enabled", True),
+            settings=copy.deepcopy(payload.get("settings", {})),
             response_mode=payload.get("response_mode", _DEFAULT_RESPONSE_MODE),
             mention_patterns=list(payload.get("mention_patterns") or []),
             observe_unaddressed=payload.get("observe_unaddressed", False),
@@ -521,6 +529,7 @@ class ChannelConfig:
                 "allowed_chat_ids": self.allowed_chat_ids,
                 "token_env_var": self.token_env_var,
                 "enabled": self.enabled,
+                "settings": self.settings,
                 "response_mode": self.response_mode,
                 "mention_patterns": self.mention_patterns,
                 "observe_unaddressed": self.observe_unaddressed,

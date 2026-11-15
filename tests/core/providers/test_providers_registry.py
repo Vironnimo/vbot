@@ -654,6 +654,67 @@ def test_custom_provider_cannot_shadow_bundled_provider(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_extension_provider_registration_is_scoped_and_survives_config_reload(
+    tmp_path: Path,
+) -> None:
+    from core.models.discovery import build_discovery_request
+    from core.providers.adapter import ProviderAdapter
+    from core.providers.adapter_types import adapter_type_for_config
+    from core.providers.openai_compatible import OpenAICompatibleAdapter
+
+    class ExtensionAdapter(OpenAICompatibleAdapter):
+        pass
+
+    resources = _write_providers(tmp_path, _provider())
+    registry = ProviderRegistry.load(resources, custom_providers={})
+    other_runtime = ProviderRegistry.load(resources, custom_providers={})
+    owner = object()
+    active = True
+    definition = _provider(id="contributed", adapter="extension_wire", models_endpoint="/models")
+    registry.register_provider(owner, definition, ExtensionAdapter, is_current=lambda: active)
+    definition["name"] = "mutated input"
+    config = registry.get("contributed")
+    assert config.name == "Minimal"
+    assert config.catalog_scope == "instance"
+    assert adapter_type_for_config(config) is ExtensionAdapter
+    request = await build_discovery_request(config, config.connections[0])
+    assert request.adapter_class is ExtensionAdapter
+    assert "contributed" not in other_runtime.list_ids()
+    await registry.reload_async(resources, custom_providers={"custom": _custom("none")})
+    assert registry.get("contributed") is config
+    with pytest.raises(ConfigError):
+        registry.register_provider(object(), _provider(), is_current=lambda: True)
+    with pytest.raises(ConfigError):
+        registry.register_provider(object(), definition, ExtensionAdapter, is_current=lambda: True)
+    registry.release_providers(object())
+    assert registry.get("contributed") is config
+    active = False
+    assert "contributed" not in registry.list_ids()
+    with pytest.raises(ConfigError):
+        await build_discovery_request(config, config.connections[0])
+    registry.release_providers(owner)
+    assert registry.list_ids() == ["custom", "minimal"]
+    active = True
+    registry.register_provider(owner, definition, ExtensionAdapter, is_current=lambda: active)
+    with pytest.raises(ConfigError):
+        adapter_type_for_config(config)
+    replacement = registry.get("contributed")
+    registry.release_providers(owner)
+    with pytest.raises(ConfigError):
+        adapter_type_for_config(replacement)
+    for invalid_id in ("../escape", "con", "spaces are invalid"):
+        with pytest.raises(ConfigError):
+            registry.register_provider(owner, _provider(id=invalid_id), is_current=lambda: True)
+    with pytest.raises(ConfigError):
+        registry.register_provider(owner, definition, ProviderAdapter, is_current=lambda: True)
+    registry.register_provider(owner, _provider(id="contributed"), is_current=lambda: True)
+    registry.reload(resources, custom_providers={"contributed": _custom("none")})
+    assert registry.get("contributed").custom
+    registry.reload(resources, custom_providers={})
+    assert "contributed" not in registry.list_ids()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("newer_async", [False, True])
 async def test_slow_provider_reload_cannot_replace_a_newer_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newer_async: bool

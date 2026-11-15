@@ -732,6 +732,8 @@ def _page_projection(registry: Any, delivery: Any) -> list[JsonObject]:
                 "entry_url": page["url"],
                 "epoch": identity.epoch,
                 "badge": registry.page_badge(identity, declaration.page_id),
+                "navigation": declaration.navigation,
+                "services": list(declaration.services),
             }
         )
     return pages
@@ -760,7 +762,10 @@ def _extension_requests(state: Any, params: JsonObject) -> JsonObject:
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return extension visibility and secret RPC handlers."""
 
+    from server.rpc.extension_presentation import presentation_handlers
+
     return {
+        **presentation_handlers(),
         "extensions.list": serialized_read(
             _list_extensions, lock_attribute="_settings_mutation_lock"
         ),

@@ -228,7 +228,7 @@ class ProviderTaskClient:
         # Task endpoints are OpenAI-compatible paths below the Adapter's
         # OpenAI-compatible base, which can differ from a native chat base.
         self._base_url = openai_compatible_base_url(
-            str(getattr(provider, "adapter", "") or ""),
+            provider,
             connection.base_url or provider.base_url,
         )
         self._usage_observer = usage_observer
@@ -333,6 +333,7 @@ class ProviderTaskClient:
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
 
         async def _do_request() -> ParsedResultT:
+            self._provider.ensure_available()
             context = (
                 nullcontext(http_client) if http_client is not None else self.http_client(timeout)
             )
@@ -454,6 +455,7 @@ class ProviderTaskClient:
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
 
         async def _do_request() -> ParsedResultT:
+            self._provider.ensure_available()
             async with self.http_client(timeout) as client:
                 request_headers = await self._headers()
                 try:

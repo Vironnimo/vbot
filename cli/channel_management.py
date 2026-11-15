@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -10,9 +11,11 @@ from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+from core.channels._choices import ALLOWED_CHANNEL_PLATFORMS
 
 CHANNEL_UPDATE_FLAGS = (
     "--platform",
+    "--settings-file",
     "--agent",
     "--token-env",
     "--dm-scope",
@@ -52,6 +55,7 @@ def channel_add(
     server_url: str | None = None,
     disabled: bool = False,
     email: Mapping[str, Any] | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> CommandResult:
     """Create a channel configuration via `channel.create` RPC."""
 
@@ -68,6 +72,8 @@ def channel_add(
         params["server_url"] = server_url
     if email:
         params["email"] = dict(email)
+    if settings is not None:
+        params["settings"] = dict(settings)
     if platform == "whatsapp" or disabled:
         params["enabled"] = False
     if token is not None:
@@ -81,7 +87,7 @@ def channel_add(
         params["token"] = token
     elif token_env:
         params["token_env_var"] = token_env
-    elif platform != "whatsapp":
+    elif platform in ALLOWED_CHANNEL_PLATFORMS - {"whatsapp"}:
         return CommandResult(
             ok=False,
             message="channel add requires --token-stdin or --token-env",
@@ -160,7 +166,21 @@ def channel_list(instance: ServerInstance) -> CommandResult:
         return CommandResult(
             ok=False, message="RPC result missing channels list", instance=instance
         )
-    return CommandResult(ok=True, message=_format_channel_rows(channels), instance=instance)
+    message = _format_channel_rows(channels)
+    platforms = payload.data.get("platforms")
+    if isinstance(platforms, list):
+        message += "\n\navailable platforms:"
+        for platform in platforms:
+            if isinstance(platform, dict) and isinstance(platform.get("id"), str):
+                schema = json.dumps(platform.get("settings_schema", {}), ensure_ascii=False)
+                message += "\n" + record_fields(
+                    [
+                        f"id={platform['id']}",
+                        f"label={platform.get('label', platform['id'])}",
+                        f"settings_schema={schema}",
+                    ]
+                )
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def channel_remove(instance: ServerInstance, channel_id: str) -> CommandResult:

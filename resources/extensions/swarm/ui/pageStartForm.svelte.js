@@ -1,6 +1,6 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 import { tick } from 'svelte';
-import { sameServerPath } from '$lib/pathPicker.js';
+import { sameServerPath } from '@vbot/extension-sdk/lib/pathPicker.js';
 import { requestId } from './pagePresentation.js';
 import { failureText } from './failureText.js';
 

@@ -1,6 +1,6 @@
 ---
 name: vbot-docs
-description: Configure and inspect vBot, the app you run in: Agents including yourself, settings, and what it records, such as Sessions, usage and logs. Use when a task reads or changes anything vBot holds, also when your Tools show too little or you would open its data files. Not for editing vBot's own source code.
+description: "Configure and inspect vBot, the app you run in: Agents including yourself, settings, and what it records, such as Sessions, usage and logs. Use when a task reads or changes anything vBot holds, also when your Tools show too little or you would open its data files. Not for editing vBot's own source code."
 ---
 
 # vBot
@@ -30,9 +30,10 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Import Sessions or Memory from another coding agent into vBot | `references/external-import.md` |
 | Provider keys, logins and limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
-| Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
+| Write or change an Extension's Tools, hooks, Commands or settings | `references/extensions.md`; for its own Sessions, then `references/extension-pages.md` |
+| Add or replace UI controls, build an Extension page, use product services, add a Provider or Channel platform, or add a local Desktop capability | `references/extension-platform.md`; for page lifecycle or owned Sessions, then `references/extension-pages.md` |
 | Use or configure an installed Extension, its CLI operations and setup | `references/extension-index.md`, then the guide for the requested task |
-| Channels (Telegram, Discord, Slack, Mattermost, WhatsApp, email): first setup, tokens, allowed chats, group access | `references/channels.md` |
+| Channels, including Extension platforms: first setup, platform settings, tokens, allowed chats, group access | `references/channels.md` |
 | Automations: scheduled Runs, change checks and Webhooks | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |

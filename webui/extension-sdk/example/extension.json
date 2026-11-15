@@ -1,0 +1,22 @@
+{
+  "name": "Extension example",
+  "description": "An independently built UI-only Extension",
+  "api_version": 30,
+  "required_features": ["ui.contributions", "ui.pages"],
+  "pages": [
+    {
+      "page_id": "example",
+      "title": "Extension example",
+      "entry": "web/page.html"
+    }
+  ],
+  "contributions": [
+    {
+      "id": "insert-greeting",
+      "surface": "chat.composer.actions",
+      "title": "Insert greeting",
+      "kind": "action",
+      "action": { "command": "composer.insert", "params": { "text": "Hello!" } }
+    }
+  ]
+}

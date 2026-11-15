@@ -1,4 +1,4 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 import { tick } from 'svelte';
 import { canStop, requestId } from './pagePresentation.js';
 import {

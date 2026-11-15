@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from core.attachments import AttachmentStore
 from core.channels import _delivery
 from core.channels._adapters import create_adapter
+from core.channels._choices import ALLOWED_CHANNEL_PLATFORMS
 from core.channels._connections import ChannelConnections
 from core.channels._observations import ChannelObservationInbox
 from core.channels.adapter import (
@@ -32,6 +33,7 @@ from core.channels.config import (
 )
 from core.channels.engine import ChannelConversationEngine
 from core.channels.mail import InboundMailSink
+from core.channels.platforms import ChannelAdapterContext, ChannelAdapterFactory, ChannelPlatforms
 from core.channels.state import RUN_BUTTON_PRUNE_BATCH_SIZE, ChannelStateStore
 from core.channels.storage import ChannelStorage
 from core.chat.messages import ReplySurface
@@ -84,6 +86,18 @@ class ChannelService:
         self._tool_catalog = tool_catalog
         self._command_dispatcher = command_dispatcher
         self._interaction_dispatcher = interaction_dispatcher
+        self._platforms = ChannelPlatforms()
+        self._builtin_platform_owner = object()
+        for platform in sorted(ALLOWED_CHANNEL_PLATFORMS):
+            self._platforms.register(
+                self._builtin_platform_owner,
+                platform,
+                {"mattermost": "Mattermost", "whatsapp": "WhatsApp"}.get(
+                    platform, platform.title()
+                ),
+                lambda config, context: self._create_builtin_adapter(config, context),
+                settings_schema={"type": "object", "additionalProperties": False},
+            )
         self._storage = ChannelStorage(Path(data_root))
         self._channel_root = Path(data_root) / "channels"
         # channels.db holds the durable state of every configured Channel. A
@@ -122,12 +136,59 @@ class ChannelService:
             self._storage,
             get_channel=self.get_channel,
             validate_agent=self._validate_agent_exists,
+            validate_config=self._platforms.validate,
+            defer_start=self._platforms.pending,
             new_engine=self._new_engine,
             create_adapter=lambda config: self._create_adapter(config),
             recover_observations=self._recover_observations,
         )
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
         self._mail_sink: InboundMailSink | None = None
+
+    def register_platform(
+        self,
+        owner: object,
+        platform_id: str,
+        label: str,
+        factory: ChannelAdapterFactory,
+        *,
+        settings_schema: Mapping[str, Any] | None = None,
+        is_current: Callable[[], bool] = lambda: True,
+    ) -> None:
+        """Register one platform without replacing another owner or a built-in."""
+        self._platforms.register(
+            owner,
+            platform_id,
+            label,
+            factory,
+            settings_schema=settings_schema,
+            is_current=is_current,
+        )
+
+    def platform_catalog(self) -> list[dict[str, Any]]:
+        """The available platform ids, labels and configuration schemas."""
+        return self._platforms.catalog()
+
+    async def release_platforms(self, owner: object) -> None:
+        """Withdraw admission before draining the owner's running Channels."""
+        platforms = self._platforms.release(owner)
+        stops = []
+        for config in self._storage.snapshot():
+            if config.platform in platforms:
+                self.stop_channel(config.id)
+                stopping = self._connections.stopping(config.id)
+                if stopping is not None:
+                    stops.append(stopping)
+                if config.enabled:
+                    self._connections.mark_failed(
+                        config.id, f"Channel platform '{config.platform}' is unavailable"
+                    )
+        if stops:
+            await settle_before_cancelling(asyncio.gather(*stops))
+
+    def resume_platforms(self, owner: object) -> None:
+        """Resume retained enabled Channels after the owner's registrations publish."""
+        self._connections.resume_platforms(self._platforms.owner_platforms(owner))
 
     def set_mail_sink(self, sink: InboundMailSink | None) -> None:
         """Bind where email Channels hand the mails no conversation takes (Cron)."""
@@ -437,6 +498,7 @@ class ChannelService:
         if not isinstance(config, ChannelConfig):
             raise ChannelConfigError("config must be a ChannelConfig instance")
         config.validate()
+        self._platforms.validate(config)
         # The id names the Channel's directory; existing Channels keep theirs.
         if is_reserved_name(config.id):
             raise ChannelConfigError(reserved_name_message("Channel id", config.id))
@@ -500,6 +562,9 @@ class ChannelService:
                 fields = {**fields, "email": config.email.updated(fields["email"])}
             updated = replace(config, **fields)
             updated.validate()
+            self._platforms.validate(
+                updated, available=updated.enabled or updated.platform != config.platform
+            )
             self._validate_agent_exists(updated.agent_id)
             self._preflight_adapter_start(updated)
             await self._change_config(config, updated)
@@ -617,6 +682,7 @@ class ChannelService:
                 # Nothing to persist; (re)start a stopped or failed adapter.
                 self.start_channel(channel_id, config_override=config)
                 return
+            self._platforms.validate(config)
             await self._change_config(config, replace(config, enabled=True))
 
     async def disable_channel(self, channel_id: str) -> None:
@@ -696,9 +762,22 @@ class ChannelService:
         )
 
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:
+        return self._platforms.create(
+            config,
+            ChannelAdapterContext(
+                engine=self._connections.engine_for(config),
+                credential_resolver=self._credential_resolver,
+                attachment_store=self._attachment_store,
+                state_dir=self._channel_root / config.id,
+            ),
+        )
+
+    def _create_builtin_adapter(
+        self, config: ChannelConfig, context: ChannelAdapterContext
+    ) -> ChannelAdapter:
         return create_adapter(
             config,
-            engine_for=self._connections.engine_for,
+            engine_for=lambda _config: context.engine,
             credential_resolver=self._credential_resolver,
             attachment_store=self._attachment_store,
             state=self._state,

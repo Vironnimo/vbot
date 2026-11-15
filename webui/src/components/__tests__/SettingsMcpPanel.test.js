@@ -4,14 +4,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import { init, t } from '../../lib/i18n.js';
+import { init, t, registerCatalog } from '../../lib/i18n.js';
+import mcpText from '../../../../resources/extensions/mcp/ui/i18n.js';
+registerCatalog(mcpText);
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 it('limits MCP typography to its panel and portaled dialogs', () => {
   const style = document.createElement('style');
   style.textContent = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), '../settings/mcp.css'),
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../../../resources/extensions/mcp/ui/mcp.css',
+    ),
     'utf8',
   );
   document.head.appendChild(style);
@@ -57,7 +62,38 @@ vi.mock(
   async () => import('../../../node_modules/svelte/src/index-client.js'),
 );
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpc));
-const { default: Panel } = await import('../settings/SettingsMcpPanel.svelte');
+const { default: Panel } =
+  await import('../../../../resources/extensions/mcp/ui/SettingsMcpPanel.svelte');
+let revealSearch;
+const pageClient = {
+  operation: (operation, args = {}) =>
+    rpc('extensions.operation', {
+      name: 'mcp',
+      operation,
+      arguments: args,
+    }),
+  services: {
+    query: (name, params) => rpc(name, params),
+    execute: (name, params) => rpc(name, params),
+  },
+  listDirectory: (params) => rpc('filesystem.list', params),
+  openExternalUrl: vi.fn().mockResolvedValue({}),
+  setSearchIndex: vi.fn().mockResolvedValue({}),
+  onSearch: (listener) => {
+    revealSearch = listener;
+    return () => {
+      revealSearch = null;
+    };
+  },
+};
+function mountPanel(options) {
+  const props = options.props ?? {};
+  props.client = pageClient;
+  return mount(Panel, {
+    ...options,
+    props,
+  });
+}
 let component;
 let records;
 const original = {
@@ -104,6 +140,8 @@ function submit() {
 }
 beforeEach(() => {
   init('en');
+  pageClient.openExternalUrl.mockClear();
+  pageClient.setSearchIndex.mockClear();
   records = [];
   rpc.mockReset().mockImplementation(async (method, params) => {
     if (method === 'agent.list')
@@ -173,7 +211,7 @@ describe('MCP management surface', () => {
         });
       return handler(method, params);
     });
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Capabilities & access').click();
     await settle();
@@ -206,7 +244,7 @@ describe('MCP management surface', () => {
     ).toBe(false);
   });
   it('creates a local connection without a second Agent permission list', async () => {
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Add MCP connection').click();
     await settle();
@@ -254,7 +292,7 @@ describe('MCP management surface', () => {
         state: 'connected',
       },
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Edit').click();
     await settle();
@@ -287,7 +325,7 @@ describe('MCP management surface', () => {
           Object.assign(new Error('test-owned-save-error'), { code }),
         );
       });
-      component = mount(Panel, { target: document.body });
+      component = mountPanel({ target: document.body });
       await settle();
       button('Add MCP connection').click();
       await settle();
@@ -319,7 +357,7 @@ describe('MCP management surface', () => {
         state: 'connected',
       },
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Credentials').click();
     flushSync();
@@ -355,7 +393,7 @@ describe('MCP management surface', () => {
         state: 'connected',
       },
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     const details = document.querySelector('article[aria-label="remote"]');
     expect(details.textContent).toContain('Signed in');
@@ -388,7 +426,7 @@ describe('MCP management surface', () => {
         state: 'connected',
       },
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Edit').click();
     await settle();
@@ -475,7 +513,7 @@ describe('MCP management surface', () => {
       });
       return { imported: ['files'] };
     });
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Import').click();
     await settle();
@@ -544,7 +582,7 @@ describe('MCP management surface', () => {
       return { servers: [server(id, false)] };
     });
     try {
-      component = mount(Panel, { target: document.body });
+      component = mountPanel({ target: document.body });
       await settle();
       button('Import').click();
       await settle();
@@ -597,7 +635,7 @@ describe('MCP management surface', () => {
         missing_credentials: ['FILES_TOKEN', 'TEST_KEY'],
       })),
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     const head = (id) =>
       document.querySelector(`article[aria-label="${id}"] .s-entity__head`);
@@ -634,7 +672,7 @@ describe('MCP management surface', () => {
         listener = null;
       };
     };
-    component = mount(Panel, {
+    component = mountPanel({
       target: document.body,
       props: { subscribeInvalidations },
     });
@@ -700,7 +738,7 @@ describe('MCP management surface', () => {
         })),
       };
     });
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Add MCP connection').click();
     await settle();
@@ -747,7 +785,7 @@ describe('MCP management surface', () => {
           ? { servers: [] }
           : handler(method, params),
       );
-      component = mount(Panel, { target: document.body });
+      component = mountPanel({ target: document.body });
       await settle();
       button('Import').click();
       await settle();
@@ -795,7 +833,7 @@ describe('MCP management surface', () => {
         ? reading.promise
         : handler(method, params),
     );
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     button('Add MCP connection').click();
     await settle();
@@ -826,7 +864,7 @@ describe('MCP management surface', () => {
         state: 'connected',
       },
     ];
-    component = mount(Panel, { target: document.body });
+    component = mountPanel({ target: document.body });
     await settle();
     document.querySelector('[aria-label="Enable example"]').click();
     await settle();
@@ -945,7 +983,7 @@ describe('MCP management surface', () => {
       subscribeInvalidations,
       agentsRefreshToken: 0,
     });
-    component = mount(Panel, { target: document.body, props });
+    component = mountPanel({ target: document.body, props });
     await settle();
     button('Browse the catalog').click();
     await settle();
@@ -979,6 +1017,11 @@ describe('MCP management surface', () => {
     publish('pending_inputs');
     await settle();
     expect(dialog().textContent).toContain(request.payload.url);
+    dialog().querySelector('.requested-url__open').click();
+    await settle();
+    expect(pageClient.openExternalUrl).toHaveBeenCalledWith(
+      request.payload.url,
+    );
     expect(
       document.querySelector('article[aria-label="tracker"]').textContent,
     ).toContain('Sign in');
@@ -1098,7 +1141,7 @@ describe('MCP management surface', () => {
       return handler(method, params);
     });
     const dialog = () => document.querySelector('[role="dialog"]');
-    component = mount(Panel, {
+    component = mountPanel({
       target: document.body,
       props: {
         subscribeInvalidations: (next) => {
@@ -1138,4 +1181,92 @@ describe('MCP management surface', () => {
       'Details for tracker_2',
     );
   });
+});
+
+it('waits for its page context and releases bridge subscriptions on removal', async () => {
+  const { default: Page } =
+    await import('../../../../resources/extensions/mcp/ui/McpPage.svelte');
+  let receiveContext;
+  const offContext = vi.fn();
+  const listeners = new Set();
+  records = [
+    {
+      id: 'docs',
+      configuration: {
+        id: 'docs',
+        transport: 'http',
+        description: 'Remote documentation',
+        url: 'https://user:secret@docs.example.com/mcp?token=secret',
+        headers: { Authorization: 'secret' },
+        enabled: true,
+      },
+      state: 'disconnected',
+    },
+  ];
+  const client = {
+    ...pageClient,
+    context: null,
+    onContext: (listener) => {
+      receiveContext = listener;
+      return offContext;
+    },
+    onInvalidation: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    registerLayer: () => () => {},
+    dispose: vi.fn(),
+  };
+  component = mount(Page, {
+    target: document.body,
+    props: { bridgeClient: client },
+  });
+  await settle();
+  expect(rpc).not.toHaveBeenCalled();
+  receiveContext({
+    locale: 'en',
+    timezone: 'Europe/Berlin',
+    theme: { accent: '#345678' },
+  });
+  await settle();
+  expect(document.documentElement.style.getPropertyValue('--accent')).toBe(
+    '#345678',
+  );
+  expect(rpc).toHaveBeenCalledExactlyOnceWith('extensions.operation', {
+    name: 'mcp',
+    operation: 'list',
+    arguments: {},
+  });
+  expect(pageClient.setSearchIndex).toHaveBeenLastCalledWith([
+    {
+      id: 'connections',
+      label: 'MCP connections',
+      terms: 'Add MCP connection Browse the catalog Import',
+    },
+    {
+      id: 'connection:docs',
+      label: 'docs',
+      terms: 'Remote documentation http https://docs.example.com/mcp',
+    },
+  ]);
+  revealSearch('connection:docs');
+  await settle();
+  expect(document.activeElement.getAttribute('aria-label')).toBe(
+    'Details for docs',
+  );
+  expect(document.activeElement.getAttribute('aria-expanded')).toBe('true');
+  for (const listener of listeners)
+    listener({
+      reason: 'resource_changed',
+      change: { resource: 'connections' },
+    });
+  await settle();
+  expect(rpc).toHaveBeenCalledTimes(2);
+  await unmount(component);
+  component = null;
+  expect(listeners.size).toBe(0);
+  expect(offContext).toHaveBeenCalledOnce();
+  expect(client.dispose).toHaveBeenCalledOnce();
+  expect(revealSearch).toBeNull();
+  document.documentElement.style.removeProperty('--accent');
 });

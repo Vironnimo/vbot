@@ -4,11 +4,11 @@
   // history, the edit draft and every Wiki request; WikiIndex, WikiPage and
   // WikiEditor show them.
   import { onMount, onDestroy, tick, untrack } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { createDebouncedAutosave } from '@vbot/extension-sdk/lib/autosave.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
   import { failureText } from './failureText.js';
   import { requestId } from './pagePresentation.js';
   import { createPageRefresh, swarmChanged } from './pageRefresh.js';

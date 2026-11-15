@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -134,7 +134,9 @@ class Connections:
         return socket
 
 
-def make_sharing(tmp_path: Path) -> tuple[ComputerSharing, Connections, list[Capability]]:
+def make_sharing(
+    tmp_path: Path, capability: str = "terminal"
+) -> tuple[ComputerSharing, Connections, list[Capability]]:
     connection = Connections()
     handlers: list[Capability] = []
 
@@ -148,7 +150,7 @@ def make_sharing(tmp_path: Path) -> tuple[ComputerSharing, Connections, list[Cap
             settings_path=tmp_path / "settings.json",
             identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
             authorization=Authorization(),
-            factories={"terminal": factory},
+            factories={capability: factory},
             connector=connection,
         ),
         connection,
@@ -160,7 +162,7 @@ def test_grants_and_private_identity_belong_to_one_server(tmp_path: Path) -> Non
     sharing, _connections, _handlers = make_sharing(tmp_path)
     first_url = "https://one.example/"
     sharing.set_server_url(first_url)
-    assert sharing.status()["capabilities"] == {"terminal": False, "computer_use": False}
+    assert sharing.status()["capabilities"] == {"terminal": False}
     first = sharing.update({"terminal": True, "name": "My laptop"}, expected_server=first_url)
     assert first["computer_id"].startswith("pc_")
     assert "key" not in first
@@ -246,24 +248,25 @@ async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
 
 
 @pytest.mark.parametrize("transition", ["reconnect", "switch", "restart"])
+@pytest.mark.parametrize("capability", ["terminal", "printer"])
 @pytest.mark.asyncio
 async def test_a_native_lifetime_survives_only_a_reconnect_to_the_same_server(
-    tmp_path: Path, transition: str
+    tmp_path: Path, transition: str, capability: str
 ) -> None:
-    sharing, connections, handlers = make_sharing(tmp_path)
+    sharing, connections, handlers = make_sharing(tmp_path, capability)
     first_url = "https://one.example/"
     sharing.set_server_url(first_url)
-    sharing.update({"terminal": True}, expected_server=first_url)
+    sharing.update({capability: True}, expected_server=first_url)
     first = await connections.add()
     running = asyncio.create_task(sharing.run())
     try:
         hello = await asyncio.wait_for(first.outgoing.get(), timeout=2)
-        assert (await first.call("start-one", "start"))["ok"] is True
+        assert (await first.call("start-one", "start", capability))["ok"] is True
         next_instance = "server-two" if transition == "restart" else "server-one"
         second = await connections.add(next_instance)
         if transition == "switch":
             sharing.set_server_url("https://two.example/")
-            sharing.update({"terminal": True}, expected_server="https://two.example/")
+            sharing.update({capability: True}, expected_server="https://two.example/")
         else:
             # A settings refresh wakes the reconnect immediately, with no timing sleeps.
             await first.incoming.put(OSError("connection lost"))
@@ -273,7 +276,7 @@ async def test_a_native_lifetime_survives_only_a_reconnect_to_the_same_server(
             third = await connections.add("server-two")
             next_hello = await asyncio.wait_for(third.outgoing.get(), timeout=2)
             second = third
-        assert (await second.call("status-two", "status"))["ok"] is True
+        assert (await second.call("status-two", "status", capability))["ok"] is True
         if transition == "reconnect":
             assert len(handlers) == 1
             assert next_hello["instance_id"] == hello["instance_id"]
@@ -614,3 +617,89 @@ async def test_identity_failure_on_first_connection_retries_after_recovery(
     finally:
         sharing.close()
         await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["factory", "ready", "cleanup", "invalid_handler"])
+async def test_failed_capability_initialization_preserves_healthy_native_work_and_can_recover(
+    tmp_path: Path, failure: str
+) -> None:
+    broken = True
+    healthy = Capability()
+    attempted: list[Capability] = []
+    published: list[Mapping[str, Any]] = []
+    connections = Connections()
+
+    class UnreadyCapability(Capability):
+        async def ready(self) -> str | None:
+            if broken and failure == "ready":
+                raise RuntimeError("private readiness details")
+            return "Device unavailable" if broken else None
+
+        @override
+        async def close(self) -> None:
+            await super().close()
+            if broken and failure == "cleanup":
+                raise OSError("private cleanup details")
+
+    def custom_factory(_emit: Any) -> execution.ExecutionHandler:
+        if broken and failure == "factory":
+            raise ModuleNotFoundError("private import details")
+        if broken and failure == "invalid_handler":
+            return cast(execution.ExecutionHandler, None)
+        handler = UnreadyCapability()
+        attempted.append(handler)
+        return handler
+
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=Authorization(),
+        factories={"terminal": lambda _emit: healthy, "z_custom": custom_factory},
+        publish=published.append,
+        connector=connections,
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    initial = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(initial.outgoing.get(), timeout=2)
+        assert (await initial.call("start", "start"))["result"]["count"] == 1
+        degraded = await connections.add()
+        sharing.update({"z_custom": True}, expected_server=url)
+        hello = await asyncio.wait_for(degraded.outgoing.get(), timeout=2)
+        assert hello["capabilities"] == ["terminal"]
+        assert (await degraded.call("retained", "status"))["result"]["count"] == 1
+        expected = {
+            "factory": "ModuleNotFoundError",
+            "ready": "RuntimeError",
+            "cleanup": "Device unavailable; close: OSError",
+            "invalid_handler": "TypeError",
+        }[failure]
+        status = sharing.status()
+        assert status["connected"] is True
+        assert status["error_code"] is None
+        assert status["available"] == {"terminal": True, "z_custom": False}
+        assert status["capability_errors"] == {"z_custom": expected}
+        assert any(state["capability_errors"] == {"z_custom": expected} for state in published)
+        assert all(handler.closed for handler in attempted)
+        assert not healthy.closed
+
+        broken = False
+        recovered = await connections.add()
+        disabled = sharing.update({"z_custom": False}, expected_server=url)
+        assert disabled["available"]["z_custom"] is True
+        sharing.update({"z_custom": True}, expected_server=url)
+        hello = await asyncio.wait_for(recovered.outgoing.get(), timeout=2)
+        assert hello["capabilities"] == ["terminal", "z_custom"]
+        assert (await recovered.call("recovered", "status", "z_custom"))["ok"] is True
+        assert (await recovered.call("still_retained", "status"))["result"]["count"] == 1
+        assert sharing.status()["capability_errors"] == {}
+        assert not healthy.closed
+    finally:
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+    assert healthy.closed
+    assert all(handler.closed for handler in attempted)

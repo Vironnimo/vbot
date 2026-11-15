@@ -4,9 +4,9 @@
   // was filled or handed on; a rejection shows its message here. It renders
   // as one stacked Settings row: label and hint, then the field with its
   // Fill in button.
-  import Button from '../ui/Button.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import { t } from '$lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
 
   const noop = async () => {};
   const componentId = $props.id();

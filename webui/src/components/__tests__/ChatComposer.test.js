@@ -38,10 +38,131 @@ import {
 } from './ChatComposer.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
+const { mount, unmount } = await import('svelte');
+const { default: ContributionContextHost } =
+  await import('./ContributionContextHost.support.svelte');
+const { default: ChatComposer } = await import('../ChatComposer.svelte');
+
 const attachments = () => document.body.querySelectorAll('.attachment-item');
 
 describe('ChatComposer', () => {
   const composer = setupChatComposerSuite();
+
+  it('composes built-ins and keeps Extension draft actions local to each Chat area', async () => {
+    setDraft('agent::first', 'first');
+    setDraft('agent::second', 'second');
+    let registry;
+    const onSendMessage = vi.fn();
+    const instance = mount(ContributionContextHost, {
+      target: document.body,
+      props: {
+        component: ChatComposer,
+        instances: [
+          { draftKey: 'agent::first', onSendMessage },
+          { draftKey: 'agent::second', onSendMessage },
+        ],
+        source: {
+          entries: [
+            {
+              id: 'extension:example:insert',
+              extension: 'example',
+              epoch: 'epoch',
+              surface: 'chat.composer.actions',
+              kind: 'action',
+              title: 'Insert test content',
+              text: 'Insert test content',
+              action: {
+                command: 'composer.replace',
+                params: { text: 'changed' },
+              },
+            },
+            {
+              id: 'extension:example:frame',
+              extension: 'example',
+              epoch: 'epoch',
+              surface: 'chat.composer.actions',
+              kind: 'view',
+              title: 'Draft panel',
+              page: {
+                extension: 'example',
+                page: 'inline',
+                epoch: 'epoch',
+                entry_url: '/test-frame',
+                title: 'Draft panel',
+              },
+            },
+          ],
+        },
+        onRegistry: (value) => {
+          registry = value;
+        },
+      },
+    });
+    try {
+      flushSync();
+      registry.save('chat.composer.actions', {
+        hidden: ['core:composer.attachment'],
+      });
+      flushSync();
+      expect(
+        document.querySelectorAll(
+          `[aria-label="${t('chat.attachment.addFile')}"]`,
+        ),
+      ).toHaveLength(0);
+      const inputs = document.querySelectorAll('textarea.msg-input');
+      const actions = document.querySelectorAll(
+        '[aria-label="Insert test content"]',
+      );
+      expect(inputs).toHaveLength(2);
+      actions[0].click();
+      await settle();
+      expect([...inputs].map((input) => input.value)).toEqual([
+        'changed',
+        'second',
+      ]);
+      expect(getDraft('agent::first')).toBe('changed');
+      expect(getDraft('agent::second')).toBe('second');
+      // A page may prepare the local draft, but cannot submit it as human
+      // input or run Slash Commands through the native Send callback.
+      const frame = document.querySelector('iframe');
+      const child = frame.contentWindow;
+      const sent = vi.spyOn(child, 'postMessage');
+      frame.dispatchEvent(new Event('load'));
+      const init = sent.mock.calls
+        .map(([data]) => data)
+        .findLast((data) => data.type === 'vbot.extension.init');
+      expect(init.ui.commands).not.toContain('chat.submit');
+      const message = (data) =>
+        window.dispatchEvent(
+          new MessageEvent('message', { source: child, origin: 'null', data }),
+        );
+      message({ ...init, type: 'vbot.extension.ready' });
+      message({
+        ...init,
+        type: 'vbot.extension.call',
+        id: 'submit',
+        method: 'ui.command',
+        params: { name: 'chat.submit', params: {} },
+      });
+      await settle(3);
+      expect(
+        sent.mock.calls
+          .map(([data]) => data)
+          .find((data) => data.id === 'submit'),
+      ).toMatchObject({ type: 'vbot.extension.error' });
+      expect(onSendMessage).not.toHaveBeenCalled();
+      sent.mockRestore();
+      registry.reset('chat.composer.actions');
+      flushSync();
+      expect(
+        document.querySelectorAll(
+          `[aria-label="${t('chat.attachment.addFile')}"]`,
+        ),
+      ).toHaveLength(2);
+    } finally {
+      await unmount(instance);
+    }
+  });
 
   describe('context usage card', () => {
     function mountContextRing(props = {}) {

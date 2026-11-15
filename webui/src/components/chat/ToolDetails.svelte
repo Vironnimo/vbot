@@ -1,4 +1,5 @@
 <script>
+  import ContributionSurface from '../extensions/ContributionSurface.svelte';
   // The expanded body of a Tool row. Ordinary Run rows and standalone Tool
   // events share it. It opens with the call's images, videos and audio.
   //
@@ -182,78 +183,111 @@
   {/if}
 {/snippet}
 
+{#snippet toolResultContribution()}
+  <ToolMedia items={media} />
+  {#if blocks}
+    {#each blocks as block, index (index)}
+      {#if block.type === 'text'}
+        {#if block.label === 'output' && streamed}
+          {@render outputSections()}
+        {:else}
+          {@const clampKey = `${viewKey}:${block.label}:${index}`}
+          <ToolDetailSection
+            label={TEXT_LABELS[block.label]()}
+            value={block.text}
+            mode="literal"
+            clampLines={CLAMPED_TEXT_LINES[block.label] ?? 0}
+            expanded={viewState.isOpen(clampKey)}
+            onExpandedChange={(next) => viewState.setOpen(clampKey, next)}
+          />
+          {#if block.truncated}
+            <p class="teb-row tool-detail-truncated">
+              {t('chat.toolDetailTruncated')}
+            </p>
+          {/if}
+        {/if}
+      {:else if block.type === 'file_changes'}
+        <ToolDiff changes={block.files} />
+      {:else if block.type === 'results'}
+        <ToolResults items={block.items} />
+      {:else if block.type === 'memory_changes'}
+        <ToolMemoryChanges {block} />
+      {:else}
+        <ToolNotice notice={block} />
+      {/if}
+    {/each}
+    {#if !streamsReplaceOutput}
+      {@render outputSections()}
+    {/if}
+    {#if rawDisclosure}
+      <details
+        class="tool-raw-call"
+        open={viewState.isOpen(rawKey)}
+        ontoggle={(event) =>
+          viewState.setOpen(rawKey, event.currentTarget.open)}
+      >
+        <summary class="tool-raw-call__summary">
+          {t('chat.toolRawCall')}
+        </summary>
+        {#if viewState.isOpen(rawKey)}
+          <div class="tool-raw-call__body">
+            {#if awaitingCall}
+              {@render callStatus()}
+            {:else}
+              {@render argsSection('raw')}
+              {@render resultSection('raw-result')}
+            {/if}
+          </div>
+        {/if}
+      </details>
+    {:else if awaitingCall}
+      {@render callStatus()}
+    {:else}
+      {@render argsSection('raw')}
+      {@render resultSection()}
+    {/if}
+  {:else if awaitingCall}
+    {@render callStatus()}
+    {@render outputSections()}
+  {:else}
+    {@render argsSection('arguments')}
+    {@render outputSections()}
+    {@render resultSection()}
+  {/if}
+{/snippet}
+
 {#if open || revealed}
   <div class="tool-event-body tool-event-details collapse-host">
     <CollapseRail />
-    <ToolMedia items={media} />
-    {#if blocks}
-      {#each blocks as block, index (index)}
-        {#if block.type === 'text'}
-          {#if block.label === 'output' && streamed}
-            {@render outputSections()}
-          {:else}
-            {@const clampKey = `${viewKey}:${block.label}:${index}`}
-            <ToolDetailSection
-              label={TEXT_LABELS[block.label]()}
-              value={block.text}
-              mode="literal"
-              clampLines={CLAMPED_TEXT_LINES[block.label] ?? 0}
-              expanded={viewState.isOpen(clampKey)}
-              onExpandedChange={(next) => viewState.setOpen(clampKey, next)}
-            />
-            {#if block.truncated}
-              <p class="teb-row tool-detail-truncated">
-                {t('chat.toolDetailTruncated')}
-              </p>
-            {/if}
-          {/if}
-        {:else if block.type === 'file_changes'}
-          <ToolDiff changes={block.files} />
-        {:else if block.type === 'results'}
-          <ToolResults items={block.items} />
-        {:else if block.type === 'memory_changes'}
-          <ToolMemoryChanges {block} />
-        {:else}
-          <ToolNotice notice={block} />
-        {/if}
-      {/each}
-      {#if !streamsReplaceOutput}
-        {@render outputSections()}
-      {/if}
-      {#if rawDisclosure}
-        <details
-          class="tool-raw-call"
-          open={viewState.isOpen(rawKey)}
-          ontoggle={(event) =>
-            viewState.setOpen(rawKey, event.currentTarget.open)}
-        >
-          <summary class="tool-raw-call__summary">
-            {t('chat.toolRawCall')}
-          </summary>
-          {#if viewState.isOpen(rawKey)}
-            <div class="tool-raw-call__body">
-              {#if awaitingCall}
-                {@render callStatus()}
-              {:else}
-                {@render argsSection('raw')}
-                {@render resultSection('raw-result')}
-              {/if}
-            </div>
-          {/if}
-        </details>
-      {:else if awaitingCall}
-        {@render callStatus()}
-      {:else}
-        {@render argsSection('raw')}
-        {@render resultSection()}
-      {/if}
-    {:else if awaitingCall}
-      {@render callStatus()}
-      {@render outputSections()}
-    {:else}
-      {@render argsSection('arguments')}
-      {@render outputSections()}
-      {@render resultSection()}
-    {/if}
+    <ContributionSurface
+      surface="chat.tool-result"
+      data={{
+        tool_name: toolName,
+        arguments: shownArgs,
+        result: shownResult,
+        output,
+        truncated: awaitingCall,
+        failed: resultFailed,
+      }}
+      commands={{
+        'tool.read': async () =>
+          loadRaw
+            ? await loadRaw()
+            : { arguments: shownArgs, result: shownResult },
+      }}
+      context={{
+        tool_name: toolName,
+        tool_call_id: tool?.id ?? '',
+        tool_status: live ? 'running' : resultFailed ? 'failed' : 'completed',
+      }}
+      builtins={[
+        {
+          id: 'core:chat.tool-result',
+          title: t('chat.toolResultLabel'),
+          order: 10,
+          render: toolResultContribution,
+        },
+      ]}
+    />
   </div>
 {/if}

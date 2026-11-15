@@ -42,6 +42,80 @@ afterEach(() => {
 });
 
 describe('extension page client', () => {
+  it('exposes catalog services, local commands, external links and searchable page entries through the bound bridge', async () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target, 'nonce-a', 'epoch-a', {
+      api: { version: 30, features: ['ui.contributions'] },
+      ui: { commands: ['composer.insert'], context: { session_id: 'one' } },
+    });
+    expect(client.context.api).toEqual({
+      version: 30,
+      features: ['ui.contributions'],
+    });
+    const entries = [{ id: 'one', label: 'One', terms: 'connection' }];
+    for (const [invoke, method, params] of [
+      [() => client.services.describe(), 'service.describe', {}],
+      [
+        () => client.services.query('agent.list'),
+        'service.query',
+        { name: 'agent.list', params: {} },
+      ],
+      [
+        () => client.services.execute('agent.update', { id: 'a' }),
+        'service.execute',
+        { name: 'agent.update', params: { id: 'a' } },
+      ],
+      [
+        () => client.command('composer.insert', { text: 'hello' }),
+        'ui.command',
+        { name: 'composer.insert', params: { text: 'hello' } },
+      ],
+      [
+        () => client.openExternalUrl('https://example.test'),
+        'external.open',
+        { url: 'https://example.test' },
+      ],
+      [() => client.setSearchIndex(entries), 'search.index', { entries }],
+    ]) {
+      const result = invoke();
+      const request = target.postMessage.mock.calls.at(-1)[0];
+      expect(request).toMatchObject({
+        method,
+        params,
+        epoch: 'epoch-a',
+        nonce: 'nonce-a',
+      });
+      dispatchFrom(target, {
+        ...request,
+        type: 'vbot.extension.result',
+        result: { ok: true },
+      });
+      await expect(result).resolves.toEqual({ ok: true });
+    }
+    const reveal = vi.fn();
+    const remove = client.onSearch(reveal);
+    dispatchFrom(target, {
+      type: 'vbot.extension.search.reveal',
+      version: 1,
+      descriptor,
+      epoch: 'epoch-a',
+      nonce: 'wrong',
+      id: 'one',
+    });
+    expect(reveal).not.toHaveBeenCalled();
+    dispatchFrom(target, {
+      type: 'vbot.extension.search.reveal',
+      version: 1,
+      descriptor,
+      epoch: 'epoch-a',
+      nonce: 'nonce-a',
+      id: 'one',
+    });
+    expect(reveal).toHaveBeenCalledExactlyOnceWith('one');
+    remove();
+  });
+
   it('asks the shell to open one Session by canonical address', async () => {
     const target = parent();
     client = createExtensionPageClient({ target });

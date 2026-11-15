@@ -1,22 +1,22 @@
 <script>
   import LimitsEditor from './LimitsEditor.svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Checkbox from '../../../../webui/src/components/ui/Checkbox.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   import {
     buildModelSelectOptions,
     filterModelSelectOptions,
     modelFilterFooterLabel,
-  } from '../../../../webui/src/lib/modelSelection.js';
+  } from '@vbot/extension-sdk/lib/modelSelection.js';
   import {
     effortOptionsForReasoning,
     effortForReasoning,
     reasoningForModelValue,
-  } from '../../../../webui/src/lib/agentForm.js';
+  } from '@vbot/extension-sdk/lib/agentForm.js';
   import { repairSteps, returnTargets, stepName } from './workflows.js';
 
   // One step of the edited Workflow: what it does and when it starts. An

@@ -13,6 +13,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const invalidationListeners = new Set();
   const contextListeners = new Set();
   const runEventListeners = new Set();
+  const searchListeners = new Set();
   let autosaveParticipant = null;
   // The dialogs and menus the page shows over its content, the topmost last.
   const layers = [];
@@ -143,6 +144,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     if (typeof data.code === 'string' && data.code) error.code = data.code;
     if (typeof data.reason === 'string' && data.reason)
       error.details = { data: { reason: data.reason } };
+    if (isPlainObject(data.data)) error.details = { data: data.data };
     return error;
   }
 
@@ -197,6 +199,10 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         theme: isPlainObject(data.theme) ? data.theme : {},
         locale: typeof data.locale === 'string' ? data.locale : 'en',
         timezone: typeof data.timezone === 'string' ? data.timezone : 'UTC',
+        ui: isPlainObject(data.ui) ? data.ui : {},
+        api: isPlainObject(data.api)
+          ? data.api
+          : { version: null, features: [] },
       };
       forwardHistoryInput(data.forwardHistoryInput === true);
       target.postMessage(
@@ -250,9 +256,18 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       notifyAutosave();
       return;
     }
+    if (
+      data.type === 'vbot.extension.search.reveal' &&
+      typeof data.id === 'string'
+    ) {
+      for (const listener of searchListeners) listener(data.id);
+      return;
+    }
     if (data.type === 'vbot.extension.context') {
       context = {
         ...context,
+        ui: isPlainObject(data.ui) ? data.ui : context.ui,
+        api: isPlainObject(data.api) ? data.api : context.api,
         route: typeof data.route === 'string' ? data.route : context.route,
         theme: isPlainObject(data.theme) ? data.theme : context.theme,
         locale: typeof data.locale === 'string' ? data.locale : context.locale,
@@ -338,6 +353,14 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     },
     operation: (operation, arguments_ = {}) =>
       call('operation', { operation, arguments: arguments_ }),
+    services: Object.freeze({
+      describe: () => call('service.describe'),
+      query: (name, params = {}) => call('service.query', { name, params }),
+      execute: (name, params = {}) => call('service.execute', { name, params }),
+    }),
+    command: (name, params = {}) => call('ui.command', { name, params }),
+    openExternalUrl: (url) => call('external.open', { url }),
+    setSearchIndex: (entries) => call('search.index', { entries }),
     // `query.child_limit` (1-200) delivers only each Run's latest steps; a
     // Run with earlier steps starts with a `history_gap` child, whose steps
     // `readRunChildren` reads.
@@ -448,6 +471,10 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       contextListeners.add(listener);
       return () => contextListeners.delete(listener);
     },
+    onSearch(listener) {
+      searchListeners.add(listener);
+      return () => searchListeners.delete(listener);
+    },
     // Listeners receive `{reason, change}`; `change` is `{resource, ids,
     // revision}` from the Extension's `publish_change`, or null.
     onInvalidation(listener) {
@@ -465,6 +492,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       invalidationListeners.clear();
       contextListeners.clear();
       runEventListeners.clear();
+      searchListeners.clear();
       autosaveParticipant = null;
       layers.length = 0;
       context = null;

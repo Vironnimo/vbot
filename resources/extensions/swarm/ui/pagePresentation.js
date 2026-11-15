@@ -1,5 +1,5 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
-import { modelIdParts } from '../../../../webui/src/lib/modelSelection.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
+import { modelIdParts } from '@vbot/extension-sdk/lib/modelSelection.js';
 export const requestId = () =>
   crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 

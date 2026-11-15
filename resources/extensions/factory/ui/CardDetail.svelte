@@ -4,18 +4,18 @@
 
 <script>
   import { untrack } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
-  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
-  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
+  import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
+  import LazyContent from '@vbot/extension-sdk/ui/LazyContent.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import SaveStatus from '@vbot/extension-sdk/ui/SaveStatus.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
   import LimitsEditor from './LimitsEditor.svelte';
   import { limitsProblem, normalizeLimits } from './limits.js';

@@ -13,6 +13,7 @@ import pytest
 
 from core.channels import (
     ChannelAdapter,
+    ChannelAdapterContext,
     ChannelConfig,
     ChannelConfigError,
     ChannelNotFoundError,
@@ -83,6 +84,53 @@ def _record_restart_delays(service: ChannelService, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(service._connections, "_restart_delay_seconds", immediate)
     return delays
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred", [False, True], ids=["startup", "extension-startup"])
+@pytest.mark.parametrize("failure", [RuntimeError, ImportError])
+async def test_platform_factory_failure_is_supervised_without_blocking_other_channels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deferred: bool,
+    failure: type[Exception],
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    for channel_id in ("broken", "healthy"):
+        storage.save(make_config(channel_id, platform="contributed"))
+    service = make_service(tmp_path)
+    owner = object()
+    current = not deferred
+    attempts: dict[str, int] = {}
+    adapters: dict[str, BlockingAdapter] = {}
+
+    def factory(config: ChannelConfig, context: ChannelAdapterContext) -> BlockingAdapter:
+        attempts[config.id] = attempts.get(config.id, 0) + 1
+        if config.id == "broken" and attempts[config.id] == 1:
+            raise failure("platform dependency unavailable")
+        adapters[config.id] = BlockingAdapter()
+        return adapters[config.id]
+
+    delays = _record_restart_delays(service, monkeypatch)
+    service.register_platform(
+        owner, "contributed", "Contributed", factory, is_current=lambda: current
+    )
+    try:
+        service.start()
+        if deferred:
+            assert attempts == {}
+            current = True
+            service.resume_platforms(owner)
+        assert service.is_failed("broken")
+        assert "healthy" in adapters
+        await wait_until(lambda: attempts.get("broken") == 2)
+        assert delays == [1.0]
+        await adapters["broken"].started.wait()
+        await adapters["healthy"].started.wait()
+        assert service.is_running("broken")
+        assert service.is_running("healthy")
+    finally:
+        await service.aclose()
 
 
 @pytest.mark.asyncio

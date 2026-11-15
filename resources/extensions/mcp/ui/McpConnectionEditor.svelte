@@ -6,20 +6,21 @@
   // problem inside the closed disclosure opens it first.
   import { tick } from 'svelte';
 
-  import { t } from '$lib/i18n.js';
-  import { MCP_DESCRIPTION_MAX_LENGTH } from '$lib/mcpSettings.js';
-  import Dropdown from '../Dropdown.svelte';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import PathField from '../ui/PathField.svelte';
-  import Toggle from '../ui/Toggle.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { MCP_DESCRIPTION_MAX_LENGTH } from './mcpSettings.js';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import PathField from '@vbot/extension-sdk/ui/PathField.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import McpQuickFill from './McpQuickFill.svelte';
 
   const componentId = $props.id();
   let {
+    listDirectory,
     draft = $bindable(),
     original,
     state: panelState,
@@ -248,6 +249,7 @@
                   </div>
                   <div class="s-row-control">
                     <PathField
+                      {listDirectory}
                       id={`${componentId}-command`}
                       mode="file"
                       aria-describedby={`${componentId}-command-desc`}
@@ -473,6 +475,7 @@
                     </div>
                     <div class="s-row-control">
                       <PathField
+                        {listDirectory}
                         id={`${componentId}-cwd`}
                         mode="directory"
                         projectShortcuts

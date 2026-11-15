@@ -57,6 +57,7 @@ def test_channel_add_sends_the_connection_and_prints_the_channel_frame(
 @pytest.mark.parametrize(
     ("platform", "flags", "params", "shown"),
     [
+        pytest.param("matrix", (), {}, (), id="extension-without-token"),
         pytest.param(
             "whatsapp",
             ("--allow", "self"),
@@ -419,7 +420,10 @@ def test_channel_list_prints_one_row_per_channel(rpc: FakeRpc, run_cli: RunCli) 
                     "allowed_chat_ids": [],
                     "token_env_var": "TELEGRAM_BOT_TOKEN_TG_WORK",
                 },
-            ]
+            ],
+            "platforms": [
+                {"id": "matrix", "label": "Matrix", "settings_schema": {"type": "object"}}
+            ],
         },
     )
 
@@ -435,6 +439,8 @@ def test_channel_list_prints_one_row_per_channel(rpc: FakeRpc, run_cli: RunCli) 
         "- id=tg-work platform=telegram agent=assistant dm_scope=main "
         "enabled=no allowed_chat_ids=- token_env_var=TELEGRAM_BOT_TOKEN_TG_WORK",
     ]
+
+    assert 'id=matrix label=Matrix settings_schema={"type": "object"}' in out
 
 
 def test_channel_access_commands_use_additive_actions_and_print_the_saved_state(
@@ -522,3 +528,28 @@ def test_channel_whatsapp_pair_can_reset_the_linked_account(rpc: FakeRpc, run_cl
 
     assert code == 0
     assert rpc.calls == [("channel.whatsapp.pair", {"id": "wa", "reset": True})]
+
+
+@pytest.mark.parametrize("command", ["add", "update"])
+def test_platform_settings_file_replaces_settings(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, command: str
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text('{"homeserver":"https://chat.example"}', encoding="utf-8")
+    method = "channel.create" if command == "add" else "channel.update"
+    rpc.reply(method, {"id": "team"})
+    flags = ("--platform", "matrix", "--agent", "assistant") if command == "add" else ()
+    code, _out, _err = run_cli(
+        "channel", command, "team", *flags, "--settings-file", str(settings_file)
+    )
+    assert code == 0
+    assert rpc.params(method)["settings"] == {"homeserver": "https://chat.example"}
+
+    settings_file.write_text("[]", encoding="utf-8")
+    previous_calls = list(rpc.calls)
+    code, out, _err = run_cli(
+        "channel", command, "team", *flags, "--settings-file", str(settings_file)
+    )
+    assert code != 0
+    assert "expected a JSON object" in out
+    assert rpc.calls == previous_calls

@@ -1,11 +1,11 @@
 <script>
-  import { t } from '$lib/i18n.js';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
-  import TextField from '../ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import StatusChip from '@vbot/extension-sdk/ui/StatusChip.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   let { state: panelState, controller, status } = $props();
   let capabilityQuery = $state('');
 </script>

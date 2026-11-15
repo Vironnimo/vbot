@@ -48,6 +48,7 @@ from core.chat.wire_shaping import (
 )
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    ProviderAdapter,
     terminal_outcome_from_response,
 )
 from core.providers.errors import (
@@ -390,6 +391,8 @@ class WireRequestRunner:
         )
         normalized: JsonObject | None = None
         try:
+            if isinstance(adapter, ProviderAdapter):
+                adapter.ensure_available()
             response = await adapter.send(
                 messages,
                 model_id=model_id,

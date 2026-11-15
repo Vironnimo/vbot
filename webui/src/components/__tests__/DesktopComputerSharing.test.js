@@ -28,8 +28,18 @@ beforeEach(() => {
     name: 'Laptop',
     server_url: 'https://vbot.example',
     connected: true,
-    capabilities: { terminal: false, computer_use: false },
-    available: { terminal: true, computer_use: false },
+    capabilities: { terminal: false, computer_use: false, printer: false },
+    capability_catalog: [
+      { id: 'terminal', label: 'Terminal' },
+      { id: 'computer_use', label: 'Computer Use' },
+      {
+        id: 'printer',
+        owner: 'printer',
+        label: 'Office printer',
+        description: 'Print documents',
+      },
+    ],
+    available: { terminal: true, computer_use: false, printer: true },
     active_terminals: 0,
   };
   getStatus = vi.fn(async () => status);
@@ -37,7 +47,7 @@ beforeEach(() => {
     status = {
       ...status,
       computer_id:
-        changes.terminal || changes.computer_use
+        changes.terminal || changes.computer_use || changes.printer
           ? 'pc_laptop'
           : status.computer_id,
       name: changes.name ?? status.name,
@@ -49,6 +59,7 @@ beforeEach(() => {
         ...(changes.computer_use === undefined
           ? {}
           : { computer_use: changes.computer_use }),
+        ...(changes.printer === undefined ? {} : { printer: changes.printer }),
       },
     };
     return status;
@@ -86,6 +97,27 @@ describe('Desktop computer sharing', () => {
       'Not connected',
     );
     expect(toggle('Share Computer Use').disabled).toBe(true);
+    expect(toggle('Office printer').disabled).toBe(false);
+    toggle('Office printer').click();
+    flushSync();
+    await coordinator.flushPending();
+    expect(setStatus).toHaveBeenCalledWith({ printer: true });
+    expect(toggle('Office printer').getAttribute('aria-checked')).toBe('true');
+    window.dispatchEvent(
+      new CustomEvent('vbot-desktop-computer-sharing', {
+        detail: {
+          ...status,
+          available: { ...status.available, printer: false },
+          capability_errors: { printer: 'ModuleNotFoundError' },
+        },
+      }),
+    );
+    flushSync();
+    expect(document.body.textContent).toContain(
+      'Unavailable: ModuleNotFoundError',
+    );
+    expect(toggle('Office printer').disabled).toBe(false);
+    expect(toggle('Share Terminal').disabled).toBe(false);
     toggle('Share Terminal').click();
     flushSync();
     await coordinator.flushPending();

@@ -36,6 +36,7 @@ from server.events import (
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
+from server.extension_services import bind_application_services
 from server.file_delivery import FileDelivery
 from server.live.registry import LiveCallRegistry
 from server.rpc.dispatcher import dispatch_method
@@ -140,6 +141,7 @@ def _initialize_app_state(
     app.state.server_bind = dict(server_bind)
     runtime.set_server_port(server_bind["listen_port"], own_hosts=server_hosts)
     app.state.live_calls = _build_live_call_registry(app.state)
+    app.state.extension_services_unbind = bind_application_services(app.state, METHODS)
 
 
 def _build_live_call_registry(state: Any) -> LiveCallRegistry:

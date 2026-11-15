@@ -720,7 +720,10 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
 
     status = {
         "server_url": "https://remote.example/",
-        "capabilities": {"terminal": False, "computer_use": False},
+        "capabilities": {"terminal": False, "computer_use": False, "printer": False},
+        "capability_catalog": [
+            {"id": "printer", "label": "Printer", "description": "Print documents"}
+        ],
     }
 
     def update(changes: Any, *, expected_server: str, confirm: Any = None) -> dict[str, Any]:
@@ -735,16 +738,17 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
     assert bridge.getDesktopCapabilities()["computerSharing"] is True
     assert bridge.getComputerSharing() == status
     if outcome == "allow":
-        bridge.setComputerSharing({"terminal": True})
-        assert applied == [({"terminal": True}, "https://remote.example/")]
+        bridge.setComputerSharing({"printer": True})
+        assert applied == [({"printer": True}, "https://remote.example/")]
     else:
         with pytest.raises(BridgeError) as raised:
-            bridge.setComputerSharing({"terminal": True})
+            bridge.setComputerSharing({"printer": True})
         assert str(raised.value) == (
             "declined" if outcome == "decline" else "computer_server_changed"
         )
         assert applied == []
     assert len(questions) == 1
+    assert "Printer" in questions[0]
 
 
 def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(

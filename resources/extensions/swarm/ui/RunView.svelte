@@ -5,15 +5,15 @@
 </script>
 
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ContextMenu from '../../../../webui/src/components/ui/ContextMenu.svelte';
-  import { contextMenuAnchor } from '../../../../webui/src/components/ui/contextMenu.js';
-  import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
-  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
-  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ContextMenu from '@vbot/extension-sdk/ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from '@vbot/extension-sdk/ui/contextMenu.js';
+  import StatusChip from '@vbot/extension-sdk/ui/StatusChip.svelte';
+  import TabList from '@vbot/extension-sdk/ui/TabList.svelte';
+  import LazyContent from '@vbot/extension-sdk/ui/LazyContent.svelte';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
   import { failureText } from './failureText.js';
   import {
     aroundSlot,

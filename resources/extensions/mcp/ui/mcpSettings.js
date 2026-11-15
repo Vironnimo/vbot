@@ -1,7 +1,6 @@
-import { extensionOperation } from './api.js';
-import { PENDING_INPUTS_RESOURCE } from './extensionInputs.js';
-import { t, tOr } from './i18n.js';
-import { isSettingsConflict } from './settingsSave.js';
+import { PENDING_INPUTS_RESOURCE } from '@vbot/extension-sdk/lib/extensionInputs.js';
+import { t, tOr } from '@vbot/extension-sdk/lib/i18n.js';
+import { isSettingsConflict } from '@vbot/extension-sdk/lib/settingsSave.js';
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
 export const MCP_DESCRIPTION_MAX_LENGTH = 200;
@@ -198,10 +197,7 @@ export function mcpCredentialSlot(server, credential) {
 // `list` again only then (`handleInvalidation`), never on a timer. Drafts
 // stay in the modal, so a status refresh can never replace a half-written
 // connection or secret.
-export function createMcpSettings({
-  onChange,
-  operation = extensionOperation,
-}) {
+export function createMcpSettings({ onChange, operation }) {
   let state = {
     connections: [],
     loading: true,

@@ -21,6 +21,8 @@
     // Runs once the address was handed to the browser.
     onOpen = noop,
     onOpenFailed = noop,
+    // Isolated Extension views delegate browser handoff to their host.
+    openUrl = null,
   } = $props();
 
   let getDomain = $state(null);
@@ -50,6 +52,13 @@
   function open(event) {
     if (disabled) {
       event.preventDefault();
+      return;
+    }
+    if (openUrl) {
+      event.preventDefault();
+      Promise.resolve()
+        .then(() => openUrl(address.href))
+        .then(() => onOpen(), onOpenFailed);
       return;
     }
     if (!isDesktopAccessor()) {

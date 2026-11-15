@@ -11,12 +11,18 @@
     shell = null,
     onToast = () => {},
     onOpenSession = () => {},
+    onUiCommand = null,
+    embedded = false,
     autosaveContext = null,
   } = $props();
   let descriptor = $state(initialDescriptor);
   let theme = $state(initialContext.theme ?? {});
   let locale = $state(initialContext.locale ?? 'en');
   let timezone = $state(initialContext.timezone ?? 'UTC');
+  let uiContext = $state(initialContext.ui ?? {});
+  let apiCapabilities = $state(
+    initialContext.api ?? { version: null, features: [] },
+  );
   const invalidationListeners = [];
   if (autosaveContext) provideAutosaveContext(autosaveContext);
   if (shell) provideNavigation(shell);
@@ -37,6 +43,8 @@
     if ('theme' in next) theme = next.theme;
     if ('locale' in next) locale = next.locale;
     if ('timezone' in next) timezone = next.timezone;
+    if ('ui' in next) uiContext = next.ui;
+    if ('api' in next) apiCapabilities = next.api;
   }
 </script>
 
@@ -49,4 +57,8 @@
   {subscribeInvalidations}
   {onToast}
   {onOpenSession}
+  {uiContext}
+  {apiCapabilities}
+  {onUiCommand}
+  {embedded}
 />

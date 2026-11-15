@@ -361,6 +361,10 @@ export function expandSettingsEntry({ element, openDetails }, container) {
       expanded = true;
     }
   }
+  if (element.matches('[data-extension-search]')) {
+    element.click();
+    expanded = true;
+  }
   return expanded;
 }
 

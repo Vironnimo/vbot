@@ -93,6 +93,49 @@ def register(api: ExtensionAPI) -> None:
         service.respond,
         secret=True,
     )
+
+    async def controls(_arguments: dict[str, Any]) -> dict[str, Any]:
+        snapshot = await service.control({"action": "status"})
+        entries = snapshot.get("controls", [snapshot])
+        items = []
+        for entry in entries:
+            if not entry.get("active") and not entry.get("stopping"):
+                continue
+            name = (
+                (entry.get("computer_name") or entry.get("computer_id", ""))
+                if entry.get("computer_id") != "server"
+                else ""
+            )
+            items.append(
+                {
+                    "id": entry.get("control_id") or entry.get("computer_id", "server"),
+                    "label": f"Stop Computer Use on {name}" if name else "Stop Computer Use",
+                    "text": name or "Stop Computer Use",
+                    "disabled": bool(entry.get("stopping")),
+                    "tone": "danger",
+                    "action": {
+                        "operation": "control",
+                        "params": {"action": "stop", "control_id": entry.get("control_id")},
+                    },
+                }
+            )
+        return {"items": items}
+
+    api.operations.register(
+        "controls",
+        "Read current desktop controls for the interface.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        controls,
+    )
+    api.register_contribution(
+        "controls",
+        surface="chat.composer.actions",
+        title="Computer Use",
+        kind="action",
+        order=30,
+        source={"operation": "controls", "resource": "control"},
+        operations=("control",),
+    )
     api.on_shutdown(service.close)
     api.on("run_end", service.run_end)
     api.register_tool_family(TOOL_FAMILY, "Computer Use")

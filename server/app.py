@@ -383,6 +383,9 @@ def create_app(
                             await access_service.close()
                 finally:
                     runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
+                    if state_initialized:
+                        with cleanup_step():
+                            app.state.extension_services_unbind()
                     if on_stopped is not None:
                         with cleanup_step():
                             on_stopped(runtime_stopped_cleanly and services_stopped_cleanly)

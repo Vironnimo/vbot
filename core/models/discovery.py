@@ -149,7 +149,7 @@ async def refresh_models(
             else None
         )
         adapter_class: Any = (
-            request.adapter_class if request else discovery_adapter_type(provider_config.adapter)
+            request.adapter_class if request else discovery_adapter_type(provider_config)
         )
         if adapter_class is None:
             raise ValueError("Provider has no catalog normalizer")

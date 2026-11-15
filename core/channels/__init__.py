@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         InboundMailSink,
         MailAttachment,
     )
+    from core.channels.platforms import ChannelAdapterContext, ChannelAdapterFactory
     from core.channels.storage import ChannelStorage
 
 
@@ -59,6 +60,8 @@ _EXPORT_MODULES = {
     "CHECKLIST_ITEM_ID_MAX_BYTES": "core.channels.checklist",
     "MANAGED_CHANNEL_TOKEN_ENV_PREFIX": "core.channels.config",
     "ChannelAdapter": "core.channels.adapter",
+    "ChannelAdapterContext": "core.channels.platforms",
+    "ChannelAdapterFactory": "core.channels.platforms",
     "ChannelConfig": "core.channels.config",
     "ChannelConfigError": "core.channels.config",
     "ChannelError": "core.channels.config",
@@ -105,6 +108,8 @@ __all__ = [
     "CHECKLIST_ITEM_ID_MAX_BYTES",
     "MANAGED_CHANNEL_TOKEN_ENV_PREFIX",
     "ChannelAdapter",
+    "ChannelAdapterContext",
+    "ChannelAdapterFactory",
     "ChannelConfig",
     "ChannelConfigError",
     "ChannelError",

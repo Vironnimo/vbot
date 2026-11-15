@@ -19,7 +19,7 @@ from core.models.models_dev import (
     ModelsDevModel,
 )
 from core.providers._wire_profile_files import WireProfileFile
-from core.providers.adapter_types import ADAPTER_TYPES
+from core.providers.adapter_types import adapter_type_for_config
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.wire_profiles import standalone_wire_binding
 from core.utils.logging import get_logger
@@ -188,7 +188,7 @@ def _admitted_models(
     written, so it never appears in the Model DB.
     """
 
-    adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+    adapter_class = adapter_type_for_config(provider_config)
     if adapter_class is None:
         return projected
 

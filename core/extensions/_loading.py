@@ -24,6 +24,7 @@ from core.extensions._declarations import (
     PageDeclaration,
     _diagnose_capability,
 )
+from core.extensions.contributions import EXTENSION_FEATURES
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.ids import is_reserved_name
 from core.utils.logging import get_logger
@@ -97,6 +98,13 @@ def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension
             if found:
                 discovered.append(_DiscoveredExtension(entry.name, entry, entry_path))
                 break
+        else:
+            manifest_path = entry / _MANIFEST_FILENAME
+            try:
+                if is_file_strict(manifest_path):
+                    discovered.append(_DiscoveredExtension(entry.name, entry, manifest_path))
+            except OSError as exc:
+                discovered.append(_DiscoveredExtension(entry.name, entry, manifest_path, str(exc)))
 
     return sorted(discovered, key=lambda item: item.name)
 
@@ -164,8 +172,20 @@ def _register_extension(
         _LOGGER.error("Extension %r %s", name, message)
         return _failed_record(discovered, message, manifest=manifest)
 
+    missing_features = set(manifest.required_features) - EXTENSION_FEATURES if manifest else set()
+    if missing_features:
+        return _failed_record(
+            discovered,
+            "unsupported required features: " + ", ".join(sorted(missing_features)),
+            manifest=manifest,
+        )
+
     try:
-        module = _import_extension_module(discovered)
+        module = (
+            _import_extension_module(discovered)
+            if discovered.entry_path.name != _MANIFEST_FILENAME
+            else None
+        )
     except Exception as exc:
         _LOGGER.error(
             "Failed to load extension %r from %s: %s",
@@ -185,8 +205,6 @@ def _register_extension(
     )
 
     register_fn = getattr(module, "register", None)
-    if register_fn is None:
-        return record
 
     bound_config_provider = (lambda: config_provider(name)) if config_provider is not None else None
     api = ExtensionAPI(
@@ -198,7 +216,14 @@ def _register_extension(
         credential_resolver=credential_resolver,
     )
     try:
-        result = register_fn(api)
+        if manifest is not None:
+            for page in manifest.pages:
+                api.register_page(**page)
+            for contribution in manifest.contributions:
+                fields = dict(contribution)
+                contribution_id = fields.pop("id", None)
+                api.register_contribution(contribution_id, **fields)
+        result = register_fn(api) if register_fn is not None else None
     except (Exception, asyncio.CancelledError) as exc:
         _LOGGER.error("Extension %r register() raised: %s", name, exc, exc_info=True)
         record.status = "failed"
@@ -389,7 +414,55 @@ def _load_manifest(directory: Path) -> ExtensionManifest | None:
         api_version=api_version,
         display_name=_manifest_optional_str(raw, "name"),
         documentation=_manifest_documentation(raw),
+        pages=_manifest_objects(raw, "pages"),
+        contributions=_manifest_objects(raw, "contributions"),
+        required_features=_manifest_features(raw),
+        desktop=_manifest_desktop(raw),
     )
+
+
+def _manifest_objects(raw: dict[str, Any], key: str) -> tuple[dict[str, Any], ...]:
+    value = raw.get(key, [])
+    if (
+        not isinstance(value, list)
+        or len(value) > 256
+        or any(not isinstance(item, dict) for item in value)
+    ):
+        raise _ManifestError(f"{key} must be a list of at most 256 declaration objects")
+    return tuple(value)
+
+
+def _manifest_features(raw: dict[str, Any]) -> tuple[str, ...]:
+    value = raw.get("required_features", [])
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise _ManifestError("required_features must be a list of feature names")
+    return tuple(value)
+
+
+def _manifest_desktop(raw: dict[str, Any]) -> dict[str, Any] | None:
+    value = raw.get("desktop")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"entry", "api_version"}:
+        raise _ManifestError("desktop must declare entry and optional api_version")
+    entry = value.get("entry")
+    if (
+        not isinstance(entry, str)
+        or not entry
+        or "\\" in entry
+        or ":" in entry
+        or "\x00" in entry
+        or PurePosixPath(entry).is_absolute()
+        or ".." in entry.split("/")
+        or "" in entry.split("/")
+        or "." in entry.split("/")
+        or not entry.endswith(".py")
+    ):
+        raise _ManifestError("desktop.entry must be a relative Python file")
+    version = value.get("api_version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise _ManifestError("desktop.api_version must be a positive integer")
+    return {"entry": entry, "api_version": version}
 
 
 def _manifest_optional_str(raw: dict[str, Any], key: str) -> str | None:

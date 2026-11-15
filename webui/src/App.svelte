@@ -78,6 +78,7 @@
 
 <script>
   import AppShell from './components/AppShell.svelte';
+  import ContributionPreferences from './components/extensions/ContributionPreferences.svelte';
   import Button from './components/ui/Button.svelte';
   import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
@@ -129,6 +130,10 @@
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
   import { createAppExtensions } from './app/extensions.svelte.js';
+  import {
+    createContributions,
+    provideContributions,
+  } from '$lib/contributions.svelte.js';
   import { createAppNotices } from './app/notices.svelte.js';
   import { createLiveUiActions } from './app/liveUiActions.js';
   import { createAppAutosave } from './app/autosave.svelte.js';
@@ -174,6 +179,48 @@
   });
 
   const visibleNavigationItems = $derived(extensions.allNavigationItems);
+
+  const contributions = provideContributions(
+    createContributions({
+      get entries() {
+        return extensions.contributions;
+      },
+      get apiCapabilities() {
+        return extensions.apiCapabilities;
+      },
+      get pages() {
+        return extensions.extensionPages;
+      },
+      get theme() {
+        return extensions.extensionPageTheme;
+      },
+      get locale() {
+        return setup.settings?.appearance?.language ?? 'en';
+      },
+      get timezone() {
+        return dateTimePrefs.timeZone;
+      },
+      subscribe: extensions.subscribeInvalidations,
+      notifyError: (error) =>
+        desktop.showToast({ title: error.message, variant: 'error' }),
+      toast: (message, variant) =>
+        desktop.showToast({ title: message, variant }),
+      openSession: (address) => chatNavigation.openSessionLink(address),
+      commands: {
+        'navigation.open': ({ view, place = [] }) => {
+          if (
+            !extensions.allNavigationItems.some((item) => item.id === view) ||
+            !Array.isArray(place) ||
+            place.some((item) => typeof item !== 'string')
+          )
+            throw new Error('Navigation target is unavailable');
+          return navigator.navigate(view, place);
+        },
+      },
+    }),
+  );
+  onMount(() => contributions.connect());
+  let layoutEditorOpen = $state(false);
 
   // Main menu indicators by view id (`{count, tone, label}`), each reported
   // by the view that owns its meaning.
@@ -507,6 +554,7 @@
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
+    onPublicResourceChange: extensions.publicChange,
     onExtensionNotification: extensions.notify,
     onPortalsChanged: invalidatePortals,
     onCheckWebuiBuild: checkWebuiBuild,
@@ -697,6 +745,7 @@
           {#snippet children(Component)}
             <Component
               descriptor={page}
+              apiCapabilities={extensions.apiCapabilities}
               navigation={navigator.view(activeViewId)}
               theme={{ ...extensions.extensionPageTheme }}
               locale={setup.settings?.appearance?.language ?? 'en'}
@@ -894,6 +943,22 @@
   </ToastStack>
 </AppShell>
 
+{#if contributions.customized}
+  <div class="interface-layout-recovery">
+    <Button variant="secondary" onClick={() => (layoutEditorOpen = true)}>
+      {t('contributions.title')}
+    </Button>
+  </div>
+{/if}
+{#if layoutEditorOpen}
+  <Modal
+    title={t('contributions.title')}
+    onClose={() => (layoutEditorOpen = false)}
+  >
+    {#snippet body()}<ContributionPreferences />{/snippet}
+  </Modal>
+{/if}
+
 <ExtensionRequests
   subscribeInvalidations={extensions.subscribeInvalidations}
   onNoticeChange={(notice) => (extensionNotice = notice)}
@@ -957,6 +1022,13 @@
 {/if}
 
 <style>
+  .interface-layout-recovery {
+    position: fixed;
+    right: var(--space-md);
+    bottom: var(--space-md);
+    z-index: 1050;
+  }
+
   .app-data-store-incident p {
     margin: 0;
     color: var(--text-med);

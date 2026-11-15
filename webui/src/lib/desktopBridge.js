@@ -200,19 +200,58 @@ function normalizeComputerSharing(raw) {
   ) {
     throw new Error('The Desktop returned an invalid computer sharing status');
   }
+  const capabilityId = (id) =>
+    typeof id === 'string' &&
+    /^[a-z][a-z0-9_]{0,63}$/.test(id) &&
+    id !== 'name';
+  const declared = Array.isArray(raw.capability_catalog)
+    ? raw.capability_catalog
+    : Object.keys(raw.capabilities ?? {}).map((id) => ({ id, label: id }));
+  const capabilityCatalog = [];
+  const seen = new Set();
+  for (const item of declared) {
+    if (!isPlainObject(item) || !capabilityId(item.id) || seen.has(item.id))
+      continue;
+    seen.add(item.id);
+    capabilityCatalog.push({
+      id: item.id,
+      owner: text(item.owner),
+      label: typeof item.label === 'string' ? item.label : item.id,
+      description: text(item.description),
+    });
+    if (capabilityCatalog.length === 32) break;
+  }
   return {
     computer_id: raw.computer_id,
     name: typeof raw.name === 'string' ? raw.name : '',
     server_url: typeof raw.server_url === 'string' ? raw.server_url : '',
     connected: raw.connected === true,
-    capabilities: {
-      terminal: raw.capabilities?.terminal === true,
-      computer_use: raw.capabilities?.computer_use === true,
-    },
-    available: {
-      terminal: raw.available?.terminal === true,
-      computer_use: raw.available?.computer_use === true,
-    },
+    capability_catalog: capabilityCatalog,
+    capabilities: Object.fromEntries(
+      capabilityCatalog.map(({ id }) => [id, raw.capabilities?.[id] === true]),
+    ),
+    available: Object.fromEntries(
+      capabilityCatalog.map(({ id }) => [id, raw.available?.[id] === true]),
+    ),
+    capability_errors: Object.fromEntries(
+      capabilityCatalog
+        .filter(({ id }) => typeof raw.capability_errors?.[id] === 'string')
+        .map(({ id }) => [id, raw.capability_errors[id]]),
+    ),
+    extensions: Array.isArray(raw.extensions)
+      ? raw.extensions
+          .filter(
+            (entry) => isPlainObject(entry) && typeof entry.name === 'string',
+          )
+          .map((entry) => ({
+            name: entry.name,
+            status: text(entry.status),
+            error: text(entry.error),
+            capability_errors: Array.isArray(entry.capability_errors)
+              ? entry.capability_errors.filter((id) => typeof id === 'string')
+              : [],
+          }))
+      : [],
     active_terminals: Number.isSafeInteger(raw.active_terminals)
       ? Math.max(0, raw.active_terminals)
       : 0,

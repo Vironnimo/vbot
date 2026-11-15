@@ -324,3 +324,20 @@ The source `references/extension-index.md` is replaced by the runtime's generate
 | `Update keeps the old container until the replacement passes its check, restoring it when that check fails.` | Describes the retained baseline and keeps a failed search check from being mistaken for deletion of the former service. |
 | `Remove deletes only vBot's managed containers, keeps the configuration and shared runtime ...` | Bounds removal to owned resources and explains conditional restoration without overwriting later user choices. |
 | `For an existing external SearXNG service, use vbot config patch ...` | Gives the existing-service path without installing a duplicate container; the address placeholder explicitly comes from the user. |
+
+
+## Extension platform authoring and Channel configuration
+
+| Text | Reason |
+|---|---|
+| `Write or change an Extension's Tools, hooks, Commands or settings` route | Keeps the existing server author guide as the entry point for its own capabilities. |
+| `Add or replace UI controls, build an Extension page...` route | Authors can discover the new manifest, SDK, services and native interfaces without reading the full Tool-authoring guide first. |
+| `Channels, including Extension platforms...` route | Removes the closed built-in platform list from Skill routing and names platform settings as a supported task. |
+| `A Channel connects an Agent to a messaging platform...` | The Channel guide now covers contributed transports as well as built-ins. |
+| Updated `channel add` recipe with a platform placeholder, optional token and `--settings-file` | Platform ids come from the active catalog; contributed adapters do not inherently require the built-in token convention. |
+| Updated `channel update` recipe with `--settings-file` | Makes the supported whole-object configuration path discoverable. |
+| `vbot channel list also prints the available platform ids...` | One read supplies current ids and schema, avoiding guessed enums and extra probing. |
+| `To configure an Extension platform, read its schema and declared usage guide...` | Connects discovery to a complete add command while keeping secrets out of the JSON file. |
+| `Token flags are required only when that platform uses...` | Keeps credential setup tied to the adapter contract instead of imposing standard bot-token fields on every platform. |
+| `On update, --settings-file replaces the entire platform settings object...` | Prevents omitted platform settings from being silently cleared and provides the explicit empty-object reset. |
+| `When a platform's Extension is disabled or unavailable...` | Saved configuration is retained but does not prove an available running adapter. |

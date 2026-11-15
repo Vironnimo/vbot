@@ -1,6 +1,6 @@
 # Extensions Agent-facing text
 
-Why each sentence of the Agent-facing authoring text the Extensions domain owns exists: the `vbot-docs` references `extensions.md` and `extension-pages.md`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the Agent-facing authoring text the Extensions domain owns exists: the `vbot-docs` references `extensions.md`, `extension-pages.md` and `extension-platform.md`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 Rows cover the listed additions to the `vbot-docs` authoring references and Extension-owned usage guides; older wording has no recorded reasons yet. Software Factory runtime/usage text has its sentence reasons in `extensions/factory-agent-facing-text.md`.
 
@@ -29,6 +29,106 @@ Rows cover the listed additions to the `vbot-docs` authoring references and Exte
 | `A Svelte page calls provideNavigation(...) ...` | Back and Forward close the topmost dialog or menu app-wide before navigating (2026-09-29). A page that does not provide the client's layer registry leaves its dialogs open while Back moves the page's place underneath them. Preventive; no Session evidence yet. |
 | `An invalidation callback receives {reason, change}: ...` | Scoped page invalidation (2026-09-28): `publish_change` forwards `{resource, ids, revision}` only to the owning Extension's open page, and `null` marks a full refresh (descriptor reload, reconnect, Run-stream recovery). Without the sentence, an Agent authoring a page reloads every read model on each change; the Swarm page did exactly that under a 23-Agent load (~3.5 operations/s plus a descriptor reload per change). |
 | `To let the user enter a path on the vBot server, ... render the shared PathField ...` | Server paths are entered only through the shared `PathField`, never a browser file dialog, because the server may run on another computer (`webui.md` -> Ownership); pages can list the server's folders since API v12 (2026-10, `client.listDirectory`). Without the paragraph, an Agent authoring a page offers a browser file input, which reads the viewer's computer and yields no server path, or a plain text field without completion; `projectShortcuts` would call the app API, which the sandboxed page cannot reach. The trailing-separator sentence comes from the Swarm page: a completed `C:/work/` differed from the profile's `C:/work` and counted as a changed Run directory. The field drops the separator when focus leaves it (2026-10), but a value submitted while the field has focus still carries it. Preventive; no Session evidence yet. |
+
+## API 30 authoring
+
+The following rows cover the API 30 additions and revised sentences in the three authoring references; sentence beginnings identify wording in the source instead of maintaining a second copy.
+
+| Text | Reason |
+|---|---|
+| `An Extension declares capabilities in a manifest or a Python register(api) function...` | The old Python-only definition caused authors to create unnecessary server code for declarative UI. |
+| `Python Extensions run with the full rights of vBot itself...` | Keeps the trust statement scoped to executable server code after adding isolated UI-only packages. |
+| `This covers creating and changing a server Extension.` and the following links | Routes UI, service and native work to a focused reference instead of requiring the entire legacy Tool guide. |
+| Manifest-only layout row | Makes the required filename and lack of Python entry concrete. |
+| `Server Extension code changes apply through reload...` | Replaces the false blanket no-restart claim with separate server and local native lifecycle boundaries. |
+| `A Python server entry exposes one register(api)...` | Preserves the declaration timeout without imposing a Python entry on UI-only Extensions. |
+| Updated page signature and new contribution, Provider and Channel registration table rows | Authors can use the public declaration functions without guessing keyword arguments or importing registries. |
+| `A Python package or directory Extension can add an extension.json...` | Distinguishes an optional manifest for Python from the manifest that makes a UI-only directory discoverable. |
+| `currently 30` and the API 30 version entry | New callers declare a compatible host before trying unavailable platform APIs. |
+| `Read this reference for page lifecycle or Extension-owned Sessions.` and its two starting references | A UI-only author needs the small page setup guide; an owned-Session author needs the server host contract. |
+| `the public page client is @vbot/extension-sdk/client` | Gives the installed public import instead of an internal repository filename. |
+| `Installed Extensions ship prebuilt assets...` and `Bundled source Extensions also build...` | Gives independent author builds and repository builds their respective paths without requiring Node on the running server. |
+| `The child imports createExtensionPageClient...`, updated `provideNavigation`, `PathField` and `registerCatalog` imports | External authors cannot resolve the repository's `$lib` alias; the public package preserves the same implementations. |
+| `Leave projectShortcuts unset, because that shortcut loader uses the app transport directly.` | Retains the needed shared-control restriction without claiming that a page can never read Projects through declared services. |
+| `A page keeps its English UI text...` | The own-catalog contract applies to externally built pages as well as bundled ones. |
+| `Read this reference to add UI controls or pages...` and the following cross-reference sentence | Defines the new reference's trigger and sends unrelated Tool and Session work to its existing owner. |
+| `Use a manifest-only Extension for static status text...` | A small visual customization no longer needs a Python lifecycle. |
+| `Add a Python server entry when...` | Identifies behavior that still requires server execution. |
+| `Add a separate local Desktop entry only...` | Prevents server installation from being mistaken for native local execution. |
+| `Run vbot home on the server's computer...` | Authors need actual install paths and must not write to the CLI computer when targeting a remote server. |
+| `Give it a unique directory name...` | Identity controls settings and ownership; a display label cannot disambiguate duplicate folders. |
+| `After changing server declarations or assets...` | Establishes reload and diagnostics as the first observable acceptance check. |
+| `Declare api_version: 30...` and the feature list | Gives the compatibility gate and exact supported feature names. |
+| `The host rejects unknown required features...` | Explains why feature declarations prevent partial initialization on an incompatible server. |
+| `Python server code is trusted...` | A sandboxed view does not make an accompanying Python module sandboxed. |
+| `For a composer button...` and the manifest example | Provides a minimal complete UI customization without a server entry, bundler or custom action handler. |
+| `Python declares the same contribution...` | Shows the shared declaration path and prevents duplicate local registration. |
+| `Local ids start with a lowercase letter...` | Prevents registration failures from invalid identifiers. |
+| `The public id is extension:<directory-name>:<local-id>.` | Authors need the stable namespaced id when declaring replacement targets. |
+| Surface table | Lists supported placement names once so authors do not guess DOM locations or unsupported extension points. |
+| `Every contribution supplies surface, kind and title...` | States the minimal schema and three render modes. |
+| `Use text for display text...` | Gives default order and exact-match visibility semantics without encouraging arbitrary expressions. |
+| `Context fields depend on the surface...` | Enumerates accepted bindings while preserving absence as meaningful instead of promising fabricated state. |
+| `A text value or a direct parameter value can bind...` | Demonstrates bounded data binding and its missing-value refusal. |
+| `An action names either an owner operation...` | Separates owner behavior from existing UI commands using the actual descriptor shapes. |
+| `Composer surfaces provide...` | Gives commands and parameters needed by the minimal manifest example and its common variations. |
+| `An embedded page receives the available command names...` | Authors discover scoped commands from live context instead of assuming every surface has composer authority. |
+| `For dynamic controls, declare source...` and the example response | Connects an owner read operation to the exact native item shape the renderer accepts. |
+| `List any additional operation named by returned items...` | Dynamic actions need an explicit allowlist; declaring the source alone does not authorize all owner operations. |
+| `Publish changes with host.publish_change...` | Keeps controls current through invalidation, with the correct resource, ids and revision arguments. |
+| `Results display at most 100 items...` | Authors design a page rather than relying on silently omitted overflow controls. |
+| `Use kind: view and page: panel...` | Shows reuse of the page boundary and how embedded-only views avoid unwanted sidebar entries. |
+| `The page receives client.context.ui.surface...` | Locates the context projection and specifies reacting to updates instead of caching initial selection. |
+| `Use native status or action contributions...` | Keeps trivial controls on shared product rendering while retaining custom layout freedom. |
+| `An icon is one of...` | Describes accepted names or geometry and prevents markup/URL values the parser refuses. |
+| `Users hide, order and select replacements...` | Shows where customization is controlled after an author has shipped a contribution. |
+| `Set replaces to the exact public id...` | Prevents an author from assuming installation silently replaces core controls; records fallback behavior. |
+| `Declare pages in the manifest or Python...` and both examples | Shows the shared page declaration, required service names and portable asset entry. |
+| `navigation defaults to true...` | Authors know when they need explicit embedding and service declarations. |
+| `Assets stay under the page's build root...` | Prevents absolute repository paths and references outside served assets. |
+| `The installed SDK artifact is...` | Locates a distributable authoring package in an installed app without assuming a source checkout. |
+| `Extract the artifact into a temporary directory...` and the npm recipe | The template must be copied before installation so its package.json does not overwrite recorded dependencies. |
+| `Replace <vbot_root> with the path...` | Placeholders and paths with spaces must become valid shell arguments. |
+| `Keep package-lock.json and use npm ci...` | Makes repeat builds deterministic and distinguishes build artifacts from runtime requirements. |
+| `The SDK's packaged README.md and package.json...` | Routes detailed component contracts to the actual public package instead of duplicating them in the Skill. |
+| `Import createExtensionPageClient...` | Gives the supported bridge, styles and shared-control entry points. |
+| `Create one client per page lifetime...` | Avoids duplicate message listeners and retained pending requests. |
+| `Apply the host's theme, locale, timezone and route...` | Maintains product presentation through the public theme-to-CSS mapping and directs lifecycle details to one canonical reference. |
+| `Use the startup host's host.services...` | Names the integration boundary instead of encouraging direct Runtime or RPC access. |
+| `host.services.describe() returns...` | Supplies the discovery result shape needed to choose current capabilities. |
+| `Choose a returned name and its parameter schema...` | Preserves query/mutation separation and schema-based arguments. |
+| `A standalone Runtime can have no application service catalog...` | Avoids assuming server application handlers exist in every embedding. |
+| `For pages, declare the needed service names...` | Connects manifest service grants to the matching bridge methods. |
+| `An undeclared service is refused...` | Makes grants page-specific rather than implicitly Extension-wide. |
+| `These services are trusted operator integrations...` | Prevents a Tool author from interpreting operator services as a way around ToolContext policy. |
+| `Subscribe with dispose = host.services.subscribe...` | Gives the actual synchronous registration and returned disposer. |
+| `The callback receives an invalidation...` | A coalesced signal requires rereading current state and cannot reconstruct a durable event log. |
+| `Call the returned disposer...` | Releases unneeded listeners and explains registration retirement. |
+| `Keep callbacks short...` | Observer deadlines and lifecycle cleanup require ongoing work to be separately owned. |
+| `Register a Provider during register(api)...` and example | Reuses the shipped Provider schema and demonstrates a complete no-auth local endpoint definition. |
+| `The optional adapter_type is a concrete...` | Distinguishes selecting an existing protocol adapter from supplying a new implementation. |
+| `Provider ids are shared...` | Prevents accidental override assumptions and directs authors to collision diagnostics. |
+| `Registration and Model discovery belong to the current Runtime...` | Avoids global monkeypatches that leak registrations across independent instances. |
+| `Register a Channel platform with...` | Gives the public registration signature and optional schema. |
+| `The synchronous factory(config, context) returns...` | States the factory contract and supported imports. |
+| `config.settings contains...` | Identifies where validated platform config and shared services enter the adapter. |
+| `Give the settings schema an object root...` | Matches validation and keeps credentials out of the persisted generic settings object. |
+| `Construct the adapter without I/O...` | Keeps effects in the supported start lifecycle and preserves common inbound authorization and Session routing. |
+| `Platform ids share one catalog...` | Authors cannot silently replace an existing platform by choosing its id. |
+| `Factories start after Extension startup...` | Resource setup precedes adapter construction and saved configuration survives retirement. |
+| `Configure the resulting platform...` | Sends setup to the catalog-driven CLI workflow instead of a fixed built-in enum. |
+| `Install native code on the computer where Desktop runs...` | Distinguishes the local native extension root from server data and provides platform-specific locations. |
+| `Add desktop: ... to extension.json...` | States the independently versioned native entry declaration. |
+| `Desktop loads this local entry...` | Prevents server reload or server-entry import assumptions for native code. |
+| `Import DesktopExtensionAPI...` | Gives the supported native SDK imports. |
+| `The synchronous register(api) calls...` | Provides the exact declaration interface without eager effects. |
+| `Registration only declares the factory...` | Keeps handler creation behind the local grant boundary. |
+| `Grants start disabled...` | Prevents author workflows from assuming automatic native access or remote installation. |
+| `The handler implements async execute...` | Defines required execution/lifecycle methods and the event sink shape. |
+| `Optional async ready()...` | Gives the actual readiness hook name and safe-read declaration. |
+| `Release connections and tasks...` | Native state must survive disconnection and terminate on revocation/shutdown; loading alone is insufficient. |
+| `Local Desktop settings extensions.disabled...` | Gives the local no-import control, distinct from server enablement. |
+| `The local extension folder takes precedence...` | Explains identity shadowing even for failed or disabled local copies so restoration does not require guessing. |
 
 ## Extension usage documentation
 

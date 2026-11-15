@@ -98,7 +98,8 @@ def test_channel_config_defaults_and_round_trips_gating_fields() -> None:
         ({"mention_patterns": None}, "$.mention_patterns", None),
         ({"enabled": "yes"}, "$.enabled", "must be a boolean"),
         ({"observe_unaddressed": "true"}, "$.observe_unaddressed", "must be a boolean"),
-        ({"platform": "unknown"}, "$.platform", None),
+        ({"platform": "../unknown"}, "$.platform", None),
+        ({"settings": []}, "$.settings", None),
         ({"response_mode": "sometimes"}, "$.response_mode", "must be one of: all, mention"),
         (
             {"platform": "whatsapp", "token_env_var": "", "allowed_chat_ids": ["someone"]},
@@ -408,3 +409,18 @@ def test_managed_channel_token_env_var_is_safe_and_collision_free() -> None:
     assert managed_channel_token_env_var("tg-main") == "VBOT_CHANNEL_TOKEN__74672D6D61696E"
     assert managed_channel_token_env_var("a-b") != managed_channel_token_env_var("a_b")
     assert managed_channel_token_env_var("main") != managed_channel_token_env_var("MAIN")
+
+
+def test_unavailable_platform_configuration_remains_readable(tmp_path: Path) -> None:
+    config = ChannelConfig.from_dict(
+        make_config_payload(
+            platform="matrix",
+            token_env_var="",
+            enabled=False,
+            settings={"homeserver": "https://chat.example", "rooms": ["team"]},
+        )
+    )
+    storage = ChannelStorage(tmp_path)
+    storage.save(config)
+    assert storage.get(config.id) == config
+    assert ChannelConfig.from_dict(config.to_dict()) == config

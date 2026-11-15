@@ -5,6 +5,10 @@
   import { formatAgentAddress } from '$lib/agentAddress.js';
   import { createExtensionRunStream } from '$lib/extensionRunStream.js';
   import { noteExtensionPageInvalidation } from '$lib/clientMetrics.js';
+  import {
+    isDesktopAccessor,
+    openDesktopExternalUrl,
+  } from '$lib/desktopBridge.js';
   import Banner from './ui/Banner.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
@@ -13,6 +17,7 @@
   } from '$lib/navigation.svelte.js';
   import {
     invokeExtensionPageOperation,
+    invokeExtensionPageService,
     listModelFavorites,
     openExtensionPageRun,
     cancelExtensionPageToolCall,
@@ -45,6 +50,12 @@
     'directory.list',
     'favorite_models.list',
     'favorite_models.set',
+    'service.describe',
+    'service.query',
+    'service.execute',
+    'ui.command',
+    'external.open',
+    'search.index',
   ]);
 
   let {
@@ -56,6 +67,10 @@
     subscribeInvalidations = null,
     onToast = () => {},
     onOpenSession = () => {},
+    uiContext = {},
+    apiCapabilities = { version: null, features: [] },
+    onUiCommand = null,
+    embedded = false,
   } = $props();
   // The page's route spells its navigation place (`/swarms/<id>`), or is ''
   // at the page's start. Back/Forward and the main navigation change the
@@ -72,6 +87,9 @@
   let frameContext = $state.raw(null);
   let disposed = false;
   let observedDescriptor = '';
+  let observedUiScope = '';
+  let pageLayerOpen = $state(false);
+  let searchEntries = $state([]);
   const runSubscriptions = new SvelteMap();
   const unregisterAutosave = useAutosaveContext().register({
     hasPending: () => frameContext?.autosavePending === true,
@@ -226,12 +244,15 @@
       theme: isPlainObject(theme) ? theme : {},
       locale: typeof locale === 'string' && locale ? locale : 'en',
       timezone: typeof timezone === 'string' && timezone ? timezone : 'UTC',
+      ui: isPlainObject(uiContext) ? uiContext : {},
+      api: apiCapabilities,
     };
   }
 
   // While the page reports an open dialog or menu, it holds one layer of the
   // App navigation; Back/Forward then ask the page to close its topmost one.
   function showPageLayers(context, open) {
+    pageLayerOpen = open;
     if (open === Boolean(context.releaseLayer)) return;
     if (!open) {
       context.releaseLayer();
@@ -278,6 +299,7 @@
 
   function onFrameLoad() {
     invalidateContext('reload');
+    searchEntries = [];
     const captured = captureDescriptor(descriptor);
     const child = frame?.contentWindow;
     if (disposed || !captured || !child) return;
@@ -307,6 +329,8 @@
       theme: isPlainObject(theme) ? theme : {},
       locale: typeof locale === 'string' && locale ? locale : 'en',
       timezone: typeof timezone === 'string' && timezone ? timezone : 'UTC',
+      ui: isPlainObject(uiContext) ? uiContext : {},
+      api: apiCapabilities,
       forwardHistoryInput: context.forwardsHistoryInput,
     });
   }
@@ -341,6 +365,8 @@
     const reason = error?.details?.data?.reason;
     if (method === 'directory.list' && typeof reason === 'string' && reason)
       failure.reason = reason;
+    if (method.startsWith('service.') && isPlainObject(error?.details?.data))
+      failure.data = error.details.data;
     return failure;
   }
 
@@ -469,7 +495,73 @@
     if (!context.ready || !validCall(data)) return;
     try {
       let result;
-      if (
+      if (data.method.startsWith('service.')) {
+        const kind = data.method.slice('service.'.length);
+        if (
+          kind !== 'describe' &&
+          (typeof data.params.name !== 'string' ||
+            !isPlainObject(data.params.params))
+        )
+          throw new Error(t('extensions.page.requestInvalid'));
+        result = await invokeExtensionPageService(
+          context.descriptor.owner,
+          context.descriptor.page,
+          context.descriptor.epoch,
+          kind,
+          data.params.name ?? '',
+          data.params.params ?? {},
+        );
+      } else if (data.method === 'search.index') {
+        const entries = data.params.entries;
+        const ids = [];
+        if (
+          !Array.isArray(entries) ||
+          entries.length > 200 ||
+          entries.some((entry) => {
+            if (
+              !isPlainObject(entry) ||
+              typeof entry.id !== 'string' ||
+              !entry.id ||
+              entry.id.length > 128 ||
+              ids.includes(entry.id) ||
+              typeof entry.label !== 'string' ||
+              !entry.label ||
+              entry.label.length > 256 ||
+              typeof entry.terms !== 'string' ||
+              entry.terms.length > 4096
+            )
+              return true;
+            ids.push(entry.id);
+            return false;
+          })
+        )
+          throw new Error(t('extensions.page.requestInvalid'));
+        searchEntries = entries.map(({ id, label, terms }) => ({
+          id,
+          label,
+          terms,
+        }));
+        result = {};
+      } else if (data.method === 'ui.command') {
+        if (
+          !onUiCommand ||
+          typeof data.params.name !== 'string' ||
+          !isPlainObject(data.params.params)
+        )
+          throw new Error(t('extensions.page.requestInvalid'));
+        result = await onUiCommand(data.params.name, data.params.params);
+      } else if (data.method === 'external.open') {
+        const url = new URL(data.params.url);
+        if (
+          !['https:', 'http:'].includes(url.protocol) ||
+          url.username ||
+          url.password
+        )
+          throw new Error(t('extensions.page.invalidLink'));
+        if (isDesktopAccessor()) await openDesktopExternalUrl(url.href);
+        else window.open(url.href, '_blank', 'noopener,noreferrer');
+        result = {};
+      } else if (
         data.method === 'operation' &&
         typeof data.params.operation === 'string' &&
         data.params.operation &&
@@ -747,6 +839,21 @@
     observedDescriptor = identity;
   });
 
+  // A retained inline view must not apply a queued action to another Session
+  // or Tool row. A new scope starts a fresh handshake without reloading assets.
+  $effect.pre(() => {
+    const next = JSON.stringify([
+      uiContext?.context?.agent_id,
+      uiContext?.context?.session_id,
+      uiContext?.context?.project_id,
+      uiContext?.context?.run_id,
+      uiContext?.context?.tool_call_id,
+    ]);
+    if (observedUiScope && next !== observedUiScope && frameContext)
+      onFrameLoad();
+    observedUiScope = next;
+  });
+
   // Sends route and display changes to the ready frame. The payload is read
   // before the readiness check: `ready` is a plain field, so an effect that
   // first ran before the frame's Ready would otherwise never rerun.
@@ -868,7 +975,26 @@
 </script>
 
 {#if descriptor?.entry_url}
+  {#each searchEntries as entry (entry.id)}
+    <button
+      type="button"
+      hidden
+      data-search-label={entry.label}
+      data-search-terms={entry.terms}
+      data-extension-search
+      onclick={() => {
+        if (!frameContext?.ready) return;
+        post(frameContext, {
+          ...contextPayload(frameContext),
+          type: 'vbot.extension.search.reveal',
+          id: entry.id,
+        });
+        frame?.focus({ preventScroll: true });
+      }}>{entry.label}</button
+    >
+  {/each}
   <iframe
+    class:extension-page--layer={embedded && pageLayerOpen}
     bind:this={frame}
     title={descriptor.title}
     sandbox="allow-scripts"
@@ -887,5 +1013,12 @@
     min-height: 0;
     border: 0;
     background: var(--surface);
+  }
+  .extension-page--layer {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    width: 100vw;
+    height: 100dvh;
   }
 </style>

@@ -1,5 +1,6 @@
 <script>
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
   import FileAutocomplete from './FileAutocomplete.svelte';
   import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
@@ -55,7 +56,7 @@
     onLoadModelCatalog = null,
     // Opens the Secret form; a bare `/secret` calls it instead of sending.
     onOpenSecretForm = null,
-    computerControl,
+    uiContext = {},
     // A row under the input box (the Session settings pickers).
     footer,
   } = $props();
@@ -550,7 +551,201 @@
     const command = `/model ${option.value}`;
     submission.submitCommand(command);
   };
+  async function updateContributionDraft(text, insert = false) {
+    if (disabled || submission.inFlight || media.voiceBusy || media.isRecording)
+      throw new Error(t('chat.sendUnavailableSending'));
+    if (typeof text !== 'string' || text.length > 1000000)
+      throw new TypeError(
+        'Draft text must be a string of at most 1000000 characters',
+      );
+    const capturedKey = draftKey;
+    const start = inputElement?.selectionStart ?? content.length;
+    const end = inputElement?.selectionEnd ?? start;
+    content = insert
+      ? content.slice(0, start) + text + content.slice(end)
+      : text;
+    inputOrigin = '';
+    noteContentEdited();
+    picker.triggerContext = null;
+    await tick();
+    if (draftKey === capturedKey) {
+      resizeInput();
+      inputElement?.focus();
+    }
+    return {};
+  }
+  const contributionContext = $derived({
+    ...uiContext,
+    run_active: isRunning,
+    has_draft: Boolean(content),
+  });
+  const contributionCommands = {
+    'composer.insert': ({ text }) => updateContributionDraft(text, true),
+    'composer.replace': ({ text }) => updateContributionDraft(text),
+    'composer.clear': () => updateContributionDraft(''),
+    'draft.insert': ({ text }) => updateContributionDraft(text, true),
+    'draft.replace': ({ text }) => updateContributionDraft(text),
+    'draft.clear': () => updateContributionDraft(''),
+    'chat.cancel': () => (isRunning && !cancelling ? onCancelRun() : undefined),
+  };
 </script>
+
+{#snippet usageContribution()}
+  <ContextUsageRing
+    {contextUsage}
+    {contextWindow}
+    {usage}
+    {sessionUsage}
+    {compactionPolicy}
+    {onForceCompaction}
+    {compactionState}
+    {compactionSubmitting}
+    {disabled}
+  />
+{/snippet}
+
+{#snippet microphoneContribution()}
+  <span class="tooltip-anchor" use:tooltip={media.microphoneLabel}>
+    <Button
+      variant="tertiary"
+      icon
+      class={media.isRecording ? 'btn-icon--active' : ''}
+      disabled={disabled || media.voiceBusy}
+      loading={media.voiceBusy}
+      ariaLabel={media.microphoneLabel}
+      onClick={media.handleMicrophoneClick}
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
+        <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
+      </svg>
+    </Button>
+  </span>
+{/snippet}
+
+{#snippet attachmentContribution()}
+  <Button
+    variant="tertiary"
+    icon
+    {disabled}
+    ariaLabel={t('chat.attachment.addFile')}
+    tooltip={t('chat.attachment.addFile')}
+    onClick={media.handleFilePickerClick}
+  >
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"
+      />
+    </svg>
+  </Button>
+{/snippet}
+
+{#snippet stopContribution()}
+  {#if isRunning}
+    <!-- Run-level cancel lives next to Send: while a run is active both
+             actions coexist — Send queues, the stop button cancels. It is
+             deliberately independent of the composer `disabled` state so a
+             run stays cancellable even while the input is locked. Its menu
+             button offers Stop all, which also ends the Session's background
+             commands, terminals and Sub-Agents. -->
+    <span class="composer-stop composer-stop-group">
+      <Button
+        variant="danger"
+        icon
+        class="composer-stop-run"
+        disabled={cancelling}
+        disabledReason={cancelling ? t('cancel.cancelling') : ''}
+        ariaLabel={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
+        tooltip={{
+          title: t('chat.cancelRun'),
+          text: t('chat.cancelRunHint'),
+        }}
+        onClick={onCancelRun}
+      >
+        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+          <rect
+            x="3.5"
+            y="3.5"
+            width="7"
+            height="7"
+            rx="1"
+            fill="currentColor"
+            stroke="none"
+          />
+        </svg>
+      </Button>
+      <Button
+        variant="danger"
+        icon
+        class="composer-stop-menu"
+        loading={stoppingAll}
+        ariaLabel={t('chat.stopOptions')}
+        tooltip={{
+          title: t('chat.stopOptions'),
+          text: t('chat.stopOptionsHint'),
+        }}
+        aria-haspopup="menu"
+        aria-expanded={stopMenu !== null}
+        onClick={openStopMenu}
+      >
+        <svg viewBox="0 0 10 14" width="9" height="13" aria-hidden="true">
+          <path d="M2 5.5 5 8.5l3-3" />
+        </svg>
+      </Button>
+    </span>
+    <ContextMenu menu={stopMenu} onClose={() => (stopMenu = null)} />
+  {:else if backgroundWorkRunning}
+    <Button
+      variant="danger"
+      icon
+      class="composer-stop composer-stop-all"
+      loading={stoppingAll}
+      ariaLabel={t('chat.stopAll')}
+      tooltip={{ title: t('chat.stopAll'), text: t('chat.stopAllHint') }}
+      onClick={onStopAll}
+    >
+      <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+        <rect
+          x="1.5"
+          y="1.5"
+          width="7"
+          height="7"
+          rx="1"
+          fill="currentColor"
+          stroke="none"
+          opacity="0.5"
+        />
+        <rect
+          x="5.5"
+          y="5.5"
+          width="7"
+          height="7"
+          rx="1"
+          fill="currentColor"
+          stroke="none"
+        />
+      </svg>
+    </Button>
+  {/if}
+{/snippet}
+
+{#snippet sendContribution()}
+  <Button
+    type="submit"
+    variant="primary"
+    icon
+    disabled={disabled || Boolean(sendDisabledReason)}
+    disabledReason={sendDisabledReason}
+    ariaLabel={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
+    tooltip={isRunning
+      ? { title: t('chat.queueMessage'), text: t('chat.queueMessageHint') }
+      : { title: t('chat.sendMessage'), text: t('chat.sendMessageHint') }}
+  >
+    <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+      <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
+    </svg>
+  </Button>
+{/snippet}
 
 <form
   class="input-area"
@@ -652,152 +847,51 @@
           : t('chat.composerPlaceholder')}
         rows="1"></textarea>
     </div>
-    <ContextUsageRing
-      {contextUsage}
-      {contextWindow}
-      {usage}
-      {sessionUsage}
-      {compactionPolicy}
-      {onForceCompaction}
-      {compactionState}
-      {compactionSubmitting}
-      {disabled}
+    <ContributionSurface
+      surface="chat.composer.context"
+      context={contributionContext}
+      commands={contributionCommands}
+      builtins={[
+        {
+          id: 'core:composer.usage',
+          title: t('chat.contextRingLabel'),
+          order: 10,
+          render: usageContribution,
+        },
+      ]}
     />
     <div class="input-btns">
-      <span class="tooltip-anchor" use:tooltip={media.microphoneLabel}>
-        <Button
-          variant="tertiary"
-          icon
-          class={media.isRecording ? 'btn-icon--active' : ''}
-          disabled={disabled || media.voiceBusy}
-          loading={media.voiceBusy}
-          ariaLabel={media.microphoneLabel}
-          onClick={media.handleMicrophoneClick}
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
-            <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
-          </svg>
-        </Button>
-      </span>
-      <Button
-        variant="tertiary"
-        icon
-        {disabled}
-        ariaLabel={t('chat.attachment.addFile')}
-        tooltip={t('chat.attachment.addFile')}
-        onClick={media.handleFilePickerClick}
-      >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path
-            d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"
-          />
-        </svg>
-      </Button>
-      {@render computerControl?.()}
-      {#if isRunning}
-        <!-- Run-level cancel lives next to Send: while a run is active both
-             actions coexist — Send queues, the stop button cancels. It is
-             deliberately independent of the composer `disabled` state so a
-             run stays cancellable even while the input is locked. Its menu
-             button offers Stop all, which also ends the Session's background
-             commands, terminals and Sub-Agents. -->
-        <span class="composer-stop composer-stop-group">
-          <Button
-            variant="danger"
-            icon
-            class="composer-stop-run"
-            disabled={cancelling}
-            disabledReason={cancelling ? t('cancel.cancelling') : ''}
-            ariaLabel={cancelling
-              ? t('cancel.cancelling')
-              : t('chat.cancelRun')}
-            tooltip={{
-              title: t('chat.cancelRun'),
-              text: t('chat.cancelRunHint'),
-            }}
-            onClick={onCancelRun}
-          >
-            <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-              <rect
-                x="3.5"
-                y="3.5"
-                width="7"
-                height="7"
-                rx="1"
-                fill="currentColor"
-                stroke="none"
-              />
-            </svg>
-          </Button>
-          <Button
-            variant="danger"
-            icon
-            class="composer-stop-menu"
-            loading={stoppingAll}
-            ariaLabel={t('chat.stopOptions')}
-            tooltip={{
-              title: t('chat.stopOptions'),
-              text: t('chat.stopOptionsHint'),
-            }}
-            aria-haspopup="menu"
-            aria-expanded={stopMenu !== null}
-            onClick={openStopMenu}
-          >
-            <svg viewBox="0 0 10 14" width="9" height="13" aria-hidden="true">
-              <path d="M2 5.5 5 8.5l3-3" />
-            </svg>
-          </Button>
-        </span>
-        <ContextMenu menu={stopMenu} onClose={() => (stopMenu = null)} />
-      {:else if backgroundWorkRunning}
-        <Button
-          variant="danger"
-          icon
-          class="composer-stop composer-stop-all"
-          loading={stoppingAll}
-          ariaLabel={t('chat.stopAll')}
-          tooltip={{ title: t('chat.stopAll'), text: t('chat.stopAllHint') }}
-          onClick={onStopAll}
-        >
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <rect
-              x="1.5"
-              y="1.5"
-              width="7"
-              height="7"
-              rx="1"
-              fill="currentColor"
-              stroke="none"
-              opacity="0.5"
-            />
-            <rect
-              x="5.5"
-              y="5.5"
-              width="7"
-              height="7"
-              rx="1"
-              fill="currentColor"
-              stroke="none"
-            />
-          </svg>
-        </Button>
-      {/if}
-      <Button
-        type="submit"
-        variant="primary"
-        icon
-        disabled={disabled || Boolean(sendDisabledReason)}
-        disabledReason={sendDisabledReason}
-        ariaLabel={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
-        tooltip={isRunning
-          ? { title: t('chat.queueMessage'), text: t('chat.queueMessageHint') }
-          : { title: t('chat.sendMessage'), text: t('chat.sendMessageHint') }}
-      >
-        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-          <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
-        </svg>
-      </Button>
+      <ContributionSurface
+        surface="chat.composer.actions"
+        context={contributionContext}
+        commands={contributionCommands}
+        builtins={[
+          {
+            id: 'core:composer.microphone',
+            title: media.microphoneLabel,
+            order: 10,
+            render: microphoneContribution,
+          },
+          {
+            id: 'core:composer.attachment',
+            title: t('chat.attachment.addFile'),
+            order: 20,
+            render: attachmentContribution,
+          },
+          {
+            id: 'core:composer.stop',
+            title: t('chat.cancelRun'),
+            order: 90,
+            render: stopContribution,
+          },
+          {
+            id: 'core:composer.send',
+            title: t('chat.sendMessage'),
+            order: 100,
+            render: sendContribution,
+          },
+        ]}
+      />
     </div>
   </div>
   {#if media.pendingAttachments.length > 0}
@@ -877,7 +971,10 @@
   <ComposerWidgetStates sessionKey={draftKey} />
   {#if footer}
     <div class="composer-footer">
-      {@render footer()}
+      {@render footer({
+        context: contributionContext,
+        commands: contributionCommands,
+      })}
     </div>
   {/if}
 </form>

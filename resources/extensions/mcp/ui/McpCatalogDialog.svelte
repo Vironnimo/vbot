@@ -1,29 +1,26 @@
 <script>
-  import { agentDisplayOrder, agentDisplayName } from '$lib/agentPlacement.js';
+  import {
+    agentDisplayOrder,
+    agentDisplayName,
+  } from '@vbot/extension-sdk/lib/agentPlacement.js';
   // Connects a hosted MCP service from the MCP Extension's catalog in one
   // dialog: choose a service and Connect, sign in to it in the browser when
   // it needs an account, then choose the Agents that may use it. Opened for
   // an existing connection, it starts at that connection's waiting sign-in.
   import { onMount, tick, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import Dropdown from '../Dropdown.svelte';
-  import RequestedUrl from '../RequestedUrl.svelte';
-  import Badge from '../ui/Badge.svelte';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import Checkbox from '../ui/Checkbox.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
-  import FormField from '../ui/FormField.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import {
-    extensionOperation,
-    listAgents,
-    listTools,
-    updateAgent,
-  } from '$lib/api.js';
-  import { inputResponse } from '$lib/extensionInputs.js';
-  import { t } from '$lib/i18n.js';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import RequestedUrl from '@vbot/extension-sdk/ui/RequestedUrl.svelte';
+  import Badge from '@vbot/extension-sdk/ui/Badge.svelte';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import { inputResponse } from '@vbot/extension-sdk/lib/extensionInputs.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import {
     MCP_CATALOG_CATEGORIES,
     mcpAgentAccess,
@@ -31,9 +28,12 @@
     mcpCatalogMatches,
     mcpGrantedToolAccess,
     mcpSignInPhase,
-  } from '$lib/mcpCatalog.js';
-  import { mcpProblemText } from '$lib/mcpSettings.js';
-  import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
+  } from './mcpCatalog.js';
+  import { mcpProblemText } from './mcpSettings.js';
+  import {
+    formatAbsoluteTime,
+    formatRelativeTime,
+  } from '@vbot/extension-sdk/lib/timeText.js';
 
   const noop = () => {};
   // The MCP Extension's changes that alter a connection's sign-in: its
@@ -41,6 +41,7 @@
   const SIGN_IN_RESOURCES = new Set(['connections', 'pending_inputs']);
 
   let {
+    client,
     subscribeInvalidations = null,
     // The id of a saved connection whose waiting sign-in the dialog opens
     // at, instead of the catalog.
@@ -51,6 +52,12 @@
     // Bumped when the Agents change; the grant step lists them.
     agentsRefreshToken = 0,
   } = $props();
+  const extensionOperation = (_owner, name, args) =>
+    client.operation(name, args);
+  const listAgents = () => client.services.query('agent.list', {});
+  const listTools = () => client.services.query('tool.list', {});
+  const updateAgent = (params) =>
+    client.services.execute('agent.update', params);
 
   const componentId = $props.id();
   const titleId = `${componentId}-title`;
@@ -492,6 +499,14 @@
                       class="mcp-catalog__docs"
                       href={entry.docs_url}
                       target="_blank"
+                      onclick={(event) => {
+                        event.preventDefault();
+                        void client
+                          .openExternalUrl(entry.docs_url)
+                          .catch(() => {
+                            error = t('extensions.openFailed');
+                          });
+                      }}
                       rel="noopener noreferrer">{t('mcp.catalogDocs')}</a
                     >
                   {/if}
@@ -513,6 +528,7 @@
       {:else if view === 'signin'}
         {#if signIn.phase === 'waiting'}
           <RequestedUrl
+            openUrl={(url) => client.openExternalUrl(url)}
             url={signIn.request.payload?.url}
             openLabel={t('extensions.openSignIn')}
             disabled={busy}

@@ -1,6 +1,8 @@
 <script>
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
+  import ContributionIcon from './extensions/ContributionIcon.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import { onMount, tick, untrack } from 'svelte';
@@ -358,6 +360,186 @@
   }
 </script>
 
+{#snippet navigationContribution()}
+  <nav
+    bind:this={navigationElement}
+    class="app-shell__navigation"
+    aria-label={t('navigation.sections')}
+  >
+    {#each navGroups as group (group.id)}
+      <div
+        class:app-shell__nav-group--divided={group.divided}
+        class="app-shell__nav-group"
+        role={group.label ? 'group' : undefined}
+        aria-label={group.label?.()}
+      >
+        {#if group.label}
+          <span class="app-shell__nav-group-label" aria-hidden="true">
+            {group.label()}
+          </span>
+        {/if}
+        {#each group.items as item (item.id)}
+          <button
+            class:app-shell__nav-item--active={item.id === activeViewId}
+            class:app-shell__nav-item--mobile-secondary={!MOBILE_PRIMARY_VIEW_IDS.has(
+              item.id,
+            )}
+            class="app-shell__nav-item"
+            type="button"
+            aria-current={item.id === activeViewId ? 'page' : undefined}
+            aria-label={navItemName(item, railCompact)}
+            use:tooltip={{
+              text: navItemTooltip(item, railCompact),
+              placement: 'right',
+            }}
+            onclick={() => handleSelectView(item.id)}
+          >
+            {#if item.icon && (typeof item.icon === 'object' || ['network', 'panel', 'grid', 'sparkles', 'factory'].includes(item.icon))}
+              <ContributionIcon icon={item.icon} size={15} />
+            {:else}
+              <svg
+                class="app-shell__nav-icon"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                style="width: 15px; height: 15px; flex-shrink: 0"
+              >
+                {#if item.id === 'chat'}
+                  <path d="M2 3h12v8H9l-4 3v-3H2z" />
+                {:else if item.id === 'agents'}
+                  <circle cx="8" cy="5" r="2.5" />
+                  <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+                {:else if item.id === 'terminals'}
+                  <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                  <path d="m4 6 2 2-2 2m4 0h3.5" />
+                {:else if item.id === 'skills'}
+                  <path d="M4 2h8v12l-4-2.5L4 14z" />
+                {:else if item.id === 'projects'}
+                  <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
+                {:else if item.id === 'calendar'}
+                  <rect x="2" y="3" width="12" height="11" rx="1.5" />
+                  <path d="M2 6.5h12M5.5 1.5v3m5-3v3" />
+                {:else if item.id === 'cron'}
+                  <circle cx="8" cy="8" r="6" />
+                  <path d="M8 4.5V8l2.5 2.5" />
+                {:else if item.id === 'system-prompt'}
+                  <rect x="2" y="2" width="12" height="12" rx="2" />
+                  <path d="M5 6h6M5 9h4" />
+                {:else if item.id === 'settings'}
+                  <circle cx="8" cy="8" r="2.5" />
+                  <path
+                    d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.6-4.4-1.4 1.4M4 12l1.4-1.4M12 12l-1.4-1.4M4 4l1.4 1.4"
+                  />
+                {:else if item.id === 'logs'}
+                  <path
+                    d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"
+                  />
+                  <path d="M5 5.5h6M5 8h6M5 10.5h4" />
+                {:else if item.id === 'statistics'}
+                  <path d="M2.5 13.5h11" />
+                  <path d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5" />
+                {:else}
+                  <path d="m7 5-3 5m5-5 3 5M5 12h6" />
+                  <circle cx="8" cy="3" r="2" />
+                  <circle cx="3" cy="12" r="2" />
+                  <circle cx="13" cy="12" r="2" />
+                {/if}
+              </svg>
+            {/if}
+            <span class="app-shell__nav-label">
+              {item.label()}
+            </span>
+            {#if indicators[item.id]}
+              {@const indicator = indicators[item.id]}
+              <span
+                class="count-badge app-shell__nav-indicator app-shell__nav-indicator--{indicator.tone}"
+                aria-hidden="true"
+              >
+                {indicator.count > 99 ? '99+' : indicator.count}
+              </span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/each}
+    <button
+      bind:this={moreButton}
+      class:app-shell__nav-more--active={activeInMobileSheet}
+      class="app-shell__nav-more"
+      type="button"
+      aria-expanded={mobileNavOpen}
+      onclick={toggleMobileNav}
+    >
+      <svg
+        class="app-shell__nav-icon"
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        style="width: 15px; height: 15px; flex-shrink: 0"
+      >
+        {#if mobileNavOpen}
+          <path d="m4 4 8 8m0-8-8 8" />
+        {:else}
+          <circle cx="3.5" cy="8" r="1" />
+          <circle cx="8" cy="8" r="1" />
+          <circle cx="12.5" cy="8" r="1" />
+        {/if}
+      </svg>
+      <span class="app-shell__nav-label">
+        {mobileNavOpen ? t('common.close') : t('navigation.more')}
+      </span>
+    </button>
+  </nav>
+{/snippet}
+
+{#snippet liveVoiceContribution()}
+  {@render sidebarFooter?.()}
+{/snippet}
+
+{#snippet voiceStatusContribution()}
+  {#if voiceAvailable}
+    <div class="sidebar-footer__row">
+      <button
+        type="button"
+        class="sidebar-footer__mic"
+        use:tooltip={micDetails}
+        aria-label={micIndicator.tooltip}
+        onclick={handleMicIndicatorClick}
+      >
+        <svg
+          class="mic-icon mic-icon--{micIndicator.tone}"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        >
+          <rect x="6" y="2" width="4" height="7.5" rx="2" />
+          <path d="M3.5 9.5a4.5 4.5 0 0 0 9 0" />
+          <path d="M8 14v1.5" />
+        </svg>
+        <span class="sidebar-footer__label">{micIndicator.label}</span>
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet connectionContribution()}
+  <div
+    class="sidebar-footer__row sidebar-footer__connection"
+    aria-label={statusAriaLabel}
+    use:tooltip={connectionDetails}
+  >
+    <svg
+      class="conn-icon {statusIconClass}"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+    >
+      <path d="M5 1.5v3.5M11 1.5v3.5" />
+      <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />
+      <path d="M8 10.5V14" />
+    </svg>
+    <span class="footer-text">
+      {statusLabel}
+    </span>
+  </div>
+{/snippet}
+
 <svelte:window
   oncontextmenu={menu.handleContextMenu}
   onkeydown={handleWindowKeydown}
@@ -416,188 +598,50 @@
       </Button>
     </div>
 
-    <nav
-      bind:this={navigationElement}
-      class="app-shell__navigation"
-      aria-label={t('navigation.sections')}
-    >
-      {#each navGroups as group (group.id)}
-        <div
-          class:app-shell__nav-group--divided={group.divided}
-          class="app-shell__nav-group"
-          role={group.label ? 'group' : undefined}
-          aria-label={group.label?.()}
-        >
-          {#if group.label}
-            <span class="app-shell__nav-group-label" aria-hidden="true">
-              {group.label()}
-            </span>
-          {/if}
-          {#each group.items as item (item.id)}
-            <button
-              class:app-shell__nav-item--active={item.id === activeViewId}
-              class:app-shell__nav-item--mobile-secondary={!MOBILE_PRIMARY_VIEW_IDS.has(
-                item.id,
-              )}
-              class="app-shell__nav-item"
-              type="button"
-              aria-current={item.id === activeViewId ? 'page' : undefined}
-              aria-label={navItemName(item, railCompact)}
-              use:tooltip={{
-                text: navItemTooltip(item, railCompact),
-                placement: 'right',
-              }}
-              onclick={() => handleSelectView(item.id)}
-            >
-              <svg
-                class="app-shell__nav-icon"
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                style="width: 15px; height: 15px; flex-shrink: 0"
-              >
-                {#if item.id === 'chat'}
-                  <path d="M2 3h12v8H9l-4 3v-3H2z" />
-                {:else if item.id === 'agents'}
-                  <circle cx="8" cy="5" r="2.5" />
-                  <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
-                {:else if item.id === 'terminals'}
-                  <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-                  <path d="m4 6 2 2-2 2m4 0h3.5" />
-                {:else if item.id === 'skills'}
-                  <path d="M4 2h8v12l-4-2.5L4 14z" />
-                {:else if item.id === 'projects'}
-                  <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
-                {:else if item.id === 'calendar'}
-                  <rect x="2" y="3" width="12" height="11" rx="1.5" />
-                  <path d="M2 6.5h12M5.5 1.5v3m5-3v3" />
-                {:else if item.id === 'cron'}
-                  <circle cx="8" cy="8" r="6" />
-                  <path d="M8 4.5V8l2.5 2.5" />
-                {:else if item.id === 'system-prompt'}
-                  <rect x="2" y="2" width="12" height="12" rx="2" />
-                  <path d="M5 6h6M5 9h4" />
-                {:else if item.id === 'settings'}
-                  <circle cx="8" cy="8" r="2.5" />
-                  <path
-                    d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.6-4.4-1.4 1.4M4 12l1.4-1.4M12 12l-1.4-1.4M4 4l1.4 1.4"
-                  />
-                {:else if item.id === 'logs'}
-                  <path
-                    d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"
-                  />
-                  <path d="M5 5.5h6M5 8h6M5 10.5h4" />
-                {:else if item.id === 'statistics'}
-                  <path d="M2.5 13.5h11" />
-                  <path d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5" />
-                {:else if item.icon === 'factory'}
-                  <path d="M1.5 14.5V8l4-2.5V8l4-2.5V8h3V2h2v12.5z" />
-                  <path d="M4 11.5h1.5m2.5 0h1.5" />
-                {:else if item.icon === 'grid'}
-                  <rect x="2" y="2" width="5" height="5" rx="1" />
-                  <rect x="9" y="2" width="5" height="5" rx="1" />
-                  <rect x="2" y="9" width="5" height="5" rx="1" />
-                  <rect x="9" y="9" width="5" height="5" rx="1" />
-                {:else if item.icon === 'panel'}
-                  <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-                  <path d="M6 2.5v11" />
-                {:else if item.icon === 'sparkles'}
-                  <path
-                    d="M7 2.5 8.2 6 11.5 7.2 8.2 8.4 7 12 5.8 8.4 2.5 7.2 5.8 6z"
-                  />
-                  <path d="M12.5 10.5v3m-1.5-1.5h3" />
-                {:else}
-                  <path d="m7 5-3 5m5-5 3 5M5 12h6" />
-                  <circle cx="8" cy="3" r="2" />
-                  <circle cx="3" cy="12" r="2" />
-                  <circle cx="13" cy="12" r="2" />
-                {/if}
-              </svg>
-              <span class="app-shell__nav-label">
-                {item.label()}
-              </span>
-              {#if indicators[item.id]}
-                {@const indicator = indicators[item.id]}
-                <span
-                  class="count-badge app-shell__nav-indicator app-shell__nav-indicator--{indicator.tone}"
-                  aria-hidden="true"
-                >
-                  {indicator.count > 99 ? '99+' : indicator.count}
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/each}
-      <button
-        bind:this={moreButton}
-        class:app-shell__nav-more--active={activeInMobileSheet}
-        class="app-shell__nav-more"
-        type="button"
-        aria-expanded={mobileNavOpen}
-        onclick={toggleMobileNav}
-      >
-        <svg
-          class="app-shell__nav-icon"
-          viewBox="0 0 16 16"
-          aria-hidden="true"
-          style="width: 15px; height: 15px; flex-shrink: 0"
-        >
-          {#if mobileNavOpen}
-            <path d="m4 4 8 8m0-8-8 8" />
-          {:else}
-            <circle cx="3.5" cy="8" r="1" />
-            <circle cx="8" cy="8" r="1" />
-            <circle cx="12.5" cy="8" r="1" />
-          {/if}
-        </svg>
-        <span class="app-shell__nav-label">
-          {mobileNavOpen ? t('common.close') : t('navigation.more')}
-        </span>
-      </button>
-    </nav>
+    <ContributionSurface
+      surface="shell.sidebar"
+      context={{
+        connected: connectionStatus === CONNECTION_STATUS_CONNECTED,
+        view: activeViewId,
+      }}
+      builtins={[
+        {
+          id: 'core:sidebar.navigation',
+          title: t('navigation.sections'),
+          order: 10,
+          render: navigationContribution,
+        },
+      ]}
+    />
 
     <div class="sidebar-footer app-shell__footer">
-      {@render sidebarFooter?.()}
-      {#if voiceAvailable}
-        <div class="sidebar-footer__row">
-          <button
-            type="button"
-            class="sidebar-footer__mic"
-            use:tooltip={micDetails}
-            aria-label={micIndicator.tooltip}
-            onclick={handleMicIndicatorClick}
-          >
-            <svg
-              class="mic-icon mic-icon--{micIndicator.tone}"
-              viewBox="0 0 16 16"
-              aria-hidden="true"
-            >
-              <rect x="6" y="2" width="4" height="7.5" rx="2" />
-              <path d="M3.5 9.5a4.5 4.5 0 0 0 9 0" />
-              <path d="M8 14v1.5" />
-            </svg>
-            <span class="sidebar-footer__label">{micIndicator.label}</span>
-          </button>
-        </div>
-      {/if}
-      <div
-        class="sidebar-footer__row sidebar-footer__connection"
-        aria-label={statusAriaLabel}
-        use:tooltip={connectionDetails}
-      >
-        <svg
-          class="conn-icon {statusIconClass}"
-          viewBox="0 0 16 16"
-          aria-hidden="true"
-        >
-          <path d="M5 1.5v3.5M11 1.5v3.5" />
-          <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />
-          <path d="M8 10.5V14" />
-        </svg>
-        <span class="footer-text">
-          {statusLabel}
-        </span>
-      </div>
+      <ContributionSurface
+        surface="shell.status"
+        context={{
+          connected: connectionStatus === CONNECTION_STATUS_CONNECTED,
+          view: activeViewId,
+        }}
+        builtins={[
+          {
+            id: 'core:status.live-voice',
+            title: t('contributions.liveVoice'),
+            order: 10,
+            render: liveVoiceContribution,
+          },
+          {
+            id: 'core:status.voice',
+            title: t('contributions.voiceStatus'),
+            order: 20,
+            render: voiceStatusContribution,
+          },
+          {
+            id: 'core:status.connection',
+            title: t('contributions.connection'),
+            order: 30,
+            render: connectionContribution,
+          },
+        ]}
+      />
     </div>
   </aside>
 

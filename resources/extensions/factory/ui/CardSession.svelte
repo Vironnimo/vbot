@@ -1,22 +1,22 @@
 <script>
   import { onDestroy, onMount, untrack } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
-  import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
-  import ContextUsageRing from '../../../../webui/src/components/chat/ContextUsageRing.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ChatAssistantRun from '@vbot/extension-sdk/ui/ChatAssistantRun.svelte';
+  import ChatTimelineEntry from '@vbot/extension-sdk/ui/ChatTimelineEntry.svelte';
+  import ContextUsageRing from '@vbot/extension-sdk/ui/ContextUsageRing.svelte';
   import {
     createChatState,
     ensureSessionState,
     loadHistory,
     prependHistory,
-  } from '../../../../webui/src/lib/chatState.js';
+  } from '@vbot/extension-sdk/lib/chatState.js';
   import {
     applyTimelineEvent,
     visibleTimelineItemsForRender,
     mergeRunChildPage,
-  } from '../../../../webui/src/lib/chatTimeline.js';
+  } from '@vbot/extension-sdk/lib/chatTimeline.js';
   import {
     participantId,
     participantName,

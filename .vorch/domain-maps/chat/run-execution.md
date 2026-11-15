@@ -197,6 +197,8 @@ One `RecoveryBudget` in the Run context bounds each unfinished Model step on eac
 
 ## Streaming requests outside Chat
 
+Every new Model request checks the Runtime-bound Adapter's registration availability, including Chat retries and the completed-response fallback. Retiring an Extension Provider lets an admitted stream finish but refuses subsequent requests from cached Adapters (`providers/connections.md` -> Configuration model).
+
 `core/chat/streaming.py::stream_model_response` is the streaming request helper for every Model request outside Chat: it returns the normalized completed response, can hand out Tool Calls while the Model still writes, and reports the Usage accumulated so far to an optional synchronous `on_usage` callback (an exception it raises is logged, never ends the stream), so its callers record what a stream that fails or is cancelled consumed (`usage.md`). The streaming-only rule and its two `send()` fallbacks: `providers.md` -> Interfaces.
 
 Like Chat, it keeps a response whose normalized finish arrived before a transport failure or timeout, including its Usage and completed Tool Calls. Other Provider failures and callback failures still propagate.

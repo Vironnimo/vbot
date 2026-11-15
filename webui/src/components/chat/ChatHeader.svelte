@@ -1,4 +1,5 @@
 <script>
+  import ContributionSurface from '../extensions/ContributionSurface.svelte';
   import { isChatAgent } from '$lib/agentPlacement.js';
   import { tick } from 'svelte';
 
@@ -29,6 +30,7 @@
   const EXPANDED_PROJECTS_KEY = 'vbot.chat.agentPicker.expandedProjects';
 
   let {
+    uiContext = {},
     titleId = 'chat-title',
     // Identity Agents in roster order.
     agents = [],
@@ -529,6 +531,40 @@
   </span>
 {/snippet}
 
+{#snippet importContribution()}
+  {#if onImport}
+    <Button variant="tertiary" disabled={!selectedAddress} onClick={onImport}>
+      {t('external.open')}
+    </Button>
+  {/if}
+{/snippet}
+
+{#snippet areaContribution()}
+  {@render actions?.()}
+{/snippet}
+
+{#snippet infoContribution()}
+  <Button
+    id={infoToggleId}
+    variant="secondary"
+    icon
+    class="chat-header__action chat-header__info-toggle"
+    ariaLabel={infoToggleLabel}
+    tooltip={infoToggleLabel}
+    aria-expanded={infoPanelOpen}
+    aria-controls={infoPanelOpen ? infoPanelId : undefined}
+    onClick={() => onToggleInfoPanel()}
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+    </svg>
+    {#if infoRunningCount > 0}
+      <span class="chat-header__info-running" aria-hidden="true"></span>
+    {/if}
+  </Button>
+{/snippet}
+
 <header class="chat-header">
   <h2 id={titleId} class="chat-title">{t('chat.title')}</h2>
   <div class="chat-header__session-actions">
@@ -609,31 +645,39 @@
     {/if}
   </div>
   <div class="chat-header__area-actions">
-    {#if onImport}
-      <Button variant="tertiary" disabled={!selectedAddress} onClick={onImport}>
-        {t('external.open')}
-      </Button>
-    {/if}
-    {@render actions?.()}
-    <Button
-      id={infoToggleId}
-      variant="secondary"
-      icon
-      class="chat-header__action chat-header__info-toggle"
-      ariaLabel={infoToggleLabel}
-      tooltip={infoToggleLabel}
-      aria-expanded={infoPanelOpen}
-      aria-controls={infoPanelOpen ? infoPanelId : undefined}
-      onClick={() => onToggleInfoPanel()}
-    >
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M15 4v16" />
-      </svg>
-      {#if infoRunningCount > 0}
-        <span class="chat-header__info-running" aria-hidden="true"></span>
-      {/if}
-    </Button>
+    <ContributionSurface
+      surface="chat.header"
+      context={{
+        ...uiContext,
+        agent_id: uiContext.agent_id ?? selectedAddress,
+      }}
+      commands={{
+        'session.new': () => (!newSessionDisabled ? onNewSession() : undefined),
+        'sessions.toggle': () =>
+          !sessionListDisabled ? onToggleSessionList() : undefined,
+        'session.info': () => onToggleInfoPanel(),
+      }}
+      builtins={[
+        {
+          id: 'core:chat-header.import',
+          title: t('external.open'),
+          order: 0,
+          render: importContribution,
+        },
+        {
+          id: 'core:chat-header.area',
+          title: t('chat.title'),
+          order: 10,
+          render: areaContribution,
+        },
+        {
+          id: 'core:chat-header.info',
+          title: infoToggleLabel,
+          order: 20,
+          render: infoContribution,
+        },
+      ]}
+    />
   </div>
 </header>
 

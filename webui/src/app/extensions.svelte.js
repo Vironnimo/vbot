@@ -1,19 +1,12 @@
-import { listExtensionPages } from '$lib/api.js';
+import { listExtensionPages, listExtensionContributions } from '$lib/api.js';
 import { onMount, tick } from 'svelte';
 import { t } from '$lib/i18n.js';
+import { EXTENSION_THEME_TOKENS } from '$lib/extensionTheme.js';
 
 export function createAppExtensions(context) {
-  const EXTENSION_THEME_TOKENS = Object.freeze({
-    background: '--bg',
-    surface: '--surface',
-    elevatedSurface: '--surface-2',
-    border: '--border',
-    text: '--text-hi',
-    mutedText: '--text-med',
-    accent: '--accent',
-  });
-
   let extensionPages = $state([]);
+  let contributions = $state([]);
+  let apiCapabilities = $state({ version: null, features: [] });
 
   let extensionPagesLoadInFlight = null;
 
@@ -27,8 +20,8 @@ export function createAppExtensions(context) {
 
   // Every WebUI surface that shows Extension data subscribes here: the open
   // Extension page (`ExtensionPage.svelte`), the pending-input requests
-  // (`ExtensionRequests.svelte`) and the Computer Use control
-  // (`ComputerUseControl.svelte`). Each listener filters what concerns it.
+  // (`ExtensionRequests.svelte`) and declarative contribution sources.
+  // Each listener filters what concerns it.
   const invalidationListeners = [];
 
   let invalidationRevision = 0;
@@ -50,12 +43,14 @@ export function createAppExtensions(context) {
 
   const allNavigationItems = $derived([
     ...context.navigationItems,
-    ...extensionPages.map((page) => ({
-      id: page.route,
-      label: () => page.title,
-      icon: page.icon,
-      section: 'main',
-    })),
+    ...extensionPages
+      .filter((page) => page.navigation !== false)
+      .map((page) => ({
+        id: page.route,
+        label: () => page.title,
+        icon: page.icon,
+        section: 'main',
+      })),
   ]);
 
   // `owner` null means anything Extension-backed can have changed, so every
@@ -114,10 +109,33 @@ export function createAppExtensions(context) {
         const reload = extensionPagesRequested;
         extensionPagesRequested = true;
         try {
-          const result = await listExtensionPages();
-          extensionPages = Array.isArray(result?.pages) ? result.pages : [];
-          updated = true;
-          context.onPagesLoaded?.();
+          const [pagesResult, uiResult] = await Promise.allSettled([
+            listExtensionPages(),
+            Promise.resolve().then(() => listExtensionContributions()),
+          ]);
+          if (pagesResult.status === 'fulfilled') {
+            extensionPages = Array.isArray(pagesResult.value?.pages)
+              ? pagesResult.value.pages
+              : [];
+            updated = true;
+            context.onPagesLoaded?.();
+          }
+          // An unavailable catalog restores built-ins instead of keeping an
+          // Extension replacement whose registration may have been retired.
+          contributions =
+            uiResult.status === 'fulfilled' &&
+            Array.isArray(uiResult.value?.contributions)
+              ? uiResult.value.contributions
+              : [];
+          apiCapabilities =
+            uiResult.status === 'fulfilled'
+              ? {
+                  version: uiResult.value?.api_version ?? null,
+                  features: Array.isArray(uiResult.value?.features)
+                    ? uiResult.value.features
+                    : [],
+                }
+              : { version: null, features: [] };
         } catch {
           // Keep the last valid descriptors while a transient RPC error clears.
         }
@@ -251,6 +269,20 @@ export function createAppExtensions(context) {
   return {
     get extensionPages() {
       return extensionPages;
+    },
+    get contributions() {
+      return contributions;
+    },
+    get apiCapabilities() {
+      return apiCapabilities;
+    },
+    publicChange(kind) {
+      if (typeof kind === 'string' && kind !== 'extensions')
+        invalidate(null, {
+          resource: kind,
+          ids: [],
+          revision: invalidationRevision + 1,
+        });
     },
     subscribeInvalidations,
     publishChange,

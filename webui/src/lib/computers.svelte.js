@@ -31,8 +31,21 @@ export function computerName(computer) {
 export function computerDescription(computer) {
   if (!computer?.known) return t('computers.availabilityUnknown');
   const capabilities = computer.capabilities ?? [];
+  const customCapabilities = capabilities.filter(
+    (name) =>
+      typeof name === 'string' && !['terminal', 'computer_use'].includes(name),
+  );
   let description;
-  if (
+  if (customCapabilities.length) {
+    const labels = capabilities.map((name) => {
+      if (name === 'terminal') return 'Terminal';
+      if (name === 'computer_use') return 'Computer Use';
+      return name;
+    });
+    description = t('computers.capabilitiesEnabled', {
+      capabilities: labels.join(', '),
+    });
+  } else if (
     capabilities.includes('terminal') &&
     capabilities.includes('computer_use')
   ) {

@@ -1,17 +1,17 @@
 <script>
   import { participantColor } from './pagePresentation.js';
-  import { activeLocaleTag, t } from '../../../../webui/src/lib/i18n.js';
-  import { formatMoment } from '../../../../webui/src/lib/timeText.js';
+  import { activeLocaleTag, t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { formatMoment } from '@vbot/extension-sdk/lib/timeText.js';
   import {
     dateKeyInApplicationZone,
     formatDateTimeInApplicationZone,
-  } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
-  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
+  } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
+  import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
   import SwarmIcon from './SwarmIcon.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import ParticipantChip from './ParticipantChip.svelte';

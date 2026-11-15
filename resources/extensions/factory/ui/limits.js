@@ -1,4 +1,4 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 
 export const limitFields = [
   { key: 'tool_calls', label: () => t('factory.limit.tools') },
