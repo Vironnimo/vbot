@@ -24,6 +24,7 @@ from core.extensions._callbacks import (
     invoke_isolated_handler,
     wait_for_extension_callbacks,
 )
+from core.extensions._declarations import ExtensionUnavailableError
 from core.extensions._service_exports import (
     ExportedResource,
     ExportedService,
@@ -106,6 +107,15 @@ def _parameter_error(error: ValidationError) -> ExtensionServiceError:
             "validator": error.validator,
         },
     )
+
+
+def _service_result(result: Any) -> JsonObject:
+    if not isinstance(result, dict):
+        raise ExtensionServiceError("invalid_result", "Service result must be a JSON object")
+    try:
+        return dict(detached_json(result, limit=8 * 1024 * 1024))
+    except ValueError as exc:
+        raise ExtensionServiceError("invalid_result", str(exc)) from exc
 
 
 class ExtensionSubscription:
@@ -311,7 +321,10 @@ class ExtensionServiceCatalog:
         supplied = {} if params is None else params
         if not isinstance(supplied, dict):
             raise ExtensionServiceError("invalid_request", "Service parameters must be an object")
-        arguments = copy.deepcopy(supplied)
+        try:
+            arguments = detached_json(supplied)
+        except ValueError as exc:
+            raise ExtensionServiceError("invalid_request", str(exc)) from exc
         errors = sorted(
             validator.iter_errors(arguments),
             key=lambda error: (
@@ -327,7 +340,7 @@ class ExtensionServiceCatalog:
             raise ExtensionServiceError(
                 "service_unavailable", "Application services changed during the read"
             )
-        return copy.deepcopy(result)
+        return _service_result(result)
 
     def install_exports(self, registry: ExtensionRegistry | None) -> None:
         """Publish all registrations before the first startup callback can consume them."""
@@ -404,30 +417,33 @@ class ExtensionServiceCatalog:
             if self._exported_services.get(name) is not exported:
                 raise ExtensionServiceError("service_unavailable", "Extension service replaced")
 
-        with self._export_context():
-            result = await invoke_isolated_handler(
-                guarded_handler(declaration.handler, require_current),
-                arguments,
-                extension_name=exported.owner.name,
-                description=f"service {name}",
-            )
+        try:
+            with self._export_context():
+                result = await invoke_isolated_handler(
+                    guarded_handler(declaration.handler, require_current),
+                    arguments,
+                    extension_name=exported.owner.name,
+                    description=f"service {name}",
+                )
+        except ExtensionUnavailableError as exc:
+            raise ExtensionServiceError(
+                "callback_unavailable", "An earlier Extension callback is still running"
+            ) from exc
         if kind == "query":
             exported.require_current()
             if self._exported_services.get(name) is not exported:
                 raise ExtensionServiceError(
                     "service_unavailable", "Extension service changed during the read"
                 )
-        if not isinstance(result, dict):
-            raise ExtensionServiceError("invalid_result", "Service result must be a JSON object")
-        try:
-            return dict(detached_json(result, limit=8 * 1024 * 1024))
-        except ValueError as exc:
-            raise ExtensionServiceError("invalid_result", str(exc)) from exc
+        return _service_result(result)
 
     def publish_export(
         self, owner: ExtensionRegistrationIdentity, resource: str, scope: JsonObject | None
     ) -> None:
-        name = qualified_name(owner.name, local_name(resource))
+        try:
+            name = qualified_name(owner.name, local_name(resource))
+        except ValueError as exc:
+            raise ExtensionServiceError("invalid_request", str(exc)) from exc
         with self._lock:
             exported = self._exported_resources.get(name)
             if exported is None or exported.owner != owner:

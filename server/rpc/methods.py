@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from functools import wraps
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from server.rpc import (
@@ -109,27 +109,26 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
     from server.rpc._contracts import PARAMETER_CONTRACTS
 
     return {
-        name: _with_parameter_contract(handler, PARAMETER_CONTRACTS[name])
+        name: _ParameterContractHandler(handler, PARAMETER_CONTRACTS[name])
         if name in PARAMETER_CONTRACTS
         else handler
         for name, handler in handlers.items()
     }
 
 
-def _with_parameter_contract(
-    handler: RpcMethodHandler, contract: RpcParameterContract
-) -> RpcMethodHandler:
-    """Apply the shared wire envelope before any domain or mutation admission."""
+@dataclass(frozen=True, slots=True)
+class _ParameterContractHandler:
+    """Apply the shared wire envelope before any domain or mutation admission.
 
-    @wraps(handler)
-    def validated(state: Any, params: JsonObject) -> Any:
-        _reject_unsupported(params, contract.request_fields, contract.name)
-        return handler(state, params)
+    The callable itself owns the gate; copied function metadata cannot attest it.
+    """
 
-    # Audit the actual registered callable, including wrappers around domain
-    # locks and workers. A source parser cannot prove this for delegated RPCs.
-    validated.__rpc_parameter_contract__ = contract  # type: ignore[attr-defined]
-    return validated
+    handler: RpcMethodHandler
+    contract: RpcParameterContract
+
+    def __call__(self, state: Any, params: JsonObject) -> Any:
+        _reject_unsupported(params, self.contract.request_fields, self.contract.name)
+        return self.handler(state, params)
 
 
 METHODS = build_method_handlers()

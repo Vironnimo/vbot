@@ -154,6 +154,10 @@ AGENT_FIELDS = {
     "permission_rules": nullable(PERMISSION_RULES),
     "placement": _PLACEMENT,
 }
+OPERATOR_AGENT_FIELDS = frozenset({"permission_rules", "tool_access"})
+_SERVICE_AGENT_FIELDS = {
+    name: schema for name, schema in AGENT_FIELDS.items() if name not in OPERATOR_AGENT_FIELDS
+}
 _AGENT_UPDATE_FIELDS = {
     **AGENT_FIELDS,
     "current_session_id": nullable(_ID),
@@ -164,7 +168,17 @@ _AGENT_UPDATE_FIELDS = {
     "context_commands": _CONTEXT_COMMANDS,
 }
 _AGENT_UPDATE = {
-    **params({"id": _ID, **_AGENT_UPDATE_FIELDS}, ("id",)),
+    **params(
+        {
+            "id": _ID,
+            **{
+                name: schema
+                for name, schema in _AGENT_UPDATE_FIELDS.items()
+                if name not in OPERATOR_AGENT_FIELDS
+            },
+        },
+        ("id",),
+    ),
     "not": {"required": ["tools", "subagent_allow"]},
 }
 _PROJECT_FIELDS = {
@@ -315,7 +329,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "agent.create",
         "execute",
-        params({"id": _ID, **AGENT_FIELDS}, ("id",)),
+        params({"id": _ID, **_SERVICE_AGENT_FIELDS}, ("id",)),
         ("agents",),
         "Create an Identity Agent through the canonical Agent store.",
     ),
@@ -446,7 +460,9 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
                 {
                     "project_id": _ID,
                     "agent_id": _ID,
-                    "field": enum(*_PROJECT_OVERRIDES),
+                    "field": enum(
+                        *(name for name in _PROJECT_OVERRIDES if name not in OPERATOR_AGENT_FIELDS)
+                    ),
                     "value": {"description": "Value matching the selected override field."},
                 },
                 ("project_id", "agent_id", "field", "value"),
@@ -466,7 +482,13 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "project.clear_override",
         "execute",
         params(
-            {"project_id": _ID, "agent_id": _ID, "field": enum(*_PROJECT_OVERRIDES)},
+            {
+                "project_id": _ID,
+                "agent_id": _ID,
+                "field": enum(
+                    *(name for name in _PROJECT_OVERRIDES if name not in OPERATOR_AGENT_FIELDS)
+                ),
+            },
             ("project_id", "agent_id", "field"),
         ),
         ("projects", "agents", "skills"),
@@ -1043,6 +1065,13 @@ _CHAT_RPC_ONLY_FIELDS = {
     ),
 }
 RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {
+    **{
+        method: dict.fromkeys(
+            OPERATOR_AGENT_FIELDS,
+            "Agent Permission Rules and Tool access are operator-owned configuration.",
+        )
+        for method in ("agent.create", "agent.update")
+    },
     "chat.send": dict(_CHAT_RPC_ONLY_FIELDS),
     "chat.stream": dict(_CHAT_RPC_ONLY_FIELDS),
     "session.create": {

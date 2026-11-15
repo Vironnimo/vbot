@@ -24,11 +24,12 @@ from server.extension_services import (
     bind_application_services,
     is_extension_service_call,
 )
+from server.rpc._contracts import PARAMETER_CONTRACTS
 from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler, dispatch_method
 from server.rpc.errors import RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.methods import METHODS
+from server.rpc.methods import METHODS, _ParameterContractHandler
 from tests.core.extensions.extension_test_support import write_extension
 from tests.server.rpc_test_support import StubAdapter, make_state
 
@@ -48,8 +49,17 @@ async def test_service_binding_reuses_handlers_errors_and_clears_request_authori
 
     catalog = ExtensionServiceCatalog()
     state = SimpleNamespace(runtime=SimpleNamespace(extension_services=catalog))
-    handlers: dict[str, RpcMethodHandler] = {name: handler for name, _, _, _ in SERVICE_DEFINITIONS}
-    handlers["agent.list"] = serialized_read(handler, lock_attribute="_publication_lock")
+    handlers: dict[str, RpcMethodHandler] = {
+        **METHODS,
+        **{
+            name: _ParameterContractHandler(handler, PARAMETER_CONTRACTS[name])
+            for name, _, _, _ in SERVICE_DEFINITIONS
+        },
+    }
+    handlers["agent.list"] = _ParameterContractHandler(
+        serialized_read(handler, lock_attribute="_publication_lock"),
+        PARAMETER_CONTRACTS["agent.list"],
+    )
     close = bind_application_services(state, handlers)
     services = catalog.for_owner(ExtensionRegistrationIdentity("fixture", "one"), lambda: None)
     with bound_principal(Principal("host")):
@@ -169,7 +179,14 @@ async def test_observer_actions_have_independent_principal_and_publication_conte
 
     mutation = serialized_mutation(update, lock_attribute="_publication_lock")
     close = bind_application_services(
-        state, {name: mutation for name, _, _, _ in SERVICE_DEFINITIONS}
+        state,
+        {
+            **METHODS,
+            **{
+                name: _ParameterContractHandler(mutation, PARAMETER_CONTRACTS[name])
+                for name, _, _, _ in SERVICE_DEFINITIONS
+            },
+        },
     )
     identity = ExtensionRegistrationIdentity("observer", "one")
     services = catalog.for_owner(identity, lambda: None)

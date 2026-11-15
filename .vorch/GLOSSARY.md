@@ -63,7 +63,7 @@ A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Cha
 Which clients a vBot server admits and whether they must sign in: `local`, `lan` or `authenticated`, chosen by the host for each server start (`access.md`). Not an Agent's Tool access, a Project's Skill selection, or the server's startup mode.
 
 ## Device
-A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`, with its own revocable token (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
+A client installation (browser profile, Desktop or CLI) approved by the host or another Device to sign in in Access Mode `authenticated`, with a revocable token (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
 
 ## Computer
 An execution target for a Session: the server host or a Desktop installation sharing native capabilities such as Terminal and Computer Use (`computers.md`). Not a Device, which grants access to a server, or a second Agent runtime.
@@ -84,7 +84,10 @@ A note vBot adds to a Session to inform the Model without a visible user message
 The stretch of a Session from its start or a successful Compaction to the next one, during which the System Prompt and the Tool list stay fixed so the Provider prompt cache holds (`chat/request-building.md`). Not a Run, which is one turn inside an epoch.
 
 ## Tool
-A function vBot offers its Agents, with a name, description and JSON Schema parameters, callable during a Run when the Agent's Tool access allows it (`tools.md`). Not a tool of the coding agent's own harness.
+A named function vBot offers an Agent during a Run, with a description, JSON Schema and Tool access policy (`tools.md`). Not a tool of the coding agent's own harness.
+
+## Service
+A named product-integration query or action of vBot or an Extension (`extensions/host.md`). Not a Managed Service, Provider, or Home Assistant service.
 
 ## Permission Rules
 An Agent's optional rule set that limits which paths its Tools may read or change, which shell commands they may run and which hosts those commands may reach; an Agent without one has full access, and the user can give one Session its own rules (`permissions.md`). Not the Tool Access Policy (which Tools an Agent has), the server's Access Mode, or an OS sandbox.
@@ -96,7 +99,7 @@ A value such as a password, API key or login that the user gives an Agent to use
 An Identity Agent's own home for its identity and Memory files (`agent.md`). Not a Project, even when its path equals one, and not a Session owner; a Session of an Identity Agent works in it only when it has no Working Project.
 
 ## Project
-A registered repository that Agents work in, with its Sources, Team, defaults, Skill selection and Team overrides; vBot keeps the Project's runtime state in its data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+A registered repository with Sources, Team, defaults, Skills and Team overrides; its runtime state lives in vBot's data directory (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
 
 ## Working Project
 The Project a Session works in for its whole life: its file and shell work, Project Skills and Project Context come from that repository (`sessions/ownership.md`). Not the Default Project, which only seeds new Sessions, and not the Session's addressing Project, which stays empty for an Identity Agent's Session working in a Project.

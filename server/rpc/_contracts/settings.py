@@ -17,7 +17,7 @@ from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS
 from core.settings.settings import NOTIFICATION_FIELDS, SUBAGENT_SETTING_FIELDS
 
 from .common import JsonObject, array, boolean, enum, integer, nullable, obj, params, string
-from .conversation import AGENT_FIELDS
+from .conversation import AGENT_FIELDS, OPERATOR_AGENT_FIELDS
 
 TASK_OPTIONS = {
     **obj(additional=True),
@@ -136,7 +136,10 @@ SETTINGS_SECTIONS: JsonObject = {
     "defaults": obj(
         {
             "agent": obj(
-                {name: nullable(AGENT_FIELDS[name]) for name in sorted(AGENT_DEFAULT_FIELDS)}
+                {
+                    name: nullable(AGENT_FIELDS[name])
+                    for name in sorted(AGENT_DEFAULT_FIELDS - OPERATOR_AGENT_FIELDS)
+                }
             )
         },
         ("agent",),
@@ -154,7 +157,6 @@ SETTINGS_SECTIONS: JsonObject = {
                     },
                     ("routing",),
                 ),
-                "claude_agent": obj({"executable_path": string()}),
             }
         ),
         "minProperties": 1,
@@ -243,7 +245,7 @@ SETTINGS_PATCH = params(
                             {
                                 "op": enum("set"),
                                 "path": string(
-                                    "Public path from settings.catalog; bracket notation "
+                                    "Non-operator path from settings.catalog; bracket notation "
                                     "supports dynamic keys."
                                 ),
                                 "value": {
