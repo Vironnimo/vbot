@@ -44,7 +44,7 @@ dev     = ["textual>=8.2.8,<9", "pytest", "pytest-asyncio", "ruff==0.16.9", "myp
 exclude = ["/archive", "**/node_modules/**"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["core", "server", "cli", "desktop"]
+packages = ["core", "server", "cli", "desktop", "vbot_extension_sdk"]
 exclude = ["**/node_modules/**"]
 
 [tool.vbot.package]
@@ -95,7 +95,7 @@ line-ending = "lf"
 
 [tool.mypy]
 python_version = "3.14"
-files = ["core", "server", "cli", "desktop", "tests"]
+files = ["core", "server", "cli", "desktop", "vbot_extension_sdk", "tests"]
 mypy_path = "scripts"
 warn_return_any = true
 warn_unused_configs = true

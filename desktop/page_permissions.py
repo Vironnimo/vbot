@@ -150,6 +150,19 @@ class PagePermissions:
                 "The selected server changed", error_code="computer_server_changed"
             )
 
+    def reload_desktop_extensions(self, server_url: str) -> None:
+        """A remote page cannot reload native code without a local dialog."""
+        self.computer_sharing(server_url, [])
+        origin = parse_server_address(server_url.rstrip("/"), None).origin
+        self._ask(
+            "Reload Desktop Extensions",
+            "{page} asks to reload Extensions installed on this computer. Updated Extensions "
+            "keep their existing sharing permissions. Changed Extensions stop their current "
+            "work; new Extensions still need sharing permission. Reload them?",
+            origin=origin,
+        )
+        self.computer_sharing(server_url, [])
+
     def _page_origin(self) -> str | None:
         """The calling page's origin; ``None`` when the window is between two pages."""
         origin = url_origin(self._page_url())

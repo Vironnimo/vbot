@@ -38,6 +38,10 @@ The running Desktop app hosts native handlers, including while minimized; it sta
 
 Adding a native capability declares a local Desktop entry in the Extension manifest and supplies a server-side consumer plus its capability protocol (`desktop/computer-sharing.md` -> Local Extension declarations). The registry and socket route capability names and operation payloads without Terminal or Computer Use branches. Extensions reach this same service through `host.computers`; they do not need Runtime or transport access (`extensions/host.md`).
 
+Custom native capability ids are owner-qualified (`extension:<percent-encoded-owner>:<local-name>`); legacy builtin ids and stored Generation 1 registrations remain valid. `core/utils/native_capabilities.py` is the lightweight shared identity/transport contract. Capability catalogs are byte-bounded (256 KiB of serialized ids), not limited to 32 entries; the separate user-chosen 32-Computer registration limit still applies. Desktop's local reload preserves unchanged handlers and their incarnation; changed handlers retire within that scope, and capability owners must refuse stale resource ids themselves.
+
+Protocol 1 welcomes advertise `capability_updates: 1`. A `capabilities` frame replaces only that connection's live offer, validates the same id/byte bounds, and publishes `capabilities_changed` through the existing Computer resource bridge. It preserves the connection, incarnation and pending replies; reload never disconnects unrelated admitted operations. Persisted capabilities remain the last successful hello's metadata until the next normal registration; all live resolution uses the current offer. The event name is reserved from capability-owned events. Older servers without the welcome feature cannot apply live Desktop reload.
+
 ## Lifecycle and evidence
 
 Runtime constructs the registry before TerminalManager, injects it there and into Extension hosts, and closes it after TerminalManager so active terminal cleanup still has its connection (`runtime/lifecycle-steps.md`). Registry mutation and publication stay on the serving Event Loop; durable registration writes run on a bounded worker.

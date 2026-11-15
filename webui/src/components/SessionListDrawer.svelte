@@ -1,5 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
   import { portal } from '$lib/dropdownPanel.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
   import Toggle from './ui/Toggle.svelte';
@@ -676,109 +677,136 @@
   aria-label={t('sessions.title')}
   style:--session-drawer-width={`${sessionListWidth.value}px`}
 >
-  <div class="session-drawer__header">
-    <h3 class="session-drawer__title">{headerTitle}</h3>
-    <TabList
-      class="session-drawer__view"
-      appearance="segmented"
-      density="compact"
-      ariaLabel={t('sessions.view.aria')}
-      value={filters.view}
-      onChange={(view) => setFilter('view', view)}
-      items={[
-        {
-          id: 'agent',
-          label: t('sessions.view.agent'),
-          tooltip: t('sessions.view.agentHint'),
-          icon: agentViewIcon,
-        },
-        {
-          id: 'all',
-          label: t('sessions.view.all'),
-          tooltip: t('sessions.view.allHint'),
-          icon: allAgentsViewIcon,
-        },
-        {
-          id: 'projects',
-          label: t('sessions.view.projects'),
-          tooltip: t('sessions.view.projectsHint'),
-          icon: projectsViewIcon,
-        },
-      ]}
-    />
-    <div class="session-drawer__filter">
-      <button
-        type="button"
-        class="session-drawer__icon-button session-drawer__filter-trigger"
-        class:session-drawer__filter-trigger--active={activeFilterCount > 0}
-        class:session-drawer__filter-trigger--open={menus.filterMenuOpen}
-        aria-label={t('sessions.filtersAria')}
-        aria-haspopup="menu"
-        aria-expanded={menus.filterMenuOpen}
-        use:tooltip={filterTooltip}
-        onclick={(event) => menus.toggleFilterMenu(event.currentTarget)}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path
-            d="M1.75 2.75h12.5M3.75 8h8.5M6.25 13.25h3.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-          />
-        </svg>
-        {#if activeFilterCount > 0}
-          <span
-            class="session-drawer__filter-count"
-            aria-label={t('sessions.filtersActive', {
-              count: activeFilterCount,
-            })}
-          >
-            {activeFilterCount}
-          </span>
-        {/if}
-      </button>
-      {#if menus.filterMenuOpen}
-        <div
-          bind:this={menus.filterMenuElement}
-          use:portal
-          class="session-drawer__filter-menu"
-          role="menu"
-          data-placement={menus.filterMenuPlacement}
-          data-positioning="fixed"
-          style={menus.filterMenuStyle}
+  {#snippet sessionControls()}
+    <div class="session-drawer__header">
+      <h3 class="session-drawer__title">{headerTitle}</h3>
+      <TabList
+        class="session-drawer__view"
+        appearance="segmented"
+        density="compact"
+        ariaLabel={t('sessions.view.aria')}
+        value={filters.view}
+        onChange={(view) => setFilter('view', view)}
+        items={[
+          {
+            id: 'agent',
+            label: t('sessions.view.agent'),
+            tooltip: t('sessions.view.agentHint'),
+            icon: agentViewIcon,
+          },
+          {
+            id: 'all',
+            label: t('sessions.view.all'),
+            tooltip: t('sessions.view.allHint'),
+            icon: allAgentsViewIcon,
+          },
+          {
+            id: 'projects',
+            label: t('sessions.view.projects'),
+            tooltip: t('sessions.view.projectsHint'),
+            icon: projectsViewIcon,
+          },
+        ]}
+      />
+      <div class="session-drawer__filter">
+        <button
+          type="button"
+          class="session-drawer__icon-button session-drawer__filter-trigger"
+          class:session-drawer__filter-trigger--active={activeFilterCount > 0}
+          class:session-drawer__filter-trigger--open={menus.filterMenuOpen}
+          aria-label={t('sessions.filtersAria')}
+          aria-haspopup="menu"
+          aria-expanded={menus.filterMenuOpen}
+          use:tooltip={filterTooltip}
+          onclick={(event) => menus.toggleFilterMenu(event.currentTarget)}
         >
-          {#each SESSION_FILTER_ROWS as filterRow (filterRow.key)}
-            <div
-              class="session-drawer__filter-row"
-              role="menuitemcheckbox"
-              aria-checked={filters[filterRow.key]}
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M1.75 2.75h12.5M3.75 8h8.5M6.25 13.25h3.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
+          {#if activeFilterCount > 0}
+            <span
+              class="session-drawer__filter-count"
+              aria-label={t('sessions.filtersActive', {
+                count: activeFilterCount,
+              })}
             >
-              <span>{filterRow.label()}</span>
-              <Toggle
-                size="sm"
-                checked={filters[filterRow.key]}
-                ariaLabel={filterRow.label()}
-                onChange={(checked) => setFilter(filterRow.key, checked)}
-              />
-            </div>
-          {/each}
-        </div>
-      {/if}
+              {activeFilterCount}
+            </span>
+          {/if}
+        </button>
+        {#if menus.filterMenuOpen}
+          <div
+            bind:this={menus.filterMenuElement}
+            use:portal
+            class="session-drawer__filter-menu"
+            role="menu"
+            data-placement={menus.filterMenuPlacement}
+            data-positioning="fixed"
+            style={menus.filterMenuStyle}
+          >
+            {#each SESSION_FILTER_ROWS as filterRow (filterRow.key)}
+              <div
+                class="session-drawer__filter-row"
+                role="menuitemcheckbox"
+                aria-checked={filters[filterRow.key]}
+              >
+                <span>{filterRow.label()}</span>
+                <Toggle
+                  size="sm"
+                  checked={filters[filterRow.key]}
+                  ariaLabel={filterRow.label()}
+                  onChange={(checked) => setFilter(filterRow.key, checked)}
+                />
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
-  </div>
-
-  <button
-    type="button"
-    class="session-drawer__new"
-    aria-keyshortcuts="Control+Shift+O"
-    disabled={newSessionDisabled}
-    use:tooltip={t('chat.newSessionShortcut')}
-    onclick={() => onNewSession()}
-  >
-    <NewSessionIcon />
-    <span>{t('chat.newSession')}</span>
-  </button>
+  {/snippet}
+  {#snippet newSessionControl()}
+    <button
+      type="button"
+      class="session-drawer__new"
+      aria-keyshortcuts="Control+Shift+O"
+      disabled={newSessionDisabled}
+      use:tooltip={t('chat.newSessionShortcut')}
+      onclick={() => onNewSession()}
+    >
+      <NewSessionIcon />
+      <span>{t('chat.newSession')}</span>
+    </button>
+  {/snippet}
+  <ContributionSurface
+    surface="chat.sessions"
+    context={{
+      agent_id: agentId,
+      session_id: currentSessionId,
+      has_session: Boolean(currentSessionId),
+      view: 'chat',
+    }}
+    data={{ filters: { ...filters } }}
+    builtins={[
+      {
+        id: 'core:chat.sessions.controls',
+        title: t('sessions.title'),
+        order: 10,
+        render: sessionControls,
+      },
+      {
+        id: 'core:chat.sessions.new',
+        title: t('chat.newSession'),
+        order: 20,
+        render: newSessionControl,
+      },
+    ]}
+  />
 
   {#if actions.actionError}
     <p class="session-drawer__state session-drawer__state--error" role="alert">
@@ -1042,113 +1070,154 @@
         {/if}
       </div>
     {:else}
-      <button
-        type="button"
-        class:session-row__select--active={list.rowSelected(session)}
-        class="session-row__select"
-        onclick={() => list.handleSelectSession(session)}
-        onkeydown={(event) => {
-          if (isContextMenuKey(event)) openRowMenu(session, event);
-        }}
-        use:tooltip={() =>
-          sessionHoverDetails(session, {
-            sessions: rowSessions,
-            agents: rosterAgents,
-          })}
-      >
-        <div class="session-row__heading">
-          <!-- One status slot before the title: work that is not finished
+      {#snippet selectSession()}
+        <button
+          type="button"
+          class:session-row__select--active={list.rowSelected(session)}
+          class="session-row__select"
+          onclick={() => list.handleSelectSession(session)}
+          onkeydown={(event) => {
+            if (isContextMenuKey(event)) openRowMenu(session, event);
+          }}
+          use:tooltip={() =>
+            sessionHoverDetails(session, {
+              sessions: rowSessions,
+              agents: rosterAgents,
+            })}
+        >
+          <div class="session-row__heading">
+            <!-- One status slot before the title: work that is not finished
                  (working, or waiting for work that will wake it) hides an
                  unread result, which counts only once the Session is idle. -->
-          {#if approvalSessions.has(`${session.agent_address || asText(agentId)}::${session.id}`)}
-            <span
-              class="session-row__status session-row__approval"
-              aria-label={t('sessions.awaitingApproval')}
-              use:tooltip={t('sessions.awaitingApproval')}
-            >
+            {#if approvalSessions.has(`${session.agent_address || asText(agentId)}::${session.id}`)}
               <span
-                class="tab-indicator tab-indicator--approval"
-                aria-hidden="true"
-              ></span>
-            </span>
-          {:else if session.activity_state === 'working' || session.activity_state === 'waiting'}
-            <span
-              class="session-row__status session-row__activity"
-              aria-label={sessionActivityLabel(session)}
-              use:tooltip={() => sessionActivityDetails(session)}
-            >
+                class="session-row__status session-row__approval"
+                aria-label={t('sessions.awaitingApproval')}
+                use:tooltip={t('sessions.awaitingApproval')}
+              >
+                <span
+                  class="tab-indicator tab-indicator--approval"
+                  aria-hidden="true"
+                ></span>
+              </span>
+            {:else if session.activity_state === 'working' || session.activity_state === 'waiting'}
               <span
-                class="tab-indicator"
-                class:tab-indicator--running={session.activity_state ===
-                  'working'}
-                class:tab-indicator--waiting={session.activity_state ===
-                  'waiting'}
-                aria-hidden="true"
-              ></span>
-            </span>
-          {:else if session.has_unread_completion && session.id !== currentSessionId}
-            <span
-              class="session-row__status session-row__unread"
-              aria-label={t('sessions.unreadCompletion')}
-              use:tooltip={() => unreadRunDetails(session)}
-            >
+                class="session-row__status session-row__activity"
+                aria-label={sessionActivityLabel(session)}
+                use:tooltip={() => sessionActivityDetails(session)}
+              >
+                <span
+                  class="tab-indicator"
+                  class:tab-indicator--running={session.activity_state ===
+                    'working'}
+                  class:tab-indicator--waiting={session.activity_state ===
+                    'waiting'}
+                  aria-hidden="true"
+                ></span>
+              </span>
+            {:else if session.has_unread_completion && session.id !== currentSessionId}
               <span
-                class="tab-indicator tab-indicator--unread"
-                aria-hidden="true"
-              ></span>
-            </span>
-          {/if}
-          {#if session.pinned_at}
+                class="session-row__status session-row__unread"
+                aria-label={t('sessions.unreadCompletion')}
+                use:tooltip={() => unreadRunDetails(session)}
+              >
+                <span
+                  class="tab-indicator tab-indicator--unread"
+                  aria-hidden="true"
+                ></span>
+              </span>
+            {/if}
+            {#if session.pinned_at}
+              <span
+                class="session-row__pin"
+                role="img"
+                aria-label={t('sessions.pinned')}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M6 2.5h4M6.75 2.5l-.5 4.25L4 9.5h8L9.75 6.75l-.5-4.25M8 9.5v4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+            {/if}
+            <p class="session-row__name">
+              {session.display_name || sessionDisplayName(session)}
+            </p>
+          </div>
+          {#if marker}
             <span
-              class="session-row__pin"
+              class="session-row__marker"
               role="img"
-              aria-label={t('sessions.pinned')}
+              aria-label={marker.label}
+              data-session-marker={marker.kind}
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path
-                  d="M6 2.5h4M6.75 2.5l-.5 4.25L4 9.5h8L9.75 6.75l-.5-4.25M8 9.5v4"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+              <SessionKindIcon icon={sessionKindIcon(marker)} />
             </span>
           {/if}
-          <p class="session-row__name">
-            {session.display_name || sessionDisplayName(session)}
-          </p>
-        </div>
-        {#if marker}
-          <span
-            class="session-row__marker"
-            role="img"
-            aria-label={marker.label}
-            data-session-marker={marker.kind}
-          >
-            <SessionKindIcon icon={sessionKindIcon(marker)} />
-          </span>
-        {/if}
-        {#if session.agent_name}
-          <span class="session-row__agent">{session.agent_name}</span>
-        {/if}
-      </button>
-      <Button
-        variant="tertiary"
-        icon
-        class="session-row__menu-trigger"
-        ariaLabel={t('sessions.actions')}
-        aria-haspopup="menu"
-        aria-expanded={rowMenuKey === sessionRowKey(session)}
-        onClick={(event) => openRowMenu(session, event)}
-      >
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <circle cx="3.5" cy="8" r="1.25" />
-          <circle cx="8" cy="8" r="1.25" />
-          <circle cx="12.5" cy="8" r="1.25" />
-        </svg>
-      </Button>
+          {#if session.agent_name}
+            <span class="session-row__agent">{session.agent_name}</span>
+          {/if}
+        </button>
+      {/snippet}
+      {#snippet sessionActions()}
+        <Button
+          variant="tertiary"
+          icon
+          class="session-row__menu-trigger"
+          ariaLabel={t('sessions.actions')}
+          aria-haspopup="menu"
+          aria-expanded={rowMenuKey === sessionRowKey(session)}
+          onClick={(event) => openRowMenu(session, event)}
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <circle cx="3.5" cy="8" r="1.25" />
+            <circle cx="8" cy="8" r="1.25" />
+            <circle cx="12.5" cy="8" r="1.25" />
+          </svg>
+        </Button>
+      {/snippet}
+      <ContributionSurface
+        surface="chat.session.item"
+        context={{
+          agent_id: session.agent_address || asText(agentId),
+          session_id: session.id,
+          project_id: session.project_id ?? '',
+          session_selected: list.rowSelected(session),
+          has_session: true,
+          view: 'chat',
+        }}
+        data={{
+          session: {
+            id: session.id,
+            agent_id: session.agent_address || asText(agentId),
+            project_id: session.project_id ?? '',
+            title: String(
+              session.display_name || sessionDisplayName(session),
+            ).slice(0, 1024),
+            activity_state: session.activity_state ?? 'idle',
+          },
+        }}
+        commands={{ 'session.open': () => list.handleSelectSession(session) }}
+        builtins={[
+          {
+            id: 'core:chat.session.select',
+            title: t('sessions.title'),
+            order: 10,
+            render: selectSession,
+          },
+          {
+            id: 'core:chat.session.actions',
+            title: t('sessions.actions'),
+            order: 20,
+            render: sessionActions,
+          },
+        ]}
+      />
     {/if}
   </li>
 {/snippet}

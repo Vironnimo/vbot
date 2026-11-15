@@ -29,6 +29,7 @@ function setup(overrides = {}) {
     onLoadProjects: vi.fn(),
     onReloadAgents: vi.fn(),
     onComputersChanged: vi.fn(),
+    onPublicResourceChange: vi.fn(),
     readDataStoreStatus: vi.fn().mockResolvedValue({ incidents: [] }),
     readBackgroundActivity: vi.fn().mockResolvedValue({ activities: [] }),
     readApplicationUpdate: vi.fn().mockResolvedValue({ installed: false }),
@@ -753,6 +754,7 @@ describe('App controller', () => {
     ['channels', ['channels']],
     ['debug_traces', ['debugTraces']],
     ['cron', ['cron']],
+    ['bootstrap', []],
     ['calendar', ['calendar']],
     ['commands', ['commands']],
     ['terminals', ['terminals']],
@@ -770,6 +772,9 @@ describe('App controller', () => {
     await controller.handleServerEvent(resourceChanged(kind));
 
     expect(refreshTokens(state)).toEqual(tokensBumped(state, bumped));
+    expect(actions.onPublicResourceChange).toHaveBeenCalledExactlyOnceWith(
+      kind,
+    );
     expect(actions.onLoadProjects).toHaveBeenCalledTimes(
       kind === 'projects' ? 1 : 0,
     );

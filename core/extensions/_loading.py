@@ -589,7 +589,8 @@ def resolve_pages(
     """Resolve every loaded page entry once for this registration.
 
     An entry outside its Extension root is diagnosed here and never becomes
-    a page of this registration.
+    a page of this registration. Cross-references are checked after synchronous
+    and asynchronous registration have both finished, regardless of order.
     """
     pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
     for record in records:
@@ -606,4 +607,59 @@ def resolve_pages(
                 )
                 continue
             pages[(record.name, declaration.page_id)] = (record, declaration, entry)
+            try:
+                available = is_file_strict(entry)
+            except OSError:
+                _diagnose_capability(
+                    record, f"page {declaration.page_id!r} unavailable: entry is unreadable"
+                )
+            else:
+                if not available:
+                    _diagnose_capability(
+                        record, f"page {declaration.page_id!r} skipped: entry is missing"
+                    )
+        _validate_contribution_references(record, pages)
+        _validate_service_references(record)
     return pages
+
+
+def _validate_contribution_references(
+    record: ExtensionRecord,
+    pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]],
+) -> None:
+    """Drop only contributions whose final owner declarations cannot serve them."""
+    operations = record.declarations.operations
+    declared_operations = set(operations.operations) if operations is not None else set()
+    valid = []
+    for contribution in record.declarations.contributions:
+        reasons = []
+        spec = contribution.spec
+        if spec["kind"] == "view" and (record.name, spec["page"]) not in pages:
+            reasons.append(f"page {spec['page']!r} is unknown or unavailable")
+        missing_operations = set(spec["operations"]) - declared_operations
+        if missing_operations:
+            reasons.append(f"unknown operations: {', '.join(sorted(missing_operations))}")
+        if reasons:
+            _diagnose_capability(
+                record, f"contribution {contribution.id!r} skipped: {'; '.join(reasons)}"
+            )
+        else:
+            valid.append(contribution)
+    record.declarations.contributions[:] = valid
+
+
+def _validate_service_references(record: ExtensionRecord) -> None:
+    """Resolve local resources only after the owner's complete registration."""
+    resources = {resource.name for resource in record.declarations.resources}
+    valid = []
+    for service in record.declarations.services:
+        missing = set(service.resources) - resources
+        if missing:
+            _diagnose_capability(
+                record,
+                f"service {service.name!r} skipped: unknown resources: "
+                f"{', '.join(sorted(missing))}",
+            )
+        else:
+            valid.append(service)
+    record.declarations.services[:] = valid

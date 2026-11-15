@@ -1,5 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
   import Button from './ui/Button.svelte';
   import SaveStatus from './ui/SaveStatus.svelte';
   import Banner from './ui/Banner.svelte';
@@ -66,6 +67,15 @@
 
   let selectedProject = $derived(projectsController.selectedProject());
   let findingsExpanded = $state(false);
+  let editorElement = $state();
+
+  function focusEditorField({ field } = {}) {
+    if (field !== 'display_name') throw new Error(t('errors.validation'));
+    const control = editorElement?.querySelector('#project-edit-name');
+    if (!control) return { focused: false };
+    control.focus();
+    return { focused: true };
+  }
 
   // The sparse project.set changes the open form represents versus the saved
   // project — empty when the form matches what the server already holds.
@@ -419,6 +429,7 @@
       {#key selectedProject.project_id}
         <div
           class="project-detail-pane"
+          bind:this={editorElement}
           data-testid={`project-panel-${selectedProject.project_id}`}
         >
           <div class="project-detail-scroll page-scroll">
@@ -447,106 +458,152 @@
               </Banner>
             {/if}
 
-            <ProjectOverviewPanel
-              bind:projectsState
-              {projectsController}
-              {handleManualSave}
-            >
-              {#snippet repositoryActions()}
-                <div class="detail-btns">
-                  {#if needsRePoint(selectedProject)}
-                    <Button
-                      variant="secondary"
-                      data-testid={`project-repoint-${selectedProject.project_id}`}
-                      onClick={() => openRePoint(selectedProject)}
-                    >
-                      {t('projects.rePoint.submit')}
-                    </Button>
-                  {/if}
-                  <Button
-                    variant="danger"
-                    data-testid={`project-remove-${selectedProject.project_id}`}
-                    disabled={removeDisabled(selectedProject)}
-                    onClick={() => removeOne(selectedProject)}
-                  >
-                    {t('projects.remove')}
-                  </Button>
-                </div>{/snippet}
-            </ProjectOverviewPanel>
-            <div
-              class="projects-part"
-              role="group"
-              aria-labelledby="project-part-context"
-            >
-              <header class="projects-part__head">
-                <p class="projects-part__title" id="project-part-context">
-                  {t('projects.part.context')}
-                </p>
-                <p class="projects-part__desc">
-                  {t('projects.part.contextSummary')}
-                </p>
-              </header>
-              <ProjectContextPanel bind:projectsState {projectsController} />
-              <ProjectMemoryPanel
-                projectId={selectedProject.project_id}
-                enabled={projectsState.editForm.memory_enabled}
-                onEnabledChange={(value) =>
-                  (projectsState.editForm.memory_enabled = value)}
-                refreshToken={memoriesRefreshToken}
-                {onToast}
-              />
-              <ProjectAccessPanel
-                {projectsState}
-                {projectsController}
-                {onToast}
-                {onOpenSkill}
-                {skillsRefreshToken}
-                {agentsRefreshToken}
-                {projectsRefreshToken}
-              />
-            </div>
-            <div
-              class="projects-part"
-              role="group"
-              aria-labelledby="project-part-team"
-            >
-              <header class="projects-part__head">
-                <p class="projects-part__title" id="project-part-team">
-                  {t('projects.part.team')}
-                </p>
-                <p class="projects-part__desc">
-                  {t('projects.part.teamSummary')}
-                </p>
-              </header>
-              <ProjectDefaultsPanel
+            {#snippet overviewSection()}
+              <ProjectOverviewPanel
                 bind:projectsState
                 {projectsController}
-                {onNavigateToSettingsPanel}
-                {trackModelDropdownOpen}
-              />
-              <ProjectTeamPanel
-                bind:findingsExpanded
-                bind:projectsState
-                {projectsController}
-                {trackModelDropdownOpen}
-                {updateToolAccessOverride}
-                {clearOverride}
-                {navigateToExtensions}
+                {handleManualSave}
               >
-                {#snippet scanAction()}
-                  <Button
-                    variant="tertiary"
-                    data-testid="project-repository-rescan"
-                    loading={projectsState.scanRefreshRequested}
-                    disabled={projectsState.scanLoading}
-                    onClick={refreshScan}
-                  >
-                    {projectsState.scanRefreshRequested
-                      ? t('projects.repository.rescanning')
-                      : t('projects.repository.rescan')}
-                  </Button>{/snippet}
-              </ProjectTeamPanel>
-            </div>
+                {#snippet repositoryActions()}
+                  <div class="detail-btns">
+                    {#if needsRePoint(selectedProject)}
+                      <Button
+                        variant="secondary"
+                        data-testid={`project-repoint-${selectedProject.project_id}`}
+                        onClick={() => openRePoint(selectedProject)}
+                      >
+                        {t('projects.rePoint.submit')}
+                      </Button>
+                    {/if}
+                    <Button
+                      variant="danger"
+                      data-testid={`project-remove-${selectedProject.project_id}`}
+                      disabled={removeDisabled(selectedProject)}
+                      onClick={() => removeOne(selectedProject)}
+                    >
+                      {t('projects.remove')}
+                    </Button>
+                  </div>{/snippet}
+              </ProjectOverviewPanel>
+            {/snippet}
+            {#snippet contextSection()}
+              <div
+                class="projects-part"
+                role="group"
+                aria-labelledby="project-part-context"
+              >
+                <header class="projects-part__head">
+                  <p class="projects-part__title" id="project-part-context">
+                    {t('projects.part.context')}
+                  </p>
+                  <p class="projects-part__desc">
+                    {t('projects.part.contextSummary')}
+                  </p>
+                </header>
+                <ProjectContextPanel bind:projectsState {projectsController} />
+                <ProjectMemoryPanel
+                  projectId={selectedProject.project_id}
+                  enabled={projectsState.editForm.memory_enabled}
+                  onEnabledChange={(value) =>
+                    (projectsState.editForm.memory_enabled = value)}
+                  refreshToken={memoriesRefreshToken}
+                  {onToast}
+                />
+                <ProjectAccessPanel
+                  {projectsState}
+                  {projectsController}
+                  {onToast}
+                  {onOpenSkill}
+                  {skillsRefreshToken}
+                  {agentsRefreshToken}
+                  {projectsRefreshToken}
+                />
+              </div>
+            {/snippet}
+            {#snippet teamSection()}
+              <div
+                class="projects-part"
+                role="group"
+                aria-labelledby="project-part-team"
+              >
+                <header class="projects-part__head">
+                  <p class="projects-part__title" id="project-part-team">
+                    {t('projects.part.team')}
+                  </p>
+                  <p class="projects-part__desc">
+                    {t('projects.part.teamSummary')}
+                  </p>
+                </header>
+                <ProjectDefaultsPanel
+                  bind:projectsState
+                  {projectsController}
+                  {onNavigateToSettingsPanel}
+                  {trackModelDropdownOpen}
+                />
+                <ProjectTeamPanel
+                  bind:findingsExpanded
+                  bind:projectsState
+                  {projectsController}
+                  {trackModelDropdownOpen}
+                  {updateToolAccessOverride}
+                  {clearOverride}
+                  {navigateToExtensions}
+                >
+                  {#snippet scanAction()}
+                    <Button
+                      variant="tertiary"
+                      data-testid="project-repository-rescan"
+                      loading={projectsState.scanRefreshRequested}
+                      disabled={projectsState.scanLoading}
+                      onClick={refreshScan}
+                    >
+                      {projectsState.scanRefreshRequested
+                        ? t('projects.repository.rescanning')
+                        : t('projects.repository.rescan')}
+                    </Button>{/snippet}
+                </ProjectTeamPanel>
+              </div>
+            {/snippet}
+            <ContributionSurface
+              surface="project.editor.sections"
+              context={{
+                project_id: selectedProject.project_id,
+                editor_mode: 'edit',
+                view: 'projects',
+              }}
+              data={{
+                editor: {
+                  id: selectedProject.project_id,
+                  mode: 'edit',
+                  values: {
+                    display_name: String(
+                      projectsState.editForm.display_name ?? '',
+                    ).slice(0, 1024),
+                  },
+                },
+              }}
+              commands={{ 'editor.focus': focusEditorField }}
+              builtins={[
+                {
+                  id: 'core:project.editor.overview',
+                  title: t('projects.repositorySection'),
+                  order: 10,
+                  render: overviewSection,
+                },
+                {
+                  id: 'core:project.editor.context',
+                  title: t('projects.part.context'),
+                  order: 20,
+                  render: contextSection,
+                },
+                {
+                  id: 'core:project.editor.team',
+                  title: t('projects.part.team'),
+                  order: 30,
+                  render: teamSection,
+                },
+              ]}
+            />
             <div class="management-footer">
               <SaveStatus
                 type="submit"

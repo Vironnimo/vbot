@@ -2,5 +2,13 @@
   "name": "Terminal",
   "version": "1.0.0",
   "description": "Share native terminals from the running Desktop app.",
-  "desktop": { "entry": "desktop.py", "api_version": 1 }
+  "api_version": 29,
+  "desktop": { "entry": "desktop.py", "api_version": 1 },
+  "documentation": [
+    {
+      "path": "docs/usage.md",
+      "title": "Terminal sharing",
+      "description": "Share Desktop terminals with the connected server and choose their Computer."
+    }
+  ]
 }

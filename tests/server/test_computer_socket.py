@@ -114,6 +114,7 @@ async def _connected(
             "computer_id": computer_id,
             "instance_id": "inst_running_app",
             "server_instance": registry.server_instance,
+            "capability_updates": 1,
         }
         yield socket, serving
     finally:
@@ -193,10 +194,20 @@ async def test_link_correlates_replies_to_the_computer_that_received_the_request
             )
             await processed.wait()
             assert not call.done()
+            socket.event_bus.events.clear()
+            socket.receive(
+                {"type": "capabilities", "capabilities": ["terminal", "extension:office:printer"]}
+            )
             socket.receive(
                 {"type": "result", "id": request["id"], "ok": True, "result": {"written": True}}
             )
             assert await call == {"written": True}
+            assert registry.get("pc_laptop").capabilities == (
+                "terminal",
+                "extension:office:printer",
+            )
+            assert registry.get("pc_laptop").instance_id == "inst_running_app"
+            assert not socket.close_codes
             assert ("resource_changed", {"kind": "computers"}) in socket.event_bus.events
     finally:
         unsubscribe()

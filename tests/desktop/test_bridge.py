@@ -137,6 +137,7 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "restartDesktop",
         "getComputerSharing",
         "setComputerSharing",
+        "reloadDesktopExtensions",
     }
 
 
@@ -705,8 +706,10 @@ def test_without_a_way_to_ask_another_servers_page_is_refused() -> None:
 
 
 @pytest.mark.parametrize("outcome", ["allow", "decline", "navigate"])
+@pytest.mark.parametrize("action", ["grant", "reload"])
 def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
     outcome: str,
+    action: str,
 ) -> None:
     page = ["https://remote.example/"]
     applied: list[Any] = []
@@ -726,29 +729,47 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
         ],
     }
 
-    def update(changes: Any, *, expected_server: str, confirm: Any = None) -> dict[str, Any]:
+    def update(
+        changes: Any,
+        *,
+        expected_server: str,
+        confirm: Any = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
         applied.append((changes, expected_server))
         return status
 
-    sharing = SimpleNamespace(status=lambda: status, update=update)
+    sharing = SimpleNamespace(
+        status=lambda: status,
+        update=update,
+        reload_extensions=lambda **kwargs: update({}, **kwargs),
+    )
     bridge, _ = _bridge(
         computer_sharing=sharing,
         permissions=_page_permissions(lambda: page[0], confirm),
     )
     assert bridge.getDesktopCapabilities()["computerSharing"] is True
     assert bridge.getComputerSharing() == status
+    invoke = (
+        (lambda: bridge.setComputerSharing({"printer": True}))
+        if action == "grant"
+        else bridge.reloadDesktopExtensions
+    )
     if outcome == "allow":
-        bridge.setComputerSharing({"printer": True})
-        assert applied == [({"printer": True}, "https://remote.example/")]
+        invoke()
+        assert applied == [
+            ({"printer": True} if action == "grant" else {}, "https://remote.example/")
+        ]
     else:
         with pytest.raises(BridgeError) as raised:
-            bridge.setComputerSharing({"printer": True})
+            invoke()
         assert str(raised.value) == (
             "declined" if outcome == "decline" else "computer_server_changed"
         )
         assert applied == []
     assert len(questions) == 1
-    assert "Printer" in questions[0]
+    if action == "grant":
+        assert "Printer" in questions[0]
 
 
 def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(

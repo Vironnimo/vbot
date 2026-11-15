@@ -597,6 +597,7 @@ export default Object.freeze({
   'chat.activity.later.agent': 'an Agent',
   'chat.activity.later.review': 'a background Reflection',
   'chat.activity.later.maintenance': 'Skill maintenance',
+  'chat.activity.later.extension': 'an Extension',
   'chat.activity.later.vbot': 'vBot',
   'chat.activity.later.external': 'an edit outside vBot',
   'chat.activity.later.unknown': 'another change',

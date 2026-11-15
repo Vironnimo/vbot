@@ -499,8 +499,9 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("conflicting_edit", [False, True])
+@pytest.mark.parametrize("actor", ["rpc", "extension"])
 async def test_pass_undo_keeps_aging_and_all_skill_owners_together(
-    harness: _Harness, conflicting_edit: bool
+    harness: _Harness, conflicting_edit: bool, actor: str
 ) -> None:
     root = harness.home("main")
     shared = harness.home("owner")
@@ -558,10 +559,17 @@ async def test_pass_undo_keeps_aging_and_all_skill_owners_together(
         return
 
     harness.changed.clear()
-    undone = await harness.service.undo("main", started_at)
+    undone = await harness.service.undo("main", started_at, actor=actor)
     assert all(path.read_text(encoding="utf-8") == content for path, content in snapshots.items())
     assert set(harness.changed) == {"main", "owner"}
     assert undone["changes"] == status["changes"]
+    skill_actor = "extension" if actor == "extension" else "human"
+    assert all(
+        revision.actor == skill_actor
+        for home in (root, shared)
+        for revision in harness.authoring.recorded_revisions(home)
+        if revision.kind == "revert"
+    )
     sizes = {home: len(harness.authoring.history(home)) for home in (root, shared)}
     await harness.service.undo("main", started_at)
     assert all(len(harness.authoring.history(home)) == size for home, size in sizes.items())

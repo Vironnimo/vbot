@@ -47,22 +47,34 @@ async def test_page_descriptors_read_badges_on_every_reconnect_and_drop_retired_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["status", "save", "dynamic-save"])
 async def test_contribution_actions_require_current_registration_and_declared_operation(
-    tmp_path: Path,
+    tmp_path: Path, operation: str
 ) -> None:
     write_package(
         tmp_path,
         "fixture",
         """
-async def status(params):
-    return {'items': [{'id': 'one', 'text': 'Current'}]}
 def register(api):
-    api.operations.register('status', 'Status', {'type': 'object'}, status)
+    async def handler(params):
+        if params.get('retire'):
+            api.get_config()['retire']()
+        return {'items': [{'id': 'one', 'text': 'Current'}]}
+    for operation in ('status', 'save', 'dynamic-save'):
+        api.operations.register(operation, operation, {'type': 'object'}, handler)
     api.register_contribution('status', surface='shell.status', kind='status',
-                              title='Status', source={'operation':'status'})
+                              title='Status', source={'operation':'status'},
+                              action={'operation':'save'}, operations=['dynamic-save'])
 """,
     )
-    registry = ExtensionRegistry.load(tmp_path)
+    retired_calls = []
+
+    def retire() -> None:
+        retired_calls.append(operation)
+        registry.retire_registration()
+        state.runtime.extensions = ExtensionRegistry.load(tmp_path)
+
+    registry = ExtensionRegistry.load(tmp_path, config={"fixture": {"retire": retire}})
     state = SimpleNamespace(
         runtime=SimpleNamespace(extensions=registry), file_delivery=SimpleNamespace()
     )
@@ -74,28 +86,40 @@ def register(api):
         "extension": "fixture",
         "id": "status",
         "epoch": descriptor["epoch"],
-        "operation": "status",
+        "operation": operation,
     }
     assert (await _contribution_operation(state, params))["items"][0]["text"] == "Current"
     with pytest.raises(RpcError) as refused:
         await _contribution_operation(state, {**params, "operation": "undeclared"})
     assert refused.value.code == "invalid_request"
-    registry.retire_registration()
-    assert (await _contributions(state, {}))["contributions"] == []
-    state.runtime.extensions = ExtensionRegistry.load(tmp_path)
+    if operation == "status":
+        with pytest.raises(RpcError) as stale_read:
+            await _contribution_operation(state, {**params, "params": {"retire": True}})
+        assert stale_read.value.code == "invalid_request"
+    else:
+        result = await _contribution_operation(state, {**params, "params": {"retire": True}})
+        assert result["items"][0]["text"] == "Current"
+    assert retired_calls == [operation]
+    assert registry.contribution_declarations() == []
     with pytest.raises(RpcError):
         await _contribution_operation(state, params)
+    assert retired_calls == [operation]
+    state.runtime.extensions.retire_registration()
+    assert (await _contributions(state, {}))["contributions"] == []
 
 
 @pytest.mark.asyncio
-async def test_page_services_preserve_declaration_scope_and_domain_refusal(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["query", "execute"])
+async def test_page_services_preserve_scope_refusal_and_admitted_results(
+    tmp_path: Path, kind: str
+) -> None:
     package = write_package(
         tmp_path,
         "fixture",
         """
 def register(api):
     api.register_page('settings', 'Settings', 'page.html', navigation=False,
-                      services=('agent.list',))
+                      services=('agent.list', 'settings.update'))
 """,
     )
     (package / "page.html").write_text("<!doctype html>", encoding="utf-8")
@@ -107,6 +131,11 @@ def register(api):
             "services": [
                 {"name": "agent.list", "resources": ["agents"]},
                 {"name": "settings.update", "resources": ["settings"]},
+                {"name": "agent.delete", "resources": ["agents"]},
+            ],
+            "resource_definitions": [
+                {"name": "agents", "description": "Agents"},
+                {"name": "unrelated", "description": "Another service's resource"},
             ],
         },
         query=AsyncMock(return_value={"agents": []}),
@@ -123,10 +152,11 @@ def register(api):
     }
     assert await _page_service(state, params) == {"agents": []}
     description = await _page_service(state, {**params, "kind": "describe"})
-    assert [item["name"] for item in description["services"]] == ["agent.list"]
-    assert description["resources"] == ["agents"]
+    assert [item["name"] for item in description["services"]] == ["agent.list", "settings.update"]
+    assert description["resources"] == ["agents", "settings"]
+    assert description["resource_definitions"] == [{"name": "agents", "description": "Agents"}]
     with pytest.raises(RpcError):
-        await _page_service(state, {**params, "name": "settings.update", "kind": "execute"})
+        await _page_service(state, {**params, "name": "agent.delete", "kind": "execute"})
     services.execute.assert_not_awaited()
     services.query.side_effect = ExtensionServiceError(
         "fixture_conflict", "Conflict", {"revision": 2}
@@ -138,8 +168,22 @@ def register(api):
 
     async def retire(_name, _params):
         registry.retire_registration()
-        return {"agents": []}
+        state.runtime.extensions = ExtensionRegistry.load(tmp_path)
+        return {"committed": True}
 
-    services.query.side_effect = retire
+    getattr(services, kind).side_effect = retire
+    retiring_params = {
+        **params,
+        "kind": kind,
+        "name": "agent.list" if kind == "query" else "settings.update",
+    }
+    if kind == "query":
+        with pytest.raises(RpcError) as stale_read:
+            await _page_service(state, retiring_params)
+        assert stale_read.value.code == "invalid_request"
+    else:
+        assert await _page_service(state, retiring_params) == {"committed": True}
+        services.execute.assert_awaited_once_with("settings.update", {})
     with pytest.raises(RpcError):
-        await _page_service(state, params)
+        await _page_service(state, retiring_params)
+    state.runtime.extensions.retire_registration()

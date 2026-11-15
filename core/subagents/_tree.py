@@ -124,7 +124,13 @@ class SubAgentTreeControl:
             "tool_name": result.latest_tool_name,
         }
 
-    async def stop_tree(self, address: SessionAddress) -> int:
+    async def stop_tree(
+        self,
+        address: SessionAddress,
+        *,
+        reason: str = USER_CANCEL_REASON,
+        initiator: str = "user_stop_all",
+    ) -> int:
         """Stop a Session's current Run, its background work and every Sub-Agent below it.
 
         The user's "Stop all"; returns how many Runs, queued messages, commands and
@@ -135,8 +141,8 @@ class SubAgentTreeControl:
         """
         stopped = await self._stop_subtree(
             address,
-            reason=USER_CANCEL_REASON,
-            initiator="user_stop_all",
+            reason=reason,
+            initiator=initiator,
             silence_root=False,
             clear_root_queue=False,
         )

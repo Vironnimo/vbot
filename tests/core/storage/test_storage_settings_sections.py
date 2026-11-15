@@ -14,9 +14,15 @@ from typing import Any
 
 import pytest
 
+from core.settings.paths import build_effective_settings, parse_patch_operations, setting_details
 from core.storage import SettingsConflictError, StorageError, StorageManager
 
-APPEARANCE_DEFAULTS = {"language": "en", "chat_width": "comfortable", "chat_working_mode": "normal"}
+APPEARANCE_DEFAULTS = {
+    "language": "en",
+    "chat_width": "comfortable",
+    "chat_working_mode": "normal",
+    "ui_layout": None,
+}
 REFLECTION_DEFAULTS = {"enabled": True, "memory_turn_interval": 10, "skill_model_step_interval": 10}
 COMPACTION_DEFAULTS = {
     "enabled": True,
@@ -195,9 +201,9 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         {},
         {"appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"}},
         StorageManager.load_appearance_settings,
-        {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
+        {"language": "en", "chat_width": "wide", "chat_working_mode": "compact", "ui_layout": None},
     ),
-    "appearance-replaces-deprecated-and-unknown-values": (
+    "appearance-unknown-values-stay-out-of-effective-settings": (
         {"appearance": {"language": "en", "show_token_counts": False, "theme": "dark"}},
         {"appearance": {"language": "en", "chat_width": "bogus"}},
         lambda storage: storage.load_settings()["appearance"],
@@ -489,13 +495,55 @@ def test_debug_section_update_preserves_unrecognized_stored_fields(tmp_path: Pat
     assert persisted["debug"]["future_field"] == {"keep": True}
 
 
+def test_shared_ui_layout_round_trips_and_survives_sparse_and_path_edits(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    assert storage.load_appearance_settings()["ui_layout"] is None
+    layout = {
+        "future.surface": {
+            "hidden": ["future:contribution"],
+            "order": ["builtin:one", "future:contribution"],
+            "replacements": {"builtin:one": "extension:two", "builtin:default": ""},
+            "future_field": {"enabled": True, "nested": [None, 1.5]},
+        }
+    }
+    storage.save_settings(
+        {"appearance": {"future_preference": {"keep": True}, "chat_width": "wide"}}
+    )
+    storage.update_settings_sections({"appearance": {"ui_layout": layout}})
+    storage.update_settings_sections({"appearance": {"language": "en"}})
+    loaded = storage.load_settings()
+    assert loaded["appearance"]["chat_width"] == "wide"
+    assert build_effective_settings(loaded)["appearance"]["ui_layout"] == layout
+    assert setting_details(loaded, "appearance.ui_layout")["value"] == layout
+    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["appearance"][
+        "future_preference"
+    ] == {"keep": True}
+
+    # Unrelated path edits preserve opaque future layout fields as well.
+    storage.patch_settings(
+        parse_patch_operations(
+            [{"op": "set", "path": "appearance.chat_working_mode", "value": "compact"}]
+        )
+    )
+    assert storage.load_appearance_settings()["ui_layout"] == layout
+    for value in ({}, layout, None):
+        storage.patch_settings(
+            parse_patch_operations([{"op": "set", "path": "appearance.ui_layout", "value": value}])
+        )
+        assert storage.load_appearance_settings()["ui_layout"] == value
+    storage.update_settings_sections({"appearance": {"ui_layout": layout}})
+    storage.patch_settings(
+        parse_patch_operations([{"op": "unset", "path": "appearance.ui_layout"}])
+    )
+    assert storage.load_appearance_settings()["ui_layout"] is None
+
+
 @pytest.mark.parametrize(
     "update",
     [
         pytest.param([], id="not-a-mapping"),
         pytest.param({"bogus": {}}, id="unknown-section"),
         pytest.param({"appearance": "en"}, id="appearance-not-a-mapping"),
-        pytest.param({"appearance": {}}, id="appearance-without-language"),
         pytest.param(
             {"appearance": {"language": "en", "show_token_counts": False}},
             id="appearance-unknown-field",
@@ -576,6 +624,30 @@ _ALL_NOTIFICATIONS_ON = dict.fromkeys(NOTIFICATION_DEFAULTS, True)
 
 # (stored, update, base, the paths a conflict names or None when the update applies)
 BASED_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any]] = {
+    "layout-different-surfaces-still-conflict-as-a-whole": (
+        {"appearance": {"ui_layout": {"future.surface": {"hidden": ["newer"]}}}},
+        {"appearance": {"ui_layout": {"chat.footer": {"hidden": ["mine"]}}}},
+        {"appearance": {"ui_layout": {}}},
+        ("appearance.ui_layout",),
+    ),
+    "layout-explicit-defaults-conflict-with-unselected-base": (
+        {"appearance": {"ui_layout": {}}},
+        {"appearance": {"ui_layout": {"chat.footer": {"hidden": ["mine"]}}}},
+        {"appearance": {"ui_layout": None}},
+        ("appearance.ui_layout",),
+    ),
+    "layout-same-desired-value-does-not-conflict": (
+        {"appearance": {"ui_layout": {}}},
+        {"appearance": {"ui_layout": {}}},
+        {"appearance": {"ui_layout": None}},
+        None,
+    ),
+    "layout-base-omitted-is-unguarded": (
+        {"appearance": {"ui_layout": {"future.surface": {}}}},
+        {"appearance": {"ui_layout": {}}},
+        {"appearance": {"language": "en"}},
+        None,
+    ),
     "unchanged-since-base": (
         {"debug": {"enabled": False, "trace_limit": 50}},
         {"debug": {"enabled": False, "trace_limit": 100}},

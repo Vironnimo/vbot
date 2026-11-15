@@ -1156,6 +1156,16 @@ describe('Reflection rows', () => {
       'Nothing was undone: Skill “deploy” was changed again later by an edit outside vBot',
     ],
     [
+      'a later Memory change by an Extension',
+      {
+        store: 'memory',
+        scope: 'agent',
+        text: 'Uses pytest.',
+        later: { actor: 'extension' },
+      },
+      'Nothing was undone: the Agent Memory entry “Uses pytest.” was changed again later by an Extension',
+    ],
+    [
       'a later change of unknown revision',
       { store: 'skill', skill: 'deploy', later: null },
       'Nothing was undone: Skill “deploy” was changed again later. Change it directly instead.',

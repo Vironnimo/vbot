@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from core.config_validation import JsonConfigValidationError
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
+from core.utils.native_capabilities import validate_capability_ids
 from core.utils.workers import BoundedWorkerPool
 
 from ._store import COMPUTERS_PATH, ComputerClaimError, ComputerStore, validate_description
@@ -331,7 +332,23 @@ class ComputerRegistry:
     def receive(self, connection: ComputerConnection, message: Any) -> None:
         if connection.closed or not isinstance(message, dict):
             return
-        if message.get("type") == "result":
+        if message.get("type") == "capabilities":
+            capabilities = message.get("capabilities")
+            validate_capability_ids(capabilities)
+            assert isinstance(capabilities, list)
+            if self._connections.get(connection.info.id) is not connection:
+                return
+            # This is the current link's live offer, not a new identity claim.
+            # Keep pending requests and the incarnation; the next normal hello
+            # refreshes the persisted last-known capability metadata.
+            connection.info = replace(connection.info, capabilities=tuple(capabilities))
+            self._infos[connection.info.id] = connection.info
+            self._emit(
+                connection.info.id,
+                "capabilities_changed",
+                {"instance_id": connection.info.instance_id},
+            )
+        elif message.get("type") == "result":
             request_id = message.get("id")
             future = connection.pending.get(request_id) if isinstance(request_id, str) else None
             if future is None or future.done():
@@ -358,7 +375,7 @@ class ComputerRegistry:
             )
             if (
                 isinstance(event, str)
-                and event not in {"connected", "disconnected", "removed"}
+                and event not in {"connected", "disconnected", "removed", "capabilities_changed"}
                 and capability in connection.info.capabilities
                 and isinstance(data, dict)
             ):

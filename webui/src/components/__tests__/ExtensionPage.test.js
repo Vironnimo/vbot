@@ -140,57 +140,62 @@ async function flushReplies() {
 }
 
 describe('ExtensionPage frame bridge', () => {
-  it('binds declared services and surface commands to the current page and Chat context', async () => {
-    const onUiCommand = vi.fn().mockResolvedValue({ inserted: true });
-    api.invokeExtensionPageService.mockResolvedValue({ agents: ['alpha'] });
-    const page = openPage({
-      onUiCommand,
-      initialContext: {
-        api: { version: 30, features: ['ui.contributions', 'services'] },
-        ui: {
-          surface: 'chat.composer.actions',
-          context: { session_id: 'one' },
-          commands: ['composer.insert'],
+  it.each(['session_id', 'message_id', 'editor_mode'])(
+    'binds declared services and surface commands to the current page and %s context',
+    async (scopeField) => {
+      const onUiCommand = vi.fn().mockResolvedValue({ inserted: true });
+      api.invokeExtensionPageService.mockResolvedValue({ agents: ['alpha'] });
+      const page = openPage({
+        onUiCommand,
+        initialContext: {
+          api: { version: 30, features: ['ui.contributions', 'services'] },
+          ui: {
+            surface: 'chat.composer.actions',
+            context: { session_id: 'one', [scopeField]: 'one' },
+            commands: ['composer.insert'],
+          },
         },
-      },
-    });
-    expect(page.init.ui.context.session_id).toBe('one');
-    expect(page.init.api).toEqual({
-      version: 30,
-      features: ['ui.contributions', 'services'],
-    });
-    page.call('service', 'service.query', { name: 'agent.list', params: {} });
-    await page.replied('service');
-    expect(api.invokeExtensionPageService).toHaveBeenCalledExactlyOnceWith(
-      'alpha',
-      'main',
-      'epoch-a',
-      'query',
-      'agent.list',
-      {},
-    );
-    expect(page.reply('service').result).toEqual({ agents: ['alpha'] });
-    page.call('insert', 'ui.command', {
-      name: 'composer.insert',
-      params: { text: 'hello' },
-    });
-    await page.replied('insert');
-    expect(onUiCommand).toHaveBeenCalledExactlyOnceWith('composer.insert', {
-      text: 'hello',
-    });
-    component.update({ ui: { context: { session_id: 'two' } } });
-    flushSync();
-    page.call('obsolete', 'ui.command', {
-      name: 'composer.insert',
-      params: { text: 'old' },
-    });
-    await flushReplies();
-    expect(onUiCommand).toHaveBeenCalledTimes(1);
-    expect(
-      page.posted().findLast((item) => item.type === 'vbot.extension.init')
-        .nonce,
-    ).not.toBe(page.init.nonce);
-  });
+      });
+      expect(page.init.ui.context.session_id).toBe('one');
+      expect(page.init.api).toEqual({
+        version: 30,
+        features: ['ui.contributions', 'services'],
+      });
+      page.call('service', 'service.query', { name: 'agent.list', params: {} });
+      await page.replied('service');
+      expect(api.invokeExtensionPageService).toHaveBeenCalledExactlyOnceWith(
+        'alpha',
+        'main',
+        'epoch-a',
+        'query',
+        'agent.list',
+        {},
+      );
+      expect(page.reply('service').result).toEqual({ agents: ['alpha'] });
+      page.call('insert', 'ui.command', {
+        name: 'composer.insert',
+        params: { text: 'hello' },
+      });
+      await page.replied('insert');
+      expect(onUiCommand).toHaveBeenCalledExactlyOnceWith('composer.insert', {
+        text: 'hello',
+      });
+      component.update({
+        ui: { context: { session_id: 'one', [scopeField]: 'two' } },
+      });
+      flushSync();
+      page.call('obsolete', 'ui.command', {
+        name: 'composer.insert',
+        params: { text: 'old' },
+      });
+      await flushReplies();
+      expect(onUiCommand).toHaveBeenCalledTimes(1);
+      expect(
+        page.posted().findLast((item) => item.type === 'vbot.extension.init')
+          .nonce,
+      ).not.toBe(page.init.nonce);
+    },
+  );
 
   it('publishes bounded searchable page metadata and reveals it inside the current frame', async () => {
     const page = openPage({ embedded: true });

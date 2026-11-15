@@ -15,7 +15,7 @@ a Skill instead.)
 
 from __future__ import annotations
 
-from core.tools import tool_failure, tool_success
+from vbot_extension_sdk.tools import tool_failure, tool_success
 
 # JSON Schema for the tool's arguments — the same shape the model sees for
 # built-in tools. Keep descriptions concise and sufficient for correct use:

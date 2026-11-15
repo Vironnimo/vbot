@@ -2,7 +2,7 @@
 
 import sys
 
-from desktop.extensions import DesktopExtensionAPI, EventSink, ExecutionHandler
+from vbot_extension_sdk.desktop import DesktopExtensionAPI, EventSink, ExecutionHandler
 
 
 def _create(emit: EventSink) -> ExecutionHandler:

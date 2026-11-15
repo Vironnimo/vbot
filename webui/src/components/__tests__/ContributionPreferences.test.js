@@ -29,6 +29,10 @@ it('configures native composer controls before Chat has ever mounted and refines
     target: document.body,
     props: {
       component: ContributionPreferences,
+      source: {
+        settings: { appearance: { ui_layout: {} } },
+        writeSettings: async (params) => ({ appearance: params.appearance }),
+      },
       onRegistry: (value) => {
         registry = value;
       },
@@ -72,4 +76,49 @@ it('configures native composer controls before Chat has ever mounted and refines
   expect(rows()).toHaveLength(4);
   expect(rows()[2].textContent).toContain('Queue this message');
   unregister();
+});
+
+it('offers explicit browser migration and keeps failed shared saves recoverable', async () => {
+  init('en');
+  localStorage.setItem(
+    'vbot.ui-layout.v1',
+    JSON.stringify({
+      'chat.composer.actions': { hidden: ['core:composer.send'] },
+    }),
+  );
+  const writeSettings = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockImplementation(async (params) => ({ appearance: params.appearance }));
+  let registry;
+  component = mount(ContributionContextHost, {
+    target: document.body,
+    props: {
+      component: ContributionPreferences,
+      source: { settings: { appearance: { ui_layout: null } }, writeSettings },
+      onRegistry: (value) => {
+        registry = value;
+      },
+    },
+  });
+  flushSync();
+  expect(document.querySelector('fieldset').disabled).toBe(true);
+  const button = (label) =>
+    [...document.querySelectorAll('button')].find(
+      (item) => item.textContent.trim() === label,
+    );
+  button(t('contributions.importLayout')).click();
+  await vi.waitFor(() => expect(registry.error).toContain('offline'));
+  flushSync();
+  expect(document.body.textContent).toContain('offline');
+  expect(localStorage.getItem('vbot.ui-layout.v1')).not.toBeNull();
+  button(t('common.save')).click();
+  await vi.waitFor(() => expect(registry.pending).toBe(false));
+  flushSync();
+  expect(document.querySelector('fieldset').disabled).toBe(false);
+  expect(localStorage.getItem('vbot.ui-layout.v1')).toBeNull();
+  expect(
+    writeSettings.mock.calls[1][0].appearance.ui_layout['chat.composer.actions']
+      .hidden,
+  ).toEqual(['core:composer.send']);
 });

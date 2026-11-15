@@ -122,3 +122,54 @@ the owner-bound host; importing Runtime internals is not an SDK contract.
 Python Extensions execute trusted code in the server process. Page isolation and
 owner-bound APIs provide predictable application boundaries; they do not sandbox
 the Python code.
+
+## UI contributions
+
+Core controls and Extension contributions use the same composition, ordering,
+visibility and user-selected replacement rules. The host supports these areas:
+
+- `shell.status`, `shell.sidebar`, `chat.header`
+- `chat.composer.actions`, `chat.composer.context`, `chat.composer.footer`,
+  `chat.composer.footer.start`, `chat.composer.footer.end`
+- `chat.timeline`, `chat.tool-result`, `chat.message`, `chat.message.actions`
+- `chat.sessions`, `chat.session.item`
+- `agent.editor.sections`, `project.editor.sections`, `settings.sections`
+
+Each embedded page receives `context.ui.surface`, scalar `context.ui.context`,
+bounded `context.ui.data`, and the available `context.ui.commands`. Use only
+commands advertised in the current context. Local commands are tied to that
+Message, Session row, editor or composer. `message.copy` copies the current text;
+`session.open` opens the current row; `editor.focus({field})` focuses `name` or
+`description` in an Agent editor and `display_name` in a Project editor.
+Composer commands edit the draft; starting a Run requires the declared nonhuman
+service path, never the human Send path. Message projections exclude attachments
+and Provider payloads and mark text truncation. A scope change retires the page
+handshake, so retained requests cannot act on the next Message or editor.
+
+`when` accepts the original flat equality map or a structured expression:
+
+```json
+{
+  "all": [
+    {"field": "message_role", "op": "in", "value": ["assistant", "user"]},
+    {"field": "context_tokens", "op": "gte", "value": 1000},
+    {"not": {"run_active": true}}
+  ]
+}
+```
+
+`all` and `any` require nonempty arrays; `not` contains one expression. Predicates
+use a declared context field, `op` (`eq`, `ne`, `in`, `exists`, `gt`, `gte`, `lt`,
+`lte`) and `value`. Existence takes a boolean, membership takes scalar values,
+and ordered comparisons require finite numbers without coercion. Missing fields
+fail comparisons; `{ "field": "project_id", "op": "exists", "value": false }`
+tests absence explicitly. Expressions are limited to depth 8 and 64 nodes.
+Message scopes add `message_id` and `message_role`, Session rows add
+`session_selected`, and editor scopes add `editor_mode` (`create` or `edit`).
+
+Interface layout preferences are shared by browsers connected to the same
+server. Settings offers explicit migration of an older browser-local layout;
+a saved server layout always wins. Unknown or temporarily unavailable
+contribution IDs remain saved, and unavailable selected replacements restore the
+native control. Extensions declare replacement eligibility; the user chooses
+whether to activate it.

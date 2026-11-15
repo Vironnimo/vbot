@@ -29,6 +29,7 @@ from core.channels.config import (
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
+    ChannelPlatformUnavailableError,
     _normalize_channel_id,
 )
 from core.channels.engine import ChannelConversationEngine
@@ -1004,7 +1005,8 @@ class ChannelService:
                     # credentials cannot undo that identity change: retain the
                     # new config and expose/retry the adapter failure normally.
                     self._connections.mark_failed(channel_id, str(error) or type(error).__name__)
-                    self._connections.schedule_restart(channel_id)
+                    if not isinstance(error, ChannelPlatformUnavailableError):
+                        self._connections.schedule_restart(channel_id)
                     _LOGGER.error(
                         "Cannot restart channel adapter after Agent rename (channel=%s): %s",
                         channel_id,

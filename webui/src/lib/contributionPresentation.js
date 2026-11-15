@@ -16,6 +16,15 @@ export function contributionSurfaceOptions() {
     { value: 'chat.composer.footer.end', label: t('contributions.footerEnd') },
     { value: 'chat.timeline', label: t('contributions.timeline') },
     { value: 'chat.tool-result', label: t('contributions.toolResult') },
+    { value: 'chat.message', label: t('contributions.message') },
+    { value: 'chat.message.actions', label: t('contributions.messageActions') },
+    { value: 'chat.sessions', label: t('contributions.sessions') },
+    { value: 'chat.session.item', label: t('contributions.sessionItem') },
+    { value: 'agent.editor.sections', label: t('contributions.agentEditor') },
+    {
+      value: 'project.editor.sections',
+      label: t('contributions.projectEditor'),
+    },
     { value: 'settings.sections', label: t('contributions.settings') },
   ];
 }
@@ -82,6 +91,30 @@ const BUILTIN_ENTRIES = {
   'chat.timeline': [['core:chat.timeline', () => t('chat.title'), 10]],
   'chat.tool-result': [
     ['core:chat.tool-result', () => t('chat.toolResultLabel'), 10],
+  ],
+  'chat.message': [['core:chat.message.content', () => t('chat.title'), 10]],
+  'chat.message.actions': [
+    ['core:chat.message.copy', () => t('common.copy'), 10],
+    ['core:chat.message.edit', () => t('chat.editMessage'), 20],
+  ],
+  'chat.sessions': [
+    ['core:chat.sessions.controls', () => t('sessions.title'), 10],
+    ['core:chat.sessions.new', () => t('chat.newSession'), 20],
+  ],
+  'chat.session.item': [
+    ['core:chat.session.select', () => t('sessions.title'), 10],
+    ['core:chat.session.actions', () => t('sessions.actions'), 20],
+  ],
+  'agent.editor.sections': [
+    ['core:agent.editor.overview', () => t('agents.detail.identity'), 10],
+    ['core:agent.editor.behavior', () => t('agents.contextMemory'), 20],
+    ['core:agent.editor.access', () => t('agents.form.toolAccess'), 30],
+    ['core:agent.editor.details', () => t('agents.storageDetails'), 40],
+  ],
+  'project.editor.sections': [
+    ['core:project.editor.overview', () => t('projects.repositorySection'), 10],
+    ['core:project.editor.context', () => t('projects.part.context'), 20],
+    ['core:project.editor.team', () => t('projects.part.team'), 30],
   ],
 };
 

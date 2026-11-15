@@ -42,6 +42,7 @@ from core.skills import (
     SkillRevertConflictError,
     SkillRevertIncompleteError,
     SkillRevision,
+    SkillWriter,
 )
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -489,8 +490,9 @@ class LearningChanges:
         """Take back every change of the Run that is not undone yet, all of them or none.
 
         *workspace* is the Agent's Workspace, which holds its Memory files;
-        *actor* names the person's surface in the Memory history (``rpc`` from
-        an RPC). Raises :class:`LearningRunActiveError` while the Run still
+        *actor* names the calling surface in the Memory history (``rpc`` from
+        a user RPC, ``extension`` from a service). Extension calls retain that
+        actor in Skill history too. Raises :class:`LearningRunActiveError` while the Run still
         runs, :class:`LearningUndoConflictError` when a later change built on
         one of the Run's changes and :class:`LearningUndoError` for any other
         refusal, all before writing. A failure while writing takes back what
@@ -504,6 +506,7 @@ class LearningChanges:
         guards are held, before reading histories or changing either store.
         """
         _check_ids(agent_id, run_id)
+        skill_writer = SkillWriter(actor="extension") if actor == "extension" else HUMAN_WRITER
         with (
             self._undo_lock,
             self._agent_guard(),
@@ -535,7 +538,7 @@ class LearningChanges:
                     self._skills.check_revert(
                         skill_plan.home,
                         skill_plan.revisions,
-                        writer=HUMAN_WRITER,
+                        writer=skill_writer,
                         related=skill_plan.related,
                     )
             applied_skills: list[tuple[_SkillUndo, list[SkillRevision]]] = []
@@ -547,11 +550,11 @@ class LearningChanges:
                         skill_reverts = self._skills.revert(
                             skill_plan.home,
                             skill_plan.revisions,
-                            writer=HUMAN_WRITER,
+                            writer=skill_writer,
                             related=skill_plan.related,
                         )
                 except Exception as error:
-                    if self._restore_skills(agent_id, run_id, applied_skills):
+                    if self._restore_skills(agent_id, run_id, applied_skills, skill_writer):
                         raise LearningUndoFailedError(
                             "The undo stopped part-way; some Skill changes could not be "
                             "restored. Inspect the remaining Run changes and undo again to finish."
@@ -586,6 +589,7 @@ class LearningChanges:
                         run_id,
                         applied_skills,
                         error,
+                        skill_writer,
                         project_id=plan.project_id,
                     )
                     if not restored:
@@ -780,6 +784,7 @@ class LearningChanges:
         agent_id: str,
         run_id: str,
         applied: Sequence[tuple[_SkillUndo, Sequence[SkillRevision]]],
+        writer: SkillWriter,
     ) -> int:
         """Compensate completed Skill homes, returning the number left undone."""
         left = 0
@@ -788,7 +793,7 @@ class LearningChanges:
             if revisions:
                 try:
                     self._skills.revert(
-                        plan.home, [revision.id for revision in revisions], writer=HUMAN_WRITER
+                        plan.home, [revision.id for revision in revisions], writer=writer
                     )
                     restored = True
                 except Exception:
@@ -808,6 +813,7 @@ class LearningChanges:
         run_id: str,
         applied: Sequence[tuple[_SkillUndo, Sequence[SkillRevision]]],
         failure: Exception,
+        writer: SkillWriter,
         *,
         project_id: str | None = None,
     ) -> LearningError:
@@ -818,7 +824,7 @@ class LearningChanges:
         did not record cannot be taken back and stays undone.
         """
         skill_count = sum(len(plan.revisions) for plan, _ in applied)
-        skills_left = self._restore_skills(agent_id, run_id, applied)
+        skills_left = self._restore_skills(agent_id, run_id, applied, writer)
         if skill_count and not skills_left:
             _LOGGER.warning(
                 "Learning undo failed; Skills restored (agent=%s run=%s)", agent_id, run_id

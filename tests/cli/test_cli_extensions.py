@@ -141,6 +141,23 @@ def _schema_payload(*extra_fields: dict[str, Any]) -> dict[str, Any]:
             ("homeassistant", "overridden", "/data/extensions/homeassistant/__init__.py"),
             id="overridden",
         ),
+        pytest.param(
+            [
+                _extension(
+                    "partial",
+                    "loaded",
+                    capability_errors=[
+                        "contribution 'broken' skipped: page 'missing' is unknown or unavailable"
+                    ],
+                )
+            ],
+            (
+                "partial",
+                "loaded",
+                "warning: contribution 'broken' skipped: page 'missing' is unknown or unavailable",
+            ),
+            id="capability-diagnostic",
+        ),
     ],
 )
 def test_extensions_list_prints_each_extension_state(

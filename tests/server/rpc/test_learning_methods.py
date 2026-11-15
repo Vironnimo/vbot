@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from core.automation import LearningChanges
 from core.memory import MemoryService, MemoryWriter
 from core.skills import HUMAN_WRITER, SkillWriter
+from server.extension_services import extension_service_context
 from tests.server.rpc_test_support import (
     StubAdapter,
     make_state,
@@ -77,11 +79,13 @@ def _reviewed_agent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_project", [False, True], ids=["personal", "shared-project"])
 @pytest.mark.parametrize("with_shared", [False, True], ids=["own-skills", "shared-skills"])
+@pytest.mark.parametrize("actor", ["rpc", "extension"])
 async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     with_project: bool,
     with_shared: bool,
+    actor: str,
 ) -> None:
     state, agent_dir = _reviewed_agent(tmp_path, with_project=with_project, with_shared=with_shared)
     invalidated: list[str | None] = []
@@ -94,7 +98,15 @@ async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
         running = await rpc_error(state, "learning.undo", agent_id="coder", run_id=REVIEW)
     assert (running["code"], running["data"]) == ("active_run", {"run_id": REVIEW})
     assert resource_changes(state) == []
-    undone = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
+    with extension_service_context() if actor == "extension" else nullcontext():
+        undone = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
+    assert state.runtime.memory.recorded_revisions("coder")[-1].actor == actor
+    expected_skill_actor = "extension" if actor == "extension" else "human"
+    for owner in ["coder", "owner"] if with_shared else ["coder"]:
+        history = state.runtime.skill_authoring.recorded_revisions(
+            tmp_path / "agents" / owner / "skills"
+        )
+        assert history[-1].actor == expected_skill_actor
 
     memory_count = 2 if with_project else 1
     skill_count = 2 if with_shared else 1

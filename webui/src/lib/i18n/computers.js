@@ -56,6 +56,16 @@ export default {
     'Allow the connected server to see and operate this desktop with its mouse and keyboard.',
   'computers.capabilityUnavailable': 'Unavailable on this computer.',
   'computers.capabilityError': 'Unavailable: {reason}',
+  'computers.reloadExtensions': 'Reload local Extensions',
+  'computers.reloading': 'Reloading Extensions…',
+  'computers.reloadHelp':
+    'Apply changes to Extensions installed on this computer. Updated Extensions keep their sharing choices; new Extensions start unshared.',
+  'computers.reloadError':
+    'The local Extensions could not be reloaded. Try again.',
+  'computers.extensionAdded':
+    '{name} was added. Review its sharing choices above.',
+  'computers.extensionUpdated': '{name} was updated.',
+  'computers.extensionRemoved': '{name} was removed.',
   'computers.connectedTo': 'Connected to {server}',
   'computers.notConnected':
     'Not connected. Shared capabilities will become available when this app connects to its server.',

@@ -27,6 +27,7 @@ from core.automation import (
     LibrarianService,
     LibrarianUnavailableError,
 )
+from server.extension_services import is_extension_service_call
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -81,8 +82,9 @@ async def _librarian_undo(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "started_at"}, "librarian.undo")
     agent_id = _required_string(params, "agent_id")
     started_at = _required_string(params, "started_at")
+    actor = "extension" if is_extension_service_call() else "rpc"
     try:
-        return await _librarian(state).undo(agent_id, started_at)
+        return await _librarian(state).undo(agent_id, started_at, actor=actor)
     except LearningRunActiveError as exc:
         raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc), data={"run_id": exc.run_id}) from exc
     except LearningUndoConflictError as exc:

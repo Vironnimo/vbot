@@ -70,6 +70,55 @@ def make_service(trigger: StubTriggerService, data_root: Path, startup_id: str) 
     return BootstrapService(cast(Any, trigger), data_root, startup_id=startup_id)
 
 
+def test_change_subscriptions_observe_only_committed_mutations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(StubTriggerService(), tmp_path, "startup-one")
+    observed: list[list[dict[str, Any]]] = []
+
+    def record() -> None:
+        observed.append([job.to_dict() for job in service.list_jobs()])
+
+    def broken_callback() -> None:
+        raise RuntimeError("Observer failure must not fail a committed change")
+
+    unsubscribe = service.add_changed_callback(record)
+    remove_broken = service.add_changed_callback(broken_callback)
+    job = service.create_job(agent_id="main", prompt="Startup work", mode="once")
+    assert observed[-1] == [job.to_dict()]
+    remove_broken()
+
+    service.update_job(job.id, prompt="Changed work")
+    assert observed[-1][0]["prompt"] == "Changed work"
+    service.update_job(job.id, prompt="Changed work")
+    assert len(observed) == 2
+    service.disable_job(job.id)
+    assert observed[-1][0]["status"] == "paused"
+    service.enable_job(job.id)
+    assert observed[-1][0]["status"] == "active"
+    service.retarget_agent(job.id, "other")
+    assert observed[-1][0]["agent_id"] == "other"
+    service.rename_prompt_skill(job.id, "Renamed Skill")
+    assert observed[-1][0]["prompt"] == "Renamed Skill"
+
+    def failed_write(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("Storage unavailable")
+
+    with monkeypatch.context() as failed:
+        failed.setattr(bootstrap_module, "write_json_document", failed_write)
+        with pytest.raises(BootstrapStorageError):
+            service.update_job(job.id, prompt="Not committed")
+    assert len(observed) == 6
+    assert service.get_job(job.id).prompt == "Renamed Skill"
+    service.delete_job(job.id)
+    assert observed[-1] == []
+    assert len(observed) == 7
+    unsubscribe()
+    unsubscribe()
+    service.create_job(agent_id="main", prompt="After unsubscribe", mode="once")
+    assert len(observed) == 7
+
+
 @pytest.mark.asyncio
 async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> None:
     first_trigger = StubTriggerService()
@@ -88,6 +137,8 @@ async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> N
 
     second_trigger = StubTriggerService()
     second = make_service(second_trigger, tmp_path, "startup-two")
+    observed = []
+    second.add_changed_callback(lambda: observed.append(second.get_job(created.id)))
     second.activate()
     await second.wait_until_idle()
 
@@ -106,6 +157,8 @@ async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> N
     assert completed.status == "completed"
     assert completed.last_outcome == "success"
     assert completed.last_run_id == "run-1"
+    assert observed[-1] == completed
+    assert any(job.last_started_startup_id == "startup-two" for job in observed)
 
 
 @pytest.mark.asyncio

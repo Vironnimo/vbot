@@ -403,7 +403,7 @@ class LibrarianService:
         )
         return await self.status(agent_id)
 
-    async def undo(self, agent_id: str, started_at: str) -> dict[str, Any]:
+    async def undo(self, agent_id: str, started_at: str, *, actor: str = "rpc") -> dict[str, Any]:
         """Undo one retained pass, including aging and every shared Skill owner."""
         if self._closed:
             raise LibrarianBusyError("The Librarian is shutting down.")
@@ -414,7 +414,12 @@ class LibrarianService:
         async def undo_and_publish() -> dict[str, Any]:
             try:
                 owners = await _LIBRARIAN_WORKERS.run(
-                    self._undo_pass, agent_id, started_at, agent.created_at, Path(agent.workspace)
+                    self._undo_pass,
+                    agent_id,
+                    started_at,
+                    agent.created_at,
+                    Path(agent.workspace),
+                    actor,
                 )
             except LearningUndoFailedError:
                 # A failed compensation can leave changes in any participating home.
@@ -453,7 +458,7 @@ class LibrarianService:
         return record
 
     def _undo_pass(
-        self, agent_id: str, started_at: str, agent_created_at: str, workspace: Path
+        self, agent_id: str, started_at: str, agent_created_at: str, workspace: Path, actor: str
     ) -> set[str]:
         with self._runtime.agents.lifecycle_guard():
             record = self._pass_to_undo(agent_id, started_at, agent_created_at)
@@ -471,7 +476,7 @@ class LibrarianService:
             agent_id,
             record.run_id or f"librarian-pass:{agent_id}:{record.started_at}",
             workspace=workspace,
-            actor="rpc",
+            actor=actor,
             skill_revisions={agent_id: record.archived_revisions},
             validate=validate,
         )

@@ -848,6 +848,8 @@
       uiContext?.context?.project_id,
       uiContext?.context?.run_id,
       uiContext?.context?.tool_call_id,
+      uiContext?.context?.message_id,
+      uiContext?.context?.editor_mode,
     ]);
     if (observedUiScope && next !== observedUiScope && frameContext)
       onFrameLoad();

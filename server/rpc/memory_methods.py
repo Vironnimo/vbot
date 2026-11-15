@@ -20,6 +20,7 @@ from core.memory import (
 from core.memory._file_backend import memory_source_path
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
+from server.extension_services import is_extension_service_call
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -40,6 +41,7 @@ class _MemoryOwner:
     workspace: Path
     agent_id: str | None = None
     project_id: str | None = None
+    actor: str = "rpc"
 
     @property
     def fields(self) -> JsonObject:
@@ -55,7 +57,7 @@ class _MemoryOwner:
 
     @property
     def writer(self) -> MemoryWriter:
-        return MemoryWriter(agent_id=self.agent_id, project_id=self.project_id, actor="rpc")
+        return MemoryWriter(agent_id=self.agent_id, project_id=self.project_id, actor=self.actor)
 
 
 def _guard_memory_mutation(handler: MutationHandler) -> MutationHandler:
@@ -346,6 +348,7 @@ def _revision_response(revision: MemoryRevision) -> JsonObject:
 
 
 async def _memory_owner(state: Any, params: JsonObject) -> _MemoryOwner:
+    actor = "extension" if is_extension_service_call() else "rpc"
     if ("agent_id" in params) == ("project_id" in params):
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -354,13 +357,13 @@ async def _memory_owner(state: Any, params: JsonObject) -> _MemoryOwner:
     if "project_id" in params:
         project_id = _required_string(params, "project_id")
         workspace = await _MEMORY_RPC_WORKERS.run(_project_workspace, state, project_id)
-        return _MemoryOwner(workspace=workspace, project_id=project_id)
+        return _MemoryOwner(workspace=workspace, project_id=project_id, actor=actor)
     agent_id = _required_string(params, "agent_id")
     try:
         agent = await state.runtime.agents.get_async(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _MemoryOwner(workspace=Path(agent.workspace), agent_id=agent_id)
+    return _MemoryOwner(workspace=Path(agent.workspace), agent_id=agent_id, actor=actor)
 
 
 def _project_workspace(state: Any, project_id: str) -> Path:

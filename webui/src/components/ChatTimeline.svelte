@@ -653,6 +653,7 @@
     {/if}
     {#if item.type === 'assistant_run'}
       <ChatAssistantRun
+        {uiContext}
         {item}
         {agentName}
         {chatWorkingMode}
@@ -684,6 +685,7 @@
       />
     {:else}
       <ChatTimelineEntry
+        {uiContext}
         {item}
         {agentName}
         {isReasoningOpen}

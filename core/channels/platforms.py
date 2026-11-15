@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
 from jsonschema import Draft202012Validator
 
 from core.channels.adapter import ChannelAdapter
-from core.channels.config import ChannelConfig, ChannelConfigError
+from core.channels.config import (
+    ChannelConfig,
+    ChannelConfigError,
+    ChannelPlatformUnavailableError,
+)
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentStore
@@ -104,7 +108,7 @@ class ChannelPlatforms:
             if not available:
                 return
             choices = ", ".join(item["id"] for item in self.catalog())
-            raise ChannelConfigError(
+            raise ChannelPlatformUnavailableError(
                 f"Channel platform '{config.platform}' is unavailable. Available: {choices}"
             )
         errors = sorted(

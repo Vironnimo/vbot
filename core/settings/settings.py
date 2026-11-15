@@ -66,6 +66,7 @@ from core.settings._rules import (
     validate_timezone_name,
     validate_top_p,
 )
+from core.settings._ui_layout import normalize_ui_layout
 from core.settings._update_models import (
     _parse_local_models_update,
     _parse_model_tasks_update,
@@ -431,15 +432,20 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
             f"unsupported appearance settings: {', '.join(unsupported_fields)}"
         )
 
-    # `language` stays required so a partial update never resets it: the
-    # appearance section is normalized as a whole (full replace), so callers
-    # send the complete section. Display preferences are optional and validated
-    # when present; missing values normalize to their defaults.
-    language = appearance.get("language")
-    if not isinstance(language, str) or not language:
-        raise SettingsValidationError("params.appearance.language must be a non-empty string")
+    parsed: JsonObject = {}
+    if "language" in appearance:
+        language = appearance["language"]
+        if not isinstance(language, str) or not language:
+            raise SettingsValidationError("params.appearance.language must be a non-empty string")
+        parsed["language"] = language
 
-    parsed: JsonObject = {"language": language}
+    if "ui_layout" in appearance:
+        try:
+            parsed["ui_layout"] = normalize_ui_layout(
+                appearance["ui_layout"], "params.appearance.ui_layout"
+            )
+        except StorageError as error:
+            raise SettingsValidationError(str(error)) from error
 
     if "chat_width" in appearance:
         chat_width = appearance.get("chat_width")

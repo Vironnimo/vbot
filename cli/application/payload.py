@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 SHAPES = ("server", "server-desktop", "desktop-client")
-APP_COMMON = ("core", "cli")
+APP_COMMON = ("core", "cli", "vbot_extension_sdk")
 APP_SERVER = ("server", "resources", "webui/dist")
 APP_DESKTOP = ("desktop",)
 # The Desktop Client hosts the native desktop target without loading the
@@ -32,6 +32,8 @@ APP_DESKTOP_TARGET += (
     "resources/extensions/computer_use/extension.json",
     "resources/extensions/terminal/extension.json",
     "resources/extensions/terminal/desktop.py",
+    "resources/extensions/terminal/docs/usage.md",
+    "resources/sdk/vbot_extension_sdk-31.0.0-py3-none-any.whl",
 )
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}

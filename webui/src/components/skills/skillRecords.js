@@ -52,7 +52,7 @@ export function formatSkillTime(value) {
     : '';
 }
 
-/** Who wrote a Skill or a revision: a person, an Agent, or a background job. */
+/** Who wrote a Skill or revision, preserving human and nonhuman provenance. */
 export function skillActorLabel(actor) {
   switch (actor) {
     case 'human':
@@ -63,6 +63,8 @@ export function skillActorLabel(actor) {
       return t('skills.actor.reflection');
     case 'librarian':
       return t('skills.actor.librarian');
+    case 'extension':
+      return t('skills.actor.extension');
     case 'external':
       return t('skills.actor.external');
     default:

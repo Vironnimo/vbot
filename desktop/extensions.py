@@ -8,20 +8,31 @@ This module deliberately imports no server or Runtime services.
 from __future__ import annotations
 
 import hashlib
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import logging
+import os
 import re
 import sys
+import uuid
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
-from typing import Any, Protocol
+from types import CodeType, ModuleType
+from typing import Any, Protocol, override
 
 from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.native_capabilities import (
+    MAX_CAPABILITY_CATALOG_BYTES,
+    qualified_capability_id,
+    valid_capability_id,
+    validate_capability_ids,
+)
 
-DESKTOP_EXTENSION_API_VERSION = 1
+DESKTOP_EXTENSION_API_VERSION = 2
 _CAPABILITY_ID = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _LOGGER = logging.getLogger("vbot.desktop.extensions")
 
@@ -48,6 +59,12 @@ class NativeCapability:
     description: str
     factory: HandlerFactory
     available: bool = True
+    source: str = ""
+    revision: str = ""
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.source, self.revision
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -61,8 +78,13 @@ class NativeCapability:
 class DesktopExtensionAPI:
     """Declaration-only API passed to a local Extension's ``register`` function."""
 
-    def __init__(self, owner: str) -> None:
+    def __init__(
+        self, owner: str, *, source: str = "", revision: str = "", legacy: bool = False
+    ) -> None:
         self._owner = owner
+        self._source = source
+        self._revision = revision
+        self._legacy = legacy
         self._capabilities: dict[str, NativeCapability] = {}
 
     def register_capability(
@@ -89,17 +111,34 @@ class DesktopExtensionAPI:
             raise ValueError("A capability description must be text of up to 2000 characters")
         if not callable(factory) or not isinstance(available, bool):
             raise ValueError("A capability needs a factory and boolean availability")
+        capability_id = (
+            name
+            if self._legacy and name == self._owner
+            else qualified_capability_id(self._owner, name)
+        )
+        if not valid_capability_id(capability_id):
+            raise ValueError("The Extension folder name cannot form a native capability identity")
         self._capabilities[name] = NativeCapability(
-            name, self._owner, label.strip(), description, factory, available
+            capability_id,
+            self._owner,
+            label.strip(),
+            description,
+            factory,
+            available,
+            self._source,
+            self._revision,
         )
 
 
 @dataclass
 class DesktopExtensionCatalog:
-    """A startup snapshot; failed or shadowing local identities remain visible."""
+    """One local snapshot; failed or shadowing identities remain visible."""
 
     capabilities: dict[str, NativeCapability] = field(default_factory=dict)
     records: list[dict[str, Any]] = field(default_factory=list)
+    _cache: dict[tuple[str, str], tuple[str, tuple[NativeCapability, ...] | None]] = field(
+        default_factory=dict
+    )
 
     @property
     def factories(self) -> Mapping[str, HandlerFactory]:
@@ -107,13 +146,17 @@ class DesktopExtensionCatalog:
 
 
 def load_desktop_extensions(
-    roots: Iterable[Path], *, disabled: Iterable[str] = ()
+    roots: Iterable[Path],
+    *,
+    disabled: Iterable[str] = (),
+    previous: DesktopExtensionCatalog | None = None,
 ) -> DesktopExtensionCatalog:
     """Collect trusted local native entries in first-identity-wins root order.
 
     A server entry point is never imported. A disabled, invalid or server-only
     earlier folder still claims its identity, so it cannot activate a later copy.
-    Entry changes take effect on the next Desktop launch.
+    An explicit local reload may pass its previous snapshot. Unchanged packages
+    retain their declarations; changed packages get an isolated source namespace.
     """
     catalog = DesktopExtensionCatalog()
     claimed: set[str] = set()
@@ -167,26 +210,105 @@ def load_desktop_extensions(
                 record["status"] = "disabled"
                 continue
             try:
-                declarations = _load_declarations(candidate)
+                source, revision, legacy = _source_identity(candidate)
+                cache_key = (source, name)
+                cached = previous._cache.get(cache_key) if previous is not None else None
+                declarations = (
+                    cached[1]
+                    if cached is not None and cached[0] == revision
+                    else _load_declarations(candidate, source, revision, legacy)
+                )
+                catalog._cache[cache_key] = (revision, declarations)
                 if declarations is None:
                     record["status"] = "server_only"
                     continue
+                combined = {**catalog.capabilities}
                 for capability in declarations:
-                    if capability.id in catalog.capabilities or len(catalog.capabilities) >= 32:
-                        record["capability_errors"].append(capability.id)
-                        continue
-                    catalog.capabilities[capability.id] = capability
+                    if capability.id in combined:
+                        raise ValueError(f"Native capability {capability.id} is already registered")
+                    combined[capability.id] = capability
+                validate_capability_ids(list(combined))
+                if (
+                    len(json.dumps([item.describe() for item in combined.values()]).encode())
+                    > MAX_CAPABILITY_CATALOG_BYTES
+                ):
+                    raise ValueError("Native capability catalog exceeds the 4 MiB transport budget")
+                catalog.capabilities = combined
+                record["capabilities"] = [item.id for item in declarations]
+                if previous is not None:
+                    record["change"] = (
+                        "unchanged"
+                        if cached is not None and cached[0] == revision
+                        else "updated"
+                        if cached is not None
+                        else "added"
+                    )
             except Exception as error:
-                record.update(status="failed", error=type(error).__name__)
+                record.update(status="failed", error=f"{type(error).__name__}: {error}")
                 _LOGGER.warning(
                     "Desktop Extension registration failed (extension=%s error=%s)",
                     name,
                     type(error).__name__,
                 )
+    if previous is not None:
+        present = {record["name"] for record in catalog.records}
+        for owner in sorted({item.owner for item in previous.capabilities.values()} - present):
+            catalog.records.append({"name": owner, "status": "removed", "capability_errors": []})
     return catalog
 
 
-def _load_declarations(root: Path) -> tuple[NativeCapability, ...] | None:
+def _source_identity(root: Path) -> tuple[str, str, bool]:
+    resolved = root.resolve()
+    builtin_root = Path(__file__).resolve().parent.parent / "resources" / "extensions"
+    legacy = (
+        root.name in {"terminal", "computer_use"}
+        and resolved == (builtin_root / root.name).resolve()
+    )
+    source = (
+        f"builtin:{root.name}"
+        if legacy
+        else hashlib.sha256(os.path.normcase(str(resolved)).encode()).hexdigest()
+    )
+    digest = hashlib.sha256()
+    for directory, children, files in os.walk(resolved):
+        children[:] = sorted(
+            name
+            for name in children
+            if name not in {"__pycache__", ".git", ".venv", "node_modules"}
+        )
+        for name in sorted(files):
+            path = Path(directory) / name
+            if path.suffix != ".py" and path != resolved / "extension.json":
+                continue
+            if not path.resolve().is_relative_to(resolved):
+                raise ValueError("Desktop Extension source must stay inside its local package")
+            digest.update(path.relative_to(resolved).as_posix().encode())
+            digest.update(b"\x00")
+            digest.update(path.read_bytes())
+    return source, digest.hexdigest(), legacy
+
+
+class _SourceLoader(importlib.machinery.SourceFileLoader):
+    @override
+    def get_code(self, fullname: str) -> CodeType:
+        # Native reloads must not reuse timestamp/size based .pyc caches.
+        return compile(self.get_data(self.path), self.path, "exec", dont_inherit=True)
+
+
+class _SourceFinder(importlib.abc.MetaPathFinder):
+    @override
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if not fullname.startswith("vbot_desktop_ext_"):
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is not None and isinstance(spec.loader, importlib.machinery.SourceFileLoader):
+            spec.loader = _SourceLoader(fullname, spec.loader.path)
+        return spec
+
+
+def _load_declarations(
+    root: Path, source: str, revision: str, legacy: bool
+) -> tuple[NativeCapability, ...] | None:
     try:
         manifest = json.loads((root / "extension.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -218,11 +340,10 @@ def _load_declarations(root: Path) -> tuple[NativeCapability, ...] | None:
         raise ValueError("A Desktop entry must stay inside its Extension")
     # A fresh package namespace allows relative imports without executing a
     # server-side __init__.py, or mixing edited modules with an earlier load.
-    digest = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    package_name = f"vbot_desktop_ext_{digest}"
-    for imported in tuple(sys.modules):
-        if imported == package_name or imported.startswith(package_name + "."):
-            del sys.modules[imported]
+    digest = hashlib.sha256(f"{root.resolve()}:{revision}".encode()).hexdigest()[:16]
+    package_name = f"vbot_desktop_ext_{digest}_{uuid.uuid4().hex[:12]}"
+    if not any(isinstance(finder, _SourceFinder) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _SourceFinder())
     package = ModuleType(package_name)
     package.__path__ = [str(root)]
     sys.modules[package_name] = package
@@ -234,20 +355,47 @@ def _load_declarations(root: Path) -> tuple[NativeCapability, ...] | None:
         namespace = ModuleType(entry_package)
         namespace.__path__ = [str(entry_directory)]
         sys.modules[entry_package] = namespace
-    spec = importlib.util.spec_from_file_location(f"{entry_package}.entry", path)
+    spec = importlib.util.spec_from_file_location(
+        f"{entry_package}.entry", path, loader=_SourceLoader(f"{entry_package}.entry", str(path))
+    )
     if spec is None or spec.loader is None:
         raise ValueError("The Desktop entry cannot be loaded")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    api = DesktopExtensionAPI(root.name)
-    register = getattr(module, "register", None)
-    if not callable(register):
-        raise ValueError("The Desktop entry needs a register function")
-    result = register(api)
-    if result is not None:
-        close = getattr(result, "close", None)
-        if callable(close):
-            close()
-        raise ValueError("Desktop registration must be synchronous and return None")
-    return tuple(api._capabilities.values())
+    try:
+        spec.loader.exec_module(module)
+        api = DesktopExtensionAPI(root.name, source=source, revision=revision, legacy=legacy)
+        register = getattr(module, "register", None)
+        if not callable(register):
+            raise ValueError("The Desktop entry needs a register function")
+        result = register(api)
+        if result is not None:
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+            raise ValueError("Desktop registration must be synchronous and return None")
+        capabilities = tuple(api._capabilities.values())
+    except BaseException:
+        _remove_namespace(package_name)
+        raise
+    remaining = len(capabilities)
+
+    def release_namespace() -> None:
+        nonlocal remaining
+        remaining -= 1
+        if remaining <= 0:
+            _remove_namespace(package_name)
+
+    # A live handler's event sink retains its declaration. Old relative imports
+    # therefore remain valid until both the catalog and its handlers retire.
+    for capability in capabilities:
+        weakref.finalize(capability, release_namespace)
+    if not capabilities:
+        release_namespace()
+    return capabilities
+
+
+def _remove_namespace(package_name: str) -> None:
+    for name in tuple(sys.modules):
+        if name == package_name or name.startswith(package_name + "."):
+            sys.modules.pop(name, None)

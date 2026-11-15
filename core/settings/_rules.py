@@ -95,7 +95,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
 
 # Field membership is shared by raw documents, strict updates and tolerant
 # normalization; each boundary keeps its own required fields and value rules.
-APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
+APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode", "ui_layout"})
 ARCHIVE_FIELDS = frozenset({"retention_days"})
 COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
 DEFAULTS_SECTIONS = frozenset({"agent"})

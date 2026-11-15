@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 
 from core.extensions import ExtensionRegistry
-from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+from core.extensions.extensions import API_VERSION, ExtensionAPI, ExtensionDeclarations
+from tests.core.extensions.extension_test_support import write_package
 
 
 def test_manifest_only_extension_publishes_owned_ui_without_importing_native_code(
@@ -104,3 +105,88 @@ def test_contribution_declarations_detach_inputs_and_keep_explicit_operation_sco
         )
     api.register_page("page", "Page", "page.html", icon={"paths": ["M1 1L9 9"]})
     assert declarations.pages[0].icon == {"paths": ["M1 1L9 9"], "view_box": "0 0 16 16"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "async_registration", [False, True], ids=["sync-register", "async-register"]
+)
+@pytest.mark.parametrize("async_load", [False, True], ids=["load", "aload"])
+async def test_final_declaration_references_are_diagnosed_without_losing_valid_capabilities(
+    tmp_path: Path, async_registration: bool, async_load: bool
+) -> None:
+    register = "async def register(api):" if async_registration else "def register(api):"
+    pause = "    await asyncio.sleep(0)\n" if async_registration else ""
+    package = write_package(
+        tmp_path,
+        "references",
+        "import asyncio\n"
+        "async def read(arguments):\n"
+        "    return {'text': 'ready'}\n"
+        f"{register}\n"
+        "    api.register_contribution('valid-source', surface='shell.status', kind='status', "
+        "title='Ready', source={'operation': 'read'}, operations=['read'])\n"
+        "    api.register_contribution('bad-operations', surface='shell.status', kind='status', "
+        "title='Bad operations', source={'operation': 'missing-source'}, "
+        "action={'operation': 'missing-action'}, operations=['missing-dynamic'])\n"
+        "    api.register_service('read', 'query', {'type': 'object'}, read, "
+        "resources=['changes'])\n"
+        "    api.register_service('save', 'execute', {'type': 'object'}, read)\n"
+        "    api.register_service('bad', 'query', {'type': 'object'}, read, "
+        "resources=['changes', 'missing-resource'])\n"
+        f"{pause}"
+        "    api.operations.register('read', 'Read', {'type': 'object'}, read)\n"
+        "    api.register_resource('changes')\n"
+        "    api.register_page('panel', 'Panel', 'panel.html')\n"
+        "    api.register_page('unbuilt', 'Unbuilt', 'unbuilt.html')\n",
+        manifest={
+            "api_version": API_VERSION,
+            "contributions": [
+                {
+                    "id": contribution_id,
+                    "surface": "settings.sections",
+                    "kind": "view",
+                    "title": contribution_id,
+                    "page": page,
+                }
+                for contribution_id, page in [
+                    ("valid-view", "panel"),
+                    ("bad-view", "missing-page"),
+                    ("unbuilt-view", "unbuilt"),
+                ]
+            ],
+        },
+    )
+    (package / "panel.html").write_text("<!doctype html>", encoding="utf-8")
+    registry = (
+        await ExtensionRegistry.aload(tmp_path) if async_load else ExtensionRegistry.load(tmp_path)
+    )
+    try:
+        record = registry.records()[0]
+        assert record.status == "loaded"
+        identity = registry.registration_identity("references")
+        assert registry.current_contribution(identity, "valid-view") is not None
+        assert registry.current_contribution(identity, "valid-source") is not None
+        assert registry.current_contribution(identity, "bad-view") is None
+        assert registry.current_contribution(identity, "bad-operations") is None
+        diagnostics = "\n".join(record.capability_errors)
+        assert "contribution 'bad-view' skipped" in diagnostics
+        assert "missing-page" in diagnostics
+        assert "contribution 'bad-operations' skipped" in diagnostics
+        assert all(
+            name in diagnostics for name in ("missing-action", "missing-source", "missing-dynamic")
+        )
+        assert "page 'unbuilt' skipped: entry is missing" in diagnostics
+        assert "service 'bad' skipped: unknown resources: missing-resource" in diagnostics
+        assert [service.name for service in record.declarations.services] == ["read", "save"]
+        assert [resource.name for resource in record.declarations.resources] == ["changes"]
+        # Assets may appear after a build without changing registration identity.
+        assert registry.current_page(identity, "unbuilt") is not None
+        assert registry.current_contribution(identity, "unbuilt-view") is not None
+        (package / "unbuilt.html").write_text("<!doctype html>", encoding="utf-8")
+        assert {page.page_id for _identity, page, _entry in registry.page_declarations()} == {
+            "panel",
+            "unbuilt",
+        }
+    finally:
+        registry.retire_registration()

@@ -75,6 +75,7 @@ from core.subagents._constants import (
     SUBAGENT_START_FIRST_TEXT,
     SUBAGENT_STARTED_NOTE,
     SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE,
+    USER_CANCEL_REASON,
 )
 from core.subagents._delegation import (
     _admission,
@@ -401,8 +402,14 @@ class SubAgentCoordinator:
     ) -> JsonObject | None:
         return await self._tree.inspect(agent_id, session_id, subagent_id, project_id=project_id)
 
-    async def stop_tree(self, address: SessionAddress) -> int:
-        return await self._tree.stop_tree(address)
+    async def stop_tree(
+        self,
+        address: SessionAddress,
+        *,
+        reason: str = USER_CANCEL_REASON,
+        initiator: str = "user_stop_all",
+    ) -> int:
+        return await self._tree.stop_tree(address, reason=reason, initiator=initiator)
 
     async def work_snapshot(
         self, address: SessionAddress, *, include_entries: bool = False

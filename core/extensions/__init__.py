@@ -43,7 +43,11 @@ if TYPE_CHECKING:
         ExtensionOperations,
         ManagementOperation,
     )
-    from core.extensions.services import ExtensionServiceError, ExtensionServices
+    from core.extensions.services import (
+        ExtensionServiceError,
+        ExtensionServices,
+        ExtensionSubscription,
+    )
     from core.extensions.settings_schema import (
         SettingsFieldDeclaration,
         parse_settings_fields,
@@ -51,6 +55,7 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "ExtensionSubscription": "core.extensions.services",
     "ExtensionServices": "core.extensions.services",
     "ExtensionServiceError": "core.extensions.services",
     "Database": "core.extensions.databases",
@@ -104,6 +109,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "ExtensionSubscription",
     "ExtensionServices",
     "ExtensionServiceError",
     "Database",

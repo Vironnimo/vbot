@@ -57,10 +57,16 @@ def summary(service: SkillAuthoringService, root: Path, name: str | None = None)
 
 
 @pytest.mark.parametrize("subject_created_at", [None, "2026-10-29T12:00:00.000001Z"])
+@pytest.mark.parametrize(
+    "base_writer", [AGENT, SkillWriter(actor="extension")], ids=["agent", "extension"]
+)
 def test_every_write_records_its_writer_and_files(
-    service: SkillAuthoringService, root: Path, subject_created_at: str | None
+    service: SkillAuthoringService,
+    root: Path,
+    subject_created_at: str | None,
+    base_writer: SkillWriter,
 ) -> None:
-    writer = replace(AGENT, subject_created_at=subject_created_at)
+    writer = replace(base_writer, subject_created_at=subject_created_at)
     service.create(root, "demo", skill_document(), writer=writer)
     service.write_file(root, "demo", "references/notes.md", "notes\r\n", writer=writer)
     service.rewrite(root, "demo", "SKILL.md", lambda text: text + "More.\n", writer=HUMAN_WRITER)
@@ -70,13 +76,17 @@ def test_every_write_records_its_writer_and_files(
     assert summary(service, root) == [
         (4, "demo", "change", "human"),
         (3, "demo", "change", "human"),
-        (2, "demo", "change", "agent"),
-        (1, "demo", "create", "agent"),
+        (2, "demo", "change", writer.actor),
+        (1, "demo", "create", writer.actor),
     ]
     assert summary(service, root, "demo")[:1] == [(4, "demo", "change", "human")]
     assert len(service.history(root, limit=2)) == 2
     first, second, *_ = history_lines(root)
-    assert (first["session_id"], first["run_id"], first["run_kind"]) == ("s-1", "r-1", "user")
+    assert (first.get("session_id"), first.get("run_id"), first.get("run_kind")) == (
+        writer.session_id,
+        writer.run_id,
+        writer.run_kind,
+    )
     assert first.get("subject_created_at") == second.get("subject_created_at") == subject_created_at
     assert "subject_created_at" not in history_lines(root)[2]
     # Decode the durable format from a different path, without the writer's cache.
@@ -84,6 +94,7 @@ def test_every_write_records_its_writer_and_files(
     reopened.parent.mkdir()
     shutil.copyfile(root.parent / "skill-history.jsonl", reopened.parent / "skill-history.jsonl")
     loaded = SkillHistory(reopened).revisions()
+    assert loaded[0].actor == loaded[0].origin == writer.actor
     assert [revision.subject_created_at for revision in loaded] == [
         subject_created_at,
         subject_created_at,
@@ -107,7 +118,7 @@ def test_every_write_records_its_writer_and_files(
     )
     record = service.record(root, "demo")
     assert record is not None
-    assert (record.origin, record.pinned, record.changed_by) == ("agent", False, "human")
+    assert (record.origin, record.pinned, record.changed_by) == (writer.actor, False, "human")
     assert record.created_at == first["at"]
 
 
@@ -272,7 +283,14 @@ def test_background_writers_change_unpinned_skills_whoever_created_them(
     )
 
 
-def test_pins_are_recorded_and_only_people_pin(service: SkillAuthoringService, root: Path) -> None:
+@pytest.mark.parametrize(
+    "writer", [AGENT, SkillWriter(actor="extension")], ids=["agent", "extension"]
+)
+def test_pins_are_recorded_and_only_people_pin(
+    service: SkillAuthoringService,
+    root: Path,
+    writer: SkillWriter,
+) -> None:
     service.create(root, "demo", skill_document(), writer=AGENT)
 
     pinned = service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
@@ -281,12 +299,27 @@ def test_pins_are_recorded_and_only_people_pin(service: SkillAuthoringService, r
     assert (pinned.revision, unchanged.revision) == (2, None)
     assert service.records(root)["demo"].pinned is True
     with pytest.raises(SkillAuthoringError, match="Only a person"):
-        service.set_pinned(root, "demo", False, writer=AGENT)
+        service.set_pinned(root, "demo", False, writer=writer)
+    if writer.actor == "extension":
+        for attempt in (service.check_revert, service.revert):
+            with pytest.raises(
+                SkillAuthoringError, match="Extension writers cannot change Skill pins"
+            ):
+                attempt(root, [int(pinned.revision or 0)], writer=writer)
+        assert service.records(root)["demo"].pinned is True
     service.set_pinned(root, "demo", False, writer=HUMAN_WRITER)
     assert summary(service, root)[:2] == [
         (3, "demo", "unpin", "human"),
         (2, "demo", "pin", "human"),
     ]
+    if writer.actor == "extension":
+        # A revert of a human revert is still a pin mutation, not a loophole.
+        [reverted] = service.revert(root, [3], writer=HUMAN_WRITER)
+        for attempt in (service.check_revert, service.revert):
+            with pytest.raises(
+                SkillAuthoringError, match="Extension writers cannot change Skill pins"
+            ):
+                attempt(root, [reverted.id], writer=writer)
 
 
 @pytest.mark.parametrize("existing_folder", ["demo", "other-folder"])

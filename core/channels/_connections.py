@@ -17,6 +17,7 @@ from core.channels.config import (
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
+    ChannelPlatformUnavailableError,
     _normalize_channel_id,
 )
 from core.channels.engine import ChannelConversationEngine
@@ -126,9 +127,11 @@ class ChannelConnections:
         except Exception as error:
             reason = str(error) or type(error).__name__
             self.mark_failed(channel_id, reason)
-            self.schedule_restart(channel_id)
+            if not isinstance(error, ChannelPlatformUnavailableError):
+                self.schedule_restart(channel_id)
             if isinstance(error, ChannelError):
-                # Expected, such as a missing credential: recovery retries it.
+                # Missing platforms resume on registration; transient config
+                # failures such as missing credentials retain ordinary recovery.
                 _LOGGER.warning(
                     "Cannot start configured channel adapter (channel=%s error_type=%s): %s",
                     channel_id,
@@ -422,7 +425,8 @@ class ChannelConnections:
                 return
             self._adapter_stop_tasks.pop(channel_id, None)
             self.mark_failed(channel_id, str(error) or type(error).__name__)
-            self.schedule_restart(channel_id)
+            if not isinstance(error, ChannelPlatformUnavailableError):
+                self.schedule_restart(channel_id)
             _LOGGER.error(
                 "Cannot start queued channel adapter after stop completed (channel=%s): %s",
                 channel_id,
@@ -536,6 +540,11 @@ class ChannelConnections:
                 self._failure_reasons.pop(channel_id, None)
 
         self._failure_reasons[channel_id] = str(error)
+
+        if isinstance(error, ChannelPlatformUnavailableError):
+            self.mark_failed(channel_id, str(error))
+            _LOGGER.warning("Channel platform unavailable (channel=%s): %s", channel_id, error)
+            return
 
         if channel_id in self._adapter_outages:
             _LOGGER.debug(
@@ -689,7 +698,8 @@ class ChannelConnections:
             )
         if owns_restart:
             self.mark_failed(channel_id, str(error) or type(error).__name__)
-            self.schedule_restart(channel_id)
+            if not isinstance(error, ChannelPlatformUnavailableError):
+                self.schedule_restart(channel_id)
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:

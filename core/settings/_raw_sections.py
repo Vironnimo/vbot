@@ -51,6 +51,7 @@ from core.settings._raw_schema import (
     WEB_SEARCH_FIELDS,
     WEB_SEARCH_SEARXNG_FIELDS,
 )
+from core.settings._ui_layout import UiLayoutError, normalize_ui_layout
 from core.settings.agent_defaults import diagnose_agent_default_value
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
@@ -226,6 +227,10 @@ def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     _warn_unknown_keys(diagnostics, "$.appearance", value, APPEARANCE_FIELDS, "appearance field")
     _validate_appearance_chat_width(diagnostics, value.get("chat_width"))
     _validate_appearance_chat_working_mode(diagnostics, value.get("chat_working_mode"))
+    try:
+        normalize_ui_layout(value.get("ui_layout"), "$.appearance.ui_layout")
+    except UiLayoutError as error:
+        _error(diagnostics, error.path, error.detail)
 
     language = value.get("language")
     if language is None:

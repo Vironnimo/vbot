@@ -56,6 +56,7 @@
   } from '$lib/chatTimelinePresentation.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
+  import MessageContributionSurface from './MessageContributionSurface.svelte';
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -75,6 +76,7 @@
   let {
     item,
     agentName = '',
+    uiContext = {},
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
     messageEditingDisabledReason = '',
@@ -378,30 +380,54 @@
           >{formatTime(item.message.timestamp)}</span
         >
       {/if}
-      {#if ['assistant', 'user'].includes(item.message.role) && copyableMessageText(item.message)}
-        <CopyButton
-          text={copyableMessageText(item.message)}
-          class="chat-copy-action message-copy"
-          label={copyLabelForMessage(item.message)}
-          copiedLabel={copiedLabelForMessage(item.message)}
-        />
-      {/if}
-      {#if item.message.editable === true && !editing}
-        <Button
-          variant="tertiary"
-          icon
-          class="chat-edit-action message-edit"
-          ariaLabel={t('chat.editMessage')}
-          tooltip={t('chat.editMessage')}
-          disabled={Boolean(messageEditingDisabledReason)}
-          disabledReason={messageEditingDisabledReason}
-          onClick={() => beginEditing(item.message)}
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-            <path d="M4 20h4l11-11-4-4L4 16v4ZM13.5 6.5l4 4" />
-          </svg>
-        </Button>
-      {/if}
+      {#snippet copyMessage()}
+        {#if ['assistant', 'user'].includes(item.message.role) && copyableMessageText(item.message)}
+          <CopyButton
+            text={copyableMessageText(item.message)}
+            class="chat-copy-action message-copy"
+            label={copyLabelForMessage(item.message)}
+            copiedLabel={copiedLabelForMessage(item.message)}
+          />
+        {/if}
+      {/snippet}
+      {#snippet editMessage()}
+        {#if item.message.editable === true && !editing}
+          <Button
+            variant="tertiary"
+            icon
+            class="chat-edit-action message-edit"
+            ariaLabel={t('chat.editMessage')}
+            tooltip={t('chat.editMessage')}
+            disabled={Boolean(messageEditingDisabledReason)}
+            disabledReason={messageEditingDisabledReason}
+            onClick={() => beginEditing(item.message)}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M4 20h4l11-11-4-4L4 16v4ZM13.5 6.5l4 4" />
+            </svg>
+          </Button>
+        {/if}
+      {/snippet}
+      <MessageContributionSurface
+        surface="chat.message.actions"
+        message={item.message}
+        text={copyableMessageText(item.message)}
+        {uiContext}
+        builtins={[
+          {
+            id: 'core:chat.message.copy',
+            title: t('common.copy'),
+            order: 10,
+            render: copyMessage,
+          },
+          {
+            id: 'core:chat.message.edit',
+            title: t('chat.editMessage'),
+            order: 20,
+            render: editMessage,
+          },
+        ]}
+      />
     </div>
     <div class="msg-content">
       {#if editing}
@@ -439,67 +465,82 @@
           </span>
         </div>
       {:else}
-        {#if hasReadableReasoning(item.message) && (hasAssistantContent(item.message) || item.message.reasoning_summary?.length)}
-          <ChatReasoning
-            source={item.message.reasoning ?? ''}
-            summary={item.message.reasoning_summary}
-            open={isReasoningOpen(item.id)}
-            durationLabel={reasoningDurationLabel({
-              durationMs: item.message.reasoning_timing?.duration_ms,
-            })}
-            onOpenChange={(open) => onReasoningOpenChange(item.id, open)}
-          />
-        {/if}
-        {#if hasUserContentBlocks(item.message)}
-          <div class="msg-body-blocks">
-            {#each userContentBlocks(item.message) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
-              {@render userContentBlock(block, blockIndex)}
-            {/each}
-          </div>
-        {:else if textFromMessage(item.message)}
-          {#if item.message.role === 'assistant'}
-            {#if isReasoningOnlyAssistantMessage(item.message)}
-              {#if !item.message.reasoning_summary?.length}<p
-                  class="msg-body-text"
-                >
-                  {textFromMessage(item.message)}
-                </p>{/if}
-            {:else}
-              <MarkdownContent
-                source={textFromMessage(item.message)}
-                class="msg-markdown"
-              />
-            {/if}
-          {:else if item.message.role === 'error'}
-            {@const errorPresentation = errorMessagePresentation(
-              textFromMessage(item.message),
-            )}
-            <p class="msg-body-text">{errorPresentation.summary}</p>
-            {#if errorPresentation.details}
-              <details
-                class="error-details"
-                open={viewState.isOpen(disclosureKey('error'))}
-                ontoggle={(event) =>
-                  viewState.setOpen(
-                    disclosureKey('error'),
-                    event.currentTarget.open,
-                  )}
-              >
-                <summary class="error-details-summary">
-                  {t('chat.errorDetails')}
-                </summary>
-                <pre
-                  class="error-details-body">{errorPresentation.details}</pre>
-              </details>
-            {/if}
-          {:else if item.message.role === 'user'}
-            {@render userText(textFromMessage(item.message), 'user-text')}
-          {:else}
-            <p class="msg-body-text">
-              {@render linkifiedText(textFromMessage(item.message))}
-            </p>
+        {#snippet messageContent()}
+          {#if hasReadableReasoning(item.message) && (hasAssistantContent(item.message) || item.message.reasoning_summary?.length)}
+            <ChatReasoning
+              source={item.message.reasoning ?? ''}
+              summary={item.message.reasoning_summary}
+              open={isReasoningOpen(item.id)}
+              durationLabel={reasoningDurationLabel({
+                durationMs: item.message.reasoning_timing?.duration_ms,
+              })}
+              onOpenChange={(open) => onReasoningOpenChange(item.id, open)}
+            />
           {/if}
-        {/if}
+          {#if hasUserContentBlocks(item.message)}
+            <div class="msg-body-blocks">
+              {#each userContentBlocks(item.message) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
+                {@render userContentBlock(block, blockIndex)}
+              {/each}
+            </div>
+          {:else if textFromMessage(item.message)}
+            {#if item.message.role === 'assistant'}
+              {#if isReasoningOnlyAssistantMessage(item.message)}
+                {#if !item.message.reasoning_summary?.length}<p
+                    class="msg-body-text"
+                  >
+                    {textFromMessage(item.message)}
+                  </p>{/if}
+              {:else}
+                <MarkdownContent
+                  source={textFromMessage(item.message)}
+                  class="msg-markdown"
+                />
+              {/if}
+            {:else if item.message.role === 'error'}
+              {@const errorPresentation = errorMessagePresentation(
+                textFromMessage(item.message),
+              )}
+              <p class="msg-body-text">{errorPresentation.summary}</p>
+              {#if errorPresentation.details}
+                <details
+                  class="error-details"
+                  open={viewState.isOpen(disclosureKey('error'))}
+                  ontoggle={(event) =>
+                    viewState.setOpen(
+                      disclosureKey('error'),
+                      event.currentTarget.open,
+                    )}
+                >
+                  <summary class="error-details-summary">
+                    {t('chat.errorDetails')}
+                  </summary>
+                  <pre
+                    class="error-details-body">{errorPresentation.details}</pre>
+                </details>
+              {/if}
+            {:else if item.message.role === 'user'}
+              {@render userText(textFromMessage(item.message), 'user-text')}
+            {:else}
+              <p class="msg-body-text">
+                {@render linkifiedText(textFromMessage(item.message))}
+              </p>
+            {/if}
+          {/if}
+        {/snippet}
+        <MessageContributionSurface
+          message={item.message}
+          text={copyableMessageText(item.message)}
+          {uiContext}
+          builtins={[
+            {
+              id: 'core:chat.message.content',
+              title: t('chat.title'),
+              order: 10,
+              render: messageContent,
+            },
+          ]}
+        />
       {/if}
     </div>
   </article>

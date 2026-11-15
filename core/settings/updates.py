@@ -64,7 +64,7 @@ _MISSING = object()
 def apply_appearance_settings(
     settings: dict[str, Any],
     appearance: Mapping[str, Any],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Merge Appearance settings into an in-memory settings mapping."""
 
     if not isinstance(appearance, Mapping):
@@ -74,10 +74,10 @@ def apply_appearance_settings(
     if unsupported_fields:
         raise StorageError(f"Unsupported appearance settings: {', '.join(unsupported_fields)}")
 
-    if "language" not in appearance:
-        raise StorageError("Appearance settings must include language")
-
-    settings["appearance"] = normalize_appearance_settings(appearance)
+    previous = settings.get("appearance")
+    merged = dict(previous) if isinstance(previous, Mapping) else {}
+    merged.update(appearance)
+    settings["appearance"] = {**merged, **normalize_appearance_settings(merged)}
     return dict(settings["appearance"])
 
 
@@ -611,6 +611,8 @@ def stale_setting_paths(
 def _changed_leaves(before: Any, after: Any, path: tuple[str, ...]) -> list[tuple[str, ...]]:
     if settings_values_equal(before, after):
         return []
+    if path == ("appearance", "ui_layout"):
+        return [path]
     if isinstance(before, Mapping) and isinstance(after, Mapping):
         return [
             changed

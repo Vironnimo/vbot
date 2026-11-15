@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
+from desktop import extensions
 from desktop.extensions import load_desktop_extensions
 
 
@@ -45,14 +47,34 @@ def test_native_discovery_never_imports_server_code_or_constructs_handlers(
     )
     (native_directory / "labels.py").write_text("LABEL = 'Office printer'", encoding="utf-8")
     catalog = load_desktop_extensions([tmp_path])
-    assert catalog.records == [{"name": "printer", "status": "loaded", "capability_errors": []}]
-    assert catalog.capabilities["printer"].describe() == {
-        "id": "printer",
+    assert catalog.records[0]["status"] == "loaded"
+    assert catalog.records[0]["capabilities"] == ["extension:printer:printer"]
+    assert catalog.capabilities["extension:printer:printer"].describe() == {
+        "id": "extension:printer:printer",
         "owner": "printer",
         "label": "Office printer",
         "description": "Print documents",
     }
-    assert set(catalog.factories) == {"printer"}
+    assert set(catalog.factories) == {"extension:printer:printer"}
+    unchanged = load_desktop_extensions([tmp_path], previous=catalog)
+    assert (
+        unchanged.capabilities["extension:printer:printer"]
+        is catalog.capabilities["extension:printer:printer"]
+    )
+    labels = native_directory / "labels.py"
+    stamp = labels.stat()
+    labels.write_text("LABEL = 'Edited printer'", encoding="utf-8")
+    os.utime(labels, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    changed = load_desktop_extensions([tmp_path], previous=unchanged)
+    assert changed.capabilities["extension:printer:printer"].label == "Edited printer"
+    assert (
+        changed.capabilities["extension:printer:printer"].source
+        == catalog.capabilities["extension:printer:printer"].source
+    )
+    assert (
+        changed.capabilities["extension:printer:printer"].revision
+        != catalog.capabilities["extension:printer:printer"].revision
+    )
 
 
 @pytest.mark.parametrize("state", ["disabled", "failed", "server_only"])
@@ -79,17 +101,65 @@ def test_invalid_disabled_settings_prevent_native_loading(tmp_path: Path, disabl
     assert not catalog.capabilities
 
 
-def test_native_capability_collisions_preserve_the_first_owner_and_diagnose_the_second(
+def test_native_capabilities_are_owner_qualified_without_a_small_count_limit(
     tmp_path: Path,
 ) -> None:
     declaration = (
-        "def register(api):\n    api.register_capability('printer', 'Printer', lambda emit: None)\n"
+        "def register(api):\n"
+        "    for number in range(40):\n"
+        "        api.register_capability('printer_' + str(number), 'Printer', lambda emit: None)\n"
     )
     _extension(tmp_path, "first", declaration)
     _extension(tmp_path, "second", declaration)
     catalog = load_desktop_extensions([tmp_path])
-    assert catalog.capabilities["printer"].owner == "first"
-    assert catalog.records[1]["capability_errors"] == ["printer"]
+    assert len(catalog.capabilities) == 80
+    assert catalog.capabilities["extension:first:printer_0"].owner == "first"
+    assert catalog.capabilities["extension:second:printer_0"].owner == "second"
+    assert all(record["status"] == "loaded" for record in catalog.records)
+
+
+def test_reload_cache_keeps_distinct_owners_when_packages_resolve_to_one_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for owner in ("alpha", "beta"):
+        _extension(
+            tmp_path,
+            owner,
+            "def register(api):\n"
+            "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
+        )
+    identify = extensions._source_identity
+
+    def aliased_source(root: Path) -> tuple[str, str, bool]:
+        _source, revision, legacy = identify(root)
+        return "same-resolved-package", revision, legacy
+
+    # Canonical source identity is equal for directory aliases/junctions, while
+    # their registration owners are the distinct visible folder names.
+    monkeypatch.setattr(extensions, "_source_identity", aliased_source)
+    initial = load_desktop_extensions([tmp_path])
+    reloaded = load_desktop_extensions([tmp_path], previous=initial)
+    assert set(reloaded.capabilities) == {"extension:alpha:printer", "extension:beta:printer"}
+    assert all(record["status"] == "loaded" for record in reloaded.records)
+    for capability_id, capability in reloaded.capabilities.items():
+        assert capability is initial.capabilities[capability_id]
+
+
+def test_only_shipped_native_packages_keep_legacy_capability_ids(tmp_path: Path) -> None:
+    _extension(
+        tmp_path,
+        "terminal",
+        "def register(api):\n"
+        "    api.register_capability('terminal', 'Other terminal', lambda emit: None)\n",
+    )
+    bundled = Path(__file__).resolve().parents[2] / "resources" / "extensions"
+    shipped = load_desktop_extensions([bundled])
+    assert {"terminal", "computer_use"} <= shipped.capabilities.keys()
+    assert shipped.capabilities["terminal"].source == "builtin:terminal"
+    local = load_desktop_extensions([tmp_path, bundled])
+    assert "terminal" not in local.capabilities
+    assert "extension:terminal:terminal" in local.capabilities
 
 
 @pytest.mark.parametrize("entry", ["../outside.py", "/outside.py", "C:/outside.py", "native.js"])

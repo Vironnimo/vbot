@@ -346,6 +346,7 @@ export default Object.freeze({
   'skills.actor.agent': 'An Agent',
   'skills.actor.reflection': 'A background Reflection',
   'skills.actor.librarian': 'Skill maintenance',
+  'skills.actor.extension': 'An Extension',
   'skills.actor.external': 'Outside vBot',
   'skills.actor.unknown': 'Unknown',
   'skills.facts.createdBy': 'Created by',

@@ -265,7 +265,20 @@ class DesktopBridge:
             summaries.append(f"{label}: {description}" if description else label)
         self._permissions.computer_sharing(server_url, summaries)
         return self._computer_sharing.update(
-            changes, expected_server=server_url, confirm=self._confirm
+            changes,
+            expected_server=server_url,
+            confirm=self._confirm,
+            expected_revision=status.get("catalog_revision"),
+        )
+
+    def reloadDesktopExtensions(self) -> dict[str, Any]:  # noqa: N802
+        """Reload locally installed native packages, never code supplied by a page."""
+        if self._computer_sharing is None:
+            raise BridgeError("computer_sharing_unavailable")
+        server_url = self._computer_sharing.status()["server_url"]
+        self._permissions.reload_desktop_extensions(server_url)
+        return self._computer_sharing.reload_extensions(
+            expected_server=server_url, confirm=self._confirm
         )
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802

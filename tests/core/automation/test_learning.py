@@ -240,7 +240,10 @@ def test_the_changes_of_a_run_are_its_net_effect(agent: _Agent) -> None:
     assert agent.entries() == {"user": [], "agent": ["Uses pytest."]}
 
 
-def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> None:
+@pytest.mark.parametrize("actor", ["rpc", "extension"])
+def test_undo_takes_back_every_change_with_the_callers_provenance(
+    agent: _Agent, actor: str
+) -> None:
     before = agent.skill_files()
     review(agent)
     project = agent.project()
@@ -259,7 +262,7 @@ def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> N
         agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
     assert agent.files() == files
     agent.running.clear()
-    result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
+    result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor=actor)
 
     assert (result.memory_changed, result.skills_changed) == (True, True)
     assert result.changes.summary.to_dict() == {"memory": 3, "skills": 3, "undone": True}
@@ -270,15 +273,16 @@ def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> N
     assert agent.skill_files() == before
     memory_reverts = [r for r in agent.memory.recorded_revisions(AGENT_ID) if r.kind == "revert"]
     assert sorted((r.scope, r.actor, r.reverts) for r in memory_reverts) == [
-        ("agent", "rpc", (3,)),
-        ("user", "rpc", (2,)),
+        ("agent", actor, (3,)),
+        ("user", actor, (2,)),
     ]
     skill_reverts = [r for r in agent.skills.recorded_revisions(agent.home) if r.kind == "revert"]
+    skill_actor = "extension" if actor == "extension" else "human"
     assert sorted((r.actor, r.reverts) for r in skill_reverts) == [
-        ("human", (3,)),
-        ("human", (4,)),
-        ("human", (5,)),
-        ("human", (6,)),
+        (skill_actor, (3,)),
+        (skill_actor, (4,)),
+        (skill_actor, (5,)),
+        (skill_actor, (6,)),
     ]
     # Nothing is left to take back.
     again = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
@@ -683,12 +687,14 @@ def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
         ),
     ],
 )
+@pytest.mark.parametrize("actor", ["rpc", "extension"])
 def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
     agent: _Agent,
     monkeypatch: pytest.MonkeyPatch,
     break_writes: Callable[[pytest.MonkeyPatch, _Agent], None],
     error_type: type[LearningError],
     user_memory_undone: bool,
+    actor: str,
 ) -> None:
     review(agent)
     skill_files = agent.skill_files()
@@ -697,7 +703,7 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
     with monkeypatch.context() as patch:
         break_writes(patch, agent)
         with pytest.raises(error_type):
-            agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
+            agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor=actor)
 
     assert agent.skill_files() == skill_files
     assert agent.entries() == ({**entries, "user": []} if user_memory_undone else entries)
@@ -707,8 +713,14 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
         for path in agent.projects.values()
     )
     assert agent.learning.of_run(AGENT_ID, REVIEW).summary.undone is False
+    skill_actor = "extension" if actor == "extension" else "human"
+    assert all(
+        revision.actor == skill_actor
+        for revision in agent.skills.recorded_revisions(agent.home)
+        if revision.kind == "revert"
+    )
     # What the failed attempt left recorded belongs to the review itself, so it
     # never blocks undoing the rest.
-    result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
+    result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor=actor)
     assert result.changes.summary.undone is True
     assert not (agent.home / "deploy").exists()

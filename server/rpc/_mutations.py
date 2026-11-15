@@ -52,6 +52,20 @@ def state_lock(state: Any, lock_attribute: str) -> asyncio.Lock:
     return lock
 
 
+def require_mutation_available(state: Any, lock_attribute: str) -> None:
+    """Reject recursive writes before admission or acquisition of another lock.
+
+    Multi-stage operations use this before launching work which will later need
+    the publication lock. Waiting inside the callback would deadlock the writer
+    awaiting that callback; admitting external work first would also be too late.
+    """
+    if _current_lease(state_lock(state, lock_attribute)) is not None:
+        raise RpcError(
+            "mutation_in_progress",
+            "A callback cannot start another mutation of the state being published",
+        )
+
+
 @asynccontextmanager
 async def state_read_lock(state: Any, lock_attribute: str) -> AsyncIterator[None]:
     """Join an enclosing mutation's read lease, or acquire its publication lock.
@@ -91,11 +105,7 @@ def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> Mut
 
     async def run(state: Any, params: JsonObject) -> JsonObject:
         lock = state_lock(state, lock_attribute)
-        if _current_lease(lock) is not None:
-            raise RpcError(
-                "mutation_in_progress",
-                "A callback cannot start another mutation of the state being published",
-            )
+        require_mutation_available(state, lock_attribute)
         async with lock:
             lease = _ReadLease(lock)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -269,10 +270,20 @@ class BootstrapService:
         self._activation_task: asyncio.Task[None] | None = None
         self._running_job_ids: set[str] = set()
         self._active_runs: dict[str, Any] = {}
+        self._changed_callbacks: set[Callable[[], None]] = set()
 
     @property
     def startup_id(self) -> str:
         return self._startup_id
+
+    def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to committed job and Run-state changes; return an idempotent unsubscribe."""
+        self._changed_callbacks.add(callback)
+
+        def unsubscribe() -> None:
+            self._changed_callbacks.discard(callback)
+
+        return unsubscribe
 
     def create_job(
         self,
@@ -763,6 +774,11 @@ class BootstrapService:
             raise BootstrapStorageError(str(error)) from error
         except OSError as error:
             raise BootstrapStorageError(f"Cannot write {self._jobs_path}: {error}") from error
+        for callback in tuple(self._changed_callbacks):
+            try:
+                callback()
+            except Exception:
+                _LOGGER.exception("Bootstrap change callback failed")
 
     def _validate_job(self, job: BootstrapJob, *, validate_references: bool = True) -> None:
         if not is_valid_agent_id(job.agent_id):
