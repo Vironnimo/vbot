@@ -53,6 +53,9 @@ _CURRENT_SUBSCRIPTION: ContextVar[_Subscription | None] = ContextVar(
 class ExtensionServiceError(ValueError):
     """An expected public-service refusal with a transport-independent code."""
 
+    code: str
+    data: Any
+
     def __init__(self, code: str, message: str, data: Any = None) -> None:
         super().__init__(message)
         self.code = code
@@ -185,7 +188,7 @@ class ExtensionServiceCatalog:
         self._exported_services: dict[str, ExportedService] = {}
         self._exported_resources: dict[str, ExportedResource] = {}
         self._exclusions: dict[str, str] = {}
-        self._publish_export: Callable[[str, JsonObject | None], None] | None = None
+        self._publish_export: Callable[[JsonObject], None] | None = None
         self._export_context: Callable[[], AbstractContextManager[None]] = nullcontext
         self._subscriptions: set[_Subscription] = set()
         self._lock = threading.RLock()
@@ -218,7 +221,7 @@ class ExtensionServiceCatalog:
         *,
         resources: Iterable[str] = (),
         exclusions: Mapping[str, str] | None = None,
-        publish_export: Callable[[str, JsonObject | None], None] | None = None,
+        publish_export: Callable[[JsonObject], None] | None = None,
         export_context: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> Callable[[], None]:
         self._capture_loop()
@@ -445,7 +448,22 @@ class ExtensionServiceCatalog:
                     raise _parameter_error(error)
             self.publish(name, value)
             if self._publish_export is not None:
-                self._publish_export(name, value)
+                # Browser invalidations contain public declarations only. Scope
+                # belongs to Python observers and may contain private metadata.
+                self._publish_export(
+                    {
+                        "owner": owner.name,
+                        "epoch": owner.epoch,
+                        "resource": name,
+                        "local_resource": exported.declaration.name,
+                        "revision": self._revision,
+                        "services": sorted(
+                            service_name
+                            for service_name, service in self._exported_services.items()
+                            if name in service.resources
+                        ),
+                    }
+                )
 
     def subscribe(
         self,

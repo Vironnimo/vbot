@@ -62,6 +62,8 @@ describe('ChatComposer', () => {
           { draftKey: 'agent::second', onSendMessage },
         ],
         source: {
+          settings: { appearance: { ui_layout: {} } },
+          writeSettings: async (params) => ({ appearance: params.appearance }),
           entries: [
             {
               id: 'extension:example:insert',
@@ -100,9 +102,11 @@ describe('ChatComposer', () => {
     });
     try {
       flushSync();
-      registry.save('chat.composer.actions', {
-        hidden: ['core:composer.attachment'],
-      });
+      expect(
+        await registry.save('chat.composer.actions', {
+          hidden: ['core:composer.attachment'],
+        }),
+      ).toBe(true);
       flushSync();
       expect(
         document.querySelectorAll(
@@ -152,7 +156,7 @@ describe('ChatComposer', () => {
       ).toMatchObject({ type: 'vbot.extension.error' });
       expect(onSendMessage).not.toHaveBeenCalled();
       sent.mockRestore();
-      registry.reset('chat.composer.actions');
+      expect(await registry.reset('chat.composer.actions')).toBe(true);
       flushSync();
       expect(
         document.querySelectorAll(

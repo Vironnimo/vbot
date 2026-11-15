@@ -161,6 +161,7 @@ export function createAppController({
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
   onPublicResourceChange = () => {},
+  onExtensionResourceChange = () => {},
   onExtensionNotification = () => {},
   // A Session's Portals changed (its `portals` scope), or, with null, every
   // Session's may have.
@@ -320,6 +321,10 @@ export function createAppController({
     }
     if (event.type === 'extension_notification') {
       onExtensionNotification(event.payload);
+      return;
+    }
+    if (event.type === 'extension_resource_changed') {
+      onExtensionResourceChange(event.payload);
       return;
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {

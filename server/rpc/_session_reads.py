@@ -15,6 +15,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_string,
+    rpc_request_fields,
 )
 
 type JsonObject = dict[str, Any]
@@ -52,7 +53,7 @@ def resolve_session(
 async def show_session(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"session_id", "agent_id", "summary", "cursor", "limit", "run_id", "entry", "offset"},
+        rpc_request_fields("session.show"),
         "session.show",
     )
     session_id = _required_string(params, "session_id")

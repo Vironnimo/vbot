@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from desktop import extensions
 from desktop.extensions import load_desktop_extensions
+from tests.directory_links import link_directory
 
 
 def _extension(root: Path, name: str, source: str, *, entry: str = "desktop.py") -> Path:
@@ -120,30 +122,126 @@ def test_native_capabilities_are_owner_qualified_without_a_small_count_limit(
 
 def test_reload_cache_keeps_distinct_owners_when_packages_resolve_to_one_source(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for owner in ("alpha", "beta"):
-        _extension(
-            tmp_path,
-            owner,
-            "def register(api):\n"
-            "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
-        )
-    identify = extensions._source_identity
-
-    def aliased_source(root: Path) -> tuple[str, str, bool]:
-        _source, revision, legacy = identify(root)
-        return "same-resolved-package", revision, legacy
-
-    # Canonical source identity is equal for directory aliases/junctions, while
-    # their registration owners are the distinct visible folder names.
-    monkeypatch.setattr(extensions, "_source_identity", aliased_source)
+    package = _extension(
+        tmp_path,
+        "alpha",
+        "def register(api):\n"
+        "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
+    )
+    link_directory(tmp_path / "beta", package)
     initial = load_desktop_extensions([tmp_path])
     reloaded = load_desktop_extensions([tmp_path], previous=initial)
     assert set(reloaded.capabilities) == {"extension:alpha:printer", "extension:beta:printer"}
     assert all(record["status"] == "loaded" for record in reloaded.records)
     for capability_id, capability in reloaded.capabilities.items():
         assert capability is initial.capabilities[capability_id]
+
+
+@pytest.mark.parametrize("asset", ["settings.json", "data.bin", "native.pyd", "ui/index.html"])
+def test_native_reload_detects_added_changed_and_removed_package_assets(
+    tmp_path: Path, asset: str
+) -> None:
+    package = _extension(
+        tmp_path,
+        "printer",
+        "def register(api):\n"
+        "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
+    )
+    current = load_desktop_extensions([tmp_path])
+    asset_path = package / asset
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    for content in (b"original", b"modified", None):
+        if content is None:
+            asset_path.unlink()
+        else:
+            asset_path.write_bytes(content)
+        updated = load_desktop_extensions([tmp_path], previous=current)
+        before = current.capabilities["extension:printer:printer"]
+        after = updated.capabilities["extension:printer:printer"]
+        assert updated.records[0]["change"] == "updated"
+        assert after is not before
+        assert after.source == before.source
+        assert after.revision != before.revision
+        current = updated
+
+
+def test_native_reload_ignores_dependency_and_generated_cache_files(tmp_path: Path) -> None:
+    package = _extension(
+        tmp_path,
+        "printer",
+        "def register(api):\n"
+        "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
+    )
+    initial = load_desktop_extensions([tmp_path])
+    for ignored in ("__pycache__", ".git", ".venv", "node_modules", ".pytest_cache", ".cache"):
+        directory = package / ignored
+        directory.mkdir(exist_ok=True)
+        (directory / "volatile.json").write_bytes(b"updated")
+    (package / "desktop.pyc").write_bytes(b"updated bytecode")
+    unchanged = load_desktop_extensions([tmp_path], previous=initial)
+    assert unchanged.records[0]["change"] == "unchanged"
+    assert (
+        unchanged.capabilities["extension:printer:printer"]
+        is initial.capabilities["extension:printer:printer"]
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["entries", "bytes", "depth", "scan", "read", "link", "directory_swap"]
+)
+def test_native_reload_refuses_incomplete_or_unbounded_package_fingerprints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    root = tmp_path / "extensions"
+    package = _extension(
+        root,
+        "printer",
+        "def register(api):\n"
+        "    api.register_capability('printer', 'Printer', lambda emit: None)\n",
+    )
+    assets = package / "assets"
+    assets.mkdir()
+    asset = assets / "data.bin"
+    asset.write_bytes(b"input")
+    initial = load_desktop_extensions([root])
+    assert initial.capabilities
+    if failure == "entries":
+        monkeypatch.setattr(extensions, "_PACKAGE_MAX_ENTRIES", 1)
+    elif failure == "bytes":
+        monkeypatch.setattr(extensions, "_PACKAGE_MAX_BYTES", 1)
+    elif failure == "depth":
+        monkeypatch.setattr(extensions, "_PACKAGE_MAX_DEPTH", 0)
+    elif failure in {"scan", "directory_swap"}:
+        real_scandir = os.scandir
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "data.bin").write_bytes(b"not package content")
+
+        def scan(path: Any) -> Any:
+            if Path(path) == assets:
+                if failure == "scan":
+                    raise PermissionError("asset directory unavailable")
+                assets.rename(tmp_path / "former-assets")
+                link_directory(assets, outside)
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", scan)
+    elif failure == "read":
+        real_open = Path.open
+
+        def read(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if path == asset:
+                raise PermissionError("asset unavailable")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", read)
+    else:
+        link_directory(assets / "cycle", package)
+    refused = load_desktop_extensions([root], previous=initial)
+    assert refused.records[0]["status"] == "failed"
+    assert refused.records[0]["error"]
+    assert not refused.capabilities
 
 
 def test_only_shipped_native_packages_keep_legacy_capability_ids(tmp_path: Path) -> None:

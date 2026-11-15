@@ -810,7 +810,7 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict:
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         """Send a non-streaming chat request.
 
         Args:
@@ -823,7 +823,9 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    def stream(self, messages: list[dict], *, model_id: str, **kwargs) -> AsyncIterator[dict]:
+    def stream(
+        self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
+    ) -> AsyncIterator[JsonObject]:
         """Send a streaming chat request.
 
         Args:

@@ -33,6 +33,15 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     applyManagedService: (action, options = {}) =>
       call('managed_service.apply', { id: 'searxng', action, ...options }),
     listExtensionPages: () => call('extensions.pages'),
+    listExtensionContributions: () => call('extensions.contributions'),
+    invokeExtensionContribution: (descriptor, operation, params = {}) =>
+      call('extensions.contribution_operation', {
+        extension: descriptor.extension,
+        id: descriptor.local_id,
+        epoch: descriptor.epoch,
+        operation,
+        params,
+      }),
     reportClientMetrics: (report) => call('performance.client_report', report),
     updateSettings: (params) => call('settings.update', params),
     getRecallIndexStatus: () => call('recall.status'),

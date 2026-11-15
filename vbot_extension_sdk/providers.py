@@ -80,6 +80,7 @@ _EXPORTS = exports_for(
         ),
     }
 )
+_EXPORTS["ToolCallIdRules"] = "core.providers.adapter:ToolCallIdProfile"
 
 
 def __getattr__(name: str) -> Any:

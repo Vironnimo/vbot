@@ -628,7 +628,7 @@ def _ambiguous_provider() -> SimpleNamespace:
             "connection.list",
             {"x": 1},
             "invalid_request",
-            "connection.list does not accept params",
+            "x",
         ),
         # An unknown Provider id is refused whether or not a Connection is named.
         (

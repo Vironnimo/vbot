@@ -26,7 +26,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 # Both histories are read, and an undo rewrites Memory files and Skill packages,
@@ -48,7 +48,7 @@ def _guard_learning_mutation(handler: MutationHandler) -> MutationHandler:
 
 async def _learning_changes(state: Any, params: JsonObject) -> JsonObject:
     """Return every Memory and Skill change one Run of an Identity Agent made."""
-    _reject_unsupported(params, {"agent_id", "run_id"}, "learning.changes")
+    _reject_unsupported(params, rpc_request_fields("learning.changes"), "learning.changes")
     agent_id = _required_string(params, "agent_id")
     run_id = _required_string(params, "run_id")
     async with _agent_reference_lock(state):
@@ -66,7 +66,7 @@ async def _learning_changes(state: Any, params: JsonObject) -> JsonObject:
 @_guard_learning_mutation
 async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
     """Take back every change of one Run with the caller's provenance, all or none."""
-    _reject_unsupported(params, {"agent_id", "run_id"}, "learning.undo")
+    _reject_unsupported(params, rpc_request_fields("learning.undo"), "learning.undo")
     agent_id = _required_string(params, "agent_id")
     run_id = _required_string(params, "run_id")
     workspace = await _agent_workspace(state, agent_id)

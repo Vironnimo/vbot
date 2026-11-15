@@ -30,6 +30,8 @@ Liveness and close: after 25 s without an event the shared socket sends a transp
 
 ## Extension attention
 
+Custom Resource publications use the allowed `extension_resource_changed` event, not a global `resource_changed(kind="extensions")`. `ExtensionServiceCatalog` snapshots public Resource/Service declaration metadata under its registration lock and `server/extension_services.py` publishes it on the shared bus; Python-only observer scope is excluded. Consumers filter by declared dependencies and registration epoch (`webui/extension-pages.md` -> Invalidations). The ordinary bus sequence/replay and reconnect snapshot rules apply; lifecycle declaration changes still use `extensions` invalidations.
+
 The allowlist also includes `extension_notification`, bridged from Runtime's owner-bound notification publisher after the Event Bus is installed and before Extension startup. Its `{extension, page_id, route, title, body, key, at}` payload targets only a declared Extension page and local route; bounds and validation belong to `extensions/host.md` -> Transient attention. The bounded bus replay can redeliver it after a short disconnect, but it has no durable notification store, acknowledgement or unread RPC. Accessors namespace replacement keys by owner. Current page badges come from `extensions.pages`, not replayed notifications (`tests/server/test_app_events.py`, `tests/server/rpc/test_extensions_pages.py`).
 
 ## Permission approvals

@@ -9,11 +9,12 @@ class HostUnavailableError(ImportError):
 
 
 def resolve(namespace: str, exports: dict[str, str], name: str) -> Any:
-    module = exports.get(name)
-    if module is None:
+    target = exports.get(name)
+    if target is None:
         raise AttributeError(f"module {namespace!r} has no attribute {name!r}")
+    module, _, attribute = target.partition(":")
     try:
-        return getattr(import_module(module), name)
+        return getattr(import_module(module), attribute or name)
     except ModuleNotFoundError as error:
         if error.name in {"core", "desktop"} or error.name == module:
             raise HostUnavailableError(

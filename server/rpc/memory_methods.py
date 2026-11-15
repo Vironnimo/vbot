@@ -27,13 +27,12 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 # Memory files are read and rewritten here, never on the Event Loop.
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
-_OWNER_FIELDS = {"agent_id", "project_id"}
 
 
 @dataclass(frozen=True)
@@ -73,7 +72,7 @@ def _guard_memory_mutation(handler: MutationHandler) -> MutationHandler:
 
 
 async def _list_memories(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS, "memory.list")
+    _reject_unsupported(params, rpc_request_fields("memory.list"), "memory.list")
     async with _agent_reference_lock(state):
         owner = await _memory_owner(state, params)
         return await _MEMORY_RPC_WORKERS.run(
@@ -83,7 +82,7 @@ async def _list_memories(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_memory_mutation
 async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS | {"scope", "content"}, "memory.add")
+    _reject_unsupported(params, rpc_request_fields("memory.add"), "memory.add")
     owner = await _memory_owner(state, params)
     scope = _memory_scope(params, owner)
     content = _required_string(params, "content")
@@ -103,9 +102,7 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_memory_mutation
 async def _import_memory(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, _OWNER_FIELDS | {"scope", "source", "path", "entries"}, "memory.import"
-    )
+    _reject_unsupported(params, rpc_request_fields("memory.import"), "memory.import")
     owner = await _memory_owner(state, params)
     scope = _memory_scope(params, owner)
     source = _required_string(params, "source")
@@ -156,7 +153,7 @@ async def _import_memory(state: Any, params: JsonObject) -> JsonObject:
 async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        _OWNER_FIELDS | {"scope", "entry_id", "content"},
+        rpc_request_fields("memory.replace"),
         "memory.replace",
     )
     owner = await _memory_owner(state, params)
@@ -182,7 +179,7 @@ async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
 async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        _OWNER_FIELDS | {"scope", "entry_id"},
+        rpc_request_fields("memory.remove"),
         "memory.remove",
     )
     owner = await _memory_owner(state, params)
@@ -203,7 +200,7 @@ async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _memory_history(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS | {"scope", "limit"}, "memory.history")
+    _reject_unsupported(params, rpc_request_fields("memory.history"), "memory.history")
     limit = _optional_positive_int(params, "limit")
     async with _agent_reference_lock(state):
         owner = await _memory_owner(state, params)
@@ -225,7 +222,7 @@ async def _memory_history(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _memory_show(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS | {"revision"}, "memory.show")
+    _reject_unsupported(params, rpc_request_fields("memory.show"), "memory.show")
     revision = _optional_positive_int(params, "revision")
     async with _agent_reference_lock(state):
         owner = await _memory_owner(state, params)
@@ -244,7 +241,7 @@ async def _memory_show(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _memory_diff(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS | {"from", "to"}, "memory.diff")
+    _reject_unsupported(params, rpc_request_fields("memory.diff"), "memory.diff")
     from_id = _optional_positive_int(params, "from")
     if from_id is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.from must be a positive integer")
@@ -277,7 +274,7 @@ async def _memory_diff(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_memory_mutation
 async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _OWNER_FIELDS | {"revisions"}, "memory.revert")
+    _reject_unsupported(params, rpc_request_fields("memory.revert"), "memory.revert")
     revision_ids = params.get("revisions")
     if (
         not isinstance(revision_ids, list)

@@ -59,7 +59,12 @@ from server.rpc.errors import (
 )
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.statistics_methods import statistics_service
-from server.rpc.validation import _optional_string, _required_string
+from server.rpc.validation import (
+    _optional_string,
+    _reject_unsupported,
+    _required_string,
+    rpc_request_fields,
+)
 
 JsonObject = dict[str, Any]
 
@@ -200,17 +205,7 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
 async def _skill_install(
     state: Any, params: JsonObject, *, archive: bytes | None = None
 ) -> JsonObject:
-    unknown = set(params) - {
-        "scope",
-        "source",
-        "path",
-        "ref",
-        "replace",
-        "dry_run",
-        "expected_sha256",
-    }
-    if unknown:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Unsupported Skill installation parameters")
+    _reject_unsupported(params, rpc_request_fields("skill.install"), "skill.install")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     source = _required_string(params, "source")
     path = _required_string(params, "path") if "path" in params else None
@@ -309,7 +304,7 @@ async def _skill_history(state: Any, params: JsonObject) -> JsonObject:
 
 def _read_history(state: Any, params: JsonObject) -> JsonObject:
     """Return a writable home's revisions, or one Skill's, newest first."""
-    _reject_unknown(params, {"scope", "name", "limit"}, "skill.history")
+    _reject_unsupported(params, rpc_request_fields("skill.history"), "skill.history")
     scope = _validated_scope(state, params)
     name = _optional_string(params, "name")
     limit = params.get("limit", _DEFAULT_HISTORY_LIMIT)
@@ -333,7 +328,7 @@ def _read_history(state: Any, params: JsonObject) -> JsonObject:
 
 async def _skill_revert(state: Any, params: JsonObject) -> JsonObject:
     """Undo revisions of one home, all or none, as a person."""
-    _reject_unknown(params, {"scope", "revisions"}, "skill.revert")
+    _reject_unsupported(params, rpc_request_fields("skill.revert"), "skill.revert")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     revision_ids = params.get("revisions")
     if (
@@ -375,7 +370,7 @@ async def _skill_archived(state: Any, params: JsonObject) -> JsonObject:
 
 def _read_archived(state: Any, params: JsonObject) -> JsonObject:
     """Return the archived packages of one writable home, newest first."""
-    _reject_unknown(params, {"scope"}, "skill.archived")
+    _reject_unsupported(params, rpc_request_fields("skill.archived"), "skill.archived")
     scope = _validated_scope(state, params)
     try:
         archived = state.runtime.skill_authoring.archived(_scope_root(state, scope))
@@ -386,7 +381,7 @@ def _read_archived(state: Any, params: JsonObject) -> JsonObject:
 
 async def _skill_restore(state: Any, params: JsonObject) -> JsonObject:
     writer = _writer()
-    _reject_unknown(params, {"scope", "archive_id"}, "skill.restore")
+    _reject_unsupported(params, rpc_request_fields("skill.restore"), "skill.restore")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     archive_id = _required_string(params, "archive_id")
     return await _write(
@@ -398,7 +393,7 @@ async def _skill_restore(state: Any, params: JsonObject) -> JsonObject:
 
 async def _skill_purge(state: Any, params: JsonObject) -> JsonObject:
     """Permanently delete one archived package; no registry sees the archive."""
-    _reject_unknown(params, {"scope", "archive_id"}, "skill.purge")
+    _reject_unsupported(params, rpc_request_fields("skill.purge"), "skill.purge")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     archive_id = _required_string(params, "archive_id")
     try:
@@ -409,15 +404,6 @@ async def _skill_purge(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {"scope": scope, "purged": purged.to_dict()}
-
-
-def _reject_unknown(params: JsonObject, allowed: set[str], method: str) -> None:
-    unknown = set(params) - allowed
-    if unknown:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"{method} does not accept: {', '.join(sorted(unknown))}",
-        )
 
 
 async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
@@ -465,7 +451,7 @@ async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
     Usage is included by default for existing callers. Interactive catalogs can
     omit it and request ``skill.usage`` separately, without waiting for Statistics.
     """
-    _reject_unknown(params, {"include_usage"}, "skill.inventory")
+    _reject_unsupported(params, rpc_request_fields("skill.inventory"), "skill.inventory")
     include_usage = _required_bool(params, "include_usage") if "include_usage" in params else True
     inventory = await _inventory_read(state)
     if not include_usage:
@@ -505,7 +491,7 @@ async def _inventory_read(state: Any) -> JsonObject:
 
 async def _skill_usage(state: Any, params: JsonObject) -> JsonObject:
     """Return use projected onto the current packages, without exposing Session rows."""
-    _reject_unknown(params, set(), "skill.usage")
+    _reject_unsupported(params, rpc_request_fields("skill.usage"), "skill.usage")
     inventory = await _inventory_read(state)
     inventory = {**inventory, "skills": [dict(entry) for entry in inventory["skills"]]}
     usage = await statistics_service(state).skill_package_usage_async()

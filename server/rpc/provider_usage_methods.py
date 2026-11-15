@@ -16,16 +16,13 @@ from typing import Any, cast
 from core.providers.usage import ProviderUsageService
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
-_SUPPORTED_FIELDS = {"connections"}
-_HISTORY_SUPPORTED_FIELDS = {"since", "until"}
-
 
 async def _provider_usage(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _SUPPORTED_FIELDS, "provider.usage")
+    _reject_unsupported(params, rpc_request_fields("provider.usage"), "provider.usage")
 
     connections = _optional_connections(params)
     report = await _usage_service(state).report(connections=connections)
@@ -33,7 +30,9 @@ async def _provider_usage(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _provider_usage_history(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _HISTORY_SUPPORTED_FIELDS, "provider.usage_history")
+    _reject_unsupported(
+        params, rpc_request_fields("provider.usage_history"), "provider.usage_history"
+    )
     since = _optional_utc_timestamp(params, "since")
     until = _optional_utc_timestamp(params, "until")
     if since is not None and until is not None and since > until:
@@ -43,7 +42,9 @@ async def _provider_usage_history(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _provider_usage_history_clear(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "provider.usage_history.clear")
+    _reject_unsupported(
+        params, rpc_request_fields("provider.usage_history.clear"), "provider.usage_history.clear"
+    )
     result = await _usage_service(state).clear_history()
     return result.to_dict()
 

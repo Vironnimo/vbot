@@ -280,3 +280,15 @@ Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/
 | `Quitting it or turning off Terminal sharing closes...` | Makes process shutdown and the local confirmation boundary explicit. |
 | `A temporary network disconnect keeps programs alive...` | A reconnect is not evidence that a program ended; inspecting retained Terminals avoids duplicate launches. |
 | `Live reload requires a server that supports native capability updates...` in the platform reference | An older connected server cannot accept live catalog updates; startup or offline reload remains the supported fallback. |
+
+## SDK contract and resource invalidation
+
+| Text | Reason |
+|---|---|
+| `The host supplies api.operations and command-handler contexts...` | Prevents constructing objects whose required private wiring the SDK intentionally does not expose; both typed constructors are unavailable to authors. |
+| `Pages receive the canonical resource id...` | Gives browser consumers the actual invalidation key without promising Python-only scope data. |
+| `For a contribution's source.resource...` | Lets authors match both owner-local and canonical resource events without inventing another registration id. |
+| `A resource data change refreshes matching consumers...` | Distinguishes resource data updates from declaration reloads so authors retain unrelated page state. |
+| `Use Reload local Extensions...changed code, assets, data files and native modules...` | Authors can apply any installed package change without restarting the Desktop or confusing server and local reload. |
+| `Keep mutable state outside the installed Extension package...` | Avoids handler retirement on each reload after the Extension writes its own state; dependency and cache exclusions explain the fingerprint boundary. |
+| `Package scanning accepts up to 10,000 entries...` | Makes deterministic package-size failures actionable instead of prompting repeated reloads of a partially read package. |

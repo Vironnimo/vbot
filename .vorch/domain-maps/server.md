@@ -10,7 +10,7 @@ FastAPI transport and public protocol edge around the core vBot kernel.
 
 RPC surfaces register their tables in `server/rpc/methods.py`; focused helpers own validation, payloads, errors and event bridging. `chat_methods.py` keeps submission/Run control; `_chat_reads.py`, `_chat_input.py` and `_chat_queue.py` own reads, input/commands and Queue operations. They retain parsed `SessionAddress` through internal helpers and invalidation until transport serialization. Tables define names/parameters/return shapes - do not mirror the catalog here.
 
-Every RPC needs a Service contract or exclusion in `server/_extension_service_contracts/`; the binder preserves nonhuman provenance (`extensions/host.md`).
+RPC field contracts and Service exposure belong to `server/rpc/_contracts/`. Both entrances share the field gate; domain validation stays canonical (`extensions/host.md`).
 
 `rpc/_mutations.py` owns cancellation-safe mutation sequencing: Settings and Skill handlers each use a state-local lock that spans persistence, live refresh and publication. Cancelling a waiting caller starts no mutation; cancelling an admitted caller waits for its sequence to settle before releasing the lock.
 

@@ -207,7 +207,7 @@
             >
             <input
               bind:this={fileInput}
-              class="mcp-import__file"
+              hidden
               type="file"
               accept=".json,.jsonc,.toml,.txt,application/json,text/plain"
               tabindex="-1"

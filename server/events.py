@@ -42,6 +42,7 @@ SERVER_STOPPING_EVENT = "server_stopping"
 # reports: ``{"job_id", "name", "agent_id", "project_id", "message"}``.
 CRON_FAILURE_ALERT_EVENT = "cron_failure_alert"
 EXTENSION_NOTIFICATION_EVENT = "extension_notification"
+EXTENSION_RESOURCE_CHANGED_EVENT = "extension_resource_changed"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -62,6 +63,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         SERVER_STOPPING_EVENT,
         CRON_FAILURE_ALERT_EVENT,
         EXTENSION_NOTIFICATION_EVENT,
+        EXTENSION_RESOURCE_CHANGED_EVENT,
     }
 )
 

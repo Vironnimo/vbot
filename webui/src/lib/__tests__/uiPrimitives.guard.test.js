@@ -574,14 +574,22 @@ describe('UI primitive guard', () => {
   it('keeps Extension pages to the shared form and table primitives', () => {
     // A page cannot borrow WebUI's look for a raw control: Dropdown,
     // SearchableDropdown, TextField, Checkbox, Toggle, TextArea and DataTable
-    // carry the shared styling, states and accessibility.
-    const RAW_CONTROL = /<(select|input|textarea|table)\b/g;
+    // carry the shared styling, states and accessibility. An explicitly hidden
+    // native file input only supplies the browser picker behind a shared Button;
+    // it is not a visible control and has no equivalent form primitive.
+    const RAW_CONTROL = /<(select|input|textarea|table)\b[^>]*>/g;
     const violations = [];
 
     expect(EXTENSION_UI_SVELTE_FILES.length).toBeGreaterThan(0);
     for (const filePath of EXTENSION_UI_SVELTE_FILES) {
       const source = readFileSync(filePath, 'utf8');
       for (const match of source.matchAll(RAW_CONTROL)) {
+        if (
+          match[1] === 'input' &&
+          /\btype\s*=\s*['"]file['"]/.test(match[0]) &&
+          /\shidden(?:\s|\/?>)/.test(match[0])
+        )
+          continue;
         violations.push(`${relative(SRC_DIR, filePath)}: <${match[1]}>`);
       }
     }

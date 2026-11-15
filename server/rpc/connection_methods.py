@@ -50,7 +50,7 @@ from server.rpc.provider_access import (
     _provider_connection,
     _runtime_token_store,
 )
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
@@ -67,7 +67,7 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
     """
 
     _reject_unsupported(
-        params, {"provider_id", "connection_id", "enabled"}, "connection set-enabled"
+        params, rpc_request_fields("connection.set_enabled"), "connection set-enabled"
     )
 
     provider_id = _required_string(params, "provider_id")
@@ -143,8 +143,7 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _list_connections(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "connection.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("connection.list"), "connection.list")
     try:
         runtime = state.runtime
         connections = [
@@ -185,15 +184,12 @@ def custom_provider_items(runtime: Any) -> list[JsonObject]:
 
 
 async def _list_custom_providers(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "provider.custom_list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("provider.custom_list"), "provider.custom_list")
     return {"providers": await _CONNECTION_WORKERS.run(custom_provider_items, state.runtime)}
 
 
 async def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, {"provider", "api_key", "expected_revision"}, "provider custom-save"
-    )
+    _reject_unsupported(params, rpc_request_fields("provider.custom_save"), "provider custom-save")
     expected_revision = params.get("expected_revision")
     if expected_revision is not None and (
         not isinstance(expected_revision, str) or not expected_revision
@@ -311,7 +307,9 @@ def _reject_ignored_wire_entries(provider_id: str, provider: JsonObject) -> None
 
 
 async def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"provider_id"}, "provider custom-delete")
+    _reject_unsupported(
+        params, rpc_request_fields("provider.custom_delete"), "provider custom-delete"
+    )
     try:
         provider_id = normalize_custom_provider_id(_required_string(params, "provider_id"))
     except Exception as exc:
@@ -607,7 +605,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"provider_id", "connection_id", "account"}, "provider disconnect")
+    _reject_unsupported(params, rpc_request_fields("provider.disconnect"), "provider disconnect")
 
     provider_id = _required_string(params, "provider_id")
     connection_id = _required_string(params, "connection_id")
@@ -668,7 +666,7 @@ async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
 
 async def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
-        params, {"provider_id", "connection_id", "account"}, "provider connection status"
+        params, rpc_request_fields("provider.connection_status"), "provider connection status"
     )
 
     provider_id = _required_string(params, "provider_id")

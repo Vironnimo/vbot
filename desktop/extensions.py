@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import stat
 import sys
 import uuid
 import weakref
@@ -24,7 +25,7 @@ from pathlib import Path
 from types import CodeType, ModuleType
 from typing import Any, Protocol, override
 
-from core.utils.file_status import is_dir_strict, is_file_strict
+from core.utils.file_status import is_dir_strict, is_file_strict, is_link_status
 from core.utils.native_capabilities import (
     MAX_CAPABILITY_CATALOG_BYTES,
     qualified_capability_id,
@@ -35,6 +36,26 @@ from core.utils.native_capabilities import (
 DESKTOP_EXTENSION_API_VERSION = 2
 _CAPABILITY_ID = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _LOGGER = logging.getLogger("vbot.desktop.extensions")
+_PACKAGE_MAX_ENTRIES = 10_000
+_PACKAGE_MAX_BYTES = 256 * 1024 * 1024
+_PACKAGE_MAX_DEPTH = 64
+_PACKAGE_IGNORED_NAMES = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".cache",
+        ".tox",
+        ".nox",
+    }
+)
 
 
 class ExecutionHandler(Protocol):
@@ -269,23 +290,88 @@ def _source_identity(root: Path) -> tuple[str, str, bool]:
         if legacy
         else hashlib.sha256(os.path.normcase(str(resolved)).encode()).hexdigest()
     )
+    return source, _package_revision(resolved), legacy
+
+
+def _package_revision(root: Path) -> str:
+    """Fingerprint installed inputs, never mutable caches or linked directory trees.
+
+    Root aliases are resolved by the caller. Every other traversal or read failure
+    fails the package instead of reusing declarations from an incomplete scan.
+    """
     digest = hashlib.sha256()
-    for directory, children, files in os.walk(resolved):
-        children[:] = sorted(
-            name
-            for name in children
-            if name not in {"__pycache__", ".git", ".venv", "node_modules"}
-        )
-        for name in sorted(files):
-            path = Path(directory) / name
-            if path.suffix != ".py" and path != resolved / "extension.json":
+    entry_count = 0
+    byte_count = 0
+
+    def check_directory(directory: Path, expected: os.stat_result) -> None:
+        current = directory.lstat()
+        if (
+            is_link_status(current)
+            or not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino, current.st_mtime_ns)
+            != (expected.st_dev, expected.st_ino, expected.st_mtime_ns)
+        ):
+            raise ValueError("Desktop Extension package changed during reload")
+
+    def visit(directory: Path, depth: int, expected: os.stat_result) -> None:
+        nonlocal entry_count, byte_count
+        if depth > _PACKAGE_MAX_DEPTH:
+            raise ValueError("Desktop Extension package exceeds the directory depth budget")
+        check_directory(directory, expected)
+        entries = []
+        with os.scandir(directory) as scan:
+            for entry in scan:
+                entry_count += 1
+                if entry_count > _PACKAGE_MAX_ENTRIES:
+                    raise ValueError("Desktop Extension package exceeds the file entry budget")
+                if entry.name.casefold() not in _PACKAGE_IGNORED_NAMES:
+                    entries.append(entry)
+        check_directory(directory, expected)
+        for entry in sorted(entries, key=lambda item: item.name):
+            path = Path(entry.path)
+            # DirEntry.stat leaves inode/device zero on Windows; path lstat
+            # supplies the identity needed to check the subsequently opened file.
+            status = path.lstat()
+            if is_link_status(status):
+                raise ValueError("Desktop Extension package must not contain links or junctions")
+            if stat.S_ISDIR(status.st_mode):
+                visit(path, depth + 1, status)
                 continue
-            if not path.resolve().is_relative_to(resolved):
-                raise ValueError("Desktop Extension source must stay inside its local package")
-            digest.update(path.relative_to(resolved).as_posix().encode())
-            digest.update(b"\x00")
-            digest.update(path.read_bytes())
-    return source, digest.hexdigest(), legacy
+            if not stat.S_ISREG(status.st_mode):
+                raise ValueError("Desktop Extension package must contain only regular files")
+            if path.suffix.casefold() in {".pyc", ".pyo"}:
+                continue
+            if byte_count + status.st_size > _PACKAGE_MAX_BYTES:
+                raise ValueError("Desktop Extension package exceeds the content byte budget")
+            relative = path.relative_to(root).as_posix().encode()
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(status.st_size.to_bytes(8, "big"))
+            with path.open("rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
+                    status.st_dev,
+                    status.st_ino,
+                    status.st_size,
+                    status.st_mtime_ns,
+                ):
+                    raise ValueError("Desktop Extension package changed during reload")
+                read_bytes = 0
+                while chunk := stream.read(1024 * 1024):
+                    read_bytes += len(chunk)
+                    byte_count += len(chunk)
+                    if byte_count > _PACKAGE_MAX_BYTES:
+                        raise ValueError(
+                            "Desktop Extension package exceeds the content byte budget"
+                        )
+                    digest.update(chunk)
+                finished = os.fstat(stream.fileno())
+                if read_bytes != status.st_size or finished.st_mtime_ns != status.st_mtime_ns:
+                    raise ValueError("Desktop Extension package changed during reload")
+        check_directory(directory, expected)
+
+    visit(root, 0, root.lstat())
+    return digest.hexdigest()
 
 
 class _SourceLoader(importlib.machinery.SourceFileLoader):

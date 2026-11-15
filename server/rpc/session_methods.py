@@ -75,6 +75,7 @@ from server.rpc.validation import (
     _required_session_address,
     _required_string,
     _validate_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -173,7 +174,7 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
     """Set or clear some of one Session's Agent overrides; other fields keep their value."""
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "agent_overrides", "remember"},
+        rpc_request_fields("session.set_agent_overrides"),
         "session.set_agent_overrides",
     )
     address = _required_session_address(params)
@@ -223,7 +224,9 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
 @_guard_agent_lifecycle
 async def _set_session_fast_mode(state: Any, params: JsonObject) -> JsonObject:
     """Persist the speed preference for this Session's next Chat request."""
-    _reject_unsupported(params, {"agent_id", "session_id", "enabled"}, "session.set_fast_mode")
+    _reject_unsupported(
+        params, rpc_request_fields("session.set_fast_mode"), "session.set_fast_mode"
+    )
     address = _required_session_address(params)
     enabled = params.get("enabled")
     if not isinstance(enabled, bool):
@@ -260,8 +263,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     simply resumes empty on the next inbound message, and an active sub-agent
     child is already covered by the per-session busy guard.
     """
-    supported_fields = {"agent_id", "session_id", "permanent"}
-    _reject_unsupported(params, supported_fields, "session.delete")
+    _reject_unsupported(params, rpc_request_fields("session.delete"), "session.delete")
 
     address = _required_session_address(params)
     permanent = _optional_bool(params, "permanent", default=False)
@@ -330,17 +332,6 @@ def _project_agent_landing(state: Any, agent_id: str, project_id: str) -> str | 
     newest_session_id = state.runtime.chat_sessions.newest_session_id(agent_id, project_id)
     return None if newest_session_id is None else str(newest_session_id)
 
-
-_SESSION_LIST_FILTER_PARAMS = frozenset(
-    {
-        "include_subagents",
-        "include_memory_reflections",
-        "include_skill_reflections",
-        "include_cron",
-        "include_channels",
-        "split_pinned",
-    }
-)
 
 # Newest Sessions each Project group of ``session.project_groups`` shows.
 SESSION_PROJECT_GROUP_DEFAULT_LIMIT = 5
@@ -458,17 +449,7 @@ def _session_list_page_payload(
 async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {
-            "agent_id",
-            "agent_ids",
-            "parent_session_id",
-            "parent_agent_id",
-            "working_project_id",
-            "limit",
-            "cursor",
-            "required_session",
-            *_SESSION_LIST_FILTER_PARAMS,
-        },
+        rpc_request_fields("session.list"),
         "session.list",
     )
     if sum(key in params for key in ("agent_id", "agent_ids", "working_project_id")) > 1:
@@ -612,7 +593,9 @@ async def _list_session_project_groups(state: Any, params: JsonObject) -> JsonOb
     out. Each group is a ``session.list`` page that ``session.list`` with
     ``working_project_id`` and its ``next_cursor`` continues.
     """
-    _reject_unsupported(params, {"limit", *_SESSION_LIST_FILTER_PARAMS}, "session.project_groups")
+    _reject_unsupported(
+        params, rpc_request_fields("session.project_groups"), "session.project_groups"
+    )
     limit = (
         _optional_positive_integer(params, "limit", max_value=SESSION_PROJECT_GROUP_MAX_LIMIT)
         or SESSION_PROJECT_GROUP_DEFAULT_LIMIT
@@ -649,7 +632,7 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     The row matches a ``session.list`` row except that Compaction Policy and
     active-Run fields are not resolved.
     """
-    _reject_unsupported(params, {"agent_id", "session_id"}, "session.get")
+    _reject_unsupported(params, rpc_request_fields("session.get"), "session.get")
     address = _required_session_address(params)
     try:
         chat_sessions = state.runtime.chat_sessions
@@ -680,9 +663,7 @@ async def _session_change_stats(state: Any, params: JsonObject) -> JsonObject:
     With ``include_subagents``, the Runs of its Sub-Agents at every depth count
     as its own and ``subagents`` names how many Sub-Agent Sessions were merged.
     """
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "include_subagents"}, "session.change_stats"
-    )
+    _reject_unsupported(params, rpc_request_fields("session.change_stats"), "session.change_stats")
     address = _required_session_address(params)
     include_subagents = _optional_bool(params, "include_subagents", default=False)
     chat_sessions = state.runtime.chat_sessions
@@ -764,7 +745,9 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
     One Session-store read covers every address. An address without live
     completed Sessions, including an unknown Agent, returns an empty list.
     """
-    _reject_unsupported(params, {"agent_ids"}, "session.activity_list")
+    _reject_unsupported(
+        params, rpc_request_fields("session.activity_list"), "session.activity_list"
+    )
     requested_addresses = _validate_string_list("agent_ids", params.get("agent_ids"))
     scopes: list[tuple[str | None, str]] = []
     for requested_address in requested_addresses:
@@ -793,9 +776,7 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
 
 async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     """Acknowledge the exact terminal Run rendered in one Session."""
-    _reject_unsupported(
-        params, {"agent_id", "session_id", "run_id", "run_ids"}, "session.mark_read"
-    )
+    _reject_unsupported(params, rpc_request_fields("session.mark_read"), "session.mark_read")
     address = _required_session_address(params)
     run_ids = (
         _validate_string_list("run_ids", params["run_ids"])
@@ -828,7 +809,9 @@ async def _notification_status(state: Any, params: JsonObject) -> JsonObject:
     from core.automation.cron import CronJobNotFoundError
     from core.sessions.notifications import notification_allowed
 
-    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.notification_status")
+    _reject_unsupported(
+        params, rpc_request_fields("session.notification_status"), "session.notification_status"
+    )
     address = _required_session_address(params)
     run_id = _required_string(params, "run_id")
     sessions = state.runtime.chat_sessions
@@ -852,7 +835,9 @@ async def _notification_status(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _set_notification_policy(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id", "policy"}, "session.notification_policy")
+    _reject_unsupported(
+        params, rpc_request_fields("session.notification_policy"), "session.notification_policy"
+    )
     address = _required_session_address(params)
     policy = _required_string(params, "policy")
     if policy not in {"all", "errors", "muted"}:
@@ -876,8 +861,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     another Agent leaves the pinned Skill catalog behind so the target re-pins
     its own.
     """
-    supported_fields = {"agent_id", "session_id", "target_agent_id"}
-    _reject_unsupported(params, supported_fields, "session.fork")
+    _reject_unsupported(params, rpc_request_fields("session.fork"), "session.fork")
 
     source_agent_id, source_project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -948,8 +932,7 @@ def _optional_fork_target(
 
 
 async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {"agent_id", "session_id", "channel_id", "platform_conv_id"}
-    _reject_unsupported(params, supported_fields, "session.link_channel")
+    _reject_unsupported(params, rpc_request_fields("session.link_channel"), "session.link_channel")
 
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -1011,8 +994,7 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     The response carries the stored title (``None`` when cleared) so the caller
     can confirm what was applied after normalization.
     """
-    supported_fields = {"agent_id", "session_id", "title"}
-    _reject_unsupported(params, supported_fields, "session.rename")
+    _reject_unsupported(params, rpc_request_fields("session.rename"), "session.rename")
 
     address = _required_session_address(params)
     title = _session_title_param(params)
@@ -1028,7 +1010,7 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
 
 async def _set_session_pinned(state: Any, params: JsonObject) -> JsonObject:
     """Pin or unpin one Session for the Session lists of every Accessor."""
-    _reject_unsupported(params, {"agent_id", "session_id", "pinned"}, "session.set_pinned")
+    _reject_unsupported(params, rpc_request_fields("session.set_pinned"), "session.set_pinned")
     address = _required_session_address(params)
     pinned = params.get("pinned")
     if not isinstance(pinned, bool):
@@ -1048,7 +1030,7 @@ async def _set_session_pinned(state: Any, params: JsonObject) -> JsonObject:
 async def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject:
     """Set a full Session Policy override, or clear it back to live inheritance."""
     _reject_unsupported(
-        params, {"agent_id", "session_id", "policy"}, "session.set_compaction_policy"
+        params, rpc_request_fields("session.set_compaction_policy"), "session.set_compaction_policy"
     )
     address = _required_session_address(params)
     policy = params.get("policy")

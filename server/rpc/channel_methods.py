@@ -31,6 +31,7 @@ from server.rpc.validation import (
     _required_bool,
     _required_string,
     _required_string_list,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -38,8 +39,7 @@ _LOGGER = get_logger("server.rpc.channels")
 
 
 async def _list_channels(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "channel.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("channel.list"), "channel.list")
 
     try:
         channel_service = state.runtime.channel_service
@@ -63,25 +63,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {
-        "id",
-        "platform",
-        "agent_id",
-        "dm_scope",
-        "allowed_chat_ids",
-        "token_env_var",
-        "token",
-        "enabled",
-        "response_mode",
-        "mention_patterns",
-        "observe_unaddressed",
-        "app_token_env_var",
-        "app_token",
-        "server_url",
-        "email",
-        "settings",
-    }
-    _reject_unsupported(params, supported_fields, "channel.create")
+    _reject_unsupported(params, rpc_request_fields("channel.create"), "channel.create")
 
     channel_id = _required_string(params, "id")
     token_env_var, managed_token = _channel_token_input(params, channel_id)
@@ -150,23 +132,7 @@ async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject
 
 
 async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {
-        "id",
-        "platform",
-        "agent_id",
-        "dm_scope",
-        "allowed_chat_ids",
-        "token_env_var",
-        "enabled",
-        "response_mode",
-        "mention_patterns",
-        "observe_unaddressed",
-        "app_token_env_var",
-        "server_url",
-        "email",
-        "settings",
-    }
-    _reject_unsupported(params, supported_fields, "channel.update")
+    _reject_unsupported(params, rpc_request_fields("channel.update"), "channel.update")
 
     channel_id = _required_string(params, "id")
     updates: JsonObject = {}
@@ -223,7 +189,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "channel.delete")
+    _reject_unsupported(params, rpc_request_fields("channel.delete"), "channel.delete")
 
     channel_id = _required_string(params, "id")
     try:
@@ -237,7 +203,7 @@ async def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "channel.enable")
+    _reject_unsupported(params, rpc_request_fields("channel.enable"), "channel.enable")
 
     channel_id = _required_string(params, "id")
     try:
@@ -256,7 +222,7 @@ async def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "channel.disable")
+    _reject_unsupported(params, rpc_request_fields("channel.disable"), "channel.disable")
 
     channel_id = _required_string(params, "id")
     try:
@@ -275,7 +241,7 @@ async def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "token", "slot"}, "channel.set_token")
+    _reject_unsupported(params, rpc_request_fields("channel.set_token"), "channel.set_token")
 
     channel_id = _required_string(params, "id")
     token = _required_string(params, "token")
@@ -392,7 +358,7 @@ async def _saved_channel_config(state: Any, channel_id: str) -> ChannelConfig:
 
 
 async def _channel_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "channel.status")
+    _reject_unsupported(params, rpc_request_fields("channel.status"), "channel.status")
 
     channel_id = _required_string(params, "id")
     try:
@@ -418,7 +384,7 @@ def _channel_status_facts(channel_service: Any, config: ChannelConfig) -> JsonOb
 
 
 async def _channel_access_get(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id"}, "channel.access.get")
+    _reject_unsupported(params, rpc_request_fields("channel.access.get"), "channel.access.get")
     channel_id = _required_string(params, "id")
     try:
         return cast(JsonObject, await state.runtime.channel_service.channel_access(channel_id))

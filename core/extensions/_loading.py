@@ -607,20 +607,48 @@ def resolve_pages(
                 )
                 continue
             pages[(record.name, declaration.page_id)] = (record, declaration, entry)
-            try:
-                available = is_file_strict(entry)
-            except OSError:
-                _diagnose_capability(
-                    record, f"page {declaration.page_id!r} unavailable: entry is unreadable"
-                )
-            else:
-                if not available:
-                    _diagnose_capability(
-                        record, f"page {declaration.page_id!r} skipped: entry is missing"
-                    )
         _validate_contribution_references(record, pages)
         _validate_service_references(record)
+    for record, declaration, entry in pages.values():
+        refresh_page_availability(record, declaration, entry)
     return pages
+
+
+def refresh_page_availability(
+    record: ExtensionRecord, declaration: PageDeclaration, entry: Path
+) -> bool:
+    """Refresh transient page/view diagnostics without losing their registration.
+
+    Projection and catalog workers may inspect the same record concurrently. The
+    lock covers the disk observation and replaces only diagnostics owned here.
+    """
+    with record._diagnostic_lock:
+        try:
+            reason = None if is_file_strict(entry) else "entry is missing"
+        except OSError:
+            reason = "entry is unreadable"
+        messages: tuple[str, ...] = ()
+        if reason is not None:
+            messages = (
+                f"page {declaration.page_id!r} unavailable: {reason}",
+                *(
+                    f"contribution {item.id!r} unavailable: page {declaration.page_id!r} {reason}"
+                    for item in record.declarations.contributions
+                    if item.spec["kind"] == "view" and item.spec["page"] == declaration.page_id
+                ),
+            )
+        previous = record._page_availability_errors.get(declaration.page_id, ())
+        if previous != messages:
+            remaining = [message for message in record.capability_errors if message not in previous]
+            added = [message for message in messages if message not in remaining]
+            record.capability_errors = remaining + added
+            if messages:
+                record._page_availability_errors[declaration.page_id] = messages
+            else:
+                record._page_availability_errors.pop(declaration.page_id, None)
+            for message in added:
+                _LOGGER.warning("Extension %r %s", record.name, message)
+        return reason is None
 
 
 def _validate_contribution_references(

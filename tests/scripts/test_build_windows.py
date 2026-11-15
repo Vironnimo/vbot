@@ -216,7 +216,7 @@ def test_copy_application_respects_shape_and_exclusions(
     )
 
     assert (destination / "vbot_extension_sdk").exists()
-    assert (destination / "resources/sdk/vbot_extension_sdk-31.0.0-py3-none-any.whl").is_file()
+    assert (destination / "resources/sdk/vbot_extension_sdk-31.0.1-py3-none-any.whl").is_file()
 
     if shape == "desktop-client":
         assert not (destination / sdk_path).exists()

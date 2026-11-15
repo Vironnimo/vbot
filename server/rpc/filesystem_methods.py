@@ -13,6 +13,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -27,7 +28,7 @@ async def _list_filesystem(_state: Any, params: JsonObject) -> JsonObject:
     lists only the entries whose names start with it, ignoring case, before the
     entry limit applies. The listing runs off the Event Loop within its own budget.
     """
-    _reject_unsupported(params, {"path", "root", "include_files", "prefix"}, "filesystem.list")
+    _reject_unsupported(params, rpc_request_fields("filesystem.list"), "filesystem.list")
     path = params.get("path")
     if path is not None and not isinstance(path, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.path must be a string or null")
@@ -50,7 +51,9 @@ async def _create_filesystem_directory(_state: Any, params: JsonObject) -> JsonO
     ``root`` relative to it, ``""`` being the root); the result's ``path`` has the
     same form. An existing entry is never touched.
     """
-    _reject_unsupported(params, {"path", "name", "root"}, "filesystem.create_directory")
+    _reject_unsupported(
+        params, rpc_request_fields("filesystem.create_directory"), "filesystem.create_directory"
+    )
     path = params.get("path")
     if not isinstance(path, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.path must be a string")

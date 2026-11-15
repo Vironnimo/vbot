@@ -413,10 +413,22 @@ describe('App', () => {
             return { pages: [] };
           },
           'extensions.requests': () => ({ requests: [] }),
-          'extensions.list': () => ({
-            extensions: [{ name: 'computer_use', status: 'loaded' }],
+          'extensions.contributions': () => ({
+            contributions: [
+              {
+                id: 'extension:computer_use:control',
+                local_id: 'control',
+                extension: 'computer_use',
+                epoch: 'fixture-epoch',
+                surface: 'chat.composer.actions',
+                kind: 'status',
+                title: 'Computer Use',
+                source: { operation: 'read', resource: 'control' },
+                operations: ['read'],
+              },
+            ],
           }),
-          'extensions.operation': () => ({ available: true, active: false }),
+          'extensions.contribution_operation': () => ({ items: [] }),
         },
       }),
     );
@@ -426,11 +438,11 @@ describe('App', () => {
       rpcMock.mock.calls.filter(([name]) => name === method).length;
     const counts = () => [
       calls('extensions.requests'),
-      calls('extensions.operation'),
+      calls('extensions.contribution_operation'),
     ];
     await waitForCondition(() => {
       expect(calls('extensions.pages')).toBe(1);
-      expect(calls('extensions.operation')).toBeGreaterThan(0);
+      expect(calls('extensions.contribution_operation')).toBeGreaterThan(0);
     });
     // Startup reads end; nothing polls afterwards.
     let settled;
@@ -442,8 +454,9 @@ describe('App', () => {
     });
     // Each surface read once when it mounted; the first page catalog asks
     // none of them to read again.
-    expect([...counts(), calls('extensions.list')]).toEqual([1, 1, 1]);
-    const [requests, status] = counts();
+    expect([...counts(), calls('extensions.contributions')]).toEqual([1, 1, 1]);
+    const [requests, initialStatus] = counts();
+    let status = initialStatus;
     const extensionsChanged = (scope) =>
       handlers.onEvent({
         type: 'resource_changed',
@@ -452,6 +465,38 @@ describe('App', () => {
       });
     const change = (owner, resource) =>
       extensionsChanged({ owner, resource, ids: ['record'], revision: 1 });
+
+    await handlers.onEvent({
+      type: 'extension_resource_changed',
+      payload: {
+        owner: 'unrelated',
+        epoch: 'fixture-epoch',
+        resource: 'extension:unrelated:control',
+        local_resource: 'control',
+        revision: 1,
+        services: [],
+      },
+    });
+    expect(counts()).toEqual([requests, status]);
+    expect(calls('extensions.pages')).toBe(1);
+    expect(calls('extensions.contributions')).toBe(1);
+    await handlers.onEvent({
+      type: 'extension_resource_changed',
+      payload: {
+        owner: 'computer_use',
+        epoch: 'fixture-epoch',
+        resource: 'extension:computer_use:control',
+        local_resource: 'control',
+        revision: 2,
+        services: [],
+      },
+    });
+    await waitForCondition(() =>
+      expect(counts()).toEqual([requests, status + 1]),
+    );
+    status++;
+    expect(calls('extensions.pages')).toBe(1);
+    expect(calls('extensions.contributions')).toBe(1);
 
     await change('swarm', 'swarms');
     await change('mcp', 'pending_inputs');
@@ -464,16 +509,19 @@ describe('App', () => {
     );
     // An Extension reload (or reconnect) can change both.
     await extensionsChanged(null);
-    await waitForCondition(() =>
-      expect(counts()).toEqual([requests + 2, status + 2]),
-    );
+    await waitForCondition(() => {
+      expect(counts()[0]).toBe(requests + 2);
+      expect(counts()[1]).toBeGreaterThan(status + 1);
+    });
+    const refreshedStatus = counts()[1];
     // A transient page-catalog failure cannot suppress unrelated surfaces'
     // catch-up reads; those keep using their own Extension operations.
     pagesUnavailable = true;
     await extensionsChanged(null);
-    await waitForCondition(() =>
-      expect(counts()).toEqual([requests + 3, status + 3]),
-    );
+    await waitForCondition(() => {
+      expect(counts()[0]).toBe(requests + 3);
+      expect(counts()[1]).toBeGreaterThan(refreshedStatus);
+    });
   });
 
   it('shows app_error events as error Toasts that stay until dismissed', () => {
@@ -716,7 +764,7 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  it('passes the live shell theme and display context to an Extension page', async () => {
+  it('passes live context and targeted Resource changes to an Extension page', async () => {
     const rootStyle = document.documentElement.style;
     for (const [name, value] of [
       ['--bg', '#111111'],
@@ -742,6 +790,7 @@ describe('App', () => {
                 route: 'extension:fixture:main',
                 entry_url: '/fixture-page.html',
                 epoch: 'fixture-epoch',
+                services: ['extension:provider:read'],
               },
             ],
           }),
@@ -752,7 +801,7 @@ describe('App', () => {
         },
       }),
     );
-    mountApp();
+    const handlers = mountApp();
     sendConnectionReady();
 
     await waitForCondition(() => {
@@ -799,6 +848,34 @@ describe('App', () => {
       source: { value: child },
     });
     window.dispatchEvent(event);
+    const reads = () =>
+      rpcMock.mock.calls.filter(([method]) =>
+        [
+          'extensions.pages',
+          'extensions.contributions',
+          'extensions.requests',
+        ].includes(method),
+      ).length;
+    const readsBefore = reads();
+    await handlers.onEvent({
+      type: 'extension_resource_changed',
+      payload: {
+        owner: 'provider',
+        epoch: 'fixture-epoch',
+        resource: 'extension:provider:items',
+        local_resource: 'items',
+        revision: 7,
+        services: ['extension:provider:read'],
+      },
+    });
+    expect(sent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'vbot.extension.invalidate',
+        change: { resource: 'extension:provider:items', ids: [], revision: 7 },
+      }),
+      '*',
+    );
+    expect(reads()).toBe(readsBefore);
     rootStyle.setProperty('--accent', '#00cc88');
 
     await waitForCondition(() => {

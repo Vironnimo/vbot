@@ -11,11 +11,16 @@ from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported, _required_agent_address, _required_string
+from server.rpc.validation import (
+    _reject_unsupported,
+    _required_agent_address,
+    _required_string,
+    rpc_request_fields,
+)
 
 
 async def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
-    _reject_unsupported(params, set(), "input.list")
+    _reject_unsupported(params, rpc_request_fields("input.list"), "input.list")
     inputs = state.runtime.direct_inputs
     try:
         rows = inputs.list_inputs()
@@ -34,8 +39,8 @@ async def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
 
 async def _mutate(state: Any, params: dict[str, Any], action: str) -> dict[str, Any]:
     allowed = (
-        {"id", "name", "agent_id", "working_project_id", "enabled", "run_overrides"}
-        if action in {"create", "update"}
+        rpc_request_fields(f"input.{action}")
+        if action in {"create", "update", "delete"}
         else {"id"}
     )
     _reject_unsupported(params, allowed, f"input.{action}")

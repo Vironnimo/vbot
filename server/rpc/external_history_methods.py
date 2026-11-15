@@ -10,7 +10,12 @@ from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RpcError
 from server.rpc.session_methods import _create_session
-from server.rpc.validation import _optional_string, _reject_unsupported, _required_string
+from server.rpc.validation import (
+    _optional_string,
+    _reject_unsupported,
+    _required_string,
+    rpc_request_fields,
+)
 
 _WORKERS = BoundedWorkerPool(name="external-history", max_workers=2)
 
@@ -30,14 +35,8 @@ def _page(params: dict[str, Any]) -> dict[str, int]:
 
 
 async def _read(state: Any, params: dict[str, Any], action: str) -> dict[str, Any]:
-    allowed = {"source", "path", "offset", "limit"}
-    if action in {"list", "show"}:
-        allowed.add("query")
-    if action == "show":
-        allowed.add("source_session_id")
-    if action in {"show", "memories"}:
-        allowed.add("char_offset")
-    _reject_unsupported(params, allowed, "external." + action)
+    method = "external." + action
+    _reject_unsupported(params, rpc_request_fields(method), method)
     source, path = _required_string(params, "source"), _optional_string(params, "path")
     arguments: dict[str, Any] = {"path": path, **_page(params)}
     if action in {"show", "memories"}:
@@ -56,7 +55,7 @@ async def _read(state: Any, params: dict[str, Any], action: str) -> dict[str, An
 
 
 async def _sources(state: Any, params: dict[str, Any]) -> dict[str, Any]:
-    _reject_unsupported(params, set(), "external.sources")
+    _reject_unsupported(params, rpc_request_fields("external.sources"), "external.sources")
     return {"items": await _WORKERS.run(ExternalHistory().sources)}
 
 
@@ -75,7 +74,7 @@ async def _memories(state: Any, params: dict[str, Any]) -> dict[str, Any]:
 async def _import_session(state: Any, params: dict[str, Any]) -> dict[str, Any]:
     _reject_unsupported(
         params,
-        {"source", "path", "source_session_id", "agent_id", "working_project_id", "make_current"},
+        rpc_request_fields("external.import_session"),
         "external.import_session",
     )
     source, identity = (

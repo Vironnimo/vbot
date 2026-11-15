@@ -76,6 +76,7 @@ class ProviderError(VBotError):
     model-scoped failures (404) without parsing message text.
     """
 
+    retryable: bool
     retry_after: float | None = None
     status_code: int | None = None
 

@@ -1,6 +1,8 @@
 """Public presentation declarations and manifest-only Extension lifecycle."""
 
 import json
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -113,7 +115,10 @@ def test_contribution_declarations_detach_inputs_and_keep_explicit_operation_sco
 )
 @pytest.mark.parametrize("async_load", [False, True], ids=["load", "aload"])
 async def test_final_declaration_references_are_diagnosed_without_losing_valid_capabilities(
-    tmp_path: Path, async_registration: bool, async_load: bool
+    tmp_path: Path,
+    deny_access: Callable[[Path], None],
+    async_registration: bool,
+    async_load: bool,
 ) -> None:
     register = "async def register(api):" if async_registration else "def register(api):"
     pause = "    await asyncio.sleep(0)\n" if async_registration else ""
@@ -176,17 +181,44 @@ async def test_final_declaration_references_are_diagnosed_without_losing_valid_c
         assert all(
             name in diagnostics for name in ("missing-action", "missing-source", "missing-dynamic")
         )
-        assert "page 'unbuilt' skipped: entry is missing" in diagnostics
+        assert "page 'unbuilt' unavailable: entry is missing" in diagnostics
+        assert (
+            "contribution 'unbuilt-view' unavailable: page 'unbuilt' entry is missing"
+            in diagnostics
+        )
         assert "service 'bad' skipped: unknown resources: missing-resource" in diagnostics
         assert [service.name for service in record.declarations.services] == ["read", "save"]
         assert [resource.name for resource in record.declarations.resources] == ["changes"]
         # Assets may appear after a build without changing registration identity.
         assert registry.current_page(identity, "unbuilt") is not None
         assert registry.current_contribution(identity, "unbuilt-view") is not None
+        persistent = [message for message in record.capability_errors if "unbuilt" not in message]
+        unavailable = list(record.capability_errors)
+        registry.page_declarations()
+        registry.page_declarations()
+        assert record.capability_errors == unavailable
         (package / "unbuilt.html").write_text("<!doctype html>", encoding="utf-8")
-        assert {page.page_id for _identity, page, _entry in registry.page_declarations()} == {
-            "panel",
-            "unbuilt",
-        }
+        with ThreadPoolExecutor(max_workers=4) as projections:
+            results = [projections.submit(registry.page_declarations) for _ in range(4)]
+            for result in results:
+                assert {page.page_id for _identity, page, _entry in result.result()} == {
+                    "panel",
+                    "unbuilt",
+                }
+        assert record.capability_errors == persistent
+        (package / "unbuilt.html").unlink()
+        assert [page.page_id for _identity, page, _entry in registry.page_declarations()] == [
+            "panel"
+        ]
+        assert record.capability_errors == unavailable
+        (package / "unbuilt.html").write_text("<!doctype html>", encoding="utf-8")
+        deny_access(package / "unbuilt.html")
+        registry.page_declarations()
+        unreadable = [message for message in record.capability_errors if "unbuilt" in message]
+        assert len(unreadable) == 2
+        assert all("unreadable" in message and "missing" not in message for message in unreadable)
+        assert [
+            message for message in record.capability_errors if "unbuilt" not in message
+        ] == persistent
     finally:
         registry.retire_registration()

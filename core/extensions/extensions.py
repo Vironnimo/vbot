@@ -68,7 +68,6 @@ from core.extensions._declarations import (
     ToolDeclaration,
     ToolFamilyDeclaration,
     ToolResultValidator,
-    _diagnose_capability,
 )
 from core.extensions._loading import (
     _await_pending_registers,
@@ -78,6 +77,7 @@ from core.extensions._loading import (
     _register_extension,
     _run_coroutine_to_completion,
     purge_extension_modules,
+    refresh_page_availability,
     resolve_pages,
 )
 from core.extensions.contributions import ContributionDeclaration
@@ -217,10 +217,7 @@ class ExtensionRegistry:
         for record, declaration, entry in self._pages.values():
             if record.status != "loaded":
                 continue
-            if not entry.is_file():
-                _diagnose_capability(
-                    record, f"page {declaration.page_id!r} skipped: entry is missing"
-                )
+            if not refresh_page_availability(record, declaration, entry):
                 continue
             pages.append(
                 (ExtensionRegistrationIdentity(record.name, self._epoch), declaration, entry)

@@ -9,7 +9,7 @@ from core.model_tasks.live import LIVE_MEDIA_KINDS, LiveStartRejected
 from server.live.registry import LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _reject_unsupported, _required_string
+from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
@@ -28,7 +28,7 @@ def _registry(state: Any) -> LiveCallRegistry:
 
 def _status(state: Any, params: JsonObject) -> JsonObject:
     """Report whether a ``live_voice`` binding is configured and usable."""
-    _reject_unsupported(params, set(), "live.status")
+    _reject_unsupported(params, rpc_request_fields("live.status"), "live.status")
     status: JsonObject = state.runtime.live_voice.status()
     return status
 

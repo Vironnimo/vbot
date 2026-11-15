@@ -28,6 +28,7 @@ from server.rpc.validation import (
     _required_agent_address,
     _required_block_slug,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -57,13 +58,12 @@ async def _file_preview_revision(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _list_logs(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "log.list does not accept params")
+    _reject_unsupported(params, rpc_request_fields("log.list"), "log.list")
     return await _log_viewer(state).list_files()
 
 
 async def _read_log(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"file", "before"}, "log read")
+    _reject_unsupported(params, rpc_request_fields("log.read"), "log read")
 
     file_name = _required_string(params, "file")
     before = _optional_positive_integer(params, "before")
@@ -76,7 +76,7 @@ async def _read_log(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _list_prompts(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"scope"}, "prompt.list")
+    _reject_unsupported(params, rpc_request_fields("prompt.list"), "prompt.list")
     try:
         manager = _prompt_manager(state)
         blocks = manager.list_blocks(params.get("scope"))
@@ -89,7 +89,7 @@ def _list_prompts(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "content", "scope"}, "prompt.update")
+    _reject_unsupported(params, rpc_request_fields("prompt.update"), "prompt.update")
     block_id = _required_string(params, "id")
     content = params.get("content")
     if not isinstance(content, str):
@@ -108,7 +108,7 @@ def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "scope"}, "prompt.reset")
+    _reject_unsupported(params, rpc_request_fields("prompt.reset"), "prompt.reset")
     block_id = _required_string(params, "id")
     try:
         manager = _prompt_manager(state)
@@ -124,7 +124,7 @@ def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _set_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"layout", "scope"}, "prompt.set_layout")
+    _reject_unsupported(params, rpc_request_fields("prompt.set_layout"), "prompt.set_layout")
     layout = params.get("layout")
     if not isinstance(layout, list):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.layout must be a list")
@@ -143,7 +143,7 @@ def _set_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _create_prompt_block(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"slug", "content", "scope", "position"}, "prompt.create_block")
+    _reject_unsupported(params, rpc_request_fields("prompt.create_block"), "prompt.create_block")
     slug = _required_block_slug(params, "slug")
     content = params.get("content")
     if content is not None and not isinstance(content, str):
@@ -162,7 +162,7 @@ def _create_prompt_block(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _remove_prompt_block(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "scope"}, "prompt.remove_block")
+    _reject_unsupported(params, rpc_request_fields("prompt.remove_block"), "prompt.remove_block")
     block_id = _required_string(params, "id")
     try:
         manager = _prompt_manager(state)
@@ -178,7 +178,7 @@ def _remove_prompt_block(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _reset_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"scope"}, "prompt.reset_layout")
+    _reject_unsupported(params, rpc_request_fields("prompt.reset_layout"), "prompt.reset_layout")
     try:
         manager = _prompt_manager(state)
         before = _prompt_layout_signature(manager, params.get("scope"))
@@ -238,7 +238,7 @@ def _optional_layout_position(params: JsonObject) -> int | None:
 async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "scope", "include_tools", "session_id", "working_project_id"},
+        rpc_request_fields("prompt.preview"),
         "prompt.preview",
     )
     include_tools = params.get("include_tools", False)

@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-31.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-31.0.1-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-31.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-31.0.1-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -38,14 +38,27 @@ or native namespace does not load Providers, Channels or the server. Opaque host
 capabilities outside these contracts remain typed `Any`; use `host.services`
 for product integration instead of navigating internal Runtime objects.
 
+The checked public contract is the exported namespace plus its declarations,
+not every implementation member reachable on an aliased class. `ExtensionOperations`
+comes from `api.operations`; `ExtensionCommandContext` comes from a command
+callback. Their authoring types intentionally reject direct construction because
+the host supplies private wiring. Other declared constructors remain callable.
+
 ## Version contract and migration from API 30
 
-The SDK version is `31.0.0`, and `API_VERSION` describes the SDK's server contract.
+The SDK version is `31.0.1`, and `API_VERSION` describes the SDK's server contract.
 Declare `"api_version": 31` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 30 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+SDK patch 31.0.1 corrects declarations without changing API generation 31:
+`ToolContext.permissions` is required, and `normalize_tool_call_ids` takes
+`ToolCallIdRules`, the host's existing constraint value, rather than a profile
+name. `ToolCallIdProfile` remains the literal name used in wire configuration.
+Type-only imports are private unless explicitly re-exported; import `ToolContext`
+from `.tools` and `ContentBlock` from `.channels`.
 
 For optional support in shared code, `require_api(minimum=31)` returns the
 running host's API version or raises; `maximum=` can bound a tested version
@@ -137,5 +150,17 @@ python -m pip wheel --no-deps --no-build-isolation ./sdk/python --wheel-dir ./re
 
 Publish/copy the resulting wheel, not this metadata-only build directory. The
 runtime package's source is `vbot_extension_sdk/`; update its declarations and
-rebuild the wheel together. The package contract test compares every shipped
-SDK source/type file with the wheel to prevent stale distributed interfaces.
+rebuild the wheel together. `tests/core/extensions/test_python_sdk.py` checks
+every exported declaration against its canonical owner: namespace inventory,
+method and attribute annotations, aliases, async behavior, abstract and Protocol
+implementation obligations, callable argument kinds, and defaults. Concrete
+immutable defaults are recorded in the declarations and compared by value;
+factory and opaque object defaults use `...`, whose presence and type are checked.
+Declared `Any` positions intentionally permit more specific host types.
+
+The two host-supplied constructors above are the only named shape exemptions.
+PEP 695/Literal aliases are structurally compared separately because stubtest
+does not understand all of their runtime representations. Internal extra members
+are permitted, but new exported names and new required subclass methods cannot
+silently escape the check. The package contract also type-checks an isolated
+authoring consumer and compares every shipped SDK source/type file with the wheel.

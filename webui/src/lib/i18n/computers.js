@@ -2,11 +2,11 @@ export default {
   'computers.server': 'Server',
   'computers.label': 'Computer',
   'computers.offline': 'Offline',
-  'computers.offlineCapabilities': 'Offline Â· {capabilities}',
+  'computers.offlineCapabilities': 'Offline · {capabilities}',
   'computers.availabilityUnknown': 'Availability unknown',
   'computers.terminalAndComputerUse': 'Terminal and Computer Use enabled',
-  'computers.terminalOnly': 'Terminal enabled Â· Computer Use unavailable',
-  'computers.computerUseOnly': 'Computer Use enabled Â· Terminal unavailable',
+  'computers.terminalOnly': 'Terminal enabled · Computer Use unavailable',
+  'computers.computerUseOnly': 'Computer Use enabled · Terminal unavailable',
   'computers.noCapabilities': 'No capabilities shared',
   'computers.capabilitiesEnabled': '{capabilities} enabled',
   'computers.loadError':
@@ -23,8 +23,8 @@ export default {
     'Allow another computer when your task needs it. For Terminal and Computer Use, the Agent can use only the computers you select here.',
   'computers.running':
     'Computer access can be changed once the current Run ends.',
-  'computers.selectedOffline': '{name} Â· Offline',
-  'computers.selectedRevoked': '{name} Â· Not allowed',
+  'computers.selectedOffline': '{name} · Offline',
+  'computers.selectedRevoked': '{name} · Not allowed',
   'computers.defaultRevoked':
     'This conversation may no longer use this computer. Choose another default.',
   'computers.terminalUnavailable': 'Terminal is unavailable on this computer.',

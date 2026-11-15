@@ -549,12 +549,12 @@ async def test_settings_get_path_returns_effective_value_and_details(tmp_path: P
 @pytest.mark.parametrize(
     ("method", "params", "named"),
     [
-        ("settings.get", {"extra": True}, "settings.get does not accept params"),
-        ("settings.catalog", {"prefix": 5}, "params.prefix must be a string"),
+        ("settings.get", {"extra": True}, "extra"),
+        ("settings.catalog", {"prefix": 5}, "prefix"),
         (
             "settings.get_path",
             {"path": "web_search.provider", "allow_missing": "yes"},
-            "params.allow_missing must be a boolean",
+            "allow_missing",
         ),
     ],
 )
@@ -565,4 +565,5 @@ async def test_malformed_settings_reads_are_rejected(
 
     error = await rpc_error(state, method, **params)
 
-    assert error == {"code": "invalid_request", "message": named}
+    assert error["code"] == "invalid_request"
+    assert named in error["message"]

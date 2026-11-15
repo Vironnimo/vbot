@@ -10,6 +10,7 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_session_address,
     _required_string,
+    rpc_request_fields,
 )
 
 JsonObject = dict[str, Any]
@@ -34,7 +35,7 @@ def _portal_list(state: Any, params: JsonObject) -> JsonObject:
 
 def _portal_close(state: Any, params: JsonObject) -> JsonObject:
     """Close one Portal; closing a Portal that is no longer open changes nothing."""
-    _reject_unsupported(params, {"id"}, "portal.close")
+    _reject_unsupported(params, rpc_request_fields("portal.close"), "portal.close")
     portal_id = _required_string(params, "id")
     closed = state.runtime.portals.close(portal_id)
     return {"id": portal_id, "closed": closed is not None}

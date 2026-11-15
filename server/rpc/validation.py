@@ -29,6 +29,22 @@ CHAT_INPUT_ORIGINS = frozenset(
 ChatInputOrigin = Literal["speech_transcription", "live_voice"]
 
 
+def rpc_request_fields(method: str) -> frozenset[str]:
+    """Use the canonical envelope shared with the Extension service facade."""
+    # Domain modules import validation while registering their handlers. Loading
+    # contracts only on use keeps their domain-type imports out of that cycle.
+    from server.rpc._contracts import request_fields
+
+    return request_fields(method)
+
+
+def service_request_fields(method: str) -> frozenset[str]:
+    """The explicitly exposed subset of one shared RPC parameter contract."""
+    from server.rpc._contracts import PARAMETER_CONTRACTS
+
+    return frozenset(PARAMETER_CONTRACTS[method].service[2]["properties"])
+
+
 def _chat_reply_surface(params: JsonObject) -> ReplySurface:
     """Read the destination of this submission, independent of the Session's past."""
     value = params.get("reply_surface", "webui")

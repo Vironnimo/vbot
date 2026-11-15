@@ -115,6 +115,11 @@ class ChannelError(VBotError):
     part was acknowledged, or the platform's answer to a write never arrived.
     """
 
+    retryable: bool
+    retry_after: float | None
+    possibly_delivered: bool
+    user_message: str
+
     def __init__(
         self,
         message: str = "",

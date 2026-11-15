@@ -12,7 +12,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, rpc_request_fields
 
 JsonObject = dict[str, Any]
 
@@ -37,12 +37,12 @@ async def _change(state: Any, *, step: SetupStep | None = None, finish: bool = F
 
 
 async def _get(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "setup.get")
+    _reject_unsupported(params, rpc_request_fields("setup.get"), "setup.get")
     return await _change(state)
 
 
 async def _update(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"step"}, "setup.update")
+    _reject_unsupported(params, rpc_request_fields("setup.update"), "setup.update")
     step = params.get("step")
     if not isinstance(step, str) or step not in SETUP_STEPS:
         raise RpcError(
@@ -53,7 +53,7 @@ async def _update(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _finish(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "setup.finish")
+    _reject_unsupported(params, rpc_request_fields("setup.finish"), "setup.finish")
     return await _change(state, finish=True)
 
 
