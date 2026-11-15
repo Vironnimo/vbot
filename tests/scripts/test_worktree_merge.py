@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -723,6 +724,18 @@ def test_a_repair_window_protects_its_merge_until_main_has_it(
         assert _wait_until(
             lambda: worktree_lock._own_repair_window_is_active(holder_path, "task-a"), timeout=1
         )
+        if sys.platform == "win32":
+            read_text = Path.read_text
+            replacement_pending = True
+
+            def read_during_replacement(path, *args, **kwargs):
+                nonlocal replacement_pending
+                if path == holder_path and replacement_pending:
+                    replacement_pending = False
+                    raise PermissionError("holder replacement in progress")
+                return read_text(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", read_during_replacement)
         main_head = _git_output(real_repo, "rev-parse", "HEAD")
         _around_the_merge_check(monkeypatch, module, during_the_check)
         result = module.merges.merge(

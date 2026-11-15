@@ -248,6 +248,8 @@ A conflicted merge rolls back completely — `main` stays untouched — and prin
 
 Because `main` cannot move during a repair, every conflict is resolved exactly once against a frozen base — concurrent sessions cannot invalidate each other's resolutions into an endless loop. If you abandon the repair, close the window explicitly with `python scripts/worktree.py repair-finish <name>`; closing a window that already ended is a harmless `already-closed`.
 
+The keeper replaces its holder record atomically. Readers use `core.utils.atomic.read_replaced_text` so a brief Windows sharing violation during replacement does not make an active window appear closed.
+
 ## How vBot detects the worktree context
 
 Each worktree gets a marker file:
