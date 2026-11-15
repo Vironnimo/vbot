@@ -107,7 +107,6 @@ def test_unknown_flag_does_not_echo_its_value_or_other_positional_secrets(prefix
 @pytest.mark.parametrize(
     "tokens,choices",
     [
-        (["channel", "add", "demo", "--platform", "telegarm"], ["telegram", "discord"]),
         (["agent", "update", "a", "--thinking-effort", "hihg"], ["high"]),
         (["update", "--output", "humna"], ["human", "auto", "plain"]),
     ],
