@@ -68,6 +68,7 @@ class ExecutionHandler(Protocol):
 
 type EventSink = Callable[[str, dict[str, Any]], None]
 type HandlerFactory = Callable[[EventSink], ExecutionHandler]
+type BeforeReload = Callable[[frozenset[str]], None]
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,7 @@ def load_desktop_extensions(
     *,
     disabled: Iterable[str] = (),
     previous: DesktopExtensionCatalog | None = None,
+    before_load: BeforeReload | None = None,
 ) -> DesktopExtensionCatalog:
     """Collect trusted local native entries in first-identity-wins root order.
 
@@ -178,8 +180,11 @@ def load_desktop_extensions(
     earlier folder still claims its identity, so it cannot activate a later copy.
     An explicit local reload may pass its previous snapshot. Unchanged packages
     retain their declarations; changed packages get an isolated source namespace.
+    All package fingerprints are collected before before_load can approve the
+    affected existing capability ids. Declining it imports no replacement code.
     """
     catalog = DesktopExtensionCatalog()
+    packages: list[tuple[Path, dict[str, Any], str, str, bool]] = []
     claimed: set[str] = set()
     try:
         disabled_values = tuple(disabled)
@@ -193,6 +198,8 @@ def load_desktop_extensions(
             {"name": "extensions.disabled", "status": "failed", "error": "invalid_disabled_list"}
         )
         _LOGGER.warning("Desktop Extensions disabled because their local settings are invalid")
+        if before_load is not None:
+            before_load(frozenset(previous.capabilities if previous else ()))
         return catalog
     for root in roots:
         try:
@@ -232,38 +239,7 @@ def load_desktop_extensions(
                 continue
             try:
                 source, revision, legacy = _source_identity(candidate)
-                cache_key = (source, name)
-                cached = previous._cache.get(cache_key) if previous is not None else None
-                declarations = (
-                    cached[1]
-                    if cached is not None and cached[0] == revision
-                    else _load_declarations(candidate, source, revision, legacy)
-                )
-                catalog._cache[cache_key] = (revision, declarations)
-                if declarations is None:
-                    record["status"] = "server_only"
-                    continue
-                combined = {**catalog.capabilities}
-                for capability in declarations:
-                    if capability.id in combined:
-                        raise ValueError(f"Native capability {capability.id} is already registered")
-                    combined[capability.id] = capability
-                validate_capability_ids(list(combined))
-                if (
-                    len(json.dumps([item.describe() for item in combined.values()]).encode())
-                    > MAX_CAPABILITY_CATALOG_BYTES
-                ):
-                    raise ValueError("Native capability catalog exceeds the 4 MiB transport budget")
-                catalog.capabilities = combined
-                record["capabilities"] = [item.id for item in declarations]
-                if previous is not None:
-                    record["change"] = (
-                        "unchanged"
-                        if cached is not None and cached[0] == revision
-                        else "updated"
-                        if cached is not None
-                        else "added"
-                    )
+                packages.append((candidate, record, source, revision, legacy))
             except Exception as error:
                 record.update(status="failed", error=f"{type(error).__name__}: {error}")
                 _LOGGER.warning(
@@ -271,6 +247,64 @@ def load_desktop_extensions(
                     name,
                     type(error).__name__,
                 )
+    if before_load is not None:
+        observed = {
+            (source, candidate.name): revision for candidate, _, source, revision, _ in packages
+        }
+        affected = frozenset(
+            name
+            for name, declaration in (previous.capabilities.items() if previous else ())
+            if observed.get((declaration.source, declaration.owner)) != declaration.revision
+        )
+        before_load(affected)
+    for candidate, record, source, revision, legacy in packages:
+        name = candidate.name
+        try:
+            cache_key = (source, name)
+            cached = previous._cache.get(cache_key) if previous is not None else None
+            declarations = (
+                cached[1]
+                if cached is not None and cached[0] == revision
+                else _load_declarations(candidate, source, revision, legacy)
+            )
+            if (cached is None or cached[0] != revision) and _source_identity(candidate) != (
+                source,
+                revision,
+                legacy,
+            ):
+                raise ValueError("Desktop Extension package changed during registration")
+            catalog._cache[cache_key] = (revision, declarations)
+            if declarations is None:
+                record["status"] = "server_only"
+                continue
+            combined = {**catalog.capabilities}
+            for capability in declarations:
+                if capability.id in combined:
+                    raise ValueError(f"Native capability {capability.id} is already registered")
+                combined[capability.id] = capability
+            validate_capability_ids(list(combined))
+            if (
+                len(json.dumps([item.describe() for item in combined.values()]).encode())
+                > MAX_CAPABILITY_CATALOG_BYTES
+            ):
+                raise ValueError("Native capability catalog exceeds the 4 MiB transport budget")
+            catalog.capabilities = combined
+            record["capabilities"] = [item.id for item in declarations]
+            if previous is not None:
+                record["change"] = (
+                    "unchanged"
+                    if cached is not None and cached[0] == revision
+                    else "updated"
+                    if cached is not None
+                    else "added"
+                )
+        except Exception as error:
+            record.update(status="failed", error=f"{type(error).__name__}: {error}")
+            _LOGGER.warning(
+                "Desktop Extension registration failed (extension=%s error=%s)",
+                name,
+                type(error).__name__,
+            )
     if previous is not None:
         present = {record["name"] for record in catalog.records}
         for owner in sorted({item.owner for item in previous.capabilities.values()} - present):

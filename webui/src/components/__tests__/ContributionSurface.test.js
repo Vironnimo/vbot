@@ -13,6 +13,24 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock('$lib/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   invokeExtensionContribution: (...args) => invoke(...args),
+  readExtensionContributionSources: async (requests) => ({
+    results: await Promise.all(
+      requests.map(async (request) => {
+        try {
+          return {
+            ok: true,
+            result: await invoke(
+              { ...descriptor, epoch: request.epoch },
+              request.operation,
+              request.params,
+            ),
+          };
+        } catch (error) {
+          return { ok: false, error: { message: error.message } };
+        }
+      }),
+    ),
+  }),
 }));
 
 const { default: ContributionSurface } =
@@ -24,6 +42,7 @@ const { default: ContributionContextHost } =
 
 const descriptor = {
   id: 'extension:computer:control',
+  local_id: 'control',
   extension: 'computer',
   epoch: 'epoch-a',
   surface: 'chat.composer.actions',
@@ -61,7 +80,7 @@ function deferred() {
 }
 
 async function settle() {
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 12; index++) {
     await Promise.resolve();
     flushSync();
   }
@@ -106,9 +125,81 @@ afterEach(async () => {
   if (instance) await unmount(instance);
   instance = null;
   expect(listeners.size).toBe(0);
+  vi.unstubAllGlobals();
 });
 
 describe('ContributionSurface operations', () => {
+  it('reads only viewport-near sources in 300 mounted Message rows and renews them on re-entry', async () => {
+    let observeChanges;
+    const targets = [];
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback) {
+          observeChanges = callback;
+        }
+        observe(element) {
+          targets.push(element);
+        }
+        unobserve() {}
+        disconnect = disconnect;
+      },
+    );
+    invoke.mockResolvedValue(idle);
+    const row = {
+      ...descriptor,
+      surface: 'chat.message',
+      source: {
+        ...descriptor.source,
+        params: { message_id: { context: 'message_id' } },
+      },
+    };
+    instance = mount(ContributionContextHost, {
+      target: document.body,
+      props: {
+        component: ContributionSurface,
+        source: {
+          entries: [row],
+          subscribe(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        },
+        instances: Array.from({ length: 300 }, (_, id) => ({
+          surface: row.surface,
+          context: { message_id: `message-${id}` },
+        })),
+      },
+    });
+    await settle();
+    expect(targets).toHaveLength(300);
+    expect(invoke).not.toHaveBeenCalled();
+    observeChanges(
+      targets.slice(0, 5).map((target) => ({ target, isIntersecting: true })),
+    );
+    await settle();
+    expect(invoke.mock.calls.map(([, , params]) => params.message_id)).toEqual(
+      Array.from({ length: 5 }, (_, id) => `message-${id}`),
+    );
+    invalidate();
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(10);
+    observeChanges([{ target: targets[0], isIntersecting: false }]);
+    await settle();
+    invalidate();
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(14);
+    observeChanges([{ target: targets[0], isIntersecting: true }]);
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(15);
+    expect(invoke.mock.lastCall[2]).toEqual({ message_id: 'message-0' });
+    await unmount(instance);
+    instance = null;
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(listeners.size).toBe(0);
+  });
+
   it('renders every public named icon and validated custom geometry', () => {
     instance = mount(ContributionContextHost, {
       target: document.body,
@@ -141,6 +232,7 @@ describe('ContributionSurface operations', () => {
     const next = deferred();
     invoke.mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise);
     mountSurface();
+    await settle();
     expect(invoke).toHaveBeenCalledExactlyOnceWith(descriptor, 'read', {
       session_id: 'first',
     });
@@ -152,7 +244,7 @@ describe('ContributionSurface operations', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     first.resolve(stop);
     await settle();
-    expect(stopButton()).not.toBeNull();
+    expect(stopButton()).toBeNull();
     expect(invoke).toHaveBeenCalledTimes(2);
     next.resolve(idle);
     await settle();
@@ -270,6 +362,7 @@ describe('ContributionSurface operations', () => {
       const previous = deferred();
       invoke.mockReturnValueOnce(previous.promise).mockResolvedValue(idle);
       const { source, props } = mountSurface();
+      await settle();
       if (change === 'context') props.context = { session_id: 'second' };
       else if (change === 'epoch')
         source.entries = [{ ...descriptor, epoch: 'epoch-b' }];
@@ -304,6 +397,7 @@ describe('ContributionSurface operations', () => {
     mountSurface();
     await settle();
     invalidate();
+    await settle();
     stopButton().click();
     flushSync();
     expect(stopButton().disabled).toBe(true);
@@ -315,5 +409,31 @@ describe('ContributionSurface operations', () => {
     expect(invoke).toHaveBeenCalledTimes(4);
     expect(document.body.textContent).toContain('Computer idle');
     expect(document.body.textContent).not.toContain('Stale control state');
+  });
+
+  it('refreshes the new context when its source completed during an earlier context action', async () => {
+    const action = deferred();
+    invoke
+      .mockResolvedValueOnce(stop)
+      .mockReturnValueOnce(action.promise)
+      .mockResolvedValueOnce(idle)
+      .mockResolvedValueOnce({
+        items: [{ id: 'fresh', text: 'Current context' }],
+      });
+    const { props } = mountSurface();
+    await settle();
+    stopButton().click();
+    await settle();
+    props.context = { session_id: 'second' };
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(3);
+    action.resolve({ stopped: true });
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke.mock.lastCall[2]).toEqual({ session_id: 'second' });
+    expect(document.body.textContent).toContain('Current context');
+    expect(
+      invoke.mock.calls.filter(([, operation]) => operation === 'stop'),
+    ).toHaveLength(1);
   });
 });

@@ -16,7 +16,7 @@ from desktop import execution, servers
 from desktop.connection import ConnectionController
 from desktop.credentials import DeviceTokenStore
 from desktop.execution import ComputerSharing, SharingError
-from desktop.extensions import DesktopExtensionCatalog, EventSink, NativeCapability
+from desktop.extensions import BeforeReload, DesktopExtensionCatalog, EventSink, NativeCapability
 from desktop.probe import (
     PROBE_SERVER_UNREACHABLE,
     PROBE_WEBUI_AVAILABLE,
@@ -722,9 +722,12 @@ async def test_native_reload_refuses_legacy_servers_before_and_after_scanning(
     declaration = NativeCapability("terminal", "terminal", "Terminal", "", lambda _emit: handler)
     catalog = DesktopExtensionCatalog({"terminal": declaration})
 
-    def scan() -> DesktopExtensionCatalog:
+    def scan(
+        _previous: DesktopExtensionCatalog, before_load: BeforeReload
+    ) -> DesktopExtensionCatalog:
         loop.call_soon_threadsafe(scanned.set)
         assert release_scan.wait(2)
+        before_load(frozenset())
         return catalog
 
     sharing = ComputerSharing(
@@ -769,21 +772,24 @@ async def test_native_reload_refuses_legacy_servers_before_and_after_scanning(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retire_error", [False, True])
+@pytest.mark.parametrize("retire_error", [False, True, "cancel"])
 async def test_local_reload_retires_changed_work_preserves_other_handlers_and_binds_grants(
     tmp_path: Path,
-    retire_error: bool,
+    retire_error: bool | str,
 ) -> None:
     connections = Connections()
     healthy = Capability()
     instances: list[Capability] = []
     sinks: list[EventSink] = []
     custom_id = "extension:office:printer"
+    fail_after_import = False
 
     class ReloadCapability(Capability):
         @override
         async def close(self) -> None:
             if retire_error and self is instances[0]:
+                if retire_error == "cancel":
+                    raise asyncio.CancelledError
                 raise OSError("retirement unavailable")
             await super().close()
 
@@ -815,6 +821,22 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
             }
         )
     )
+
+    def reload_catalog(
+        previous: DesktopExtensionCatalog, before_load: BeforeReload
+    ) -> DesktopExtensionCatalog:
+        previous_terminal = previous.capabilities.get("terminal")
+        next_terminal = catalog.capabilities.get("terminal")
+        before_load(
+            frozenset({"terminal"})
+            if previous_terminal is not None
+            and (next_terminal is None or next_terminal.identity != previous_terminal.identity)
+            else frozenset()
+        )
+        if fail_after_import:
+            assert sharing.allow_close(lambda _title, _message: True)
+        return catalog
+
     sharing = ComputerSharing(
         settings_path=tmp_path / "settings.json",
         identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
@@ -822,7 +844,7 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
         factories=catalog.factories,
         capabilities=catalog.capabilities,
         connector=connections,
-        reload_extensions=lambda: catalog,
+        reload_extensions=reload_catalog,
     )
     url = "https://one.example/"
     sharing.set_server_url(url)
@@ -880,7 +902,9 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
                 "type": "capabilities",
                 "capabilities": ["terminal"],
             }
-            assert sharing.status()["capability_errors"][custom_id] == "close: OSError"
+            assert sharing.status()["capability_errors"][custom_id] == (
+                "close: CancelledError" if retire_error == "cancel" else "close: OSError"
+            )
             assert len(instances) == 1
             assert (await initial.call("retirement_failed", "status"))["result"]["count"] == 1
             retire_error = False
@@ -950,7 +974,187 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
             assert declined.value.error_code == "declined"
         assert not healthy.closed
         assert (await initial.call("declined_reload", "status"))["result"]["count"] == 1
+        # Imports alone cannot advance the accepted fingerprint baseline. A
+        # concurrent native fence after import rejects publication; trying again
+        # must still confirm the changed, running Terminal package.
+        catalog = DesktopExtensionCatalog(
+            {
+                "terminal": NativeCapability(
+                    "terminal",
+                    "terminal",
+                    "Changed",
+                    "",
+                    lambda _emit: Capability(),
+                    source=terminal.source,
+                    revision="changed",
+                )
+            }
+        )
+        confirmed = []
+
+        def accept(_title: str, _message: str) -> bool:
+            confirmed.append(True)
+            return True
+
+        revision = sharing.status()["catalog_revision"]
+        fail_after_import = True
+        for _attempt in range(2):
+            with pytest.raises(SharingError) as rejected:
+                sharing.reload_extensions(expected_server=url, confirm=accept)
+            assert rejected.value.error_code == "computer_server_changed"
+            assert sharing.status()["catalog_revision"] == revision
+            assert not healthy.closed and healthy.active_count == 1
+            sharing.resume()
+        assert len(confirmed) == 2
+        fail_after_import = False
+        sharing.reload_extensions(expected_server=url, confirm=accept)
+        assert len(confirmed) == 3
+        update = await asyncio.wait_for(initial.outgoing.get(), timeout=2)
+        assert update == {"type": "capabilities", "capabilities": ["terminal"]}
     finally:
         sharing.close()
         await asyncio.wait_for(running, timeout=2)
     assert healthy.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hang_in_close", [False, True])
+async def test_reload_quarantines_unsettled_handlers_with_one_bounded_wait_and_allows_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hang_in_close: bool,
+) -> None:
+    connections = Connections()
+    healthy = Capability()
+    release_close = asyncio.Event()
+    closed = [asyncio.Event(), asyncio.Event()]
+    close_counts = [0, 0]
+    handlers: list[Capability] = []
+    ids = ("extension:office:first", "extension:office:second")
+
+    class SlowCapability(Capability):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+        @override
+        async def close(self) -> None:
+            close_counts[self.index] += 1
+            closed[self.index].set()
+            if hang_in_close:
+                await release_close.wait()
+            self.closed = True
+            # A noncooperative operation can outlive close as well. Deliberately
+            # leave it running so retirement must retain its exact owner.
+
+    def factory(index: int) -> Callable[[EventSink], Capability]:
+        def create(_emit: EventSink) -> Capability:
+            handler = SlowCapability(index)
+            handlers.append(handler)
+            return handler
+
+        return create
+
+    terminal = NativeCapability("terminal", "terminal", "Terminal", "", lambda _emit: healthy)
+    catalog = DesktopExtensionCatalog(
+        {
+            "terminal": terminal,
+            **{
+                name: NativeCapability(name, "office", name, "", factory(index), revision="first")
+                for index, name in enumerate(ids)
+            },
+        }
+    )
+
+    def reload_catalog(
+        _previous: DesktopExtensionCatalog, before_load: BeforeReload
+    ) -> DesktopExtensionCatalog:
+        before_load(frozenset(ids))
+        return catalog
+
+    waits: list[tuple[asyncio.Task[None], ...]] = []
+
+    async def controlled_wait(tasks: Any, *, timeout: float) -> Any:
+        assert timeout == execution.RETIREMENT_TIMEOUT
+        snapshot = tuple(tasks)
+        waits.append(snapshot)
+        await asyncio.gather(*(event.wait() for event in closed))
+        # Exhaust this one shared deadline deterministically. Every old task is
+        # still owned, not cancelled; another reload observes the same tasks.
+        return (
+            {task for task in snapshot if task.done()},
+            {task for task in snapshot if not task.done()},
+        )
+
+    monkeypatch.setattr(execution, "_wait_for_retirement", controlled_wait)
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=Authorization(),
+        factories=catalog.factories,
+        capabilities=catalog.capabilities,
+        connector=connections,
+        reload_extensions=reload_catalog,
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True, **dict.fromkeys(ids, True)}, expected_server=url)
+    socket = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        for index, name in enumerate(ids):
+            await socket.incoming.put(
+                {
+                    "type": "call",
+                    "id": str(index),
+                    "capability": name,
+                    "operation": "held",
+                    "params": {},
+                }
+            )
+        await asyncio.wait_for(
+            asyncio.gather(*(handler.entered.wait() for handler in handlers)), timeout=2
+        )
+        catalog = DesktopExtensionCatalog(
+            {
+                "terminal": terminal,
+                **{
+                    name: NativeCapability(
+                        name, "office", name, "", factory(index), revision="second"
+                    )
+                    for index, name in enumerate(ids)
+                },
+            }
+        )
+        for attempt in range(2):
+            assert sharing.reload_extensions(expected_server=url)["reloading"]
+            update = await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+            assert update == {"type": "capabilities", "capabilities": ["terminal"]}
+            status = sharing.status()
+            assert not status["reloading"]
+            assert set(status["capability_errors"]) == set(ids)
+            assert all(not status["available"][name] for name in ids)
+            assert len(handlers) == 2 and close_counts == [1, 1]
+            assert (await socket.call(f"healthy-{attempt}", "status"))["ok"]
+        assert len(waits) == 2 and set(waits[0]) == set(waits[1])
+        assert all(not task.cancelled() for task in waits[0])
+        release_close.set()
+        for handler in handlers:
+            handler.release.set()
+        results = [await asyncio.wait_for(socket.outgoing.get(), timeout=2) for _ in ids]
+        assert {result["id"] for result in results} == {"0", "1"}
+        assert all(result["ok"] for result in results)
+        await asyncio.gather(*waits[0])
+        sharing.reload_extensions(expected_server=url)
+        update = await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        assert update["capabilities"] == sorted(["terminal", *ids])
+        assert not sharing.status()["capability_errors"]
+        assert len(handlers) == 4 and close_counts == [1, 1]
+        assert not socket.closed and healthy.disconnects == 0
+    finally:
+        release_close.set()
+        for handler in handlers:
+            handler.release.set()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)

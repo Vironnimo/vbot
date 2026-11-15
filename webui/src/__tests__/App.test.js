@@ -428,7 +428,9 @@ describe('App', () => {
               },
             ],
           }),
-          'extensions.contribution_operation': () => ({ items: [] }),
+          'extensions.contribution_sources': ({ requests }) => ({
+            results: requests.map(() => ({ ok: true, result: { items: [] } })),
+          }),
         },
       }),
     );
@@ -438,11 +440,11 @@ describe('App', () => {
       rpcMock.mock.calls.filter(([name]) => name === method).length;
     const counts = () => [
       calls('extensions.requests'),
-      calls('extensions.contribution_operation'),
+      calls('extensions.contribution_sources'),
     ];
     await waitForCondition(() => {
       expect(calls('extensions.pages')).toBe(1);
-      expect(calls('extensions.contribution_operation')).toBeGreaterThan(0);
+      expect(calls('extensions.contribution_sources')).toBeGreaterThan(0);
     });
     // Startup reads end; nothing polls afterwards.
     let settled;

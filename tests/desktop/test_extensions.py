@@ -26,7 +26,7 @@ def _extension(root: Path, name: str, source: str, *, entry: str = "desktop.py")
 
 @pytest.mark.parametrize("entry", ["desktop.py", "native/desktop.py"])
 def test_native_discovery_never_imports_server_code_or_constructs_handlers(
-    tmp_path: Path, entry: str
+    tmp_path: Path, entry: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     package = _extension(
         tmp_path,
@@ -67,6 +67,24 @@ def test_native_discovery_never_imports_server_code_or_constructs_handlers(
     stamp = labels.stat()
     labels.write_text("LABEL = 'Edited printer'", encoding="utf-8")
     os.utime(labels, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    imported = []
+    load = extensions._load_declarations
+
+    def observed_load(*args: Any, **kwargs: Any) -> Any:
+        imported.append(args[0])
+        return load(*args, **kwargs)
+
+    def decline(affected: frozenset[str]) -> None:
+        assert affected == {"extension:printer:printer"}
+        raise RuntimeError("test-owned-decline")
+
+    monkeypatch.setattr(extensions, "_load_declarations", observed_load)
+    # A second, earlier package would have been imported before discovering the
+    # affected old owner without the complete metadata-only preflight.
+    _extension(tmp_path, "added", "raise AssertionError('declined import')")
+    with pytest.raises(RuntimeError, match="test-owned-decline"):
+        load_desktop_extensions([tmp_path], previous=unchanged, before_load=decline)
+    assert imported == []
     changed = load_desktop_extensions([tmp_path], previous=unchanged)
     assert changed.capabilities["extension:printer:printer"].label == "Edited printer"
     assert (
@@ -188,7 +206,8 @@ def test_native_reload_ignores_dependency_and_generated_cache_files(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    "failure", ["entries", "bytes", "depth", "scan", "read", "link", "directory_swap"]
+    "failure",
+    ["entries", "bytes", "depth", "scan", "read", "link", "directory_swap", "registration_change"],
 )
 def test_native_reload_refuses_incomplete_or_unbounded_package_fingerprints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -236,6 +255,16 @@ def test_native_reload_refuses_incomplete_or_unbounded_package_fingerprints(
             return real_open(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, "open", read)
+    elif failure == "registration_change":
+        asset.write_bytes(b"changed input")
+        real_load = extensions._load_declarations
+
+        def register(*args: Any, **kwargs: Any) -> Any:
+            declarations = real_load(*args, **kwargs)
+            asset.write_bytes(b"changed during registration")
+            return declarations
+
+        monkeypatch.setattr(extensions, "_load_declarations", register)
     else:
         link_directory(assets / "cycle", package)
     refused = load_desktop_extensions([root], previous=initial)

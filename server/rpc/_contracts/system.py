@@ -1073,6 +1073,10 @@ SERVICE_EXCLUSIONS = {
         "UI contribution dispatch is bound to its registration epoch and "
         "declared operations; cross-Extension calls use Services."
     ),
+    "extensions.contribution_sources": (
+        "Batched browser source reads are registration-bound presentation transport; "
+        "cross-Extension calls use explicitly exported Services."
+    ),
     "extensions.contributions": (
         "Projects browser Pages with principal-bound asset capabilities; query "
         "declared Services for portable data."

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import json
+import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.extensions import API_VERSION, ExtensionRegistrationIdentity
+from core.extensions._callbacks import ExtensionHandlerTimeoutError, invoke_isolated_handler
+from core.extensions._declarations import ExtensionUnavailableError
 from core.extensions.contributions import EXTENSION_FEATURES, ContributionDeclaration
 from core.extensions.operations import ExtensionOperationError
 from core.extensions.services import ExtensionServiceError
@@ -14,6 +20,15 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string
+
+_LOGGER = logging.getLogger("vbot.server.rpc.extension_presentation")
+_SOURCE_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass
+class _SourceOwnerAdmission:
+    slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(2))
+    users: int = 0
 
 
 async def _contributions(state: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -57,6 +72,86 @@ async def _contributions(state: Any, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _contribution_operation(state: Any, params: dict[str, Any]) -> dict[str, Any]:
+    return await _invoke_contribution(state, params, source_only=False)
+
+
+async def _contribution_sources(state: Any, params: dict[str, Any]) -> dict[str, Any]:
+    """Read a bounded batch through the same registration-scoped source owner.
+
+    All batches on this application share admission, so multiple clients cannot
+    multiply the read fan-out. Per-entry failures preserve successful siblings.
+    """
+    _reject_unsupported(params, {"requests"}, "extensions.contribution_sources")
+    requests = params.get("requests")
+    if not isinstance(requests, list) or not 1 <= len(requests) <= 32:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Source requests must contain 1 to 32 entries")
+    slots = getattr(state, "extension_contribution_source_slots", None)
+    if slots is None:
+        slots = state.extension_contribution_source_slots = asyncio.Semaphore(4)
+        state.extension_contribution_source_owners = {}
+    owners: dict[str, _SourceOwnerAdmission] = state.extension_contribution_source_owners
+
+    async def read(request: Any) -> dict[str, Any]:
+        owner = None
+        name = ""
+        try:
+            if not isinstance(request, dict):
+                raise RpcError(RPC_ERROR_INVALID_REQUEST, "Source request must be an object")
+            name = _required_string(request, "extension")
+            owner = owners.setdefault(name, _SourceOwnerAdmission())
+            owner.users += 1
+            # Wait for this owner's turn before global admission, reserving
+            # capacity for other Extensions even when one has many slow rows.
+            async with owner.slots, slots:
+                result = await invoke_isolated_handler(
+                    _invoke_contribution,
+                    state,
+                    request,
+                    source_only=True,
+                    extension_name=name,
+                    description="contribution source read",
+                    timeout_seconds=_SOURCE_TIMEOUT_SECONDS,
+                )
+                # A list must not amplify a large single-operation result into
+                # an unbounded batch response. 32 entries total at most 8 MiB.
+                if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode()) > 262_144:
+                    raise RpcError(
+                        RPC_ERROR_INVALID_REQUEST, "Contribution source result exceeds 256 KiB"
+                    )
+            return {"ok": True, "result": result}
+        except RpcError as exc:
+            return {"ok": False, "error": exc.to_dict()}
+        except ExtensionHandlerTimeoutError:
+            return {
+                "ok": False,
+                "error": {"code": "callback_timeout", "message": "Extension source read timed out"},
+            }
+        except ExtensionUnavailableError:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "callback_unavailable",
+                    "message": "An earlier Extension callback is still running",
+                },
+            }
+        except Exception:
+            _LOGGER.exception("Unexpected Extension source read failure")
+            return {
+                "ok": False,
+                "error": {"code": "internal_error", "message": "Extension source read failed"},
+            }
+        finally:
+            if owner is not None:
+                owner.users -= 1
+                if not owner.users:
+                    owners.pop(name)
+
+    return {"results": await asyncio.gather(*(read(request) for request in requests))}
+
+
+async def _invoke_contribution(
+    state: Any, params: dict[str, Any], *, source_only: bool
+) -> dict[str, Any]:
     _reject_unsupported(
         params,
         {"extension", "id", "epoch", "operation", "params"},
@@ -79,6 +174,8 @@ async def _contribution_operation(state: Any, params: dict[str, Any]) -> dict[st
             raise ValueError("Extension contribution is unavailable; refresh its catalog")
         if operation not in declaration.spec["operations"]:
             raise ValueError("Operation is not declared by this contribution")
+        if source_only and declaration.spec.get("source", {}).get("operation") != operation:
+            raise ValueError("Batch reads require the declared source operation")
         return declaration
 
     try:
@@ -163,5 +260,6 @@ def presentation_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "extensions.contributions": _contributions,
         "extensions.contribution_operation": _contribution_operation,
+        "extensions.contribution_sources": _contribution_sources,
         "extensions.page_service": _page_service,
     }

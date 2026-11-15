@@ -22,10 +22,14 @@
   let response = $state(null);
   let error = $state('');
   let busy = $state(false);
-  let disposed = false;
   let revision = 0;
-  let reading = false;
-  let queued = false;
+  let sourceHandle;
+  let visible = $state(false);
+  const repeated = $derived(
+    ['chat.message', 'chat.message.actions', 'chat.session.item'].includes(
+      descriptor.surface,
+    ),
+  );
   const items = $derived(
     normalizeContributionItems(descriptor, response, context),
   );
@@ -38,86 +42,56 @@
     ],
   });
 
-  async function refresh() {
-    if (!descriptor.source || disposed) return;
-    queued = true;
-    if (reading || busy) return;
-    reading = true;
-    try {
-      while (queued && !disposed && !busy) {
-        queued = false;
-        const generation = revision;
-        try {
-          const result = await invokeExtensionContribution(
-            descriptor,
-            descriptor.source.operation,
-            bindContributionParams(descriptor.source.params, context),
-          );
-          if (!disposed && generation === revision) {
-            response = result;
-            error = '';
-          }
-        } catch (failure) {
-          if (!disposed && generation === revision) error = failure.message;
-        }
-      }
-    } finally {
-      reading = false;
-    }
+  function refresh() {
+    sourceHandle?.refresh();
   }
 
   $effect(() => {
+    const active = !repeated || visible;
     let parameters;
+    let bindingError;
     try {
       parameters = bindContributionParams(descriptor.source?.params, context);
-    } catch {
+    } catch (failure) {
       parameters = null;
+      bindingError = failure;
     }
-    JSON.stringify([descriptor.id, descriptor.epoch, parameters]);
-    untrack(() => {
-      revision++;
+    JSON.stringify([
+      descriptor.id,
+      descriptor.epoch,
+      descriptor.source,
+      parameters,
+    ]);
+    return untrack(() => {
+      const generation = ++revision;
       response = null;
-      error = '';
-      void refresh();
+      error = bindingError?.message ?? '';
+      if (!descriptor.source || !active || parameters === null) return;
+      sourceHandle = registry.watchSource(descriptor, parameters, (next) => {
+        if (generation !== revision || busy) return;
+        response = next.result;
+        error = next.error?.message ?? '';
+      });
+      const current = sourceHandle;
+      return () => {
+        ++revision;
+        current.release();
+        sourceHandle = null;
+      };
     });
   });
-  $effect(() =>
-    registry?.subscribe((change) => {
-      if (change.serviceResource) {
-        const resource = descriptor.source?.resource;
-        const publication = change.serviceResource;
-        if (
-          !resource ||
-          publication.epoch !== descriptor.epoch ||
-          (resource !== change.change?.resource &&
-            !(
-              publication.owner === descriptor.extension &&
-              resource === publication.local_resource
-            ))
-        )
-          return;
-      } else {
-        if (change.owner != null && change.owner !== descriptor.extension)
-          return;
-        if (
-          descriptor.source?.resource &&
-          change.change?.resource &&
-          descriptor.source.resource !== change.change.resource
-        )
-          return;
-      }
-      void refresh();
-    }),
-  );
-  onDestroy(() => {
-    disposed = true;
-    revision++;
-  });
+  onDestroy(() => ++revision);
+
+  function viewport(element) {
+    return {
+      destroy: registry.observeSource(element, (value) => (visible = value)),
+    };
+  }
 
   async function act(item) {
     if (busy || item.disabled || !item.action) return;
     const action = item.action;
-    const generation = ++revision;
+    const generation = revision;
     busy = true;
     try {
       const params = bindContributionParams(action.params, context);
@@ -127,18 +101,22 @@
         await invokeExtensionContribution(descriptor, action.operation, params);
       } else if (action.command)
         await registry.command(action.command, params, commands);
-      if (!disposed && generation === revision) error = '';
+      if (generation === revision) error = '';
     } catch (failure) {
-      if (!disposed && generation === revision) {
+      if (generation === revision) {
         error = failure.message;
         registry?.notifyError(failure);
       }
     } finally {
       busy = false;
-      if (!disposed) void refresh();
+      refresh();
     }
   }
 </script>
+
+{#if descriptor.source && repeated}
+  <span class="contribution-viewport" aria-hidden="true" use:viewport></span>
+{/if}
 
 {#if descriptor.kind === 'view' && descriptor.page}
   <section
@@ -192,6 +170,11 @@
 {/if}
 
 <style>
+  .contribution-viewport {
+    display: inline-block;
+    width: 0;
+    height: 1px;
+  }
   .contribution-status {
     display: inline-flex;
     gap: 4px;

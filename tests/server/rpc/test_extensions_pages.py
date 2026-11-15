@@ -1,16 +1,23 @@
 """Extension page descriptors carry current, owner-bound attention state."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.extensions import ExtensionRegistry
+from core.extensions import ExtensionRegistry, _callbacks
 from core.extensions.operations import ExtensionHost
 from core.extensions.services import ExtensionServiceError
 from server.rpc.errors import RpcError
-from server.rpc.extension_presentation import _contribution_operation, _contributions, _page_service
+from server.rpc.extension_presentation import (
+    _contribution_operation,
+    _contribution_sources,
+    _contributions,
+    _page_service,
+)
 from server.rpc.extensions_methods import _extension_pages, _extensions_payload
 from tests.core.extensions.extension_test_support import write_package
 
@@ -133,6 +140,13 @@ def register(api):
         "operation": operation,
     }
     assert (await _contribution_operation(state, params))["items"][0]["text"] == "Current"
+    batch = (await _contribution_sources(state, {"requests": [params, None]}))["results"]
+    assert batch[0]["ok"] is (operation == "status")
+    assert batch[1]["error"]["code"] == "invalid_request"
+    if operation == "status":
+        assert batch[0]["result"]["items"][0]["text"] == "Current"
+    else:
+        assert batch[0]["error"]["code"] == "invalid_request"
     with pytest.raises(RpcError) as refused:
         await _contribution_operation(state, {**params, "operation": "undeclared"})
     assert refused.value.code == "invalid_request"
@@ -147,9 +161,211 @@ def register(api):
     assert registry.contribution_declarations() == []
     with pytest.raises(RpcError):
         await _contribution_operation(state, params)
+    stale_batch = await _contribution_sources(state, {"requests": [params]})
+    assert stale_batch["results"][0]["error"]["code"] == "invalid_request"
     assert retired_calls == [operation]
     state.runtime.extensions.retire_registration()
     assert (await _contributions(state, {}))["contributions"] == []
+
+
+@pytest.mark.asyncio
+async def test_contribution_source_batches_share_bounded_admission_and_keep_entry_outcomes(
+    tmp_path: Path,
+) -> None:
+    for name in ("fixture", "other"):
+        write_package(
+            tmp_path,
+            name,
+            "def register(api):\n"
+            "    api.operations.register('read', 'Read', {'type':'object'}, "
+            "api.get_config()['read'])\n"
+            "    api.register_contribution('row', surface='chat.message', kind='status', "
+            "title='Row', source={'operation':'read'})\n",
+        )
+    entered: asyncio.Queue[int] = asyncio.Queue()
+    release = asyncio.Event()
+    active = peak = 0
+
+    async def read(params):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        entered.put_nowait(params["index"])
+        try:
+            await release.wait()
+            if params["index"] == 3:
+                raise RuntimeError("test-private-internal-detail")
+            if params["index"] == 4:
+                return {"items": ["x" * 262_144]}
+            return {"index": params["index"]}
+        finally:
+            active -= 1
+
+    registry = ExtensionRegistry.load(
+        tmp_path, config={name: {"read": read} for name in ("fixture", "other")}
+    )
+    state = SimpleNamespace(runtime=SimpleNamespace(extensions=registry))
+    request = {
+        "extension": "fixture",
+        "id": "row",
+        "operation": "read",
+        "epoch": registry.registration_identity("fixture").epoch,
+    }
+    batches = []
+    try:
+        bad_requests: tuple[Any, ...] = ([], [{}] * 33, {})
+        for bad in bad_requests:
+            with pytest.raises(RpcError) as refused:
+                await _contribution_sources(state, {"requests": bad})
+            assert refused.value.code == "invalid_request"
+        for offset in (0, 32):
+            batches.append(
+                asyncio.create_task(
+                    _contribution_sources(
+                        state,
+                        {
+                            "requests": [
+                                {
+                                    **request,
+                                    "extension": "fixture" if index % 2 else "other",
+                                    "params": {"index": offset + index},
+                                }
+                                for index in range(32)
+                            ]
+                        },
+                    )
+                )
+            )
+        for _ in range(4):
+            await asyncio.wait_for(entered.get(), 1)
+        assert active == peak == 4
+        release.set()
+        results = [entry for batch in await asyncio.gather(*batches) for entry in batch["results"]]
+        assert peak == 4
+        assert len(results) == 64
+        for index, outcome in enumerate(results):
+            if index == 3:
+                assert outcome["error"]["code"] == "internal_error"
+                assert "test-private-internal-detail" not in str(outcome)
+            elif index == 4:
+                assert outcome["error"]["code"] == "invalid_request"
+            else:
+                assert outcome == {"ok": True, "result": {"index": index}}
+    finally:
+        release.set()
+        await asyncio.gather(*batches, return_exceptions=True)
+        registry.retire_registration()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_source_work_does_not_hold_shared_slots_or_restart_unsettled_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("slow", "healthy"):
+        write_package(
+            tmp_path,
+            name,
+            "def register(api):\n"
+            "    api.operations.register('read', 'Read', {'type':'object'}, "
+            "api.get_config()['read'])\n"
+            "    api.register_contribution('row', surface='chat.message', kind='status', "
+            "title='Row', source={'operation':'read'})\n",
+        )
+    entered = 0
+    all_entered, expire, release = (asyncio.Event() for _ in range(3))
+
+    async def slow(_params):
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            all_entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()  # Real Extension code can ignore cancellation.
+        return {"done": True}
+
+    async def healthy(_params):
+        return {"healthy": True}
+
+    original_wait = _callbacks._wait
+    waits = 0
+
+    async def deadline(tasks, *, timeout):
+        nonlocal waits
+        waits += 1
+        if waits <= 2:
+            await expire.wait()
+            return set(), set(tasks)
+        return await original_wait(tasks, timeout=timeout)
+
+    monkeypatch.setattr(_callbacks, "_wait", deadline)
+    registry = ExtensionRegistry.load(
+        tmp_path,
+        config={
+            "slow": {"read": slow},
+            "healthy": {"read": healthy},
+        },
+    )
+    state = SimpleNamespace(runtime=SimpleNamespace(extensions=registry))
+
+    def request(owner):
+        return {
+            "extension": owner,
+            "id": "row",
+            "operation": "read",
+            "epoch": registry.registration_identity(owner).epoch,
+        }
+
+    batches = []
+    try:
+        batches.append(
+            asyncio.create_task(
+                _contribution_sources(
+                    state,
+                    {
+                        "requests": [request("slow")] * 4,
+                    },
+                )
+            )
+        )
+        await asyncio.wait_for(all_entered.wait(), 1)
+        batches.append(
+            asyncio.create_task(
+                _contribution_sources(
+                    state,
+                    {
+                        "requests": [request("healthy")],
+                    },
+                )
+            )
+        )
+        # A slow owner's queued rows do not take every global permit, even
+        # before its deadline expires.
+        working = await asyncio.wait_for(batches[1], 1)
+        assert working["results"] == [{"ok": True, "result": {"healthy": True}}]
+        expire.set()
+        failed = await asyncio.wait_for(batches[0], 1)
+        assert [row["error"]["code"] for row in failed["results"]] == [
+            "callback_timeout",
+            "callback_timeout",
+            "callback_unavailable",
+            "callback_unavailable",
+        ]
+        blocked = await _contribution_sources(state, {"requests": [request("slow")]})
+        assert blocked["results"][0]["error"]["code"] == "callback_unavailable"
+        assert entered == 2
+        release.set()
+        await _callbacks.wait_for_extension_callbacks("slow")
+        recovered = await _contribution_sources(state, {"requests": [request("slow")]})
+        assert recovered["results"] == [{"ok": True, "result": {"done": True}}]
+    finally:
+        expire.set()
+        release.set()
+        await asyncio.gather(*batches, return_exceptions=True)
+        await _callbacks.wait_for_extension_callbacks("slow")
+        registry.retire_registration()
 
 
 @pytest.mark.asyncio
