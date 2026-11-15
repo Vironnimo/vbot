@@ -154,7 +154,7 @@ OPENROUTER_ROUTING_SHAPE = json_object(
 SETTINGS_SHAPE: JsonShape = json_document(
     KNOWN_RAW_SETTINGS_KEYS,
     {
-        "appearance": json_object(APPEARANCE_FIELDS),
+        "appearance": json_object(APPEARANCE_FIELDS, {"ui_layout": OPAQUE}),
         "archive": json_object(ARCHIVE_FIELDS),
         "compaction": COMPACTION_POLICY_SHAPE,
         "debug": json_object(DEBUG_FIELDS),

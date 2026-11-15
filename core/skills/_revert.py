@@ -100,13 +100,14 @@ def check_revert(
     revision_ids: Sequence[int],
     *,
     related: Collection[int] = (),
+    allow_pin_changes: bool = True,
 ) -> None:
     """Check that :func:`revert_revisions` would run now; change no package.
 
     Raises what the revert raises before changing anything. Outside changes of
     the named Skills are recorded first. The caller holds the authoring write lock.
     """
-    _plan(history, root, revision_ids, related)
+    _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
 
 
 def revert_revisions(
@@ -116,6 +117,7 @@ def revert_revisions(
     actor: RevertActor,
     *,
     related: Collection[int] = (),
+    allow_pin_changes: bool = True,
 ) -> list[SkillRevision]:
     """Revert *revision_ids* in the home *root*; return the recorded revisions.
 
@@ -124,7 +126,7 @@ def revert_revisions(
     the history cannot record them all, the packages changed all the same and
     the list is shorter. The caller holds the authoring write lock.
     """
-    steps = _plan(history, root, revision_ids, related)
+    steps = _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
     _execute(root, history.archive_root, steps)
     recorded: list[SkillRevision] = []
     for step in steps:
@@ -161,6 +163,8 @@ def _plan(
     root: Path,
     revision_ids: Sequence[int],
     related: Collection[int],
+    *,
+    allow_pin_changes: bool,
 ) -> list[_Step]:
     """Check the named revisions and plan their inverses, newest first."""
     if not revision_ids:
@@ -176,6 +180,8 @@ def _plan(
         history.observe(skill, live_package(root, skill))
     _check_conflicts(history, targets, related)
     steps = [_inverse(history, root, target) for target in targets]
+    if not allow_pin_changes and any(step.action == "pin" for step in steps):
+        raise RevertError("Extension writers cannot change Skill pins through revision reverts.")
     _simulate(root, history.archive_root, steps)
     return steps
 

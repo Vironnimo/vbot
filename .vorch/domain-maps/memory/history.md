@@ -15,4 +15,6 @@ The per-owner Memory revision log and revert (`core/memory/_history.py`, the his
 
 ## RPCs
 
+The RPC edge freezes writer provenance before worker execution: user calls record `rpc`, while Extension application-service calls record `extension`, including imports and reverts. Worker context cannot relabel an Extension write as a person's edit.
+
 `memory.history` (newest first, optional `scope` and `limit`, plus `total`), `memory.show` (entries after a `revision`), `memory.diff` (`from`, optional `to`, else current) and `memory.revert` (`revisions`, returning the projections and the recorded revisions) expose the history. Each requires exactly one `agent_id` or `project_id`, returns that owner field, and reads only that owner's scopes. The service history/read methods retain their positional Agent owner and add keyword `project_id`; revert/check_revert select the owner from `MemoryWriter`. Revert is a guarded mutation and publishes whenever it changed a file: also when the history recorded nothing, and before re-raising a `MemoryRevertIncompleteError` that left scopes reverted (`test_memory_revert_announces_changed_files_without_a_recorded_revision`). Reference and Project lifecycle locks match the other `memory.*` RPCs (`memory.md` -> Interfaces).

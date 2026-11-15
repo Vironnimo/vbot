@@ -69,6 +69,7 @@ from core.settings._rules import (
     WEB_SEARCH_SEARXNG_FIELDS,
     is_archive_retention_days,
 )
+from core.settings._ui_layout import normalize_ui_layout
 from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_default_value
 from core.utils.errors import StorageError
 
@@ -202,7 +203,7 @@ def normalize_transcription_audio_settings(value: Any) -> dict[str, Any]:
     }
 
 
-def normalize_appearance_settings(appearance: Any) -> dict[str, str]:
+def normalize_appearance_settings(appearance: Any) -> dict[str, Any]:
     """Return the normalized Appearance settings subset."""
 
     section = _coerce_appearance_section(appearance)
@@ -210,6 +211,7 @@ def normalize_appearance_settings(appearance: Any) -> dict[str, str]:
         "language": _normalize_appearance_language(section),
         "chat_width": _normalize_appearance_chat_width(section),
         "chat_working_mode": _normalize_appearance_chat_working_mode(section),
+        "ui_layout": normalize_ui_layout(section.get("ui_layout")),
     }
 
 

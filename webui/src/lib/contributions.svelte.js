@@ -1,6 +1,10 @@
 import { getContext, setContext } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { contributionContext } from './contributions.js';
+import { getSettings, updateSettings } from './api.js';
+import { createSettingsDraft, rebaseDraft } from './settingsSave.js';
+import { createAutosaveParticipant } from './autosave.js';
+import { t } from './i18n.js';
 
 const CONTEXT = Symbol('ui-contributions');
 const STORAGE_KEY = 'vbot.ui-layout.v1';
@@ -18,6 +22,7 @@ function readLayouts() {
         .map(([surface, layout]) => [
           surface,
           {
+            ...layout,
             hidden: Array.isArray(layout.hidden)
               ? layout.hidden.filter((id) => typeof id === 'string')
               : [],
@@ -43,10 +48,114 @@ function readLayouts() {
 }
 
 export function createContributions(source) {
-  let layouts = $state(readLayouts());
+  let legacy = $state(readLayouts());
+  let layouts = $state(null);
+  let baseline = $state(null);
+  let ready = $state(false);
+  let saving = $state(false);
+  let error = $state('');
   let mounted = $state({});
-  let storageError = $state(false);
   const registrations = new SvelteMap();
+  let readRevision = 0;
+  let refreshQueued = false;
+  let refreshPromise = null;
+  let connected = false;
+  const copy = (value) => JSON.parse(JSON.stringify(value));
+  const fromSettings = (settings) => settings?.appearance?.ui_layout ?? null;
+  const current = () => layouts ?? legacy;
+  const pending = () =>
+    ready && JSON.stringify(layouts) !== JSON.stringify(baseline);
+  const migrationPending = () =>
+    ready &&
+    baseline === null &&
+    layouts === null &&
+    Object.keys(legacy).length > 0;
+
+  function acceptSettings(settings) {
+    if (!settings) return;
+    if (saving) {
+      refreshQueued = true;
+      return;
+    }
+    const saved = copy(fromSettings(settings));
+    const { value, conflicts } = rebaseDraft(layouts, baseline, saved);
+    layouts = value;
+    baseline = saved;
+    ready = true;
+    if (conflicts.length) error = t('settings.saveConflict');
+  }
+
+  async function refresh() {
+    refreshQueued = true;
+    if (saving) return false;
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = (async () => {
+      while (refreshQueued && !saving) {
+        refreshQueued = false;
+        const revision = ++readRevision;
+        try {
+          const settings = await (source.readSettings ?? getSettings)();
+          if (revision !== readRevision) continue;
+          error = '';
+          acceptSettings(settings);
+          source.onSettingsCommit?.(settings);
+        } catch (failure) {
+          if (revision === readRevision)
+            error = `${t('settings.saveError')} ${failure.message}`;
+          return false;
+        }
+      }
+      return true;
+    })();
+    try {
+      return await refreshPromise;
+    } finally {
+      refreshPromise = null;
+    }
+  }
+
+  const participant = createAutosaveParticipant({
+    getSnapshot: () => layouts,
+    hasChanges: pending,
+    save: async () => {
+      ++readRevision;
+      const draft = createSettingsDraft({
+        settings: { appearance: { ui_layout: copy(baseline) } },
+        fromSettings,
+        read: () => layouts,
+        write: (value) => {
+          layouts = value;
+        },
+        toPayload: (ui_layout) => ({ appearance: { ui_layout } }),
+        submit: source.writeSettings ?? updateSettings,
+      });
+      const success = await draft.save({
+        onCommit: (settings) => {
+          baseline = copy(fromSettings(settings));
+          source.onSettingsCommit?.(settings);
+        },
+        onError: (message) => {
+          error = message;
+        },
+        setSaving: (value) => {
+          saving = value;
+        },
+      });
+      if (success && baseline !== null) {
+        // Only retire the browser copy after a confirmed server write. A
+        // denied storage cleanup is harmless: the saved server layout wins.
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          /* retained backup */
+        }
+        legacy = {};
+      }
+      if (connected && refreshQueued) void refresh();
+      return success;
+    },
+  });
+  acceptSettings(source.settings);
 
   function publishMounted() {
     const merged = {};
@@ -65,16 +174,9 @@ export function createContributions(source) {
   }
 
   function save(surface, update) {
-    const next = { ...layouts, [surface]: { ...layouts[surface], ...update } };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      layouts = next;
-      storageError = false;
-      return true;
-    } catch {
-      storageError = true;
-      return false;
-    }
+    if (!ready || migrationPending()) return Promise.resolve(false);
+    layouts = { ...current(), [surface]: { ...current()[surface], ...update } };
+    return participant.runSave();
   }
 
   return {
@@ -99,11 +201,32 @@ export function createContributions(source) {
     get mounted() {
       return mounted;
     },
-    get storageError() {
-      return storageError;
+    get ready() {
+      return ready;
+    },
+    get saving() {
+      return saving;
+    },
+    get error() {
+      return error;
+    },
+    get pending() {
+      return pending();
+    },
+    get migrationPending() {
+      return migrationPending();
+    },
+    participant,
+    acceptSettings,
+    refresh,
+    retry: () => (ready ? participant.runSave('manual') : refresh()),
+    migrate(useLegacy) {
+      if (!migrationPending()) return Promise.resolve(false);
+      layouts = useLegacy ? copy(legacy) : {};
+      return participant.runSave('manual');
     },
     get customized() {
-      return Object.values(layouts).some(
+      return Object.values(current()).some(
         (layout) =>
           layout?.hidden?.length ||
           layout?.order?.length ||
@@ -113,7 +236,7 @@ export function createContributions(source) {
     get commandNames() {
       return Object.keys(source.commands ?? {});
     },
-    layout: (surface) => layouts[surface] ?? {},
+    layout: (surface) => current()[surface] ?? {},
     save,
     reset(surface) {
       return save(surface, { hidden: [], order: [], replacements: {} });
@@ -152,12 +275,30 @@ export function createContributions(source) {
       return (await handler(JSON.parse(JSON.stringify(params)))) ?? {};
     },
     connect() {
+      connected = true;
+      if (!ready) void refresh();
+      const unsubscribe = source.subscribe?.((change) => {
+        if (
+          change.owner == null &&
+          (!change.change?.resource || change.change.resource === 'settings')
+        )
+          void refresh();
+      });
       const changed = (event) => {
-        if (event.key === STORAGE_KEY || event.key === null)
-          layouts = readLayouts();
+        if (
+          (event.key === STORAGE_KEY || event.key === null) &&
+          baseline === null &&
+          layouts === null
+        )
+          legacy = readLayouts();
       };
       window.addEventListener('storage', changed);
-      return () => window.removeEventListener('storage', changed);
+      return () => {
+        connected = false;
+        ++readRevision;
+        unsubscribe?.();
+        window.removeEventListener('storage', changed);
+      };
     },
     context: contributionContext,
   };

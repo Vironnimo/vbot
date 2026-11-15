@@ -119,6 +119,7 @@ class ExtensionRegistry:
         self._quiesced: set[str] = set()
         self._epoch = uuid.uuid4().hex
         self._registration_retired = False
+        self._retired_service_owners: set[str] = set()
         self._integration_owners: dict[str, ExtensionRegistrationIdentity] = {}
         self._integrations_ready = False
         # Pages resolved once per registration, keyed by (Extension, page id).
@@ -143,6 +144,17 @@ class ExtensionRegistry:
                 record.name == identity.name and record.status == "loaded"
                 for record in self._records
             )
+        )
+
+    def is_service_registration_current(self, identity: ExtensionRegistrationIdentity) -> bool:
+        """Whether this owner still admits incoming exported Service calls.
+
+        Shutdown keeps owner-host cleanup capabilities until resource release,
+        but stops accepting external operations before shutdown handlers run.
+        """
+        return (
+            self.is_registration_current(identity)
+            and identity.name not in self._retired_service_owners
         )
 
     def current_page(
@@ -763,8 +775,7 @@ class ExtensionRegistry:
 
         await self.quiesce(name)
         declarations = record.declarations
-        if declarations.operations is not None:
-            declarations.operations.retire()
+        self._retire_operations(record)
         self._remove_handlers(name)
         self._remove_interaction_handlers(name)
         self._capabilities._unregister_extension_tools(tool_registry, declarations.tools)
@@ -850,6 +861,12 @@ class ExtensionRegistry:
             identity: host for identity, host in self._owner_hosts.items() if identity.name != name
         }
 
+    def _retire_operations(self, record: ExtensionRecord) -> None:
+        """Stop incoming operations while retaining capabilities needed by cleanup."""
+        self._retired_service_owners.add(record.name)
+        if record.declarations.operations is not None:
+            record.declarations.operations.retire()
+
     def remove_applied_tools(self, tool_registry: ToolRegistry) -> None:
         """Unregister every loaded extension's applied tools from *tool_registry*.
 
@@ -864,8 +881,7 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status != "loaded":
                 continue
-            if record.declarations.operations is not None:
-                record.declarations.operations.retire()
+            self._retire_operations(record)
             self._capabilities._unregister_extension_tools(tool_registry, record.declarations.tools)
             self._capabilities._unregister_extension_tool_families(
                 tool_registry, record.name, record.declarations.tool_families
@@ -971,8 +987,7 @@ class ExtensionRegistry:
             if record.status != "loaded":
                 continue
             await self.quiesce(record.name)
-            if record.declarations.operations is not None:
-                record.declarations.operations.retire()
+            self._retire_operations(record)
             self._retire_owner_host(record.name)
             for handler in record.declarations.shutdown:
                 await invoke_lifecycle_fail_open("shutdown", record.name, handler)

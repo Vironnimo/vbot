@@ -22,7 +22,7 @@ starting point, not a sandbox.
 
 from __future__ import annotations
 
-from core.extensions import Deny
+from vbot_extension_sdk import Deny
 
 # Substrings that flag a command as destructive enough to refuse outright.
 # A real guard would do far more (and probably allowlist instead) — kept short

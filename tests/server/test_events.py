@@ -136,6 +136,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
     assert {
         "models",
         "model_favorites",
+        "settings",
         "statistics",
         "queue",
         "sessions",
@@ -146,6 +147,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "debug_traces",
         "projects",
         "cron",
+        "bootstrap",
         "inputs",
         "calendar",
         "commands",

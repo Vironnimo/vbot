@@ -2,9 +2,11 @@
 
 Messaging-platform accessors: configuration, adapters, outbound delivery and inbound routing into normal Agent Sessions.
 
+Author SDK: `vbot_extension_sdk.channels` (`sdk/python/README.md` in the repository).
+
 ## Overview
 
-`core/channels/` bridges external messaging platforms into the existing agentic loop. A Channel receives inbound platform messages, resolves them into an Agent and Session, triggers normal Runs, and routes assistant replies back through the platform adapter. `ChannelService` owns the channel configs and Channel state (Data Model), starts and stops adapter tasks for enabled channels, and exposes outbound message and file support for the `channel_send` tool. Channels reuse normal Sessions, `TriggerService`, `CommandDispatcher`, attachment storage, and prompt/tool registration; they do not own a separate conversation store.
+A Channel receives inbound platform messages, resolves them into an Agent and Session, triggers normal Runs, and routes assistant replies back through the platform adapter. `ChannelService` owns the channel configs and Channel state (Data Model), starts and stops adapter tasks for enabled channels, and exposes outbound message and file support for the `channel_send` tool. Channels reuse normal Sessions, `TriggerService`, `CommandDispatcher`, attachment storage, and prompt/tool registration; they do not own a separate conversation store.
 
 Platform-neutral conversation behavior lives in `core/channels/engine.py` (`ChannelConversationEngine`), shared by all adapters. `ChannelService` owns one engine per started Channel through its internal connection supervisor: it outlives the Channel's supervised adapter restarts and ends only with the Channel (`stop_channel`: disable, delete, a config change, `restart_channel`, shutdown), after its adapter stopped. Adapters receive the engine in their constructor, delegate to it, and attach their `ConversationTransport` in `start()`; the adapter is reduced to platform I/O. `ChatRunManager` remains the single authority for active and waiting-work capacity. The engine never imports a platform library: raw platform messages flow through it as opaque values and are converted to canonical content blocks by the adapter-supplied `ConversationTransport`.
 

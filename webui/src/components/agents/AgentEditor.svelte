@@ -10,6 +10,7 @@
     rebaseAgentFormValues,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
+  import ContributionSurface from '../extensions/ContributionSurface.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
@@ -599,6 +600,16 @@
     return t('errors.validation');
   }
 
+  function focusEditorField({ field } = {}) {
+    const fields = { name: 'agent-name', description: 'agent-description' };
+    if (!Object.hasOwn(fields, field)) throw new Error(t('errors.validation'));
+    const id = fields[field];
+    const control = editorForm?.querySelector(`#${id}`);
+    if (!control) return { focused: false };
+    control.focus();
+    return { focused: true };
+  }
+
   function viewErrorMessage(error, fallback) {
     return error?.message || fallback || t('errors.generic');
   }
@@ -631,64 +642,118 @@
       <Banner variant="error" role="alert">{t('errors.validation')}</Banner>
     {/if}
 
-    <AgentOverviewPanel
-      {agent}
-      {agents}
-      {onPlacementChanged}
-      {availableModels}
-      {availableConnections}
-      {projectOptions}
-      {projectCatalogError}
-      {onModelDropdownOpenChange}
-      bind:formValues
-      {formMode}
-      {formErrors}
-      {fieldError}
-      {navigateToAgentDefaults}
-      {inheritSource}
-      {inheritDisplayValue}
-    />
-    <AgentBehaviorPanel
-      {agent}
-      {onNavigateToSettingsPanel}
-      {memoriesRefreshToken}
-      bind:formValues
-      {formMode}
-      {handleCustomPromptToggle}
-      {navigateToAgentPrompt}
-      {showAgentToast}
-      {viewErrorMessage}
-    />
-    <AgentAccessPanel
-      {agents}
-      {availableTools}
-      {skillCatalog}
-      {availableAgentTargets}
-      {agentTargetCatalogError}
-      toolLoadingEditable={!agent?.builtin}
-      toolLoadingDefault={agent?.tool_loading_default ?? null}
-      permissionRulesEditable={!agent?.builtin}
-      permissionRulesDefault={agent?.permission_rules_default ?? null}
-      permissionRulesNewAgent={formMode === AGENT_FORM_MODE_CREATE}
-      bind:formValues
-      {navigateToExtensions}
-      {onToast}
-      {onSkillsChanged}
-      {onOpenSkill}
-    />
-    <AgentDetailsPanel
-      {agent}
-      bind:formValues
-      {formMode}
-      {formErrors}
-      {isSaving}
-      {isDeleting}
-      {deleteSelectedAgent}
-      {openRenameDialog}
-      {resetWorkspaceToDefault}
-      {fieldError}
-      {workspaceIsCustom}
-      {canDeleteSelectedAgent}
+    {#snippet overviewSection()}
+      <AgentOverviewPanel
+        {agent}
+        {agents}
+        {onPlacementChanged}
+        {availableModels}
+        {availableConnections}
+        {projectOptions}
+        {projectCatalogError}
+        {onModelDropdownOpenChange}
+        bind:formValues
+        {formMode}
+        {formErrors}
+        {fieldError}
+        {navigateToAgentDefaults}
+        {inheritSource}
+        {inheritDisplayValue}
+      />
+    {/snippet}
+    {#snippet behaviorSection()}
+      <AgentBehaviorPanel
+        {agent}
+        {onNavigateToSettingsPanel}
+        {memoriesRefreshToken}
+        bind:formValues
+        {formMode}
+        {handleCustomPromptToggle}
+        {navigateToAgentPrompt}
+        {showAgentToast}
+        {viewErrorMessage}
+      />
+    {/snippet}
+    {#snippet accessSection()}
+      <AgentAccessPanel
+        {agents}
+        {availableTools}
+        {skillCatalog}
+        {availableAgentTargets}
+        {agentTargetCatalogError}
+        toolLoadingEditable={!agent?.builtin}
+        toolLoadingDefault={agent?.tool_loading_default ?? null}
+        permissionRulesEditable={!agent?.builtin}
+        permissionRulesDefault={agent?.permission_rules_default ?? null}
+        permissionRulesNewAgent={formMode === AGENT_FORM_MODE_CREATE}
+        bind:formValues
+        {navigateToExtensions}
+        {onToast}
+        {onSkillsChanged}
+        {onOpenSkill}
+      />
+    {/snippet}
+    {#snippet detailsSection()}
+      <AgentDetailsPanel
+        {agent}
+        bind:formValues
+        {formMode}
+        {formErrors}
+        {isSaving}
+        {isDeleting}
+        {deleteSelectedAgent}
+        {openRenameDialog}
+        {resetWorkspaceToDefault}
+        {fieldError}
+        {workspaceIsCustom}
+        {canDeleteSelectedAgent}
+      />
+    {/snippet}
+    <ContributionSurface
+      surface="agent.editor.sections"
+      context={{
+        agent_id: formMode === AGENT_FORM_MODE_EDIT ? editorAgentId : '',
+        project_id: formValues.root_project_id ?? '',
+        editor_mode: formMode,
+        view: 'agents',
+      }}
+      data={{
+        editor: {
+          id: formMode === AGENT_FORM_MODE_EDIT ? editorAgentId : '',
+          mode: formMode,
+          values: {
+            name: String(formValues.name ?? '').slice(0, 1024),
+            description: String(formValues.description ?? '').slice(0, 4096),
+          },
+        },
+      }}
+      commands={{ 'editor.focus': focusEditorField }}
+      builtins={[
+        {
+          id: 'core:agent.editor.overview',
+          title: t('agents.detail.identity'),
+          order: 10,
+          render: overviewSection,
+        },
+        {
+          id: 'core:agent.editor.behavior',
+          title: t('agents.contextMemory'),
+          order: 20,
+          render: behaviorSection,
+        },
+        {
+          id: 'core:agent.editor.access',
+          title: t('agents.form.toolAccess'),
+          order: 30,
+          render: accessSection,
+        },
+        {
+          id: 'core:agent.editor.details',
+          title: t('agents.storageDetails'),
+          order: 40,
+          render: detailsSection,
+        },
+      ]}
     />
     <div class="agent-detail-footer">
       {#if formMode === AGENT_FORM_MODE_EDIT}

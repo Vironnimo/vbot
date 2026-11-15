@@ -63,6 +63,38 @@ def _stored_state(tmp_path: Path) -> SimpleNamespace:
     return state
 
 
+@pytest.mark.asyncio
+async def test_shared_layout_is_exposed_and_updated_through_public_settings(tmp_path: Path) -> None:
+    state = _stored_state(tmp_path)
+    layout = {"future.surface": {"hidden": ["future:item"], "future_field": {"keep": True}}}
+    initial = await rpc_result(state, "settings.get")
+    assert initial["appearance"]["ui_layout"] is None
+    saved = await rpc_result(
+        state,
+        "settings.update",
+        appearance={"ui_layout": layout},
+        base={"appearance": {"ui_layout": None}},
+    )
+    assert saved["appearance"]["ui_layout"] == layout
+    conflict = await rpc_error(
+        state,
+        "settings.update",
+        appearance={"ui_layout": {}},
+        base={"appearance": {"ui_layout": None}},
+    )
+    assert conflict["code"] == "settings_conflict"
+    assert "appearance.ui_layout" in conflict["message"]
+    details = await rpc_result(state, "settings.get_path", path="appearance.ui_layout")
+    assert details["setting"]["value"] == layout
+    catalog = await rpc_result(state, "settings.catalog", prefix="appearance.ui_layout")
+    assert catalog["settings"][0]["nullable"] is True
+    assert catalog["settings"][0]["default"] is None
+    patched = await rpc_result(state, "settings.patch", **_patch(_set("appearance.ui_layout", {})))
+    assert patched["changed"] == ["appearance.ui_layout"]
+    values = await rpc_result(state, "settings.values")
+    assert values["settings"]["appearance"]["ui_layout"] == {}
+
+
 class _SchemaRegistry:
     def __init__(self, records: list[ExtensionRecord]) -> None:
         self._records = records
@@ -207,6 +239,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "available_languages": storage.supported_appearance_languages(),
         "chat_width": "wide",
         "chat_working_mode": "compact",
+        "ui_layout": None,
     }
     assert result["skills"] == {
         "default_directory": str(storage.data_dir / "skills"),

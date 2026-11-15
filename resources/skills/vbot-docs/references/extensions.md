@@ -83,7 +83,7 @@ def register(api):
 `outcome` is `"success"`, `"error"` or `"cancelled"`; `run_end` always fires. Standing System Prompt text is a [prompt block](#prompt-blocks), not a hook; use the `context` hook only for changes that depend on the current messages.
 
 ```python
-from core.extensions import Deny, Modify, Replace
+from vbot_extension_sdk import Deny, Modify, Replace
 
 
 def guard(ctx, *, tool_name, tool_call_id, input):
@@ -133,7 +133,7 @@ The [word-count template](../assets/extensions/word_count.py) shows an open inpu
 `api.register_command` adds a Command to the same dispatcher as the Built-in Commands, for Chat, Channels, RPC, `/help` and WebUI autocomplete. A Command returns a result at once, reports a state change, or starts a follow-up Run, for example one that activates a Skill bundled with the Extension.
 
 ```python
-from core.chat import CommandFeedback, CommandOutcome, CommandRun
+from vbot_extension_sdk.commands import CommandFeedback, CommandOutcome, CommandRun
 
 
 async def start_workflow(context, argument):
@@ -183,7 +183,7 @@ Bundle each Skill as `<extension>/skills/<skill-name>/SKILL.md` with its helper 
 A Channel message can carry buttons. `api.register_interaction_handler(prefix, handler)` handles taps on buttons whose callback data is `"<prefix>:<payload>"`, in vBot's process without a Model call. The prefix contains no `:`, and the first Extension to claim a prefix owns it. `run` and `chk` are reserved by vBot.
 
 ```python
-from core.extensions import InteractionButton
+from vbot_extension_sdk import InteractionButton
 
 
 async def _toggle(event, responder):
@@ -324,7 +324,7 @@ A Python package or directory Extension can add an `extension.json`; a manifest-
 }
 ```
 
-The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 30. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`); 29 [usage documentation](#usage-documentation); 30 [UI contributions, product services, Provider and Channel registration, and local Desktop manifests](extension-platform.md).
+The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 31. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands; 21 shared Computer routing (`host.computers`); 22 Run-bound programmatic Tool calls (`ToolContext.programmatic`, `call_tool`, `tool_calls_available`); 23 native Decision requests (`host.decide`, `host.review_context`), shell reviewers (`api.register_shell_reviewer`) and `textarea` Settings fields; 24 [notifications and page badges](#notifications), live configuration callbacks, current-input authority, owned-Run approval status, page Session navigation and explicit Model overrides for repository-profile participants; 25 page icons (`network`, `panel`, `grid`, `sparkles`, `factory`), `identity_profile` participants and the `agents` list in `host.catalog()`; 26 `host.defer_tool_call(context)` for calls that return a pending Result and deliver their final outcome later; 27 required owner Tool and Model-request admission (`before_tool_call`, `before_model_request`), settled canonical `host.execution_usage` and exact `run_ids` filters on group usage (see the owned-Session contract in `extension-pages.md`); 28 [triggers](#triggers) (`host.triggers`); 29 [usage documentation](#usage-documentation); 30 [UI contributions, product services, Provider and Channel registration, and local Desktop manifests](extension-platform.md); 31 [versioned Python SDK, shared services/resources, resilient subscriptions, UI conditions and additional surfaces](extension-platform.md).
 
 `config_documents` maps file patterns in your Extension's state directory to `module:function` validators, for example `"config_documents": {"connections.json": "config:validate_connections_file"}`. A validator receives the file's absolute `Path` and returns a `core.config_validation.JsonValidationReport`. `vbot doctor config` loads only that module, without your `__init__`, `register` or startup, also while the Extension is disabled; keep the module independent of registration.
 
@@ -403,7 +403,7 @@ secret = await host.triggers.webhook_secret(trigger["id"])  # for the sender's s
 Keep SQLite data in databases vBot manages, never in SQLite files you open yourself (API 7). In a callback appended to `api.operations.startup`, `await host.open_database(name, schema_sql, migrations=(), retired_indexes=())` returns a `Database` at `<data_dir>/extension-data/<extension-id>/<name>.db`. `name` and the Extension id are lowercase letters, digits, `_` and `-`, starting with a letter or digit, otherwise it raises `ValueError`; each name opens once. vBot includes these databases in its data snapshots and restores.
 
 ```python
-from core.extensions.databases import Database
+from vbot_extension_sdk import Database
 
 SCHEMA = """
 CREATE TABLE notes (

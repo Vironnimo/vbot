@@ -698,6 +698,7 @@ def _settings_response_payload(state: Any) -> JsonObject:
             "available_languages": runtime.storage.supported_appearance_languages(),
             "chat_width": appearance["chat_width"],
             "chat_working_mode": appearance["chat_working_mode"],
+            "ui_layout": appearance["ui_layout"],
         },
         "defaults": defaults,
         "subagents": {field: subagents[field] for field in SUBAGENT_SETTING_FIELDS},

@@ -11,6 +11,12 @@ export const CONTRIBUTION_SURFACES = Object.freeze([
   'chat.composer.footer.end',
   'chat.timeline',
   'chat.tool-result',
+  'chat.message',
+  'chat.message.actions',
+  'chat.sessions',
+  'chat.session.item',
+  'agent.editor.sections',
+  'project.editor.sections',
   'settings.sections',
 ]);
 
@@ -33,6 +39,10 @@ export const UI_CONTEXT_FIELDS = Object.freeze([
   'context_window',
   'session_cost',
   'output_speed',
+  'message_id',
+  'message_role',
+  'session_selected',
+  'editor_mode',
 ]);
 
 export function contributionContext(value = {}) {
@@ -40,20 +50,102 @@ export function contributionContext(value = {}) {
     UI_CONTEXT_FIELDS.filter((key) => {
       const item = value[key];
       return (
-        item === null || ['string', 'number', 'boolean'].includes(typeof item)
+        item === null ||
+        ['string', 'boolean'].includes(typeof item) ||
+        (typeof item === 'number' && Number.isFinite(item))
       );
     }).map((key) => [key, value[key]]),
   );
 }
 
 export function contributionMatches(item, context = {}) {
-  return (
-    !item.when ||
-    Object.entries(item.when).every(
-      ([key, value]) =>
-        UI_CONTEXT_FIELDS.includes(key) && context[key] === value,
+  let nodes = 0;
+  const scalar = (value) =>
+    value === null ||
+    ['string', 'boolean'].includes(typeof value) ||
+    (typeof value === 'number' && Number.isFinite(value));
+  function matches(condition, depth = 0) {
+    if (
+      ++nodes > 64 ||
+      depth > 8 ||
+      !condition ||
+      typeof condition !== 'object' ||
+      Array.isArray(condition)
     )
-  );
+      return undefined;
+    const keys = Object.keys(condition);
+    for (const operator of ['all', 'any']) {
+      if (!Object.hasOwn(condition, operator)) continue;
+      if (
+        keys.length !== 1 ||
+        !Array.isArray(condition[operator]) ||
+        !condition[operator].length
+      )
+        return undefined;
+      // Evaluate every child so the structural limit is independent of context.
+      const results = condition[operator].map((child) =>
+        matches(child, depth + 1),
+      );
+      if (results.includes(undefined)) return undefined;
+      return operator === 'all'
+        ? results.every(Boolean)
+        : results.some(Boolean);
+    }
+    if (Object.hasOwn(condition, 'not')) {
+      if (keys.length !== 1) return undefined;
+      const result = matches(condition.not, depth + 1);
+      return result === undefined ? undefined : !result;
+    }
+    if (Object.hasOwn(condition, 'field')) {
+      const { field, op, value } = condition;
+      if (
+        !UI_CONTEXT_FIELDS.includes(field) ||
+        keys.length !== 3 ||
+        !keys.includes('op') ||
+        !keys.includes('value')
+      )
+        return undefined;
+      const present = Object.hasOwn(context, field);
+      if (op === 'exists')
+        return typeof value === 'boolean' ? present === value : undefined;
+      if (op === 'in')
+        return Array.isArray(value) && value.every(scalar)
+          ? present && value.includes(context[field])
+          : undefined;
+      if (
+        !['eq', 'ne', 'gt', 'gte', 'lt', 'lte'].includes(op) ||
+        !scalar(value)
+      )
+        return undefined;
+      if (!['eq', 'ne'].includes(op) && typeof value !== 'number')
+        return undefined;
+      if (!present) return false;
+      const actual = context[field];
+      if (op === 'eq') return actual === value;
+      if (op === 'ne') return actual !== value;
+      if (
+        typeof actual !== 'number' ||
+        typeof value !== 'number' ||
+        !Number.isFinite(actual)
+      )
+        return false;
+      if (op === 'gt') return actual > value;
+      if (op === 'gte') return actual >= value;
+      if (op === 'lt') return actual < value;
+      if (op === 'lte') return actual <= value;
+      return false;
+    }
+    if (
+      Object.entries(condition).some(
+        ([key, value]) => !UI_CONTEXT_FIELDS.includes(key) || !scalar(value),
+      )
+    )
+      return undefined;
+    return Object.entries(condition).every(
+      ([key, value]) => Object.hasOwn(context, key) && context[key] === value,
+    );
+  }
+  return item.when == null || matches(item.when) === true;
 }
 
 export function composeContributions(

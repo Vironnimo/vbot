@@ -9,6 +9,7 @@
   import Button from '../ui/Button.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import Banner from '../ui/Banner.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import Dropdown from '../Dropdown.svelte';
 
   const registry = useContributions();
@@ -59,65 +60,100 @@
         .map((item) => ({ value: item.id, label: item.title })),
     ];
   }
+  function selectReplacement(target, replacement) {
+    const replacements = { ...layout.replacements };
+    if (replacement) replacements[target] = replacement;
+    else delete replacements[target];
+    registry.save(surface, { replacements });
+  }
 </script>
 
 {#if registry}
   <section class="contribution-preferences">
     <h3>{t('contributions.title')}</h3>
     <p class="s-desc">{t('contributions.help')}</p>
-    <div class="contribution-preferences__toolbar">
-      <Dropdown
-        value={surface}
-        {options}
-        ariaLabel={t('contributions.surface')}
-        onValueChange={(value) => (surface = value)}
-      />
-      <Button variant="tertiary" onClick={() => registry.reset(surface)}
-        >{t('contributions.reset')}</Button
-      >
-    </div>
-    {#if registry.storageError}<Banner variant="error"
-        >{t('contributions.storageError')}</Banner
-      >{/if}
-    {#if entries.length}
-      <SortableList
-        items={entries}
-        getLabel={(entry) => entry.title}
-        onReorder={reorder}
-        class="contribution-preferences__list"
-        itemClass="contribution-preferences__item"
-        itemFocusable
-      >
-        {#snippet item(entry)}
-          <div class="contribution-preferences__row">
-            <span>{entry.title}</span>
-            <Toggle
-              size="sm"
-              checked={!(layout.hidden ?? []).includes(entry.id)}
-              ariaLabel={t('contributions.visible', { name: entry.title })}
-              onChange={(visible) => toggle(entry, visible)}
-            />
-          </div>
-          {#if !entry.replaces && entries.some((item) => item.replaces === entry.id)}
-            <Dropdown
-              value={layout.replacements?.[entry.id] ?? ''}
-              options={replacementOptions(entry)}
-              ariaLabel={t('contributions.replacement', { name: entry.title })}
-              onValueChange={(value) =>
-                registry.save(surface, {
-                  replacements: { ...layout.replacements, [entry.id]: value },
+    {#if registry.error}<Banner variant="error">{registry.error}</Banner>{/if}
+    {#if !registry.ready}
+      <p role="status">{t('contributions.loading')}</p>
+      {#if registry.error}<Button
+          variant="tertiary"
+          onClick={() => registry.refresh()}
+          >{t('contributions.loadRetry')}</Button
+        >{/if}
+    {/if}
+    {#if registry.migrationPending}
+      <Banner>{t('contributions.migration')}</Banner>
+      <div class="contribution-preferences__toolbar">
+        <Button onClick={() => registry.migrate(true)}
+          >{t('contributions.importLayout')}</Button
+        >
+        <Button variant="tertiary" onClick={() => registry.migrate(false)}
+          >{t('contributions.useDefaults')}</Button
+        >
+      </div>
+    {/if}
+    <fieldset disabled={!registry.ready || registry.migrationPending}>
+      <div class="contribution-preferences__toolbar">
+        <Dropdown
+          value={surface}
+          {options}
+          ariaLabel={t('contributions.surface')}
+          onValueChange={(value) => (surface = value)}
+        />
+        <Button variant="tertiary" onClick={() => registry.reset(surface)}
+          >{t('contributions.reset')}</Button
+        >
+      </div>
+      {#if entries.length}
+        <SortableList
+          items={entries}
+          getLabel={(entry) => entry.title}
+          onReorder={reorder}
+          class="contribution-preferences__list"
+          itemClass="contribution-preferences__item"
+          itemFocusable
+        >
+          {#snippet item(entry)}
+            <div class="contribution-preferences__row">
+              <span>{entry.title}</span>
+              <Toggle
+                size="sm"
+                checked={!(layout.hidden ?? []).includes(entry.id)}
+                ariaLabel={t('contributions.visible', { name: entry.title })}
+                onChange={(visible) => toggle(entry, visible)}
+              />
+            </div>
+            {#if !entry.replaces && entries.some((item) => item.replaces === entry.id)}
+              <Dropdown
+                value={layout.replacements?.[entry.id] ?? ''}
+                options={replacementOptions(entry)}
+                ariaLabel={t('contributions.replacement', {
+                  name: entry.title,
                 })}
-            />
-          {/if}
-        {/snippet}
-      </SortableList>
-    {:else}<p class="s-desc">{t('contributions.empty')}</p>{/if}
+                onValueChange={(value) => selectReplacement(entry.id, value)}
+              />
+            {/if}
+          {/snippet}
+        </SortableList>
+      {:else}<p class="s-desc">{t('contributions.empty')}</p>{/if}
+    </fieldset>
+    <SaveStatus
+      saving={registry.saving}
+      pending={registry.pending}
+      onClick={() => registry.retry()}
+    />
   </section>
 {/if}
 
 <style>
   .contribution-preferences {
     margin-top: 20px;
+  }
+  fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
   }
   .contribution-preferences__toolbar,
   .contribution-preferences__row {

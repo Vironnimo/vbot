@@ -14,6 +14,7 @@ from core.computers import ComputerError, ComputerRegistry, normalize_execution
 from core.computers._store import COMPUTERS_PATH, MAX_COMPUTERS, validate_computers_file
 from core.permissions import PermissionBoundary
 from core.tools.tools import ToolContext
+from core.utils import native_capabilities
 
 
 def hello(computer: str = "pc_laptop", **values: Any) -> dict[str, Any]:
@@ -67,6 +68,30 @@ def test_policy_preserves_a_narrowed_selection_and_never_defaults_invalid_input(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        ["extension:owner:device", "extension:owner:device"],
+        ["extension:bad%2Fowner:device"],
+        ["extension:owner:device"],
+    ],
+)
+async def test_native_registration_rejects_malformed_or_oversized_capability_catalogs(
+    capabilities: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(native_capabilities, "MAX_CAPABILITY_IDS_BYTES", 10)
+    registry = ComputerRegistry()
+    try:
+        with pytest.raises(ComputerError) as refused:
+            await registry.connect(hello(capabilities=capabilities), actor="host")
+        assert refused.value.code == "computer_protocol"
+        assert len(registry.list()) == 1
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
 async def test_selection_requires_exact_identity_grant_capability_and_connection(
     tmp_path: Path,
 ) -> None:
@@ -94,7 +119,8 @@ async def test_registration_ownership_survives_restart_and_preserves_future_fiel
     tmp_path: Path,
 ) -> None:
     registry = ComputerRegistry(tmp_path)
-    await registry.connect(hello(), actor="dev_owner")
+    capabilities = ["terminal", *[f"extension:office:device_{number}" for number in range(64)]]
+    await registry.connect(hello(capabilities=capabilities), actor="dev_owner")
     registry.close()
     path = tmp_path / COMPUTERS_PATH
     saved = json.loads(path.read_text())
@@ -103,6 +129,7 @@ async def test_registration_ownership_survives_restart_and_preserves_future_fiel
     saved["computers"][0]["future_entry"] = 2
     path.write_text(json.dumps(saved))
     restarted = ComputerRegistry(tmp_path)
+    assert restarted.get("pc_laptop").describe()["capabilities"] == capabilities
     assert not restarted.get("pc_laptop").online
     for candidate, actor, code in (
         (
@@ -278,6 +305,13 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
     call = asyncio.create_task(registry.call("pc_laptop", "terminal", "write", {"text": "test"}))
     sent = await connection.outgoing.get()
     assert sent is not None
+    registry.receive(
+        connection,
+        {"type": "capabilities", "capabilities": ["terminal", "extension:office:printer"]},
+    )
+    assert registry.get("pc_laptop").capabilities == ("terminal", "extension:office:printer")
+    assert not connection.closed and registry.get("pc_laptop").instance_id == "inst_one"
+    assert sent["id"] in connection.pending
     registry.receive(
         other, {"type": "result", "id": sent["id"], "ok": True, "result": {"forged": True}}
     )

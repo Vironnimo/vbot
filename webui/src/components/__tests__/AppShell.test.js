@@ -82,12 +82,16 @@ const navItem = (item) =>
   );
 
 describe('AppShell sidebar', () => {
-  it('composes Live, microphone and connection status with saved visibility', () => {
+  it('composes Live, microphone and connection status with saved visibility', async () => {
     let registry;
     mountedComponent = mount(ContributionContextHost, {
       target: document.body,
       props: {
         component: AppShell,
+        source: {
+          settings: { appearance: { ui_layout: {} } },
+          writeSettings: async (params) => ({ appearance: params.appearance }),
+        },
         instances: [
           {
             voiceAvailable: true,
@@ -106,14 +110,14 @@ describe('AppShell sidebar', () => {
     expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
     expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
     expect(content().querySelector('[data-live]')).toBeNull();
-    registry.save('shell.status', {
+    await registry.save('shell.status', {
       hidden: ['core:status.live-voice', 'core:status.connection'],
     });
     flushSync();
     expect(footer.querySelector('[data-live]')).toBeNull();
     expect(footer.querySelector('.sidebar-footer__connection')).toBeNull();
     expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
-    registry.reset('shell.status');
+    await registry.reset('shell.status');
     flushSync();
     expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
     expect(footer.querySelector('.sidebar-footer__connection')).not.toBeNull();

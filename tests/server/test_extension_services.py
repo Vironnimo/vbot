@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from collections.abc import Awaitable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,16 +19,25 @@ from core.runs import RunKind
 from core.runtime._shell_review_context import current_input_authority
 from core.tools import ToolContext, tool_success
 from server.access import Principal, bound_principal, current_principal
-from server.extension_services import SERVICE_DEFINITIONS, bind_application_services
-from server.rpc.dispatcher import dispatch_method
+from server.extension_services import (
+    SERVICE_DEFINITIONS,
+    bind_application_services,
+    is_extension_service_call,
+)
+from server.rpc._mutations import serialized_mutation, serialized_read
+from server.rpc.dispatcher import RpcMethodHandler, dispatch_method
 from server.rpc.errors import RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.methods import METHODS
+from tests.core.extensions.extension_test_support import write_extension
 from tests.server.rpc_test_support import StubAdapter, make_state
 
 
 @pytest.mark.asyncio
-async def test_service_binding_reuses_handlers_errors_and_clears_request_authority() -> None:
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_service_binding_reuses_handlers_errors_and_clears_request_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
     calls = []
 
     async def handler(_state: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -35,12 +46,12 @@ async def test_service_binding_reuses_handlers_errors_and_clears_request_authori
             raise RpcError("test_conflict", "test-owned refusal", data={"revision": 3})
         return {"result": params}
 
-    state = SimpleNamespace(runtime=SimpleNamespace(extension_services=ExtensionServiceCatalog()))
-    handlers = {name: handler for name, _, _, _ in SERVICE_DEFINITIONS}
+    catalog = ExtensionServiceCatalog()
+    state = SimpleNamespace(runtime=SimpleNamespace(extension_services=catalog))
+    handlers: dict[str, RpcMethodHandler] = {name: handler for name, _, _, _ in SERVICE_DEFINITIONS}
+    handlers["agent.list"] = serialized_read(handler, lock_attribute="_publication_lock")
     close = bind_application_services(state, handlers)
-    services = state.runtime.extension_services.for_owner(
-        ExtensionRegistrationIdentity("fixture", "one"), lambda: None
-    )
+    services = catalog.for_owner(ExtensionRegistrationIdentity("fixture", "one"), lambda: None)
     with bound_principal(Principal("host")):
         assert await services.query("agent.list") == {"result": {}}
         assert await services.execute("agent.update", {"id": "fixture"}) == {
@@ -48,6 +59,40 @@ async def test_service_binding_reuses_handlers_errors_and_clears_request_authori
         }
         assert current_principal() is not None
     assert calls == [({}, None), ({"id": "fixture"}, None)]
+
+    # An exported service clears request authority while keeping the live read
+    # lease needed by nested canonical queries during lifecycle publication.
+    write_extension(
+        tmp_path,
+        "nested",
+        "probe = None\n"
+        + (
+            "async def read(params): return await probe(params)\n"
+            if asynchronous
+            else "def read(params): return probe(params)\n"
+        )
+        + "def register(api):\n"
+        "    api.register_service('read', 'query', {'type': 'object'}, read)\n",
+    )
+    registry = await ExtensionRegistry.aload(tmp_path)
+    catalog.install_exports(registry)
+    contexts = []
+
+    def inspect_export(_params: dict[str, Any]) -> Awaitable[dict[str, Any]]:
+        contexts.append((current_principal(), is_extension_service_call()))
+        return services.query("agent.list")
+
+    monkeypatch.setattr(sys.modules["vbot_ext.nested"], "probe", inspect_export)
+
+    async def publish(_state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        return await services.query("extension:nested:read")
+
+    enclosing = serialized_mutation(publish, lock_attribute="_publication_lock")
+    with bound_principal(Principal("host")):
+        assert await enclosing(state, {}) == {"result": {}}
+        assert current_principal() is not None
+        assert is_extension_service_call() is False
+    assert contexts == [(None, True)]
     with pytest.raises(ExtensionServiceError) as refused:
         await services.execute("agent.update", {"id": "refused"})
     assert refused.value.code == "test_conflict"
@@ -59,11 +104,15 @@ async def test_service_binding_reuses_handlers_errors_and_clears_request_authori
         "permissions.resolve",
         "session.set_execution",
         "chat.queue_update",
+        "chat.cancel_tool_call",
     ):
         with pytest.raises(ExtensionServiceError) as unknown:
             await services.execute(private)
         assert unknown.value.code == "service_not_found"
     close()
+    assert services.describe()["available"] is True  # Exported services outlive the app binding.
+    await catalog.release_owner(registry.registration_identity("nested"))
+    sys.modules.pop("vbot_ext.nested", None)
     assert services.describe()["available"] is False
 
 
@@ -100,6 +149,60 @@ async def test_services_use_canonical_session_preferences_and_resource_publicati
         publish_resource_changed(state, "sessions", scope=address)
         await changed.wait()
         assert observed[-1]["scope"] == address
+    finally:
+        await catalog.release_owner(identity)
+        close()
+
+
+@pytest.mark.asyncio
+async def test_observer_actions_have_independent_principal_and_publication_context() -> None:
+    catalog = ExtensionServiceCatalog()
+    state = SimpleNamespace(runtime=SimpleNamespace(extension_services=catalog))
+    entered, finished = asyncio.Event(), asyncio.Event()
+    principals = []
+    mutations = []
+    errors = []
+
+    async def update(_state: Any, params: dict[str, Any]) -> dict[str, Any]:
+        mutations.append(params)
+        return {"committed": True}
+
+    mutation = serialized_mutation(update, lock_attribute="_publication_lock")
+    close = bind_application_services(
+        state, {name: mutation for name, _, _, _ in SERVICE_DEFINITIONS}
+    )
+    identity = ExtensionRegistrationIdentity("observer", "one")
+    services = catalog.for_owner(identity, lambda: None)
+
+    async def observe(_event: dict[str, Any]) -> None:
+        principals.append(current_principal())
+        entered.set()
+        try:
+            assert await services.execute("agent.update", {"id": "observer"}) == {"committed": True}
+        except Exception as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    services.subscribe(["sessions"], observe)
+
+    async def publish(_state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        catalog.publish("sessions")
+        # The observer attempts its own mutation while this publication holds
+        # the lock. It must wait independently, never inherit our read lease.
+        await entered.wait()
+        assert mutations == []
+        return {}
+
+    publish_mutation = serialized_mutation(publish, lock_attribute="_publication_lock")
+    try:
+        with bound_principal(Principal("host")):
+            await publish_mutation(state, {})
+            assert current_principal() is not None
+        await finished.wait()
+        assert principals == [None]
+        assert errors == []
+        assert mutations == [{"id": "observer"}]
     finally:
         await catalog.release_owner(identity)
         close()

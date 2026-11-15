@@ -19,6 +19,11 @@ EXTENSION_FEATURES = frozenset(
         "providers",
         "channels",
         "desktop.manifest",
+        "services.exports",
+        "ui.conditions",
+        "ui.shared-preferences",
+        "ui.message",
+        "ui.editors",
     }
 )
 UI_SURFACES = frozenset(
@@ -33,6 +38,12 @@ UI_SURFACES = frozenset(
         "chat.composer.footer.end",
         "chat.timeline",
         "chat.tool-result",
+        "chat.message",
+        "chat.message.actions",
+        "chat.sessions",
+        "chat.session.item",
+        "agent.editor.sections",
+        "project.editor.sections",
         "settings.sections",
     }
 )
@@ -56,6 +67,10 @@ UI_CONTEXT_FIELDS = frozenset(
         "context_window",
         "session_cost",
         "output_speed",
+        "message_id",
+        "message_role",
+        "session_selected",
+        "editor_mode",
     }
 )
 PAGE_ICONS = frozenset({"network", "panel", "grid", "sparkles", "factory"})
@@ -118,6 +133,64 @@ def _binding(value: object) -> bool:
     )
 
 
+def validate_condition(condition: object) -> None:
+    """Accept bounded declarative predicates, including the API30 equality map."""
+    remaining = 64
+
+    def scalar(value: object) -> bool:
+        return (
+            value is None
+            or isinstance(value, (str, bool, int, float))
+            and (not isinstance(value, float) or math.isfinite(value))
+        )
+
+    def visit(node: object, depth: int) -> None:
+        nonlocal remaining
+        remaining -= 1
+        if remaining < 0 or depth > 8 or not isinstance(node, dict):
+            raise ValueError("contribution when must be an object within 8 levels and 64 nodes")
+        if set(node) <= UI_CONTEXT_FIELDS:
+            if not all(scalar(value) for value in node.values()):
+                raise ValueError("contribution equality values must be finite scalars")
+            return
+        for group in ("all", "any"):
+            if set(node) == {group}:
+                children = node[group]
+                if not isinstance(children, list) or not children:
+                    raise ValueError("contribution all/any requires a non-empty array")
+                for child in children:
+                    visit(child, depth + 1)
+                return
+        if set(node) == {"not"}:
+            visit(node["not"], depth + 1)
+            return
+        if (
+            set(node) != {"field", "op", "value"}
+            or not isinstance(node["field"], str)
+            or node["field"] not in UI_CONTEXT_FIELDS
+            or not isinstance(node["op"], str)
+        ):
+            raise ValueError("contribution when uses unsupported context fields or expression")
+        operation, value = node["op"], node["value"]
+        valid = (
+            operation in {"eq", "ne"}
+            and scalar(value)
+            or operation == "in"
+            and isinstance(value, list)
+            and all(map(scalar, value))
+            or operation == "exists"
+            and isinstance(value, bool)
+            or operation in {"gt", "gte", "lt", "lte"}
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
+        if not valid:
+            raise ValueError("contribution when has an unsupported operator or value")
+
+    visit(condition, 0)
+
+
 def parse_contribution(contribution_id: str, **fields: Any) -> ContributionDeclaration:
     """Validate a declarative contribution before publishing its registration."""
     if not isinstance(contribution_id, str) or not _ID.fullmatch(contribution_id):
@@ -150,13 +223,7 @@ def parse_contribution(contribution_id: str, **fields: Any) -> ContributionDecla
     if isinstance(order, bool) or not isinstance(order, (int, float)) or not math.isfinite(order):
         raise ValueError("contribution order must be finite")
     when = spec.setdefault("when", {})
-    if not isinstance(when, dict) or set(when) - UI_CONTEXT_FIELDS:
-        raise ValueError("contribution when uses unsupported context fields")
-    if any(
-        value is not None and not isinstance(value, (str, bool, int, float))
-        for value in when.values()
-    ):
-        raise ValueError("contribution when values must be scalars")
+    validate_condition(when)
     if "replaces" in spec:
         _text(spec["replaces"], "replaces", maximum=240)
     if "text" in spec and not _binding(spec["text"]):

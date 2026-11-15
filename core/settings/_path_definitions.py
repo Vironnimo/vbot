@@ -143,6 +143,13 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         allowed_values=tuple(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES)),
     ),
     _static(
+        "appearance.ui_layout",
+        "object",
+        "Shared UI layout; null permits local import and an empty object selects defaults.",
+        default=None,
+        nullable=True,
+    ),
+    _static(
         "models.favorites",
         "array",
         "Model ids the Model pickers list first, for every Connection of the Model.",

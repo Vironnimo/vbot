@@ -6,7 +6,7 @@ import copy
 from typing import Any
 
 from core.extensions import API_VERSION, ExtensionRegistrationIdentity
-from core.extensions.contributions import EXTENSION_FEATURES
+from core.extensions.contributions import EXTENSION_FEATURES, ContributionDeclaration
 from core.extensions.operations import ExtensionOperationError
 from core.extensions.services import ExtensionServiceError
 from server.file_delivery import FILE_PREVIEW_WORKERS
@@ -71,17 +71,23 @@ async def _contribution_operation(state: Any, params: dict[str, Any]) -> dict[st
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Operation params must be an object")
     registry = state.runtime.extensions
 
-    def check() -> None:
-        declaration = registry.current_contribution(identity, contribution_id) if registry else None
+    def check() -> ContributionDeclaration:
+        declaration: ContributionDeclaration | None = (
+            registry.current_contribution(identity, contribution_id) if registry else None
+        )
         if state.runtime.extensions is not registry or declaration is None:
             raise ValueError("Extension contribution is unavailable; refresh its catalog")
         if operation not in declaration.spec["operations"]:
             raise ValueError("Operation is not declared by this contribution")
+        return declaration
 
     try:
-        check()
+        declaration = check()
         result = dict(await registry.management(name).invoke(operation, arguments))
-        check()
+        # Sources are read projections. Other operations are admitted actions:
+        # their definitive result survives a reload or retirement they trigger.
+        if declaration.spec.get("source", {}).get("operation") == operation:
+            check()
         return result
     except ExtensionOperationError as exc:
         raise RpcError(exc.code, str(exc)) from exc
@@ -122,19 +128,26 @@ async def _page_service(state: Any, params: dict[str, Any]) -> dict[str, Any]:
             entries = [
                 entry for entry in description["services"] if entry["name"] in declaration.services
             ]
+            resources = {resource for entry in entries for resource in entry.get("resources", [])}
             return {
                 **description,
                 "services": entries,
-                "resources": sorted(
-                    {resource for entry in entries for resource in entry.get("resources", [])}
-                ),
+                "resources": sorted(resources),
+                "resource_definitions": [
+                    entry
+                    for entry in description.get("resource_definitions", [])
+                    if entry["name"] in resources
+                ],
             }
         name = _required_string(params, "name")
         if name not in declaration.services:
             raise ValueError("Service is not declared by this page")
         operation = services.query if kind == "query" else services.execute
         result = await operation(name, arguments)
-        page()
+        # An admitted execute can reload its own page. Its committed result is
+        # definitive; only reads must still belong to the original registration.
+        if kind == "query":
+            page()
         return dict(result)
     except RpcError:
         raise

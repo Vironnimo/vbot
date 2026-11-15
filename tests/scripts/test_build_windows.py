@@ -59,7 +59,15 @@ _PINNED_SQLITE = b"pinned sqlite"
 
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
-    for directory in ("core", "cli", "server", "desktop", "resources", "webui/dist"):
+    for directory in (
+        "core",
+        "cli",
+        "server",
+        "desktop",
+        "resources",
+        "webui/dist",
+        "vbot_extension_sdk",
+    ):
         path = source / directory
         path.mkdir(parents=True)
         (path / "included.txt").write_text(directory, encoding="utf-8")
@@ -201,11 +209,14 @@ def test_copy_application_respects_shape_and_exclusions(
     destination = tmp_path / "app"
     source = _source(tmp_path)
     sdk_path = Path("resources/sdk/vbot-extension-sdk-1.0.0.tgz")
-    (source / sdk_path).parent.mkdir(parents=True)
+    (source / sdk_path).parent.mkdir(parents=True, exist_ok=True)
     (source / sdk_path).write_bytes(b"built extension SDK")
     build_windows.copy_application(
         source, destination, shape, search_target=build_windows.SEARCH_TARGET
     )
+
+    assert (destination / "vbot_extension_sdk").exists()
+    assert (destination / "resources/sdk/vbot_extension_sdk-31.0.0-py3-none-any.whl").is_file()
 
     if shape == "desktop-client":
         assert not (destination / sdk_path).exists()

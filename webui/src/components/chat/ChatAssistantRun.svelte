@@ -62,6 +62,7 @@
   } from '$lib/chatTimelinePresentation.js';
 
   import ChatTimelineEntry from './ChatTimelineEntry.svelte';
+  import MessageContributionSurface from './MessageContributionSurface.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
   import ChatWidget from './ChatWidget.svelte';
@@ -73,6 +74,7 @@
   let {
     item,
     agentName = '',
+    uiContext = {},
     chatWorkingMode = 'normal',
     subAgentStatuses = {},
     isReasoningOpen = () => false,
@@ -811,17 +813,45 @@
       {:else if child.type === 'user_message'}
         <ChatTimelineEntry
           item={{ type: 'message', message: child.message }}
+          uiContext={{ ...uiContext, run_id: item.runId ?? '' }}
           {messageEditingDisabledReason}
           {onEditMessage}
         />
       {:else if child.type === 'assistant_output'}
         {@const working = isRunChildWorking(item, child)}
-        <MarkdownContent
-          contentId={child.id}
-          source={child.content ?? ''}
-          streaming={working}
-          caret={working}
-          class={`msg-markdown${working ? ' streaming-text' : ''}`}
+        {@const message = {
+          id: child.messageId ?? child.id,
+          role: 'assistant',
+          run_id: item.runId,
+          timestamp: child.timestamp,
+        }}
+        {#snippet messageContent()}
+          <MarkdownContent
+            contentId={child.id}
+            source={child.content ?? ''}
+            streaming={working}
+            caret={working}
+            class={`msg-markdown${working ? ' streaming-text' : ''}`}
+          />
+        {/snippet}
+        <MessageContributionSurface
+          {message}
+          text={child.content ?? ''}
+          {uiContext}
+          builtins={[
+            {
+              id: 'core:chat.message.content',
+              title: t('chat.title'),
+              order: 10,
+              render: messageContent,
+            },
+          ]}
+        />
+        <MessageContributionSurface
+          surface="chat.message.actions"
+          {message}
+          text={child.content ?? ''}
+          {uiContext}
         />
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">

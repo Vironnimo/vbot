@@ -1181,7 +1181,7 @@ describe('Skills manager', () => {
       revision(3, 'change', 'reflection', [
         { path: 'SKILL.md', change: 'updated' },
       ]),
-      revision(2, 'change', 'human', [
+      revision(2, 'change', 'extension', [
         { path: 'SKILL.md', change: 'updated' },
         { path: 'notes.md', change: 'created' },
       ]),
@@ -1223,6 +1223,9 @@ describe('Skills manager', () => {
     ]);
     expect(texts('.skills-history__meta', items[0])[0]).toContain(
       'A background Reflection',
+    );
+    expect(texts('.skills-history__meta', items[1])[0]).toContain(
+      'An Extension',
     );
     expect(texts('.skills-history__files li', items[1])).toEqual([
       'Changed SKILL.md',

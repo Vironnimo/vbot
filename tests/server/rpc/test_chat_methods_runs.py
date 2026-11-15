@@ -11,17 +11,21 @@ import pytest
 
 from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
+from core.extensions import ExtensionRegistrationIdentity
+from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceError
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.subagents.links import link_session
 from core.tools import ToolContext, tool_success
 from core.tools.process_tree import RunningProcess
+from server.extension_services import bind_application_services
 from server.file_delivery import FileDelivery
 from server.rpc.errors import (
     RPC_ERROR_COMMAND_NOT_FOUND,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_RUN_NOT_FOUND,
 )
+from server.rpc.methods import METHODS
 from tests.core.runs.runs_test_support import RunTimelines
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.subagents.subagents_test_support import SubAgentHarness
@@ -48,6 +52,22 @@ async def _held_run(address: SessionAddress = ADDRESS) -> tuple[SimpleNamespace,
     run = await manager.start(address, _hold_until_cancelled)
     await asyncio.sleep(0)
     return SimpleNamespace(chat_runs=manager, file_delivery=FileDelivery()), run
+
+
+async def _service_call(state: Any, method: str, **params: Any) -> JsonObject:
+    if not hasattr(state, "runtime"):
+        state.runtime = SimpleNamespace()
+    state.runtime.extension_services = ExtensionServiceCatalog()
+    close = bind_application_services(state, METHODS)
+    services = state.runtime.extension_services.for_owner(
+        ExtensionRegistrationIdentity("fixture", "one"), lambda: None
+    )
+    try:
+        return {"ok": True, "result": await services.execute(method, params)}
+    except ExtensionServiceError as error:
+        return {"ok": False, "error": {"code": error.code}}
+    finally:
+        close()
 
 
 @pytest.mark.asyncio
@@ -130,16 +150,26 @@ async def test_cancel_stops_the_run_during_a_tool_and_ignores_its_late_output(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extension", [False, True], ids=["accessor", "extension"])
 @pytest.mark.parametrize(("params", "reason"), [({"reason": "user"}, "user"), ({}, None)])
 async def test_cancel_records_the_optional_reason_on_the_run(
-    params: JsonObject, reason: str | None
+    params: JsonObject, reason: str | None, extension: bool
 ) -> None:
     state, run = await _held_run()
 
-    response = await call(state, "chat.cancel", run_id=run.id, **params)
+    response = await (_service_call if extension else call)(
+        state, "chat.cancel", run_id=run.id, **params
+    )
+
+    if extension and reason == "user":
+        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+        assert not run.cancel_requested
+        await state.chat_runs.cancel(run.id)
+        return
 
     assert response["result"]["status"] == "cancelled"
     assert run.cancel_reason == reason
+    assert run.cancel_initiator == ("extension" if extension else "rpc")
 
 
 @pytest.mark.asyncio
@@ -192,19 +222,29 @@ async def test_cancel_tool_call_reports_an_unknown_run_or_tool_call(
 
 
 @pytest.mark.asyncio
-async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped() -> None:
+@pytest.mark.parametrize("extension", [False, True], ids=["accessor", "extension"])
+async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped(
+    extension: bool,
+) -> None:
     stopped: list[SessionAddress] = []
+    stop_options = []
 
-    async def stop_tree(address: SessionAddress) -> int:
+    async def stop_tree(address: SessionAddress, **options: str) -> int:
         stopped.append(address)
+        stop_options.append(options)
         return 3
 
     state = SimpleNamespace(runtime=SimpleNamespace(subagents=SimpleNamespace(stop_tree=stop_tree)))
 
-    response = await call(state, "chat.stop_all", agent_id="builder@vbot", session_id="s1")
+    response = await (_service_call if extension else call)(
+        state, "chat.stop_all", agent_id="builder@vbot", session_id="s1"
+    )
 
     assert response == {"ok": True, "result": {"ok": True, "stopped": 3}}
     assert stopped == [SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")]
+    assert stop_options == [
+        {"reason": "extension_cancelled", "initiator": "extension_stop_all"} if extension else {}
+    ]
 
 
 @pytest.mark.asyncio

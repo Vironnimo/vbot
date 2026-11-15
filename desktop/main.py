@@ -242,7 +242,7 @@ def _run_desktop(
     from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
     from desktop.execution import ComputerSharing
-    from desktop.extensions import load_desktop_extensions
+    from desktop.extensions import DesktopExtensionCatalog, load_desktop_extensions
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
     from desktop.page_permissions import PagePermissions
@@ -299,15 +299,23 @@ def _run_desktop(
     window_holder: list[Any] = []
     window_state = desktop_window.WindowState()
 
-    extension_settings = read_section("extensions", settings_file)
-    disabled_extensions = extension_settings.get("disabled", [])
-    native_extensions = load_desktop_extensions(
-        (
-            desktop_config_directory / "extensions",
-            Path(__file__).resolve().parent.parent / "resources" / "extensions",
-        ),
-        disabled=disabled_extensions,
+    native_roots = (
+        desktop_config_directory / "extensions",
+        Path(__file__).resolve().parent.parent / "resources" / "extensions",
     )
+    native_extensions = load_desktop_extensions(
+        native_roots,
+        disabled=read_section("extensions", settings_file).get("disabled", []),
+    )
+
+    def reload_native_extensions() -> DesktopExtensionCatalog:
+        nonlocal native_extensions
+        native_extensions = load_desktop_extensions(
+            native_roots,
+            disabled=read_section("extensions", settings_file).get("disabled", []),
+            previous=native_extensions,
+        )
+        return native_extensions
 
     computer_sharing = ComputerSharing(
         settings_path=settings_file or desktop_config_directory / SETTINGS_FILE_NAME,
@@ -316,6 +324,7 @@ def _run_desktop(
         factories=native_extensions.factories,
         capabilities=native_extensions.capabilities,
         extension_records=native_extensions.records,
+        reload_extensions=reload_native_extensions,
         publish=page_events.publish_computer_sharing,
     )
     desktop_restart = (

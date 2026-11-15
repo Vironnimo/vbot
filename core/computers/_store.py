@@ -27,6 +27,7 @@ from core.json_documents import (
     write_json_document,
 )
 from core.utils.ids import is_safe_id
+from core.utils.native_capabilities import validate_capability_ids
 
 COMPUTERS_PATH = "access/computers.json"
 MAX_COMPUTERS = 32
@@ -81,16 +82,7 @@ def validate_description(value: dict[str, Any]) -> None:
     normalize_device_name(value.get("name"))
     if value.get("platform") not in {"win32", "linux", "darwin"}:
         raise ValueError("Computer platform is invalid")
-    capabilities = value.get("capabilities")
-    if (
-        not isinstance(capabilities, list)
-        or len(capabilities) > 32
-        or any(
-            not isinstance(item, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item)
-            for item in capabilities
-        )
-    ):
-        raise ValueError("Computer capabilities are invalid")
+    validate_capability_ids(value.get("capabilities"))
 
 
 class ComputerClaimError(Exception):

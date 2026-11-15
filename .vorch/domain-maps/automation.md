@@ -15,6 +15,7 @@ An objective set for a Session by the user or its Agent from a direct user reque
 ## Interfaces
 
 - `CronProjection` is the detached, read-only Cron projection Calendar consumers use.
+- Bootstrap's `bootstrap` resource reports committed changes (-> References).
 
 - `TriggerService` is DI-wired with the Runtime's one ChatLoop; programmatic Runs stream through the same SSE path as normal sends.
 - Calendar events drive Cron jobs of schedule type `event` (Conventions -> Event jobs); the calendar keeps events only and runs nothing (`calendar.md`). `CronService` reads it through the narrow `EventCalendar` protocol (`_cron_events.py`: `get_event`, `iter_occurrences`, `system_timezone_name`, `add_changed_callback`) and serves the calendar's `EventJobs` protocol (`core/calendar/event_jobs.py`: `check_event_change`, `event_deleted`). Runtime builds the calendar first, passes it as `CronService(calendar=)` and binds the service back with `CalendarService.bind_event_jobs`; the calendar never imports automation.
@@ -63,6 +64,7 @@ Cron owns notification policy; Sessions owns each Run's source and read state (`
 Read these only when your task matches - not by default.
 
 - Task inputs: authenticated prompts, overrides and Session/result handling -> `automation/direct-inputs.md`
+- Bootstrap change subscriptions -> `automation/bootstrap.md`
 - Cron/Bootstrap jobs: validation, schedules/DST, Working Projects, Run overrides, health/failures, delivery, catch-up, fire claims, edits, targets and logging -> `automation/cron.md`
 - Cron jobs with a `watch`: the check before each Run and its runner, baselines, the change note, check failures -> `automation/cron-watch.md`
 - Cron webhook jobs: the `/api/hooks/` route, secrets, URL, waiting requests, the webhook note -> `automation/cron-webhooks.md`

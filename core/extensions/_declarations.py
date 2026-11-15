@@ -23,7 +23,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 30
+API_VERSION = 31
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -351,6 +351,8 @@ class ExtensionDeclarations:
     commands: list[CommandDeclaration] = field(default_factory=list)
     pages: list[PageDeclaration] = field(default_factory=list)
     contributions: list[ContributionDeclaration] = field(default_factory=list)
+    services: list[ServiceDeclaration] = field(default_factory=list)
+    resources: list[ResourceDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     providers: list[ProviderDeclaration] = field(default_factory=list)
     channel_platforms: list[ChannelPlatformDeclaration] = field(default_factory=list)
@@ -363,6 +365,27 @@ class ExtensionDeclarations:
     settings_schema: list[SettingsFieldDeclaration] | None = None
     operations: ExtensionOperations | None = None
     shell_reviewer: ShellReviewerDeclaration | None = None
+
+
+@dataclass(frozen=True)
+class ResourceDeclaration:
+    """An Extension-local invalidation resource and its optional scope contract."""
+
+    name: str
+    description: str
+    scope_schema: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ServiceDeclaration:
+    """An Extension-owned public operation with a detached parameter contract."""
+
+    name: str
+    kind: Literal["query", "execute"]
+    parameters: dict[str, Any]
+    handler: Callable[[dict[str, Any]], Any]
+    resources: tuple[str, ...]
+    description: str
 
 
 @dataclass(frozen=True)
@@ -420,5 +443,7 @@ class ExtensionRecord:
 
 def _diagnose_capability(record: ExtensionRecord, message: str) -> None:
     """Record a non-fatal capability diagnostic and log it at ``warning``."""
+    if message in record.capability_errors:
+        return
     record.capability_errors.append(message)
     _LOGGER.warning("Extension %r %s", record.name, message)

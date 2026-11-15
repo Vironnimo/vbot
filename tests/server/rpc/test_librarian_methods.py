@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +13,7 @@ from core.agents import AgentNotFoundError
 from core.automation import LibrarianBusyError, LibrarianUnavailableError
 from core.automation.learning import LearningRunActiveError, LearningUndoConflictError
 from core.automation.librarian import LibrarianStateError
+from server.extension_services import extension_service_context
 from server.rpc.methods import dispatch_rpc
 
 
@@ -20,6 +22,7 @@ class _FakeLibrarian:
         self.error = error
         self.calls: list[tuple[str, str]] = []
         self.undo_started_at: str | None = None
+        self.undo_actor: str | None = None
 
     async def status(self, agent_id: str) -> dict[str, Any]:
         return await self._answer("status", agent_id)
@@ -30,8 +33,9 @@ class _FakeLibrarian:
     async def overview(self) -> dict[str, Any]:
         return await self._answer("overview", "librarian")
 
-    async def undo(self, agent_id: str, started_at: str) -> dict[str, Any]:
+    async def undo(self, agent_id: str, started_at: str, *, actor: str = "rpc") -> dict[str, Any]:
         self.undo_started_at = started_at
+        self.undo_actor = actor
         return await self._answer("undo", agent_id)
 
     async def _answer(self, method: str, agent_id: str) -> dict[str, Any]:
@@ -48,6 +52,7 @@ def _state(librarian: _FakeLibrarian) -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("actor", ["rpc", "extension"])
 @pytest.mark.parametrize(
     ("method", "params", "agent_id"),
     [
@@ -58,16 +63,20 @@ def _state(librarian: _FakeLibrarian) -> Any:
         ("overview", {}, "librarian"),
     ],
 )
-async def test_librarian_methods_answer(method: str, params: dict[str, Any], agent_id: str) -> None:
+async def test_librarian_methods_answer(
+    method: str, params: dict[str, Any], agent_id: str, actor: str
+) -> None:
     librarian = _FakeLibrarian()
 
-    response = await dispatch_rpc(
-        _state(librarian), {"method": f"librarian.{method}", "params": params}
-    )
+    with extension_service_context() if actor == "extension" else nullcontext():
+        response = await dispatch_rpc(
+            _state(librarian), {"method": f"librarian.{method}", "params": params}
+        )
 
     assert response == {"ok": True, "result": {"agent_id": agent_id, "running": method == "run"}}
     assert librarian.calls == [(method, agent_id)]
     assert librarian.undo_started_at == params.get("started_at")
+    assert librarian.undo_actor == (actor if method == "undo" else None)
 
 
 @pytest.mark.asyncio

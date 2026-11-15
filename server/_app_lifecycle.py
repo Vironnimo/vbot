@@ -26,6 +26,7 @@ from server.events import (
     EXTENSION_NOTIFICATION_EVENT,
     RESOURCE_KIND_APPLICATION,
     RESOURCE_KIND_ARCHIVE,
+    RESOURCE_KIND_BOOTSTRAP,
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_COMPUTERS,
     RESOURCE_KIND_CRON,
@@ -109,6 +110,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
+    app.state.bootstrap_change_bridge_unsubscribe = _register_bootstrap_change_bridge(app.state)
     app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
     app.state.archive_change_bridge_unsubscribe = _register_archive_change_bridge(app.state)
     app.state.skill_change_bridge_unsubscribe = _register_skill_change_bridge(app.state)
@@ -321,6 +323,19 @@ def _register_calendar_change_bridge(state: Any) -> Any:
     )
 
 
+def _register_bootstrap_change_bridge(state: Any) -> Any:
+    return state.runtime.bootstrap_service.add_changed_callback(
+        lambda: publish_resource_changed(state, RESOURCE_KIND_BOOTSTRAP)
+    )
+
+
+def _unregister_bootstrap_change_bridge(state: Any) -> None:
+    unsubscribe = state.bootstrap_change_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.bootstrap_change_bridge_unsubscribe = None
+
+
 def _unregister_calendar_change_bridge(state: Any) -> None:
     unsubscribe = state.calendar_change_bridge_unsubscribe
     if unsubscribe is not None:
@@ -380,7 +395,7 @@ def _register_terminal_change_bridge(state: Any) -> Any:
 
 def _register_computer_change_bridge(state: Any) -> Any:
     def changed(_computer_id: str, event: str, _data: dict[str, Any]) -> None:
-        if event in {"connected", "disconnected", "removed"}:
+        if event in {"connected", "disconnected", "removed", "capabilities_changed"}:
             publish_resource_changed(state, RESOURCE_KIND_COMPUTERS)
 
     return state.runtime.computers.subscribe(changed)

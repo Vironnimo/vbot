@@ -85,6 +85,37 @@ afterEach(async () => {
 });
 
 describe('Desktop computer sharing', () => {
+  it('reloads local packages explicitly and renders every owner-qualified capability unshared', async () => {
+    await vi.waitFor(() => expect(toggle('Share Terminal')).not.toBeNull());
+    status = { ...status, reload_supported: true };
+    window.dispatchEvent(
+      new CustomEvent('vbot-desktop-computer-sharing', { detail: status }),
+    );
+    flushSync();
+    const catalog = Array.from({ length: 40 }, (_, index) => ({
+      id: `extension:office:device_${index}`,
+      owner: 'office',
+      label: `Device ${index}`,
+    }));
+    const reload = vi.fn(async () => ({
+      ...status,
+      capability_catalog: catalog,
+      capabilities: Object.fromEntries(catalog.map(({ id }) => [id, false])),
+      available: Object.fromEntries(catalog.map(({ id }) => [id, true])),
+      extensions: [{ name: 'office', status: 'loaded', change: 'added' }],
+    }));
+    window.pywebview.api.reloadDesktopExtensions = reload;
+    const button = [...document.querySelectorAll('button')].find(
+      (element) => element.textContent.trim() === 'Reload local Extensions',
+    );
+    button.click();
+    await vi.waitFor(() => expect(toggle('Device 39')).not.toBeNull());
+    expect(reload).toHaveBeenCalledWith();
+    expect(setStatus).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('[role="switch"]')).toHaveLength(40);
+    expect(toggle('Device 39').getAttribute('aria-checked')).toBe('false');
+  });
+
   it('grants sharing on a fresh installation before a computer ID exists and keeps unavailable capabilities disabled', async () => {
     await vi.waitFor(() => expect(toggle('Share Terminal')).not.toBeNull());
     window.dispatchEvent(

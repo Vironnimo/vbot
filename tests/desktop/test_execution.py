@@ -16,6 +16,7 @@ from desktop import execution, servers
 from desktop.connection import ConnectionController
 from desktop.credentials import DeviceTokenStore
 from desktop.execution import ComputerSharing, SharingError
+from desktop.extensions import DesktopExtensionCatalog, EventSink, NativeCapability
 from desktop.probe import (
     PROBE_SERVER_UNREACHABLE,
     PROBE_WEBUI_AVAILABLE,
@@ -71,6 +72,7 @@ class Socket:
     def __init__(self, server_instance: str = "server-one", *, welcome: bool = True) -> None:
         self.server_instance = server_instance
         self.welcome = welcome
+        self.capability_updates = True
         self.incoming: asyncio.Queue[Any] = asyncio.Queue()
         self.outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.closed = False
@@ -86,6 +88,7 @@ class Socket:
                     "computer_id": message["computer_id"],
                     "instance_id": message["instance_id"],
                     "server_instance": self.server_instance,
+                    "capability_updates": 1 if self.capability_updates else 0,
                 }
             )
 
@@ -703,3 +706,251 @@ async def test_failed_capability_initialization_preserves_healthy_native_work_an
         await asyncio.wait_for(running, timeout=2)
     assert healthy.closed
     assert all(handler.closed for handler in attempted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connect_during_scan", [False, True])
+async def test_native_reload_refuses_legacy_servers_before_and_after_scanning(
+    tmp_path: Path,
+    connect_during_scan: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    scanned = asyncio.Event()
+    release_scan = threading.Event()
+    connections = Connections()
+    handler = Capability()
+    declaration = NativeCapability("terminal", "terminal", "Terminal", "", lambda _emit: handler)
+    catalog = DesktopExtensionCatalog({"terminal": declaration})
+
+    def scan() -> DesktopExtensionCatalog:
+        loop.call_soon_threadsafe(scanned.set)
+        assert release_scan.wait(2)
+        return catalog
+
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=Authorization(),
+        factories=catalog.factories,
+        capabilities=catalog.capabilities,
+        connector=connections,
+        reload_extensions=scan,
+    )
+    url = "https://legacy.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    socket = await connections.add()
+    socket.capability_updates = False
+    reloading: asyncio.Task[dict[str, Any]] | None = None
+    if connect_during_scan:
+        reloading = asyncio.create_task(
+            asyncio.to_thread(sharing.reload_extensions, expected_server=url)
+        )
+        await asyncio.wait_for(scanned.wait(), timeout=2)
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        assert (await socket.call("started", "start"))["ok"]
+        assert not sharing.status()["reload_supported"]
+        release_scan.set()
+        with pytest.raises(SharingError) as refused:
+            if reloading is not None:
+                await reloading
+            else:
+                sharing.reload_extensions(expected_server=url)
+        assert refused.value.error_code == "computer_reload_unavailable"
+        assert scanned.is_set() is connect_during_scan
+        assert not socket.closed and handler.disconnects == 0
+        assert (await socket.call("retained_legacy", "status"))["result"]["count"] == 1
+    finally:
+        release_scan.set()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retire_error", [False, True])
+async def test_local_reload_retires_changed_work_preserves_other_handlers_and_binds_grants(
+    tmp_path: Path,
+    retire_error: bool,
+) -> None:
+    connections = Connections()
+    healthy = Capability()
+    instances: list[Capability] = []
+    sinks: list[EventSink] = []
+    custom_id = "extension:office:printer"
+
+    class ReloadCapability(Capability):
+        @override
+        async def close(self) -> None:
+            if retire_error and self is instances[0]:
+                raise OSError("retirement unavailable")
+            await super().close()
+
+    def custom_factory(emit: EventSink) -> Capability:
+        handler = ReloadCapability()
+        instances.append(handler)
+        sinks.append(emit)
+        return handler
+
+    terminal = NativeCapability(
+        "terminal",
+        "terminal",
+        "Terminal",
+        "",
+        lambda _emit: healthy,
+        source="builtin:terminal",
+        revision="stable",
+    )
+    original = NativeCapability(
+        custom_id, "office", "Printer", "", custom_factory, source="local-package", revision="first"
+    )
+    catalog = DesktopExtensionCatalog({"terminal": terminal, custom_id: original})
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "computer_sharing": {
+                    "servers": {"https://one.example": {"terminal": True, "printer": True}}
+                }
+            }
+        )
+    )
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=Authorization(),
+        factories=catalog.factories,
+        capabilities=catalog.capabilities,
+        connector=connections,
+        reload_extensions=lambda: catalog,
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    assert sharing.status()["capabilities"] == {"terminal": True, custom_id: False}
+    sharing.update({"terminal": True, custom_id: True}, expected_server=url)
+    initial = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        assert (await asyncio.wait_for(initial.outgoing.get(), timeout=2))["type"] == "hello"
+        await initial.call("start", "start")
+        assert not sharing.reload_extensions(expected_server=url)["reloading"]
+        assert sharing.status()["connected"]
+        assert (await initial.call("unchanged", "status"))["ok"]
+        await initial.incoming.put(
+            {
+                "type": "call",
+                "id": "held",
+                "capability": custom_id,
+                "operation": "held",
+                "params": {},
+            }
+        )
+        await asyncio.wait_for(instances[0].entered.wait(), timeout=2)
+        await initial.incoming.put(
+            {
+                "type": "call",
+                "id": "unchanged_held",
+                "capability": "terminal",
+                "operation": "held",
+                "params": {},
+            }
+        )
+        await asyncio.wait_for(healthy.entered.wait(), timeout=2)
+        edited = NativeCapability(
+            custom_id,
+            "office",
+            "Edited",
+            "",
+            custom_factory,
+            source=original.source,
+            revision="second",
+        )
+        added_id = "extension:office:new"
+        added = NativeCapability(
+            added_id, "office", "New", "", custom_factory, source=original.source, revision="second"
+        )
+        catalog = DesktopExtensionCatalog(
+            {"terminal": terminal, custom_id: edited, added_id: added}
+        )
+        pending = sharing.reload_extensions(expected_server=url)
+        assert pending["reloading"]
+        assert pending["capabilities"] == {"terminal": True, custom_id: True, added_id: False}
+        if retire_error:
+            assert await asyncio.wait_for(initial.outgoing.get(), timeout=2) == {
+                "type": "capabilities",
+                "capabilities": ["terminal"],
+            }
+            assert sharing.status()["capability_errors"][custom_id] == "close: OSError"
+            assert len(instances) == 1
+            assert (await initial.call("retirement_failed", "status"))["result"]["count"] == 1
+            retire_error = False
+            sharing.reload_extensions(expected_server=url)
+        retired_result = await asyncio.wait_for(initial.outgoing.get(), timeout=2)
+        assert (
+            retired_result["type"] == "result"
+            and retired_result["id"] == "held"
+            and retired_result["ok"]
+        )
+        assert await asyncio.wait_for(initial.outgoing.get(), timeout=2) == {
+            "type": "capabilities",
+            "capabilities": sorted(["terminal", custom_id]),
+        }
+        assert not initial.closed and healthy.disconnects == 0
+        healthy.release.set()
+        retained_result = await asyncio.wait_for(initial.outgoing.get(), timeout=2)
+        assert (
+            retained_result["type"] == "result"
+            and retained_result["id"] == "unchanged_held"
+            and retained_result["ok"]
+        )
+        assert instances[0].closed and len(instances) == 2
+        assert not healthy.closed
+        assert not sharing.status()["reloading"]
+        sinks[0]("stale", {})
+        assert (await initial.call("retained", "status"))["result"]["count"] == 1
+        assert (await initial.call("new_version", "status", custom_id))["ok"]
+
+        # A different local package with the same folder identity cannot inherit consent.
+        copied = NativeCapability(
+            custom_id,
+            "office",
+            "Other package",
+            "",
+            custom_factory,
+            source="different-package",
+            revision="third",
+        )
+        catalog = DesktopExtensionCatalog({"terminal": terminal, custom_id: copied})
+        status = sharing.reload_extensions(expected_server=url)
+        assert status["capabilities"][custom_id] is False
+        assert (await asyncio.wait_for(initial.outgoing.get(), timeout=2))["capabilities"] == [
+            "terminal"
+        ]
+        assert instances[1].closed
+        assert not healthy.closed
+        with pytest.raises(SharingError) as refused:
+            sharing.update(
+                {custom_id: True},
+                expected_server=url,
+                expected_revision=pending["catalog_revision"],
+            )
+        assert refused.value.error_code == "computer_catalog_changed"
+        stored = json.loads((tmp_path / "settings.json").read_text())["computer_sharing"]
+        assert stored["servers"]["https://one.example"][custom_id] is True
+        assert stored["servers"]["https://one.example"]["printer"] is True
+        assert stored["capability_sources"]["https://one.example"][custom_id] == "local-package"
+        catalog = DesktopExtensionCatalog({})  # Removing a running Terminal needs local consent.
+
+        def failed_confirmation(_title: str, _message: str) -> bool:
+            raise RuntimeError("dialog unavailable")
+
+        for confirm in (None, lambda _title, _message: False, failed_confirmation):
+            with pytest.raises(SharingError) as declined:
+                sharing.reload_extensions(expected_server=url, confirm=confirm)
+            assert declined.value.error_code == "declined"
+        assert not healthy.closed
+        assert (await initial.call("declined_reload", "status"))["result"]["count"] == 1
+    finally:
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+    assert healthy.closed

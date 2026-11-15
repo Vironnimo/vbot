@@ -19,6 +19,8 @@ from core.extensions._declarations import (
     PromptBlockDeclaration,
     ProviderDeclaration,
     RecallBackendDeclaration,
+    ResourceDeclaration,
+    ServiceDeclaration,
     SessionPromptBlockDeclaration,
     SessionRuntimeDeclaration,
     ShellReviewerDeclaration,
@@ -26,6 +28,7 @@ from core.extensions._declarations import (
     ToolFamilyDeclaration,
     _is_page_id,
 )
+from core.extensions._service_exports import description_text, local_name, parameter_schema
 from core.extensions.contributions import parse_contribution, validate_icon
 from core.extensions.interactions import (
     InteractionHandlerDeclaration,
@@ -87,6 +90,55 @@ class ExtensionAPI:
         if self._declarations.settings_schema is not None:
             raise ValueError("settings schema already declared")
         self._declarations.settings_schema = parse_settings_fields(fields)
+
+    def register_resource(
+        self,
+        name: str,
+        *,
+        description: str = "",
+        scope_schema: dict[str, Any] | None = None,
+    ) -> None:
+        """Export an invalidation resource under ``extension:<owner>:<name>``."""
+        name = local_name(name)
+        if any(item.name == name for item in self._declarations.resources):
+            raise ValueError(f"Resource already declared: {name}")
+        self._declarations.resources.append(
+            ResourceDeclaration(
+                name,
+                description_text(description),
+                parameter_schema(scope_schema) if scope_schema is not None else None,
+            )
+        )
+
+    def register_service(
+        self,
+        name: str,
+        kind: str,
+        parameters: dict[str, Any],
+        handler: Callable[[dict[str, Any]], Any],
+        *,
+        resources: Sequence[str] = (),
+        description: str = "",
+    ) -> None:
+        """Export a query or execute callback; resources are local declarations."""
+        name = local_name(name)
+        if kind not in {"query", "execute"} or not callable(handler):
+            raise ValueError("Service requires query/execute kind and a callable handler")
+        if any(item.name == name for item in self._declarations.services):
+            raise ValueError(f"Service already declared: {name}")
+        if isinstance(resources, str):
+            raise ValueError("Service resources must be a sequence of local resource names")
+        names = tuple(dict.fromkeys(local_name(resource) for resource in resources))
+        self._declarations.services.append(
+            ServiceDeclaration(
+                name,
+                "query" if kind == "query" else "execute",
+                parameter_schema(parameters),
+                handler,
+                names,
+                description_text(description),
+            )
+        )
 
     def get_config(self) -> dict[str, Any]:
         """Return the extension's config, read **live** per call (fresh dict).

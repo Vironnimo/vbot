@@ -52,7 +52,7 @@ _FORMAT_VERSION = 1
 # Text larger than this (or not UTF-8) is recorded by hash only.
 MAX_STORED_TEXT_BYTES = 1024 * 1024
 
-SkillActor = Literal["human", "agent", "reflection", "librarian"]
+SkillActor = Literal["human", "agent", "reflection", "librarian", "extension"]
 SkillRevisionKind = Literal[
     "baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"
 ]
@@ -60,7 +60,7 @@ SkillFileChangeKind = Literal["created", "updated", "deleted"]
 # ``published``: the Skill moved into another home, such as a private Skill made global.
 SkillArchiveReason = Literal["deleted", "absorbed", "inactive", "published"]
 
-SKILL_ACTORS: tuple[SkillActor, ...] = ("human", "agent", "reflection", "librarian")
+SKILL_ACTORS: tuple[SkillActor, ...] = ("human", "agent", "reflection", "librarian", "extension")
 # Actors that write without a person attending: they never change a Skill the
 # user pinned.
 BACKGROUND_ACTORS: frozenset[str] = frozenset({"reflection", "librarian"})
@@ -126,7 +126,7 @@ class SkillReference:
 class SkillRevision:
     """One recorded change of one Skill in one home.
 
-    ``actor`` is ``human``, ``agent``, ``reflection``, ``librarian`` or
+    ``actor`` is ``human``, ``agent``, ``reflection``, ``librarian``, ``extension`` or
     ``external`` (baseline and external revisions). ``live`` is set when the
     revision moved the Skill into or out of the home; ``archive_id`` names the
     archived package involved. ``origin``/``created_at``/``pinned`` carry a

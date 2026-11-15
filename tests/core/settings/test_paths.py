@@ -591,6 +591,7 @@ def test_catalog_contains_static_and_dynamic_public_paths() -> None:
 
     assert "server.port" in paths
     assert "server.timezone" in paths
+    assert "appearance.ui_layout" in paths
     assert "web_search.provider" in paths
     assert "speech.transcription_audio.profile" in paths
     assert "notifications.automation_failed" in paths

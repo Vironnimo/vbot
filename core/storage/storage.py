@@ -431,7 +431,7 @@ class StorageManager:
 
         return sorted(SUPPORTED_APPEARANCE_LANGUAGES)
 
-    def load_appearance_settings(self) -> dict[str, str]:
+    def load_appearance_settings(self) -> dict[str, Any]:
         """Return normalized persisted Appearance settings."""
 
         settings = self.load_settings()

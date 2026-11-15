@@ -44,7 +44,7 @@ The following rows cover the API 30 additions and revised sentences in the three
 | `A Python server entry exposes one register(api)...` | Preserves the declaration timeout without imposing a Python entry on UI-only Extensions. |
 | Updated page signature and new contribution, Provider and Channel registration table rows | Authors can use the public declaration functions without guessing keyword arguments or importing registries. |
 | `A Python package or directory Extension can add an extension.json...` | Distinguishes an optional manifest for Python from the manifest that makes a UI-only directory discoverable. |
-| `currently 30` and the API 30 version entry | New callers declare a compatible host before trying unavailable platform APIs. |
+| `currently 31` and the API 30/31 version entries | New callers declare a compatible host before trying unavailable platform APIs. |
 | `Read this reference for page lifecycle or Extension-owned Sessions.` and its two starting references | A UI-only author needs the small page setup guide; an owned-Session author needs the server host contract. |
 | `the public page client is @vbot/extension-sdk/client` | Gives the installed public import instead of an internal repository filename. |
 | `Installed Extensions ship prebuilt assets...` and `Bundled source Extensions also build...` | Gives independent author builds and repository builds their respective paths without requiring Node on the running server. |
@@ -58,7 +58,7 @@ The following rows cover the API 30 additions and revised sentences in the three
 | `Run vbot home on the server's computer...` | Authors need actual install paths and must not write to the CLI computer when targeting a remote server. |
 | `Give it a unique directory name...` | Identity controls settings and ownership; a display label cannot disambiguate duplicate folders. |
 | `After changing server declarations or assets...` | Establishes reload and diagnostics as the first observable acceptance check. |
-| `Declare api_version: 30...` and the feature list | Gives the compatibility gate and exact supported feature names. |
+| `Declare api_version: 31...` and the feature list | Gives the compatibility gate and exact supported feature names. |
 | `The host rejects unknown required features...` | Explains why feature declarations prevent partial initialization on an incompatible server. |
 | `Python server code is trusted...` | A sandboxed view does not make an accompanying Python module sandboxed. |
 | `For a composer button...` and the manifest example | Provides a minimal complete UI customization without a server entry, bundler or custom action handler. |
@@ -101,9 +101,9 @@ The following rows cover the API 30 additions and revised sentences in the three
 | `For pages, declare the needed service names...` | Connects manifest service grants to the matching bridge methods. |
 | `An undeclared service is refused...` | Makes grants page-specific rather than implicitly Extension-wide. |
 | `These services are trusted operator integrations...` | Prevents a Tool author from interpreting operator services as a way around ToolContext policy. |
-| `Subscribe with dispose = host.services.subscribe...` | Gives the actual synchronous registration and returned disposer. |
+| `Subscribe with subscription = host.services.subscribe...` | Gives the actual synchronous registration and returned disposer. |
 | `The callback receives an invalidation...` | A coalesced signal requires rereading current state and cannot reconstruct a durable event log. |
-| `Call the returned disposer...` | Releases unneeded listeners and explains registration retirement. |
+| `Call subscription.close() or subscription()...` | Releases unneeded listeners and explains registration retirement. |
 | `Keep callbacks short...` | Observer deadlines and lifecycle cleanup require ongoing work to be separately owned. |
 | `Register a Provider during register(api)...` and example | Reuses the shipped Provider schema and demonstrates a complete no-auth local endpoint definition. |
 | `The optional adapter_type is a concrete...` | Distinguishes selecting an existing protocol adapter from supplying a new implementation. |
@@ -119,7 +119,7 @@ The following rows cover the API 30 additions and revised sentences in the three
 | `Configure the resulting platform...` | Sends setup to the catalog-driven CLI workflow instead of a fixed built-in enum. |
 | `Install native code on the computer where Desktop runs...` | Distinguishes the local native extension root from server data and provides platform-specific locations. |
 | `Add desktop: ... to extension.json...` | States the independently versioned native entry declaration. |
-| `Desktop loads this local entry...` | Prevents server reload or server-entry import assumptions for native code. |
+| `Use Reload local Extensions...` | Gives the local reload action and distinguishes it from server reload. |
 | `Import DesktopExtensionAPI...` | Gives the supported native SDK imports. |
 | `The synchronous register(api) calls...` | Provides the exact declaration interface without eager effects. |
 | `Registration only declares the factory...` | Keeps handler creation behind the local grant boundary. |
@@ -231,3 +231,52 @@ Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/
 | `update, delete and restore also take page_id and expected_revision...` | Distinguishes the current edit baseline from restore's historical revision and explains whole-content versus passage edits. |
 | `On a conflict, inspect the changed page before reapplying the requested edit.` | A competing edit changes the basis for the mutation; blindly sending a new revision can erase that work. |
 | `Wiki edits send no Board messages; post the returned page link when participants need to notice it.` | A saved knowledge page does not itself deliver a message or wake participants. |
+
+## API 31 authoring and Python SDK
+
+| Text | Reason |
+|---|---|
+| `Import server contracts from vbot_extension_sdk...` | Gives stable author imports for server, Provider, Channel and native implementations. |
+| `These are the same host classes used by built-ins...` | Avoids duplicate adapter implementations and preserves API 30 import compatibility. |
+| `For an external Python 3.14 authoring environment...` | Locates the installable wheel and states the actual supported interpreter without requiring an application checkout. |
+| `The wheel supplies dependency-free type declarations...` | Prevents attempting to execute adapters without their host or installing the full application into an author environment. |
+| `The package metadata contains its complete build and migration guide.` | Makes detailed packaging guidance discoverable in the distributed artifact. |
+| `Declare API 31 when using services.exports...` | Ties capability adoption to load-time negotiation and keeps Desktop API 2 independent. |
+| `API 30 manifests remain supported...` | Avoids unnecessary migration of working Extensions and rejects new calls on older hosts. |
+| SDK imports in `extensions.md` and the three runnable Python templates | Makes the examples usable through the supported author namespace rather than internal modules. |
+| `Use text for display text and order...when accepts...` | Introduces conditions through the actual supported grammar instead of arbitrary expressions. |
+| `Operators are eq, ne...` | Makes missing-field and numeric comparison behavior predictable when surface context changes. |
+| Added Message, Session-list and editor surface rows and context fields | Authors can select actual supported placements without DOM patching or guessing context names. |
+| `Message actions provide message.copy...` | Limits the command to the selected Message and opens only the current Session row. |
+| `Editor sections provide editor.focus...` | Names the supported field values and avoids inventing write or submit commands. |
+| `Message data contains id...` | Makes text truncation and the bounded row projection explicit for embedded views. |
+| `Editor data exposes bounded name/description values...` | Keeps author code from depending on raw editor state or credentials. |
+| `A callback failure or timeout leaves the subscription active...` | Authors can monitor degraded subscriptions and receive safe diagnostics without silently losing updates. |
+| `Observers run with their own Extension identity...` | Establishes the caller identity for follow-up service use without borrowing the triggering request. |
+| `During register(api), declare resources...` | Provides complete declarations with valid closed schemas and local resource references. |
+| `The handler receives validated parameters...` | Distinguishes JSON service values from transport objects and permits both callback styles. |
+| `Consumers discover extension:...through describe()...` | Gives the owner-qualified identity and execution identity for cross-Extension calls. |
+| `Publish an owned change with host.services.publish...` | Connects changes to schema-validated invalidations, without publishing another Extension's resources. |
+| `Registration validates the complete declaration set...` | Prevents unnecessary ordering workarounds when resources are declared after services. |
+| `Read each returned service's parameter schema...` | Keeps integration arguments aligned with live contracts and identifies safe field-level diagnostics. |
+| `The catalog includes product-domain services...` | Directs authors to live discovery and explains intentional exclusions instead of implying every internal RPC is callable. |
+| `Reload preserves sharing choices for the same local package...` | Makes explicit local reload useful while retaining deny-by-default for newly installed native code. |
+| `Capability ids are extension:<percent-encoded-directory-name>:<local-name>...` | Prevents cross-Extension collisions and guessed ids, including escaped owner names. |
+| `Users hide, order and select replacements...saved on the server...` | Gives the shared preference scope instead of implying each browser owns a separate layout. |
+| `An existing browser-local layout can be explicitly imported...` | Preserves user choice during migration and avoids overwriting an already saved shared layout. |
+
+## Terminal usage guide
+
+| Text | Reason |
+|---|---|
+| Manifest `Terminal sharing` title and description | Makes the native-only Extension's usage guide discoverable in the composed Skill. |
+| `The terminal Extension supplies native Terminal execution...` | Identifies where programs execute and which server receives the capability. |
+| `Agents use the existing terminal Tool...` | Directs Agents and users to the established Tool and operator surface instead of inventing Extension operations. |
+| `The user enables Terminal under Share this computer...` | Supplies the actual local opt-in and separate Session Computer selection needed to reach Desktop programs. |
+| `Sharing starts disabled and belongs to the connected server.` | Prevents assuming discovery grants access or that consent transfers to another server. |
+| `An Agent also needs access to the terminal Tool...` | Local sharing does not bypass Tool access or the current full-access requirement for remote Terminals. |
+| `Other Tools, including file access and shell commands...` | Selecting a Desktop Computer does not move ordinary file or shell Tools to it. |
+| `The Desktop can stay minimized while sharing.` | Gives the supported background lifetime without requiring a visible window. |
+| `Quitting it or turning off Terminal sharing closes...` | Makes process shutdown and the local confirmation boundary explicit. |
+| `A temporary network disconnect keeps programs alive...` | A reconnect is not evidence that a program ended; inspecting retained Terminals avoids duplicate launches. |
+| `Live reload requires a server that supports native capability updates...` in the platform reference | An older connected server cannot accept live catalog updates; startup or offline reload remains the supported fallback. |

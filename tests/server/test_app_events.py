@@ -14,6 +14,7 @@ from unittest.mock import ANY
 from anyio.from_thread import BlockingPortal
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.automation.bootstrap import BootstrapService
 from core.automation.cron import CronFailureAlert, CronService
 from core.recall import IndexStatus
 from core.sessions import SessionAddress
@@ -75,6 +76,10 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     runtime.command_manager = command_manager  # type: ignore[assignment]
     cron_service = CronService(cast(Any, SimpleNamespace()), tmp_path)
     runtime.cron_service = cron_service  # type: ignore[attr-defined]
+    bootstrap_service = BootstrapService(
+        cast(Any, SimpleNamespace()), tmp_path, startup_id="server-events"
+    )
+    runtime.bootstrap_service = bootstrap_service
     session_scope: JsonObject = {
         "project_id": None,
         "agent_id": "coder",
@@ -129,6 +134,11 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
                 prompt="Scheduled work",
                 schedule_type="cron",
                 cron_expression="0 9 * * *",
+            )
+        )
+        bootstrap_events = publishes(
+            lambda: bootstrap_service.create_job(
+                agent_id="coder", prompt="Startup work", mode="once"
             )
         )
         alert = CronFailureAlert("cron_1", "Watch", "coder", None, "Job failed twice.")
@@ -191,6 +201,7 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     read_scope = {**session_scope, "read_run_id": run_id}
     assert read_events == [("resource_changed", {"kind": "sessions", "scope": read_scope})]
     assert cron_events == [("resource_changed", {"kind": "cron"})]
+    assert bootstrap_events == [("resource_changed", {"kind": "bootstrap"})]
     # A job delivering to vBot alerts its accessors to a failure no Run reports.
     assert alert_events == [
         (
@@ -244,3 +255,4 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     assert runtime.model_catalog_changed_callbacks == []
     assert runtime.recall.listeners == []
     assert cron_service._failure_alert_callbacks == set()
+    assert bootstrap_service._changed_callbacks == set()

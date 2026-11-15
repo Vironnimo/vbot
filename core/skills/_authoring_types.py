@@ -102,7 +102,8 @@ class SkillWriter:
 
     ``actor`` is ``human`` (a person through the WebUI, CLI or RPC), ``agent``
     (an attended Agent's Tool call), ``reflection`` or ``librarian`` (background
-    Runs). A written ``SKILL.md`` is stamped ``metadata.vbot.author: human`` for
+    Runs), or ``extension`` (application service ingress, with no human identity).
+    A written ``SKILL.md`` is stamped ``metadata.vbot.author: human`` for
     a person and ``agent`` otherwise.
     """
 

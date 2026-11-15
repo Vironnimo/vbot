@@ -202,12 +202,24 @@ function normalizeComputerSharing(raw) {
   }
   const capabilityId = (id) =>
     typeof id === 'string' &&
-    /^[a-z][a-z0-9_]{0,63}$/.test(id) &&
-    id !== 'name';
+    id.length <= 2400 &&
+    id !== 'name' &&
+    (/^[a-z][a-z0-9_]{0,63}$/.test(id) ||
+      /^extension:(?:[A-Za-z0-9_.~-]|%[0-9A-F]{2})+:[a-z][a-z0-9_]{0,63}$/.test(
+        id,
+      ));
   const declared = Array.isArray(raw.capability_catalog)
     ? raw.capability_catalog
     : Object.keys(raw.capabilities ?? {}).map((id) => ({ id, label: id }));
   const capabilityCatalog = [];
+  if (
+    new TextEncoder().encode(JSON.stringify(declared)).byteLength >
+    4 * 1024 * 1024
+  ) {
+    throw new Error(
+      'The Desktop capability catalog exceeds its transport budget',
+    );
+  }
   const seen = new Set();
   for (const item of declared) {
     if (!isPlainObject(item) || !capabilityId(item.id) || seen.has(item.id))
@@ -219,13 +231,14 @@ function normalizeComputerSharing(raw) {
       label: typeof item.label === 'string' ? item.label : item.id,
       description: text(item.description),
     });
-    if (capabilityCatalog.length === 32) break;
   }
   return {
     computer_id: raw.computer_id,
     name: typeof raw.name === 'string' ? raw.name : '',
     server_url: typeof raw.server_url === 'string' ? raw.server_url : '',
     connected: raw.connected === true,
+    reload_supported: raw.reload_supported === true,
+    reloading: raw.reloading === true,
     capability_catalog: capabilityCatalog,
     capabilities: Object.fromEntries(
       capabilityCatalog.map(({ id }) => [id, raw.capabilities?.[id] === true]),
@@ -247,6 +260,7 @@ function normalizeComputerSharing(raw) {
             name: entry.name,
             status: text(entry.status),
             error: text(entry.error),
+            change: text(entry.change),
             capability_errors: Array.isArray(entry.capability_errors)
               ? entry.capability_errors.filter((id) => typeof id === 'string')
               : [],
@@ -267,6 +281,10 @@ export async function setComputerSharing(changes) {
   return normalizeComputerSharing(
     await callBridge('setComputerSharing', changes),
   );
+}
+
+export async function reloadDesktopExtensions() {
+  return normalizeComputerSharing(await callBridge('reloadDesktopExtensions'));
 }
 
 export function onComputerSharing(handler) {

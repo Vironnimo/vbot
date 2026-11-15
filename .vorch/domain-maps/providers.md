@@ -2,6 +2,8 @@
 
 `core/providers/` owns Provider configuration, credential and Account resolution, adapter contracts, shared wire policy, and Provider-specific request/response translation.
 
+External Extension adapters import the same canonical contracts through `vbot_extension_sdk.providers`; authoring and version compatibility: `sdk/python/README.md` (repository-relative).
+
 ## Overview
 
 Providers translate canonical vBot requests and responses at the external-service or native model-harness boundary. Bundled Provider and Connection definitions live in `resources/providers/*.json`; user-defined OpenAI-compatible Providers live as secret-free records under `settings.json` `providers.custom` and are materialized through the same registry. Model facts and refreshable catalogs belong to the Models domain. Runtime resolves one exact Provider Connection, creates the configured outer Adapter, and injects credentials, Model lookup, connection mode, and optional debug capture. Chat and task domains consume normalized interfaces and must not know Provider wire fields.

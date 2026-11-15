@@ -170,6 +170,9 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
     [
         # Sparse sections keep only the fields they name.
         pytest.param({"appearance": {"language": "en"}}, None, id="appearance-language-only"),
+        pytest.param({"appearance": {}}, None, id="appearance-empty-sparse-update"),
+        pytest.param({"appearance": {"ui_layout": None}}, None, id="appearance-layout-unselected"),
+        pytest.param({"appearance": {"ui_layout": {}}}, None, id="appearance-layout-defaults"),
         pytest.param(
             {"appearance": {"language": "en", "chat_width": "comfortable"}},
             None,
@@ -279,8 +282,7 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
         ({"appearance": []}, "params.appearance must be an object"),
-        # A partial section never resets the language.
-        ({"appearance": {}}, "params.appearance.language must be a non-empty string"),
+        ({"appearance": {"language": ""}}, "params.appearance.language must be a non-empty string"),
         (
             {"appearance": {"language": "en", "chat_width": "huge"}},
             "params.appearance.chat_width must be one of: comfortable, full, wide",

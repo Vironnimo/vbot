@@ -13,7 +13,7 @@ Read when adding or changing a Desktop bridge method, a capability, the page pol
 - Dictation: `getDictation` / `setDictation` (`desktop/dictation.md` -> Bridge and status).
 - Window zoom: `getZoom()` / `setZoom(percent)`, both answering `{supported, percent, levels, default}`; a value that is no level rejects as `zoom_invalid` (`desktop/window.md` -> Window zoom).
 - Update restart: `getDesktopUpdate()` (`{pending, restarting, failed}`), `restartDesktop()` (`{accepted: true}`; rejects `no_update_pending`, `restart_unavailable`) - `desktop/update-restart.md`.
-- Computer sharing: `getComputerSharing` / `setComputerSharing`, capability `computerSharing`; public local status and per-server grants (`desktop/computer-sharing.md`). Enabling a remote server's capability needs native consent for its still-loaded page, and no registration key reaches this bridge.
+- Computer sharing: `getComputerSharing` / `setComputerSharing`, capability `computerSharing`; public local status and per-server grants (`desktop/computer-sharing.md`). `reloadDesktopExtensions()` rescans only fixed local package roots and accepts no code or paths. Enabling a remote server's capability or requesting native Extension reload needs native consent for its still-loaded page, and no registration key reaches this bridge.
 
 ## Error contract
 

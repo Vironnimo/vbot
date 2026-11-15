@@ -190,7 +190,13 @@ class SkillRevisions:
         with self._owner._write_lock:
             history = self._revert_history(target_root, writer)
             with _revert_errors():
-                check_revert(history, history.home, revision_ids, related=related)
+                check_revert(
+                    history,
+                    history.home,
+                    revision_ids,
+                    related=related,
+                    allow_pin_changes=writer.actor != "extension",
+                )
 
     def revert(
         self,
@@ -227,6 +233,7 @@ class SkillRevisions:
                         writer.subject_created_at,
                     ),
                     related=related,
+                    allow_pin_changes=writer.actor != "extension",
                 )
 
     def _revert_history(self, target_root: Path, writer: SkillWriter) -> SkillHistory:

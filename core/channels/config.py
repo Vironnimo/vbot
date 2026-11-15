@@ -139,6 +139,10 @@ class ChannelConfigError(ChannelError):
     """Raised when channel config data is invalid."""
 
 
+class ChannelPlatformUnavailableError(ChannelConfigError):
+    """The configured platform must be registered before this Channel can start."""
+
+
 def validate_channel_file(config_path: str | Path) -> JsonValidationReport:
     """Validate one persisted ``channel.json`` without consuming it."""
     return validate_json_file(config_path, validate_channel_document, missing_ok=False)

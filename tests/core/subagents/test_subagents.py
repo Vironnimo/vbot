@@ -974,11 +974,11 @@ async def test_inspect_reports_the_work_a_subagent_still_runs(
     ]
 
 
-@pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
+@pytest.mark.parametrize("stop_source", ["tool", "user", "extension"])
 @pytest.mark.parametrize("historical_children", [0, 1_000], ids=["small-tree", "large-tree"])
 async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     harness: SubAgentHarness,
-    user_stop: bool,
+    stop_source: str,
     historical_children: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1027,9 +1027,14 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
         await release_cleanup.wait()
 
     outer_run.add_cancel_callback(cleanup)
+    stop_options = (
+        {"reason": "extension_cancelled", "initiator": "extension_stop_all"}
+        if stop_source == "extension"
+        else {}
+    )
     stopping = asyncio.create_task(
-        harness.coordinator.stop_tree(outer_session)
-        if user_stop
+        harness.coordinator.stop_tree(outer_session, **stop_options)
+        if stop_source != "tool"
         else harness.background_tasks({"action": "stop", "id": outer["id"]})
     )
     try:
@@ -1064,10 +1069,17 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
 
     assert [outer_run.status, inner_run.status] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
     assert harness.triggers.to(outer_session) == []
-    if user_stop:
+    if stop_source != "tool":
         assert result == 2
         [notice] = harness.triggers.to(harness.parent)
-        assert "Its turn was cancelled by the user." in notice.body
+        if stop_source == "user":
+            assert "Its turn was cancelled by the user." in notice.body
+            assert outer_run.cancel_initiator == inner_run.cancel_initiator == "user_stop_all"
+        else:
+            assert "Its turn was cancelled." in notice.body
+            assert "by the user" not in notice.body
+            assert outer_run.cancel_reason == inner_run.cancel_reason == "extension_cancelled"
+            assert outer_run.cancel_initiator == inner_run.cancel_initiator == "extension_stop_all"
     else:
         assert isinstance(result, dict)
         assert result["data"]["status"] == "stopped"

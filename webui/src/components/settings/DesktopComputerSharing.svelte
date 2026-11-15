@@ -8,6 +8,7 @@
     getComputerSharing,
     isDesktopDeclined,
     onComputerSharing,
+    reloadDesktopExtensions,
     setComputerSharing,
   } from '$lib/desktopBridge.js';
   import { t } from '$lib/i18n.js';
@@ -26,6 +27,7 @@
   let loadError = $state(false);
   let saveError = $state('');
   let saving = $state(false);
+  let reloading = $state(false);
   let disposed = false;
   let revision = 0;
 
@@ -60,7 +62,10 @@
     const nextValues = values(next);
     const old = submitted ?? baseline;
     const pending = Object.fromEntries(
-      Object.entries(draft).filter(([key, value]) => old && value !== old[key]),
+      Object.entries(draft).filter(
+        ([key, value]) =>
+          old && Object.hasOwn(nextValues, key) && value !== old[key],
+      ),
     );
     status = next;
     baseline = nextValues;
@@ -132,6 +137,26 @@
     void autosave.participant.runSave();
   }
 
+  async function reload() {
+    if (reloading || status.reloading) return;
+    reloading = true;
+    saveError = '';
+    try {
+      await autosave.participant.runSave('manual');
+      if (changed() || disposed) return;
+      const next = await reloadDesktopExtensions();
+      if (!disposed) {
+        revision += 1;
+        applyStatus(next);
+      }
+    } catch (error) {
+      if (!disposed && !isDesktopDeclined(error))
+        saveError = t('computers.reloadError');
+    } finally {
+      reloading = false;
+    }
+  }
+
   onMount(() => {
     void load();
     return onComputerSharing((next) => {
@@ -181,7 +206,9 @@
         <div class="s-row-control">
           <Toggle
             checked={draft[capability.id]}
-            disabled={!status.available[capability.id] && !draft[capability.id]}
+            disabled={reloading ||
+              status.reloading ||
+              (!status.available[capability.id] && !draft[capability.id])}
             ariaLabel={capabilityLabel(capability)}
             onChange={(enabled) => toggle(capability.id, enabled)}
           />
@@ -197,6 +224,27 @@
       >
     {/each}
     <div class="s-group__block">
+      {#if status.reload_supported}
+        <Button
+          variant="secondary"
+          disabled={saving || reloading || status.reloading}
+          onClick={reload}
+        >
+          {reloading || status.reloading
+            ? t('computers.reloading')
+            : t('computers.reloadExtensions')}
+        </Button>
+        <p class="s-row-desc">{t('computers.reloadHelp')}</p>
+        {#each status.extensions.filter((extension) => ['added', 'updated'].includes(extension.change) || extension.status === 'removed') as extension, index (`reload:${extension.name}:${index}`)}
+          <p class="s-row-desc">
+            {extension.status === 'removed'
+              ? t('computers.extensionRemoved', { name: extension.name })
+              : extension.change === 'updated'
+                ? t('computers.extensionUpdated', { name: extension.name })
+                : t('computers.extensionAdded', { name: extension.name })}
+          </p>
+        {/each}
+      {/if}
       <p class="s-row-desc" role="status">
         {status.connected
           ? t('computers.connectedTo', { server: status.server_url })

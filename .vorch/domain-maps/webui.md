@@ -61,7 +61,7 @@ Read when the task matches.
 
 - Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
 - Using or changing the shared LazyContent, SortableList, PathField, DataTable, DateField, TimeField, Button, Modal, ImageLightbox or Dropdown, or a choice that falls back to a default -> `webui/shared-controls.md`
-- Extension contribution surfaces, device-local UI preferences, page host/client, frame bridge, page routes and layers, invalidations, services, Settings search, Run streams and page styles -> `webui/extension-pages.md`
+- Extension contribution surfaces, shared UI preferences and browser-layout migration, page host/client, frame bridge, page routes and layers, invalidations, services, Settings search, Run streams and page styles -> `webui/extension-pages.md`
 - Live voice control, call media/owner socket, UI requests from a Live call, or spoken Run updates -> `model_tasks/live.md`
 - The Terminals view: xterm rendering, Terminal sockets, geometry, dictation -> `tools/terminal.md`
 - Sidebar rows/groups, shared appearance or redesign -> relevant sections of `webui/design.md` (current state plus explicit user requirements)

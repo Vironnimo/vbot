@@ -472,6 +472,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
         "core.utils.ids",
         "core.utils.logging",
         "core.utils.model_files",
+        "core.utils.native_capabilities",
         "core.utils.processes",
         "core.utils.workers",
     }

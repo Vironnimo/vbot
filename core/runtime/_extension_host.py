@@ -267,6 +267,7 @@ class ExtensionHostFactory:
 
     def make_host(self) -> ExtensionHost:
         self._ensure_started()
+        self.services.install_exports(self._extensions)
         return replace(
             self._host,
             for_owner=self._extension_owner_host,

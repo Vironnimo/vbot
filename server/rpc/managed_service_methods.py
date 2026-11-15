@@ -11,7 +11,7 @@ from cli.application.services import ManagedService, search_restore_operations
 from cli.application.state import ApplicationError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.rpc._mutations import state_lock
+from server.rpc._mutations import require_mutation_available, state_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string
@@ -55,6 +55,7 @@ class ServiceOperations:
     async def start(
         self, action: str, plan_id: str | None, allow_prerequisites: bool
     ) -> JsonObject:
+        require_mutation_available(self.state, "_settings_mutation_lock")
         service = self.service
         if service is None:
             raise ApplicationError("Managed services require an installed vBot server")
@@ -211,6 +212,9 @@ async def _apply(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST, "plan_id must be a string and allow_prerequisites a boolean"
         )
+    # Check before taking the operation lock: another admitted operation may be
+    # waiting for Settings while its publisher awaits this lifecycle callback.
+    require_mutation_available(state, "_settings_mutation_lock")
     async with state_lock(state, "_managed_service_lock"):
         try:
             return await _operations(state).start(action, plan_id, allow)

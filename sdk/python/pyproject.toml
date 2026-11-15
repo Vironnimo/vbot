@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vbot-extension-sdk"
+version = "31.0.0"
+description = "Public authoring contracts for Extensions running in the vBot host"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+license = "Apache-2.0"
+dependencies = []
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../vbot_extension_sdk" = "vbot_extension_sdk"
+
+[tool.hatch.build.targets.sdist]
+include = ["README.md", "pyproject.toml"]

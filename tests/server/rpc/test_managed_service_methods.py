@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 
 from cli.application._service_prerequisites import ActionRequiredError
+from core.extensions import ExtensionRegistrationIdentity
+from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceError
+from server.extension_services import bind_application_services
 from server.rpc import managed_service_methods as methods
 from server.rpc import settings_methods
+from server.rpc._mutations import serialized_mutation
 from server.rpc.dispatcher import dispatch_method
+from server.rpc.methods import METHODS
 
 
 class ServiceStub:
@@ -130,3 +136,40 @@ async def test_managed_service_development_checkout_is_inspectable_without_host_
     assert result["available"] is False
     assert result["plan"] is None
     assert result["actions"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["install", "update", "remove"])
+async def test_managed_service_refuses_nested_settings_changes_before_admission(
+    service_state, action
+):
+    state, service, raw, patches = service_state
+    state.runtime.extension_services = ExtensionServiceCatalog()
+    close = bind_application_services(state, METHODS)
+    services = state.runtime.extension_services.for_owner(
+        ExtensionRegistrationIdentity("nested-service", "one"), lambda: None
+    )
+    previous_record, previous_settings = deepcopy(service.record), deepcopy(raw)
+
+    async def configuration_callback(_state, _params):
+        with pytest.raises(ExtensionServiceError) as refused:
+            await services.execute(
+                "managed_service.apply",
+                {"id": "searxng", "action": action, "plan_id": "reviewed"},
+            )
+        assert refused.value.code == "mutation_in_progress"
+        return {}
+
+    try:
+        async with asyncio.timeout(1):
+            await serialized_mutation(
+                configuration_callback, lock_attribute="_settings_mutation_lock"
+            )(state, {})
+        assert service.record == previous_record
+        assert raw == previous_settings
+        assert not patches
+        assert not hasattr(state, "_managed_service_operations")
+        # Once publication settles, ordinary admission and selection still work.
+        assert (await apply(state, "install"))["state"] == "completed"
+    finally:
+        close()

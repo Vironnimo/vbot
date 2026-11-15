@@ -198,6 +198,61 @@ async def test_authoring_writes_the_scope_and_refreshes_it_live(tmp_path: Path, 
 
 
 @pytest.mark.asyncio
+async def test_service_authoring_records_extension_provenance_across_worker_writes(
+    tmp_path: Path,
+) -> None:
+    from core.extensions import ExtensionRegistrationIdentity
+    from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceError
+    from server.extension_services import bind_application_services
+    from server.rpc.methods import METHODS
+
+    state = _state(tmp_path)
+    state.runtime.extension_services = ExtensionServiceCatalog()
+    close = bind_application_services(state, METHODS)
+    services = state.runtime.extension_services.for_owner(
+        ExtensionRegistrationIdentity("fixture", "one"), lambda: None
+    )
+    root = _scope_root(state, "global")
+    package = {"scope": "global", "name": "demo"}
+    try:
+        created = await services.execute("skill.create", {**package, "content": _skill_md()})
+        await services.execute("skill.update", {**package, "content": _skill_md(body="Changed.\n")})
+        await services.execute(
+            "skill.write_file", {**package, "path": "references/note.md", "content": "Note"}
+        )
+        await services.execute("skill.remove_file", {**package, "path": "references/note.md"})
+        deleted = await services.execute("skill.delete", package)
+        await services.execute(
+            "skill.restore", {"scope": "global", "archive_id": deleted["archive_id"]}
+        )
+        history = (await services.query("skill.history", {"scope": "global"}))["revisions"]
+        assert len(history) == 6
+        assert {revision["actor"] for revision in history} == {"extension"}
+        assert all(
+            "session_id" not in revision and "run_id" not in revision for revision in history
+        )
+        assert created["revision"] == 1
+        assert SkillRegistry.load(root).get("demo").metadata["vbot"]["author"] == "agent"
+        # Package imports preserve the original document but still record who installed it.
+        source = _package(tmp_path, "installed")
+        await services.execute("skill.install", {"scope": "global", "source": str(source)})
+        installed = (
+            await services.query("skill.history", {"scope": "global", "name": "installed"})
+        )["revisions"]
+        assert installed[0]["actor"] == "extension"
+        reverted = await services.execute(
+            "skill.revert", {"scope": "global", "revisions": [installed[0]["id"]]}
+        )
+        assert reverted["revisions"][0]["actor"] == "extension"
+        assert not (root / "installed").exists()
+        with pytest.raises(ExtensionServiceError) as refused:
+            await services.execute("skill.set_pinned", {**package, "pinned": True})
+        assert refused.value.code == "service_not_found"
+    finally:
+        close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["global", "agent:builder"])
 async def test_install_publishes_the_complete_package_and_refreshes_the_scope(
     tmp_path: Path, scope: str

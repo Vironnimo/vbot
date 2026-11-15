@@ -186,6 +186,22 @@ def detach_extension_task(
     task.add_done_callback(finished)
 
 
+async def wait_for_extension_callbacks(extension_name: str) -> None:
+    """Wait for previously detached callbacks without cancelling their admitted work.
+
+    An observation may keep its latest invalidations queued while a timed-out
+    callback finishes. Cancelling this wait never transfers cancellation to the
+    detached callbacks; the caller can still retire its own subscription promptly.
+    """
+    while True:
+        owners = _owner_callbacks.get(asyncio.get_running_loop(), {})
+        state = owners.get(extension_name)
+        pending = () if state is None else tuple(task for task in state.detached if not task.done())
+        if not pending:
+            return
+        await asyncio.wait(pending)
+
+
 def _log_slow_extension_handler(
     *,
     extension_name: str,

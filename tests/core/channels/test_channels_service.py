@@ -671,8 +671,9 @@ async def test_registered_platform_validates_settings_without_claiming_other_own
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("initially_registered", [False, True], ids=["absent", "starting"])
 async def test_platform_lifetime_defers_start_drains_and_resumes_saved_channels(
-    tmp_path: Path,
+    tmp_path: Path, initially_registered: bool
 ) -> None:
     config = replace(make_config("team", platform="matrix"), token_env_var="")
     ChannelStorage(tmp_path).save(config)
@@ -687,10 +688,20 @@ async def test_platform_lifetime_defers_start_drains_and_resumes_saved_channels(
         return adapter
 
     try:
-        service.register_platform(owner, "matrix", "Matrix", factory, is_current=lambda: current)
+        if initially_registered:
+            service.register_platform(
+                owner, "matrix", "Matrix", factory, is_current=lambda: current
+            )
         service.start()
         assert created == []
-        assert not service.is_failed("team")
+        assert service.is_failed("team") is not initially_registered
+        assert service._connections.pending_tasks() == []
+        assert (await service.get_channel("team")) == config
+        if not initially_registered:
+            assert "unavailable" in (service.failure_reason("team") or "")
+            service.register_platform(
+                owner, "matrix", "Matrix", factory, is_current=lambda: current
+            )
         current = True
         service.resume_platforms(owner)
         await created[-1][2].started.wait()
@@ -698,6 +709,7 @@ async def test_platform_lifetime_defers_start_drains_and_resumes_saved_channels(
         assert created[-1][1].state_dir == tmp_path / "channels" / "team"
         assert created[-1][1].engine.config == config
         assert service.is_running("team")
+        assert not service.is_failed("team")
         current = False
         await service.release_platforms(owner)
         assert created[-1][2].stopped.is_set()

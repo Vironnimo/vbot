@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.chat import (
+from vbot_extension_sdk.commands import (
     CommandFeedback,
     CommandOutcome,
     CommandRun,

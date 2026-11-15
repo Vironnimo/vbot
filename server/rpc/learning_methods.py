@@ -14,6 +14,7 @@ from core.automation import (
 )
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES, RESOURCE_KIND_SKILLS
+from server.extension_services import is_extension_service_call
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -64,11 +65,12 @@ async def _learning_changes(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_learning_mutation
 async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
-    """Take back every change of one Run as a person, all of them or none."""
+    """Take back every change of one Run with the caller's provenance, all or none."""
     _reject_unsupported(params, {"agent_id", "run_id"}, "learning.undo")
     agent_id = _required_string(params, "agent_id")
     run_id = _required_string(params, "run_id")
     workspace = await _agent_workspace(state, agent_id)
+    actor = "extension" if is_extension_service_call() else "rpc"
     try:
         result = await _LEARNING_RPC_WORKERS.run(
             partial(
@@ -76,7 +78,7 @@ async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
                 agent_id,
                 run_id,
                 workspace=workspace,
-                actor="rpc",
+                actor=actor,
             )
         )
     except LearningRunActiveError as exc:

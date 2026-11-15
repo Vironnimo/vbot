@@ -442,8 +442,15 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
 
     run_id = _required_string(params, "run_id")
     reason = _optional_string(params, "reason")
+    extension_call = is_extension_service_call()
+    if extension_call and reason in {"user", "parent_agent"}:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "Extension cancellation cannot claim another actor"
+        )
     try:
-        run = await state.chat_runs.cancel(run_id, reason=reason, initiator="rpc")
+        run = await state.chat_runs.cancel(
+            run_id, reason=reason, initiator="extension" if extension_call else "rpc"
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return await _run_response(run, file_delivery=state.file_delivery)
@@ -454,7 +461,14 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id"}, "chat.stop_all")
     address = _required_session_address(params)
     try:
-        stopped = await state.runtime.subagents.stop_tree(address)
+        stopped = await state.runtime.subagents.stop_tree(
+            address,
+            **(
+                {"reason": "extension_cancelled", "initiator": "extension_stop_all"}
+                if is_extension_service_call()
+                else {}
+            ),
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True, "stopped": stopped}

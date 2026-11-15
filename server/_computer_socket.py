@@ -34,6 +34,7 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
                 "computer_id": connection.info.id,
                 "instance_id": connection.info.instance_id,
                 "server_instance": computers.server_instance,
+                "capability_updates": 1,
             }
         )
         computer_id = connection.info.id

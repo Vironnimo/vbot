@@ -1,6 +1,6 @@
 """Native Terminal contribution, loaded only by the local Desktop."""
 
-from desktop.extensions import DesktopExtensionAPI, EventSink, ExecutionHandler
+from vbot_extension_sdk.desktop import DesktopExtensionAPI, EventSink, ExecutionHandler
 
 
 def _create(_emit: EventSink) -> ExecutionHandler:

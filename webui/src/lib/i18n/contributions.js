@@ -1,14 +1,18 @@
 export default Object.freeze({
   'contributions.title': 'Interface layout',
   'contributions.help':
-    'Choose which interface elements this browser shows. Drag rows or use Alt+Arrow keys to reorder them. Extensions can offer replacements; unavailable replacements restore the standard element.',
+    'Customize the interface on every browser connected to this server. Drag rows or use Alt+Arrow keys to reorder them. Extensions can offer replacements; unavailable replacements restore the standard element.',
   'contributions.surface': 'Interface area',
   'contributions.reset': 'Restore this area',
   'contributions.visible': 'Show {name}',
   'contributions.replacement': 'Replace {name}',
   'contributions.standard': 'Standard element',
-  'contributions.storageError':
-    'The browser could not save this layout. Check its storage settings and try again.',
+  'contributions.loading': 'Loading shared layout…',
+  'contributions.loadRetry': 'Reload shared layout',
+  'contributions.migration':
+    'This browser has an older local layout. Choose whether to share it with all browsers connected to this server or start with the standard layout. The local copy stays until your choice is saved.',
+  'contributions.importLayout': 'Share this browser’s layout',
+  'contributions.useDefaults': 'Use shared defaults',
   'contributions.retry': 'Retry {name}',
   'contributions.empty':
     'Open the relevant view to configure its built-in elements.',
@@ -22,6 +26,12 @@ export default Object.freeze({
   'contributions.footerEnd': 'Chat input footer: end',
   'contributions.timeline': 'Chat timeline',
   'contributions.toolResult': 'Tool results',
+  'contributions.message': 'Messages',
+  'contributions.messageActions': 'Message actions',
+  'contributions.sessions': 'Session list controls',
+  'contributions.sessionItem': 'Session list entries',
+  'contributions.agentEditor': 'Agent editor sections',
+  'contributions.projectEditor': 'Project editor sections',
   'contributions.settings': 'Extension settings',
   'contributions.liveVoice': 'Live voice',
   'contributions.voiceStatus': 'Microphone status',

@@ -201,6 +201,7 @@
         return dateTimePrefs.timeZone;
       },
       subscribe: extensions.subscribeInvalidations,
+      onSettingsCommit: (settings) => (setup.settings = settings),
       notifyError: (error) =>
         desktop.showToast({ title: error.message, variant: 'error' }),
       toast: (message, variant) =>
@@ -239,6 +240,7 @@
     onStay: () => navigator.cancelPendingMove(),
   });
   provideAutosaveContext(autosave);
+  onDestroy(autosave.register(contributions.participant));
   let appController;
 
   let terminalsView = $state();

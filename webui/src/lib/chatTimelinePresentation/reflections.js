@@ -228,6 +228,8 @@ const laterActorLabel = (later) => {
       return t('chat.activity.later.review');
     case 'librarian':
       return t('chat.activity.later.maintenance');
+    case 'extension':
+      return t('chat.activity.later.extension');
     case 'internal':
       return t('chat.activity.later.vbot');
     case 'external':
