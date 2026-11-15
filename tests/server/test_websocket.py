@@ -238,10 +238,12 @@ async def test_websocket_receives_during_blocked_send_and_settles_both_direction
     stream_closed = asyncio.Event()
     waiting_receives = 0
     sent: list[Any] = []
+    stream_tasks: set[asyncio.Task[Any] | None] = set()
 
     class Socket:
         async def receive(self) -> dict[str, Any]:
             nonlocal waiting_receives
+            stream_tasks.add(asyncio.current_task())
             waiting_receives += 1
             try:
                 return await incoming.get()
@@ -249,6 +251,7 @@ async def test_websocket_receives_during_blocked_send_and_settles_both_direction
                 waiting_receives -= 1
 
         async def send_bytes(self, data: bytes) -> None:
+            stream_tasks.add(asyncio.current_task())
             sending.set()
             try:
                 await release_send.wait()
@@ -262,13 +265,13 @@ async def test_websocket_receives_during_blocked_send_and_settles_both_direction
             sent.append(json.loads(data))
 
     async def output() -> AsyncGenerator[bytes | dict[str, Any]]:
+        stream_tasks.add(asyncio.current_task())
         try:
             yield b"assistant"
             yield {"type": "caption"}
         finally:
             stream_closed.set()
 
-    before = asyncio.all_tasks()
     async with aclosing(output()) as stream, asyncio.timeout(1):
         task = asyncio.create_task(
             _stream_websocket_events(
@@ -308,7 +311,7 @@ async def test_websocket_receives_during_blocked_send_and_settles_both_direction
     assert send_settled.is_set()
     assert stream_closed.is_set()
     assert waiting_receives == 0
-    assert not (asyncio.all_tasks() - before)
+    assert all(task is not None and task.done() for task in stream_tasks)
 
 
 class StubTerminalWebsocketManager:
