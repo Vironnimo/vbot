@@ -308,22 +308,23 @@ def _run_desktop(
         disabled=read_section("extensions", settings_file).get("disabled", []),
     )
 
-    def reload_native_extensions() -> DesktopExtensionCatalog:
-        nonlocal native_extensions
-        native_extensions = load_desktop_extensions(
+    def reload_native_extensions(
+        previous: DesktopExtensionCatalog,
+        before_load: Callable[[frozenset[str]], None],
+    ) -> DesktopExtensionCatalog:
+        return load_desktop_extensions(
             native_roots,
             disabled=read_section("extensions", settings_file).get("disabled", []),
-            previous=native_extensions,
+            previous=previous,
+            before_load=before_load,
         )
-        return native_extensions
 
     computer_sharing = ComputerSharing(
         settings_path=settings_file or desktop_config_directory / SETTINGS_FILE_NAME,
         identities=identities,
         authorization=access,
         factories=native_extensions.factories,
-        capabilities=native_extensions.capabilities,
-        extension_records=native_extensions.records,
+        extension_catalog=native_extensions,
         reload_extensions=reload_native_extensions,
         publish=page_events.publish_computer_sharing,
     )

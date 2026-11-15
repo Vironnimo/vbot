@@ -26,6 +26,7 @@ from core.utils.ids import new_id
 from desktop._http import shared_ssl_context
 from desktop.credentials import DeviceTokenStore, StoredComputerIdentity
 from desktop.extensions import (
+    BeforeReload,
     DesktopExtensionCatalog,
     ExecutionHandler,
     HandlerFactory,
@@ -39,6 +40,8 @@ SETTINGS_KEY = "computer_sharing"
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_PENDING_CALLS = 64
 MAX_REMEMBERED_CALLS = 4096
+RETIREMENT_TIMEOUT = 10.0
+_wait_for_retirement = asyncio.wait
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 
 
@@ -97,6 +100,7 @@ class _Scope:
     ready: set[str] = field(default_factory=set)
     declarations: dict[str, NativeCapability] = field(default_factory=dict)
     retiring: dict[str, tuple[ExecutionHandler, NativeCapability]] = field(default_factory=dict)
+    retirement_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     calls: set[asyncio.Task[None]] = field(default_factory=set)
     capability_calls: dict[asyncio.Task[None], str] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
@@ -116,15 +120,24 @@ class ComputerSharing:
         factories: Mapping[str, HandlerFactory],
         capabilities: Mapping[str, NativeCapability] | None = None,
         extension_records: list[dict[str, Any]] | None = None,
+        extension_catalog: DesktopExtensionCatalog | None = None,
         publish: Callable[[Mapping[str, Any]], None] = lambda _status: None,
         connector: Callable[..., Any] = connect_socket,
         available: Mapping[str, bool] | None = None,
-        reload_extensions: Callable[[], DesktopExtensionCatalog] | None = None,
+        reload_extensions: Callable[
+            [DesktopExtensionCatalog, BeforeReload], DesktopExtensionCatalog
+        ]
+        | None = None,
     ) -> None:
         self._settings_path = settings_path
         self._settings = read_section(SETTINGS_KEY, settings_path)
         self._identities = identities
         self._authorization = authorization
+        if extension_catalog is not None:
+            if capabilities is not None or extension_records is not None:
+                raise ValueError("An Extension catalog is the complete native declaration snapshot")
+            capabilities = extension_catalog.capabilities
+            extension_records = extension_catalog.records
         self._capabilities = (
             dict(capabilities)
             if capabilities is not None
@@ -136,6 +149,9 @@ class ComputerSharing:
         if set(self._capabilities) != set(factories):
             raise ValueError("Native capability declarations must match their factories")
         self._extension_records = list(extension_records or ())
+        self._extension_catalog = extension_catalog or DesktopExtensionCatalog(
+            dict(self._capabilities), list(self._extension_records)
+        )
         self._reload_extensions = reload_extensions
         self._catalog_revision = 0
         self._reloading = False
@@ -497,16 +513,23 @@ class ComputerSharing:
                         "computer_reload_busy",
                         "The Desktop is already changing its native capabilities",
                     )
-            catalog = self._reload_extensions()
-            with self._lock:
-                old_terminal = self._capabilities.get("terminal")
-                terminal = catalog.capabilities.get("terminal")
-                terminal_changed = old_terminal is not None and (
-                    terminal is None or old_terminal.identity != terminal.identity
-                )
-                self._disabling_terminal = terminal_changed
-            try:
-                count = self.active_terminals if terminal_changed else 0
+
+            def before_load(affected: frozenset[str]) -> None:
+                with self._lock:
+                    if expected_server != self._server_url or self._closed:
+                        raise SharingError(
+                            "computer_server_changed",
+                            "The selected server changed; open the settings again",
+                        )
+                    if self._socket is not None and (
+                        self._scope is None or not self._scope.capability_updates
+                    ):
+                        raise SharingError(
+                            "computer_reload_unavailable",
+                            "This server does not support live native Extension reload",
+                        )
+                    self._disabling_terminal = "terminal" in affected
+                count = self.active_terminals if "terminal" in affected else 0
                 if count:
                     try:
                         allowed = confirm is not None and confirm(
@@ -521,6 +544,27 @@ class ComputerSharing:
                         allowed = False
                     if not allowed:
                         raise SharingError("declined", "The local Extensions were not reloaded")
+                with self._lock:
+                    if (
+                        expected_server != self._server_url
+                        or self._closed
+                        or self._quiescing
+                        or self._switching_server
+                    ):
+                        raise SharingError(
+                            "computer_server_changed",
+                            "The selected server changed; open the settings again",
+                        )
+                    if self._socket is not None and (
+                        self._scope is None or not self._scope.capability_updates
+                    ):
+                        raise SharingError(
+                            "computer_reload_unavailable",
+                            "This server does not support live native Extension reload",
+                        )
+
+            try:
+                catalog = self._reload_extensions(self._extension_catalog, before_load)
                 with self._lock:
                     if (
                         expected_server != self._server_url
@@ -555,6 +599,9 @@ class ComputerSharing:
                         self._capability_errors
                     )
                     self._capabilities = dict(catalog.capabilities)
+                    # The fingerprint baseline advances atomically with the
+                    # accepted declarations, never merely because imports ran.
+                    self._extension_catalog = catalog
                     self._available = {
                         name: item.available for name, item in self._capabilities.items()
                     }
@@ -735,15 +782,25 @@ class ComputerSharing:
                 scope.declarations.pop(capability),
             )
         for capability, (removed, _declaration) in tuple(scope.retiring.items()):
+            if capability not in scope.retirement_tasks:
+                scope.retirement_tasks[capability] = asyncio.create_task(
+                    self._retire_handler(scope, capability, removed)
+                )
+        if scope.retirement_tasks:
+            # One budget covers the entire batch. A timed-out close or admitted
+            # call remains owned and quarantined; cancelling its await could hide
+            # a still-running worker and incorrectly admit a second handler.
+            await _wait_for_retirement(scope.retirement_tasks.values(), timeout=RETIREMENT_TIMEOUT)
+        for capability, task in tuple(scope.retirement_tasks.items()):
+            if not task.done():
+                errors[capability] = "retirement: timeout; cleanup still pending"
+                continue
+            scope.retirement_tasks.pop(capability)
+            if task.cancelled():
+                errors[capability] = "close: CancelledError"
+                continue
             try:
-                # close releases resources and wakes admitted operations; settle
-                # only this handler's calls before admitting its replacement.
-                await removed.close()
-                pending = [
-                    task for task, name in scope.capability_calls.items() if name == capability
-                ]
-                if pending:
-                    await asyncio.gather(*pending, return_exceptions=True)
+                task.result()
                 scope.retiring.pop(capability)
             except Exception as error:
                 errors[capability] = f"close: {type(error).__name__}"
@@ -799,6 +856,15 @@ class ComputerSharing:
             raise SharingError(
                 "computer_capability_unavailable", "The shared capabilities are unavailable"
             )
+
+    async def _retire_handler(
+        self, scope: _Scope, capability: str, handler: ExecutionHandler
+    ) -> None:
+        """Close exactly once while pending; retain every admitted call to settlement."""
+        await handler.close()
+        pending = [task for task, name in scope.capability_calls.items() if name == capability]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _serve(self, scope: _Scope, server_url: str, name: str) -> None:
         header = self._authorization.header(server_url)
@@ -1050,7 +1116,12 @@ class ComputerSharing:
         )
         closed = await asyncio.gather(
             *(handler.close() for handler in scope.handlers.values()),
-            *(handler.close() for handler, _declaration in scope.retiring.values()),
+            *(
+                scope.retirement_tasks[capability]
+                if capability in scope.retirement_tasks
+                else handler.close()
+                for capability, (handler, _declaration) in scope.retiring.items()
+            ),
             return_exceptions=True,
         )
         if scope.calls:
