@@ -395,6 +395,11 @@ def test_a_microphone_delivering_digital_silence_is_reopened_rarely(
         if "user_idle_seconds" in options:
             # A noise gate sends the same zeros: one reopen per return, not per silence.
             assert len(sd.streams) == 2
+            before_gap = items[: items.index(CaptureGap("read_failed"))]
+            assert (
+                sum(item.duration for item in before_gap if isinstance(item, AudioBlock))
+                >= options["silence_restart_seconds"]
+            )
     else:
         assert all(isinstance(item, AudioBlock) for item in items)
         assert len(sd.streams) == 1
