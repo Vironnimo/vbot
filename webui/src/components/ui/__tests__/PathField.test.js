@@ -11,7 +11,6 @@ vi.mock('svelte', async () => {
 });
 
 const listProjects = vi.fn();
-vi.mock('$lib/api.js', () => ({ listProjects }));
 
 const { default: PathField } = await import('../PathField.svelte');
 
@@ -71,7 +70,11 @@ describe('PathField', () => {
       },
       ...initial,
     });
-    mounted = mount(PathField, { target: document.body, props });
+    mounted = mount(PathField, {
+      target: document.body,
+      props,
+      context: new Map([['pathServices', { listProjects }]]),
+    });
     flushSync();
     return document.body.querySelector('input');
   }

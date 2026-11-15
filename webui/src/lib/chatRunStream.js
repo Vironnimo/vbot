@@ -1,4 +1,4 @@
-import { isTerminalRunEvent } from './api.js';
+import { isTerminalRunEvent } from './runEventTypes.js';
 import { createRunActivityProjection } from './chatRunStream/activity.js';
 import { runEventFromServerEvent } from './chatRunStream/serverEvents.js';
 import { formatAgentAddress } from './agentAddress.js';

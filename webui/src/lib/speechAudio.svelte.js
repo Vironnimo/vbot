@@ -1,6 +1,6 @@
 import { getContext, setContext } from 'svelte';
 import { createAudioPlayback } from './audioPlayback.svelte.js';
-import { isSpeechPlaybackUrl } from './api.js';
+import { isSpeechPlaybackUrl } from './mediaUrls.js';
 import { speechArtifactFromResult } from './chatTimelinePresentation/messages.js';
 import { formatAgentAddress } from './agentAddress.js';
 
@@ -15,6 +15,7 @@ const speechAudioKey = (runId, callId) => `${runId}:${callId}`;
 // fresh speech call once; Chat players only attach controls to these resources.
 export function createSpeechAudio({
   createPlayback = createAudioPlayback,
+  readAudio,
 } = {}) {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- resource ownership, not rendered state
   const entries = new Map();
@@ -65,6 +66,7 @@ export function createSpeechAudio({
       resource: null,
     });
     entry.resource = createPlayback({
+      readAudio,
       onPlay() {
         if (destroyed) return;
         // Manual replay can take over from another paused/playing source.
@@ -128,6 +130,7 @@ export function createSpeechAudio({
   }
 
   return {
+    readAudio,
     get active() {
       return active;
     },

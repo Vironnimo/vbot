@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, untrack } from 'svelte';
 
   import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
@@ -26,6 +31,8 @@
   );
   let saving = $state(false);
   const draft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: normalizePermissionRulesDefaultSettings,
     read: () => form,

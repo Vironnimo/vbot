@@ -3,7 +3,7 @@ import {
   RPC_ERROR_HTTP,
   RPC_ERROR_NETWORK,
   RPC_ERROR_RESPONSE,
-} from '../api/transport.js';
+} from '../apiErrors.js';
 import { holdsSecretArgument, isBareSecretCommand } from '../agentSecrets.js';
 import { containsPotentialApiKey } from '../secretDetection.js';
 

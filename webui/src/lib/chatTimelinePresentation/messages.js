@@ -4,7 +4,7 @@ import { formatMoment } from '$lib/timeText.js';
 import { isPlainObject } from '$lib/values.js';
 import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
-import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
+import { attachmentUrl, isSpeechPlaybackUrl } from '$lib/mediaUrls.js';
 import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
 import { isPermissionDeniedResult } from '$lib/permissionRules.js';
 // Rendering a cancelled Tool result uses the server's stable failure code.
@@ -690,15 +690,7 @@ function isRenderableUserContentBlock(block) {
 
 function attachmentUrlForId(attachmentId) {
   const normalizedId = trimmedString(attachmentId);
-  if (!normalizedId) {
-    return '';
-  }
-
-  try {
-    return getAttachmentUrl(normalizedId);
-  } catch {
-    return '';
-  }
+  return normalizedId ? attachmentUrl(normalizedId) : '';
 }
 
 function hasErrorResult(result) {

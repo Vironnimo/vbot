@@ -13,6 +13,11 @@ export default Object.freeze({
     'This browser has an older local layout. Choose whether to share it with all browsers connected to this server or start with the standard layout. The local copy stays until your choice is saved.',
   'contributions.importLayout': 'Share this browser’s layout',
   'contributions.useDefaults': 'Use shared defaults',
+  'contributions.contextUnavailable': 'UI context unavailable: {name}',
+  'contributions.extensionActionUnavailable':
+    'Extension action unavailable: {name}',
+  'contributions.actionUnavailable': 'UI action unavailable: {name}',
+  'contributions.invalidActionParams': 'UI action parameters must be an object',
   'contributions.retry': 'Retry {name}',
   'contributions.empty':
     'Open the relevant view to configure its built-in elements.',

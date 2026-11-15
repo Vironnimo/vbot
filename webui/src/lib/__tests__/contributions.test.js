@@ -330,11 +330,7 @@ describe('public UI contribution composition', () => {
     expect(params.text).toBe('hello');
     await registry.command('navigation.open', { view: 'chat' });
     expect(global).toHaveBeenCalledExactlyOnceWith({ view: 'chat' });
-    await expect(registry.command('toString')).rejects.toThrow(
-      'UI action unavailable',
-    );
-    await expect(registry.command('composer.insert', {}, {})).rejects.toThrow(
-      'UI action unavailable',
-    );
+    await expect(registry.command('toString')).rejects.toThrow();
+    await expect(registry.command('composer.insert', {}, {})).rejects.toThrow();
   });
 });

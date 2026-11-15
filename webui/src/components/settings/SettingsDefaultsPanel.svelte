@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
@@ -70,6 +75,8 @@
   );
   let saving = $state(false);
   const agentDefaultsDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: normalizeAgentDefaultsFormValues,
     read: () => agentDefaults,

@@ -77,6 +77,12 @@
 </script>
 
 <script>
+  import {
+    listServerDirectory,
+    createServerDirectory,
+    listProjects,
+  } from '$lib/api.js';
+  import { readSpeechPlayback, resolvePermissionApproval } from '$lib/api.js';
   import AppShell from './components/AppShell.svelte';
   import ContributionPreferences from './components/extensions/ContributionPreferences.svelte';
   import Button from './components/ui/Button.svelte';
@@ -116,7 +122,12 @@
     renameComposerAgent,
   } from '$lib/composerMemory.js';
   import { renameWidgetStatesAgent } from '$lib/widgetStates.svelte.js';
-  import { invalidatePortals } from '$lib/portals.svelte.js';
+  import {
+    invalidatePortals,
+    sessionPortals,
+    watchPortals,
+    closePortal,
+  } from '$lib/portals.svelte.js';
   import {
     isDesktopAccessor,
     onDesktopOpenSession,
@@ -143,10 +154,18 @@
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
+  setContext('pathServices', {
+    listDirectory: (...args) => listServerDirectory(...args),
+    createDirectory: (...args) => createServerDirectory(...args),
+    listProjects: (...args) => listProjects(...args),
+  });
+  setContext('portals', { sessionPortals, watchPortals, closePortal });
   const selection = createAppSelection();
   const computers = provideComputers(createComputers());
   onDestroy(() => computers.destroy());
-  const speechAudio = provideSpeechAudio(createSpeechAudio());
+  const speechAudio = provideSpeechAudio(
+    createSpeechAudio({ readAudio: (...args) => readSpeechPlayback(...args) }),
+  );
   onDestroy(() => speechAudio.destroy());
   const setup = createAppSetup({
     get modelsRefreshToken() {
@@ -233,6 +252,7 @@
 
   const appControllerState = $state(createAppControllerState());
   setContext('permissionApprovals', {
+    resolve: (...args) => resolvePermissionApproval(...args),
     get requests() {
       return appControllerState.permissionApprovals.requests;
     },

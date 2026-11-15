@@ -1,24 +1,4 @@
-// Presentation composition is independent of transport and Svelte. Both core
-// snippets and Extension descriptors use these identifiers and ordering rules.
-export const CONTRIBUTION_SURFACES = Object.freeze([
-  'shell.status',
-  'shell.sidebar',
-  'chat.header',
-  'chat.composer.actions',
-  'chat.composer.context',
-  'chat.composer.footer',
-  'chat.composer.footer.start',
-  'chat.composer.footer.end',
-  'chat.timeline',
-  'chat.tool-result',
-  'chat.message',
-  'chat.message.actions',
-  'chat.sessions',
-  'chat.session.item',
-  'agent.editor.sections',
-  'project.editor.sections',
-  'settings.sections',
-]);
+import { t } from './i18n.js';
 
 export const UI_CONTEXT_FIELDS = Object.freeze([
   'agent_id',
@@ -255,7 +235,9 @@ export function bindContributionParams(params = {}, context = {}) {
           !UI_CONTEXT_FIELDS.includes(value.context) ||
           !Object.hasOwn(context, value.context)
         )
-          throw new Error(`UI context unavailable: ${value.context}`);
+          throw new Error(
+            t('contributions.contextUnavailable', { name: value.context }),
+          );
         return [key, context[value.context]];
       }
       return [key, value];

@@ -3,10 +3,10 @@
   // on another computer, so every listing comes from it, one directory at a
   // time: typing completes folder by folder (like a shell's Tab completion)
   // and Browse… opens PathBrowserDialog. `listDirectory` takes and returns the
-  // `filesystem.list` params and result; it defaults to the WebUI API, and an
+  // `filesystem.list` params and result; the App supplies it through context, and an
   // isolated Extension page passes its host bridge instead.
   // `createDirectory` (filesystem.create_directory params and result) lets the
-  // dialog make new folders; it defaults to the WebUI API only together with
+  // dialog make new folders; the App supplies it through context only together with
   // the default listing, so a page that passes its own listing and no
   // creation gets a dialog without New folder.
   //
@@ -24,13 +24,8 @@
   // field handles its own keys first and passes the rest on, so Enter still
   // submits or adds unless it picks a highlighted suggestion. Without focus,
   // a path longer than the field shows its end, the folder or file it names.
-  import { onDestroy, tick } from 'svelte';
+  import { getContext, onDestroy, tick } from 'svelte';
 
-  import {
-    createServerDirectory,
-    listProjects,
-    listServerDirectory,
-  } from '$lib/api.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -52,6 +47,7 @@
   import PathBrowserDialog from './PathBrowserDialog.svelte';
   import TextField from './TextField.svelte';
 
+  const host = getContext('pathServices');
   const noop = () => {};
   const LISTING_DELAY_MS = 150;
   const MAX_SUGGESTIONS = 100;
@@ -83,9 +79,13 @@
   } = $props();
 
   // Read at call time, so a test or page that never lists needs no API.
-  const listings = createListingCache((params) =>
-    (listDirectory ?? listServerDirectory)(params),
-  );
+  function readDirectory(params) {
+    const read = listDirectory ?? host?.listDirectory;
+    if (typeof read !== 'function')
+      throw new Error(t('pathPicker.failure.failed'));
+    return read(params);
+  }
+  const listings = createListingCache(readDirectory);
 
   let rootElement = $state();
   let panelElement = $state();
@@ -440,7 +440,7 @@
   }
 
   async function loadProjectShortcuts() {
-    const result = await listProjects();
+    const result = await host?.listProjects?.();
     const projects = Array.isArray(result?.projects) ? result.projects : [];
     return projects
       .filter((project) => typeof project?.cwd === 'string' && project.cwd)
@@ -605,9 +605,9 @@
     {root}
     {value}
     {startPath}
-    listDirectory={(params) => (listDirectory ?? listServerDirectory)(params)}
+    listDirectory={readDirectory}
     createDirectory={createDirectory ??
-      (listDirectory ? null : (params) => createServerDirectory(params))}
+      (listDirectory ? null : host?.createDirectory)}
     loadShortcuts={projectShortcuts ? loadProjectShortcuts : null}
     onSelect={chooseFromBrowser}
     onClose={() => (browsing = false)}

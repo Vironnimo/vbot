@@ -97,7 +97,11 @@
       const params = bindContributionParams(action.params, context);
       if (action.operation) {
         if (!descriptor.operations?.includes(action.operation))
-          throw new Error(`Extension action unavailable: ${action.operation}`);
+          throw new Error(
+            t('contributions.extensionActionUnavailable', {
+              name: action.operation,
+            }),
+          );
         await invokeExtensionContribution(descriptor, action.operation, params);
       } else if (action.command)
         await registry.command(action.command, params, commands);

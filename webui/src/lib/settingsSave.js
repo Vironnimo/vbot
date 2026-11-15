@@ -1,4 +1,3 @@
-import { getSettings, updateSettings } from './api.js';
 import { t } from './i18n.js';
 
 // `settings.update` refuses a write based on values that changed meanwhile.
@@ -86,11 +85,11 @@ export function rebaseDraft(
 /**
  * A Settings editor's local draft plus the saved values it was derived from.
  *
- * `save()` sends the draft through `settings.update` (or `submit`) together
+ * `save()` sends the draft through the supplied `submit` callback together
  * with its origin as `base`, so the server refuses the write when a value it
  * would change was changed meanwhile (another editor, window, or a save that
  * finished after the user left). The draft is then rebased onto Settings read
- * again through `settings.get`: untouched values take the saved ones, a value
+ * again through `reload`: untouched values take the saved ones, a value
  * changed on both sides takes the saved one and reports it, and the remaining
  * edits are retried. After a successful write, values edited while it ran
  * stay; the rest take the saved values, so normalization reaches the visible
@@ -104,8 +103,9 @@ export function rebaseDraft(
  * @param {(values: object, origin?: object) => object} params.toPayload - Draft
  *   values -> update sections. `toPayload(draft, origin)` builds the write, so
  *   it may name only what changed; `toPayload(origin)` builds the `base`.
- * @param {(params: object) => Promise<object>} [params.submit] - Sends the
+ * @param {(params: object) => Promise<object>} params.submit - Sends the
  *   sections plus `base` and resolves to the saved Settings.
+ * @param {() => Promise<object>} params.reload - Re-reads saved Settings after a conflict.
  * @param {number} [params.leafDepth] - Draft depth at which a value merges as
  *   a whole (see `rebaseDraft`).
  */
@@ -115,9 +115,12 @@ export function createSettingsDraft({
   read,
   write,
   toPayload,
-  submit = updateSettings,
+  submit,
+  reload,
   leafDepth = Infinity,
 }) {
+  if (typeof submit !== 'function' || typeof reload !== 'function')
+    throw new TypeError('Settings submit and reload callbacks are required');
   let origin = plain(fromSettings(settings));
 
   function replaceDraft(value) {
@@ -172,7 +175,7 @@ export function createSettingsDraft({
           if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
             throw error;
           }
-          const currentSettings = await getSettings();
+          const currentSettings = await reload();
           conflicted = adopt(currentSettings) || conflicted;
           onCommit(currentSettings);
           if (sameValue(read(), origin)) break;

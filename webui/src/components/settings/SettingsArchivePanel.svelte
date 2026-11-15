@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   // Settings -> Archive, above the archived items: whether and after how
   // many days vBot deletes archived Agents, Projects and Sessions
   // automatically (`archive.retention_days`, 1-3650 or null for never). The
@@ -66,6 +71,8 @@
   let daysInvalid = $derived(automatic && !validDays(Number(daysText)));
 
   const retentionDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings,
     read: () => draft,

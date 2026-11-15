@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import AgentModelSettings from '../agents/AgentModelSettings.svelte';
@@ -88,6 +93,8 @@
   let librarianSettings = $state(untrack(() => getLibrarianSettings(settings)));
   let saving = $state(false);
   const librarianDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: getLibrarianSettings,
     read: () => librarianSettings,

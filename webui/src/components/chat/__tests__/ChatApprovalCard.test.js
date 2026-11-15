@@ -14,10 +14,6 @@ vi.mock(
   'svelte',
   async () => import('../../../../node_modules/svelte/src/index-client.js'),
 );
-vi.mock('$lib/api.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  resolvePermissionApproval: (...args) => resolve(...args),
-}));
 const { default: ChatApprovalCard } =
   await import('../ChatApprovalCard.svelte');
 const { default: ChatAssistantRun } =
@@ -78,6 +74,7 @@ describe('ChatApprovalCard', () => {
   it('names the access and allows the call once', async () => {
     resolve.mockResolvedValue({ resolved: true });
     component = mount(ChatApprovalCard, {
+      context: new Map([['permissionApprovals', { resolve }]]),
       target: document.body,
       props: { request: approval() },
     });
@@ -103,6 +100,7 @@ describe('ChatApprovalCard', () => {
     resolve.mockResolvedValue({ resolved: true });
     const request = approval();
     component = mount(ChatApprovalCard, {
+      context: new Map([['permissionApprovals', { resolve }]]),
       target: document.body,
       props: { request },
     });
@@ -121,6 +119,7 @@ describe('ChatApprovalCard', () => {
     ]) {
       document.body.innerHTML = '';
       component = mount(ChatApprovalCard, {
+        context: new Map([['permissionApprovals', { resolve }]]),
         target: document.body,
         props: { request },
       });
@@ -150,6 +149,7 @@ describe('ChatApprovalCard', () => {
 
   it('offers only Allow once when no Session Grant could help', () => {
     component = mount(ChatApprovalCard, {
+      context: new Map([['permissionApprovals', { resolve }]]),
       target: document.body,
       props: { request: approval({ session_grant: null }) },
     });
@@ -164,7 +164,7 @@ describe('approval cards in the Run', () => {
     component = mount(ChatAssistantRun, {
       target: document.body,
       props: { item: assistantRun({ items }), ...props },
-      context: new Map([['permissionApprovals', { requests }]]),
+      context: new Map([['permissionApprovals', { requests, resolve }]]),
     });
     flushSync();
   }

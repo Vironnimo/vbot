@@ -1,4 +1,8 @@
-import { getContext, setContext } from 'svelte';
+import ContributionControl from '../components/extensions/ContributionControl.svelte';
+export {
+  provideContributions,
+  useContributions,
+} from './contributionContext.js';
 import { SvelteMap } from 'svelte/reactivity';
 import { contributionContext } from './contributions.js';
 import {
@@ -11,7 +15,6 @@ import { createSettingsDraft, rebaseDraft } from './settingsSave.js';
 import { createAutosaveParticipant } from './autosave.js';
 import { t } from './i18n.js';
 
-const CONTEXT = Symbol('ui-contributions');
 const STORAGE_KEY = 'vbot.ui-layout.v1';
 
 function readLayouts() {
@@ -130,6 +133,7 @@ export function createContributions(source) {
     save: async () => {
       ++readRevision;
       const draft = createSettingsDraft({
+        reload: source.readSettings ?? getSettings,
         settings: { appearance: { ui_layout: copy(baseline) } },
         fromSettings,
         read: () => layouts,
@@ -190,6 +194,7 @@ export function createContributions(source) {
   }
 
   return {
+    Control: ContributionControl,
     get entries() {
       return source.entries ?? [];
     },
@@ -281,9 +286,9 @@ export function createContributions(source) {
           ? source.commands[name]
           : null;
       if (typeof handler !== 'function')
-        throw new Error(`UI action unavailable: ${name}`);
+        throw new Error(t('contributions.actionUnavailable', { name }));
       if (!params || typeof params !== 'object' || Array.isArray(params))
-        throw new Error('UI action parameters must be an object');
+        throw new Error(t('contributions.invalidActionParams'));
       return (await handler(JSON.parse(JSON.stringify(params)))) ?? {};
     },
     connect() {
@@ -315,6 +320,3 @@ export function createContributions(source) {
     context: contributionContext,
   };
 }
-
-export const provideContributions = (value) => setContext(CONTEXT, value);
-export const useContributions = () => getContext(CONTEXT) ?? null;

@@ -6,6 +6,7 @@ const PLAY_EVENT = 'vbot-audio-play';
 // A media resource independent of its controls. Ordinary players own one;
 // App owns speech resources so changing Session never stops their audio.
 export function createAudioPlayback({
+  readAudio,
   onPlay = () => {},
   onFinished = () => {},
 } = {}) {
@@ -244,6 +245,7 @@ export function createAudioPlayback({
     autoplayAttempted = true;
     const owner = createSpeechPlayback({
       url: playback,
+      readAudio,
       onState(next) {
         if (stream !== owner) return;
         const wasPaused = state.paused;

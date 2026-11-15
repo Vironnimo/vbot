@@ -1,5 +1,3 @@
-import { readSpeechPlayback } from './api.js';
-
 // AudioPlayer's transient media resource. Keep only two seconds scheduled in
 // WebAudio and one bounded transport frame, letting HTTP apply backpressure.
 // The completed artifact owns seeking and replay; transient audio is never
@@ -7,7 +5,7 @@ import { readSpeechPlayback } from './api.js';
 export function createSpeechPlayback({
   url,
   onState,
-  readAudio = readSpeechPlayback,
+  readAudio,
   AudioContextClass = globalThis.AudioContext ?? globalThis.webkitAudioContext,
 }) {
   const abort = new AbortController();

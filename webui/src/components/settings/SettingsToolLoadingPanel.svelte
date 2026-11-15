@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, untrack } from 'svelte';
 
   import ToolCatalogEditor from '../tools/ToolCatalogEditor.svelte';
@@ -44,6 +49,8 @@
   );
   let saving = $state(false);
   const draft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: normalizeToolLoadingDefaultSettings,
     read: () => form,

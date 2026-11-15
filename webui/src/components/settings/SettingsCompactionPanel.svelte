@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
@@ -36,6 +41,8 @@
   );
   let saving = $state(false);
   const compactionDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: (next) => normalizeCompactionPolicy(next?.compaction),
     read: () => policy,

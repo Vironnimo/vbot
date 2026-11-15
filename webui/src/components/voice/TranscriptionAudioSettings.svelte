@@ -1,4 +1,9 @@
 <script>
+  import {
+    getSettings as reloadDraftSettings,
+    updateSettings as submitDraftSettings,
+  } from '$lib/api.js';
+
   // The server-wide recording format for speech-to-text: its own Voice
   // section with its own save state, shown in every accessor because the
   // Chat microphone uses it too.
@@ -31,6 +36,8 @@
 
   let transcriptionSaveState = $state('idle');
   const audioDraft = createSettingsDraft({
+    reload: reloadDraftSettings,
+    submit: submitDraftSettings,
     settings: untrack(() => settings),
     fromSettings: normalizeTranscriptionAudio,
     read: () => transcriptionAudio,
