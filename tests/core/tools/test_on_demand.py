@@ -17,6 +17,7 @@ _TOOLS = (
     "edit",
     "message_parent",
     "read",
+    "skill_manage",
     "web_search",
     "write",
     LOAD_TOOLS_TOOL_NAME,
@@ -34,15 +35,16 @@ def _agent(tool_loading: Any, **fields: Any) -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("agent", "expected"),
     [
+        # The built-in set keeps a Reflection review's write Tool skill_manage listed.
         (_agent({"on_demand": True}), {"cron", "web_search"}),
         # Naming one file edit Tool keeps all of them.
         (
             _agent({"on_demand": True, "always_loaded": ["edit", "cron"]}),
-            {"bash", "read", "web_search"},
+            {"bash", "read", "skill_manage", "web_search"},
         ),
         (
             _agent({"on_demand": True, "always_loaded": []}),
-            {"apply_patch", "bash", "cron", "edit", "read", "web_search", "write"},
+            {"apply_patch", "bash", "cron", "edit", "read", "skill_manage", "web_search", "write"},
         ),
         (_agent({"on_demand": False, "always_loaded": []}), set()),
         (_agent(None), set()),

@@ -25,7 +25,9 @@ CALL_TOOL_NAME = "call_tool"
 TOOL_TRANSPORT_NAMES = frozenset({LOAD_TOOLS_TOOL_NAME, CALL_TOOL_NAME})
 
 # The Tools an Agent keeps in its Tool list while neither it nor the global
-# default names its always-loaded Tools.
+# default names its always-loaded Tools. ``skill_manage`` and ``memory`` are the
+# write Tools of a Reflection review, which must not depend on a load: a Model
+# that knows ``skill_manage`` by name only can send the call as the listed ``skill``.
 DEFAULT_ALWAYS_LOADED_TOOLS: tuple[str, ...] = (
     "read",
     "write",
@@ -34,6 +36,7 @@ DEFAULT_ALWAYS_LOADED_TOOLS: tuple[str, ...] = (
     "bash",
     "search_files",
     "skill",
+    "skill_manage",
     "memory",
     "subagent",
     "project",
