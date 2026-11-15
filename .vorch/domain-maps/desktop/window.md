@@ -1,6 +1,6 @@
 # Desktop window
 
-Read when changing the Desktop window and process itself: startup order, the single-instance guard and the launch request handoff, window size, zoom and monitor scaling, native clipboard and browser actions, icons and title, the per-user settings store's mechanics, and the Desktop's own log files. The update restart's handoff is in `desktop/update-restart.md`; connecting to a server is in `desktop/connection.md`.
+Read when changing the Desktop window and process itself: startup order, the single-instance guard and the launch request handoff, window size, zoom, the taskbar badge and monitor scaling, native clipboard and browser actions, icons and title, the per-user settings store's mechanics, and the Desktop's own log files. The update restart's handoff is in `desktop/update-restart.md`; connecting to a server is in `desktop/connection.md`.
 
 ## Window-first startup
 
@@ -26,6 +26,10 @@ First-run window at roughly 80% of the primary display capped at 1440x960 logica
 
 `desktop/zoom.py`, Windows: one stored level from `ZOOM_LEVELS` (50-200 percent, Chromium's page zoom steps; missing or unknown reads as 100; stored as `zoom: {percent}`) scales everything the window shows, like a browser's page zoom, and belongs to this Desktop, never a server. `DesktopZoom` stores and applies it; `_windows.bind_window_zoom` turns WebView2's own zoom inputs off (`IsZoomControlEnabled`, after pywebview's initialization handler turns them on), because a zoom the user makes there lasts only for the current page, applies the stored factor once WebView2 is initialized (a host-set `ZoomFactor` stays across navigations), and applies later changes on the GUI thread. The page owns the inputs: Settings -> Appearance and the shortcuts Ctrl + Plus/Minus/0 and Ctrl + mouse wheel (`webui/settings.md` -> Onboarding and appearance) send the chosen level through `setZoom`. On other platforms the capability `zoom` is false.
 
+## Taskbar badge
+
+`desktop/taskbar_badge.py`, Windows: the window's taskbar button shows the number of unread results as an overlay circle (`1`-`9`, then `9+`), no flashing (user decision). The page owns the count and sends it through `setTaskbarBadge` (`webui/app-shell.md` -> Main menu indicators); the Desktop only draws it. `TaskbarBadge` keeps the count and touches the taskbar only when it changes; `bind_window_badge` draws the icon for the window's DPI and sets it through the shell's `ITaskbarList3` on the GUI thread, logging a failure once. A count belongs to the page that sent it: every page load clears the badge (`window.events.loaded`), so the connection screen shows none. The overlay is not set again after an Explorer restart until the count changes. On other platforms the capability `taskbarBadge` is false.
+
 ## Windows monitor scaling
 
 `desktop/_windows.py` establishes PerMonitorV2 before pywebview screen discovery. The Python-hosted .NET Framework also needs the `windows.config` opt-in and an explicit .NET 4.8 target before WinForms loads; Windows awareness alone leaves dynamic layout disabled. WinForms/WebView2 then handle monitor DPI changes, including native and browser layout. Primary screen/work-area snapshots from pywebview are physical pixels in this mode and are converted to logical pixels before sizing and centering. This bootstrap applies to packaged and source Desktop entrypoints. Regression coverage: `tests/desktop/test_windows.py` (DPI bootstrap) and `tests/desktop/test_main.py` (physical-to-logical primary screen).
@@ -48,4 +52,4 @@ The contract owners rely on (`read_section`/`update_section`, location) is in `d
 
 ## Tests
 
-`tests/desktop/test_main.py` (fresh-process import guard, launch wiring, `--open-session` handed over to a running Desktop), `test_window.py` (geometry), `test_logging.py` (daily files and crash-log generations), `test_settings.py` (settings store), `test_windows.py` (DPI, single instance, request handoff and restart successor claim, browser arguments, permission hook), `test_system_actions.py` (including a page's new windows), `test_zoom.py` (window zoom through the bridge; the WebView2 side in `test_windows.py`); WebUI: `webui/src/app/__tests__/desktopZoom.test.js` (zoom shortcuts).
+`tests/desktop/test_main.py` (fresh-process import guard, launch wiring, `--open-session` handed over to a running Desktop), `test_window.py` (geometry), `test_logging.py` (daily files and crash-log generations), `test_settings.py` (settings store), `test_windows.py` (DPI, single instance, request handoff and restart successor claim, browser arguments, permission hook), `test_system_actions.py` (including a page's new windows), `test_zoom.py` (window zoom through the bridge; the WebView2 side in `test_windows.py`), `test_taskbar_badge.py` (badge counts through the bridge); WebUI: `webui/src/app/__tests__/desktopBadge.test.js` (which count the page sends), `webui/src/app/__tests__/desktopZoom.test.js` (zoom shortcuts).

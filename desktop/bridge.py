@@ -12,7 +12,8 @@ looks like a code, and is logged with its traceback.
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
 WebUI (capabilities, clipboard and browser, the microphone, the Live voice
-hotkey, Voice, Desktop dictation, the window zoom, the update restart). Any
+hotkey, Voice, Desktop dictation, the window zoom, the taskbar badge, the
+update restart). Any
 server's page can call it, so the methods a page could abuse are gated
 (:mod:`desktop.page_permissions`): ``connect``, ``startPairing`` and
 ``forgetSignIn`` need the connection screen's key; another server's page needs
@@ -24,7 +25,8 @@ itself. The facade holds no state of its own: microphone methods delegate to
 :class:`desktop.speech.microphone.MicrophoneService`, Voice methods to
 :class:`desktop.wakeword.controller.VoiceController`, dictation methods to
 :class:`desktop.dictation.controller.DictationController`, zoom methods to
-:class:`desktop.zoom.DesktopZoom`, server selection to the connection
+:class:`desktop.zoom.DesktopZoom`, the badge to
+:class:`desktop.taskbar_badge.TaskbarBadge`, server selection to the connection
 controller, the update restart to :class:`desktop.restart.DesktopRestart`.
 """
 
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
     from desktop.restart import DesktopRestart
     from desktop.servers import ServerEntry
     from desktop.speech.microphone import MicrophoneService
+    from desktop.taskbar_badge import TaskbarBadge
     from desktop.wakeword.controller import VoiceController
     from desktop.zoom import DesktopZoom
 
@@ -187,6 +190,7 @@ class DesktopBridge:
         secure_origins: tuple[str, ...] = (),
         restart: DesktopRestart | None = None,
         zoom: DesktopZoom | None = None,
+        taskbar_badge: TaskbarBadge | None = None,
         permissions: PagePermissions | None = None,
         computer_sharing: ComputerSharing | None = None,
         confirm: Callable[[str, str], bool] | None = None,
@@ -203,6 +207,7 @@ class DesktopBridge:
         self._dictation = dictation
         self._restart = restart
         self._zoom = zoom
+        self._taskbar_badge = taskbar_badge
         self._computer_sharing = computer_sharing
         # The native dialog for choices that stop local work.
         self._confirm = confirm
@@ -226,6 +231,7 @@ class DesktopBridge:
             "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
             "dictation": self._dictation is not None and self._dictation.supported,
             "zoom": self._zoom is not None and self._zoom.supported,
+            "taskbarBadge": self._taskbar_badge is not None and self._taskbar_badge.supported,
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
             # The Desktop signs its window in to servers in the access mode
@@ -403,6 +409,14 @@ class DesktopBridge:
     def setZoom(self, percent: Any) -> dict[str, Any]:  # noqa: N802
         """Store and apply one of the zoom levels; returns the zoom status."""
         return self._require_zoom().set(percent)
+
+    # -- Taskbar badge ---------------------------------------------------------
+
+    def setTaskbarBadge(self, count: Any) -> dict[str, Any]:  # noqa: N802
+        """Show ``count`` unread results on the taskbar button; returns ``{count}``."""
+        if self._taskbar_badge is None:
+            raise RuntimeError("The taskbar badge is not available in this Desktop")
+        return self._taskbar_badge.set(count)
 
     # -- Desktop dictation -----------------------------------------------------
 

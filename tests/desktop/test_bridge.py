@@ -123,6 +123,7 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "setLiveHotkey",
         "getDictation",
         "setDictation",
+        "setTaskbarBadge",
         "getZoom",
         "setZoom",
         "connect",
@@ -256,6 +257,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         live_hotkey=hotkey,
         dictation=hotkey,
         zoom=hotkey,
+        taskbar_badge=hotkey,
         secure_origins=("http://a.lan:8420", "http://pi.lan:9000"),
     )
 
@@ -268,6 +270,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "liveHotkey": available,
         "dictation": available,
         "zoom": available,
+        "taskbarBadge": available,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
         "signIn": False,

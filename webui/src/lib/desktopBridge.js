@@ -31,6 +31,7 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   microphone: false,
   dictation: false,
   zoom: false,
+  taskbarBadge: false,
   restart: false,
   computerSharing: false,
   secureOrigins: Object.freeze([]),
@@ -155,8 +156,9 @@ function callBridge(method, ...args) {
  * Returns disabled capability flags when the bridge is absent, without caching.
  * `voiceApi` is the Desktop Voice bridge version (0 when none is offered);
  * `microphone` offers the shared microphone settings, `dictation` Desktop
- * dictation, `zoom` the window zoom; `restart` tells whether the Desktop can restart itself into a
- * new version (false for Desktops from before that protocol).
+ * dictation, `zoom` the window zoom, `taskbarBadge` the unread count on the
+ * taskbar button; `restart` tells whether the Desktop can restart itself into
+ * a new version (false for Desktops from before that protocol).
  */
 export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
@@ -178,6 +180,7 @@ export async function getDesktopCapabilities() {
     microphone: Boolean(caps?.microphone),
     dictation: Boolean(caps?.dictation),
     zoom: Boolean(caps?.zoom),
+    taskbarBadge: Boolean(caps?.taskbarBadge),
     restart: Boolean(caps?.restart),
     computerSharing: Boolean(caps?.computerSharing),
     secureOrigins: Array.isArray(caps?.secureOrigins)
@@ -1022,4 +1025,14 @@ export async function getDesktopZoom() {
  */
 export async function setDesktopZoom(percent) {
   return normalizeZoom(await callBridge('setZoom', percent));
+}
+
+// -- Taskbar badge (capability `taskbarBadge`) ---------------------------------
+
+/**
+ * Show `count` unread results on the Desktop's taskbar button; 0 removes the
+ * badge. Resolves `{count}`, the count the Desktop shows now.
+ */
+export async function setDesktopTaskbarBadge(count) {
+  return callBridge('setTaskbarBadge', count);
 }

@@ -66,6 +66,9 @@
     // Reports this Chat's Main menu indicator: `{count, tone, label}` while
     // Agents hold unread results, otherwise null.
     onNavigationIndicator = () => {},
+    // Reports the number of unread results with the displayed Session's
+    // included: what is unread while nobody looks at the page.
+    onUnattendedResults = () => {},
     sharedAgents = [],
     sharedSelectedAgentId = '',
     // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
@@ -626,6 +629,9 @@
     },
     get onNavigationIndicator() {
       return onNavigationIndicator;
+    },
+    get onUnattendedResults() {
+      return onUnattendedResults;
     },
   });
   const lifecycle = createChatViewLifecycle({

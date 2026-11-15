@@ -44,7 +44,7 @@ What a detected wake phrase does on the current server: record a spoken command 
 - `--mock-wakeword` selects the mock mode (no microphone, no network) for UI validation - the only path that simulates Voice activity. Without it, a failed probe of the on-device stack selects the unavailable mode (`voice_stack_unavailable`, never simulating) (`desktop/voice.md` -> Mock and unavailable modes).
 - **Update restart (packaged only):** `open_desktop` passes the relaunch contract `VBOT_DESKTOP_RELAUNCH` (`{version_file, version, command}`); without it (source runs) the Desktop never restarts. A packaged Desktop restarts into a newly activated version through a handoff (`desktop/update-restart.md`).
 - **Per-user settings store (`desktop/settings.py`):** `<config-dir>/settings.json` in the OS per-user config dir (Windows `%APPDATA%\vbot`; elsewhere `$XDG_CONFIG_HOME/vbot` else `~/.config/vbot`); stored device tokens live beside it in `device-tokens.json`, never in `settings.json` (`desktop/sign-in.md` -> Token store). Each top-level section has one owner module, which uses `read_section(key)` and `update_section(key, mutate)`: `mutate` gets an isolated copy and returns the whole new section, an unchanged section is not rewritten, and a raising `mutate` leaves the file untouched. A file that cannot be read as a JSON object rejects mutations without replacing its bytes, and a failed write re-raises so bridge callers reject instead of faking success (mechanics and section owners: `desktop/window.md` -> Per-user settings store).
-- Window startup, single instance, sizing, zoom, DPI, system actions, icons and the Desktop's own logs (`<config-dir>/logs/`, a Desktop Client has no server `data_dir`): `desktop/window.md`.
+- Window startup, single instance, sizing, zoom, taskbar badge, DPI, system actions, icons and the Desktop's own logs (`<config-dir>/logs/`, a Desktop Client has no server `data_dir`): `desktop/window.md`.
 
 ### Python<->JS bridge
 
@@ -89,7 +89,7 @@ Read these only when your task matches - not by default.
 - Sharing this computer, adding a native capability, transport reconnects, local grants or app-owned execution cleanup -> `desktop/computer-sharing.md`
 
 - Launch target and wait, probing and its outcomes, the Connection screen, `ConnectionController`, remembered servers, server switches -> `desktop/connection.md`
-- Window startup order, single instance and launch request handoff, size, zoom, DPI, native clipboard/browser actions, icons, settings store mechanics, the Desktop's log files -> `desktop/window.md`
+- Window startup order, single instance and launch request handoff, size, zoom, taskbar badge, DPI, native clipboard/browser actions, icons, settings store mechanics, the Desktop's log files -> `desktop/window.md`
 - Adding or changing a bridge method, capability, page-policy gate or confirmation, bridge error, or page push -> `desktop/bridge.md`
 - Desktop Voice or the speech core (file ownership, pipeline, threads and locks, stored `wakeword` settings, status and events, commands, server client, microphones and capture, echo cancellation, models, calibration, mock mode, audio and ML dependencies) -> `desktop/voice.md`
 - Live voice from the Desktop (phrase action, global shortcut, Live requests, the Live hold, WebView2 secure origins, autoplay, microphone permission) -> `desktop/live-voice.md`

@@ -129,6 +129,7 @@
   import { createAppSelection } from './app/selection.svelte.js';
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
+  import { createDesktopBadge } from './app/desktopBadge.svelte.js';
   import { createAppExtensions } from './app/extensions.svelte.js';
   import {
     createContributions,
@@ -326,6 +327,22 @@
             label: t('cron.runs.unread', { count: schedules.count }),
           }
         : null;
+  });
+  // Chat's unread results with the displayed Session's included.
+  let chatUnattendedResults = $state(0);
+  createDesktopBadge({
+    get supported() {
+      return desktop.desktopCapabilities?.taskbarBadge === true;
+    },
+    // What the Main menu counts as unread: Chat and Automations.
+    get attendedCount() {
+      return serverUnavailable
+        ? 0
+        : (navigationIndicators.chat?.count ?? 0) + schedules.count;
+    },
+    get unattendedCount() {
+      return serverUnavailable ? 0 : chatUnattendedResults + schedules.count;
+    },
   });
   let serverSwitcherOpen = $state(false);
 
@@ -739,6 +756,7 @@
         onPickModel={navigateToAgentModel}
         onNavigationIndicator={(indicator) =>
           (navigationIndicators.chat = indicator)}
+        onUnattendedResults={(count) => (chatUnattendedResults = count)}
       />
       {#if activeViewId.startsWith('extension:')}
         {@const page = extensions.extensionPages.find(
