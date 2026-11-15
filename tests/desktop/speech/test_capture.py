@@ -84,6 +84,7 @@ def start_capture() -> Iterator[Callable[..., Running]]:
             backend=sd,
             reconnect_interval=kwargs.pop("reconnect_interval", 0.05),
             block_seconds=kwargs.pop("block_seconds", 0.04),
+            user_idle_seconds=kwargs.pop("user_idle_seconds", lambda: None),
             **kwargs,
         )
         run = Running(capture, stop, statuses)
@@ -357,25 +358,43 @@ def test_repeated_read_failures_disconnect_until_the_microphone_returns(
     assert sd.events[refresh + 1 : refresh + 3] == ["initialize", "stream.open"]
 
 
+def _returning_user() -> Callable[[], float | None]:
+    """Away for the first two polls, then back at the keyboard."""
+    polls = iter((600.0, 600.0))
+    return lambda: next(polls, 0.0)
+
+
 @pytest.mark.parametrize(
-    ("idle_level", "reopened"), [(0, True), (3, False)], ids=["digital-silence", "noise-floor"]
+    ("idle_level", "options", "reopened"),
+    [
+        (0, {"silence_reopen_interval": 0.2}, True),
+        (3, {"silence_reopen_interval": 0.2}, False),
+        (0, {"silence_restart_seconds": 0.2, "user_idle_seconds": lambda: 0.0}, False),
+        (0, {"silence_restart_seconds": 0.2, "user_idle_seconds": _returning_user()}, True),
+    ],
+    ids=["long-silence", "noise-floor", "quiet-user-present", "user-returned"],
 )
-def test_a_microphone_delivering_digital_silence_is_reopened(
-    start_capture: Callable[..., Running], idle_level: int, reopened: bool
+def test_a_microphone_delivering_digital_silence_is_reopened_rarely(
+    start_capture: Callable[..., Running],
+    idle_level: int,
+    options: dict[str, Any],
+    reopened: bool,
 ) -> None:
     sd = FakeSoundDevice()
     sd.idle_level = idle_level
     subscriptions: list[CaptureSubscription] = []
 
-    run = start_capture(sd, silence_restart_seconds=0.2, subscribe=subscribe_to(subscriptions))
+    run = start_capture(sd, subscribe=subscribe_to(subscriptions), **options)
     items = read_items(subscriptions[0], 12)
 
     if reopened:
         # A dongle that lost its headset link sends zeros until every client lets go.
         assert CaptureGap("read_failed") in items
-        assert len(sd.streams) >= 2
         assert sd.streams[0].closed
         assert run.capture.status.state == "capturing"
+        if "user_idle_seconds" in options:
+            # A noise gate sends the same zeros: one reopen per return, not per silence.
+            assert len(sd.streams) == 2
     else:
         assert all(isinstance(item, AudioBlock) for item in items)
         assert len(sd.streams) == 1

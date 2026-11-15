@@ -57,6 +57,7 @@ from desktop.speech._microphones import (
     open_input_stream,
     refresh_microphone_devices,
 )
+from desktop.speech._user_activity import user_idle_seconds
 from desktop.speech.microphone import MicrophoneSelection
 
 logger = logging.getLogger("vbot.desktop.speech.capture")
@@ -79,18 +80,24 @@ ECHO_STAGE_WAIT_SECONDS = 0.5
 ECHO_RECORDING_SAMPLE_RATE = 48000
 """Stable recording rate while the WebRTC echo stage initializes."""
 
-SILENCE_RESTART_SECONDS = 5.0
-"""Digital silence after which the microphone is released and reopened.
+SILENCE_REOPEN_INTERVAL_SECONDS = 600.0
+"""Uninterrupted digital silence after which the microphone is released and reopened.
 
-A live microphone always carries a noise floor. A wireless headset dongle can
-keep delivering exact zeros after its radio link dropped, without Windows
-seeing a device change, until every client closes the stream. Capture holds the
-stream for hours, so it releases the device itself; Desktop dictation and other
-applications on the same microphone recover with it.
+A wireless headset dongle can keep delivering exact zeros after its radio link
+dropped, without Windows seeing a device change, until every client closes the
+stream. Capture holds the stream for hours, so it releases the device itself;
+Desktop dictation and other applications on the same microphone recover with
+it. A working headset with a noise gate delivers the same zeros whenever the
+user is quiet, and every reopen makes the Windows microphone indicator
+disappear and reappear, so reopens stay rare: at this interval while the
+silence lasts, and once when the user returns (``USER_AWAY_SECONDS``).
 """
 
-MAX_SILENCE_RESTART_SECONDS = 60.0
-"""Longest silence between reopens while the microphone stays silent (doubling)."""
+USER_AWAY_SECONDS = 120.0
+"""Time without keyboard or mouse input after which the next input counts as a return."""
+
+SILENCE_RESTART_SECONDS = 5.0
+"""Digital silence a returning user's microphone must show to be reopened at once."""
 
 _SILENCE_RELEASE_SECONDS = 0.5  # closed long enough for the device to stop its stream
 _DIGITAL_SILENCE_PEAK = 2  # int16 sample magnitude a noise floor exceeds
@@ -421,6 +428,9 @@ class AudioCapture:
         history_seconds: float = HISTORY_SECONDS,
         echo_stage_wait: float = ECHO_STAGE_WAIT_SECONDS,
         silence_restart_seconds: float = SILENCE_RESTART_SECONDS,
+        silence_reopen_interval: float = SILENCE_REOPEN_INTERVAL_SECONDS,
+        user_away_seconds: float = USER_AWAY_SECONDS,
+        user_idle_seconds: Callable[[], float | None] = user_idle_seconds,
     ) -> None:
         self._requested = microphone.to_dict() if microphone is not None else None
         self._echo_cancellation = echo_cancellation
@@ -434,6 +444,9 @@ class AudioCapture:
         self._block_seconds = block_seconds
         self._history_seconds = history_seconds
         self._silence_restart_seconds = silence_restart_seconds
+        self._silence_reopen_interval = silence_reopen_interval
+        self._user_away_seconds = user_away_seconds
+        self._user_idle_seconds = user_idle_seconds
         self._thread: threading.Thread | None = None
 
         self._lock = threading.Lock()
@@ -557,7 +570,8 @@ class AudioCapture:
         """Read until stopped (``True``) or until the microphone disconnects (``False``)."""
         failures = 0
         silent_seconds = 0.0
-        silence_limit = self._silence_restart_seconds
+        user_away = False
+        user_returned = False  # back at the computer; the microphone showed no sound since
         while not self._stop.is_set():
             if self._awaiting_stage:
                 self._attach_ready_stage()
@@ -576,17 +590,29 @@ class AudioCapture:
                 continue
             failures = 0
             self._process(samples, arrival)
+            idle_seconds = self._user_idle_seconds()
+            if idle_seconds is not None:
+                if idle_seconds >= self._user_away_seconds:
+                    user_away = True
+                elif user_away:
+                    user_away = False
+                    user_returned = True
             if not _is_digital_silence(samples):
                 silent_seconds = 0.0
-                silence_limit = self._silence_restart_seconds
+                user_returned = False
                 continue
             assert self._format is not None
             silent_seconds += len(samples) / self._format.sample_rate
-            if silent_seconds < silence_limit:
+            if silent_seconds < self._silence_reopen_interval and not (
+                user_returned and silent_seconds >= self._silence_restart_seconds
+            ):
                 continue
-            logger.warning(
-                "Microphone delivered digital silence for %.0f s; reopening it", silent_seconds
+            logger.info(
+                "Microphone delivered digital silence for %.0f s%s; reopening it",
+                silent_seconds,
+                " and the user returned" if user_returned else "",
             )
+            user_returned = False
             self._end_segment(GAP_READ_FAILED)
             self._close_stream()
             if self._stop.wait(_SILENCE_RELEASE_SECONDS):
@@ -595,7 +621,6 @@ class AudioCapture:
                 self._disconnect(ERROR_MICROPHONE_READ_FAILED)
                 return False
             silent_seconds = 0.0
-            silence_limit = min(silence_limit * 2, MAX_SILENCE_RESTART_SECONDS)
         return True
 
     def _read_block(self) -> tuple[np.ndarray, float]:
