@@ -1,7 +1,12 @@
 import { getContext, setContext } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { contributionContext } from './contributions.js';
-import { getSettings, updateSettings } from './api.js';
+import {
+  getSettings,
+  updateSettings,
+  readExtensionContributionSources,
+} from './api.js';
+import { createContributionSources } from './contributionSources.js';
 import { createSettingsDraft, rebaseDraft } from './settingsSave.js';
 import { createAutosaveParticipant } from './autosave.js';
 import { t } from './i18n.js';
@@ -48,6 +53,11 @@ function readLayouts() {
 }
 
 export function createContributions(source) {
+  const sourceReads = createContributionSources({
+    read: (requests, options) =>
+      readExtensionContributionSources(requests, options),
+    subscribe: (listener) => source.subscribe?.(listener),
+  });
   let legacy = $state(readLayouts());
   let layouts = $state(null);
   let baseline = $state(null);
@@ -253,6 +263,8 @@ export function createContributions(source) {
     subscribe(listener) {
       return source.subscribe?.(listener) ?? (() => {});
     },
+    watchSource: sourceReads.watch,
+    observeSource: sourceReads.observe,
     notifyError(error) {
       source.notifyError?.(error);
     },

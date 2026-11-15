@@ -41,6 +41,10 @@ export function invokeExtensionContribution(
   });
 }
 
+export function readExtensionContributionSources(requests, options = {}) {
+  return rpc('extensions.contribution_sources', { requests }, options);
+}
+
 export function invokeExtensionPageService(
   extension,
   page,

@@ -34,6 +34,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('managed_service.apply', { id: 'searxng', action, ...options }),
     listExtensionPages: () => call('extensions.pages'),
     listExtensionContributions: () => call('extensions.contributions'),
+    readExtensionContributionSources: (requests) =>
+      call('extensions.contribution_sources', { requests }),
     invokeExtensionContribution: (descriptor, operation, params = {}) =>
       call('extensions.contribution_operation', {
         extension: descriptor.extension,

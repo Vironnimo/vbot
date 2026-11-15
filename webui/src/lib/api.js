@@ -73,6 +73,7 @@ export {
   listExtensionPages,
   listExtensionContributions,
   invokeExtensionContribution,
+  readExtensionContributionSources,
   invokeExtensionPageService,
   invokeExtensionPageOperation,
   openExtensionPageRun,
