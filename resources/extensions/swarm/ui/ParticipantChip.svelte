@@ -5,7 +5,7 @@
     participantLabel,
     participantState,
   } from './pagePresentation.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import './participantChip.css';
 

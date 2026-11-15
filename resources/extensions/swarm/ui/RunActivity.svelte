@@ -1,12 +1,12 @@
 <script>
   import { resumableParticipantState } from './pagePresentation.js';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
-  import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
-  import ContextUsageRing from '../../../../webui/src/components/chat/ContextUsageRing.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import ChatAssistantRun from '@vbot/extension-sdk/ui/ChatAssistantRun.svelte';
+  import ChatTimelineEntry from '@vbot/extension-sdk/ui/ChatTimelineEntry.svelte';
+  import ContextUsageRing from '@vbot/extension-sdk/ui/ContextUsageRing.svelte';
   import SwarmIcon from './SwarmIcon.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import ParticipantChip from './ParticipantChip.svelte';

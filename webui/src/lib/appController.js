@@ -160,6 +160,7 @@ export function createAppController({
   onReloadAgents,
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
+  onPublicResourceChange = () => {},
   onExtensionNotification = () => {},
   // A Session's Portals changed (its `portals` scope), or, with null, every
   // Session's may have.
@@ -452,6 +453,7 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    onPublicResourceChange(kind);
     noteInvalidation(kind);
     if (kind === 'computers') {
       await onComputersChanged();

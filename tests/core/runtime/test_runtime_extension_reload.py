@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +13,13 @@ import pytest
 
 from core.extensions import InteractionButton, InteractionEvent
 from core.extensions.extensions import ExtensionRegistry
+from core.models.database import write_model_database_manifest
+from core.providers.accounts import ConnectionRef
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
+from core.storage.layout import DataDirectoryLayout
 from core.utils.config import Config
+from core.utils.errors import ConfigError
 from tests.core.runtime.runtime_test_support import (
     CAPABILITY_EXT_SOURCE,
     command_extension_source,
@@ -112,8 +118,45 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
     write_extension(data_dir, "lifecycle_ext", lifecycle_extension_source(marker))
     write_extension(data_dir, "interactive", INTERACTION_EXT_SOURCE)
     write_extension(data_dir, "capabilities_ext", CAPABILITY_EXT_SOURCE)
+    write_extension(
+        data_dir,
+        "transport_ext",
+        "def register(api):\n"
+        "    api.register_provider({'id': 'extension-provider', 'name': 'Extension Provider', "
+        "'adapter': 'openai_compatible', 'base_url': 'https://provider.example/v1', "
+        "'connections': [{'id': 'default', 'label': 'Default', 'type': 'none'}]})\n"
+        "    api.register_channel_platform('extension_channel', 'Extension Channel', "
+        "lambda config, context: None)\n",
+    )
     write_settings(
         data_dir, {"extensions": {"disabled": ["toggler"]}, "recall": {"backend": "ext_recall"}}
+    )
+    model_root = DataDirectoryLayout(data_dir).models
+    model_root.mkdir(parents=True, exist_ok=True)
+    (model_root / "extension-provider.json").write_text(
+        json.dumps(
+            {
+                "provider_id": "extension-provider",
+                "models": {
+                    "extension-model": {
+                        "name": "Extension Model",
+                        "context_window": 32768,
+                        "capabilities": {
+                            "vision": False,
+                            "tools": True,
+                            "json_mode": False,
+                            "reasoning": {"supported": False},
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_model_database_manifest(
+        model_root,
+        source="runtime",
+        catalogs={"extension-provider.json": datetime(2026, 1, 1, tzinfo=UTC)},
     )
     runtime = Runtime(config)
     # Before start no registry exists; a channel still acknowledges taps itself.
@@ -126,6 +169,17 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
         # Startup handlers wait for the serving lifespan, not for Runtime start.
         assert marker_lines(marker) == []
         asyncio.run(runtime.fire_extension_startup())
+        old_provider = runtime.providers.get("extension-provider")
+        assert old_provider.catalog_scope == "instance"
+        old_model = runtime.models.get("extension-provider", "extension-model")
+        runtime.storage.set_provider_connection_enabled("extension-provider:default", True)
+        provider_ref = ConnectionRef("extension-provider", "extension-provider:default")
+        old_adapter = runtime.get_adapter(provider_ref)
+        assert old_adapter.wire_profile("extension-model").protocol == "chat_completions"
+        asyncio.run(old_adapter.aclose())
+        assert "extension_channel" in {
+            platform["id"] for platform in runtime.channel_service.platform_catalog()
+        }
         assert dispatch_tool(runtime, "swap_echo", data_dir)["data"] == {"version": "v1"}
         assert dispatch_tool(runtime, "pkg_echo", data_dir)["data"] == {"value": "v1"}
         assert extension_record(runtime, "toggler").status == "disabled"
@@ -150,9 +204,28 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
         rewrite_source(extensions / "fixme.py", tool_extension_source("fixme_echo"))
         (extensions / "gone.py").unlink()
         rewrite_source(extensions / "workflow_ext.py", command_extension_source("v2"))
+        transport_source = extensions / "transport_ext.py"
+        rewrite_source(
+            transport_source,
+            transport_source.read_text(encoding="utf-8").replace(
+                "'adapter': 'openai_compatible'", "'adapter': 'anthropic'"
+            ),
+        )
         (extensions / "blockone.py").unlink()
         write_extension(data_dir, "blocktwo", _prompt_block_source("b_two", "Two block text."))
         asyncio.run(runtime.reload_extensions())
+
+        assert runtime.providers.get("extension-provider") is not old_provider
+        assert runtime.models.get("extension-provider", "extension-model") is old_model
+        new_adapter = runtime.get_adapter(provider_ref)
+        assert new_adapter.WIRE_PROTOCOLS == ("messages",)
+        assert new_adapter.wire_profile("extension-model").protocol == "messages"
+        asyncio.run(new_adapter.aclose())
+        with pytest.raises(ConfigError):
+            old_provider.ensure_available()
+        assert "extension_channel" in {
+            platform["id"] for platform in runtime.channel_service.platform_catalog()
+        }
 
         assert dispatch_tool(runtime, "swap_echo", data_dir)["data"] == {"version": "v2"}
         assert dispatch_tool(runtime, "pkg_echo", data_dir)["data"] == {"value": "v2"}
@@ -175,7 +248,12 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
         # Removing the providers of the active Recall backend and of a command.
         (extensions / "capabilities_ext.py").unlink()
         (extensions / "workflow_ext.py").unlink()
+        (extensions / "transport_ext.py").unlink()
         asyncio.run(runtime.reload_extensions())
+        assert "extension-provider" not in runtime.providers.list_ids()
+        assert "extension_channel" not in {
+            platform["id"] for platform in runtime.channel_service.platform_catalog()
+        }
 
         assert runtime.command_dispatcher.prepare("/workflow") is None
         assert "workflow_ext" not in extension_record_names(runtime)

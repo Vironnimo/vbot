@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { t } from '../i18n.js';
+import { t, registerCatalog } from '../i18n.js';
+import mcpText from '../../../../resources/extensions/mcp/ui/i18n.js';
+registerCatalog(mcpText);
 import {
   createMcpSettings,
   mcpConfiguration,
@@ -8,7 +10,7 @@ import {
   mcpDraft,
   mcpImportPlan,
   mcpProblemText,
-} from '../mcpSettings.js';
+} from '../../../../resources/extensions/mcp/ui/mcpSettings.js';
 
 const configuration = {
   id: 'example',

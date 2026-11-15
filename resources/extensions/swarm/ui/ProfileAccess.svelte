@@ -6,10 +6,10 @@
   // chosen Project's own Skills, which the list does not show, but drops names
   // of Skills that no longer exist: the list cannot show them either.
   import { SvelteSet } from 'svelte/reactivity';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import SkillSelectionPanel from '../../../../webui/src/components/skills/SkillSelectionPanel.svelte';
-  import ToolAccessEditor from '../../../../webui/src/components/tools/ToolAccessEditor.svelte';
-  import { changeToolAccessMode } from '../../../../webui/src/lib/toolAccess.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import SkillSelectionPanel from '@vbot/extension-sdk/ui/SkillSelectionPanel.svelte';
+  import ToolAccessEditor from '@vbot/extension-sdk/ui/ToolAccessEditor.svelte';
+  import { changeToolAccessMode } from '@vbot/extension-sdk/lib/toolAccess.js';
 
   let { draft = $bindable(), catalog = {} } = $props();
 

@@ -18,7 +18,6 @@
   import ChatComposer from './ChatComposer.svelte';
   import ComposerGoal from './chat/ComposerGoal.svelte';
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
-  import ComputerUseControl from './ComputerUseControl.svelte';
   import SecretGiveForm from './chat/SecretGiveForm.svelte';
   import SecretRequests from './chat/SecretRequests.svelte';
   import SessionAdvancedSettings from './sessions/SessionAdvancedSettings.svelte';
@@ -137,9 +136,6 @@
     sessionInvalidations = [],
     // Bumped when Extension lifecycle changes alter the live slash-command catalog.
     commandsRefreshToken = 0,
-    // App's Extension invalidations (`{ owner, change }`); the composer's
-    // Computer Use control refreshes its status from them.
-    subscribeExtensionInvalidations = null,
     // App's Identity Agent renames, delivered synchronously before the roster
     // is read again (`(oldAgentId, newAgentId)`); returns the unsubscribe.
     subscribeAgentRenames = null,
@@ -712,6 +708,20 @@
     };
     untrack(() => onDisplayedSession(selection));
   });
+  const contributionContext = $derived({
+    agent_id: target.activeAddressing().bareAgentId ?? '',
+    session_id: target.activeSessionState?.sessionId ?? '',
+    project_id: target.activeAddressing().projectId ?? '',
+    run_id: target.activeSessionState?.currentRun?.runId ?? '',
+    run_active: isRunActive(target.activeSessionState),
+    has_session: Boolean(target.activeSessionState?.sessionId),
+    context_tokens: target.activeSessionState?.contextUsage?.tokens ?? null,
+    context_window:
+      target.activeSessionState?.contextUsage?.context_window ?? null,
+    output_speed:
+      target.activeSessionState?.outputSpeed?.output_tokens_per_second ?? null,
+    computer_id: sessionSettings.view?.execution?.computer_id ?? '',
+  });
 </script>
 
 <svelte:window onkeydown={handleNewSessionShortcut} />
@@ -758,6 +768,7 @@
   hidden={!active}
 >
   <ChatHeader
+    uiContext={contributionContext}
     titleId={chatTitleId}
     agents={chatState.agents}
     projectGroups={target.projectGroups}
@@ -869,6 +880,7 @@
       >
         <div class="chat-view__timeline-shell">
           <ChatTimeline
+            uiContext={contributionContext}
             timelineItems={activity.timelineItems}
             sessionKey={target.activeSessionState?.key ?? ''}
             currentRun={target.activeSessionState?.currentRun ?? null}
@@ -1056,6 +1068,7 @@
             {:else if composerAvailable}
               <ChatComposer
                 bind:this={composer}
+                uiContext={contributionContext}
                 disabled={composerDisabled}
                 isRunning={isRunActive(target.activeSessionState)}
                 cancelling={target.activeSessionState?.cancellingRunIds?.includes(
@@ -1089,15 +1102,11 @@
                 onLoadModelCatalog={composerLoadModelCatalog}
                 onOpenSecretForm={composerSendMessage ? openSecretForm : null}
               >
-                {#snippet computerControl()}
-                  <ComputerUseControl
-                    onError={actions.showChatToast}
-                    subscribeInvalidations={subscribeExtensionInvalidations}
-                  />
-                {/snippet}
-                {#snippet footer()}
+                {#snippet footer(contributions)}
                   {#if sessionSettings.view}
                     <ComposerSessionSettings
+                      uiContext={contributions.context}
+                      commands={contributions.commands}
                       view={sessionSettings.view}
                       outputSpeed={target.activeSessionState?.outputSpeed}
                       outputLatency={target.activeSessionState?.outputLatency}

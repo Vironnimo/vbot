@@ -15,6 +15,10 @@ export default [
       'webui/src/**/*.svelte',
       'webui/src/**/*.js',
       'webui/scripts/**/*.{js,mjs}',
+      'extension-sdk/build.mjs',
+      'extension-sdk/example/**/*.{js,svelte}',
+      'webui/extension-sdk/build.mjs',
+      'webui/extension-sdk/example/**/*.{js,svelte}',
     ],
     languageOptions: {
       globals: {

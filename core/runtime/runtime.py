@@ -26,6 +26,7 @@ from core.extensions import (
 from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
+from core.extensions.services import ExtensionServiceCatalog
 from core.models.models import Model
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import ConnectionRef, split_connection_id
@@ -216,6 +217,11 @@ class Runtime(RuntimeServiceGraph):
 
     def _extension_host(self) -> ExtensionHost:
         return self._host_operations().make_host()
+
+    @property
+    def extension_services(self) -> ExtensionServiceCatalog:
+        """The explicit application operations offered to loaded Extensions."""
+        return self._host_operations().services
 
     async def _review_shell(
         self,
@@ -438,6 +444,7 @@ class Runtime(RuntimeServiceGraph):
     def _close_extension_databases(self) -> None:
         """Close Extension databases a shutdown handler did not release."""
         if self._extension_host_factory is not None:
+            self._extension_host_factory.close_services()
             self._extension_host_factory.databases.close()
 
     def _open_log_manager(self) -> LogManager:

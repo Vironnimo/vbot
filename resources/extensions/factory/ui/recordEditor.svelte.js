@@ -1,7 +1,7 @@
 import { onDestroy, untrack } from 'svelte';
-import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
-import { rebaseDraft } from '../../../../webui/src/lib/settingsSave.js';
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { createDebouncedAutosave } from '@vbot/extension-sdk/lib/autosave.js';
+import { rebaseDraft } from '@vbot/extension-sdk/lib/settingsSave.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 import { copy, failureText } from './presentation.js';
 
 // Factory's versioned record editor. The shared helper owns timing and save

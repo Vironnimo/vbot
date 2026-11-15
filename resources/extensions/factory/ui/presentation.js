@@ -1,5 +1,5 @@
-import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
-import { formatDateTimeInApplicationZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
+import { t, activeLocaleTag } from '@vbot/extension-sdk/lib/i18n.js';
+import { formatDateTimeInApplicationZone } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
 
 export const copy = (value) => JSON.parse(JSON.stringify(value));
 export function failureText(cause) {

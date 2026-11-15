@@ -21,6 +21,7 @@ from core.chat._stream_repetition import StreamRepetitionGuard, before_repetitio
 from core.chat.messages import USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
+    ProviderAdapter,
     TerminalOutcome,
     normalize_tool_call_candidates,
     terminal_outcome_from_response,
@@ -965,6 +966,8 @@ async def stream_model_response(
     """
     accumulator = StreamingAccumulator()
     chunk_timeout_seconds = stream_stall_timeout(adapter)
+    if isinstance(adapter, ProviderAdapter):
+        adapter.ensure_available()
     source = adapter.stream(messages, model_id=model_id, **request_options)
     awaiting_delta = True
     completed_response = False
@@ -1000,6 +1003,8 @@ async def stream_model_response(
             raise
         if accumulator.partial_reasoning is not None:
             raise
+        if isinstance(adapter, ProviderAdapter):
+            adapter.ensure_available()
         response = await adapter.send(messages, model_id=model_id, **request_options)
         normalized = finalize_model_response(
             adapter.normalize_response(response, model_id=model_id)

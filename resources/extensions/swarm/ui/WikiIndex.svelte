@@ -2,18 +2,18 @@
   // The Wiki's page list: one search field, the deleted-pages switch and the
   // pages, newest change first. WikiPanel owns the list state and requests;
   // this component shows it and reports the user's choices.
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import { isImeComposing } from '../../../../webui/src/lib/keyboard.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { isImeComposing } from '@vbot/extension-sdk/lib/keyboard.js';
   import {
     formatMoment,
     formatRelativeTime,
-  } from '../../../../webui/src/lib/timeText.js';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  } from '@vbot/extension-sdk/lib/timeText.js';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import { authorLabel } from './pagePresentation.js';
 
   let {

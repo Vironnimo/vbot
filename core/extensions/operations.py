@@ -20,6 +20,7 @@ JsonObject = dict[str, Any]
 
 if TYPE_CHECKING:
     from core.computers import ComputerRegistry
+    from core.extensions.services import ExtensionServices
 
 # The ``resource`` of the change an Extension that declares
 # ``ExtensionOperations.pending_inputs`` publishes through its owner-bound
@@ -108,6 +109,7 @@ class ExtensionHost:
     # API v28 owner-bound hosts: this Extension's triggers, Cron jobs whose fires
     # call it (``core/runtime/_extension_triggers.py``); ``None`` without Cron.
     triggers: Any | None = None
+    services: ExtensionServices | None = None
 
 
 @dataclass(frozen=True)

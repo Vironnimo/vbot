@@ -754,8 +754,18 @@ describe('channels', () => {
       }),
     ).toThrow(/server_url/u);
     expect(() =>
-      buildChannelCreatePayload({ ...telegram, platform: 'invalid' }),
-    ).toThrow(/platform must be one of/u);
+      buildChannelCreatePayload({ ...telegram, platform: '../invalid' }),
+    ).toThrow(/platform/u);
+    expect(
+      buildChannelCreatePayload({
+        ...base,
+        platform: 'matrix',
+        settings: { homeserver: 'https://chat.example' },
+      }),
+    ).toMatchObject({
+      platform: 'matrix',
+      settings: { homeserver: 'https://chat.example' },
+    });
     expect(() =>
       buildChannelCreatePayload({ ...telegram, allowed_chat_ids: [false] }),
     ).toThrow(/allowed_chat_ids/u);

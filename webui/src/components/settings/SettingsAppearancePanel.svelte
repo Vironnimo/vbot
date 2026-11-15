@@ -5,6 +5,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import DesktopZoomSetting from './DesktopZoomSetting.svelte';
+  import ContributionPreferences from '../extensions/ContributionPreferences.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -246,6 +247,8 @@
     <DesktopZoomSetting {desktopZoom} />
   {/if}
 </div>
+
+<ContributionPreferences />
 
 <div class="s-footer">
   <SaveStatus

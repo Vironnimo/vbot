@@ -1,0 +1,126 @@
+# Extension UI and product integrations
+
+Read this reference to add UI controls or pages, call product services, register a Provider or Channel platform, or supply a local Desktop capability. For server Tools, hooks, managed operations and the startup host, read [extensions.md](extensions.md); for page lifecycle and owned Sessions, read [extension-pages.md](extension-pages.md).
+
+## Pick the declaration
+
+Use a manifest-only Extension for static status text, a button that calls an existing UI command, or a prebuilt page. Add a Python server entry when the Extension needs its own operations, state, Tools, Provider definitions or Channel adapters. Add a separate local Desktop entry only for code that must execute on the user's computer.
+
+Run `vbot home` on the server's computer to find `data_dir` and `vbot_root`; install the server Extension in `<data_dir>/extensions/<name>/`. Give it a unique directory name, which is its identity; `name` in the manifest is the display label. After changing server declarations or assets, run `vbot extensions reload` and inspect `vbot extensions list` for load failures before exercising the behavior.
+
+Declare `"api_version": 30` for these platform APIs and list the features the Extension requires in `required_features`: `ui.pages`, `ui.contributions`, `ui.preferences`, `services`, `observations`, `providers`, `channels`, `desktop.manifest`. The host rejects unknown required features before importing server code. Python server code is trusted and runs without a sandbox; page isolation does not restrict Python privileges.
+
+## UI contributions
+
+For a composer button that inserts text, create `extension.json` without a Python entry:
+
+```json
+{
+  "name": "Review shortcut",
+  "api_version": 30,
+  "required_features": ["ui.contributions"],
+  "contributions": [{
+    "id": "review",
+    "surface": "chat.composer.actions",
+    "kind": "action",
+    "title": "Review changes",
+    "action": {
+      "command": "composer.insert",
+      "params": {"text": "Review the current changes."}
+    }
+  }]
+}
+```
+
+Python declares the same contribution with `api.register_contribution("review", surface=..., kind=..., title=..., action=...)`; do not declare the same id twice. Local ids start with a lowercase letter and contain lowercase letters, digits, `_` or `-`, up to 80 characters. The public id is `extension:<directory-name>:<local-id>`.
+
+| Surface | Placement |
+|---|---|
+| `shell.status`, `shell.sidebar` | Bottom status area and sidebar |
+| `chat.header` | Chat header |
+| `chat.composer.actions`, `chat.composer.context` | Composer controls and context |
+| `chat.composer.footer`, `chat.composer.footer.start`, `chat.composer.footer.end` | Composer footer and its sides |
+| `chat.timeline`, `chat.tool-result` | Chat timeline and an individual Tool Result |
+| `settings.sections` | Settings content |
+
+Every contribution supplies `surface`, `kind` and `title`; `kind` is `status`, `action` or `view`. Use `text` for display text, `order` for a numeric default order, and `when` for exact matches against the surface context, for example `{"has_session": true}`. Context fields depend on the surface; `agent_id`, `session_id`, `project_id`, `run_id`, `run_active`, `has_draft`, `has_session`, `connected`, `view`, `settings_section`, `computer_id`, `tool_name`, `tool_status`, `tool_call_id`, `context_tokens`, `context_window`, `session_cost` and `output_speed` are supported names, not a promise that every value is available. A `text` value or a direct parameter value can bind one field with `{"context": "session_id"}`; a missing parameter binding refuses the action.
+
+An `action` names either an owner operation (`{"operation": "refresh", "params": {}}`) or a UI command (`{"command": "composer.insert", "params": {"text": "..."}}`). Composer surfaces provide `composer.insert`, `composer.replace` and `composer.clear`; insertion and replacement take `text`. An embedded page receives the available command names in `client.context.ui.commands` and invokes one with `client.command(name, params)`; use only commands available in that context.
+
+For dynamic controls, declare `source: {"operation": "list_controls", "params": {}, "resource": "controls"}` and return `{"items": [{"id": "refresh", "label": "Refresh", "action": {"operation": "refresh"}}]}` from that managed operation. List any additional operation named by returned items in the contribution's `operations` array; the declared source and fixed action operations are included automatically. Publish changes with `host.publish_change("controls", [...], revision)` so the controls reread their source; the source `resource` restricts which owner changes refresh them. Results display at most 100 items; use the Extension's page for larger collections.
+
+Use `kind: "view"` and `page: "panel"` to embed the Extension's registered page; set that page's `navigation` to `false` when it needs no sidebar entry. The page receives `client.context.ui.surface`, the surface's scalar `context`, bounded `data`, and available `commands`; handle changes through `client.onContext`. Use native status or action contributions for small controls, and a page for a custom layout.
+
+An icon is one of `network`, `panel`, `grid`, `sparkles`, `factory`, or an object with SVG `paths` and a `view_box`; it is geometry, not markup or a remote URL. Users hide, order and select replacements under Settings > Appearance. Set `replaces` to the exact public id offered as the replacement target; the replacement is inactive until the user selects it, and the original returns when the replacement is unavailable.
+
+## Build a page with the SDK
+
+Declare pages in the manifest or Python, with asset paths relative to the Extension directory:
+
+```json
+{
+  "api_version": 30,
+  "required_features": ["ui.pages", "services"],
+  "pages": [{
+    "page_id": "panel",
+    "title": "My panel",
+    "entry": "web/page.html",
+    "navigation": false,
+    "services": ["agent.list"]
+  }]
+}
+```
+
+The equivalent Python declaration is `api.register_page("panel", "My panel", "web/page.html", navigation=False, services=("agent.list",))`. `navigation` defaults to true; `services` defaults to an empty list. Assets stay under the page's build root and use relative URLs.
+
+The installed SDK artifact is `<vbot_root>/resources/sdk/vbot-extension-sdk-1.0.0.tgz`; its `example/` directory contains a complete manifest-only page and composer action. Extract the artifact into a temporary directory and copy its `package/example/` contents into the Extension's build directory; from there, install the SDK and build:
+
+```bash
+npm install --save-exact <vbot_root>/resources/sdk/vbot-extension-sdk-1.0.0.tgz
+npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
+npm run build
+```
+
+Replace `<vbot_root>` with the path from `vbot home`, quoting paths with spaces. Keep `package-lock.json` and use `npm ci` for repeat builds; install the manifest and resulting `web/` directory on the server, which needs no Node build process at runtime. The SDK's packaged `README.md` and `package.json` describe its build helper and public component exports.
+
+Import `createExtensionPageClient` from `@vbot/extension-sdk/client`, shared styles from `@vbot/extension-sdk/styles`, and shared controls such as `@vbot/extension-sdk/ui/PathField.svelte`. Create one client per page lifetime and call `dispose()` on unmount. Apply the host's theme, locale, timezone and route from `onContext`, using `applyExtensionTheme(context.theme)` from `@vbot/extension-sdk/lib/extensionTheme.js` for theme variables; follow [extension-pages.md](extension-pages.md) for navigation, invalidation, server path input and translation catalogs.
+
+## Product services and observations
+
+Use the startup host's `host.services` for supported product operations. `host.services.describe()` returns `available`, service descriptors (`name`, `kind`, `parameters`, `resources`) and observable resource names. Choose a returned name and its parameter schema, then call `await host.services.query(name, params)` for a query or `await host.services.execute(name, params)` for a mutation; a kind mismatch is refused. A standalone Runtime can have no application service catalog, so check `available` before using it.
+
+For pages, declare the needed service names on the page and call `await client.services.describe()`, `query(name, params)` or `execute(name, params)` through the bridge. An undeclared service is refused; adding a service to one page does not grant it to another. These services are trusted operator integrations; a Tool implementation keeps its `ToolContext` and sanctioned Tool APIs instead of using product services to bypass Agent policy.
+
+Subscribe with `dispose = host.services.subscribe([resource_name], callback)` to resource names returned by `describe()`. The callback receives an invalidation with `kind`, `revision` and optional `scope`; reread current state because multiple changes can coalesce and no event history is retained. Call the returned disposer when observation is no longer needed; retirement also releases the subscription and invalidates the old host. Keep callbacks short and move continuing work into an owned task with shutdown cleanup.
+
+## Providers and Channel platforms
+
+Register a Provider during `register(api)` with the same definition schema as `resources/providers/*.json`:
+
+```python
+def register(api):
+    api.register_provider({
+        "id": "my-gateway",
+        "name": "My Gateway",
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:8000/v1",
+        "models_endpoint": "/models",
+        "connections": [{"id": "default", "type": "none", "label": "Default"}],
+    })
+```
+
+The optional `adapter_type` is a concrete `core.providers.ProviderAdapter` subclass; omit it to reuse the named adapter. Provider ids are shared with built-in and custom Providers; a collision is diagnosed and skipped. Registration and Model discovery belong to the current Runtime, so do not patch a global adapter selector.
+
+Register a Channel platform with `api.register_channel_platform("my_platform", "My Platform", factory, settings_schema=SCHEMA)`. The synchronous `factory(config, context)` returns a `ChannelAdapter`; import `ChannelAdapter`, `ChannelConfig` and `ChannelAdapterContext` from `core.channels`. `config.settings` contains the validated platform JSON object; the context supplies `engine`, `credential_resolver`, `attachment_store` and `state_dir`. Give the settings schema an object root; store credential references, and resolve their values through `credential_resolver` instead of putting secrets in settings. Construct the adapter without I/O, connect in `start()`, and implement the `ChannelAdapter` lifecycle and message transport contract using its existing inbound access and Session routing.
+
+Platform ids share one catalog with built-ins; collisions are refused. Factories start after Extension startup; disable or reload retires the adapter and preserves saved Channel configuration. Configure the resulting platform through the live catalog and `--settings-file` recipe in [channels.md](channels.md).
+
+## Local Desktop capabilities
+
+Install native code on the computer where Desktop runs, under its config directory's `extensions/<name>/`: `%APPDATA%/vbot/extensions/` on Windows, `$XDG_CONFIG_HOME/vbot/extensions/` on Linux, or `~/.config/vbot/extensions/` when that variable is unset. Add `"desktop": {"entry": "desktop.py", "api_version": 1}` to `extension.json`; this version belongs to the Desktop API, independently of the server API version. Desktop loads this local entry on its next launch, without importing the server entry; `vbot extensions reload` does not reload native code.
+
+Import `DesktopExtensionAPI`, `EventSink` and `ExecutionHandler` from `desktop.extensions`. The synchronous `register(api)` calls `api.register_capability(name, label, factory, description="...", available=True)`. Registration only declares the factory; `factory(emit)` creates a handler after the user grants that capability to the connected server locally. Grants start disabled, and the server cannot install native code remotely.
+
+The handler implements async `execute(operation, params) -> dict`, `disconnected() -> None` and `close() -> None`; publish events with `emit(event_name, data_dict)`. Optional async `ready() -> str | None` returns a refusal reason or `None`; `read_only_operations` names operations safe during the native execution fence. Release connections and tasks in `disconnected` and `close`, and exercise revoke, reconnect and shutdown before reporting the capability working.
+
+Local Desktop settings `extensions.disabled` suppress native code import. The local extension folder takes precedence over a bundled Extension with the same identity, even when the local copy is disabled or fails; remove the local override to use the bundled copy again.

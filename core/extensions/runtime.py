@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
+from contextlib import AbstractAsyncContextManager, nullcontext
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.extensions.extensions import (
     ExtensionRegistry,
@@ -17,6 +18,10 @@ from core.storage import StorageManager
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _SETTINGS_WORKERS = BoundedWorkerPool(name="extension-settings", max_workers=2)
+
+if TYPE_CHECKING:
+    from core.channels import ChannelService
+    from core.providers import ProviderRegistry
 
 
 class ExtensionRuntime:
@@ -46,6 +51,11 @@ class ExtensionRuntime:
         make_host: Callable[[], ExtensionHost] | None = None,
         archive_uninstalled_groups: Callable[[frozenset[str]], Awaitable[None]] | None = None,
         refresh_secret_sources: Callable[[], None] = lambda: None,
+        providers: ProviderRegistry | None = None,
+        get_channels: Callable[[], ChannelService | None] = lambda: None,
+        integrations_changed: Callable[[], None] = lambda: None,
+        resume_integrations: Callable[[], bool] = lambda: True,
+        provider_publication: Callable[[], AbstractAsyncContextManager[None]] = nullcontext,
     ) -> None:
         self._storage = storage
         self._resources_path = resources_path
@@ -65,6 +75,11 @@ class ExtensionRuntime:
         self._make_host = make_host
         self._archive_uninstalled_groups = archive_uninstalled_groups
         self._refresh_secret_sources = refresh_secret_sources
+        self._providers = providers
+        self._get_channels = get_channels
+        self._integrations_changed = integrations_changed
+        self._resume_integrations = resume_integrations
+        self._provider_publication = provider_publication
         self._mutation_lock = asyncio.Lock()
         self._closing = False
 
@@ -87,7 +102,12 @@ class ExtensionRuntime:
             # The old layer stays installed until the replacement finished loading
             # (async registrations may take seconds); retire it now so nothing
             # dispatches to Extensions that are about to shut down.
-            old_registry.retire_registration()
+            await old_registry.release_integrations(
+                self._providers,
+                self._get_channels(),
+                publication=self._provider_publication,
+                retire=True,
+            )
             old_registry.remove_applied_tools(self._tools)
             if dispatcher is not None:
                 old_registry.remove_applied_commands(dispatcher)
@@ -112,6 +132,12 @@ class ExtensionRuntime:
             )
 
         self._set_registry(new_registry)
+        if self._providers is not None:
+            async with self._provider_publication():
+                new_registry.apply_providers(self._providers)
+        channels = self._get_channels()
+        if channels is not None:
+            new_registry.apply_channels(channels)
         new_registry.apply_tools(self._tools)
         if dispatcher is not None:
             new_registry.apply_commands(dispatcher)
@@ -123,6 +149,9 @@ class ExtensionRuntime:
         if self._make_host is not None:
             new_registry.bind_host(self._make_host())
         await new_registry.fire_startup()
+        if channels is not None:
+            new_registry.resume_channels(channels, start=self._resume_integrations())
+        self._integrations_changed()
 
         records = new_registry.records()
         self._logger.info(
@@ -149,7 +178,15 @@ class ExtensionRuntime:
         removed_backends = self._recall_backend_names(registry, newly_disabled)
         dispatcher = self._get_command_dispatcher()
         for name in newly_disabled:
+            await registry.quiesce(name)
+            await registry.release_integrations(
+                self._providers,
+                self._get_channels(),
+                {name},
+                publication=self._provider_publication,
+            )
             await registry.deactivate(name, self._tools, dispatcher)
+        self._integrations_changed()
         self._refresh_prompts()
         self._refresh_secret_sources()
         await self._reload_skills()
@@ -170,6 +207,9 @@ class ExtensionRuntime:
         if self._make_host is not None:
             registry.bind_host(self._make_host())
         await registry.fire_startup()
+        channels = self._get_channels()
+        if channels is not None:
+            registry.resume_channels(channels, start=self._resume_integrations())
 
     async def _release_uninstalled_owners(self, registry: ExtensionRegistry) -> None:
         """Archive owner-managed Sessions whose Extension is no longer installed.
@@ -199,7 +239,13 @@ class ExtensionRuntime:
         async with self._mutation_lock:
             registry = self._get_registry()
             if registry is not None:
-                await self._finish_mutation(registry.fire_shutdown(), name="shutdown")
+                await self._finish_mutation(self._shutdown(registry), name="shutdown")
+
+    async def _shutdown(self, registry: ExtensionRegistry) -> None:
+        await registry.release_integrations(
+            self._providers, self._get_channels(), publication=self._provider_publication
+        )
+        await registry.fire_shutdown()
 
     async def _finish_mutation(self, operation: Coroutine[Any, Any, None], *, name: str) -> None:
         """Keep the mutation lock until an admitted operation has settled."""

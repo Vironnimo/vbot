@@ -1,13 +1,13 @@
 <script>
   import { tick } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Checkbox from '../../../../webui/src/components/ui/Checkbox.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import './boardComposer.css';
 

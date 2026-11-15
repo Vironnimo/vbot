@@ -1,11 +1,11 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import { formatMoment } from '../../../../webui/src/lib/timeText.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import CopyButton from '../../../../webui/src/components/ui/CopyButton.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
-  import ModelId from '../../../../webui/src/components/ui/ModelId.svelte';
-  import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { formatMoment } from '@vbot/extension-sdk/lib/timeText.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import ModelId from '@vbot/extension-sdk/ui/ModelId.svelte';
+  import StatusChip from '@vbot/extension-sdk/ui/StatusChip.svelte';
   import {
     runProfileName,
     runSize,

@@ -1,9 +1,9 @@
 import {
   formatMoment,
   formatRelativeTime,
-} from '../../../../webui/src/lib/timeText.js';
-import { activeLocaleTag, t } from '../../../../webui/src/lib/i18n.js';
-import { modelIdParts } from '../../../../webui/src/lib/modelSelection.js';
+} from '@vbot/extension-sdk/lib/timeText.js';
+import { activeLocaleTag, t } from '@vbot/extension-sdk/lib/i18n.js';
+import { modelIdParts } from '@vbot/extension-sdk/lib/modelSelection.js';
 import {
   participantCount,
   participantTotal,

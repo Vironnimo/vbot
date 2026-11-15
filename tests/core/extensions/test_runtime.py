@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.extensions import _callbacks as extension_callbacks
 from core.extensions.extensions import ExtensionRegistry, ExtensionUnavailableError
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
@@ -34,6 +35,39 @@ from tests.core.extensions.extension_test_support import (
 )
 
 _LOGGER_NAME = "vbot.extensions.runtime"
+
+
+@pytest.mark.asyncio
+async def test_channel_drain_deadline_does_not_block_registry_retirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_extension(tmp_path, "channels", "def register(api): pass\n")
+    registry = ExtensionRegistry.load(tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    tasks: set[asyncio.Task[Any]] = set()
+
+    async def drain(_owner: object) -> None:
+        entered.set()
+        await finish.wait()
+
+    async def deadline(
+        pending: set[asyncio.Task[Any]], *, timeout: float
+    ) -> tuple[set[Any], set[Any]]:
+        tasks.update(pending)
+        await entered.wait()
+        return set(), pending
+
+    channels = cast(Any, SimpleNamespace(release_platforms=drain))
+    registry.apply_channels(channels)
+    identity = registry.registration_identity("channels")
+    monkeypatch.setattr(extension_callbacks, "_wait", deadline)
+    try:
+        await registry.release_integrations(None, channels, retire=True)
+        assert not registry.is_registration_current(identity)
+        assert tasks and not any(task.done() for task in tasks)
+    finally:
+        finish.set()
+        await asyncio.gather(*tasks)
 
 
 def _runtime(

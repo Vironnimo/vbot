@@ -8,6 +8,7 @@
   import { onMount, tick, untrack } from 'svelte';
 
   import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
   import LazyContent from './ui/LazyContent.svelte';
   import { loadComponent } from '$lib/lazyContent.js';
   import { settingsPanelLoaders } from '$lib/settingsView/panelLoaders.js';
@@ -721,17 +722,34 @@
                   {/if}
                   <div class="settings-editor-body s-section__body">
                     {#if visitedPages[page.id]}
-                      <LazyContent load={settingsPanelLoaders[panelId]}>
-                        {#snippet children(Panel)}
-                          {@render panelContent(
-                            panelId,
-                            !pageNavigation.searchActive &&
-                              pageNavigation.activePageId === page.id &&
-                              (!subPage || panelId === page.subPages),
-                            Panel,
-                          )}
-                        {/snippet}
-                      </LazyContent>
+                      {#snippet builtInPanel()}
+                        <LazyContent load={settingsPanelLoaders[panelId]}>
+                          {#snippet children(Panel)}
+                            {@render panelContent(
+                              panelId,
+                              !pageNavigation.searchActive &&
+                                pageNavigation.activePageId === page.id &&
+                                (!subPage || panelId === page.subPages),
+                              Panel,
+                            )}
+                          {/snippet}
+                        </LazyContent>
+                      {/snippet}
+                      <ContributionSurface
+                        surface="settings.sections"
+                        context={{
+                          settings_section: panelId,
+                          view: 'settings',
+                        }}
+                        builtins={[
+                          {
+                            id: `core:settings.${panelId}`,
+                            title: panel.label(),
+                            order: 0,
+                            render: builtInPanel,
+                          },
+                        ]}
+                      />
                     {/if}
                   </div>
                 </section>

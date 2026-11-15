@@ -15,6 +15,7 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from contextlib import AbstractAsyncContextManager, nullcontext
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -79,6 +80,7 @@ from core.extensions._loading import (
     purge_extension_modules,
     resolve_pages,
 )
+from core.extensions.contributions import ContributionDeclaration
 from core.extensions.interactions import (
     InteractionEvent,
     InteractionResponder,
@@ -89,7 +91,9 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
+    from core.channels import ChannelService
     from core.chat.commands import CommandDispatcher
+    from core.providers import ProviderRegistry
     from core.recall.recall import RecallBackendRegistry
     from core.tools.tools import ToolContext, ToolRegistry
 
@@ -115,6 +119,8 @@ class ExtensionRegistry:
         self._quiesced: set[str] = set()
         self._epoch = uuid.uuid4().hex
         self._registration_retired = False
+        self._integration_owners: dict[str, ExtensionRegistrationIdentity] = {}
+        self._integrations_ready = False
         # Pages resolved once per registration, keyed by (Extension, page id).
         # Replaced as a whole, never mutated: worker threads iterate it.
         self._pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
@@ -154,6 +160,37 @@ class ExtensionRegistry:
             return None
         _record, declaration, entry = page
         return declaration, entry
+
+    def current_contribution(
+        self, identity: ExtensionRegistrationIdentity, contribution_id: str
+    ) -> ContributionDeclaration | None:
+        """Read a declared contribution only from its exact active owner."""
+        if not self.is_registration_current(identity):
+            return None
+        for record in self._records:
+            if record.name == identity.name:
+                return next(
+                    (
+                        item
+                        for item in record.declarations.contributions
+                        if item.id == contribution_id
+                    ),
+                    None,
+                )
+        return None
+
+    def contribution_declarations(
+        self,
+    ) -> list[tuple[ExtensionRegistrationIdentity, ContributionDeclaration]]:
+        """Snapshot current presentation declarations in deterministic load order."""
+        if self._registration_retired:
+            return []
+        return [
+            (ExtensionRegistrationIdentity(record.name, self._epoch), item)
+            for record in self._records
+            if record.status == "loaded"
+            for item in record.declarations.contributions
+        ]
 
     def page_declarations(
         self,
@@ -412,6 +449,40 @@ class ExtensionRegistry:
 
     def apply_commands(self, command_dispatcher: CommandDispatcher) -> None:
         self._capabilities.apply_commands(command_dispatcher)
+
+    def apply_providers(self, providers: ProviderRegistry) -> None:
+        """Install Provider declarations at the per-Runtime Provider registry."""
+        from core.extensions._integrations import apply_providers
+
+        apply_providers(self, providers)
+
+    def apply_channels(self, channels: ChannelService) -> None:
+        """Install Channel platform factories before their Channels start."""
+        from core.extensions._integrations import apply_channels
+
+        apply_channels(self, channels)
+
+    async def release_integrations(
+        self,
+        providers: ProviderRegistry | None,
+        channels: ChannelService | None,
+        names: set[str] | None = None,
+        *,
+        publication: Callable[[], AbstractAsyncContextManager[None]] = nullcontext,
+        retire: bool = False,
+    ) -> None:
+        """Drain owned Channels and withdraw only this registration's Providers."""
+        from core.extensions._integrations import release_integrations
+
+        await release_integrations(
+            self, providers, channels, names, publication=publication, retire=retire
+        )
+
+    def resume_channels(self, channels: ChannelService, *, start: bool = True) -> None:
+        """Resume enabled Channels after a fresh Extension registration is ready."""
+        from core.extensions._integrations import resume_channels
+
+        resume_channels(self, channels, start=start)
 
     def prompt_block_declarations(self) -> list[Any]:
         return self._capabilities.prompt_block_declarations()
@@ -906,6 +977,7 @@ class ExtensionRegistry:
             for handler in record.declarations.shutdown:
                 await invoke_lifecycle_fail_open("shutdown", record.name, handler)
             await self._release_owner(record.name)
+        self.retire_registration()
 
     def fire_shutdown_blocking(self) -> None:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""

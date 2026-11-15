@@ -1083,6 +1083,21 @@ def _signs_in_elsewhere(previous: dict[str, Any], config: dict[str, Any]) -> boo
 
 
 def register(api: ExtensionAPI) -> None:
+    api.register_page(
+        "settings",
+        "MCP connections",
+        "web/page.html",
+        navigation=False,
+        services=("agent.list", "tool.list", "agent.update"),
+    )
+    api.register_contribution(
+        "settings",
+        surface="settings.sections",
+        title="MCP connections",
+        kind="view",
+        page="settings",
+        when={"settings_section": "extensions"},
+    )
     service = MCPService(api)
     api.operations.startup.append(service.start)
     api.operations.pending_inputs = service.inputs.list

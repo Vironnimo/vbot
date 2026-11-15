@@ -1,15 +1,15 @@
 <script>
-  import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import { t, activeLocaleTag } from '@vbot/extension-sdk/lib/i18n.js';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
   import {
     formatInteger,
     formatTokens,
     tokenTooltip,
     totalTokens,
-  } from '../../../../webui/src/lib/statisticsView.js';
-  import DataTable from '../../../../webui/src/components/ui/DataTable.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import ModelId from '../../../../webui/src/components/ui/ModelId.svelte';
+  } from '@vbot/extension-sdk/lib/statisticsView.js';
+  import DataTable from '@vbot/extension-sdk/ui/DataTable.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import ModelId from '@vbot/extension-sdk/ui/ModelId.svelte';
   import './runUsage.css';
 
   // The Usage tab: the Run's tokens, tool calls and Runs, then one table row

@@ -1,5 +1,5 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import { stepColumns, stepName } from './workflows.js';
 
   // A Workflow as a flow: steps left to right by what they come after, so

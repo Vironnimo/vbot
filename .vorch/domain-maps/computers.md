@@ -36,7 +36,7 @@ Only the currently connected instance for an id receives requests. Replacing its
 
 The running Desktop app hosts native handlers, including while minimized; it starts no independent daemon or local Runtime. Native Terminal primitives and Computer Use targets are reusable imports, while Agents, Session state, permission decisions and orchestration stay on the server. Disconnect and close are separate handler hooks: Terminal preserves processes across a network drop, Computer Use stops/releases input, and ending the Desktop scope closes its native resources. Desktop owns per-server consent and close confirmation (`desktop.md`).
 
-Adding a native capability extends Desktop's consent/factory catalog and supplies a server-side consumer plus its capability protocol. The registry and socket route capability names and operation payloads without Terminal or Computer Use branches. Extensions reach this same service through API 21 `host.computers`; they do not need Runtime or transport access (`extensions/host.md`).
+Adding a native capability declares a local Desktop entry in the Extension manifest and supplies a server-side consumer plus its capability protocol (`desktop/computer-sharing.md` -> Local Extension declarations). The registry and socket route capability names and operation payloads without Terminal or Computer Use branches. Extensions reach this same service through `host.computers`; they do not need Runtime or transport access (`extensions/host.md`).
 
 ## Lifecycle and evidence
 

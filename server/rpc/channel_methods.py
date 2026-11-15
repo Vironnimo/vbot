@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import copy
+import re
 from typing import Any, cast
 
 from core.channels import (
     ALLOWED_CHANNEL_DM_SCOPES,
-    ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
     managed_channel_token_env_var,
 )
+from core.channels._choices import ALLOWED_CHANNEL_PLATFORMS
 from core.database import DatabaseError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_CHANNELS, RESOURCE_KIND_DATA_STORE
@@ -48,7 +50,7 @@ async def _list_channels(state: Any, params: JsonObject) -> JsonObject:
         ]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"channels": channels}
+    return {"channels": channels, "platforms": channel_service.platform_catalog()}
 
 
 async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -77,6 +79,7 @@ async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject
         "app_token",
         "server_url",
         "email",
+        "settings",
     }
     _reject_unsupported(params, supported_fields, "channel.create")
 
@@ -96,6 +99,7 @@ async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject
         app_token_env_var=_channel_app_token_key(params, channel_id),
         server_url=_channel_optional_text(params, "server_url"),
         email=_channel_email(params),
+        settings=_channel_settings(params),
     )
 
     credential_result: JsonObject | None = None
@@ -160,6 +164,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "app_token_env_var",
         "server_url",
         "email",
+        "settings",
     }
     _reject_unsupported(params, supported_fields, "channel.update")
 
@@ -188,6 +193,8 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["observe_unaddressed"] = _required_bool(params, "observe_unaddressed")
     if "email" in params:
         updates["email"] = _channel_email(params)
+    if "settings" in params:
+        updates["settings"] = _channel_settings(params)
 
     previous_config = await _channel_config_if_available(state.runtime.channel_service, channel_id)
 
@@ -499,6 +506,8 @@ def _channel_token_input(params: JsonObject, channel_id: str) -> tuple[str, str 
         return "", None
     has_env_var = "token_env_var" in params
     has_managed_token = "token" in params
+    if not has_managed_token and params.get("platform") not in ALLOWED_CHANNEL_PLATFORMS:
+        return _channel_optional_text(params, "token_env_var"), None
     if has_env_var == has_managed_token:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -616,13 +625,19 @@ def _validate_channel_agent_exists(state: Any, agent_id: str) -> None:
         raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
 
 
+def _channel_settings(params: JsonObject) -> JsonObject:
+    value = params.get("settings", {})
+    if not isinstance(value, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.settings must be an object")
+    return copy.deepcopy(value)
+
+
 def _required_channel_platform(params: JsonObject, key: str) -> str:
     platform = _required_string(params, key)
-    if platform not in ALLOWED_CHANNEL_PLATFORMS:
-        options = ", ".join(sorted(ALLOWED_CHANNEL_PLATFORMS))
+    if re.fullmatch(r"[a-z][a-z0-9_-]*", platform) is None:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.{key} must be one of: {options}",
+            f"params.{key} must be a lowercase platform id",
         )
     return platform
 

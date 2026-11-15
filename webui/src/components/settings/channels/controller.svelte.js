@@ -21,7 +21,6 @@ import {
   CHANNEL_DM_SCOPES,
   CHANNEL_FORM_MODE_CREATE,
   CHANNEL_FORM_MODE_EDIT,
-  CHANNEL_PLATFORMS,
   EMAIL_SMTP_SECURITIES,
   applyChannelPanelList,
   buildChannelCreatePayload,
@@ -56,6 +55,7 @@ export function createChannelsSettings(context) {
   let channelPanelState = $state(createChannelPanelState());
   let channelAgents = $state([]);
   let channelTools = $state([]);
+  let channelPlatforms = $state([]);
   let channelFormVisible = $state(false);
   let channelFormMode = $state(CHANNEL_FORM_MODE_CREATE);
   let channelFormValues = $state(createChannelFormValues());
@@ -110,12 +110,27 @@ export function createChannelsSettings(context) {
     return autosave.participant.runSave('manual');
   }
 
-  let channelPlatformOptions = $derived(
-    CHANNEL_PLATFORMS.map((platformId) => ({
-      value: platformId,
-      label: channelPlatformLabel(platformId),
+  let channelPlatformOptions = $derived([
+    ...channelPlatforms.map((platform) => ({
+      value: platform.id,
+      label:
+        channelPlatformLabel(platform.id) === platform.id
+          ? platform.label
+          : channelPlatformLabel(platform.id),
     })),
-  );
+    ...(channelFormValues.platform &&
+    !channelPlatforms.some(
+      (platform) => platform.id === channelFormValues.platform,
+    )
+      ? [
+          {
+            value: channelFormValues.platform,
+            label: channelFormValues.platform,
+            disabled: true,
+          },
+        ]
+      : []),
+  ]);
   let channelDmScopeOptions = $derived(
     CHANNEL_DM_SCOPES.map((scopeId) => ({
       value: scopeId,
@@ -249,7 +264,8 @@ export function createChannelsSettings(context) {
     const saved = createChannelFormValues(channel);
     const next = { ...channelFormValues };
     for (const [field, value] of Object.entries(saved)) {
-      if (next[field] === baseline[field]) next[field] = value;
+      if (JSON.stringify(next[field]) === JSON.stringify(baseline[field]))
+        next[field] = value;
     }
     channelFormValues = next;
     channelBaseline = JSON.stringify(saved);
@@ -261,6 +277,7 @@ export function createChannelsSettings(context) {
       [fieldName]: value,
     };
     if (fieldName === 'platform') {
+      channelFormValues.settings = {};
       channelFormValues.app_token_env_var = '';
       channelFormValues.server_url = '';
       if (value === 'whatsapp') {
@@ -361,6 +378,9 @@ export function createChannelsSettings(context) {
       ]);
       if (request !== channelsRequested) return;
       showChannelAgents(agentsRequest, agentsResult);
+      channelPlatforms = Array.isArray(channelsResult.platforms)
+        ? channelsResult.platforms
+        : [];
 
       const nextState = applyChannelPanelList(
         channelPanelState,
@@ -711,6 +731,13 @@ export function createChannelsSettings(context) {
       return deleteConfirmChannel;
     },
     participant: autosave.participant,
+    get channelSettingsSchema() {
+      return (
+        channelPlatforms.find(
+          (platform) => platform.id === channelFormValues.platform,
+        )?.settings_schema ?? {}
+      );
+    },
     get channelPlatformOptions() {
       return channelPlatformOptions;
     },

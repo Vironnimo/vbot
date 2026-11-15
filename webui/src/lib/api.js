@@ -71,6 +71,9 @@ export {
 export {
   getSettings,
   listExtensionPages,
+  listExtensionContributions,
+  invokeExtensionContribution,
+  invokeExtensionPageService,
   invokeExtensionPageOperation,
   openExtensionPageRun,
   cancelExtensionPageToolCall,

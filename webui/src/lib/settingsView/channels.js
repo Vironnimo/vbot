@@ -39,7 +39,6 @@ export const CHANNEL_DM_SCOPES = Object.freeze([
   CHANNEL_DM_SCOPE_PER_ACCOUNT_CHANNEL_PEER,
 ]);
 
-const CHANNEL_PLATFORM_SET = new Set(CHANNEL_PLATFORMS);
 const CHANNEL_DM_SCOPE_SET = new Set(CHANNEL_DM_SCOPES);
 
 export const CHANNEL_FORM_MODE_CREATE = 'create';
@@ -60,6 +59,9 @@ export function createChannelFormValues(channel = null) {
     server_url: textOrEmpty(channel?.server_url),
     allowed_chat_ids: formatAllowedChatIds(channel?.allowed_chat_ids),
     ...emailFormValues(channel?.email),
+    settings: isPlainObject(channel?.settings)
+      ? JSON.parse(JSON.stringify(channel.settings))
+      : {},
   };
 }
 
@@ -268,6 +270,8 @@ export function applyChannelPanelList(state, result) {
 
 export function buildChannelCreatePayload(form) {
   const source = ensureForm(form, 'create');
+  if (hasOwn(source, 'settings') && !isPlainObject(source.settings))
+    throw new TypeError('settings must be an object');
 
   return {
     id: requiredText(source.id, 'id'),
@@ -276,6 +280,9 @@ export function buildChannelCreatePayload(form) {
     dm_scope: resolveDmScope(source.dm_scope),
     allowed_chat_ids: parseAllowedChatIds(source.allowed_chat_ids),
     ...connectionFields(source),
+    ...(isPlainObject(source.settings) && Object.keys(source.settings).length
+      ? { settings: source.settings }
+      : {}),
     enabled:
       source.platform === 'whatsapp'
         ? false
@@ -313,11 +320,20 @@ export function buildChannelUpdatePayload(form, baseline = null) {
     hasUpdates = true;
   }
 
+  if (hasOwn(source, 'settings')) {
+    if (!isPlainObject(source.settings))
+      throw new TypeError('settings must be an object');
+    payload.settings = source.settings;
+    hasUpdates = true;
+  }
+
   if (hasOwn(source, 'token_env_var')) {
     payload.token_env_var =
       source.platform === 'whatsapp'
         ? ''
-        : requiredText(source.token_env_var, 'token_env_var');
+        : CHANNEL_PLATFORMS.includes(source.platform)
+          ? requiredText(source.token_env_var, 'token_env_var')
+          : textOrEmpty(source.token_env_var);
     hasUpdates = true;
   }
 
@@ -415,6 +431,7 @@ function normalizeChannel(channel) {
     app_token_env_var: asOptionalText(channel?.app_token_env_var) ?? '',
     server_url: asOptionalText(channel?.server_url) ?? '',
     email: isPlainObject(channel?.email) ? channel.email : null,
+    settings: isPlainObject(channel?.settings) ? channel.settings : {},
     enabled: booleanWithDefault(channel?.enabled, true),
     running: optionalBoolean(channel?.running),
   };
@@ -439,10 +456,8 @@ function requiredText(value, fieldName) {
 
 function requiredPlatform(value) {
   const platform = requiredText(value, 'platform');
-  if (!CHANNEL_PLATFORM_SET.has(platform)) {
-    const options = CHANNEL_PLATFORMS.join(', ');
-    throw new TypeError(`platform must be one of: ${options}`);
-  }
+  if (!/^[a-z][a-z0-9_-]*$/u.test(platform))
+    throw new TypeError('platform must be a lowercase platform id');
 
   return platform;
 }
@@ -529,8 +544,11 @@ function parseAllowedChatId(value) {
 function connectionFields(source) {
   if (source.platform === 'whatsapp') return {};
   const fields = {
-    token_env_var: requiredText(source.token_env_var, 'token_env_var'),
+    token_env_var: CHANNEL_PLATFORMS.includes(source.platform)
+      ? requiredText(source.token_env_var, 'token_env_var')
+      : textOrEmpty(source.token_env_var),
   };
+  if (!fields.token_env_var) delete fields.token_env_var;
   if (source.platform === 'slack')
     fields.app_token_env_var = requiredText(
       source.app_token_env_var,

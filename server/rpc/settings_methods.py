@@ -40,6 +40,7 @@ from server.events import (
     RESOURCE_KIND_DATA_STORE,
     RESOURCE_KIND_EXTENSIONS,
     RESOURCE_KIND_MODEL_FAVORITES,
+    RESOURCE_KIND_SETTINGS,
     RESOURCE_KIND_SKILLS,
 )
 from server.rpc._mutations import serialized_mutation, serialized_read
@@ -301,6 +302,7 @@ def _publish_settings_effects(state: Any, effects: SettingsChangeEffects) -> Non
     changes the Skill inventory. Changed shared Agent defaults change every
     Agent's effective configuration, its Permission Rules included.
     """
+    publish_resource_changed(state, RESOURCE_KIND_SETTINGS)
     if effects.commands_changed:
         publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
         publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)

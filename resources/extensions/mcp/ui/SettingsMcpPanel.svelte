@@ -4,34 +4,35 @@
   import './mcp.css';
   import { onMount, onDestroy, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import Dropdown from '../Dropdown.svelte';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
-  import FormField from '../ui/FormField.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
-  import TextField from '../ui/TextField.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import StatusChip from '@vbot/extension-sdk/ui/StatusChip.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
 
-  import Toggle from '../ui/Toggle.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import McpCatalogDialog from './McpCatalogDialog.svelte';
   import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
   import McpImportDialog from './McpImportDialog.svelte';
 
-  import { t } from '$lib/i18n.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import {
     createMcpSettings,
     mcpDraft,
     mcpCredentialNames,
     mcpProblemText,
     mcpSetupNeeded,
-  } from '$lib/mcpSettings.js';
-  import { tooltip } from '$lib/tooltip.js';
+  } from './mcpSettings.js';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
 
   const componentId = $props.id();
   let {
+    client,
     // The App's Extension invalidations; the connections refresh on their
     // changes instead of on a timer.
     subscribeInvalidations = null,
@@ -64,6 +65,7 @@
   // search still matches them.
   const expanded = new SvelteSet();
   const controller = createMcpSettings({
+    operation: (_owner, name, args) => client.operation(name, args),
     onChange: (next) => {
       state = next;
     },
@@ -74,8 +76,61 @@
   );
   onMount(() => {
     void controller.refresh();
+    return client.onSearch((id) => {
+      if (id.startsWith('connection:'))
+        void revealConnection(id.slice('connection:'.length));
+      else if (id === 'connections')
+        document.querySelector('.mcp-panel button')?.focus();
+    });
   });
   $effect(() => subscribeInvalidations?.(controller.handleInvalidation));
+  $effect(() => {
+    const entries = [
+      {
+        id: 'connections',
+        label: t('mcp.title'),
+        terms: [t('mcp.add'), t('mcp.catalogBrowse'), t('mcp.import')].join(
+          ' ',
+        ),
+      },
+      ...state.connections.slice(0, 199).map(({ id, configuration }) => {
+        let endpoint = '';
+        if (configuration.url) {
+          try {
+            const url = new URL(configuration.url);
+            endpoint = `${url.protocol}//${url.host}${url.pathname}`;
+          } catch {
+            // An invalid endpoint is explained by the connection editor.
+          }
+        }
+        return {
+          id: `connection:${id}`,
+          label: id,
+          terms: [
+            configuration.description,
+            configuration.transport,
+            configuration.command,
+            endpoint,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .slice(0, 4096),
+        };
+      }),
+    ];
+    // Leave room for the bridge envelope; never publish secret-bearing drafts.
+    const encoder = new TextEncoder();
+    const index = [];
+    let bytes = 2;
+    for (const entry of entries) {
+      const size =
+        encoder.encode(JSON.stringify(entry)).length + (index.length ? 1 : 0);
+      if (bytes + size > 48 * 1024) break;
+      index.push(entry);
+      bytes += size;
+    }
+    void client.setSearchIndex(index).catch(() => {});
+  });
   onDestroy(() => controller.dispose());
 
   // Counts opened editors, so a fill answered after its editor closed or
@@ -132,6 +187,9 @@
   // focus, since the control that opened the dialog may be gone with it.
   async function connected(id) {
     catalog = null;
+    await revealConnection(id);
+  }
+  async function revealConnection(id) {
     expanded.add(id);
     await tick();
     const index = state.connections.findIndex(
@@ -469,6 +527,7 @@
 
 {#if draft}
   <McpConnectionEditor
+    listDirectory={(params) => client.listDirectory(params)}
     bind:draft
     {original}
     {state}
@@ -561,6 +620,7 @@
 {/if}
 {#if catalog}
   <McpCatalogDialog
+    {client}
     {subscribeInvalidations}
     {agentsRefreshToken}
     signInConnection={catalog.signIn}

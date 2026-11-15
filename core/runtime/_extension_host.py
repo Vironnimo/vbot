@@ -30,6 +30,7 @@ from core.extensions.notifications import (
     validate_page_route,
 )
 from core.extensions.operations import ExtensionHost
+from core.extensions.services import ExtensionServiceCatalog
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.task_execution import TaskUsageContext
@@ -223,6 +224,42 @@ class ExtensionHostFactory:
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
         self.databases = ExtensionDatabases(host.data_dir)
+        self.services = ExtensionServiceCatalog()
+        self._service_observers = [
+            chat_run_manager.add_run_started_callback(self._observe_service_run),
+            chat_run_manager.add_run_finished_callback(self._observe_service_run),
+            chat_run_manager.add_queue_changed_callback(
+                lambda address: self.services.publish("queue", self._service_address(address))
+            ),
+            sessions.add_title_changed_callback(
+                lambda address: self.services.publish("sessions", self._service_address(address))
+            ),
+        ]
+
+    @staticmethod
+    def _service_address(address: SessionAddress) -> dict[str, Any]:
+        return {
+            "agent_id": address.agent_id,
+            "project_id": address.project_id,
+            "session_id": address.session_id,
+        }
+
+    def _observe_service_run(self, run: Run) -> None:
+        self.services.publish(
+            "runs",
+            {
+                "agent_id": run.agent_id,
+                "project_id": run.project_id,
+                "session_id": run.session_id,
+                "run_id": run.id,
+            },
+        )
+
+    def close_services(self) -> None:
+        for unsubscribe in self._service_observers:
+            unsubscribe()
+        self._service_observers.clear()
+        self.services.close()
 
     @property
     def _extensions(self) -> ExtensionRegistry | None:
@@ -237,6 +274,7 @@ class ExtensionHostFactory:
         )
 
     async def _release_owner(self, identity: Any) -> None:
+        await self.services.release_owner(identity)
         for key in tuple(self._deferred_runs):
             if key[0] == identity:
                 self._deferred_runs.pop(key)
@@ -301,6 +339,9 @@ class ExtensionHostFactory:
             ),
             temporary_agents=groups,
             state_dir=state_dir,
+            services=self.services.for_owner(
+                identity, partial(self._require_registration, identity)
+            ),
             open_database=self.databases.opener(identity),
             capture_tool_call=lambda context: self._capture_tool_call(identity, context),
             defer_tool_call=lambda context: self._capture_tool_call(

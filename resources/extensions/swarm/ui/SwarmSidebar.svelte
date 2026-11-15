@@ -1,14 +1,14 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ContextMenu from '../../../../webui/src/components/ui/ContextMenu.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ContextMenu from '@vbot/extension-sdk/ui/ContextMenu.svelte';
   import {
     contextMenuAnchor,
     isContextMenuKey,
-  } from '../../../../webui/src/components/ui/contextMenu.js';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  } from '@vbot/extension-sdk/ui/contextMenu.js';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
+  import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
   import {
     profileSummary,
     profileTooltip,

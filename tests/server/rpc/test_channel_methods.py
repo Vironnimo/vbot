@@ -94,6 +94,9 @@ def _channel_service(*configs: ChannelConfig) -> Mock:
     service.is_failed.return_value = False
     service.failure_reason.return_value = None
     service.denied_chats.return_value = []
+    service.platform_catalog.return_value = [
+        {"id": "matrix", "label": "Matrix", "settings_schema": {"type": "object"}}
+    ]
     return service
 
 
@@ -161,7 +164,8 @@ async def test_channel_list_returns_serialized_channels() -> None:
                 "denied_chats": [],
                 "connected": False,
             }
-        ]
+        ],
+        "platforms": service.platform_catalog.return_value,
     }
     service.get_channel.assert_not_awaited()
     service.channel_access.assert_not_called()
@@ -197,8 +201,23 @@ async def test_channel_list_returns_serialized_channels() -> None:
                 email=EmailSettings.from_dict(_EMAIL),
             ),
         ),
+        (
+            {
+                "id": "matrix",
+                "platform": "matrix",
+                "agent_id": "assistant",
+                "token_env_var": "",
+                "settings": {"homeserver": "https://chat.example"},
+            },
+            _channel_config(
+                channel_id="matrix",
+                platform="matrix",
+                token_env_var="",
+                settings={"homeserver": "https://chat.example"},
+            ),
+        ),
     ],
-    ids=["telegram", "discord", "email"],
+    ids=["telegram", "discord", "email", "extension"],
 )
 async def test_channel_create_saves_the_config_and_reloads_the_channel_tool(
     params: JsonObject, expected: ChannelConfig
@@ -691,7 +710,7 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
         ),
         (
             "channel.create",
-            {**_TELEGRAM, "platform": "matrix"},
+            {**_TELEGRAM, "platform": "../matrix"},
             None,
             "invalid_request",
             "platform",

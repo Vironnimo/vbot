@@ -2,7 +2,8 @@
   "name": "Computer Use",
   "version": "2.1.0",
   "description": "Operate desktop applications on the selected computer: the server or a connected Desktop app. The selected computer needs a signed-in Windows desktop. Requires explicit permission per Agent and can ask before each app.",
-  "api_version": 29,
+  "api_version": 30,
+  "desktop": { "entry": "desktop.py", "api_version": 1 },
   "documentation": [
     {
       "path": "docs/usage.md",

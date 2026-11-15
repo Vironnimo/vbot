@@ -2,12 +2,12 @@
   // The Wiki page editor: title and Markdown source with the save state. An
   // existing page autosaves through WikiPanel's participant; a new page is
   // created only by the Save action. WikiPanel owns the draft and its saves.
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import SaveStatus from '@vbot/extension-sdk/ui/SaveStatus.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
 
   let {
     page,

@@ -2,7 +2,7 @@ import {
   setToolAccessPreference,
   toolAccessIncludes,
   TOOL_ACTIVATION_CONFIGURABLE,
-} from './toolAccess.js';
+} from '@vbot/extension-sdk/lib/toolAccess.js';
 
 // The MCP connector catalog (`catalog` and `add_from_catalog` of the MCP
 // Extension): hosted services a user connects in one step, then signs in to

@@ -69,7 +69,7 @@ async def build_discovery_request(
     """
 
     base_url, models_endpoint = _require_discovery_target(provider_config, connection)
-    adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+    adapter_class = _adapter_class_for_discovery(provider_config)
     discovery_params = await _resolve_discovery_params(adapter_class, connection)
     return DiscoveryRequest(
         provider_config=provider_config,
@@ -254,7 +254,7 @@ def _resolve_discovery_target(
     return base_url, models_endpoint
 
 
-def _adapter_class_for_discovery(adapter: str) -> type[ProviderAdapter]:
+def _adapter_class_for_discovery(adapter: str | ProviderConfig) -> type[ProviderAdapter]:
     adapter_class = discovery_adapter_type(adapter)
     if adapter_class is None:
         raise ValueError(f"No model normalizer registered for adapter '{adapter}'")

@@ -1,4 +1,4 @@
-import { totalTokens } from '../../../../webui/src/lib/statisticsView.js';
+import { totalTokens } from '@vbot/extension-sdk/lib/statisticsView.js';
 
 // Background changes reload the Usage report at most this often; the last
 // change of a burst is always followed by a reload.

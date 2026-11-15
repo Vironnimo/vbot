@@ -22,7 +22,8 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 - Archive: the Settings page Archive (no main view) and the delete dialogs' Archive option (`webui/archive.md`).
 - Terminals: `terminalsView.js` owns the Terminals view; each streamed Terminal has one connection owner, `lib/terminalsView/connection.js`, and input and resize travel over that Terminal's WebSocket, not RPC (`tools/terminal.md`).
 - `api.js` preserves the public transport boundary; internal `lib/api/` files separate RPC validation/errors, event subscriptions, binary media and domain request adapters. Raw RPC calls and method literals remain inside this owner; `rpcOwnership.guard.test.js` scans the internal files as part of it. Transport failures normalize as `ApiClientError`; binary attachments stay outside RPC envelopes.
-- Extension pages use generic shell routes and `ExtensionPage.svelte`; the opaque frame bridge binds source window, nonce and registration epoch, and `extensionPageClient.js` exposes only owner operations and fixed capabilities, never arbitrary RPC access. A bridge addition that is optional on either side keeps `BRIDGE_VERSION` and the Extension `API_VERSION` unchanged; a method a page relies on raises the Extension API version (`extensions.md`). An Extension page's bundle holds only `styles/app.css` and the stylesheets its imported components import themselves, so a core component that Extension pages reuse keeps its rules in its own `<style>` block or in a stylesheet `app.css` imports. Details: `webui/extension-pages.md`.
+- `ExtensionPage.svelte` owns opaque page frames; `extensionPageClient.js` exposes declared services and capabilities, never arbitrary RPC. Source-window, nonce and registration-epoch checks bind every message. Bridge versions, bundles and page contracts: `webui/extension-pages.md`.
+- `ContributionSurface.svelte` and `lib/contributions*` compose core/Extension controls and own UI preferences. Use this owner instead of Extension-name checks; context stays local to its Chat area. Contracts: `webui/extension-pages.md`.
 - App loads the data-store status and shows the oldest unacknowledged recovery incident in a Dialog; from the same read it keeps the Secret Store projection for Settings (`webui/app-shell.md` -> Server connection and events).
 - Model selection stays in `modelSelection.js`, for every Model picker (`webui/settings.md` -> Providers and models).
 
@@ -60,7 +61,7 @@ Read when the task matches.
 
 - Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
 - Using or changing the shared LazyContent, SortableList, PathField, DataTable, DateField, TimeField, Button, Modal, ImageLightbox or Dropdown, or a choice that falls back to a default -> `webui/shared-controls.md`
-- The Extension page host or page client: frame bridge, page routes and layers, invalidations, page capabilities, Run streams, page styles -> `webui/extension-pages.md`
+- Extension contribution surfaces, device-local UI preferences, page host/client, frame bridge, page routes and layers, invalidations, services, Settings search, Run streams and page styles -> `webui/extension-pages.md`
 - Live voice control, call media/owner socket, UI requests from a Live call, or spoken Run updates -> `model_tasks/live.md`
 - The Terminals view: xterm rendering, Terminal sockets, geometry, dictation -> `tools/terminal.md`
 - Sidebar rows/groups, shared appearance or redesign -> relevant sections of `webui/design.md` (current state plus explicit user requirements)

@@ -494,6 +494,10 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
             "-c",
             "import sys; import desktop.execution; import desktop.terminal_execution; "
             "import desktop.computer_execution; "
+            "from pathlib import Path; "
+            "from desktop.extensions import load_desktop_extensions; "
+            "catalog = load_desktop_extensions([Path('resources/extensions')]); "
+            "assert set(catalog.factories) == {'terminal', 'computer_use'}, catalog.records; "
             "blocked = ('server', 'core.runtime', 'core.chat', 'core.agents', "
             "'core.sessions', 'core.extensions'); "
             "loaded = [name for name in sys.modules if any(name == prefix or "

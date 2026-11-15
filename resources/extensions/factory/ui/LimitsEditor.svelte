@@ -1,6 +1,6 @@
 <script>
-  import { activeLocaleTag, t } from '../../../../webui/src/lib/i18n.js';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import { activeLocaleTag, t } from '@vbot/extension-sdk/lib/i18n.js';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   import { limitFields } from './limits.js';
 
   let {

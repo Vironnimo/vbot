@@ -7,16 +7,16 @@
   // never carries their values back.
   import { onDestroy, onMount, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import Checkbox from '../ui/Checkbox.svelte';
-  import FormField from '../ui/FormField.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
-  import TextArea from '../ui/TextArea.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import { t } from '$lib/i18n.js';
-  import { mcpCredentialSlot, mcpImportPlan } from '$lib/mcpSettings.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import StatusChip from '@vbot/extension-sdk/ui/StatusChip.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import { mcpCredentialSlot, mcpImportPlan } from './mcpSettings.js';
 
   const noop = () => {};
   // Re-reading the preview waits until the user paused typing a new id.

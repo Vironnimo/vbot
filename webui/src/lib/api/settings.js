@@ -23,6 +23,42 @@ export function listExtensionPages(options = {}) {
   return rpc('extensions.pages', {}, options);
 }
 
+export function listExtensionContributions(options = {}) {
+  return rpc('extensions.contributions', {}, options);
+}
+
+export function invokeExtensionContribution(
+  descriptor,
+  operation,
+  params = {},
+) {
+  return rpc('extensions.contribution_operation', {
+    extension: descriptor.extension,
+    id: descriptor.local_id,
+    epoch: descriptor.epoch,
+    operation,
+    params,
+  });
+}
+
+export function invokeExtensionPageService(
+  extension,
+  page,
+  epoch,
+  kind,
+  name = '',
+  params = {},
+) {
+  return rpc('extensions.page_service', {
+    extension,
+    page,
+    epoch,
+    kind,
+    name,
+    params,
+  });
+}
+
 export function invokeExtensionPageOperation(
   name,
   operation,

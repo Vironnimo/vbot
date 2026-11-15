@@ -73,6 +73,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
 # channel too (kind "agents") rather than a parallel set of agent.* events.
 RESOURCE_KIND_MODELS = "models"
 RESOURCE_KIND_MODEL_FAVORITES = "model_favorites"
+RESOURCE_KIND_SETTINGS = "settings"
 RESOURCE_KIND_STATISTICS = "statistics"
 RESOURCE_KIND_QUEUE = "queue"
 RESOURCE_KIND_SESSIONS = "sessions"
@@ -106,6 +107,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
     {
         RESOURCE_KIND_MODELS,
         RESOURCE_KIND_MODEL_FAVORITES,
+        RESOURCE_KIND_SETTINGS,
         RESOURCE_KIND_STATISTICS,
         RESOURCE_KIND_QUEUE,
         RESOURCE_KIND_SESSIONS,

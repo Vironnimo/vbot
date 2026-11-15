@@ -114,6 +114,7 @@
         channelFormValues={channels.channelFormValues}
         channelBusy={channels.channelBusy}
         channelPlatformOptions={channels.channelPlatformOptions}
+        channelSettingsSchema={channels.channelSettingsSchema}
         channelAgentOptions={channels.channelAgentOptions}
         channelAgents={channels.channelAgents}
         channelDmScopeOptions={channels.channelDmScopeOptions}
@@ -257,6 +258,7 @@
                 channelFormValues={channels.channelFormValues}
                 channelBusy={channels.channelBusy}
                 channelPlatformOptions={channels.channelPlatformOptions}
+                channelSettingsSchema={channels.channelSettingsSchema}
                 channelAgentOptions={channels.channelAgentOptions}
                 channelAgents={channels.channelAgents}
                 channelDmScopeOptions={channels.channelDmScopeOptions}

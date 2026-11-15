@@ -1,16 +1,16 @@
 <script>
   import { untrack } from 'svelte';
-  import { scheduleAutosave } from '../../../../webui/src/lib/autosave.js';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Checkbox from '../../../../webui/src/components/ui/Checkbox.svelte';
-  import ConfirmDialog from '../../../../webui/src/components/ui/ConfirmDialog.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import { scheduleAutosave } from '@vbot/extension-sdk/lib/autosave.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import SaveStatus from '@vbot/extension-sdk/ui/SaveStatus.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import LimitsEditor from './LimitsEditor.svelte';
   import TriggerEditor from './TriggerEditor.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';

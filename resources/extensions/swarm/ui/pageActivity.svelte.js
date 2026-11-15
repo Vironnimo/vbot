@@ -3,14 +3,14 @@ import {
   applyTimelineEvent,
   mergeTimelineItems,
   mergeRunChildPage,
-} from '../../../../webui/src/lib/chatTimeline.js';
+} from '@vbot/extension-sdk/lib/chatTimeline.js';
 import {
   createChatState,
   ensureSessionState,
   loadHistory,
   prependHistory,
-} from '../../../../webui/src/lib/chatState.js';
-import { nextContextUsage } from '../../../../webui/src/lib/chatState/sessionState.js';
+} from '@vbot/extension-sdk/lib/chatState.js';
+import { nextContextUsage } from '@vbot/extension-sdk/lib/chatState.js';
 import { untrack } from 'svelte';
 import { failureText } from './failureText.js';
 

@@ -251,12 +251,19 @@ class DesktopBridge:
             raise BridgeError("computer_server_changed")
         enabled = [
             name
-            for name in ("terminal", "computer_use")
+            for name in status["capabilities"]
             if isinstance(changes, dict)
             and changes.get(name) is True
             and not status["capabilities"][name]
         ]
-        self._permissions.computer_sharing(server_url, enabled)
+        catalog = {item["id"]: item for item in status.get("capability_catalog", [])}
+        summaries = []
+        for name in enabled:
+            descriptor = catalog.get(name, {})
+            label = descriptor.get("label", name)
+            description = descriptor.get("description", "")
+            summaries.append(f"{label}: {description}" if description else label)
+        self._permissions.computer_sharing(server_url, summaries)
         return self._computer_sharing.update(
             changes, expected_server=server_url, confirm=self._confirm
         )

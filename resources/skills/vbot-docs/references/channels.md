@@ -1,12 +1,12 @@
 # Messaging Channels
 
-A Channel connects an Agent to Telegram, Discord, Slack, Mattermost, WhatsApp or an email account. For a first Telegram setup, follow "Set up Telegram" below.
+A Channel connects an Agent to a messaging platform, including platforms supplied by Extensions. For a first Telegram setup, follow "Set up Telegram" below.
 
 ```bash
-vbot channel add <channel-id> --platform telegram|discord|slack|mattermost|whatsapp|email --agent <agent-id> (--token-stdin | --token-env <ENV_VAR>) [--dm-scope <scope>] [--allow <chat-id>...] [--disabled] [group flags]
+vbot channel add <channel-id> --platform <platform-id> --agent <agent-id> [--token-stdin | --token-env <ENV_VAR>] [--settings-file <path>] [--dm-scope <scope>] [--allow <chat-id>...] [--disabled] [group flags]
 vbot channel list
 vbot channel status <channel-id>
-vbot channel update <channel-id> [--platform ...] [--agent ...] [--token-env ...] [--dm-scope ...] [--allow <chat-id>...] [--enabled true|false] [group flags]
+vbot channel update <channel-id> [--platform ...] [--agent ...] [--token-env ...] [--settings-file <path>] [--dm-scope ...] [--allow <chat-id>...] [--enabled true|false] [group flags]
 vbot channel token set <channel-id> --stdin [--slot bot|app]
 vbot channel identity <channel-id> [--user <platform-user-id>]
 vbot channel access <channel-id> --group <group-id>
@@ -18,6 +18,12 @@ vbot channel remove <channel-id>
 ```
 
 Read `channel list` for the saved configuration and `channel status <channel-id>` for the connection before you change a Channel, and use its exact id.
+
+## Extension platforms
+
+`vbot channel list` also prints the available platform ids, labels and `settings_schema` from the current platform catalog. To configure an Extension platform, read its schema and declared usage guide, write the non-secret settings as a JSON object, then run `vbot channel add <channel-id> --platform <returned-platform-id> --agent <agent-id> --settings-file <path>` with the requested access flags. Token flags are required only when that platform uses the standard token credential; follow its guide for other credential references.
+
+On update, `--settings-file` replaces the entire platform settings object; repeat every value to keep, or pass a file containing `{}` to clear it. When a platform's Extension is disabled or unavailable, the saved Channel stays configured but cannot connect; restore the platform before expecting it to run.
 
 ## Tokens
 

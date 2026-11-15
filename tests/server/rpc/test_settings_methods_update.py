@@ -944,7 +944,11 @@ async def test_saved_settings_apply_their_live_effects(
         "recall_reloads": runtime.recall_reload_count,
         "keep_awake": keep_awake,
         "invalidated": [change["kind"] for change in resource_changes(state)],
-    } == {**_NO_EFFECTS, **effects}
+    } == {
+        **_NO_EFFECTS,
+        **effects,
+        "invalidated": ["settings", *effects.get("invalidated", [])],
+    }
 
 
 @pytest.mark.asyncio

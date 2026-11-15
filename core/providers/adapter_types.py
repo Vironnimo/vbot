@@ -7,6 +7,11 @@ importing the runtime's storage and Model DB machinery.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.providers.providers import ProviderConfig
+
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.claude_agent import ClaudeAgentAdapter
@@ -46,20 +51,30 @@ ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
 }
 
 
-def discovery_adapter_type(adapter: str) -> type[ProviderAdapter] | None:
+def adapter_type_for_config(config: ProviderConfig) -> type[ProviderAdapter] | None:
+    """Resolve the exact live Adapter registration of a Provider configuration."""
+    config.ensure_available()
+    return config.extension_adapter or ADAPTER_TYPES.get(config.adapter)
+
+
+def discovery_adapter_type(adapter: str | ProviderConfig) -> type[ProviderAdapter] | None:
     """Resolve catalog behavior from the shared Adapter registration."""
 
-    adapter_class = ADAPTER_TYPES.get(adapter)
+    adapter_class = (
+        ADAPTER_TYPES.get(adapter) if isinstance(adapter, str) else adapter_type_for_config(adapter)
+    )
     # Cloud chat uses OpenAI compatibility; discovery uses /api/tags and /api/show.
     return OllamaAdapter if adapter_class is OllamaCloudAdapter else adapter_class
 
 
-def openai_compatible_base_url(adapter: str, base_url: str) -> str:
+def openai_compatible_base_url(adapter: str | ProviderConfig, base_url: str) -> str:
     """Return the OpenAI-compatible API base for a Provider's configured base URL.
 
     An unknown selector keeps the configured base, the convention of every
     OpenAI-compatible Provider.
     """
 
-    adapter_class = ADAPTER_TYPES.get(adapter)
+    adapter_class = (
+        ADAPTER_TYPES.get(adapter) if isinstance(adapter, str) else adapter_type_for_config(adapter)
+    )
     return adapter_class.openai_compatible_base_url(base_url) if adapter_class else base_url

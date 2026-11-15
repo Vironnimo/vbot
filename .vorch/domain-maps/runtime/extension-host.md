@@ -1,6 +1,6 @@
 # Runtime Extension Host
 
-The Runtime side of the Extension host: `ExtensionHostFactory` and its temporary execution groups, editor catalogs, `inspect_prompt`, Tool/Extension prompt-block contributions, Extension sampling and `resolve_tool_agent`. The Extension kernel and its API live in `extensions.md`.
+The Runtime side of the Extension host: `ExtensionHostFactory` and its temporary execution groups, public application services, editor catalogs, `inspect_prompt`, Tool/Extension prompt-block contributions, Extension sampling and `resolve_tool_agent`. The Extension kernel and its API live in `extensions.md`.
 
 ## Host factory and execution groups
 
@@ -10,6 +10,7 @@ The Runtime side of the Extension host: `ExtensionHostFactory` and its temporary
 - Editor catalogs project Model reasoning capabilities and context size, plus Tool family/activation metadata, from their existing registry owners so isolated editors can use the shared selectors without inventing capability defaults (`test_runtime_extension_host.py`).
 - Editor catalogs also expose System Prompt block metadata. Owner-bound `inspect_prompt` resolves a prospective temporary Agent like an ordinary one, applies Chat's Model-specific Tool routing and the owner's private Tool grants, then returns the combined prompt, rendered block details, effective Tool definitions and the resolved Agent's Model/effort. Inspection creates no Session or Run and rechecks registration identity after asynchronous work (`test_runtime_extension_host.py`).
 - Owner-bound transient notifications, page badges and owned pending-approval reads use the injected registry, publisher and existing Session/Run owners; no transport or durable inbox enters Runtime. Public contracts: `extensions/host.md` -> Transient attention and Current authority and pending approvals; coverage: `test_runtime_extension_host_attention.py`.
+- The factory owns the registration-bound application service catalog and core Run, Queue and Session-title invalidations. The server binds selected canonical application handlers before Extension startup, then forwards its ordinary resource invalidations; standalone Runtime has no application handler binding. Owner release drains subscriptions, and Runtime closure removes core listeners. Public contract: `extensions/host.md` -> Public application services; implementation: `core/extensions/services.py`, `server/extension_services.py`.
 
 - Deferred Tool calls upgrade the canonical invocation receipt through `host.defer_tool_call`; final delivery uses the injected `TriggerService`, so whole Tool batches precede completions, idle Sessions wake normally, and user-cancelled origins do not start another Run. Restart recovery only persists an outcome Note for the same live generation. Sessions owns conflict and acknowledgement checks (`extensions/host.md`).
 

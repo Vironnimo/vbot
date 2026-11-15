@@ -1,14 +1,14 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
-  import SortableList from '../../../../webui/src/components/ui/SortableList.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
+  import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import SortableList from '@vbot/extension-sdk/ui/SortableList.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
   import {
     boardColumns,
     stateLabel,

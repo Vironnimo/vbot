@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from core.extensions.contributions import PAGE_ICONS as PAGE_ICONS
+from core.extensions.contributions import ContributionDeclaration
 from core.extensions.interactions import (
     InteractionHandlerDeclaration,
 )
@@ -21,9 +23,8 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 29
-# Menu icons a page may declare; the WebUI draws each (``AppShell.svelte``).
-PAGE_ICONS = frozenset({"network", "panel", "grid", "sparkles", "factory"})
+API_VERSION = 30
+
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -128,6 +129,10 @@ class ExtensionManifest:
     api_version: int | None = None
     display_name: str | None = None
     documentation: tuple[ExtensionDocumentation, ...] = ()
+    pages: tuple[dict[str, Any], ...] = ()
+    contributions: tuple[dict[str, Any], ...] = ()
+    required_features: tuple[str, ...] = ()
+    desktop: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -259,7 +264,9 @@ class PageDeclaration:
     page_id: str
     title: str
     entry: str
-    icon: str = "network"
+    icon: str | dict[str, Any] = "network"
+    navigation: bool = True
+    services: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -343,7 +350,10 @@ class ExtensionDeclarations:
     tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
     commands: list[CommandDeclaration] = field(default_factory=list)
     pages: list[PageDeclaration] = field(default_factory=list)
+    contributions: list[ContributionDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
+    providers: list[ProviderDeclaration] = field(default_factory=list)
+    channel_platforms: list[ChannelPlatformDeclaration] = field(default_factory=list)
     # ``core.secrets.sources.SecretSource`` objects, kept loosely typed.
     secret_sources: list[Any] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
@@ -353,6 +363,24 @@ class ExtensionDeclarations:
     settings_schema: list[SettingsFieldDeclaration] | None = None
     operations: ExtensionOperations | None = None
     shell_reviewer: ShellReviewerDeclaration | None = None
+
+
+@dataclass(frozen=True)
+class ProviderDeclaration:
+    """A Provider configuration and optional domain Adapter class."""
+
+    definition: dict[str, Any]
+    adapter_type: Any = None
+
+
+@dataclass(frozen=True)
+class ChannelPlatformDeclaration:
+    """A Channel platform factory and its public configuration metadata."""
+
+    platform_id: str
+    label: str
+    factory: Callable[..., Any]
+    settings_schema: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

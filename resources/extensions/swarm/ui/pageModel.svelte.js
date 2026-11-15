@@ -1,6 +1,6 @@
 import { createSwarmStartForm } from './pageStartForm.svelte.js';
 import { createSwarmRunActions } from './pageRunActions.svelte.js';
-import { t, init } from '../../../../webui/src/lib/i18n.js';
+import { t, init } from '@vbot/extension-sdk/lib/i18n.js';
 import { page, requestId } from './pagePresentation.js';
 import {
   runGroups as projectRunGroups,
@@ -8,14 +8,15 @@ import {
   working as projectWorking,
   canResume as projectCanResume,
 } from './runPresentation.js';
-import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
+import { setApplicationTimeZone } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
 import { onMount } from 'svelte';
-import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+import { createExtensionPageClient } from '@vbot/extension-sdk/client';
+import { applyExtensionTheme } from '@vbot/extension-sdk/lib/extensionTheme.js';
 import {
   configureModelFavorites,
   loadModelFavorites,
-} from '$lib/modelFavorites.svelte.js';
-import { sameServerPath } from '$lib/pathPicker.js';
+} from '@vbot/extension-sdk/lib/modelFavorites.svelte.js';
+import { sameServerPath } from '@vbot/extension-sdk/lib/pathPicker.js';
 import {
   createPageRefresh,
   everythingChanged,
@@ -492,11 +493,7 @@ export function createSwarmPageModel(host) {
   function applyContext(next) {
     setApplicationTimeZone(next.timezone);
     document.documentElement.lang = init(next.locale);
-    for (const [name, value] of Object.entries(next.theme ?? {}))
-      document.documentElement.style.setProperty(
-        name.startsWith('--') ? name : `--${name}`,
-        value,
-      );
+    applyExtensionTheme(next.theme);
   }
 
   // Reloads everything the page shows. `background` marks a refresh no user

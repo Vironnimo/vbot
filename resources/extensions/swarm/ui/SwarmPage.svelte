@@ -3,11 +3,11 @@
 </script>
 
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
-  import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import LazyContent from '@vbot/extension-sdk/ui/LazyContent.svelte';
+  import { provideNavigation } from '@vbot/extension-sdk/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
   // The shared rules load before the areas' own stylesheets.
   import './swarmPage.css';

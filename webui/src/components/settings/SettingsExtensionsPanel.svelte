@@ -2,7 +2,6 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
-  import SettingsMcpPanel from './SettingsMcpPanel.svelte';
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -44,24 +43,12 @@
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const MAX_SAVE_ATTEMPTS = 3;
 
-  let {
-    onToast = noop,
-    onError = noop,
-    // The App's Extension invalidations, which keep the MCP connections live.
-    subscribeExtensionInvalidations = null,
-    // Bumped when the Agents change; the MCP catalog lists Agents.
-    agentsRefreshToken = 0,
-  } = $props();
+  let { onToast = noop, onError = noop } = $props();
   const uid = $props.id();
 
   let extensions = $state([]);
   // The persisted `extensions` section every write starts from and sends as `base`.
   let savedSettings = { disabled: [], config: {} };
-  let mcpLoaded = $derived(
-    extensions.some(
-      (extension) => extension.name === 'mcp' && extension.status === 'loaded',
-    ),
-  );
   let loading = $state(true);
   let loadError = $state('');
   let reloading = $state(false);
@@ -89,19 +76,11 @@
     }
   }
 
-  function visibleCapabilityParts(extension) {
-    // The loaded MCP Extension's own Tools are its management internals; its
-    // connections render as their own sub-topic below the list.
-    return extension.name === 'mcp' && extension.status === 'loaded'
-      ? []
-      : extensionCapabilityParts(extension.capabilities);
-  }
-
   function hasDetails(extension) {
     return (
       Boolean(extension.version) ||
       (extension.status === 'overridden' && Boolean(extension.overriddenBy)) ||
-      visibleCapabilityParts(extension).length > 0 ||
+      extensionCapabilityParts(extension.capabilities).length > 0 ||
       (extension.status !== 'overridden' && hasSettingsSchema(extension))
     );
   }
@@ -557,7 +536,9 @@
         actionName.length > 0 ||
         savingSecret.length > 0}
       {@const isOverridden = extension.status === 'overridden'}
-      {@const capabilityParts = visibleCapabilityParts(extension)}
+      {@const capabilityParts = extensionCapabilityParts(
+        extension.capabilities,
+      )}
       {@const waiting = describeExtensionWaiting(extension)}
       {@const chip = extensionStatusChip(extension)}
       {@const withDetails = hasDetails(extension)}
@@ -820,13 +801,4 @@
       </div>
     {/each}
   </div>
-
-  <!-- The loaded MCP Extension contributes its connection manager as a
-       sub-topic after the Extension list. -->
-  {#if mcpLoaded}
-    <SettingsMcpPanel
-      subscribeInvalidations={subscribeExtensionInvalidations}
-      {agentsRefreshToken}
-    />
-  {/if}
 {/if}

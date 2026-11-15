@@ -48,6 +48,7 @@ async def test_tools_register_as_one_opt_in_family_with_stop_control(computer: H
         assert tool.open_input_schema and "additionalProperties" not in tool.parameters
         assert tool.family == "computer_use" and tool.extension == "computer_use"
     status = await computer.api.operations.invoke("control", {"action": "status"})
+    assert await computer.api.operations.invoke("controls", {}) == {"items": []}
     assert len(status.pop("controls")) == 1
     assert status == {
         "available": True,
@@ -62,6 +63,13 @@ async def test_tools_register_as_one_opt_in_family_with_stop_control(computer: H
     assert computer.hotkey.started and computer.hotkey.armed is not None  # armed while in control
     status = await computer.api.operations.invoke("control", {"action": "status"})
     assert status["hotkey_available"] is True
+    controls = await computer.api.operations.invoke("controls", {})
+    assert len(controls["items"]) == 1
+    stop = controls["items"][0]["action"]
+    assert stop["operation"] == "control"
+    assert stop["params"]["control_id"] == status["controls"][0]["control_id"]
+    await computer.api.operations.invoke(stop["operation"], stop["params"])
+    assert await computer.api.operations.invoke("controls", {}) == {"items": []}
 
 
 @pytest.mark.parametrize(

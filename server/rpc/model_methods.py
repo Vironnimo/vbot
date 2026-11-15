@@ -16,7 +16,7 @@ from core.statistics import ModelRouteUse
 from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MODEL_FAVORITES, RESOURCE_KIND_MODELS
-from server.rpc._mutations import serialized_mutation, state_lock
+from server.rpc._mutations import serialized_mutation, state_read_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -98,7 +98,7 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     # never raises.
     await _await_local_catalog_refresh(state.runtime)
     # A Provider mutation publishes Settings, credentials and registries as one read boundary.
-    async with state_lock(state, "_settings_mutation_lock"):
+    async with state_read_lock(state, "_settings_mutation_lock"):
         try:
             runtime = state.runtime
             selected_models = runtime.models.query(model_query)
@@ -261,7 +261,7 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
 
     await _await_local_catalog_refresh(state.runtime)
     # A Provider mutation publishes Settings, credentials and registries as one read boundary.
-    async with state_lock(state, "_settings_mutation_lock"):
+    async with state_read_lock(state, "_settings_mutation_lock"):
         runtime = state.runtime
         try:
             model = runtime.models.get(provider_id, model_id)

@@ -177,6 +177,7 @@ class WireBinding:
 @dataclass(frozen=True)
 class _CacheEntry:
     model: Model | None
+    protocols: tuple[Protocol, ...] | None
     files_generation: int
     observations_generation: int
     profile: WireProfile
@@ -229,6 +230,8 @@ class WireProfiles:
 
         bare_id = model_id.split("::", 1)[0]
         model = self._model_resolver(provider_id, bare_id)
+        supported = self._protocol_support(provider_id)
+        protocols = tuple(supported) if supported is not None else None
         observations = self._observations
         observations_generation = observations.generation if observations is not None else 0
         key = (provider_id, connection_id, bare_id)
@@ -236,6 +239,7 @@ class WireProfiles:
         if (
             cached is not None
             and cached.model is model
+            and cached.protocols == protocols
             and cached.files_generation == self._files_generation
             and cached.observations_generation == observations_generation
         ):
@@ -246,7 +250,7 @@ class WireProfiles:
             model_id=bare_id,
             model=model,
             file=self._files.get(provider_id),
-            protocols=self._protocol_support(provider_id),
+            protocols=protocols,
             observed=(
                 observations.facts_for(provider_id, connection_id, bare_id)
                 if observations is not None
@@ -256,6 +260,7 @@ class WireProfiles:
         ).resolve()
         self._cache[key] = _CacheEntry(
             model=model,
+            protocols=protocols,
             files_generation=self._files_generation,
             observations_generation=observations_generation,
             profile=profile,

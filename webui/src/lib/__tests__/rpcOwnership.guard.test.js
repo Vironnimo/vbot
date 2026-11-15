@@ -8,6 +8,15 @@ const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_FILE = join(SRC_DIR, 'lib', 'api.js');
 const API_DIR = join(SRC_DIR, 'lib', 'api');
 
+// Public presentation IDs may coincide with domain method names. These
+// exact owners declare surfaces/local callbacks; they never dispatch RPC.
+const PRESENTATION_NAMES = {
+  'components/ChatComposer.svelte': ['chat.cancel'],
+  'components/ChatTimeline.svelte': ['chat.timeline'],
+  'lib/contributionPresentation.js': ['chat.timeline'],
+  'lib/contributions.js': ['chat.timeline'],
+};
+
 function collectProductionSources(directory) {
   const files = [];
   for (const entry of readdirSync(directory)) {
@@ -69,6 +78,8 @@ describe('RPC ownership guard', () => {
         // Translation keys may legitimately share an RPC's spelling. They
         // resolve product text; the raw-transport guard above still applies.
         if (/\bt(?:Or)?\(\s*$/.test(source.slice(0, literal.index))) continue;
+        if (PRESENTATION_NAMES[sourceLabel(filePath)]?.includes(literal[1]))
+          continue;
         if (serverMethods.has(literal[1])) {
           violations.push(`${sourceLabel(filePath)}: ${literal[1]}`);
         }

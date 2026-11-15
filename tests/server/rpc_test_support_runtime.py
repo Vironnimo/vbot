@@ -29,6 +29,7 @@ from core.chat import (
 )
 from core.computers import ComputerRegistry
 from core.database import SnapshotBarrier, write_bootstrap_marker
+from core.extensions.services import ExtensionServiceCatalog
 from core.memory import MemoryService
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import (
@@ -594,6 +595,7 @@ class StubRuntime:
         )
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
+        self.extension_services = ExtensionServiceCatalog()
         self.terminal_manager = StubTerminalManager()
         self.computers = ComputerRegistry()
         self.portals = PortalRegistry()

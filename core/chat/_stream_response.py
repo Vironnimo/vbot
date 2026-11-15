@@ -48,6 +48,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
     TERMINAL_OUTCOME_TOOL_CALLS,
+    ProviderAdapter,
     TerminalOutcome,
 )
 from core.providers.errors import (
@@ -152,6 +153,8 @@ async def consume_stream_response(
     attempt_started = time.perf_counter()
     awaiting_first_delta = True
     accumulator.request_sent()
+    if isinstance(adapter, ProviderAdapter):
+        adapter.ensure_available()
     stream = adapter.stream(
         messages,
         model_id=model_id,

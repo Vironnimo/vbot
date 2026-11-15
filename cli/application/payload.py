@@ -16,6 +16,7 @@ APP_DESKTOP_TARGET = tuple(
     f"resources/extensions/computer_use/{name}.py"
     for name in (
         "__init__",
+        "desktop",
         "target",
         "windows_target",
         "hotkey",
@@ -26,6 +27,11 @@ APP_DESKTOP_TARGET = tuple(
         "_color_filter",
         "_remote_wire",
     )
+)
+APP_DESKTOP_TARGET += (
+    "resources/extensions/computer_use/extension.json",
+    "resources/extensions/terminal/extension.json",
+    "resources/extensions/terminal/desktop.py",
 )
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}

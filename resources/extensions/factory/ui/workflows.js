@@ -1,5 +1,5 @@
 import { normalizeLimits, limitsProblem } from './limits.js';
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 
 // One global Workflow as the page edits it. The server validates and owns the
 // format (`_workflows.normalize`); this module keeps drafts in that shape,

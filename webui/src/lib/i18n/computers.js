@@ -2,12 +2,13 @@ export default {
   'computers.server': 'Server',
   'computers.label': 'Computer',
   'computers.offline': 'Offline',
-  'computers.offlineCapabilities': 'Offline · {capabilities}',
+  'computers.offlineCapabilities': 'Offline Â· {capabilities}',
   'computers.availabilityUnknown': 'Availability unknown',
   'computers.terminalAndComputerUse': 'Terminal and Computer Use enabled',
-  'computers.terminalOnly': 'Terminal enabled · Computer Use unavailable',
-  'computers.computerUseOnly': 'Computer Use enabled · Terminal unavailable',
+  'computers.terminalOnly': 'Terminal enabled Â· Computer Use unavailable',
+  'computers.computerUseOnly': 'Computer Use enabled Â· Terminal unavailable',
   'computers.noCapabilities': 'No capabilities shared',
+  'computers.capabilitiesEnabled': '{capabilities} enabled',
   'computers.loadError':
     'Computers could not be loaded. Retry to check their availability.',
   'computers.sessionTitle': 'Computers for this conversation',
@@ -22,16 +23,15 @@ export default {
     'Allow another computer when your task needs it. For Terminal and Computer Use, the Agent can use only the computers you select here.',
   'computers.running':
     'Computer access can be changed once the current Run ends.',
-  'computers.selectedOffline': '{name} · Offline',
-  'computers.selectedRevoked': '{name} · Not allowed',
+  'computers.selectedOffline': '{name} Â· Offline',
+  'computers.selectedRevoked': '{name} Â· Not allowed',
   'computers.defaultRevoked':
     'This conversation may no longer use this computer. Choose another default.',
   'computers.terminalUnavailable': 'Terminal is unavailable on this computer.',
   'computers.remoteWorkdir': 'Working directory on the selected computer',
-  'computers.stopControl': 'Stop computer control on {name}',
   'computers.settingsTitle': 'Computers',
   'computers.settingsEmpty':
-    'No Desktop computers are registered. A computer appears here once its Desktop app shares Terminal or Computer Use with this server.',
+    'No Desktop computers are registered. A computer appears here once its Desktop app shares a capability with this server.',
   'computers.online': 'Connected',
   'computers.remove.button': 'Remove',
   'computers.remove.aria': 'Remove {name}',
@@ -43,7 +43,9 @@ export default {
   'computers.remove.failed': 'The computer could not be removed.',
   'computers.sharingTitle': 'Share this computer',
   'computers.sharingHelp':
-    'Share Terminal and Computer Use with the server connected in this Desktop app. They are available while the app is running, including when minimized.',
+    'Choose the capabilities this computer shares with the connected server. They are available while this Desktop app is running, including when minimized.',
+  'computers.extensionIssue':
+    'Desktop Extension {name} could not provide all its capabilities: {reason}',
   'computers.name': 'Computer name',
   'computers.nameRequired': 'Enter a name for this computer.',
   'computers.shareTerminal': 'Share Terminal',
@@ -53,6 +55,7 @@ export default {
   'computers.shareComputerUseHelp':
     'Allow the connected server to see and operate this desktop with its mouse and keyboard.',
   'computers.capabilityUnavailable': 'Unavailable on this computer.',
+  'computers.capabilityError': 'Unavailable: {reason}',
   'computers.connectedTo': 'Connected to {server}',
   'computers.notConnected':
     'Not connected. Shared capabilities will become available when this app connects to its server.',

@@ -17,6 +17,7 @@ import core.channels.channels as channels_module
 import core.channels.state as state_module
 from core.attachments import AttachmentStore
 from core.channels import (
+    ChannelAdapterContext,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
@@ -619,3 +620,97 @@ async def test_stopping_logs_a_failed_adapter_shutdown_but_not_a_cancellation(
         "Channel adapter shutdown raised during stop (channel=tg-assistant)"
     ]
     assert errors[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_registered_platform_validates_settings_without_claiming_other_owners(
+    tmp_path: Path,
+) -> None:
+    service = make_service(tmp_path)
+    owner = object()
+    schema = {
+        "type": "object",
+        "properties": {"homeserver": {"type": "string"}},
+        "required": ["homeserver"],
+    }
+    try:
+        service.register_platform(
+            owner,
+            "matrix",
+            "Matrix",
+            lambda config, context: BlockingAdapter(),
+            settings_schema=schema,
+        )
+        schema["required"] = []
+        config = replace(make_config("team", platform="matrix", enabled=False), token_env_var="")
+        with pytest.raises(ChannelConfigError, match="required validation failed"):
+            await service.create_channel(config)
+        config = replace(config, settings={"homeserver": "https://chat.example"})
+        await service.create_channel(config)
+        with pytest.raises(ChannelConfigError, match="type validation failed"):
+            await service.update_channel("team", settings={"homeserver": 1})
+        with pytest.raises(ChannelConfigError, match="already registered"):
+            service.register_platform(
+                object(), "matrix", "Other", lambda config, context: BlockingAdapter()
+            )
+        with pytest.raises(ChannelConfigError, match="already registered"):
+            service.register_platform(
+                owner, "telegram", "Other", lambda config, context: BlockingAdapter()
+            )
+        await service.release_platforms(object())
+        assert "matrix" in {entry["id"] for entry in service.platform_catalog()}
+        await service.release_platforms(owner)
+        assert (await service.get_channel("team")).settings == config.settings
+        with pytest.raises(ChannelConfigError, match="unavailable"):
+            await service.enable_channel("team")
+        assert (await service.get_channel("team")).enabled is False
+        await service.update_channel("team", allowed_chat_ids=["room"])
+        assert (await service.get_channel("team")).settings == config.settings
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_platform_lifetime_defers_start_drains_and_resumes_saved_channels(
+    tmp_path: Path,
+) -> None:
+    config = replace(make_config("team", platform="matrix"), token_env_var="")
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path)
+    owner = object()
+    current = False
+    created: list[tuple[ChannelConfig, ChannelAdapterContext, BlockingAdapter]] = []
+
+    def factory(saved: ChannelConfig, context: ChannelAdapterContext) -> BlockingAdapter:
+        adapter = BlockingAdapter()
+        created.append((saved, context, adapter))
+        return adapter
+
+    try:
+        service.register_platform(owner, "matrix", "Matrix", factory, is_current=lambda: current)
+        service.start()
+        assert created == []
+        assert not service.is_failed("team")
+        current = True
+        service.resume_platforms(owner)
+        await created[-1][2].started.wait()
+        assert created[-1][0] == config
+        assert created[-1][1].state_dir == tmp_path / "channels" / "team"
+        assert created[-1][1].engine.config == config
+        assert service.is_running("team")
+        current = False
+        await service.release_platforms(owner)
+        assert created[-1][2].stopped.is_set()
+        assert not service.is_running("team")
+        assert (await service.get_channel("team")).enabled
+        with pytest.raises(ChannelConfigError, match="unavailable"):
+            service.start_channel("team")
+        replacement = object()
+        service.register_platform(replacement, "matrix", "Matrix", factory)
+        await service.release_platforms(owner)
+        service.resume_platforms(replacement)
+        await created[-1][2].started.wait()
+        assert service.is_running("team")
+        assert len(created) == 2
+    finally:
+        await service.aclose()

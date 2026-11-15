@@ -35,7 +35,7 @@ beforeEach(() => {
       id: 'pc_laptop',
       name: 'Laptop',
       online: true,
-      capabilities: ['terminal'],
+      capabilities: ['printer'],
     },
     { id: 'pc_old', name: 'Old PC', online: false, capabilities: [] },
   ];
@@ -70,6 +70,7 @@ it('removes only offline Desktop computers after confirmation', async () => {
   await waitForCondition(() => document.body.textContent.includes('Old PC'));
   expect(document.body.textContent).not.toContain('Server');
   expect(removeButton('Laptop')).toBeNull();
+  expect(document.body.textContent).toContain('printer enabled');
 
   removeButton('Old PC').click();
   flushSync();

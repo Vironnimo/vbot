@@ -12,7 +12,7 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.messages import WidgetState
 from core.chat.widget_states import widget_state_note
 from core.projects import format_agent_address
-from core.runs import Run
+from core.runs import Run, RunKind
 from core.sessions import (
     SessionAddress,
     new_session_id,
@@ -28,6 +28,7 @@ from core.tools.command_manager import (
 from core.tools.file_state import FileRead
 from core.tools.show_widget import SHOW_WIDGET_TOOL_NAME, WIDGET_PAYLOAD_TITLE
 from core.utils.ids import new_id
+from server.extension_services import is_extension_service_call
 from server.rpc._chat_input import (
     _chat_target,
     _execute_chat_command,
@@ -129,8 +130,28 @@ async def _submit_chat(
     file_mentions = _optional_file_mentions(params)
     widget_states = _optional_widget_states(params)
 
+    chat_loop: ChatLoop = state.chat_loop
     dispatcher: CommandDispatcher = state.command_dispatcher
     prepared_command = dispatcher.prepare(content)
+    if is_extension_service_call():
+        # Integration calls use the same canonical target and content parsing,
+        # but cannot become human input or execute a user's Slash Commands.
+        _reject_unsupported(params, {"agent_id", "session_id", "content"}, method)
+        if not isinstance(target, SessionAddress) or prepared_command is not None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "Extension Chat input requires an existing Session and cannot invoke commands",
+            )
+        try:
+            return await chat_loop.start_run(
+                agent_id,
+                content,
+                session_id=target.session_id,
+                project_id=project_id,
+                run_kind=RunKind.SYSTEM,
+            )
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
     # A new Session shows no widget yet. A command takes no widget values; the
     # client keeps them for the next message.
     if widget_states and isinstance(target, _NewSessionTarget):
@@ -138,7 +159,6 @@ async def _submit_chat(
             RPC_ERROR_INVALID_REQUEST,
             "params.widget_states can accompany only a message to an existing Session",
         )
-    chat_loop: ChatLoop = state.chat_loop
     input_id = _accessor_input_id(params)
     request_hash = _accessor_request_hash(params)
     if prepared_command is None:

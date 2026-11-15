@@ -542,6 +542,20 @@ export function createSettingsRpcMock(options = {}) {
 
     if (method === 'channel.list') {
       return {
+        platforms:
+          options.channelPlatforms ??
+          [
+            'telegram',
+            'discord',
+            'slack',
+            'mattermost',
+            'whatsapp',
+            'email',
+          ].map((id) => ({
+            id,
+            label: id,
+            settings_schema: { type: 'object', additionalProperties: false },
+          })),
         channels: channels.map((channel) => ({
           ...channel,
           ...channelStatuses.get(channel.id),

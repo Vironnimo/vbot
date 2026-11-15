@@ -1,4 +1,5 @@
 <script>
+  import ContributionSurface from './extensions/ContributionSurface.svelte';
   import { tick, untrack } from 'svelte';
 
   import {
@@ -31,6 +32,7 @@
   import EmptyState from './ui/EmptyState.svelte';
 
   let {
+    uiContext = {},
     // The displayed Session's rendered rows, projected once by the owner
     // through `visibleTimelineItemsForRender()`.
     timelineItems: sourceTimelineItems = [],
@@ -552,51 +554,72 @@
   }
 </script>
 
+{#snippet timelineContribution()}
+  {#if timelineItems.length === 0 && transientCards.length === 0}
+    {#if loadingHistory}
+      <!-- While history is loading, a quiet placeholder — flashing the
+               "No messages yet" empty state would be a lie for a session whose
+               messages just have not arrived yet. -->
+      <Banner variant="neutral" class="chat-timeline-loading">
+        {t('loading.history')}
+      </Banner>
+    {:else if historyLoaded}
+      <EmptyState
+        fill
+        class="chat-timeline-empty"
+        title={t('chat.historyEmptyTitle')}
+        description={t('chat.historyEmpty')}
+      >
+        {#snippet icon()}
+          <svg viewBox="0 0 32 32" width="38" height="38">
+            <path d="M5 7h22v14H16l-6 5v-5H5z" />
+          </svg>
+        {/snippet}
+      </EmptyState>
+    {/if}
+  {:else}
+    {#each transientCardGroups.leading as card (card.id)}
+      {@render transientCard(card)}
+    {/each}
+    {#each renderEntries as entry (entry.key)}
+      {#if entry.spacer}
+        <div
+          class="timeline-spacer"
+          data-timeline-spacer
+          aria-hidden="true"
+          style:height={`${entry.height}px`}
+        ></div>
+      {:else}
+        {@render timelineRow(entry.item)}
+      {/if}
+    {/each}
+    {#each transientCardGroups.trailing as card (card.id)}
+      {@render transientCard(card)}
+    {/each}
+  {/if}
+{/snippet}
+
 <div class="chat-timeline">
   <section class="messages" bind:this={scrollContainer}>
     <div class="messages__content" bind:this={timelineContent}>
-      {#if timelineItems.length === 0 && transientCards.length === 0}
-        {#if loadingHistory}
-          <!-- While history is loading, a quiet placeholder — flashing the
-               "No messages yet" empty state would be a lie for a session whose
-               messages just have not arrived yet. -->
-          <Banner variant="neutral" class="chat-timeline-loading">
-            {t('loading.history')}
-          </Banner>
-        {:else if historyLoaded}
-          <EmptyState
-            fill
-            class="chat-timeline-empty"
-            title={t('chat.historyEmptyTitle')}
-            description={t('chat.historyEmpty')}
-          >
-            {#snippet icon()}
-              <svg viewBox="0 0 32 32" width="38" height="38">
-                <path d="M5 7h22v14H16l-6 5v-5H5z" />
-              </svg>
-            {/snippet}
-          </EmptyState>
-        {/if}
-      {:else}
-        {#each transientCardGroups.leading as card (card.id)}
-          {@render transientCard(card)}
-        {/each}
-        {#each renderEntries as entry (entry.key)}
-          {#if entry.spacer}
-            <div
-              class="timeline-spacer"
-              data-timeline-spacer
-              aria-hidden="true"
-              style:height={`${entry.height}px`}
-            ></div>
-          {:else}
-            {@render timelineRow(entry.item)}
-          {/if}
-        {/each}
-        {#each transientCardGroups.trailing as card (card.id)}
-          {@render transientCard(card)}
-        {/each}
-      {/if}
+      <ContributionSurface
+        surface="chat.timeline"
+        context={{
+          ...uiContext,
+          run_id: currentRun?.runId ?? uiContext.run_id ?? '',
+          run_active: uiContext.run_active ?? currentRun?.status === 'running',
+        }}
+        data={{ items: sourceTimelineItems }}
+        commands={{ 'timeline.latest': () => jumpToLatest() }}
+        builtins={[
+          {
+            id: 'core:chat.timeline',
+            title: t('chat.title'),
+            order: 10,
+            render: timelineContribution,
+          },
+        ]}
+      />
     </div>
   </section>
   {#if showJumpToLatest}

@@ -19,6 +19,7 @@ export {
   isSessionEmpty,
   isRunActive,
   contextCompactionState,
+  nextContextUsage,
   resetStaleRun,
 } from './chatState/sessionState.js';
 export { createChatController } from './chatState/controller.js';

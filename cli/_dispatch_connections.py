@@ -58,6 +58,20 @@ def dispatch_channel_command(
 ) -> CommandResult:
     """Dispatch one parsed channel command against the server RPC client."""
 
+    settings: dict[str, Any] | None = None
+    if args.command in {"add", "update"} and args.settings_file is not None:
+        try:
+            settings = json.loads(_read_text_file(args.settings_file))
+            if not isinstance(settings, dict):
+                raise ValueError("expected a JSON object")
+        except (OSError, UnicodeError, ValueError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read --settings-file: {exc}",
+                instance=instance,
+                refused=True,
+            )
+
     if args.command == "add":
         token: str | None = None
         if args.token_stdin:
@@ -71,6 +85,8 @@ def dispatch_channel_command(
                     refused=True,
                 )
         connection_options: dict[str, Any] = {}
+        if settings is not None:
+            connection_options["settings"] = settings
         if args.disabled:
             connection_options["disabled"] = True
         if args.app_token_env:
@@ -106,7 +122,10 @@ def dispatch_channel_command(
     if args.command == "remove":
         return remove_channel(instance, args.id)
     if args.command == "update":
-        return update_channel(instance, args.id, _channel_changes_from_args(args))
+        changes = _channel_changes_from_args(args)
+        if settings is not None:
+            changes["settings"] = settings
+        return update_channel(instance, args.id, changes)
     if args.command == "enable":
         return enable_channel(instance, args.id)
     if args.command == "disable":

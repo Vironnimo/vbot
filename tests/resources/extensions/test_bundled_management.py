@@ -21,3 +21,18 @@ def test_management_operations_describe_each_action_and_validate_their_examples(
     )
     for example in profile_save["parameters"]["properties"]["profile"]["examples"]:
         assert _validate_profile(example)["participants"]
+
+
+def test_mcp_contributes_its_settings_view_with_only_the_services_it_uses() -> None:
+    registry = load_bundled("mcp")
+    [(identity, contribution)] = registry.contribution_declarations()
+    assert identity.name == "mcp"
+    assert contribution.spec["surface"] == "settings.sections"
+    assert contribution.spec["when"] == {"settings_section": "extensions"}
+    assert contribution.spec["kind"] == "view"
+    page = registry.current_page(identity, contribution.spec["page"])
+    assert page is not None
+    declaration, entry = page
+    assert declaration.navigation is False
+    assert declaration.services == ("agent.list", "tool.list", "agent.update")
+    assert entry.name == "page.html"

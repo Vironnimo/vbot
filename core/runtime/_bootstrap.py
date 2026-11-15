@@ -512,6 +512,7 @@ def bootstrap(runtime: Runtime) -> None:
                 "see vbot.extensions errors for details",
                 failed_extension_count,
             )
+        runtime._extensions.apply_providers(runtime._providers)
         runtime._extension_runtime = ExtensionRuntime(
             storage=runtime._storage,
             resources_path=resources_path,
@@ -531,6 +532,11 @@ def bootstrap(runtime: Runtime) -> None:
             make_host=runtime._extension_host,
             archive_uninstalled_groups=runtime._archive_uninstalled_extension_groups,
             refresh_secret_sources=runtime._refresh_secret_sources,
+            providers=runtime._providers,
+            get_channels=lambda: runtime._channel_service,
+            integrations_changed=runtime._provider_runtime._notify_catalog_changed,
+            resume_integrations=lambda: runtime._operational_producers == "enabled",
+            provider_publication=runtime._provider_runtime.model_configuration_publication_async,
         )
         runtime._refresh_secret_sources()
         # Skills load after extensions: a loaded extension may bundle its own skills
@@ -890,6 +896,8 @@ def bootstrap(runtime: Runtime) -> None:
             interaction_dispatcher=runtime._dispatch_channel_interaction,
             tool_catalog=lambda: runtime.tools.list_tools(include_session_scoped=True),
         )
+        if runtime._extensions is not None:
+            runtime._extensions.apply_channels(runtime._channel_service)
         runtime._trigger_service.set_completion_run_relay(
             runtime._channel_service.relay_completion_run
         )

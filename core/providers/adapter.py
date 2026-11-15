@@ -310,6 +310,17 @@ class ProviderAdapter(ABC):
         self._model_lookup = model_lookup
         self._debug_recorder = debug_recorder
 
+    _availability_check: Callable[[], None] | None = None
+
+    def bind_availability(self, check: Callable[[], None]) -> None:
+        """Bind this Adapter to its live Provider registration."""
+        self._availability_check = check
+
+    def ensure_available(self) -> None:
+        """Refuse a new request after the owning registration was retired."""
+        if self._availability_check is not None:
+            self._availability_check()
+
     # ------------------------------------------------------------------
     # Debug hooks
     # ------------------------------------------------------------------

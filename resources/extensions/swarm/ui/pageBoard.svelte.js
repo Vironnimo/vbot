@@ -1,6 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { tick } from 'svelte';
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 import { page, participantCard, requestId } from './pagePresentation.js';
 import { failureText } from './failureText.js';
 import { discussionPostsChanged, swarmChanged } from './pageRefresh.js';

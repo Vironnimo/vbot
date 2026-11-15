@@ -16,16 +16,23 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+import re
+from collections.abc import Callable, Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from inspect import isabstract
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from core.utils.errors import ConfigError, ProviderError
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.workers import BoundedWorkerPool
+
+if TYPE_CHECKING:
+    from core.providers.adapter import ProviderAdapter
 
 _LOGGER = logging.getLogger("vbot.providers")
 _PROVIDER_RELOAD_WORKERS = BoundedWorkerPool(name="provider-reload", max_workers=2)
@@ -410,6 +417,16 @@ class ProviderConfig:
     catalog_exclusions: frozenset[str] = frozenset()
     catalog_scope: str = "shared"
     custom: bool = False
+    # Registration metadata is runtime-only; persisted Provider documents keep
+    # the same shape. Carrying it with the config keeps discovery and inference
+    # on the exact same registration without a process-wide mutable registry.
+    extension_adapter: type[ProviderAdapter] | None = field(default=None, repr=False, compare=False)
+    registration_active: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+
+    def ensure_available(self) -> None:
+        """Refuse retained configurations after their Extension registration retires."""
+        if self.registration_active is not None and not self.registration_active():
+            raise ConfigError(f"Provider '{self.id}' is no longer available; reload its Extension")
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.
@@ -568,6 +585,8 @@ class ProviderRegistry:
 
     def __init__(self, configs: dict[str, ProviderConfig]) -> None:
         self._configs: dict[str, ProviderConfig] = configs
+        self._base_configs = configs
+        self._extension_configs: dict[str, tuple[object, ProviderConfig]] = {}
         self._reload_lock = Lock()
         self._reload_generation = 0
 
@@ -640,16 +659,85 @@ class ProviderRegistry:
             KeyError: If no provider with *provider_id* exists.
         """
         try:
-            return self._configs[provider_id]
+            config = self._configs[provider_id]
         except KeyError:
             raise KeyError(
                 f"No provider config found for id '{provider_id}'. "
                 f"Available: {', '.join(sorted(self._configs))}"
             ) from None
+        config.ensure_available()
+        return config
 
     def list_ids(self) -> list[str]:
         """Return a sorted list of all registered provider IDs."""
-        return sorted(self._configs.keys())
+        return sorted(
+            provider_id
+            for provider_id, config in self._configs.items()
+            if config.registration_active is None or config.registration_active()
+        )
+
+    def register_provider(
+        self,
+        owner: object,
+        definition: Mapping[str, Any],
+        adapter_type: type[ProviderAdapter] | None = None,
+        *,
+        is_current: Callable[[], bool],
+    ) -> None:
+        """Publish one owner-bound Provider using the normal configuration contract.
+
+        Built-in and Custom Provider ids win collisions. A definition may reuse
+        a bundled Adapter or supply its own subclass of ``ProviderAdapter``.
+        """
+        from core.providers.adapter import ProviderAdapter
+        from core.providers.adapter_types import ADAPTER_TYPES
+
+        raw = deepcopy(dict(definition))
+        for key in ("id", "name", "adapter", "base_url"):
+            if not isinstance(raw.get(key), str) or not raw[key].strip():
+                raise ConfigError(f"Provider {key} must be a non-empty string")
+        if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", raw["id"]) is None:
+            raise ConfigError(
+                "Provider id must use lowercase letters and digits in hyphen-separated segments"
+            )
+        if is_reserved_name(raw["id"]):
+            raise ConfigError(reserved_name_message("Provider id", raw["id"]))
+        if not raw.get("connections"):
+            raise ConfigError("Provider requires at least one Connection")
+        if adapter_type is not None and (
+            not isinstance(adapter_type, type)
+            or not issubclass(adapter_type, ProviderAdapter)
+            or isabstract(adapter_type)
+        ):
+            raise ConfigError("Provider adapter_type must be a concrete ProviderAdapter subclass")
+        if adapter_type is None and raw["adapter"] not in ADAPTER_TYPES:
+            raise ConfigError(f"Unknown Provider Adapter: {raw['adapter']}")
+        config = replace(
+            self._parse_config(raw),
+            catalog_scope="instance",
+            extension_adapter=adapter_type,
+            registration_active=lambda: is_current() and self._configs.get(config.id) is config,
+        )
+        if not is_current():
+            raise ConfigError("Provider Extension registration is no longer current")
+        with self._reload_lock:
+            if config.id in self._configs:
+                raise ConfigError(f"Provider id '{config.id}' is already registered")
+            self._extension_configs[config.id] = owner, config
+            self._configs = {**self._configs, config.id: config}
+
+    def release_providers(self, owner: object) -> None:
+        """Remove only the registrations installed by this exact owner identity."""
+        with self._reload_lock:
+            self._extension_configs = {
+                provider_id: registration
+                for provider_id, registration in self._extension_configs.items()
+                if registration[0] != owner
+            }
+            self._configs = {
+                **{key: value[1] for key, value in self._extension_configs.items()},
+                **self._base_configs,
+            }
 
     def credential_keys(self) -> frozenset[str]:
         """The base environment key of every Connection that has one.
@@ -706,7 +794,18 @@ class ProviderRegistry:
     def _adopt(self, configs: dict[str, ProviderConfig], generation: int) -> None:
         with self._reload_lock:
             if generation == self._reload_generation:
-                self._configs = configs
+                self._base_configs = configs
+                # A new persisted definition wins once; removing it later must
+                # not revive an Extension registration already displaced by it.
+                self._extension_configs = {
+                    key: value
+                    for key, value in self._extension_configs.items()
+                    if key not in configs
+                }
+                self._configs = {
+                    **{key: value[1] for key, value in self._extension_configs.items()},
+                    **configs,
+                }
 
     @classmethod
     def _assemble_configs(

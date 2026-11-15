@@ -3,7 +3,7 @@
   // technical error and the last lines a local server wrote to its error
   // output. The advice for the diagnosed problem and the credentials without
   // a value stand in the connection's row.
-  import { t } from '$lib/i18n.js';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
 
   let { connection } = $props();
 

@@ -6,12 +6,14 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
+  import ChannelPlatformSettings from './ChannelPlatformSettings.svelte';
   let {
     channelFormMode,
     channelFormError,
     channelFormValues,
     channelBusy,
     channelPlatformOptions,
+    channelSettingsSchema = {},
     channelAgentOptions,
     channelAgents,
     channelDmScopeOptions,
@@ -317,4 +319,10 @@
       </div>
     </div>
   {/if}
+  <ChannelPlatformSettings
+    schema={channelSettingsSchema}
+    value={channelFormValues.settings ?? {}}
+    disabled={channelBusy && creating}
+    onChange={(next) => setChannelFormField('settings', next)}
+  />
 </div>

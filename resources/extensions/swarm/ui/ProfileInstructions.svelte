@@ -7,14 +7,14 @@
   // unsaved changes, and `previewable()` resolves whether that draft can be
   // previewed (the editor shows its problems otherwise).
   import { SvelteSet } from 'svelte/reactivity';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
-  import ToolDefinitionsPanel from '../../../../webui/src/components/ToolDefinitionsPanel.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
+  import ToolDefinitionsPanel from '@vbot/extension-sdk/ui/ToolDefinitionsPanel.svelte';
   import { participantCount } from './pagePresentation.js';
   import { createProfilePromptPreview } from './profilePromptPreview.svelte.js';
 

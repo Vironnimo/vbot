@@ -27,6 +27,8 @@ vi.mock('svelte', async () => {
 });
 
 const { default: AppShell } = await import('../AppShell.svelte');
+const { default: ContributionContextHost } =
+  await import('./ContributionContextHost.support.svelte');
 
 const SIDEBAR_COLLAPSED_KEY = 'vbot.sidebar.collapsed.v1';
 const CHAT = {
@@ -80,17 +82,41 @@ const navItem = (item) =>
   );
 
 describe('AppShell sidebar', () => {
-  it('places the optional Live control above microphone and connection status', () => {
-    mountShell({
-      voiceAvailable: true,
-      sidebarFooter: createRawSnippet(() => ({
-        render: () => '<button data-live>Start Live</button>',
-      })),
+  it('composes Live, microphone and connection status with saved visibility', () => {
+    let registry;
+    mountedComponent = mount(ContributionContextHost, {
+      target: document.body,
+      props: {
+        component: AppShell,
+        instances: [
+          {
+            voiceAvailable: true,
+            sidebarFooter: createRawSnippet(() => ({
+              render: () => '<button data-live>Start Live</button>',
+            })),
+          },
+        ],
+        onRegistry: (value) => {
+          registry = value;
+        },
+      },
     });
+    flushSync();
     const footer = document.querySelector('.app-shell__footer');
     expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
     expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
     expect(content().querySelector('[data-live]')).toBeNull();
+    registry.save('shell.status', {
+      hidden: ['core:status.live-voice', 'core:status.connection'],
+    });
+    flushSync();
+    expect(footer.querySelector('[data-live]')).toBeNull();
+    expect(footer.querySelector('.sidebar-footer__connection')).toBeNull();
+    expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
+    registry.reset('shell.status');
+    flushSync();
+    expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
+    expect(footer.querySelector('.sidebar-footer__connection')).not.toBeNull();
   });
 
   it('keeps the sidebar toggle free of the shared button minimum height', () => {
@@ -169,27 +195,46 @@ describe('AppShell sidebar', () => {
     expect(chat.querySelector('.app-shell__nav-indicator')).not.toBeNull();
   });
 
-  it('renders a visible symbol for Extension pages in expanded and collapsed navigation', () => {
-    const onSelectView = vi.fn();
-    mountShell({
-      items: [
-        {
-          id: 'extension:swarm:swarms',
-          label: () => 'Swarms',
-          section: 'main',
-        },
-      ],
-      onSelectView,
-    });
-    const item = document.querySelector('.app-shell__nav-item');
-    expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
-    sidebarToggle().click();
-    flushSync();
-    expect(item.getAttribute('aria-label')).toBe('Swarms');
-    expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
-    item.click();
-    expect(onSelectView).toHaveBeenCalledWith('extension:swarm:swarms');
-  });
+  it.each([
+    { name: 'default', icon: undefined },
+    {
+      name: 'declared',
+      icon: { paths: ['M2 3h12v8H9'], view_box: '0 0 24 24' },
+    },
+  ])(
+    'renders a $name symbol for Extension pages in expanded and collapsed navigation',
+    ({ icon }) => {
+      const onSelectView = vi.fn();
+      mountShell({
+        items: [
+          {
+            id: 'extension:swarm:swarms',
+            icon,
+            label: () => 'Swarms',
+            section: 'main',
+          },
+        ],
+        onSelectView,
+      });
+      const item = document.querySelector('.app-shell__nav-item');
+      expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
+      expect(item.querySelector('svg svg')).toBeNull();
+      if (icon) {
+        expect(item.querySelector('svg').getAttribute('viewBox')).toBe(
+          icon.view_box,
+        );
+        expect(item.querySelector('path').getAttribute('d')).toBe(
+          icon.paths[0],
+        );
+      }
+      sidebarToggle().click();
+      flushSync();
+      expect(item.getAttribute('aria-label')).toBe('Swarms');
+      expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
+      item.click();
+      expect(onSelectView).toHaveBeenCalledWith('extension:swarm:swarms');
+    },
+  );
 
   it('shows the connection status as an icon with the matching state class', () => {
     mountShell({ connectionStatus: CONNECTION_STATUS_CONNECTED });

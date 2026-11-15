@@ -538,6 +538,9 @@ async def test_cached_owner_host_stops_admitting_service_calls(
     services["sample"].reset_mock()
     # Constructing a coroutine while active cannot reserve permission after retirement.
     pending_sample = host.sample(context, {})
+    assert host.services is not None
+    host.services.describe()
+    pending_query = host.services.query("agent.list")
 
     if retirement == "disable":
         assert await extensions.deactivate("mcp", runtime.tools)
@@ -548,6 +551,10 @@ async def test_cached_owner_host_stops_admitting_service_calls(
 
     with pytest.raises(ValueError):
         await pending_sample
+    with pytest.raises(ValueError):
+        await pending_query
+    with pytest.raises(ValueError):
+        host.services.describe()
     with pytest.raises(ValueError):
         await host.sample(context, {})
     assert host.resolve_tool_agent_async is not None

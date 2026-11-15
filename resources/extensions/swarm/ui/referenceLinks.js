@@ -1,4 +1,4 @@
-import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
 
 // Participants cite a Board post as "#46" and a Wiki page as "w7", and address
 // a participant as "@Name". Rendered Markdown shows them as links, but never

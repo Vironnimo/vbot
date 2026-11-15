@@ -22,7 +22,8 @@ from core.providers._usage_types import UsageWindow
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
-from core.providers.adapter_types import ADAPTER_TYPES
+from core.providers.adapter_types import ADAPTER_TYPES as ADAPTER_TYPES
+from core.providers.adapter_types import adapter_type_for_config
 from core.providers.claude_agent import ClaudeAgentAdapter, ClaudeAgentSessions
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -421,7 +422,7 @@ class ProviderRuntime:
                 "enable it in Settings → Providers or via the provider CLI"
             )
         token_getter, http_transport = self._prepare_http(connection, connection_config, account_id)
-        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+        adapter_class = adapter_type_for_config(provider_config)
         if adapter_class is None:
             raise ConfigError(
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
@@ -464,6 +465,7 @@ class ProviderRuntime:
             **extra_kwargs,
         )
         adapter.bind_wire_profiles(wire_profiles)
+        adapter.bind_availability(provider_config.ensure_available)
         adapter.local_endpoint = is_local_provider_base_url(base_url or provider_config.base_url)
         adapter.display_timezone = display_timezone
         return cast(ProviderAdapter, adapter)
@@ -774,7 +776,7 @@ class ProviderRuntime:
             provider_config = self._providers.get(provider_id)
         except KeyError:
             return None
-        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+        adapter_class = adapter_type_for_config(provider_config)
         return adapter_class.WIRE_PROTOCOLS if adapter_class is not None else None
 
     def _resolve_model(self, provider_id: str, model_id: str) -> Model | None:

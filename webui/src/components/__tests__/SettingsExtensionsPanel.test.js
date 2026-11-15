@@ -171,8 +171,8 @@ describe('SettingsExtensionsPanel', () => {
     expect(buttonByText('Refresh')).toBeUndefined();
   });
 
-  it('hides the capability list of the loaded MCP Extension and embeds its connection manager', async () => {
-    rpcMock.mockImplementation(async (method, params) => {
+  it('presents bundled Extension capabilities through the ordinary catalog', async () => {
+    rpcMock.mockImplementation(async (method) => {
       if (method === 'extensions.list')
         return {
           extensions: [
@@ -187,16 +187,15 @@ describe('SettingsExtensionsPanel', () => {
             },
           ],
         };
-      if (params?.operation === 'list') return { connections: [] };
-      if (method === 'agent.list') return { agents: [] };
-      if (method === 'project.list') return { projects: [] };
       return {};
     });
     await mountPanel();
     for (let index = 0; index < 10; index += 1) await flushAsync();
 
-    expect(buttonByText('Add MCP connection')).toBeTruthy();
-    expect(document.body.textContent).not.toContain('test-owned-internal-tool');
+    expect(document.body.textContent).toContain('test-owned-internal-tool');
+    expect(
+      rpcMock.mock.calls.every(([method]) => method === 'extensions.list'),
+    ).toBe(true);
   });
 
   it('offers Retry only when the extension list fails to load', async () => {

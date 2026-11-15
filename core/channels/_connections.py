@@ -54,6 +54,8 @@ class ChannelConnections:
         *,
         get_channel: Callable[[str], Awaitable[ChannelConfig]],
         validate_agent: Callable[[str], None],
+        validate_config: Callable[[ChannelConfig], None],
+        defer_start: Callable[[ChannelConfig], bool],
         new_engine: Callable[[ChannelConfig], ChannelConversationEngine],
         create_adapter: Callable[[ChannelConfig], ChannelAdapter],
         recover_observations: Callable[..., None],
@@ -61,6 +63,8 @@ class ChannelConnections:
         self._storage = storage
         self._get_channel = get_channel
         self._validate_agent_exists = validate_agent
+        self._validate_config = validate_config
+        self._defer_start = defer_start
         self._new_engine = new_engine
         self._create_adapter = create_adapter
         self._recover_observations = recover_observations
@@ -105,29 +109,39 @@ class ChannelConnections:
         self._started = True
         self._recover_observations()
         for config in self._storage.snapshot():
-            if config.enabled:
-                try:
-                    self.start_channel(config.id)
-                except Exception as error:
-                    reason = str(error) or type(error).__name__
-                    self.mark_failed(config.id, reason)
-                    self.schedule_restart(config.id)
-                    if isinstance(error, ChannelError):
-                        # Expected, such as a missing credential: recovery retries it.
-                        _LOGGER.warning(
-                            "Cannot start channel adapter during service startup "
-                            "(channel=%s error_type=%s): %s",
-                            config.id,
-                            type(error).__name__,
-                            error,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Cannot start channel adapter during service startup (channel=%s): %s",
-                            config.id,
-                            error,
-                            exc_info=(type(error), error, error.__traceback__),
-                        )
+            if config.enabled and not self._defer_start(config):
+                self._start_supervised_channel(config.id)
+
+    def resume_platforms(self, platforms: set[str]) -> None:
+        """Start newly available platforms through ordinary failure supervision."""
+        if not self._started:
+            return
+        for config in self._storage.snapshot():
+            if config.enabled and config.platform in platforms:
+                self._start_supervised_channel(config.id)
+
+    def _start_supervised_channel(self, channel_id: str) -> None:
+        try:
+            self.start_channel(channel_id)
+        except Exception as error:
+            reason = str(error) or type(error).__name__
+            self.mark_failed(channel_id, reason)
+            self.schedule_restart(channel_id)
+            if isinstance(error, ChannelError):
+                # Expected, such as a missing credential: recovery retries it.
+                _LOGGER.warning(
+                    "Cannot start configured channel adapter (channel=%s error_type=%s): %s",
+                    channel_id,
+                    type(error).__name__,
+                    error,
+                )
+            else:
+                _LOGGER.error(
+                    "Cannot start configured channel adapter (channel=%s): %s",
+                    channel_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
     def stop(self) -> None:
         """Stop all active channel adapter tasks. Idempotent."""
@@ -200,6 +214,7 @@ class ChannelConnections:
 
         if not config.enabled:
             return
+        self._validate_config(config)
 
         loop = _get_running_loop_or_none()
         if loop is None:

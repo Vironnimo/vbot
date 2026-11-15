@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from core.extensions._declarations import (
-    PAGE_ICONS,
+    ChannelPlatformDeclaration,
     CommandDeclaration,
     CommandHandler,
     ExtensionDeclarations,
@@ -16,6 +17,7 @@ from core.extensions._declarations import (
     LifecycleHandler,
     PageDeclaration,
     PromptBlockDeclaration,
+    ProviderDeclaration,
     RecallBackendDeclaration,
     SessionPromptBlockDeclaration,
     SessionRuntimeDeclaration,
@@ -24,6 +26,7 @@ from core.extensions._declarations import (
     ToolFamilyDeclaration,
     _is_page_id,
 )
+from core.extensions.contributions import parse_contribution, validate_icon
 from core.extensions.interactions import (
     InteractionHandlerDeclaration,
 )
@@ -214,7 +217,9 @@ class ExtensionAPI:
         title: str,
         entry: str,
         *,
-        icon: str = "network",
+        icon: str | dict[str, Any] = "network",
+        navigation: bool = True,
+        services: Sequence[str] = (),
     ) -> None:
         """Declare one page whose asset remains under this Extension's root.
 
@@ -236,11 +241,30 @@ class ExtensionAPI:
             or entry_path.suffix.lower() != ".html"
         ):
             raise ValueError("page entry must be a relative HTML asset path")
-        if not isinstance(icon, str) or icon not in PAGE_ICONS:
-            raise ValueError(f"page icon must be one of: {', '.join(sorted(PAGE_ICONS))}")
+        parsed_icon = validate_icon(icon)
+        if not isinstance(navigation, bool):
+            raise ValueError("page navigation must be a boolean")
+        if (
+            isinstance(services, str)
+            or not isinstance(services, (list, tuple))
+            or any(
+                not isinstance(service, str) or not service.strip() or len(service) > 160
+                for service in services
+            )
+        ):
+            raise ValueError("page services must be a list of public service names")
         if any(item.page_id == page_id for item in self._declarations.pages):
             raise ValueError(f"page already declared: {page_id}")
-        self._declarations.pages.append(PageDeclaration(page_id, title.strip(), entry, icon))
+        self._declarations.pages.append(
+            PageDeclaration(page_id, title.strip(), entry, parsed_icon, navigation, tuple(services))
+        )
+
+    def register_contribution(self, contribution_id: str, **fields: Any) -> None:
+        """Declare one native control or isolated view on a public UI surface."""
+        declaration = parse_contribution(contribution_id, **fields)
+        if any(item.id == declaration.id for item in self._declarations.contributions):
+            raise ValueError(f"contribution already declared: {contribution_id}")
+        self._declarations.contributions.append(declaration)
 
     def register_session_tool(
         self,
@@ -360,6 +384,31 @@ class ExtensionAPI:
         """
         self._declarations.recall_backends.append(
             RecallBackendDeclaration(name=name, factory=factory)
+        )
+
+    def register_provider(self, definition: Mapping[str, Any], adapter_type: Any = None) -> None:
+        """Declare a Provider with the normal Provider configuration shape.
+
+        ``adapter_type`` optionally supplies a ``ProviderAdapter`` subclass;
+        otherwise ``definition.adapter`` selects a bundled Adapter.
+        """
+        if not isinstance(definition, Mapping):
+            raise ValueError("Provider definition must be an object")
+        self._declarations.providers.append(
+            ProviderDeclaration(deepcopy(dict(definition)), adapter_type)
+        )
+
+    def register_channel_platform(
+        self,
+        platform_id: str,
+        label: str,
+        factory: Callable[..., Any],
+        *,
+        settings_schema: dict[str, Any] | None = None,
+    ) -> None:
+        """Declare a Channel platform factory receiving config and ChannelAdapterContext."""
+        self._declarations.channel_platforms.append(
+            ChannelPlatformDeclaration(platform_id, label, factory, deepcopy(settings_schema))
         )
 
     def register_secret_source(self, source: Any) -> None:

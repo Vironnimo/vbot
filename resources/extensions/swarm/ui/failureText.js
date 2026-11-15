@@ -1,4 +1,4 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 
 // How the page words a failed Swarm operation or bridge call. A Swarm
 // operation fails with a stable code as its message (`SwarmStoreError.code`),

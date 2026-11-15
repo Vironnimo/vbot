@@ -137,13 +137,10 @@ class PagePermissions:
                 "The selected server changed", error_code="computer_server_changed"
             )
         if capabilities:
-            names = ", ".join(
-                "Terminal" if name == "terminal" else "Computer Use" for name in capabilities
-            )
+            names = "; ".join(_shown(name) for name in capabilities)
             self._ask(
                 "Share this computer",
                 "{page} asks to use {server} on this computer while vBot Desktop is open. "
-                "Terminal can run local programs; Computer Use can see and control your desktop. "
                 "Allow this?",
                 server=names,
                 origin=expected,

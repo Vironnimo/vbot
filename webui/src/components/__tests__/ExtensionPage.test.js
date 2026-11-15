@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { isTerminalRunEvent } from '../../lib/api/events.js';
 import { t } from '../../lib/i18n.js';
+import { expandSettingsEntry } from '../../lib/settingsSearch.js';
 
 vi.mock(
   'svelte',
@@ -14,9 +15,14 @@ const operation = vi.fn();
 const history = vi.fn();
 const runChildren = vi.fn();
 const toolCall = vi.fn();
+vi.mock('$lib/desktopBridge.js', () => ({
+  isDesktopAccessor: vi.fn(() => false),
+  openDesktopExternalUrl: vi.fn(),
+}));
 vi.mock('$lib/api.js', () => ({
   isTerminalRunEvent,
   invokeExtensionPageOperation: (...args) => operation(...args),
+  invokeExtensionPageService: vi.fn(),
   openExtensionPageRun: vi.fn(),
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
@@ -28,6 +34,7 @@ vi.mock('$lib/api.js', () => ({
   subscribeRunEvents: vi.fn(),
 }));
 const api = await import('$lib/api.js');
+const desktop = await import('$lib/desktopBridge.js');
 const { ApiClientError } = await import('$lib/api/transport.js');
 const { createStandaloneNavigation } =
   await import('$lib/navigation.svelte.js');
@@ -55,6 +62,9 @@ afterEach(async () => {
   api.subscribeRunEvents.mockReset();
   api.cancelExtensionPageToolCall.mockClear();
   api.listServerDirectory.mockReset();
+  api.invokeExtensionPageService.mockReset();
+  desktop.isDesktopAccessor.mockReset().mockReturnValue(false);
+  desktop.openDesktopExternalUrl.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -130,6 +140,148 @@ async function flushReplies() {
 }
 
 describe('ExtensionPage frame bridge', () => {
+  it('binds declared services and surface commands to the current page and Chat context', async () => {
+    const onUiCommand = vi.fn().mockResolvedValue({ inserted: true });
+    api.invokeExtensionPageService.mockResolvedValue({ agents: ['alpha'] });
+    const page = openPage({
+      onUiCommand,
+      initialContext: {
+        api: { version: 30, features: ['ui.contributions', 'services'] },
+        ui: {
+          surface: 'chat.composer.actions',
+          context: { session_id: 'one' },
+          commands: ['composer.insert'],
+        },
+      },
+    });
+    expect(page.init.ui.context.session_id).toBe('one');
+    expect(page.init.api).toEqual({
+      version: 30,
+      features: ['ui.contributions', 'services'],
+    });
+    page.call('service', 'service.query', { name: 'agent.list', params: {} });
+    await page.replied('service');
+    expect(api.invokeExtensionPageService).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      'main',
+      'epoch-a',
+      'query',
+      'agent.list',
+      {},
+    );
+    expect(page.reply('service').result).toEqual({ agents: ['alpha'] });
+    page.call('insert', 'ui.command', {
+      name: 'composer.insert',
+      params: { text: 'hello' },
+    });
+    await page.replied('insert');
+    expect(onUiCommand).toHaveBeenCalledExactlyOnceWith('composer.insert', {
+      text: 'hello',
+    });
+    component.update({ ui: { context: { session_id: 'two' } } });
+    flushSync();
+    page.call('obsolete', 'ui.command', {
+      name: 'composer.insert',
+      params: { text: 'old' },
+    });
+    await flushReplies();
+    expect(onUiCommand).toHaveBeenCalledTimes(1);
+    expect(
+      page.posted().findLast((item) => item.type === 'vbot.extension.init')
+        .nonce,
+    ).not.toBe(page.init.nonce);
+  });
+
+  it('publishes bounded searchable page metadata and reveals it inside the current frame', async () => {
+    const page = openPage({ embedded: true });
+    page.call('index', 'search.index', {
+      entries: [
+        {
+          id: 'connection:one',
+          label: 'One connection',
+          terms: 'example.test',
+        },
+      ],
+    });
+    await page.replied('index');
+    flushSync();
+    const marker = document.querySelector('[data-extension-search]');
+    expect(marker.dataset.searchTerms).toBe('example.test');
+    expect(expandSettingsEntry({ element: marker }, document.body)).toBe(true);
+    expect(page.posted().at(-1)).toMatchObject({
+      type: 'vbot.extension.search.reveal',
+      id: 'connection:one',
+      nonce: page.init.nonce,
+    });
+    page.call('duplicate', 'search.index', {
+      entries: [
+        { id: 'a', label: 'a', terms: '' },
+        { id: 'a', label: 'b', terms: '' },
+      ],
+    });
+    await page.replied('duplicate');
+    expect(page.reply('duplicate').type).toBe('vbot.extension.error');
+    page.message({
+      ...page.init,
+      type: 'vbot.extension.layers.state',
+      open: true,
+    });
+    flushSync();
+    expect(
+      document
+        .querySelector('iframe')
+        .classList.contains('extension-page--layer'),
+    ).toBe(true);
+    document.querySelector('iframe').dispatchEvent(new Event('load'));
+    flushSync();
+    expect(document.querySelector('[data-extension-search]')).toBeNull();
+    expect(
+      document
+        .querySelector('iframe')
+        .classList.contains('extension-page--layer'),
+    ).toBe(false);
+  });
+
+  it('opens explicit external HTTP links and rejects executable or credential-bearing URLs', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const page = openPage();
+    page.call('external', 'external.open', {
+      url: 'https://example.test/docs',
+    });
+    await page.replied('external');
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://example.test/docs',
+      ...OPEN_OPTIONS,
+    );
+    for (const [i, url] of [
+      'javascript:alert(1)',
+      'https://user:secret@example.test',
+    ].entries()) {
+      page.call(`bad-${i}`, 'external.open', { url });
+      await page.replied(`bad-${i}`);
+      expect(page.reply(`bad-${i}`).type).toBe('vbot.extension.error');
+    }
+    expect(open).toHaveBeenCalledTimes(1);
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    desktop.openDesktopExternalUrl.mockResolvedValue({});
+    page.call('desktop', 'external.open', {
+      url: 'https://example.test/signin',
+    });
+    await page.replied('desktop');
+    expect(desktop.openDesktopExternalUrl).toHaveBeenCalledExactlyOnceWith(
+      'https://example.test/signin',
+    );
+    expect(open).toHaveBeenCalledTimes(1);
+    desktop.openDesktopExternalUrl.mockRejectedValue(
+      new Error('Browser unavailable'),
+    );
+    page.call('desktop-failed', 'external.open', {
+      url: 'https://example.test/signin',
+    });
+    await page.replied('desktop-failed');
+    expect(page.reply('desktop-failed').type).toBe('vbot.extension.error');
+  });
+
   it('opens canonical Session addresses through the shell, never a supplied URL', async () => {
     const onOpenSession = vi.fn();
     const page = openPage({ onOpenSession });

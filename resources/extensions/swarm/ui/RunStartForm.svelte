@@ -1,10 +1,10 @@
 <script>
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import PathField from '@vbot/extension-sdk/ui/PathField.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import SwarmIcon from './SwarmIcon.svelte';
   import './runStartForm.css';
 

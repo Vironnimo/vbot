@@ -23,6 +23,7 @@ from core.providers.wire_profile import (
     BudgetRule,
     DecisionWire,
     ParameterRule,
+    Protocol,
     ReasoningWire,
     RequestRules,
     WireProfile,
@@ -501,12 +502,23 @@ def test_status_reflects_verification_entries_and_explicit_rules() -> None:
         )
 
 
-def test_profiles_are_cached_until_the_model_or_the_files_change() -> None:
+def test_profiles_are_cached_until_the_model_adapter_or_files_change() -> None:
     models = {"m": _model("m", supported=True)}
-    profiles, _ = _profiles(None, models)
+    protocols: tuple[Protocol, ...] = ("chat_completions",)
+    profiles = WireProfiles(
+        files={},
+        protocol_support=lambda _provider: protocols,
+        model_resolver=lambda _provider, model: models.get(model),
+        report=lambda _issue: None,
+    )
 
     first = _resolve(profiles, "m")
     assert _resolve(profiles, "m") is first
+    protocols = ("messages",)
+    changed_adapter = _resolve(profiles, "m")
+    assert changed_adapter is not first
+    assert changed_adapter.protocol == "messages"
+    assert _resolve(profiles, "m") is changed_adapter
 
     models["m"] = _model("m", supported=False)
     second = _resolve(profiles, "m")

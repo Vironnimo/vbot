@@ -180,6 +180,10 @@ def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
                 "resources/extensions/computer_use/target.py",
                 "resources/extensions/computer_use/windows_target.py",
                 "resources/extensions/computer_use/_remote_wire.py",
+                "resources/extensions/computer_use/extension.json",
+                "resources/extensions/computer_use/desktop.py",
+                "resources/extensions/terminal/extension.json",
+                "resources/extensions/terminal/desktop.py",
             ),
             (
                 "server",
@@ -195,9 +199,18 @@ def test_copy_application_respects_shape_and_exclusions(
     tmp_path: Path, shape: str, present: tuple[str, ...], absent: tuple[str, ...]
 ) -> None:
     destination = tmp_path / "app"
+    source = _source(tmp_path)
+    sdk_path = Path("resources/sdk/vbot-extension-sdk-1.0.0.tgz")
+    (source / sdk_path).parent.mkdir(parents=True)
+    (source / sdk_path).write_bytes(b"built extension SDK")
     build_windows.copy_application(
-        _source(tmp_path), destination, shape, search_target=build_windows.SEARCH_TARGET
+        source, destination, shape, search_target=build_windows.SEARCH_TARGET
     )
+
+    if shape == "desktop-client":
+        assert not (destination / sdk_path).exists()
+    else:
+        assert (destination / sdk_path).read_bytes() == b"built extension SDK"
 
     for relative in present:
         assert (destination / relative).exists()

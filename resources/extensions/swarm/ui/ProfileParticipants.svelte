@@ -5,22 +5,22 @@
   // edits the editor's bound draft; ProfileEditor owns validation and passes
   // the current field errors in by control id.
   import { tick } from 'svelte';
-  import { t } from '../../../../webui/src/lib/i18n.js';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
+  import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   import {
     buildModelSelectOptions,
     filterModelSelectOptions,
     modelFilterFooterLabel,
-  } from '../../../../webui/src/lib/modelSelection.js';
+  } from '@vbot/extension-sdk/lib/modelSelection.js';
   import {
     effortOptionsForReasoning,
     effortForReasoning,
     reasoningForModelValue,
-  } from '../../../../webui/src/lib/agentForm.js';
+  } from '@vbot/extension-sdk/lib/agentForm.js';
   import { participantCount } from './pagePresentation.js';
 
   let { draft = $bindable(), catalog = {}, fieldErrors = {} } = $props();
