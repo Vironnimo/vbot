@@ -766,6 +766,7 @@
               navigateToSubAgent={navigateSecond}
               onSessionNavigation={(session) => (secondPlace = session)}
               onNavigationIndicator={() => {}}
+              onUnattendedResults={() => {}}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
           {/if}

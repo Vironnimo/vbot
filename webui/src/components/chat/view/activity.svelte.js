@@ -117,16 +117,23 @@ export function createChatViewActivity(context) {
   // Unread results across every Agent on the Agent bar and in its All agents
   // list. While this Chat is shown, the displayed Session's result is being
   // read and does not count, like on the Agent bar.
-  let unreadResultCount = $derived.by(() => {
-    const displayedSessionKey = context.active
-      ? target.displayedSessionKey()
-      : '';
-    return pickerAgentAddresses.reduce(
+  const countUnreadResults = (displayedSessionKey) =>
+    pickerAgentAddresses.reduce(
       (count, address) =>
         count +
         agentUnreadResults(chatState, address, displayedSessionKey).count,
       0,
     );
+  let unreadResultCount = $derived(
+    countUnreadResults(context.active ? target.displayedSessionKey() : ''),
+  );
+  // The same count with the displayed Session's result included: what is
+  // unread while nobody looks at the page (the Desktop's taskbar badge).
+  let unattendedResultCount = $derived(countUnreadResults(''));
+
+  $effect(() => {
+    const count = unattendedResultCount;
+    untrack(() => context.onUnattendedResults(count));
   });
 
   $effect(() => {

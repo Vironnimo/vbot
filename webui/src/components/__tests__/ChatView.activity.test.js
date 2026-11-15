@@ -332,9 +332,11 @@ describe('ChatView Agent activity', () => {
         rpcMock.mockImplementation(
           createChatRpcMock({ sessionMessages: { 'session-1': messages } }),
         );
+        const onUnattendedResults = vi.fn();
         await chat.mountChat({
           sharedAgents: [createAgent()],
           sharedSelectedAgentId: 'alpha',
+          onUnattendedResults,
         });
         setPageAttention(unattended);
 
@@ -366,11 +368,18 @@ describe('ChatView Agent activity', () => {
         );
 
         expect(markedRead('alpha', 'session-1', 'run-unseen')).toBe(false);
+        // Nobody is reading the displayed Session: its result counts as unread.
+        await waitForCondition(
+          () => onUnattendedResults.mock.lastCall?.[0] === 1,
+        );
 
         setPageAttention();
         regainAttention();
         await waitForCondition(() =>
           markedRead('alpha', 'session-1', 'run-unseen'),
+        );
+        await waitForCondition(
+          () => onUnattendedResults.mock.lastCall?.[0] === 0,
         );
       },
     );

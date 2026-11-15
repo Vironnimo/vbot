@@ -250,6 +250,7 @@ def _run_desktop(
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
     from desktop.system_actions import DesktopSystemActions, guard_page_windows
+    from desktop.taskbar_badge import TaskbarBadge, bind_window_badge
     from desktop.zoom import DesktopZoom
 
     _http.prewarm_outbound_http()
@@ -346,6 +347,7 @@ def _run_desktop(
         else None
     )
     zoom = DesktopZoom(settings_path=settings_file)
+    taskbar_badge = TaskbarBadge()
     system_actions = DesktopSystemActions()
 
     def confirm(title: str, message: str) -> bool:
@@ -369,6 +371,7 @@ def _run_desktop(
         secure_origins=secure_origins,
         restart=desktop_restart,
         zoom=zoom,
+        taskbar_badge=taskbar_badge,
         permissions=permissions,
         computer_sharing=computer_sharing,
         confirm=confirm,
@@ -431,10 +434,15 @@ def _run_desktop(
     apply_zoom = _windows.bind_window_zoom(window, zoom.factor)
     if apply_zoom is not None:
         zoom.attach(apply_zoom)
+    show_badge = bind_window_badge(window)
+    if show_badge is not None:
+        taskbar_badge.attach(show_badge)
     controller.attach_window(window)
     # Continues a window sign-in: ticket first, then the WebUI.
     window.events.loaded += controller.page_loaded
     window.events.loaded += permissions.page_loaded
+    # A count belongs to the page that sent it.
+    window.events.loaded += taskbar_badge.clear
     page_events.attach_window(window)
     instance.listen(
         desktop_window.activation_handler(
