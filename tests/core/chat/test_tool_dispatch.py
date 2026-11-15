@@ -16,6 +16,7 @@ from core.chat.messages import ChatMessage, JsonObject
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, RunKind
 from core.secrets import KeyFileProtection, SecretStore
 from core.secrets.agent_secrets import AgentSecrets
+from core.sessions import SessionAddress
 from core.skills import SkillRegistry
 from core.tools import (
     FileReadState,
@@ -517,6 +518,11 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
         name="api", kind="text", values={"value": value}, actor="user", agents=[harness.agent.id]
     )
     manager = ChatRunManager()
+
+    async def parents(address: SessionAddress) -> list[SessionAddress]:
+        assert address == harness.session.address
+        return [SessionAddress("project", "parent", "parent-session")]
+
     dispatch = ToolDispatchContext(
         registry=tools,
         extension_registry=None,
@@ -527,6 +533,7 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
         data_root=tmp_path,
         permissions=PermissionBoundary.UNRESTRICTED,
         approval_manager=manager,
+        approval_ancestors=parents,
     )
     round_ = ToolRound(dispatch, assistant_message_id=None, iteration_number=0)
     task = asyncio.create_task(round_.finish([call("echo", content="{{secret:API}}")]))
@@ -543,6 +550,9 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
         assert request["display_redacted"] is True
         # A review under full access has nothing a Session could remember.
         assert request["session_grant"] is None
+        assert request["ancestors"] == [
+            {"project_id": "project", "agent_id": "parent", "session_id": "parent-session"}
+        ]
         assert manager.resolve_approval(request["id"], "allow")
         messages, _ = await task
         assert value not in json.dumps([message.to_dict() for message in messages])

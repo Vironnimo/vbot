@@ -14,7 +14,7 @@ from core.computers import normalize_execution
 from core.extensions import ExtensionRegistry
 from core.permissions import PermissionBoundary
 from core.runs import Run
-from core.sessions import ChatSession, ToolResultFacts, ToolResultPayload
+from core.sessions import ChatSession, SessionAddress, ToolResultFacts, ToolResultPayload
 from core.tools import (
     ChangeTracker,
     ToolContext,
@@ -68,6 +68,7 @@ class ToolDispatchContext:
         Callable[[bool], Awaitable[tuple[PermissionBoundary, JsonObject]]] | None
     ) = None
     approval_manager: Any | None = None
+    approval_ancestors: Callable[[SessionAddress], Awaitable[list[SessionAddress]]] | None = None
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     project_cwd: Path | None = None
     project_id: str | None = None

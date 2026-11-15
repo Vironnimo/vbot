@@ -31,6 +31,7 @@ from core.extensions.notifications import page_link
 _LOGGER = logging.getLogger("vbot.application.notifications")
 
 NOTIFICATION_KINDS = (
+    "approval_required",
     "run_completed",
     "run_failed",
     "automation_failed",
@@ -151,6 +152,8 @@ class Notifier:
         # server reports as not idle (with their span start) and the held toasts.
         self._busy: dict[SessionKey, str] = {}
         self._held: dict[SessionKey, _HeldRun] = {}
+        self._approval_revision = -1
+        self._approval_requests: dict[str, dict[str, Any]] = {}
         self._armed = False
         self._expect_stop = False
         self._server_toast = False
@@ -203,6 +206,9 @@ class Notifier:
             return
         payload = event.get("payload")
         if not isinstance(payload, dict):
+            return
+        if event_type == "permissions_approvals":
+            self._approvals_changed(payload)
             return
         if event_type == _SESSION_ACTIVITY_EVENT:
             self._activity_changed(payload)
@@ -339,6 +345,9 @@ class Notifier:
     def _connection_ready(self, hello: dict[str, Any]) -> None:
         """Start over from the hello's activity: a Session it does not list is idle."""
 
+        self._approval_revision = -1
+        self._approvals_changed(hello.get("permissions_approvals", {"revision": 0, "requests": []}))
+
         if hello.get("replay_status") == "resumed":
             # The replay that follows brings every change since the last event
             # this tray saw, idle reports included, so its activity stays valid.
@@ -352,6 +361,81 @@ class Notifier:
         # does not report activity: a span that is over releases its toast.
         for session in [key for key in self._held if not self._held_span_runs(key)]:
             self._release(session, None)
+
+    def _approvals_changed(self, snapshot: dict[str, Any]) -> None:
+        """Notify once per pending request and retire it with the authoritative snapshot."""
+        if not isinstance(snapshot, dict):
+            return
+        revision, rows = snapshot.get("revision"), snapshot.get("requests")
+        if (
+            not isinstance(revision, int)
+            or revision <= self._approval_revision
+            or not isinstance(rows, list)
+        ):
+            return
+        self._approval_revision = revision
+        requests = {
+            row["id"]: row
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("id"), str)
+            and row.get("agent_id")
+            and row.get("session_id")
+        }
+        for request_id in self._approval_requests.keys() - requests.keys():
+            key = f"approval:{request_id}"
+            task = self._pending.pop(key, None)
+            if task is not None:
+                task.cancel()
+            self._sink.dismiss(key)
+        previous = self._approval_requests
+        # Preserve object identity while a delivery waits for its RPCs.
+        self._approval_requests = {key: previous.get(key, row) for key, row in requests.items()}
+        for request_id in requests.keys() - previous.keys():
+            key = f"approval:{request_id}"
+            task = asyncio.get_running_loop().create_task(
+                self._deliver_approval(self._approval_requests[request_id]), name=key
+            )
+            self._pending[key] = task
+            task.add_done_callback(lambda done: self._pending.pop(done.get_name(), None))
+            self._track(task)
+
+    async def _deliver_approval(self, request: dict[str, Any]) -> None:
+        ancestors = request.get("ancestors")
+        root = ancestors[-1] if isinstance(ancestors, list) and ancestors else request
+        project_id, agent_id, session_id = _session_key(root)
+        address = f"{agent_id}@{project_id}" if project_id else agent_id
+        _, session, agent = await asyncio.gather(
+            self._refresh_settings(),
+            self._rpc("session.get", {"agent_id": address, "session_id": session_id}),
+            self._rpc("agent.get", {"id": agent_id}) if not project_id else _none(),
+        )
+        if self._approval_requests.get(request["id"]) is not request:
+            return
+        with self._lock:
+            if not self._enabled.get("approval_required", True):
+                return
+        name = _text(agent.get("name") if agent else None) or address
+        row = session.get("session") if session else None
+        title = (
+            (_text(row.get("title")) or _text(row.get("auto_title")))
+            if isinstance(row, dict)
+            else ""
+        )
+        detail = (
+            f"Sub-Agent {request['agent_id']} needs your approval to continue."
+            if ancestors
+            else "A Tool call needs your approval to continue."
+        )
+        self._sink.show(
+            Toast(
+                f"approval:{request['id']}",
+                "approval_required",
+                f"{name} needs your approval",
+                f"{title or 'New Session'}\n{detail}"[:_TOAST_BODY_MAX_CHARS],
+                session=(address, session_id),
+            )
+        )
 
     def _activity_changed(self, payload: dict[str, Any]) -> None:
         session = _session_key(payload)

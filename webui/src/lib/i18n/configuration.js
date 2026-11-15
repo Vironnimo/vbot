@@ -393,6 +393,7 @@ export default Object.freeze({
   'settings.notifications.help':
     'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Automations, including the Agent jobs of Calendar events, that fail. Update finished reports how a vBot update ended, successfully or not. Server stopped appears when the server the tray started stops unexpectedly.',
   'settings.notifications.runCompleted': 'Run completed',
+  'settings.notifications.approvalRequired': 'Approval needs your decision',
   'settings.notifications.runFailed': 'Run failed',
   'settings.notifications.automationFailed': 'Automation failed',
   'settings.notifications.updateResult': 'Update finished',

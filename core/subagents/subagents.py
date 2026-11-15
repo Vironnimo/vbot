@@ -457,6 +457,11 @@ class SubAgentCoordinator:
         sessions = self._runtime.chat_sessions
         return await sessions.run_async(sessions.subagent_children, address)
 
+    async def ancestor_sessions(self, address: SessionAddress) -> list[SessionAddress]:
+        """Read the live Parent chain, nearest first, for operator attention."""
+        sessions = self._runtime.chat_sessions
+        return await sessions.run_async(ancestors, sessions, address, strict=True)
+
     async def parent_answer_pending(self, address: SessionAddress) -> bool:
         """Whether followed work already owes Parent an answer despite a later redirect."""
         return await self._forwarding.parent_answer_pending(address)

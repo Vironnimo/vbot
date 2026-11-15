@@ -187,8 +187,12 @@ export function setupChatViewTestSuite() {
     unmount: unmountMounted,
     // Mounts ChatView into the body and, unless `ready` is null, waits until
     // that text is displayed (the default History says "Hello").
-    async mountChat(props = {}, { ready = 'Hello' } = {}) {
-      mountedComponent = mount(ChatView, { target: document.body, props });
+    async mountChat(props = {}, { ready = 'Hello', context } = {}) {
+      mountedComponent = mount(ChatView, {
+        target: document.body,
+        props,
+        context,
+      });
       flushSync();
       if (ready !== null) await waitForText(ready);
       return mountedComponent;

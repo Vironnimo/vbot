@@ -106,6 +106,7 @@ async def test_run_starts_a_linked_subagent_in_the_background(
     assert data["agent_id"] == "worker"
     child = harness.subagent_session(data["id"])
     assert child.session_id == data["session_id"]
+    assert await harness.coordinator.ancestor_sessions(child) == [harness.parent]
     link = harness.sessions.metadata_value(child, SUBAGENT_PARENT_META_KEY)
     assert (link["id"], link["agent_id"], link["session_id"]) == (
         data["id"],
@@ -888,6 +889,10 @@ async def test_send_reaches_only_direct_subagents(harness: SubAgentHarness) -> N
     await harness.settle()
     inner = await harness.spawn("inner", session=harness.subagent_session(outer["id"]))
     await harness.settle()
+    assert await harness.coordinator.ancestor_sessions(harness.subagent_session(inner["id"])) == [
+        harness.subagent_session(outer["id"]),
+        harness.parent,
+    ]
     stranger = await harness.spawn("stranger", session=harness.sessions.create("parent").address)
     await harness.settle()
 

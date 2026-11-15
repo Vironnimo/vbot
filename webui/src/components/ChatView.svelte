@@ -23,6 +23,8 @@
   import SessionAdvancedSettings from './sessions/SessionAdvancedSettings.svelte';
   import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
+  import ChatPendingApprovals from './chat/ChatPendingApprovals.svelte';
+  import { sessionApprovalRequests } from '$lib/permissionApprovals.js';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import { getContext, untrack } from 'svelte';
   import { listConnections, listModels } from '$lib/api.js';
@@ -618,6 +620,13 @@
   }
 
   const permissionApprovals = getContext('permissionApprovals');
+  const displayedApprovals = $derived(
+    sessionApprovalRequests(
+      permissionApprovals?.requests ?? [],
+      target.activeSessionState?.agentId,
+      target.activeSessionState?.sessionId,
+    ),
+  );
   const activity = createChatViewActivity({
     chatState,
     target,
@@ -987,6 +996,11 @@
               </div>
             {/if}
             <div class="composer-tray">
+              <ChatPendingApprovals
+                requests={displayedApprovals}
+                sessionKey={target.activeSessionState?.key ?? ''}
+                onOpenSession={navigation.handleNavigateToSubAgentLink}
+              />
               {#if navigation.subAgentSessionActive}
                 <Banner appearance="tray" aria-live="polite">
                   {@render returnIcon()}

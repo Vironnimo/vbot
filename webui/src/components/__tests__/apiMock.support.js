@@ -23,6 +23,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     openFilePreview: (source) => call('file.preview_open', { source }),
     getFilePreviewRevision: (token) => call('file.preview_revision', { token }),
     rpc: (...args) => rpcMock(...args),
+    resolvePermissionApproval: (id, decision, { remember } = {}) =>
+      call('permissions.resolve', {
+        id,
+        decision,
+        ...(remember === undefined ? {} : { remember }),
+      }),
     extensionOperation: (name, operation, args = {}) =>
       call('extensions.operation', { name, operation, arguments: args }),
     getSettings: () => call('settings.get'),

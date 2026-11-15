@@ -52,6 +52,79 @@ const teamMemberIsUnread = (name) => agentShowsUnread(projectAgentName(name));
 describe('ChatView Agent activity', () => {
   const chat = setupChatViewTestSuite();
 
+  it.each([false, true])(
+    'keeps approvals visible without a loaded spawn row (nested=%s)',
+    async (nested) => {
+      rpcMock.mockImplementation(createChatRpcMock());
+      const parent = {
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+      };
+      const approvals = reactiveProps({
+        requests: [
+          {
+            id: 'approval-child',
+            run_id: 'child-run',
+            tool_call_id: 'call-1',
+            agent_id: 'worker',
+            project_id: null,
+            session_id: 'child-session',
+            tool_name: 'powershell',
+            arguments: { command: 'git status' },
+            requirements: [{ kind: 'review', target: 'git status' }],
+            ancestors: nested
+              ? [
+                  {
+                    agent_id: 'worker',
+                    project_id: 'other',
+                    session_id: 'middle-session',
+                  },
+                  parent,
+                ]
+              : [parent],
+          },
+        ],
+      });
+      const onNavigationIndicator = vi.fn();
+      const onUnattendedResults = vi.fn();
+      await chat.mountChat(
+        { onNavigationIndicator, onUnattendedResults },
+        {
+          context: new Map([['permissionApprovals', approvals]]),
+        },
+      );
+      const pending = document.querySelector('.pending-approvals');
+      expect(pending).toBeTruthy();
+      expect(pending.querySelectorAll('[data-approval-id]')).toHaveLength(1);
+      expect(
+        agentPill('Alpha').querySelector('.tab-indicator--approval'),
+      ).toBeTruthy();
+      expect(onNavigationIndicator).toHaveBeenLastCalledWith({
+        count: 1,
+        tone: 'running',
+        label: t('approvals.pendingOne'),
+      });
+      expect(onUnattendedResults).toHaveBeenLastCalledWith(1);
+      pending.open = true;
+      pending.querySelector('[data-approval="once"]').click();
+      await waitForCondition(() =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'permissions.resolve' &&
+            params.id === 'approval-child' &&
+            params.decision === 'allow',
+        ),
+      );
+      // The server's snapshot, rather than a local click, retires the request.
+      approvals.requests = [];
+      flushSync();
+      expect(document.querySelector('.pending-approvals')).toBeNull();
+      expect(onNavigationIndicator).toHaveBeenLastCalledWith(null);
+      expect(onUnattendedResults).toHaveBeenLastCalledWith(0);
+    },
+  );
+
   describe('personal Agents', () => {
     it('shows background Agent work from Session activity without selecting that Agent', async () => {
       const agents = [createAgent(), beta('session-beta')];
