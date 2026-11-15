@@ -120,14 +120,16 @@ Register a Provider during `register(api)` with the same definition schema as `r
 
 ```python
 def register(api):
-    api.register_provider({
-        "id": "my-gateway",
-        "name": "My Gateway",
-        "adapter": "openai_compatible",
-        "base_url": "http://127.0.0.1:8000/v1",
-        "models_endpoint": "/models",
-        "connections": [{"id": "default", "type": "none", "label": "Default"}],
-    })
+    api.register_provider(
+        {
+            "id": "my-gateway",
+            "name": "My Gateway",
+            "adapter": "openai_compatible",
+            "base_url": "http://127.0.0.1:8000/v1",
+            "models_endpoint": "/models",
+            "connections": [{"id": "default", "type": "none", "label": "Default"}],
+        }
+    )
 ```
 
 The optional `adapter_type` is a concrete `vbot_extension_sdk.providers.ProviderAdapter` subclass; omit it to reuse the named adapter. Provider ids are shared with built-in and custom Providers; a collision is diagnosed and skipped. Registration and Model discovery belong to the current Runtime, so do not patch a global adapter selector.

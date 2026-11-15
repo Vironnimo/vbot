@@ -93,9 +93,12 @@ def register(api: ExtensionAPI) -> None:
         return {"items": []}
 
     api.register_service(
-        "list", kind="query", handler=list_entries,
+        "list",
+        kind="query",
+        handler=list_entries,
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
-        resources=("entries",), description="List current entries",
+        resources=("entries",),
+        description="List current entries",
     )
 
     async def start(host: ExtensionHost) -> None:
