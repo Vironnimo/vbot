@@ -87,9 +87,13 @@ export function createChatScrollController(
   // This also protects an existing reading position: a queued resize/render
   // correction must not undo motion whose scroll event has not arrived yet.
   let pendingUserScrollTop = null;
+  let userInputFrame = null;
   // Each Session owns its pending page; a slow request must not block a
   // different Session after navigation.
   const loadingOlderSessions = new Set();
+  // Failed pages wait for another user gesture; render/resize updates must
+  // not turn an unavailable server into a retry loop.
+  let olderHistoryFailed = false;
   // Run history gaps of the current Session requested so far, by Run id and
   // cursor: 'pending', 'loaded' until the merged steps rendered, or
   // 'failed' until real user motion, so a failing load does not retry on
@@ -253,9 +257,11 @@ export function createChatScrollController(
     onViewChanged();
   }
 
-  function maybeRequestLoadOlder() {
+  function maybeRequestLoadOlder({ automatic = false } = {}) {
     if (
       destroyed ||
+      restorePending ||
+      (automatic && (!hasLayout() || olderHistoryFailed)) ||
       loadingOlderSessions.has(currentSessionId) ||
       container.scrollTop > LOAD_OLDER_THRESHOLD_PX ||
       !shouldLoadOlder()
@@ -264,14 +270,16 @@ export function createChatScrollController(
     }
     const requestedSessionId = currentSessionId;
     const previousScrollHeight = container.scrollHeight;
+    olderHistoryFailed = false;
     loadingOlderSessions.add(requestedSessionId);
     Promise.resolve(requestLoadOlder())
-      .catch(() => {})
-      .finally(() => {
+      .catch(() => false)
+      .then((loaded) => {
         loadingOlderSessions.delete(requestedSessionId);
         if (destroyed || currentSessionId !== requestedSessionId) {
           return;
         }
+        olderHistoryFailed = !loaded;
         // Prepended history grew the content above the reading position.
         // The anchor correction handles this when an anchor exists; without
         // one (layout-less or replaced content), shift the held pixel
@@ -427,6 +435,7 @@ export function createChatScrollController(
   function contentChanged() {
     settlePosition();
     syncWindow();
+    maybeRequestLoadOlder({ automatic: true });
     maybeLoadRunGaps();
   }
 
@@ -498,6 +507,7 @@ export function createChatScrollController(
     interactionHolds?.releaseAll();
     const viewport = viewportFor(currentSessionId);
     runGapLoads = new Map();
+    olderHistoryFailed = false;
     restorePending = true;
     restoreToPinned = viewport.pinned;
     pendingUserScrollTop = null;
@@ -599,9 +609,16 @@ export function createChatScrollController(
   // cancels a still-pending passive restore, because a user reaching for the
   // viewport wins over it.
   function noteUserInput({ upward = false } = {}) {
-    if (!upward || destroyed) {
+    if (destroyed) {
       return;
     }
+    // Pointer/scrollbar and downward input also take precedence over a
+    // passive restore. Later scroll events then classify the actual motion.
+    if (restorePending) {
+      restorePending = false;
+      classifyUserScroll(container.scrollTop);
+    }
+    if (!upward) return;
     // At the top an upward gesture cannot move the viewport, so no scroll
     // event will arrive to settle a released follow pin. A short timeline
     // stays pinned; an overflowing one already has a reading position,
@@ -617,11 +634,33 @@ export function createChatScrollController(
     }
     restorePending = false;
     pendingUserScrollTop ??= container.scrollTop;
+    if (userInputFrame === null) {
+      userInputFrame = requestFrame(() => {
+        userInputFrame = null;
+        if (pendingUserScrollTop === null) return;
+        if (
+          Math.abs(container.scrollTop - pendingUserScrollTop) >
+          PROGRAMMATIC_ECHO_TOLERANCE_PX
+        ) {
+          classifyUserScroll(container.scrollTop);
+        } else {
+          // The browser's default action had its chance. An ineffective
+          // gesture must not suppress anchor corrections indefinitely.
+          pendingUserScrollTop = null;
+          if (isNearBottom()) {
+            viewportFor(currentSessionId).pinned = true;
+            onViewChanged();
+          }
+        }
+        queueContentChanged();
+      });
+    }
     const viewport = viewportFor(currentSessionId);
     if (!viewport.pinned) {
       maybeRequestLoadOlder();
       return;
     }
+    captureAnchor(viewport);
     viewport.pinned = false;
     onViewChanged();
     maybeRequestLoadOlder();
@@ -694,6 +733,7 @@ export function createChatScrollController(
   function rendered() {
     applyRenderedLayout();
     forgetRunGapLoads('loaded');
+    maybeRequestLoadOlder({ automatic: true });
     maybeLoadRunGaps();
   }
 
@@ -926,6 +966,9 @@ export function createChatScrollController(
     }
     if (windowSyncFrame !== null) {
       cancelFrame(windowSyncFrame);
+    }
+    if (userInputFrame !== null) {
+      cancelFrame(userInputFrame);
     }
     contentSyncFrame = null;
     contentSyncQueued = false;

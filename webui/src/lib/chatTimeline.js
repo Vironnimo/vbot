@@ -72,7 +72,9 @@ function retainWindowPrefix(previous, incoming) {
       !incomingIds.has(child.id) &&
       child.position < incoming.window_start,
   );
-  if (!prefix.length) return incoming;
+  // Only a contiguous prefix can replace the incoming gap. After a long
+  // disconnect, the new window may start beyond everything we still hold.
+  if (prefix.at(-1)?.position !== incoming.window_start - 1) return incoming;
   return {
     ...incoming,
     items: [

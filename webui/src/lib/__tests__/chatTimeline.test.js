@@ -30,6 +30,53 @@ const update = (fields, sequence = 11, baseSequence = 10) => ({
 const state = (items = []) => ({ timelineItems: items, timelineSequences: {} });
 
 describe('server Timeline projection', () => {
+  it.each(['incremental read', 'full read', 'stream snapshot'])(
+    'keeps a loadable gap when a %s skips beyond the held Run window',
+    (source) => {
+      const child = (position) =>
+        outputItem(`step ${position}`, { id: `step-${position}`, position });
+      const gap = (before) => ({
+        id: 'gap',
+        type: 'history_gap',
+        before: `step-${before}`,
+        position: -1,
+      });
+      const window = (start) =>
+        assistantRun(
+          'one',
+          [
+            gap(start),
+            ...Array.from({ length: 100 }, (_, i) => child(start + i)),
+          ],
+          { window_start: start },
+        );
+      const session = { ...state([window(100)]), historyGeneration: 'g' };
+      const incoming = window(250);
+      if (source === 'stream snapshot') {
+        applyTimelineEvent(session, 'timeline_snapshot', snapshot([incoming]));
+      } else {
+        loadTimelineItems(session, [incoming], {
+          incremental: source === 'incremental read',
+        });
+      }
+      expect(session.timelineItems[0].items).toEqual(incoming.items);
+      expect(
+        mergeRunChildPage(session, {
+          run_id: 'one',
+          history_generation: 'g',
+          before: 'step-250',
+          items: [
+            gap(150),
+            ...Array.from({ length: 100 }, (_, i) => child(150 + i)),
+          ],
+        }),
+      ).toBe(true);
+      expect(
+        session.timelineItems[0].items.map((item) => item.position),
+      ).toEqual([-1, ...Array.from({ length: 200 }, (_, i) => 150 + i)]);
+    },
+  );
+
   it('keeps loaded Run prefixes through windowed reconnects and sparse updates', () => {
     const child = (position) =>
       outputItem(`step ${position}`, { id: `step-${position}`, position });

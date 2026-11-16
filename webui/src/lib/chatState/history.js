@@ -258,6 +258,7 @@ export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
   }
   sessionState.messages = sessionState.messages.slice(0, targetIndex);
   sessionState.historyAfter = '';
+  sessionState.historyEditVersion = (sessionState.historyEditVersion ?? 0) + 1;
   sessionState.historySnapshotVersion =
     (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.runEvents = sessionState.runEvents.filter(

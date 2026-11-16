@@ -697,23 +697,28 @@ describe('older History pages', () => {
   it.each([
     ['refresh', 'success'],
     ['recovery', 'failure'],
+    ['generation change', 'success'],
   ])(
-    'discards stale older-page %s/%s results without skipping history',
+    'retries superseded older-page %s/%s results at the current boundary',
     async (replacement, outcome) => {
       const older = deferred();
       const message = (id) => ({ id, role: 'user', content: id });
+      const nextBefore =
+        replacement === 'generation change' ? 'cursor-middle' : 'cursor-recent';
       const loadChatHistory = vi
         .fn()
         .mockResolvedValueOnce({
           messages: [message('middle'), message('recent')],
           has_more: true,
           next_before: 'cursor-middle',
+          history_generation: 'g1',
         })
         .mockReturnValueOnce(older.promise)
         .mockResolvedValueOnce({
           messages: [message('recent'), message('newest')],
           has_more: true,
-          next_before: 'cursor-recent',
+          next_before: nextBefore,
+          history_generation: replacement === 'generation change' ? 'g2' : 'g1',
         })
         .mockResolvedValueOnce({
           messages: [message('oldest'), message('middle')],
@@ -746,23 +751,16 @@ describe('older History pages', () => {
         });
       }
 
-      expect(await pendingOlder).toBe(false);
-      expect(sessionState.messages.map((item) => item.id)).toEqual([
-        'recent',
-        'newest',
-      ]);
-      expect(sessionState.historyBefore).toBe('cursor-recent');
-      expect(sessionState.hasOlderHistory).toBe(true);
+      expect(await pendingOlder).toBe(true);
       expect(sessionState.loadingOlderHistory).toBe(false);
       expect(sessionState.actionError).toBe('newer-action-error');
 
-      expect(await controller.loadOlderHistory(sessionState)).toBe(true);
       expect(loadChatHistory).toHaveBeenLastCalledWith({
         agent_id: 'alpha',
         session_id: 'session-one',
         limit: 50,
         child_limit: 100,
-        before: 'cursor-recent',
+        before: nextBefore,
       });
       expect(sessionState.messages.map((item) => item.id)).toEqual([
         'oldest',
@@ -774,52 +772,62 @@ describe('older History pages', () => {
     },
   );
 
-  it.each(['failed refresh', 'other Session refresh'])(
-    'keeps a pending older page usable after a %s',
-    async (replacement) => {
-      const older = deferred();
-      const loadChatHistory = vi
-        .fn()
-        .mockResolvedValueOnce({
-          messages: [{ id: 'recent', role: 'user', content: 'Recent' }],
-          has_more: true,
-          next_before: 'cursor-recent',
-        })
-        .mockReturnValueOnce(older.promise);
-      const { chatState, controller } = setupController({
-        operationOverrides: { loadChatHistory },
-      });
+  it.each([
+    'failed refresh',
+    'other Session refresh',
+    'incremental read',
+    'same-boundary refresh',
+  ])('keeps a pending older page usable after a %s', async (replacement) => {
+    const older = deferred();
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ id: 'recent', role: 'user', content: 'Recent' }],
+        has_more: true,
+        next_before: 'cursor-recent',
+        history_generation: 'g',
+        next_after: 'after-recent',
+      })
+      .mockReturnValueOnce(older.promise);
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadChatHistory },
+    });
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    const pendingOlder = controller.loadOlderHistory(sessionState);
+    if (replacement === 'failed refresh') {
+      loadChatHistory.mockRejectedValueOnce(new Error('refresh-error'));
       await controller.loadHistoryForSession('alpha', 'session-one');
-      const sessionState = ensureSessionState(
-        chatState,
-        'alpha',
-        'session-one',
-      );
-      const pendingOlder = controller.loadOlderHistory(sessionState);
-      if (replacement === 'failed refresh') {
-        loadChatHistory.mockRejectedValueOnce(new Error('refresh-error'));
-        await controller.loadHistoryForSession('alpha', 'session-one');
-      } else {
-        loadChatHistory.mockResolvedValueOnce({
-          messages: [],
-          has_more: false,
-        });
-        await controller.loadHistoryForSession('alpha', 'session-two');
-      }
-      older.resolve({
-        messages: [{ id: 'oldest', role: 'user', content: 'Oldest' }],
+    } else if (replacement === 'other Session refresh') {
+      loadChatHistory.mockResolvedValueOnce({
+        messages: [],
         has_more: false,
       });
+      await controller.loadHistoryForSession('alpha', 'session-two');
+    } else {
+      loadChatHistory.mockResolvedValueOnce({
+        messages: [{ id: 'recent', role: 'user', content: 'Recent' }],
+        history_generation: 'g',
+        incremental: replacement === 'incremental read',
+        has_more: true,
+        next_before: 'cursor-recent',
+      });
+      await controller.loadHistoryForSession('alpha', 'session-one');
+    }
+    older.resolve({
+      messages: [{ id: 'oldest', role: 'user', content: 'Oldest' }],
+      has_more: false,
+    });
 
-      expect(await pendingOlder).toBe(true);
-      expect(sessionState.messages.map((item) => item.id)).toEqual([
-        'oldest',
-        'recent',
-      ]);
-      expect(sessionState.loadingOlderHistory).toBe(false);
-      expect(sessionState.hasOlderHistory).toBe(false);
-    },
-  );
+    expect(await pendingOlder).toBe(true);
+    expect(sessionState.messages.map((item) => item.id)).toEqual([
+      'oldest',
+      'recent',
+    ]);
+    expect(sessionState.loadingOlderHistory).toBe(false);
+    expect(sessionState.hasOlderHistory).toBe(false);
+    expect(loadChatHistory).toHaveBeenCalledTimes(3);
+  });
 
   it('discards an older page after an accepted history edit', async () => {
     const older = deferred();

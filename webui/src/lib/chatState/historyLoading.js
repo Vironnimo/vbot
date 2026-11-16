@@ -367,46 +367,54 @@ export function createChatHistory({
     ) {
       return false;
     }
-    const before =
+    const pageBefore = () =>
       sessionState.historyBefore ||
       (sessionState.messages ?? []).find(
         (message) => typeof message?.id === 'string' && message.id.length > 0,
       )?.id ||
       '';
-    if (!before) {
+    if (!pageBefore()) {
       sessionState.hasOlderHistory = false;
       return false;
     }
     sessionState.loadingOlderHistory = true;
     sessionState.actionError = '';
-    const snapshotVersion = sessionState.historySnapshotVersion;
-    const isCurrentSnapshot = () =>
-      sessionState.historySnapshotVersion === snapshotVersion;
+    const editVersion = sessionState.historyEditVersion;
     try {
-      const history = await operations.loadChatHistory({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        limit: HISTORY_OLDER_LIMIT,
-        child_limit: 100,
-        before,
-      });
-      // A refreshed snapshot owns a new page boundary. Joining a page from
-      // the previous snapshot could skip the messages between those bounds.
-      if (!isCurrentSnapshot()) {
-        return false;
-      }
-      prependHistory(sessionState, history?.messages ?? [], {
-        items: history?.items,
-        replaceRunIds: history?.replace_run_ids,
-        runs: history?.runs,
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-      });
-      retainHistory(sessionState);
-      return true;
-    } catch (error) {
-      if (isCurrentSnapshot()) {
-        sessionState.actionError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
+      while (sessionState.hasOlderHistory && pageBefore()) {
+        const before = pageBefore();
+        const generation = sessionState.historyGeneration;
+        const isCurrentBoundary = () =>
+          pageBefore() === before &&
+          sessionState.historyGeneration === generation;
+        let history;
+        try {
+          history = await operations.loadChatHistory({
+            agent_id: sessionState.agentId,
+            session_id: sessionState.sessionId,
+            limit: HISTORY_OLDER_LIMIT,
+            child_limit: 100,
+            before,
+          });
+        } catch (error) {
+          if (sessionState.historyEditVersion !== editVersion) return false;
+          if (!isCurrentBoundary()) continue;
+          sessionState.actionError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
+          return false;
+        }
+        if (sessionState.historyEditVersion !== editVersion) return false;
+        // Appends leave this boundary valid. A replacement that moved it
+        // needs a fresh page, without waiting for another scroll gesture.
+        if (!isCurrentBoundary()) continue;
+        prependHistory(sessionState, history?.messages ?? [], {
+          items: history?.items,
+          replaceRunIds: history?.replace_run_ids,
+          runs: history?.runs,
+          hasMore: history?.has_more === true,
+          nextBefore: history?.next_before,
+        });
+        retainHistory(sessionState);
+        return true;
       }
       return false;
     } finally {

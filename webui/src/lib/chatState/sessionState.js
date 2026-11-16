@@ -207,6 +207,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       timelineSequences: {},
       historyLoaded: false,
       historySnapshotVersion: 0,
+      historyEditVersion: 0,
       historyGeneration: '',
       historyRuns: {},
       historyAfter: '',

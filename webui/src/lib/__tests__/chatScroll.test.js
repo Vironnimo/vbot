@@ -184,28 +184,103 @@ describe('createChatScrollController', () => {
     controller.destroy();
   });
 
-  it('corrects reading position when content above the anchor grows', () => {
-    const container = createFakeContainer();
-    const items = [
-      createElement('item-1', 100, container),
-      createElement('item-2', 700, container),
-    ];
-    container.querySelectorAll = vi.fn(() => items);
+  it.each(['no input', 'ineffective upward input'])(
+    'corrects growth above the reading anchor after %s',
+    async (input) => {
+      vi.useFakeTimers();
+      try {
+        const container = createFakeContainer();
+        const items = [
+          createElement('item-1', 100, container),
+          createElement('item-2', 700, container),
+        ];
+        container.querySelectorAll = vi.fn(() => items);
+        const controller = createController(container);
+        controller.sessionChanged('session-a');
+        controller.contentChanged();
+
+        // User reads at a position where item-2 sits 120px below the top edge.
+        container.scrollTop = 580;
+        container.dispatchScroll();
+        expect(items[1].offsetTop - container.scrollTop).toBe(120);
+
+        if (input === 'ineffective upward input') {
+          controller.noteUserInput({ upward: true });
+        }
+
+        // Content above the anchor grows by 90px; the anchor must stay put.
+        items[0].offsetTop = 190;
+        items[1].offsetTop = 790;
+        controller.contentChanged();
+        await vi.runOnlyPendingTimersAsync();
+        expect(container.scrollTop).toBe(670);
+        expect(items[1].offsetTop - container.scrollTop).toBe(120);
+        controller.destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(['render', 'content change', 'restore'])(
+    'loads older History near the top after %s and stops automatic retries on failure',
+    async (trigger) => {
+      const container = createClampedContainer();
+      container.clientHeight = 500;
+      let hasOlder = false;
+      const pages = [];
+      const requestLoadOlder = vi.fn(
+        () => new Promise((resolve, reject) => pages.push({ resolve, reject })),
+      );
+      const controller = createController(container, {
+        shouldLoadOlder: () => hasOlder,
+        requestLoadOlder,
+      });
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+      controller.sessionChanged('session-a');
+      controller.contentChanged();
+      container.scrollTop = 30;
+      container.dispatchScroll();
+      if (trigger === 'restore') {
+        controller.sessionChanged('session-b');
+        controller.contentChanged();
+        controller.sessionChanged('session-a');
+      }
+      hasOlder = true;
+      if (trigger === 'render') controller.rendered();
+      else controller.contentChanged();
+      expect(requestLoadOlder).toHaveBeenCalledTimes(1);
+
+      // A page too small to move us out of reach needs another read without
+      // another wheel/keyboard gesture.
+      pages[0].resolve(true);
+      await settle();
+      expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+      pages[1].reject(new Error('offline'));
+      await settle();
+      controller.rendered();
+      controller.contentChanged();
+      expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+
+      controller.noteUserInput({ upward: true });
+      expect(requestLoadOlder).toHaveBeenCalledTimes(3);
+      hasOlder = false;
+      pages[2].resolve(true);
+      await settle();
+      controller.destroy();
+    },
+  );
+
+  it('lets scrollbar input take over before a passive restore completes', () => {
+    const container = createClampedContainer();
     const controller = createController(container);
     controller.sessionChanged('session-a');
-    controller.contentChanged();
-
-    // User reads at a position where item-2 sits 120px below the top edge.
-    container.scrollTop = 580;
+    controller.noteUserInput();
+    container.scrollTop = 200;
     container.dispatchScroll();
-    expect(items[1].offsetTop - container.scrollTop).toBe(120);
-
-    // Content above the anchor grows by 90px; the anchor must stay put.
-    items[0].offsetTop = 190;
-    items[1].offsetTop = 790;
     controller.contentChanged();
-    expect(container.scrollTop).toBe(670);
-    expect(items[1].offsetTop - container.scrollTop).toBe(120);
+    expect(container.scrollTop).toBe(200);
+    expect(controller.isRestorePending()).toBe(false);
     controller.destroy();
   });
 
