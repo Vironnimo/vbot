@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -59,11 +59,13 @@ async def _report(
     cache_dir: Path | None = None,
     workdir: Path | None = None,
     sent: Callable[[bytes], bytes] | None = None,
+    protected: Sequence[str] = (),
 ) -> CommandReport:
     """Run *command* as the shell Tool does; return the report of its end.
 
     *workdir* is the request's workdir instead of *cwd*, the shell's start
-    directory; *sent* turns the request into what reaches the shell.
+    directory; *sent* turns the request into what reaches the shell;
+    *protected* are the request's protected folders.
     """
     layers = command_environment(RunIdentity("agent-a", "session-a", None))
     # Share compiled code across this run's cases without touching the user's cache.
@@ -71,7 +73,7 @@ async def _report(
         cache_dir = cwd.parent / "powershell-host-cache"
     pwsh = shutil.which("pwsh")
     assert pwsh is not None
-    request = powershell_request(command, str(workdir or cwd), layers.changes)
+    request = powershell_request(command, str(workdir or cwd), layers.changes, protected)
     manager = CommandManager(launcher=PipeLauncher(warm=False))
     try:
         handle = await manager.launch(
@@ -113,7 +115,7 @@ def _watch_host_compilation(markers: Path, *, gate: Path | None = None) -> str:
     return (
         f"[IO.File]::WriteAllText([IO.Path]::Combine({directory}, \"$PID.ready\"), 'ready'); "
         "function Add-Type { [CmdletBinding()] param([string]$TypeDefinition, "
-        "[string]$OutputAssembly) "
+        "[string]$OutputAssembly, [string[]]$ReferencedAssemblies) "
         f'[IO.File]::AppendAllText([IO.Path]::Combine({directory}, "$PID.compile"), '
         '$(if ($OutputAssembly) { "disk`n" } else { "memory`n" })); '
         + pause
@@ -156,13 +158,68 @@ async def test_host_cache_reuses_valid_code_and_rebuilds_invalid_entries(
 
     # Changing the actual C# input, even without a behavioral change, changes the
     # cache identity. The old entry is neither loaded nor overwritten.
-    monkeypatch.setattr(
-        _powershell_host, "HOST_SOURCE", _powershell_host.HOST_SOURCE + "\n// new\n"
+    changed = tmp_path / "host.cs"
+    changed.write_text(
+        _powershell_host.HOST_SOURCE_PATH.read_text(encoding="utf-8") + "\n// new\n",
+        encoding="utf-8",
     )
+    monkeypatch.setattr(_powershell_host, "HOST_SOURCE_PATH", changed)
     assert await _run(tmp_path, command, prefix=prefix, cache_dir=cache) == expected
     assert _compilation_attempts(markers) == ["disk"] * 4
     assert len(list(cache.glob("*.bin"))) == 2
     assert all(path.suffix in {".bin", ".lock"} for path in cache.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_target(
+    tmp_path: Path,
+) -> None:
+    """The guarded cmdlets of ``_powershell.py`` (Guards), user decisions 2026-11-16."""
+    box = tmp_path / "box"
+    for folder in ("project/src", "plain/sub"):
+        (box / folder).mkdir(parents=True)
+    (box / "project" / "file.txt").write_text("x")
+    refused = (
+        "Remove-Item -Recurse -Force project",
+        "rm -r -fo .\\project\\* -ErrorAction SilentlyContinue",
+        # The folder that holds a protected one, and the user's own folders.
+        "Remove-Item -Recurse -Force .",
+        'Remove-Item -Recurse -Force "$env:USERPROFILE\\*"',
+        "Remove-Item -Recurse -Force C:\\*",
+        "Move-Item project moved",
+        # An empty path means the profile or the current directory to PowerShell.
+        "Set-Location $null",
+        "Get-ChildItem ''",
+        "Set-Location missing",
+    )
+    command = "\n".join(
+        f"try {{ {statement}; 'ran-{index}' }} catch {{ \"refused-{index}: $_\" }}"
+        for index, statement in enumerate(refused)
+    ) + (
+        # What is named singly goes, and so does a folder nobody protects.
+        "\nRemove-Item project\\file.txt; Remove-Item -Recurse project\\src\n"
+        "Remove-Item -Recurse plain; Remove-Item -Recurse project -WhatIf | Out-Null\n"
+        "Set-Location missing -ErrorAction SilentlyContinue; Set-Location project; Set-Location -\n"
+        "\"left: $((Get-ChildItem -Name) -join ',') in $(Split-Path -Leaf $PWD)\""
+    )
+
+    code, output = await _run_protected(box, command, [str(box / "project")])
+
+    assert code == 0, output
+    for index in range(len(refused)):
+        assert f"refused-{index}: " in output and f"ran-{index}" not in output, output
+    assert "vBot protects this folder." in output
+    assert "left: project in box" in output
+    assert list((box / "project").iterdir()) == []
+
+    # Unhandled, each ends the whole command: nothing goes on in the old directory.
+    code, output = await _run_protected(box, "cd missing\n'not-run'", [])
+    assert code == 1 and "Cannot find path" in output and "not-run" not in output
+
+
+async def _run_protected(cwd: Path, command: str, protected: list[str]) -> tuple[int | None, str]:
+    transcript = (report := await _report(cwd, command, protected=protected)).transcript
+    return report.exit_code, "\n".join((*transcript.head, *transcript.tail))
 
 
 @pytest.mark.asyncio
@@ -342,6 +399,32 @@ _PRINTED_ERROR_TEXT = "; ".join(
             0,
             ("local-env-arg",),
         ),
+        # A variable the command reads but never assigns would be empty, so
+        # "$NAME/*" would be the drive's root: refused the same way. Bash's
+        # NAME=value assigns nothing.
+        (
+            "'silenced-sentinel'\nNAME=value\nRemove-Item \"$NAME/*\" -WhatIf",
+            1,
+            (
+                "ParserError",
+                "The variable '$NAME' cannot be retrieved because it has not been set.",
+            ),
+        ),
+        # Every way a command gives a variable a value counts, and so does what
+        # PowerShell sets itself; a command that can create variables unseen is
+        # not checked.
+        (
+            "$a = 1; $b, $c = 2, 3; $n++; $total += 1; [int]$typed = 4\n"
+            "foreach ($item in 5) {}; function f($p) { $p }\n"
+            "$parsed = 0; $null = [int]::TryParse('6', [ref]$parsed)\n"
+            "Get-Date -OutVariable now | Out-Null; 7 | ForEach-Object { $piped = $_ }\n"
+            "try { throw 'x' } catch { $caught = \"$_\" }\n"
+            "'x' -match 'x' | Out-Null; $where = \"$PWD $env:NOT_SET $PSVersionTable\"\n"
+            '"$a$b$c$n$total$typed$item$parsed$($now.Count)$piped$caught$($Matches[0])"',
+            0,
+            ("123114561" + "7xx",),
+        ),
+        ('Set-Variable later 8; "dynamic-$later-$never"', 0, ("dynamic-8-",)),
         # An unknown pipeline command exits instead of waiting for input.
         (
             "Get-ChildItem . | vbot_missing_pipeline_command",
@@ -472,6 +555,9 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "read-only-assignment",
         "read-only-loop-variable-in-uncalled-code",
         "writable-assignments",
+        "unassigned-variable",
+        "assigned-variables",
+        "variables-created-unseen",
         "unknown-pipeline-command",
         "shown-error",
         "error-between-rows",

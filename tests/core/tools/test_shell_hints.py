@@ -307,6 +307,66 @@ def test_platform_specific_hints_follow_the_host_shell(
         assert hint is not None and posix_expected in hint
 
 
+_UNASSIGNED = (
+    "ParserError: \nLine |\n   1 |  {command}\n     | The variable '${name}' cannot be "
+    "retrieved because it has not been set."
+)
+
+
+@pytest.mark.parametrize(
+    ("command", "output", "expected"),
+    [
+        # Before the run: a variable the command never assigned.
+        (
+            'BUILD=out; Remove-Item -Recurse "$BUILD/*"',
+            _UNASSIGNED.format(command='BUILD=out; Remove-Item "$BUILD/*"', name="BUILD"),
+            "Nothing ran. `BUILD=value` assigns nothing in PowerShell: write `$BUILD = 'value'`.",
+        ),
+        (
+            'Get-ChildItem "$VBOT_HINT_ENV/logs"',
+            _UNASSIGNED.format(command='Get-ChildItem "$VBOT_HINT_ENV/logs"', name="VBOT_HINT_ENV"),
+            "Nothing ran. $VBOT_HINT_ENV is not a PowerShell variable: the environment "
+            "variable is `$env:VBOT_HINT_ENV`.",
+        ),
+        (
+            "Remove-Item $target",
+            _UNASSIGNED.format(command="Remove-Item $target", name="target"),
+            "Nothing ran. The command reads $target but never assigns it, and variables of "
+            "earlier commands are gone. Assign it in this command. To test whether a variable "
+            "exists, use `Test-Path Variable:target`.",
+        ),
+        # While it ran: a folder Remove-Item and Move-Item leave in place.
+        (
+            "Remove-Item -Recurse -Force C:\\repo\\*",
+            "Remove-Item: Cannot remove everything in 'C:\\repo' at once: vBot protects "
+            "this folder.",
+            "The command ended at this statement. Remove-Item and Move-Item do not take a "
+            "drive root, the user's profile folders, vBot's data directory or the root of a "
+            "Project or Workspace, neither whole nor all of its content at once. Name the "
+            "files and subfolders to remove. If the folder itself has to go, tell the user.",
+        ),
+        # A directory change that failed ended the command, unless it handled the error.
+        (
+            "cd build; Remove-Item -Recurse *",
+            "Set-Location: Cannot find path 'C:\\repo\\build' because it does not exist.",
+            "The command ended at this failed Set-Location: nothing after it ran.",
+        ),
+        (
+            "cd build -ErrorAction Continue; python missing.py",
+            "Set-Location: Cannot find path 'C:\\repo\\build' because it does not exist.",
+            None,
+        ),
+    ],
+)
+def test_what_the_powershell_guards_refused_names_the_next_step(
+    monkeypatch: pytest.MonkeyPatch, command: str, output: str, expected: str | None
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+    monkeypatch.setenv("VBOT_HINT_ENV", "set")
+
+    assert annotate_failure(command, 1, output) == expected
+
+
 @pytest.mark.parametrize(
     ("command", "output", "expected"),
     [

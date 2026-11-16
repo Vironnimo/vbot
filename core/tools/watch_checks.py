@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Container, Sequence
+from collections.abc import Awaitable, Callable, Container, Iterable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -125,7 +125,9 @@ class WatchCheckRunner:
         command_checker: CommandChecker | None = None,
         ceiling_boundary: CeilingBoundary | None = None,
         credential_names: Callable[[], Container[str]] = frozenset,
+        protected_folders: Callable[[], Iterable[str]] = tuple,
     ) -> None:
+        self._protected_folders = protected_folders
         self._agent_resolver = agent_resolver
         self._sessions = sessions
         self._credential_names = credential_names
@@ -225,7 +227,9 @@ class WatchCheckRunner:
         PowerShell that did not run it, and a timeout.
         """
         try:
-            start = await _WORKERS.run(_shell_start, command, workdir, withheld)
+            start = await _WORKERS.run(
+                _shell_start, command, workdir, withheld, self._protected_folders
+            )
         except HostShellMissingError as error:
             raise WatchCheckError(f"The {noun} did not run: {error}") from error
         try:
@@ -410,13 +414,18 @@ class WatchCheckRunner:
         return path, working_project
 
 
-def _shell_start(command: str, workdir: Path, withheld: Container[str] | None) -> HostShellStart:
+def _shell_start(
+    command: str,
+    workdir: Path,
+    withheld: Container[str] | None,
+    protected_folders: Callable[[], Iterable[str]],
+) -> HostShellStart:
     """The host shell for a check, confined when *withheld* (the credentials vBot
     knows) is given; blocking: the environment reads the registry on Windows."""
     environment = unattended_command_environment(
         confined=withheld is not None, credential_names=withheld or frozenset()
     )
-    return host_shell_start(command, workdir, environment)
+    return host_shell_start(command, workdir, environment, protected_folders())
 
 
 def _refused(refusal: PermissionRefusal) -> str:

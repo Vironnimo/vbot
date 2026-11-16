@@ -14,6 +14,7 @@ bootstrap prints nothing of its own: the output is the command's.
 
 Request. ASCII lines: the request's not-run code (below) in nine decimal
 digits, then each field as Base64 of its UTF-8 text: the workdir, the command,
+the call's protected folders (one per line; Guards below),
 one line per environment change (the name, then a space and the value; the name
 alone removes the variable), and ``.`` as the last line, so a request that
 ended early is never taken for a complete one. PowerShell hands stdin to
@@ -70,6 +71,39 @@ where ``pwsh -Command`` exits with 1 without a word. So is an assignment to a
 read-only or constant variable such as ``$home``, which PowerShell reports only
 where it runs, going on with the variable's old value (user decision 2026-10-29).
 
+Guards (user decisions 2026-11-16). PowerShell turns an empty value into
+another target without a word: ``"$unset/*"`` is ``C:\\*``, ``Set-Location ''``
+goes to the user's profile, ``Get-ChildItem $null`` lists the current directory,
+and a command goes on in its old directory after a ``cd`` that failed. Agents
+reach these through habits from bash, such as ``NAME=value`` or ``$TMPDIR``.
+Two guards stand against them, compiled with the host (``_powershell_host.py``).
+Before the run, a command that reads a variable it never assigns and the
+runspace does not have is refused like a syntax error, with the message of
+PowerShell's strict mode (``VBotUnassignedVariables``). A variable counts as
+assigned when the command writes it anywhere: an assignment, ``++``, a loop or
+parameter name, ``[ref]``, or a ``-...Variable`` parameter with a literal name.
+A command that can create variables the text does not show is not checked: dot
+sourcing, ``Invoke-Expression``, ``Import-Module``, ``Set-Variable``,
+``New-Variable``, ``using``, the ``Variable:`` drive and ``PSVariable``.
+While it runs, the command's ``Remove-Item``, ``Move-Item``, ``Set-Location``,
+``Push-Location`` and ``Get-ChildItem`` are classes derived from PowerShell's
+own, imported after their module so that they and their aliases resolve first.
+``Remove-Item`` and ``Move-Item`` refuse a protected folder, a folder that
+contains one, and everything directly in either at once (``folder\\*`` without
+``-Include`` or ``-Filter``); files and subfolders named singly pass, and so
+does ``-WhatIf``. Protected are every drive root, the user's profile, Documents,
+Desktop, Downloads, both AppData folders, ProgramData, Program Files and
+Windows, and the request's folders: vBot's data directory and the roots of
+Projects and Workspaces. ``Set-Location``, ``Push-Location`` and
+``Get-ChildItem`` refuse an explicitly passed empty path with PowerShell's own
+binding message, and the first two end the command when their path does not
+exist, with PowerShell's own error, unless the command passed ``-ErrorAction``
+or changed ``$ErrorActionPreference``. A refusal ends the command as ``throw``
+does: ``try``/``catch`` catches it, ``-ErrorAction`` does not silence it. The
+guards are against mistakes, not intent: native programs, .NET calls and a
+module-qualified cmdlet name pass them. A guard that fails itself refuses
+nothing.
+
 Running. The command's text runs unchanged as its own script in a fresh
 runspace, in its global scope, as in ``pwsh -Command``:
 ``$MyInvocation``, error positions and ``Set-PSDebug`` traces show the command's
@@ -121,13 +155,13 @@ import functools
 import re
 import secrets
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from core.tools import _powershell_host
 from core.tools._command_types import NotRunReason
-from core.tools._powershell_host import host_statement
 
 # Without a byte order mark: a console encoding with one would write it first.
 UTF8_CONSOLE_STATEMENT = (
@@ -223,6 +257,17 @@ RUNNER_STATEMENTS = r"""& {
         $state.Errors = $state.Variables.GetValue('Error')
         $state.Host.Variables = $state.Variables
         $state.Host.Errors = $state.Errors
+        # The guarded file cmdlets take the place of PowerShell's own (Guards above).
+        try {
+            $guards = [PowerShell]::Create()
+            $guards.Runspace = $state.Runspace
+            $null = $guards.AddCommand('Microsoft.PowerShell.Core\Import-Module').AddParameter(
+                'Name', 'Microsoft.PowerShell.Management').AddStatement().AddCommand(
+                'Microsoft.PowerShell.Core\Import-Module').AddParameter(
+                'Assembly', [VBotGuard].Assembly).Invoke()
+            $guards.Dispose()
+        } catch {}
+        $state.Errors.Clear()
         $state.Pipeline = [PowerShell]::Create()
         $state.Pipeline.Runspace = $state.Runspace
         # ConsoleHost supplies an empty input stream only when the outer script
@@ -231,7 +276,8 @@ RUNNER_STATEMENTS = r"""& {
         $ast = [System.Management.Automation.Language.Parser]::ParseInput(
             $text, [ref]$null, [ref]$null)
         $state.Refused = [System.Management.Automation.Language.ParseError[]]@(
-            try { [VBotUnwritableVariables]::Find($ast, $state.Variables) } catch {})
+            try { [VBotUnwritableVariables]::Find($ast, $state.Variables) } catch {}
+            try { [VBotUnassignedVariables]::Find($ast, $state.Variables) } catch {})
         $usesInput = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
@@ -517,11 +563,14 @@ $__vbotNotRun = {unreadable}
 try {
     if (-not [regex]::IsMatch($__vbotRequest[0], '^[0-9]{9}$')) { throw 'no not-run code' }
     $__vbotNotRun = [int]$__vbotRequest[0]
-    if ($__vbotRequest.Count -lt 4 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
+    if ($__vbotRequest.Count -lt 5 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
     $__vbotUtf8 = [System.Text.Encoding]::UTF8
     $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
     $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
-    for ($__vbotIndex = 3; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
+    [VBotGuard]::Protect($__vbotUtf8.GetString(
+        [Convert]::FromBase64String($__vbotRequest[3])).Split(
+        [char]10, [StringSplitOptions]::RemoveEmptyEntries))
+    for ($__vbotIndex = 4; $__vbotIndex -lt $__vbotRequest.Count - 1; $__vbotIndex++) {
         $__vbotPair = $__vbotRequest[$__vbotIndex].Split(' ')
         $__vbotValue = if ($__vbotPair.Count -gt 1) {
             $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotPair[1]))
@@ -593,7 +642,10 @@ def powershell_bootstrap(cache_dir: Path | None = None) -> str:
     return (
         LANGUAGE_MODE_STATEMENT.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
         + f"{SETUP_STATEMENT}\n"
-        + host_statement(powershell_literal(str(cache_dir.absolute())))
+        + _powershell_host.host_statement(
+            powershell_literal(str(cache_dir.absolute())),
+            powershell_literal(str(_powershell_host.HOST_SOURCE_PATH)),
+        )
         + RUNNER_STATEMENTS
         + WARM_UP_STATEMENTS
         + REQUEST_STATEMENTS.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
@@ -612,15 +664,21 @@ class PowerShellRequest:
 
 
 def powershell_request(
-    command: str, workdir: str, changes: Mapping[str, str | None]
+    command: str,
+    workdir: str,
+    changes: Mapping[str, str | None],
+    protected: Iterable[str] = (),
 ) -> PowerShellRequest:
     """Return the request ``powershell_bootstrap`` reads: run *command* in *workdir*.
 
     *changes* is the call's layer of the environment over the shell's start
-    environment: a value sets the variable, None removes it.
+    environment: a value sets the variable, None removes it. *protected* are
+    folders the command's ``Remove-Item`` and ``Move-Item`` leave in place, in
+    addition to those the bootstrap knows itself (Guards).
     """
     code = _NOT_RUN_CODE_FIRST + secrets.randbelow(_NOT_RUN_CODES)
-    lines = [str(code), _base64(workdir), _base64(command)]
+    folders = "".join(f"{folder}\n" for folder in protected)
+    lines = [str(code), _base64(workdir), _base64(command), _base64(folders or "\n")]
     for name, value in changes.items():
         lines.append(_base64(name) if value is None else f"{_base64(name)} {_base64(value)}")
     lines.append(".")

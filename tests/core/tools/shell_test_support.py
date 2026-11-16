@@ -194,7 +194,8 @@ def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str
     def text(field: str) -> str:
         return base64.b64decode(field).decode("utf-8")
 
-    for line in lines[3:-1]:
+    # lines[3] holds the call's protected folders.
+    for line in lines[4:-1]:
         name, separator, value = line.partition(" ")
         if separator:
             environment[text(name)] = text(value)
