@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import shutil
 import sys
-from collections.abc import Awaitable, Callable, Container, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Container, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -109,6 +109,9 @@ _LOGGER = get_logger("tools.shell")
 CredentialResolver = Callable[[str], str]
 # The environment names vBot knows as credentials (``Runtime.environment_credential_names``).
 CredentialNames = Callable[[], Container[str]]
+# The folders a command's Remove-Item and Move-Item leave in place beyond those
+# PowerShell's bootstrap knows itself (``_powershell.py``, Guards). Blocking.
+ProtectedFolders = Callable[[], Iterable[str]]
 
 
 class ShellReviewer(Protocol):
@@ -164,7 +167,10 @@ def powershell_executable(search_path: str | None) -> Path | None:
 
 
 def host_shell_start(
-    command: str, workdir: Path, environment: CommandEnvironment
+    command: str,
+    workdir: Path,
+    environment: CommandEnvironment,
+    protected: Iterable[str] = (),
 ) -> HostShellStart:
     """The host shell for *command* in *workdir*, without input or terminal; blocking.
 
@@ -174,6 +180,8 @@ def host_shell_start(
     environment travel as the request on stdin. The request cannot carry an
     empty value, which ``SetEnvironmentVariable`` removes on .NET 8 (pwsh 7.4):
     a call that sets one starts a shell of its own with its whole environment.
+    *protected* are the folders PowerShell's guards keep besides their own
+    (``_powershell.py``, Guards); bash has no such guards.
     Raises ``HostShellMissingError`` when this host has no such shell.
     """
     complete = environment.complete()
@@ -184,9 +192,9 @@ def host_shell_start(
             raise HostShellMissingError("PowerShell 7 (pwsh) is not installed on this host")
         argv = [str(pwsh), "-NoProfile", "-NonInteractive", "-Command", powershell_bootstrap()]
         if "" in environment.changes.values():
-            request = powershell_request(command, str(workdir), {})
+            request = powershell_request(command, str(workdir), {}, protected)
             return HostShellStart(argv, complete, request, warm=False)
-        request = powershell_request(command, str(workdir), environment.changes)
+        request = powershell_request(command, str(workdir), environment.changes, protected)
         return HostShellStart(argv, environment.base, request)
     bash = shutil.which("bash", path=search_path)
     if bash is None:
@@ -194,10 +202,12 @@ def host_shell_start(
     return HostShellStart([bash, "-c", command], complete)
 
 
-def _shell_start(call: _ShellCall, environment: CommandEnvironment) -> HostShellStart:
+def _shell_start(
+    call: _ShellCall, environment: CommandEnvironment, protected: Iterable[str]
+) -> HostShellStart:
     """The host shell for *call*; raises ``_NotStartedError`` when this host cannot run it."""
     try:
-        return host_shell_start(call.command, call.workdir, environment)
+        return host_shell_start(call.command, call.workdir, environment, protected)
     except HostShellMissingError as error:
         raise _cannot_start(f"{error}. Ask the user to install it.") from error
 
@@ -245,8 +255,10 @@ class ShellTool:
         command_checker: CommandChecker | None = None,
         subagents: SubAgentTree | None = None,
         review_shell: ShellReviewer | None = None,
+        protected_folders: ProtectedFolders | None = None,
     ) -> None:
         self._commands = command_manager
+        self._protected_folders: ProtectedFolders = protected_folders or tuple
         self._subagents = subagents
         self._checker = command_checker
         self._review_shell = review_shell
@@ -506,7 +518,7 @@ class ShellTool:
                 credential_names=withheld,
             )
             # PATH lookup probes the filesystem and uses this call's fresh environment.
-            return _shell_start(call, environment)
+            return _shell_start(call, environment, self._protected_folders())
 
         confined = context.permissions.restricted
         start = await run_tool_worker(prepare)
@@ -907,6 +919,7 @@ def register_shell_tool(
     command_checker: CommandChecker | None = None,
     subagents: SubAgentTree | None = None,
     review_shell: ShellReviewer | None = None,
+    protected_folders: ProtectedFolders | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
@@ -915,6 +928,8 @@ def register_shell_tool(
     without it such a Session cannot run commands. *credential_names* are the
     names a restricted Session's commands do not inherit (``shell_environment``).
     *subagents* lets a command that slept name the caller's working Sub-Agents.
+    *protected_folders* names, for each command, the folders its ``Remove-Item``
+    and ``Move-Item`` leave in place (``_powershell.py``, Guards).
     """
     tool = ShellTool(
         command_manager,
@@ -927,6 +942,7 @@ def register_shell_tool(
         command_checker=command_checker,
         subagents=subagents,
         review_shell=review_shell,
+        protected_folders=protected_folders,
     )
     registry.register(
         SHELL_TOOL_NAME,

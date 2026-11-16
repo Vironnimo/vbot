@@ -919,6 +919,12 @@ def bootstrap(runtime: Runtime) -> None:
             command_checker=runtime._command_checker,
             ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
             credential_names=runtime.environment_credential_names,
+            protected_folders=partial(
+                _protected_folders,
+                Path(runtime._storage.data_dir),
+                runtime._projects,
+                runtime._agents,
+            ),
         )
         runtime._cron_service.set_watch_checks(runtime._watch_checks)
         runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
@@ -964,6 +970,12 @@ def bootstrap(runtime: Runtime) -> None:
             command_checker=runtime._command_checker,
             subagents=runtime._subagent_coordinator,
             review_shell=runtime._review_shell,
+            protected_folders=partial(
+                _protected_folders,
+                Path(runtime._storage.data_dir),
+                runtime._projects,
+                runtime._agents,
+            ),
         )
         register_execute_code_tool(
             runtime._tools,
@@ -1083,6 +1095,23 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _protected_folders(data_dir: Path, projects: ProjectStore, agents: AgentStore) -> list[str]:
+    """The folders a shell command must not delete or move as a whole. Blocking.
+
+    vBot's data directory and the roots of every Project and Workspace (user
+    decision 2026-11-16; ``core/tools/_powershell.py``, Guards). A store that
+    cannot be read protects nothing of its own: the command still runs.
+    """
+    folders = [str(data_dir)]
+    with suppress(Exception):
+        folders.extend(project.cwd for project in projects.list() if project.cwd)
+    with suppress(Exception):
+        folders.extend(
+            str(agent.workspace) for agent in agents.list_with_builtins() if agent.workspace
+        )
+    return folders
 
 
 def _watch_boundary(

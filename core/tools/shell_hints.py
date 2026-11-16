@@ -17,6 +17,11 @@ from ._shell_hint_common import (
     _scan_window,
 )
 from ._shell_hint_common import HINT_TOOL_NAMES as HINT_TOOL_NAMES
+from ._shell_hint_guards import (
+    _hint_failed_location,
+    _hint_protected_folder,
+    _hint_unassigned_variable,
+)
 from ._shell_hint_pipeline import (
     _hint_discarded_errors,
     _hint_first_stage,
@@ -67,6 +72,10 @@ _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_powershell_prompt,
     _hint_container_tty,
     _hint_end_of_input,
+    # What vBot's own guards refused or ended; nothing else explains those.
+    _hint_unassigned_variable,
+    _hint_protected_folder,
+    _hint_failed_location,
     _hint_command_not_found,
     _hint_powershell_command_not_found,
     _hint_store_python,

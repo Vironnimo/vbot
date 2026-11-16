@@ -129,7 +129,9 @@ def _host_shell(monkeypatch: pytest.MonkeyPatch) -> list[CommandEnvironment]:
     """
     environments: list[CommandEnvironment] = []
 
-    def start(command: str, workdir: Path, environment: CommandEnvironment) -> HostShellStart:
+    def start(
+        command: str, workdir: Path, environment: CommandEnvironment, protected: object = ()
+    ) -> HostShellStart:
         environments.append(environment)
         request = PowerShellRequest(
             f"{workdir}|{command}".encode(),

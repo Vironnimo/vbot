@@ -1,8 +1,9 @@
 """PowerShell's console host adapter and its disposable compiled-assembly cache.
 
-The C# host remains owned by the shell runner, and so does the check for writes
-to read-only variables it compiles with it (``_powershell.py``, Prepare): compiled,
-it walks the command without a script block call for each node. Loading its compiled bytes avoids
+The C# host (``_powershell_host.cs``) remains owned by the shell runner, and so
+do the checks and guarded cmdlets it compiles with it (``_powershell.py``,
+Prepare and Guards): compiled, a check walks the command without a script block
+call for each node. Loading its compiled bytes avoids
 compiler initialization and its allocations in every command process. Cache
 failures must not change a command's execution, output or status; in-memory compilation is
 the fallback. No cache data is part of the installation or canonical data store.
@@ -10,132 +11,11 @@ the fallback. No cache data is part of the installation or canonical data store.
 
 from __future__ import annotations
 
-import hashlib
+from pathlib import Path
 
-HOST_SOURCE = r"""using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Management.Automation;
-using System.Management.Automation.Host;
-using System.Management.Automation.Language;
-using System.Management.Automation.Runspaces;
-public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
-    readonly PSHost inner;
-    bool promptInputEnded;
-    public int? ExitCode;
-    public PSVariableIntrinsics Variables;
-    public Runspace CommandRunspace;
-    public IList Errors;
-    public object[] Record;
-    public object NativeExit;
-    public VBotPowerShellHost(PSHost inner) { this.inner = inner; }
-    public override string Name => inner.Name;
-    public override Version Version => inner.Version;
-    public override Guid InstanceId => inner.InstanceId;
-    public override PSHostUserInterface UI => inner.UI;
-    public override CultureInfo CurrentCulture => inner.CurrentCulture;
-    public override CultureInfo CurrentUICulture => inner.CurrentUICulture;
-    public override PSObject PrivateData => inner.PrivateData;
-    public override void SetShouldExit(int code) {
-        ExitCode = code;
-        inner.SetShouldExit(code);
-    }
-    public override void EnterNestedPrompt() {
-        // The request consumed stdin to EOF. ConsoleHost would evaluate one
-        // prompt and return. Its own runspace is waiting for this one, so the
-        // prompt must run here; delegating its input loop would deadlock.
-        if (ExitCode.HasValue || promptInputEnded) return;
-        if (UI.RawUI.CursorPosition.X != 0) UI.WriteLine();
-        string prompt = null;
-        try {
-            using (var pipeline = CommandRunspace.CreateNestedPipeline("prompt", false)) {
-                var output = pipeline.Invoke();
-                if (output.Count != 0) prompt = output[0]?.BaseObject?.ToString();
-            }
-        }
-        catch { } // ConsoleHost falls back when prompt evaluation fails.
-        UI.Write(string.IsNullOrEmpty(prompt) ? "PS>" : prompt);
-        promptInputEnded = true;
-    }
-    public override void ExitNestedPrompt() => inner.ExitNestedPrompt();
-    public override void NotifyBeginApplication() {
-        inner.NotifyBeginApplication();
-        RecordCommand();
-    }
-    public override void NotifyEndApplication() {
-        try { NativeExit = Variables.GetValue("global:LASTEXITCODE"); }
-        catch { Record = null; NativeExit = null; }
-        finally { inner.NotifyEndApplication(); }
-    }
-    public void RecordCommand() {
-        try {
-            var frames = CommandRunspace.Debugger.GetCallStack().ToArray();
-            Record = frames.Length == 0 ? null : new object[] { frames, frames[0].Position,
-                Variables.GetValue("global:LASTEXITCODE"), Errors.Count == 0 ? null : Errors[0] };
-        }
-        catch { Record = null; NativeExit = null; }
-    }
-    public EventHandler<CommandLookupEventArgs> LookupHook => OnCommandLookup;
-    void OnCommandLookup(object sender, CommandLookupEventArgs lookup) {
-        try {
-            var command = lookup.Command;
-            if (command is AliasInfo alias) command = alias.ResolvedCommand;
-            if (command is ExternalScriptInfo) RecordCommand();
-        }
-        catch { Record = null; NativeExit = null; }
-    }
-    public bool IsRunspacePushed => ((IHostSupportsInteractiveSession)inner).IsRunspacePushed;
-    public Runspace Runspace => ((IHostSupportsInteractiveSession)inner).Runspace;
-    public void PushRunspace(Runspace runspace) =>
-        ((IHostSupportsInteractiveSession)inner).PushRunspace(runspace);
-    public void PopRunspace() => ((IHostSupportsInteractiveSession)inner).PopRunspace();
-}
-public static class VBotUnwritableVariables {
-    public static ParseError[] Find(ScriptBlockAst root, PSVariableIntrinsics variables) {
-        var errors = new List<ParseError>();
-        foreach (var found in root.FindAll(ast => ast is VariableExpressionAst, true)) {
-            var node = (VariableExpressionAst)found;
-            var path = node.VariablePath;
-            if (!path.IsVariable) continue;
-            Ast target = node, parent = node.Parent;
-            while ((parent is AttributedExpressionAst attributed && attributed.Child == target) ||
-                parent is ArrayLiteralAst) {
-                target = parent;
-                parent = parent.Parent;
-            }
-            var written = false;
-            if (parent is AssignmentStatementAst assignment) written = assignment.Left == target;
-            else if (parent is UnaryExpressionAst unary) {
-                var kind = unary.TokenKind;
-                written = kind == TokenKind.PlusPlus || kind == TokenKind.MinusMinus ||
-                    kind == TokenKind.PostfixPlusPlus || kind == TokenKind.PostfixMinusMinus;
-            }
-            else if (parent is ForEachStatementAst loop) written = loop.Variable == node;
-            else if (parent is ParameterAst parameter) written = parameter.Name == node;
-            if (!written) continue;
-            var name = path.UserPath.Substring(path.UserPath.LastIndexOf(':') + 1);
-            var variable = variables.Get(name);
-            var fixedValue = ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant;
-            if (variable == null || (variable.Options & fixedValue) == 0) continue;
-            var everywhere = (variable.Options & ScopedItemOptions.AllScope) != 0;
-            if (!everywhere && !path.IsGlobal && !path.IsScript) {
-                Ast scope = node.Parent;
-                while (scope != null && !(scope is ScriptBlockAst) &&
-                    !(scope is FunctionDefinitionAst)) {
-                    scope = scope.Parent;
-                }
-                if (scope != root) continue;
-            }
-            var message = "Cannot overwrite variable " + variable.Name +
-                " because it is read-only or constant.";
-            errors.Add(new ParseError(node.Extent, "VariableNotWritable", message));
-        }
-        return errors.ToArray();
-    }
-}
-"""
+# The C# source, read by each shell from this file: inline it would push the
+# bootstrap past the 32,767 characters Windows allows a command line.
+HOST_SOURCE_PATH = Path(__file__).with_name("_powershell_host.cs")
 
 # One bounded, checksummed entry is published atomically, never a DLL/receipt pair.
 # Loading bytes leaves no file locked and uses the actual shell's dependencies.
@@ -143,17 +23,26 @@ public static class VBotUnwritableVariables {
 # invalidate the entry even when its public assembly version did not change.
 _LOAD_HOST = r"""& {
     $ErrorActionPreference = 'Stop'
-    $source = @'
-{source}
-'@
+    $source = [IO.File]::ReadAllText({source_path})
     $root = {cache_dir}
+    # The assembly of the file cmdlets the guards extend.
+    # Naming one reference drops Add-Type's default ones, so all are named.
+    $cmdlets = @(
+        (Get-Command Microsoft.PowerShell.Management\Get-Location
+            ).ImplementingType.Assembly.Location
+        [psobject].Assembly.Location
+        'netstandard', 'System.Runtime', 'System.Collections', 'System.Linq', 'System.Console',
+        'System.Runtime.Extensions', 'System.ObjectModel', 'System.Text.RegularExpressions'
+    )
     $hash = [System.Security.Cryptography.SHA256]::Create()
     $loaded = $false
     $lock = $null
     $compiled = $null
     $staged = $null
     try {
-        $identity = '{source_hash}' + '|' + $PSVersionTable.PSVersion + '|' + $PSHOME + '|' +
+        $identity = [Convert]::ToBase64String($hash.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($source))) + '|' +
+            $PSVersionTable.PSVersion + '|' + $PSHOME + '|' +
             [System.Management.Automation.PSObject].Assembly.ManifestModule.ModuleVersionId + '|' +
             [object].Assembly.ManifestModule.ModuleVersionId
         $key = [BitConverter]::ToString($hash.ComputeHash(
@@ -197,7 +86,8 @@ _LOAD_HOST = r"""& {
         if (& $load) { return }
         $name = [Guid]::NewGuid().ToString('N')
         $compiled = [IO.Path]::Combine($root, $name + '.dll')
-        Add-Type -TypeDefinition $source -OutputAssembly $compiled -ErrorAction Stop
+        Add-Type -TypeDefinition $source -ReferencedAssemblies $cmdlets `
+            -OutputAssembly $compiled -ErrorAction Stop
         $bytes = [IO.File]::ReadAllBytes($compiled)
         $null = [Reflection.Assembly]::Load($bytes)
         $loaded = $true
@@ -217,15 +107,15 @@ _LOAD_HOST = r"""& {
         }
         $hash.Dispose()
     }
-    if (-not $loaded) { Add-Type -TypeDefinition $source -ErrorAction Stop }
+    if (-not $loaded) {
+        Add-Type -TypeDefinition $source -ReferencedAssemblies $cmdlets -ErrorAction Stop
+    }
 }
 """
 
 
-def host_statement(cache_dir_literal: str) -> str:
-    """Return the host loader for an already quoted, absolute cache directory."""
-    return (
-        _LOAD_HOST.replace("{source_hash}", hashlib.sha256(HOST_SOURCE.encode()).hexdigest())
-        .replace("{cache_dir}", cache_dir_literal)
-        .replace("{source}", HOST_SOURCE)
+def host_statement(cache_dir_literal: str, source_path_literal: str) -> str:
+    """Return the host loader for an already quoted, absolute cache directory and source file."""
+    return _LOAD_HOST.replace("{cache_dir}", cache_dir_literal).replace(
+        "{source_path}", source_path_literal
     )
