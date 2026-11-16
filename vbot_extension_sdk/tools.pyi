@@ -110,6 +110,7 @@ class ToolContext:
     tool_load_hook: Any | None = None
     worked_paths_hook: Any | None = None
     allowed_skills: Sequence[str] | None = None
+    skill_ceiling: frozenset[str] | None = None
     skill_env_keys: Sequence[str] = ...
     tool_settings: Mapping[str, Any] | None = None
     delegation_bindings: Mapping[str, str | int] = ...

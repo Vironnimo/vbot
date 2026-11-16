@@ -420,6 +420,41 @@ __all__ = [
     "memory_tool_enabled",
     "normalize_env_keys",
     "normalize_tool_access",
+    "intersect_tool_access",
     "resolve_tool_access",
     "subagent_allowed_agents",
 ]
+
+
+def intersect_tool_access(owner: ToolAccess, agent: ToolAccess) -> ToolAccess:
+    """An Identity Agent's Tool access within its owner's selection.
+
+    Denials of both apply; a participant never gets a Tool its owner or its
+    Agent withholds. Both ``all`` stay ``all`` so later catalog Tools follow.
+    """
+    denied = tuple(sorted(set(owner.denied) | set(agent.denied)))
+    fixed = owner.fixed or agent.fixed or owner.mode == "none"
+    if owner.mode == "none" or agent.mode == "none":
+        return ToolAccess(mode="none", denied=denied, fixed=fixed)
+    granted = tuple(sorted(set(owner.granted) | set(agent.granted)))
+    if owner.mode == "all" and agent.mode == "all":
+        return ToolAccess(
+            mode="all",
+            denied=denied,
+            granted=tuple(name for name in granted if name not in denied),
+            fixed=fixed,
+        )
+    if owner.mode == "all":
+        names = set(agent.allowed)
+    elif agent.mode == "all":
+        names = set(owner.allowed)
+    else:
+        names = set(owner.allowed) & set(agent.allowed)
+    allowed = tuple(sorted(names - set(denied)))
+    return ToolAccess(
+        mode="selected",
+        allowed=allowed,
+        denied=denied,
+        granted=tuple(name for name in granted if name in allowed),
+        fixed=fixed,
+    )

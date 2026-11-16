@@ -65,6 +65,8 @@ class ExtensionHost:
     # (``core/agents/temporary_execution.py``). API v10 adds ``groups()``, which pages the
     # owner's group ids with live participant Sessions, and ``archive_group()``.
     temporary_agents: Any | None = None
+    # API32: actual durable identities; updates are limited to owner-created Agents.
+    identity_agents: Any | None = None
     state_dir: Path | None = None
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None

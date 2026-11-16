@@ -147,6 +147,7 @@ class CompactionRunHost(Protocol):
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
         permissions: PermissionBoundary,
+        skill_ceiling: frozenset[str] | None = None,
     ) -> object: ...
 
     async def commit_checkpoint(
@@ -350,6 +351,11 @@ class CompactionRunCoordinator:
                     project_cwd=request.project_cwd,
                     activation_skill_project_id=request.activation_skill_project_id,
                     permissions=request.permissions,
+                    skill_ceiling=getattr(
+                        getattr(request.request_inputs, "skill_registry", None),
+                        "selection_ceiling",
+                        None,
+                    ),
                 )
             except Exception:
                 _LOGGER.warning(
@@ -680,6 +686,7 @@ class CompactionRunCoordinator:
                         project_cwd=context.project_cwd,
                         activation_skill_project_id=context.skill_project_id,
                         permissions=context.permissions,
+                        skill_ceiling=getattr(context.skill_registry, "selection_ceiling", None),
                     )
                 except Exception:
                     _LOGGER.warning(

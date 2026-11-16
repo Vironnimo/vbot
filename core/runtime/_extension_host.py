@@ -49,6 +49,7 @@ from core.runs import (
     RunExecutionOwner,
     RunNotFoundError,
 )
+from core.runtime._extension_identities import ExtensionIdentityAgents
 from core.runtime._extension_triggers import ExtensionTriggerHandlers, ExtensionTriggers
 from core.runtime._shell_review_context import current_input_authority, shell_review_context
 from core.runtime._workers import _RUNTIME_WORKERS
@@ -105,6 +106,10 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             top_p=raw.get("top_p"),
             thinking_effort=raw.get("thinking_effort"),
             fallback_models=raw.get("fallback_models"),
+            identity_agent=raw.get("identity_agent"),
+            identity_incarnation=raw.get("identity_incarnation"),
+            model_override=raw.get("model_override"),
+            thinking_effort_override=raw.get("thinking_effort_override"),
             instructions=raw.get("instructions", ""),
             prompt_blocks=raw.get("prompt_blocks"),
             project_memory_enabled=raw.get("project_memory_enabled", True),
@@ -339,6 +344,12 @@ class ExtensionHostFactory:
                 identity, lambda _identity: self._extension_owner_host(identity)
             ),
             temporary_agents=groups,
+            identity_agents=ExtensionIdentityAgents(
+                self.agents,
+                identity,
+                self._require_registration,
+                require_chat_model=self.agent_resolver.require_chat_model_configured,
+            ),
             state_dir=state_dir,
             services=self.services.for_owner(
                 identity, partial(self._require_registration, identity)
@@ -595,8 +606,15 @@ class ExtensionHostFactory:
         config = _temporary_config_from_binding(binding)
         if not config.cwd.is_dir():
             raise RuntimeError("temporary working directory is unavailable")
-        self.agent_resolver.require_model_configured(config.model)
-        for fallback in config.fallback_models or ():
+        resolved = self.agent_resolver.resolve_temporary_agent(
+            binding.address,
+            generation_id=binding.generation_id,
+        )
+        if config.identity_agent:
+            self.agent_resolver.require_chat_model_configured(resolved.model)
+        else:
+            self.agent_resolver.require_model_configured(resolved.model)
+        for fallback in resolved.fallback_models:
             self.agent_resolver.require_model_configured(fallback)
 
         catalog = self.tools.list_tools(include_internal=False)
@@ -625,16 +643,14 @@ class ExtensionHostFactory:
             ),
         )
         _validate_temporary_tool_configuration(ordinary_config, ordinary_tools)
-        project_id = getattr(binding.address, "project_id", None)
+        project_id = binding.config.get(
+            "working_project_id", getattr(binding.address, "project_id", None)
+        )
         if project_id is not None:
             project = self.projects.get(project_id)
             if config.cwd.resolve() != Path(project.cwd).resolve():
                 raise RuntimeError("temporary working directory is outside its Project")
 
-        resolved = self.agent_resolver.resolve_temporary_agent(
-            binding.address,
-            generation_id=binding.generation_id,
-        )
         available = self.tools.list_tools(include_internal=False)
         effective = resolve_tool_access(
             resolved.tool_access,
@@ -1041,8 +1057,10 @@ class ExtensionHostFactory:
             agent,
             agent_body=config.instructions,
             project_context=context,
-            agent_project_id=project_id,
-            skill_registry=self.skills_for(project_id, None),
+            agent_project_id=None if config.identity_agent else project_id,
+            skill_registry=self.skills_for(project_id, config.identity_agent).restricted_to(
+                config.allowed_skills
+            ),
             effective_tool_definitions=definitions,
             session_tool_grants=grants,
             block_details=blocks,
@@ -1182,6 +1200,7 @@ class ExtensionHostFactory:
                         # to: the first usable one the Model allows.
                         "context_window": model.context_window_for(connections[0]),
                         "capabilities": {
+                            "task_types": list(model.capabilities.task_types),
                             "tools": model.capabilities.tools,
                             "reasoning": {
                                 "supported": model.capabilities.reasoning.supported,

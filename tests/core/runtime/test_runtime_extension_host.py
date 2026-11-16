@@ -478,6 +478,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             model.context_window_for(entry["connections"][0]),
         )
         assert entry["capabilities"] == {
+            "task_types": list(model.capabilities.task_types),
             "tools": model.capabilities.tools,
             "reasoning": {
                 "supported": reasoning.supported,

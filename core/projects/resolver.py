@@ -86,7 +86,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from core.agents.agents import Agent, AgentStore
-    from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
+    from core.agents.temporary import OwnedIdentityAgent, TemporaryAgent, TemporaryAgentConfig
     from core.models.models import ModelRegistry
     from core.projects.projects import Project
     from core.projects.store import ProjectStore
@@ -261,6 +261,13 @@ class AgentResolver:
         unavailable Models and returns an empty Model when exhausted. Run
         admission keeps the default availability checks.
         """
+        if session_id is not None and self._temporary_agents is not None:
+            owned_address = _session_address(project_id, agent_id, session_id)
+            binding = self._temporary_agents.identity_binding(owned_address)
+            if binding is not None:
+                return self.resolve_temporary_agent(
+                    owned_address, generation_id=binding.generation_id, session=owned_address
+                )
         _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
         overrides = (
@@ -320,6 +327,13 @@ class AgentResolver:
         Session database's pool; their Model is checked on the
         ``agent-resolution`` pool.
         """
+        if session_id is not None and self._temporary_agents is not None:
+            owned_address = _session_address(project_id, agent_id, session_id)
+            binding = await self._temporary_agents.identity_binding_async(owned_address)
+            if binding is not None:
+                return await self.resolve_temporary_agent_async(
+                    owned_address, generation_id=binding.generation_id, session=owned_address
+                )
         _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
         if address is not None:
@@ -546,7 +560,7 @@ class AgentResolver:
 
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
-    ) -> TemporaryAgent:
+    ) -> TemporaryAgent | OwnedIdentityAgent:
         """Resolve editor configuration like a started one, without creating a Session."""
         return self._temporary_resolution.preview(config, project_id)
 
@@ -887,6 +901,10 @@ class AgentResolver:
     def require_model_configured(self, model: str) -> None:
         """Raise with the shared Model-usability reason when *model* cannot run."""
         self._model_checker.require_configured(model)
+
+    def require_chat_model_configured(self, model: str) -> None:
+        """Require a configured Model supporting Chat for owned identity execution."""
+        self._model_checker.require_chat_configured(model)
 
     async def require_model_configured_async(self, model: str) -> None:
         """Event-Loop-safe :meth:`require_model_configured` on the ``agent-resolution`` pool."""

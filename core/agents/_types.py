@@ -193,6 +193,9 @@ class Agent:
     # show it so other Agents pick it only for fitting work (written only when set).
     description: str = ""
     placement: AgentPlacement | None = None
+    # Trusted Extension that created and may configure this exact identity.
+    extension_owner: str | None = None
+    extension_creation_request: dict[str, str] | None = None
 
     @property
     def permission_ceiling(self) -> PermissionCeiling | None:

@@ -74,6 +74,7 @@ Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
 - `core/skills/runtime.py::SkillRuntime` owns global scan layers, Project/Agent/shared resolution, manager inventory and scoped registry caches; `Runtime` exposes delegates and only recomposes Tools/Prompts after a registry replacement.
 - `Runtime.refresh_skills_for(project_id, identity_agent_id=None)` is the explicit Compaction refresh seam (full reload plus invalidation); normal consumers use cached `skills_for(...)` and must not imitate rescans.
+- Owned execution can impose a separate hard Skill ceiling through scoped registry views, including delegated private/Project grants (`skills/loading.md` -> Owned selection views).
 - `format_skill_catalog_entries` renders the one path-free catalog text of the `skill` Tool's list, the `core:skills` block and the new-Skill reminder: only available+allowed Skills of the registry live activation uses (`skills/loading.md` -> Catalog rendering).
 - Every change that alters the Skill inventory publishes `resource_changed(kind="skills")` (publishers: `server/events-and-reconnect.md` -> `resource_changed`); Agent-side `skill_manage` writes reach the server through `SkillRuntime.add_changed_callback`/`notify_changed`, bridged in `server/_app_lifecycle.py`.
 

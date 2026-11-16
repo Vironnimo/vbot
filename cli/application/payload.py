@@ -33,7 +33,7 @@ APP_DESKTOP_TARGET += (
     "resources/extensions/terminal/extension.json",
     "resources/extensions/terminal/desktop.py",
     "resources/extensions/terminal/docs/usage.md",
-    "resources/sdk/vbot_extension_sdk-31.0.1-py3-none-any.whl",
+    "resources/sdk/vbot_extension_sdk-32.0.0-py3-none-any.whl",
 )
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}

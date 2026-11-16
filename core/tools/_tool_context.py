@@ -359,6 +359,7 @@ class ToolContext:
     worked_paths_hook: ToolWorkedPathsHook | None = field(default=None, repr=False, compare=False)
     _worked_paths: list[Path] = field(default_factory=list, init=False, repr=False, compare=False)
     allowed_skills: Sequence[str] | None = None
+    skill_ceiling: frozenset[str] | None = None
     # Environment credentials made available by Skills active in this Session.
     # Bash combines these transient grants with the Agent's permanent Tool settings.
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
@@ -1080,6 +1081,7 @@ class ToolExecutionConfig:
     tool_turn_end_registrar: ToolTurnEndHook | None = None
     tool_result_payload_registrar: ToolResultPayloadHook | None = None
     allowed_skills: Sequence[str] | None = None
+    skill_ceiling: frozenset[str] | None = None
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
     delegation_bindings: Mapping[str, str | int] = field(default_factory=dict)

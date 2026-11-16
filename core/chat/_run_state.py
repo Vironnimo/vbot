@@ -954,6 +954,18 @@ async def resolve_run_agent(
     )
 
 
+def owned_skill_registry(
+    registry: SkillRegistry, binding: TemporarySessionBinding | None
+) -> SkillRegistry:
+    """Bound every owned descendant's catalogs and activation to its canonical owner."""
+    if binding is None:
+        return registry
+    selected = binding.config.get("allowed_skills")
+    if not isinstance(selected, list) or not all(isinstance(name, str) for name in selected):
+        raise ChatError("Owned Session Skill selection is invalid")
+    return registry.restricted_to(selected)
+
+
 async def create_run_execution_context(
     dependencies: ChatLoopDependencies,
     requests: RequestBuilder,
@@ -1034,7 +1046,7 @@ async def create_run_execution_context(
             project_id,
             runtime_agent_body(agent),
         )
-        if temporary_source is None:
+        if temporary_source is None or temporary_source.config.get("identity_agent"):
             soul_context = await _CHAT_TRANSFORM_WORKERS.run(
                 pinned_soul_context,
                 dependencies,
@@ -1057,6 +1069,7 @@ async def create_run_execution_context(
             skill_project_id,
             identity_agent_id,
         )
+        skill_registry = owned_skill_registry(skill_registry, owner_binding)
         skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
             pinned_skill_catalog,
             dependencies,

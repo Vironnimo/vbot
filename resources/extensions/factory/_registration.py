@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Any
 from core.extensions import ExtensionAPI
 from core.tools import ToolContext, ToolDisplay
 
+from ._native_agent_text import PRIVATE_TOOLS as NATIVE_TOOLS
+from ._native_values import OPERATION_DESCRIPTIONS as NATIVE_DESCRIPTIONS
+from ._native_values import OPERATION_SCHEMAS as NATIVE_SCHEMAS
 from ._values import OPERATION_DESCRIPTIONS, OPERATION_SCHEMAS, SECRET_OPERATIONS
 from .agent_text import PRIVATE_TOOLS, PUBLIC_DESCRIPTION, PUBLIC_PARAMETERS
 
@@ -53,23 +56,23 @@ def register(api: ExtensionAPI) -> None:
         family="factory",
         display=ToolDisplay(summary_fields=("action", "title", "id")),
     )
-    for name, (description, parameters) in PRIVATE_TOOLS.items():
+    for name, (description, parameters) in (PRIVATE_TOOLS | NATIVE_TOOLS).items():
         api.register_session_tool(
             name, description, parameters, _tool_handler(service, name), parallel_safe=False
         )
     api.register_session_runtime(
-        before_request=service.execution.before_request,
-        before_tool_call=service.execution.before_tool_call,
-        before_model_request=service.execution.before_model_request,
-        acknowledge_delivery=service.execution.acknowledge_delivery,
-        run_finished=service.execution.run_finished,
-        quiesce=service.execution.quiesce,
+        before_request=service.before_request,
+        before_tool_call=service.before_tool_call,
+        before_model_request=service.before_model_request,
+        acknowledge_delivery=service.acknowledge_delivery,
+        run_finished=service.run_finished,
+        quiesce=service.quiesce,
     )
     api.register_page("board", "Software Factory", "web/page.html", icon="factory")
-    for name, parameters in OPERATION_SCHEMAS.items():
+    for name, parameters in (OPERATION_SCHEMAS | NATIVE_SCHEMAS).items():
         api.operations.register(
             name,
-            OPERATION_DESCRIPTIONS.get(name, name.replace(".", " ")),
+            (OPERATION_DESCRIPTIONS | NATIVE_DESCRIPTIONS).get(name, name.replace(".", " ")),
             parameters,
             _operation_handler(service, name),
             secret=name in SECRET_OPERATIONS,

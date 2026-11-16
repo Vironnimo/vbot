@@ -231,6 +231,9 @@ class ChatCompactionHost:
                 skill_project_id,
                 identity_agent_id,
             )
+            from core.chat._run_state import owned_skill_registry
+
+            skill_registry = owned_skill_registry(skill_registry, temporary_binding)
             skill_catalog = await self.run_transform(
                 pinned_skill_catalog,
                 self._dependencies,
@@ -384,6 +387,7 @@ class ChatCompactionHost:
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
         permissions: PermissionBoundary,
+        skill_ceiling: frozenset[str] | None = None,
     ) -> _CompactionPromptRefresh:
         return cast(
             _CompactionPromptRefresh,
@@ -397,6 +401,7 @@ class ChatCompactionHost:
                 project_cwd=project_cwd,
                 activation_skill_project_id=activation_skill_project_id,
                 permissions=permissions,
+                skill_ceiling=skill_ceiling,
             ),
         )
 
@@ -411,6 +416,7 @@ class ChatCompactionHost:
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
         permissions: PermissionBoundary,
+        skill_ceiling: frozenset[str] | None = None,
     ) -> _CompactionPromptRefresh:
         from core.agents.temporary import TemporaryAgent
 
@@ -452,6 +458,10 @@ class ChatCompactionHost:
                 activation_skill_project_id,
                 activation_identity_agent_id,
             )
+
+        if skill_ceiling is not None:
+            prompt_skill_registry = prompt_skill_registry.restricted_to(skill_ceiling)
+            activation_skill_registry = activation_skill_registry.restricted_to(skill_ceiling)
 
         system_prompts = self._dependencies.get_system_prompts()
         skill_catalog = system_prompts.render_skill_catalog(agent, prompt_skill_registry)

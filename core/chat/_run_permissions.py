@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from core.agents import Agent, TemporaryAgent, default_workspace_dir
+from core.agents.temporary import OwnedIdentityAgent
 from core.chat._scratch_context import SCRATCH_RUN_KINDS
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
@@ -187,7 +188,7 @@ def session_permissions(
     ceilings = tuple(item for item in (ceiling, agent.permission_ceiling) if item is not None)
     workspace = Path(agent.workspace) if agent.workspace else None
     workdir: Path
-    if isinstance(agent, TemporaryAgent):
+    if isinstance(agent, TemporaryAgent | OwnedIdentityAgent):
         workdir = agent.cwd
     elif project_root is not None:
         workdir = project_root

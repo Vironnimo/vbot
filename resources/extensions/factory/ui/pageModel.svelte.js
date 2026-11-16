@@ -48,7 +48,9 @@ export function createFactoryPageModel(bridgeClient) {
       ? 'card'
       : route.startsWith('/workflows')
         ? 'workflows'
-        : 'board',
+        : route === '/cards'
+          ? 'board'
+          : 'native',
   );
   const cardId = $derived(
     view === 'card' ? decodePart(route.split('/')[2]) : '',
@@ -190,6 +192,8 @@ export function createFactoryPageModel(bridgeClient) {
     const valid =
       next === '' ||
       next === '/' ||
+      next === '/cards' ||
+      /^\/(?:factory|task|topic)(?:\/[^/]+)*(?:\/)?$/.test(next) ||
       /^\/card\/[^/]+$/.test(next) ||
       /^\/workflows(?:\/[^/]+)?$/.test(next);
     if (!valid) {
@@ -269,7 +273,7 @@ export function createFactoryPageModel(bridgeClient) {
       if (result.card) acceptSavedCard(result.card);
       if (result.workflow)
         acceptSavedWorkflow(result.workflow, result.effective_models);
-      if (operation === 'card.delete') await client.replaceRoute('');
+      if (operation === 'card.delete') await client.replaceRoute('/cards');
       if (operation === 'workflow.delete') {
         workflows = workflows.filter((entry) => entry.id !== args.id);
         selectedWorkflow = null;

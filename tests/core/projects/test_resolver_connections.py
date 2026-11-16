@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from core.agents import (
     LIBRARIAN_AGENT_ID,
@@ -106,6 +107,29 @@ def test_model_is_configured_only_on_an_allowed_usable_connection(
     else:
         with pytest.raises(ModelConfigurationError):
             checker.require_configured(model)
+
+
+@pytest.mark.parametrize(
+    "tasks,accepted",
+    [(("chat",), True), (("image_generation",), False), (("text_to_speech",), False), ((), True)],
+)
+def test_chat_model_gate_keeps_non_chat_routes_out_of_identity_execution(
+    tasks, accepted, monkeypatch
+):
+    checker = _two_connection_checker(usable={"openai:api-key"}, allowlist=())
+    catalog = SimpleNamespace(
+        connections=(),
+        allows_connection=lambda _: True,
+        capabilities=SimpleNamespace(task_types=tasks),
+    )
+    monkeypatch.setattr(checker._models, "get", lambda *_: catalog)
+    # Generic product availability still accepts the non-Chat native route.
+    checker.require_configured("openai/gpt-5.2")
+    if accepted:
+        checker.require_chat_configured("openai/gpt-5.2")
+    else:
+        with pytest.raises(ModelConfigurationError):
+            checker.require_chat_configured("openai/gpt-5.2")
 
 
 def test_require_configured_explains_forbidden_pinned_connection() -> None:

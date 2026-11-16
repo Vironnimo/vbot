@@ -285,6 +285,8 @@ class SkillRegistry:
         allowlist_exclusions: Iterable[str] | None = None,
     ) -> None:
         self._skills = skills
+        self._selection_ceiling: frozenset[str] | None = None
+        self._environment_source: SkillRegistry | None = None
         self._diagnostics = list(diagnostics or [])
         self._environment = _requirement_environment(
             os.environ if environment is None else environment
@@ -367,15 +369,34 @@ class SkillRegistry:
             allowlist_exclusions=allowlist_exclusions,
         )
 
+    @property
+    def selection_ceiling(self) -> frozenset[str] | None:
+        """An owned-execution ceiling, independent of private/Project grants."""
+        return self._selection_ceiling
+
+    def restricted_to(self, names: Iterable[str]) -> SkillRegistry:
+        """Return a scoped view; never mutate the shared registry or widen a ceiling."""
+        selected = frozenset(names)
+        if "*" in selected:
+            return self
+        view = copy.copy(self)
+        view._selection_ceiling = (
+            selected if self._selection_ceiling is None else selected & self._selection_ceiling
+        )
+        view._environment_source = self._environment_source or self
+        return view
+
     def same_catalog(self, other: SkillRegistry) -> bool:
         """Whether replacing this registry would leave its complete catalog unchanged."""
         return (
             self._skills == other._skills
             and self._diagnostics == other._diagnostics
-            and self._environment == other._environment
+            and (self._environment_source or self)._environment
+            == (other._environment_source or other)._environment
             and self._excluded_skills == other._excluded_skills
             and self._always_allowed == other._always_allowed
             and self._allowlist_exclusions == other._allowlist_exclusions
+            and self._selection_ceiling == other._selection_ceiling
         )
 
     @property
@@ -391,6 +412,7 @@ class SkillRegistry:
     def reload_environment(self, environment: dict[str, str]) -> None:
         """Refresh requirement inputs while preserving loaded packages and policy."""
         self._environment = _requirement_environment(environment)
+        self._environment_source = None
 
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
@@ -492,6 +514,8 @@ class SkillRegistry:
             allowed = {name for name in allowed_skills if name in self._skills}
         allowed -= self._allowlist_exclusions
         allowed |= {name for name in self._always_allowed if name in self._skills}
+        if self._selection_ceiling is not None:
+            allowed &= self._selection_ceiling
         return allowed
 
     def _availability_for_skill(
@@ -545,13 +569,17 @@ class SkillRegistry:
         stack: tuple[str, ...],
     ) -> RequirementEvaluation:
         if requirement.kind == "binary":
-            search_path = self._environment.get(_environment_key("PATH"))
+            search_path = (self._environment_source or self)._environment.get(
+                _environment_key("PATH")
+            )
             if shutil.which(requirement.name, path=search_path) is not None:
                 return RequirementEvaluation(True)
             return RequirementEvaluation(False, (f"missing binary '{requirement.name}'",))
 
         if requirement.kind == "env":
-            if self._environment.get(_environment_key(requirement.name)):
+            if (self._environment_source or self)._environment.get(
+                _environment_key(requirement.name)
+            ):
                 return RequirementEvaluation(True)
             return RequirementEvaluation(
                 False,

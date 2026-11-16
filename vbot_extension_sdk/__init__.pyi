@@ -24,10 +24,43 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 31
-SDK_VERSION: Final[str] = "31.0.1"
+API_VERSION: Final[int] = 32
+SDK_VERSION: Final[str] = "32.0.0"
 
-def require_api(minimum: int = 31, *, maximum: int | None = None) -> int: ...
+def require_api(minimum: int = 32, *, maximum: int | None = None) -> int: ...
+
+@dataclass(frozen=True)
+class TemporaryAgentConfig:
+    model: str
+    cwd: Path
+    tool_access: Any
+    allowed_skills: list[str]
+    tools: dict[str, Any]
+    name: str
+    temperature: float | None = None
+    top_p: float | None = None
+    thinking_effort: str | None = None
+    fallback_models: list[str] | None = None
+    instructions: str = ""
+    prompt_blocks: list[str] | None = None
+    project_memory_enabled: bool = True
+    compaction_policy: dict[str, Any] | None = None
+    repository_profile: str | None = None
+    identity_profile: str | None = None
+    identity_agent: str | None = None
+    identity_incarnation: str | None = None
+    permission_rules: Any = None
+    permission_ceiling: Mapping[str, Any] | None = None
+    model_override: str | None = None
+    thinking_effort_override: str | None = None
+    @property
+    def has_profile(self) -> bool: ...
+
+@dataclass(frozen=True)
+class TemporaryRunInput:
+    kind: Literal["initial", "continuation"]
+    content: str
+    request_id: str
 
 class ExtensionAPI:
     config: dict[str, Any]
@@ -172,6 +205,7 @@ class ExtensionHost:
     resolve_cwd: Callable[[str | None, str], Path] | None = None
     for_owner: Callable[[Any], ExtensionHost] | None = None
     temporary_agents: Any | None = None
+    identity_agents: Any | None = None
     state_dir: Path | None = None
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None
@@ -296,6 +330,7 @@ class SessionRequestContext:
     agent_id: str
     session_id: str
     execution_owner: Any | None = None
+    model: str | None = None
 
 @dataclass(frozen=True)
 class PreparedSessionDelivery:

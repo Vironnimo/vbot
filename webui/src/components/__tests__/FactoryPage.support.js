@@ -444,7 +444,7 @@ export async function settle() {
   flushSync();
 }
 
-export async function render(bridge, route = '') {
+export async function render(bridge, route = '/cards') {
   mounted = mount(FactoryPage, {
     target: document.body,
     props: { bridgeClient: bridge },

@@ -5,12 +5,14 @@ from typing import Any
 from ._exports import HostUnavailableError as HostUnavailableError
 from ._exports import exports_for, resolve
 
-SDK_VERSION = "31.0.1"
-API_VERSION = 31
+SDK_VERSION = "32.0.0"
+API_VERSION = 32
 
 _EXPORTS = exports_for(
     **{
         "core.extensions._api": ("ExtensionAPI",),
+        "core.agents.temporary": ("TemporaryAgentConfig",),
+        "core.agents.temporary_execution": ("TemporaryRunInput",),
         "core.extensions.operations": (
             "ExtensionHost",
             "ExtensionOperations",

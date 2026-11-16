@@ -320,7 +320,11 @@ def make_skill_handler(
                 context.skill_project_id,
                 identity_agent_id,
             )
-            return registry
+            return (
+                registry
+                if context.skill_ceiling is None
+                else registry.restricted_to(context.skill_ceiling)
+            )
 
         try:
             skill_registry = await current_registry()
@@ -697,6 +701,8 @@ async def skill_loadable(
         )
     except ProjectNotFoundError:
         return False
+    if context.skill_ceiling is not None:
+        registry = registry.restricted_to(context.skill_ceiling)
     return _is_skill_allowed(registry, name, context.allowed_skills) and (
         _unavailable_skill_message(registry, name, context.allowed_skills) is None
     )

@@ -205,6 +205,7 @@ class ToolRound:
             ),
             session_tool_grants=context.session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
+            skill_ceiling=getattr(context.skill_registry, "selection_ceiling", None),
             skill_env_keys=_active_skill_env_keys(session, context.skill_registry),
             tool_settings=agent_tool_settings(getattr(agent, "tools", {})),
             delegation_bindings=dict(getattr(agent, "delegation_bindings", {})),

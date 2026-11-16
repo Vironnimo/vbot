@@ -266,7 +266,7 @@
 
 <article class="factory-detail" data-card-id={card.id}>
   <header class="factory-detail-header">
-    <Button variant="tertiary" onClick={() => onNavigate('')}
+    <Button variant="tertiary" onClick={() => onNavigate('/cards')}
       >← {t('factory.board')}</Button
     >
     <span class="factory-subtle"

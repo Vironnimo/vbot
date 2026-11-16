@@ -109,6 +109,8 @@ class AgentMutations:
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
         placement: AgentPlacement | None = None,
+        extension_owner: str | None = None,
+        extension_creation_request: dict[str, str] | None = None,
     ) -> Agent:
         """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
         with self._owner._snapshot_barrier.compound_mutation(), self._owner._change():
@@ -192,6 +194,8 @@ class AgentMutations:
                 created_at=now,
                 updated_at=now,
                 builtin=builtin,
+                extension_owner=extension_owner,
+                extension_creation_request=extension_creation_request,
                 placement=placement,
             )
             agent = _with_builtin_capabilities(agent)
@@ -271,6 +275,8 @@ class AgentMutations:
             allowed_fields = set(Agent.__dataclass_fields__) - {
                 "id",
                 "created_at",
+                "extension_owner",
+                "extension_creation_request",
                 "updated_at",
                 "delegation_bindings",
                 "placement",

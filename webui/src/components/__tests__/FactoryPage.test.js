@@ -174,7 +174,7 @@ describe('Factory Board', () => {
     expect(bridge.pushRoute).toHaveBeenLastCalledWith('/card/fct-new');
     expect(document.querySelector('.factory-detail')).not.toBeNull();
     expect(scrollport.scrollTop).toBe(0);
-    await bridge.goTo('');
+    await bridge.goTo('/cards');
     await settle();
     expect(scrollport.scrollTop).toBe(170);
   });
@@ -371,7 +371,7 @@ describe('Factory card decisions', () => {
     expect(
       document.querySelector('.factory-detail-badges').textContent,
     ).toContain(t('factory.queued.sendBack'));
-    await bridge.goTo('');
+    await bridge.goTo('/cards');
     await settle();
     expect(
       document.querySelector('[data-column="backlog"] .factory-card-reason')
@@ -534,7 +534,7 @@ describe('Factory card decisions', () => {
     button(t('factory.delete'), dialog()).click();
     await settle();
     expect(calls(operation, 'card.delete')).toHaveLength(2);
-    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/cards');
   });
 
   it('saves a waiting Card limits for a chosen step, then retries that step', async () => {

@@ -8,7 +8,7 @@ from core.projects._runtime_agent import AgentOverrides, AgentResolutionError, R
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
-    from core.agents.temporary import TemporaryAgent
+    from core.agents.temporary import OwnedIdentityAgent, TemporaryAgent
     from core.sessions import SessionAddress
 
 
@@ -33,7 +33,9 @@ def _require_one_override_source(
         raise ValueError("an existing Session already has its own Agent overrides")
 
 
-def _require_temporary_binding(agent: TemporaryAgent | None) -> TemporaryAgent:
+def _require_temporary_binding(
+    agent: TemporaryAgent | OwnedIdentityAgent | None,
+) -> TemporaryAgent | OwnedIdentityAgent:
     if agent is None:
         raise AgentResolutionError("temporary Session binding is unavailable")
     return agent

@@ -13,6 +13,8 @@ from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
 from . import agent_text
+from ._native_schema import SCHEMA_SQL as NATIVE_SCHEMA_SQL
+from ._native_store import NativeFactoryStore
 
 type Json = dict[str, Any]
 
@@ -72,6 +74,8 @@ CREATE TABLE comments (
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
 """
+SCHEMA_SQL += NATIVE_SCHEMA_SQL
+
 _OUTPUT_FIELDS = (
     "stage_id",
     "stage_name",
@@ -303,6 +307,7 @@ MIGRATIONS = (
     Migration("execution_limits", breaks_older=True),
     Migration("execution_limit_history", breaks_older=True),
     Migration("global_workflows", breaks_older=True, apply=_migrate_global_workflows),
+    Migration("native_factory_teams"),
 )
 
 _CARD_FIELDS = (
@@ -395,6 +400,7 @@ class FactoryStore:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+        self.native = NativeFactoryStore(database)
 
     # Workflows
 
@@ -463,7 +469,7 @@ class FactoryStore:
         return await self.database.write_async(write)
 
     async def delete_workflow(self, workflow_id: str) -> None:
-        """Delete a Workflow no other Workflow starts; started Cards keep their snapshot."""
+        """Delete an unselected Workflow; started Cards retain their own snapshot."""
 
         def write(connection: sqlite3.Connection) -> None:
             _get_workflow(connection, workflow_id)
@@ -490,6 +496,17 @@ class FactoryStore:
                     "workflow_in_use",
                     f"{queued} Card(s) wait to start with this Workflow. "
                     "Discard them or let them start before deleting it.",
+                )
+            selected = connection.execute(
+                "SELECT id FROM native_tasks WHERE json_extract(body_json, '$.workflow_id') = ? "
+                "LIMIT 1",
+                (workflow_id,),
+            ).fetchone()
+            if selected is not None:
+                raise FactoryError(
+                    "workflow_in_use",
+                    f"Task {selected[0]!r} selects this Workflow. "
+                    "Clear or change the task's Workflow before deleting it.",
                 )
             connection.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
 

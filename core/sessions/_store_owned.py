@@ -71,7 +71,9 @@ def create_bound_temporary_session(
         return str(claimed["generation_id"])
     if _store_values._find_live(connection, address) is not None:
         raise ChatSessionError("temporary Session address is already in use")
-    session_key = _store_mutations._insert_session(connection, address, utc_now_timestamp())
+    session_key = _store_mutations._insert_session(
+        connection, address, utc_now_timestamp(), config.get("working_project_id")
+    )
     connection.execute(
         "INSERT INTO temporary_session_bindings "
         "(session_key, owner_name, group_id, participant_id, config_json) VALUES (?, ?, ?, ?, ?)",
@@ -116,7 +118,7 @@ def temporary_agent_binding(
     rows = connection.execute(
         f"SELECT {_BINDING_COLUMNS} FROM temporary_session_bindings AS b "
         "JOIN sessions AS s ON s.session_key = b.session_key "
-        "WHERE s.project_id = ? AND s.agent_id = ? AND s.state = 'live' LIMIT 2",
+        "WHERE s.project_id = ? AND s.agent_id = ? AND s.state = 'live' AND json_extract(b.config_json, '$.identity_agent') IS NULL LIMIT 2",
         (project_id or "", agent_id),
     ).fetchall()
     return lambda: _temporary_binding(rows[0]) if len(rows) == 1 else None
