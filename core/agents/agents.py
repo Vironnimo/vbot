@@ -257,6 +257,8 @@ class AgentStore:
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
         placement: AgentPlacement | None = None,
+        extension_owner: str | None = None,
+        extension_creation_request: dict[str, str] | None = None,
     ) -> Agent:
         """Create and persist a new Agent and its Workspace; it has no Session yet.
 
@@ -291,7 +293,17 @@ class AgentStore:
             librarian_enabled=librarian_enabled,
             description=description,
             placement=placement,
+            extension_owner=extension_owner,
+            extension_creation_request=extension_creation_request,
         )
+
+    def identify(self, agent_id: str) -> Agent:
+        """Read a durable incarnation, establishing missing legacy proof once."""
+        from ._delegation import _stamp
+
+        with self.lifecycle_guard():
+            _stamp(self, agent_id)
+            return self.get(agent_id)
 
     def id_references(self, agent_id: str) -> tuple[str, ...]:
         """What a new Agent named ``agent_id`` would inherit, as ``<kind>:<id>`` labels.

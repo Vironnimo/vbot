@@ -218,6 +218,7 @@ async def test_owned_model_admission_follows_compaction_and_each_physical_attemp
 
     async def before_model_request(context):
         assert context.binding.group_id == "group"
+        assert context.model == "openai/gpt-5.2::api-key"
         admissions.append((compacted, len(adapter.stream_requests)))
         if boundary == "before_compaction" or compacted or adapter.stream_requests:
             raise RuntimeError("Owned execution limit reached")

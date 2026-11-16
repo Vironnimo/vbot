@@ -22,6 +22,8 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 
 ## API versions
 
+- v32: actual Identity Agent Sessions through owned execution, plus owner-scoped identity creation and configuration (`extensions/host.md`, `agent/temporary-agents.md`). Existing temporary Profiles keep their snapshot semantics.
+
 What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) added:
 
 - v2: Slash Command declarations. v3: Extension-owned Tool Family declarations. v4: management operations, host capabilities, and live Tool catalogs. v5: explicit opt-in Tools. v6: page declarations and explicit Tool catalog visibility.

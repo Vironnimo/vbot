@@ -333,7 +333,7 @@ def pins_agent_body(agent: Any) -> bool:
     A Workspace-less Agent (a Project Config Agent, a temporary participant)
     carries its body in the ``core:agent_body`` block; an Identity Agent has none.
     """
-    return not getattr(agent, "workspace", None)
+    return bool(getattr(agent, "instructions", "")) or not getattr(agent, "workspace", None)
 
 
 def pinned_agent_body(

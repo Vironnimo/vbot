@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-31.0.1-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-32.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-31.0.1-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-32.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -44,21 +44,20 @@ comes from `api.operations`; `ExtensionCommandContext` comes from a command
 callback. Their authoring types intentionally reject direct construction because
 the host supplies private wiring. Other declared constructors remain callable.
 
-## Version contract and migration from API 30
+## Version contract and migration from API 31
 
-The SDK version is `31.0.1`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 31` in `extension.json` for Extensions using the new
+The SDK version is `32.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 32` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
-30 manifests and `core.extensions` imports remain supported. Change imports to
+31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
 
-SDK patch 31.0.1 corrects declarations without changing API generation 31:
-`ToolContext.permissions` is required, and `normalize_tool_call_ids` takes
-`ToolCallIdRules`, the host's existing constraint value, rather than a profile
-name. `ToolCallIdProfile` remains the literal name used in wire configuration.
-Type-only imports are private unless explicitly re-exported; import `ToolContext`
-from `.tools` and `ContentBlock` from `.channels`.
+API 32 adds actual Identity Agent execution in owner-managed Sessions and
+`host.identity_agents` for creating/configuring an Extension's own specialists.
+The original `identity_profile` remains a temporary configuration snapshot.
+Owner-bound identity creation accepts a stable `request_id`; retrying the exact
+owner, Agent id, request and configuration returns the original identity.
 
 For optional support in shared code, `require_api(minimum=31)` returns the
 running host's API version or raises; `maximum=` can bound a tested version

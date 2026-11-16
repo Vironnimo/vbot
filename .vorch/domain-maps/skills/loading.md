@@ -81,3 +81,15 @@ metadata:
 
 - Retain non-loadable directories as diagnostics (I/O failures, malformed requirements, duplicate names) so UI can explain them; YAML errors (including nesting beyond the parser's recursion limit and unconstructible scalar values such as invalid dates) and missing ordinary metadata use loadable fallbacks instead. The simple fallback ignores indented keys and block text, so nested metadata cannot replace top-level name or description. Unknown requirement keys, including YAML non-string keys, invalidate only their package rather than aborting the registry scan. Coverage: `test_imperfect_metadata_loads_with_fallbacks_and_warnings`.
 - Metadata diagnostics log at `DEBUG` (`vbot.skills`) **once per process**, keyed by (path, warning) in a bounded `LoggedConditions` memory (a pair it forgot logs again), because registries reload on every project run/reload - only the log deduplicates; caller-facing diagnostics always carry every warning. For the same reason an unreadable or invalid policy file warns once per file version (modification time and size) and logs INFO once it is usable again (`SkillPolicyService`), and a stale shared entry warns once per owner or owner/Skill until it resolves (`SkillRuntime`), not once per receiver build.
+
+## Owned selection views
+
+`SkillRegistry.restricted_to(names)` returns a scoped view whose selection is a
+hard ceiling after ordinary allowlists and private/Project always-allowed grants;
+repeated restrictions intersect and `*` never widens an existing ceiling. Shared
+registries are not mutated. Requirement/dependency checks use the same bounded
+name set, while environment checks follow the source registry's current
+credential snapshot. Chat retains this ceiling across owned descendants,
+Compaction and explicit Project context changes; fresh `skill` Tool reads carry
+it on `ToolContext.skill_ceiling`. Ordinary nonowned Sessions retain their
+existing always-allowed behavior.

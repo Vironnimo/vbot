@@ -191,7 +191,15 @@ def _setup_workflows() -> list[Json]:
 
 async def test_project_setups_become_global_workflows_and_cards_follow(tmp_path: Path) -> None:
     old = extension_database_spec(
-        tmp_path, "factory", DATABASE_NAME, _SETUPS_SCHEMA + SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+        tmp_path,
+        "factory",
+        DATABASE_NAME,
+        _SETUPS_SCHEMA + SCHEMA_SQL,
+        migrations=tuple(
+            item
+            for item in MIGRATIONS
+            if item.name not in {"global_workflows", "native_factory_teams"}
+        ),
     )
     database = open_offline_database(old)
     store = FactoryStore(database)
@@ -273,7 +281,15 @@ async def test_project_setups_become_global_workflows_and_cards_follow(tmp_path:
         database.close()
     # Older writers would misread the per-step runtime.
     older_writer = extension_database_spec(
-        tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS[:-1]
+        tmp_path,
+        "factory",
+        DATABASE_NAME,
+        SCHEMA_SQL,
+        migrations=tuple(
+            item
+            for item in MIGRATIONS
+            if item.name not in {"global_workflows", "native_factory_teams"}
+        ),
     )
     with pytest.raises(DatabaseFormatError):
         open_offline_database(older_writer)

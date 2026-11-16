@@ -178,6 +178,7 @@ class AgenticProgression:
                     agent_id=run.agent_id,
                     session_id=run.session_id,
                     execution_owner=run.execution_owner,
+                    model=target.model_reference,
                 ),
             )
 

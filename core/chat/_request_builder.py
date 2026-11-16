@@ -143,7 +143,9 @@ class RequestBuilder:
             )
             return
         context.skill_project_id = project_id
-        context.skill_registry = registry
+        from core.chat._run_state import owned_skill_registry
+
+        context.skill_registry = owned_skill_registry(registry, context.owner_binding)
 
     def resolve_project_cwd(self, project_id: str | None) -> Path | None:
         """Resolve a working Project cwd, failing closed when unavailable."""

@@ -1075,3 +1075,80 @@ async def test_temporary_participants_use_actual_chat_and_independent_history(
         await groups.quiesce()
         await runtime.chat_run_manager.aclose()
         runtime.chat_sessions.close()
+
+
+def test_owned_identity_keeps_identity_context_and_scopes_each_session(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    from core.agents.temporary import OwnedIdentityAgent
+
+    identities = AgentStore(tmp_path, sessions=sessions)
+    identity = identities.create(
+        "leader",
+        model="provider/model",
+        tool_access=ToolAccess(mode="all"),
+        tools={"subagent": {"allowed_agents": ["peer"]}, "bash": {"allowed_env": ["VISIBLE"]}},
+    )
+    identities.update("leader", current_session_id="")
+    registry = TemporaryAgentRegistry(
+        sessions, resolve_identity=identities.get, prepare_config=lambda config, _: config
+    )
+    config = _config(
+        tmp_path,
+        identity_agent="leader",
+        identity_incarnation=identity.created_at,
+        tool_access=ToolAccess(mode="selected", allowed=("read_file",)),
+        instructions="session-owned instructions",
+        allowed_skills=["*"],
+        tools={
+            "subagent": {"allowed_agents": ["*"]},
+            "bash": {"allowed_env": ["VISIBLE", "SECRET"]},
+        },
+    )
+    first = registry.create(
+        owner_name="extension",
+        group_id="task",
+        participant_id="leader",
+        config=config,
+        project_id="project",
+    )
+    second = registry.create(
+        owner_name="extension",
+        group_id="topic",
+        participant_id="leader",
+        config=config,
+        project_id="project",
+    )
+    assert first.address.project_id is None and first.address.agent_id == identity.id
+    assert first.address != second.address
+    assert sessions.working_project(first.address).project_id == "project"
+    resolved = registry.resolve(first.address, generation_id=first.generation_id)
+    assert isinstance(resolved, OwnedIdentityAgent)
+    assert resolved.workspace == identity.workspace
+    assert resolved.memory_prompt_mode == identity.memory_prompt_mode
+    assert resolved.instructions == config.instructions
+    assert resolved.tools["subagent"]["allowed_agents"] == ["peer"]
+    assert resolved.tools["bash"]["allowed_env"] == ["VISIBLE"]
+    assert resolved.tool_access.allowed == ("read_file",)
+    assert identities.get("leader").tool_access.mode == "all"
+    assert identities.get("leader").current_session_id == ""
+    assert sessions.temporary_agent_binding(None, "leader") is None
+    identities.update("leader", tool_access=ToolAccess(mode="none"))
+    narrowed = registry.resolve(first.address, generation_id=first.generation_id)
+    assert narrowed is not None and narrowed.tool_access.mode == "none"
+    assert narrowed.workspace == identity.workspace
+    assert (
+        registry.create(
+            owner_name="extension",
+            group_id="task",
+            participant_id="leader",
+            config=config,
+            project_id="project",
+        )
+        == first
+    )
+    with identities.archive_files("leader", tmp_path / "archive" / "leader"):
+        pass
+    identities.create("leader", model="provider/model")
+    with pytest.raises(ValueError):
+        registry.resolve(first.address, generation_id=first.generation_id)

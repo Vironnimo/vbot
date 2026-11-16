@@ -27,14 +27,17 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 from . import _limits, _workflows, agent_text
+from ._native_agent_text import PRIVATE_TOOLS as NATIVE_PRIVATE_TOOLS
 from .store import FINAL_STATES, RUNTIME_VERSION, FactoryError
 
 type Json = dict[str, Any]
 _LOGGER = get_logger("extensions.factory")
-_PRIVATE = frozenset(agent_text.PRIVATE_TOOLS)
+_PRIVATE = frozenset(agent_text.PRIVATE_TOOLS) | frozenset(NATIVE_PRIVATE_TOOLS)
 _STEP_TOOLS = frozenset({"factory_submit_work", "factory_report_blocked"})
 _RESULT_LIMIT = 100000
-_RETRYABLE = frozenset({"run_failed", "restart", "budget_exhausted", "upgraded", "child_failed"})
+_RETRYABLE = frozenset(
+    {"run_failed", "restart", "budget_exhausted", "upgraded", "child_failed", "native_paused"}
+)
 
 
 def _sum_reports(reports: list[Json]) -> Json:
@@ -155,6 +158,20 @@ class FactoryExecution:
     async def _check_budget(
         self, card: Json, step_id: str, *, check_runs: bool, resources: bool = True
     ) -> bool:
+        if (
+            native := getattr(self.service, "native", None)
+        ) and not await native.workflows.permitted(card):
+            await native.workflows.halt(card)
+            return True
+        if (native := getattr(self.service, "native", None)) and await native.limits.workflow_check(
+            card, check_runs=check_runs, resources=resources
+        ):
+            runtime = self._runtime(card)
+            for state in runtime.get("steps", {}).values():
+                if state.get("status") == "running":
+                    self._halt(state, "budget_exhausted")
+            await self._commit(card, runtime, event="budget_exhausted")
+            return True
         status = await self.budget_status(card, step_id, resources=resources)
         for scope, item in status.items():
             limits = (
@@ -238,6 +255,10 @@ class FactoryExecution:
             state = card["runtime"]["steps"][step_id]
             if not self._owns(state, owner):
                 raise self._error("stale_run")
+            if (
+                native := getattr(self.service, "native", None)
+            ) and not await native.workflows.model_permitted(card, getattr(context, "model", None)):
+                raise self._error("wrong_state")
             if state["status"] != "running" or not self.running(card):
                 raise self._error("wrong_state")
             new_run = context.run_id not in state.get("budget", {}).get("runs", [])
@@ -262,6 +283,12 @@ class FactoryExecution:
             state = runtime["steps"][step_id]
             if not self._owns(state, owner):
                 raise self._error("stale_run")
+            if (
+                native := getattr(self.service, "native", None)
+            ) and not await native.workflows.tool_permitted(card, tool_name):
+                from ._native_agent_text import tool_refusal
+
+                return tool_refusal(tool_name)
             if state["status"] != "running" or not self.running(card):
                 return (
                     agent_text.limit_refusal(state["limit_hit"])
@@ -346,7 +373,11 @@ class FactoryExecution:
                 for item in await self.store.list_cards()
                 if item["id"] != card["id"]
             )
-            if occupied >= limit:
+            if native := getattr(self.service, "native", None):
+                occupied += await native.running()
+            if occupied >= limit or (
+                native is not None and not await native.workflows.admissible(card, limit)
+            ):
                 runtime["queued_action"] = {
                     "accepted": "accept",
                     "answered": "answer",
@@ -383,11 +414,11 @@ class FactoryExecution:
 
     # Workflow positions
 
-    def _config(self, card: Json, step_id: str) -> TemporaryAgentConfig:
+    async def _config(self, card: Json, step_id: str) -> TemporaryAgentConfig:
         runtime = card["runtime"]
         step = _workflows.step(runtime["workflow"], step_id)
         tools = _STEP_TOOLS | ({"factory_request_changes"} if step["returns_to"] else set())
-        return TemporaryAgentConfig(
+        config = TemporaryAgentConfig(
             model="",
             **_workflows.profile(step),
             model_override=step["model"] or None,
@@ -399,11 +430,19 @@ class FactoryExecution:
             name=f"Factory {step['name']}",
             instructions=agent_text.rules(runtime["workflow"], step),
         )
+        if native := getattr(self.service, "native", None):
+            return cast(TemporaryAgentConfig, await native.workflows.config(card, config, tools))
+        return config
 
     @staticmethod
     def _participant(state: Json, step: Json) -> str:
         """The step's latest participant; a judging step gets a fresh one per run."""
-        return _workflows.participant(step, int(state.get("sequence", 1)))
+        participant = _workflows.participant(step, int(state.get("sequence", 1)))
+        return (
+            f"{participant}-p{state['native_policy_generation']}"
+            if state.get("native_policy_generation")
+            else participant
+        )
 
     @staticmethod
     def latest(outputs: list[Json], workflow: Json, step_ids: set[str]) -> list[Json]:
@@ -664,6 +703,10 @@ class FactoryExecution:
                 card = await self.store.get_card(card_id)
                 if not self._current(card, step_id, token):
                     return
+                if (
+                    native := getattr(self.service, "native", None)
+                ) and await native.workflows.refresh_pending(card, step_id):
+                    return
                 state = card["runtime"]["steps"][step_id]
                 pending = dict(state["pending"])
                 old_run = state.get("run")
@@ -690,7 +733,7 @@ class FactoryExecution:
                         binding = await self.groups.create(
                             group_id,
                             participant,
-                            self._config(card, step_id),
+                            await self._config(card, step_id),
                             project_id=card["project_id"] or None,
                         )
                         participants[participant] = {
@@ -1150,6 +1193,10 @@ class FactoryExecution:
                 "note": agent_text.error_message("workflow_missing", workflow=card["workflow_id"]),
             }
             return await self._commit(card, {**runtime, "steps": {}}, event="admission_failed")
+        if (
+            native := getattr(self.service, "native", None)
+        ) and not await native.workflows.definition_permitted(card, workflow):
+            return cast(Json, await self.store.get_card(card["id"]))
         project, problem = await self.service.resolve_card_project(card, workflow)
         if problem:
             runtime["blocker"] = {"reason": "project_unresolved", "note": problem}
@@ -1616,6 +1663,8 @@ class FactoryExecution:
         async with self.service.lock:
             cards = await self.store.list_cards()
             known = {group_id for card in cards for group_id in self.group_ids(card)}
+            if native := getattr(self.service, "native", None):
+                known.update(await native.group_ids())
             for card in cards:
                 try:
                     await self._reconcile_card(card)

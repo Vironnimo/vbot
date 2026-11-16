@@ -143,6 +143,8 @@ _AGENT_CONFIG_FIELDS = frozenset(
     {
         "allowed_skills",
         "builtin",
+        "extension_owner",
+        "extension_creation_request",
         "compaction_policy",
         "context_commands",
         "created_at",
@@ -303,8 +305,20 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
                 data["placement"], agent_id=data.get("id"), builtin=data.get("builtin")
             )
         )
+    creation = data.get("extension_creation_request")
+    if creation is not None and (
+        not isinstance(creation, dict)
+        or set(creation) != {"id", "hash"}
+        or not all(isinstance(value, str) and value for value in creation.values())
+    ):
+        add_error(
+            diagnostics, "$.extension_creation_request", "must hold nonempty id and hash strings"
+        )
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
+    validate_non_empty_string(
+        diagnostics, "$.extension_owner", data.get("extension_owner"), required=False
+    )
     validate_string(diagnostics, "$.description", data.get("description"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
     _validate_fallback_models_diagnostics(
@@ -794,6 +808,8 @@ def _agent_from_dict(
         created_at=data.get("created_at") or timestamp_default,
         updated_at=data.get("updated_at") or timestamp_default,
         builtin=data.get("builtin"),
+        extension_owner=data.get("extension_owner"),
+        extension_creation_request=data.get("extension_creation_request"),
     )
     return _with_builtin_capabilities(agent)
 
@@ -859,6 +875,10 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("permission_rules")
     else:
         persisted["permission_rules"] = permission_rules_to_dict(agent.permission_rules)
+    if persisted["extension_creation_request"] is None:
+        persisted.pop("extension_creation_request")
+    if persisted["extension_owner"] is None:
+        persisted.pop("extension_owner")
     if persisted["builtin"] is None:
         persisted.pop("builtin")
     if not persisted["description"]:

@@ -1,6 +1,33 @@
 # Software Factory
 
-Software Factory runs work Cards through Workflows - plans, drafts, changes, reviews and integration, each done by an Agent you choose - and the user accepts the result. It is bundled as `factory`; the `Software Factory` page holds the Board with its `Waiting for you` review inbox, and the Workflows page.
+Software Factory keeps a permanent team, native tasks and shared discussions for a registered Project. Select or create a Leader on the Software Factory page, add existing Identity Agents or create specialists, and assign tasks without creating a Workflow. Existing Agents keep their identity, personal Memory and private Skills; membership instructions and configuration apply locally to the Factory.
+
+Native members use `factory_tasks` to organize assigned work and submit outcomes, and `factory_topics` to consult teammates directly. The Leader also receives member/settings Tools. Completing a task needs an outcome and evidence addressing its conditions; child tasks and prerequisites must finish first. Independent review and user approval apply only when configured, and both approvals are retained separately when both are required.
+
+The user sets the Factory remit, allowed configuration and budgets. An Agent can create/assign children under its own task; unrelated initiative remains an unassigned backlog proposal until authorized. Shared discussion is attributed content, not a new user authorization. Assignment starts eligible work automatically; pause, cancellation and Factory archive stop admission while retaining history and spending. Reassignment fences old execution before the successor continues.
+
+## CLI: native teams, tasks and discussions
+
+Use `vbot extensions run factory <operation> --help` for the current flat argument schema. `catalog` supplies Project, Agent and Model ids; resource reads supply canonical ids and revisions. Lists are bounded and return `next_after` for the next `--after` page. Native task detail includes children, results, events, topics and canonical Session addresses.
+
+```bash
+vbot extensions run factory factory.create --project-id <project-id> --leader-agent-id <agent-id> --remit "Build the agreed product"
+vbot extensions run factory member.add --factory-id <factory-id> --agent-id <agent-id> --role Reviewer
+vbot extensions run factory task.create --factory-id <factory-id> --title "Implement feature" --objective "Requested behavior" --conditions "Agreed checks pass" --assignee-id <member-id>
+vbot extensions run factory task.get <task-id>
+vbot extensions run factory topic.create --factory-id <factory-id> --title "Design discussion"
+vbot extensions run factory topic.post <topic-id> --text "The question or answer"
+```
+
+For a new Leader, omit `leader_agent_id` and supply `leader_name`, `leader_model` and a stable `request_id`. `member.create` takes `factory_id`, `name` and a stable `request_id`; an omitted Model inherits the Leader's Model. Keep the same request id and payload when retrying an interrupted creation so it reuses its reserved Identity Agent.
+
+Use `task.update`, `assign`, `pause`, `resume`, `cancel`, `reopen`, `complete` or `review` with the record's current `expected_revision`. `complete` takes `outcome` and `evidence`; `review` takes `approve` and findings when requesting changes. `topic.invite` takes member ids and optional question text; `topic.get` returns bounded posts, with integer `after` selecting posts beyond that sequence. `factory.update`, `member.update`, `member.retire`, `topic.invite`, `topic.close` and `factory.archive` also require the observed revision. On conflict, inspect the latest record before applying the intended change.
+
+Use `factory.update` or `member.update` `clear_fields` to remove named configuration overrides and restore inherited settings; an explicit empty selection keeps no entries. Model and thinking effort resolve from the member override, then the Factory default, then the Identity Agent and its inherited defaults. Member Model/effort overrides and `allowed_skills`, `allowed_tools` and `denied_tools` narrow local configuration within the operator's Factory ceiling. `member.add` preserves the linked Identity Agent's global settings. Explicit `identity_config` edits are supported only for Factory-created identities; ordinary Agents settings own shared identities. Retiring a member retains history, and archiving a Factory retains records while archiving its managed Sessions.
+
+## Optional global Workflows
+
+Workflows remain an independent way to run reusable step graphs. `factory_card` creates Workflow Cards; native members use native task/topic Tools. A native task can select `workflow_id`, which links a Workflow execution as evidence without completing the responsible owner's task by itself.
 
 A Workflow is global and can fix a Project: then all its Cards work there and its steps can use the Project's Team. Without one, each Card names its Project or has none, and then works in a folder of its own. Start from templates such as One Agent, Review pushes, Implement, Plan or Plan from drafts. Each step has a name, an Agent (any of your Agents, or a member of the Project's Team, with optional Model and thinking effort overrides) and a task, or it starts another Workflow as a new Card and can wait until that Card is done. A step starts once the steps it comes after are done, so steps without a common predecessor run in parallel. A step receives the results of the steps it comes after, and of theirs, and nothing else. A step can wait for the user's approval before it starts, and the Workflow can wait for the user's acceptance when all steps are done. A step with a send-back target can return that step's result with findings instead of passing it on.
 

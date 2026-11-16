@@ -696,6 +696,30 @@ def test_allowlist_filters_skills_sorted_by_name(
     assert [skill.name for skill in registry.filter_allowed(allowed)] == expected
 
 
+def test_owned_selection_ceiling_bounds_private_grants_and_never_mutates_the_registry(
+    tmp_path: Path,
+):
+    write_skill(tmp_path, "permitted")
+    write_skill(tmp_path, "private")
+    registry = SkillRegistry.load(tmp_path, always_allowed={"private"})
+    bounded = registry.restricted_to(["permitted"])
+    assert [skill.name for skill in bounded.filter_allowed(["*"])] == ["permitted"]
+    assert not bounded.is_allowed("private", ["*"])
+    assert not bounded.restricted_to([]).filter_allowed(["*"])
+    assert bounded.restricted_to(["*"]) is bounded
+    assert [skill.name for skill in registry.filter_allowed(["*"])] == ["permitted", "private"]
+    write_skill(tmp_path, "needs", requirements_document("needs", "{skill: private}"))
+    dependencies = SkillRegistry.load(tmp_path, always_allowed={"private"}).restricted_to(["needs"])
+    assert dependencies.availability_for("needs", ["*"]).state == "unavailable"
+    write_skill(tmp_path, "credential", requirements_document("credential", "{env: CREDENTIAL}"))
+    source = SkillRegistry.load(tmp_path, environment={})
+    scoped = source.restricted_to(["credential"])
+    assert scoped.availability_for("credential", ["*"]).state == "unavailable"
+    source.reload_environment({"CREDENTIAL": "configured"})
+    assert scoped.availability_for("credential", ["*"]).state == "available"
+    assert scoped.same_catalog(source.restricted_to(["credential"]))
+
+
 def test_an_excluded_package_leaves_the_pool_and_lets_a_same_named_one_load(
     tmp_path: Path,
 ) -> None:

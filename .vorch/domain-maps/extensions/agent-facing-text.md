@@ -292,3 +292,29 @@ Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/
 | `Use Reload local Extensions...changed code, assets, data files and native modules...` | Authors can apply any installed package change without restarting the Desktop or confusing server and local reload. |
 | `Keep mutable state outside the installed Extension package...` | Avoids handler retirement on each reload after the Extension writes its own state; dependency and cache exclusions explain the fingerprint boundary. |
 | `Package scanning accepts up to 10,000 entries...` | Makes deterministic package-size failures actionable instead of prompting repeated reloads of a partially read package. |
+
+## API 32 actual identities
+
+| Text | Reason |
+|---|---|
+| `Declare api_version: 32 to use host.identity_agents...` | Keeps actual identity calls from loading on a host that has only snapshot Profiles. |
+| `From the startup host, identity = await...` | Supplies the observed proof fields and tells a membership author how to avoid rebinding to a replacement identity. |
+| `Create a specialist with...` | Establishes durable request identity before a cross-owner creation so restart can reconcile the result. |
+| `An exact retry returns the original identity...` | Makes replay and conflict consequences explicit. |
+| `Configure an original specialist with...` | Prevents an author from silently reconfiguring a shared attached Agent. |
+| `These are trusted server capabilities...` | Locates task/remit authorization in the Extension instead of implying the host knows Factory roles. |
+| `Import TemporaryAgentConfig and TemporaryRunInput...` | Gives the supported authoring imports rather than private repository paths. |
+| `To run the actual identity, set...` | Supplies the actual mode, required constructor values and live Model inheritance. |
+| `Optional instructions, explicit Model/effort overrides...` | Places local configuration on the owned Session instead of editing the shared identity. |
+| `The actual Agent retains its Workspace...` | Distinguishes actual identity context from snapshot Profile behavior and keeps private capabilities scoped. |
+| `Tool selections intersect...` | Describes the enforced policy and the supported narrowing mechanism. |
+| `The existing identity_profile remains...` | Prevents substituting the old workspace-less snapshot for the actual Agent. |
+| `Use binding = await...` | Supplies the existing canonical create/open/start sequence with an actual identity. |
+| `The selected Project becomes...` | Prevents constructing a Project-Agent address for a real Identity Agent. |
+| `Give each independent task or topic...` | Keeps separate conversations out of one undifferentiated Session while retaining continuations. |
+| `Keep each continuation's request id...` | Teaches receipt identity, closed-group participant changes and existing shutdown/recovery ownership. |
+| Owned Sessions opening now names temporary or actual identity modes | Removes the former blanket claim that every owned Session has no Identity Workspace. |
+| Python SDK wheel path now names version 32.0.0 | Points authors to the artifact actually shipped with API 32. |
+
+| `The configuration's allowed_skills is a hard ceiling...` | Names the enforced owned scope, including delegated private/Project grants, so authors do not add a separate incomplete filter. |
+| `API 32 supplies context.model...` | Owners must check the selected physical target after fallback and Connection resolution rather than trusting the binding's creation-time Model. |

@@ -125,6 +125,16 @@ class ModelConfigurationChecker:
         if not self._has_usable_allowed_connection(provider_id, catalog_model):
             raise self._unusable_error(model)
 
+    def require_chat_configured(self, model: str) -> None:
+        """Require a usable Chat route, retaining sparse catalogs' text default."""
+        self.require_configured(model)
+        parsed = _parse_provider_model(model)
+        assert parsed is not None
+        catalog = self._models.get(parsed[0], parsed[1])
+        tasks = getattr(getattr(catalog, "capabilities", None), "task_types", ())
+        if tasks and "chat" not in tasks:
+            raise ModelConfigurationError(f"model {model!r} does not support Chat")
+
     @staticmethod
     def _unusable_error(model: str) -> ModelConfigurationError:
         return ModelConfigurationError(

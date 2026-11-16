@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from core.activity import SessionActivity
 from core.agents import LIVE_BACKEND_BUILTIN
-from core.agents.agents import AgentStore
+from core.agents.agents import Agent, AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.archive import ArchiveService, convert_archived_projects
 from core.attachments import AttachmentStore
@@ -622,6 +622,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._temporary_agents = TemporaryAgentRegistry(
             runtime._chat_sessions,
             capture_delegation_bindings=runtime._agents.capture_delegation_bindings,
+            resolve_identity=lambda agent_id: cast(
+                Agent, runtime.agent_resolver.resolve_agent(None, agent_id)
+            ),
             prepare_config=lambda config, project_id: (
                 runtime.agent_resolver.prepare_temporary_config(config, project_id)
             ),

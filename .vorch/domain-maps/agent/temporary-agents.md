@@ -51,3 +51,44 @@ An empty fallback `model` is accepted only with a Profile (`repository_profile` 
 ## Identity profiles
 
 `identity_profile` names a roster Identity Agent instead; it is exclusive with `repository_profile` and refuses built-in Agents. `TemporaryResolution._prepare_identity` (`core/projects/_temporary_resolution.py`) snapshots that Agent's Model chain, sampling, thinking effort, Tool settings, Permission Rules (owner's parts first), Compaction Policy and SOUL.md (prepended to the owner's instructions), bounded by the owner's selection: Tool access is the intersection of both selections minus both denials (`none` or `fixed` on either side stays restrictive), Skills are the owner's selection within the Agent's allowed and excluded Skills, and Project Memory needs both. The participant stays a temporary Agent: no Identity Workspace, personal Memory or Agent-private Skills. The original request lives under the binding's `repository_profile_request` key for either Profile kind (`test_resolver_config_agent.py`).
+
+## Actual Identity Agent Sessions (API 32)
+
+`TemporaryAgentConfig.identity_agent` plus `identity_incarnation` selects actual
+Identity execution, exclusive with both Profiles. `model` may be empty; the
+identity's live configuration resolves it; actual identity execution and managed
+Model changes reject Models without Chat capability. The incarnation is the persisted
+creation timestamp returned by `host.identity_agents.get`; `AgentStore.identify`
+establishes a missing legacy timestamp once under its lifecycle guard. Replaced
+or missing identities fail closed. Existing `identity_profile` keeps snapshot
+semantics and never acquires personal context.
+
+An actual binding has the identity address anchor (`project_id=None`, actual
+Agent id), a new canonical Session, and its selected Working Project. Each
+binding keeps the owner's instructions, cwd, Tool/Skill selection, optional Model
+choices and Permission Ceiling. Identity resolution retains Workspace, personal
+Memory, private Skills, SOUL and live identity settings. Tool policies intersect;
+the owner's ceiling remains independent of Session Permission Rules. Ordinary
+Sessions receive none of the binding's private capabilities. Exact Session
+lookups retain the bound configuration; Agent-wide temporary lookup excludes
+actual identity bindings, so another Session cannot inherit one accidentally.
+Group receipts, epochs, archive and owned Run attribution stay unchanged.
+
+`host.identity_agents` is registration-bound trusted Extension integration.
+`get` returns identity/proof and creation ownership; `create` creates a durable
+Agent; `update` requires its exact incarnation and that this Extension created
+it. Scope/remit checks belong to the Extension before calling this capability.
+There is no delete, Workspace relocation, placement or identity-change surface.
+A stable `create(request_id=...)` persists its owner/request/configuration hash
+with the initial Agent document. Exact retries return the original; conflicts
+refuse. Owner and creation-request markers are immutable through ordinary Agent
+updates, survive archive/restore and do not confer human authority.
+
+The canonical owned binding's `allowed_skills` is a hard Skill ceiling for its
+Runs and owned descendants, including ordinary delegated target Agents. Chat
+carries it through initial request construction, explicit Project Skill-context
+loads and Compaction refresh; the `skill` Tool applies the same ceiling to fresh
+registry reads and miss rescans. `SkillRegistry.restricted_to` supplies an
+isolated scoped view, so parent/private/Project always-allowed grants cannot
+widen it and shared registries are unchanged. See `subagents/delegation.md` ->
+Owned-execution Skill ceilings.

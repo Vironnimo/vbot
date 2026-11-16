@@ -191,6 +191,7 @@ class ToolExecutor:
                 request_turn_end_hook=config.tool_turn_end_registrar,
                 result_payload_hook=config.tool_result_payload_registrar,
                 allowed_skills=config.allowed_skills,
+                skill_ceiling=config.skill_ceiling,
                 skill_env_keys=config.skill_env_keys,
                 tool_settings=config.tool_settings,
                 delegation_bindings=config.delegation_bindings,

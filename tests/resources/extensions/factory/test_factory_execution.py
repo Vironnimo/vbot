@@ -24,6 +24,7 @@ from core.sessions import DeliveryReceipt, SessionAddress
 from resources.extensions.factory._execution import FactoryExecution
 from resources.extensions.factory._management import FactoryManagement
 from resources.extensions.factory._registration import register
+from resources.extensions.factory.extension import FactoryExtension
 from resources.extensions.factory.store import FINAL_STATES, FactoryError, _upgraded_runtime
 
 type Json = dict[str, Any]
@@ -1261,12 +1262,17 @@ async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_p
     assert declarations.session_runtime is not None
     assert (
         getattr(declarations.session_runtime.acknowledge_delivery, "__func__", None)
-        is FactoryExecution.acknowledge_delivery
+        is FactoryExtension.acknowledge_delivery
     )
     assert (
         getattr(declarations.session_runtime.before_model_request, "__func__", None)
-        is FactoryExecution.before_model_request
+        is FactoryExtension.before_model_request
     )
+    registered = declarations.session_runtime.before_request.__self__
+    registered.execution = service.execution
+    assert await declarations.session_runtime.before_request(groups.context(automatic)) is None
+    await declarations.session_runtime.acknowledge_delivery(groups.context(automatic), delivery)
+    await declarations.session_runtime.before_model_request(groups.context(automatic))
     await service.flush()
     state = service.state(await service.card(), "implement")
     assert state["run"] == automatic.id and "pending" not in state

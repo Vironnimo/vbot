@@ -672,6 +672,11 @@ class StubSkills:
     def __init__(self, skills: list[StubSkill]) -> None:
         self._skills = {skill.name: skill for skill in skills}
 
+    def restricted_to(self, names) -> StubSkills:
+        if "*" in names:
+            return self
+        return StubSkills([skill for skill in self._skills.values() if skill.name in names])
+
     def get(self, name: str) -> StubSkill:
         try:
             return self._skills[name]

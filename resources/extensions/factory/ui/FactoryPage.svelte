@@ -1,4 +1,5 @@
 <script module>
+  const loadNative = () => import('./NativeFactory.svelte');
   const loadBoard = () => import('./FactoryBoard.svelte');
   const loadDetail = () => import('./CardDetail.svelte');
   const loadWorkflows = () => import('./FactoryWorkflows.svelte');
@@ -31,8 +32,8 @@
     const restore = (next) => {
       const parent = node.closest('.factory-scrollport');
       if (parent) {
-        parent.scrollTop = next === '' ? boardScroll.top : 0;
-        parent.scrollLeft = next === '' ? boardScroll.left : 0;
+        parent.scrollTop = next === '/cards' ? boardScroll.top : 0;
+        parent.scrollLeft = next === '/cards' ? boardScroll.left : 0;
       }
     };
     restore(route);
@@ -53,13 +54,14 @@
     <div class="factory-brand"><h1>{t('factory.title')}</h1></div>
     <nav class="factory-navigation" aria-label={t('factory.title')}>
       <Button
-        variant={['board', 'card'].includes(model.view)
-          ? 'secondary'
-          : 'tertiary'}
-        aria-current={['board', 'card'].includes(model.view)
-          ? 'page'
-          : undefined}
-        onClick={() => navigate('')}>{t('factory.board')}</Button
+        variant={model.view === 'native' ? 'secondary' : 'tertiary'}
+        aria-current={model.view === 'native' ? 'page' : undefined}
+        onClick={() => navigate('')}>{t('factory.native.factories')}</Button
+      >
+      <Button
+        variant={model.view === 'board' ? 'secondary' : 'tertiary'}
+        onClick={() => navigate('/cards')}
+        >{t('factory.native.workflowCards')}</Button
       >
       <Button
         variant={model.view === 'workflows' ? 'secondary' : 'tertiary'}
@@ -67,12 +69,12 @@
         onClick={() => navigate('/workflows')}>{t('factory.workflows')}</Button
       >
     </nav>
-    <span class="factory-wip" role="status"
-      >{t('factory.running', {
-        running: model.wip.running,
-        limit: model.wip.limit,
-      })}</span
-    >
+    {#if model.view !== 'native'}<span class="factory-wip" role="status"
+        >{t('factory.running', {
+          running: model.wip.running,
+          limit: model.wip.limit,
+        })}</span
+      >{/if}
   </header>
   <div
     class="factory-scrollport"
@@ -92,6 +94,13 @@
     {/if}
     {#if model.loading}
       <p class="factory-loading" role="status">{t('common.loading')}</p>
+    {:else if model.view === 'native'}
+      <LazyContent load={loadNative}
+        >{#snippet children(Component)}<Component
+            {model}
+            onNavigate={navigate}
+          />{/snippet}</LazyContent
+      >
     {:else if model.view === 'board'}
       <LazyContent load={loadBoard}
         >{#snippet children(Component)}<div use:routeScroll={model.route}>

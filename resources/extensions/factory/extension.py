@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, cast
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
@@ -107,6 +107,8 @@ class FactoryExtension:
     def __init__(self, api: ExtensionAPI) -> None:
         from ._execution import FactoryExecution
         from ._management import FactoryManagement
+        from ._native_execution import NativeFactoryExecution
+        from ._native_management import NativeFactoryManagement
         from ._triggers import FactoryTriggers
 
         self.api = api
@@ -114,10 +116,13 @@ class FactoryExtension:
         self.store: FactoryStore | None = None
         self.lock = asyncio.Lock()
         self.execution = FactoryExecution(self)
+        self.native = NativeFactoryExecution(self)
+        self.native_management = NativeFactoryManagement(self)
         self.management = FactoryManagement(self)
         self.triggers = FactoryTriggers(self)
         self._tasks: set[asyncio.Task[Any]] = set()
         self._scheduler_task: asyncio.Task[Any] | None = None
+        self._schedule_requested = False
         self._closing = False
         self._states: dict[str, str] = {}
 
@@ -136,6 +141,7 @@ class FactoryExtension:
         self.host = host
         self.store = FactoryStore(await host.open_database(DATABASE_NAME, SCHEMA_SQL, MIGRATIONS))
         self._states = {card["id"]: card["state"] for card in await self.store.list_cards()}
+        await self.native.reconcile()
         await self.execution.reconcile()
         if host.triggers is not None:
             await self.triggers.sync()
@@ -156,8 +162,16 @@ class FactoryExtension:
         return task
 
     def request_schedule(self) -> None:
-        if not self._closing and (self._scheduler_task is None or self._scheduler_task.done()):
-            self._scheduler_task = self.spawn(self.schedule())
+        if self._closing:
+            return
+        self._schedule_requested = True
+        if self._scheduler_task is None or self._scheduler_task.done():
+            self._scheduler_task = self.spawn(self._run_schedule())
+
+    async def _run_schedule(self) -> None:
+        while self._schedule_requested and not self._closing:
+            self._schedule_requested = False
+            await self.schedule()
 
     def limits(self) -> tuple[int, int]:
         config = self.api.get_config()
@@ -178,12 +192,19 @@ class FactoryExtension:
             if self._closing or self.store is None:
                 return
             limit, max_waiting = self.limits()
+            await self.native.schedule(limit)
             for card in await self.store.list_cards(state="queued"):
                 cards = await self.store.list_cards()
-                if sum(self.execution.running(item) for item in cards) >= limit:
+                if (
+                    sum(self.execution.running(item) for item in cards)
+                    + await self.native.running()
+                    >= limit
+                ):
                     break
                 if max_waiting and sum(item["state"] == "waiting" for item in cards) >= max_waiting:
                     break
+                if not await self.native.workflows.admissible(card, limit):
+                    continue
                 try:
                     await self.execution.start(await self.store.get_card(card["id"]))
                 except Exception:
@@ -203,6 +224,35 @@ class FactoryExtension:
                         event="admission_failed",
                     )
                     await self.changed(saved, current)
+
+    def _runtime_owner(self, context: Any) -> Any:
+        return self.native if self.native.owns(context.binding.group_id) else self.execution
+
+    async def before_request(self, context: Any) -> Any:
+        return await self._runtime_owner(context).before_request(context)
+
+    async def before_model_request(self, context: Any) -> None:
+        await self._runtime_owner(context).before_model_request(context)
+
+    async def before_tool_call(
+        self, context: Any, *, tool_name: str, tool_call_id: str
+    ) -> str | None:
+        return cast(
+            str | None,
+            await self._runtime_owner(context).before_tool_call(
+                context, tool_name=tool_name, tool_call_id=tool_call_id
+            ),
+        )
+
+    async def acknowledge_delivery(self, context: Any, delivery: Any) -> None:
+        await self._runtime_owner(context).acknowledge_delivery(context, delivery)
+
+    async def run_finished(self, context: Any, *, outcome: str) -> None:
+        await self._runtime_owner(context).run_finished(context, outcome=outcome)
+
+    async def quiesce(self, reason: str = "extension") -> None:
+        self.native.quiescing = True
+        await self.execution.quiesce(reason)
 
     async def config_changed(self, _previous: Json, _current: Json) -> None:
         await self.schedule()
@@ -236,6 +286,8 @@ class FactoryExtension:
             )
             if card["state"] in FINAL_STATES and card.get("parent_id"):
                 self.spawn(self.execution.child_finished(card["id"]))
+            if card["state"] in FINAL_STATES and card.get("runtime", {}).get("native_task_id"):
+                await self.native.workflow_finished(card, new_result=card["state"] == "done")
             if card["state"] in {"waiting", "proposal"} and host.notify is not None:
                 title = (
                     "Waiting for you: " if card["state"] == "waiting" else "Proposal: "
@@ -469,6 +521,14 @@ class FactoryExtension:
                 "exists. Change the step, then retry.",
             ) from error
         parts = [step.get("task", "").strip(), card["description"].strip()]
+        if scope := await self.native.workflows.scope(card):
+            factory = await self.records().native.get_factory(scope[0]["factory_id"])
+            if workflow["project_id"] not in {"", factory["project_id"]}:
+                raise FactoryError(
+                    "project_mismatch",
+                    "This child Workflow belongs to another Project. "
+                    "Select a Workflow for this Factory Project.",
+                )
         if earlier:
             parts.append(
                 "Results of earlier steps:\n"
@@ -571,6 +631,8 @@ class FactoryExtension:
         ]
 
     async def private_tool(self, name: str, context: ToolContext, arguments: Json) -> Json:
+        if name in {"factory_settings", "factory_members", "factory_tasks", "factory_topics"}:
+            return await self.native_management.private_tool(name, context, arguments)
         try:
             handlers = {
                 "factory_submit_work": self.execution.submit_work,

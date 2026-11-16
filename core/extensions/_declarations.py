@@ -24,7 +24,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 31
+API_VERSION = 32
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -237,6 +237,8 @@ class SessionRequestContext:
     agent_id: str
     session_id: str
     execution_owner: Any | None = None
+    # Exact selected physical Model at before_model_request, including fallback/pin.
+    model: str | None = None
 
 
 @dataclass(frozen=True)

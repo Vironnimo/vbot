@@ -101,3 +101,21 @@ API 28: `host.triggers` (`core/runtime/_extension_triggers.py::ExtensionTriggers
 - `set_handler(handler)` receives each fire as `CronFire.to_dict()`; a handler belongs to the registration that set it, so releasing a retired registration clears it while a newer registration's handler stays (`ExtensionTriggerHandlers`). Every call fails once the registration is no longer current.
 - The returned `schedule` preserves the owner's original expression when available (legacy jobs fall back to the formatted schedule); reconciling that expression does not reset relative timing.
 - An Extension sees only its own triggers; another Extension and the user's Cron surfaces get not-found. On startup the triggers of Extensions that are no longer installed are deleted (`archive_uninstalled_owner_groups`). Coverage: `tests/core/runtime/test_runtime_extension_host_triggers.py`.
+
+## Actual identity execution
+
+API 32 adds `host.identity_agents` and the explicit `identity_agent` mode of
+`TemporaryAgentConfig` through existing owned execution groups. The identity,
+incarnation, context, capability and idempotent-creation contracts are owned by
+`agent/temporary-agents.md` -> Actual Identity Agent Sessions (API 32).
+
+`before_model_request` receives `SessionRequestContext.model`, the exact physical
+Model reference including fallback and Connection pin. It also names the
+selected Model during owned descendant admission before automatic Compaction;
+other request callbacks leave it `None`. Owners enforce Model ceilings against
+this value rather than a binding's initial configuration snapshot.
+
+Owned execution's configured `allowed_skills` is a hard registry ceiling in the
+root and all owned descendants. It bounds the Model catalog, trigger activation
+and fresh `skill` Tool reads, including private and Project grants. Details:
+`agent/temporary-agents.md` and `skills/loading.md` -> Owned selection views.
