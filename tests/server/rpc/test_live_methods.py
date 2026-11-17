@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from inspect import unwrap
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytest
 
 from core.model_tasks.live import LiveStartRejected
 from server.live.registry import LiveRegistryClosedError
+from server.rpc.dispatcher import dispatch_method
 from server.rpc.errors import RpcError
 from server.rpc.live_methods import _start, _status, _stop, _ui_result
 from server.rpc.methods import build_method_handlers
@@ -227,10 +227,25 @@ def test_ui_result_rejects_invalid_answers(params: JsonObject) -> None:
     assert current.live_calls.answers == []
 
 
-def test_live_methods_are_registered() -> None:
+@pytest.mark.asyncio
+async def test_live_methods_are_registered() -> None:
     methods = build_method_handlers()
-    assert unwrap(methods["live.status"]) is _status
-    assert methods["live.start"] is _start
-    assert methods["live.stop"] is _stop
-    assert methods["live.ui_result"] is _ui_result
+    current = state()
+    assert await dispatch_method(current, "live.status", {}, methods) == _status(current, {})
+    assert await dispatch_method(current, "live.start", {"media": "relay"}, methods) == {
+        "call_id": "call-1",
+        "media": {"type": "relay", "audio": {}},
+    }
+    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None, ())]
+    assert await dispatch_method(current, "live.stop", {"call_id": "call-1"}, methods) == {
+        "stopping": True
+    }
+    assert current.live_calls.stops == ["call-1"]
+    assert await dispatch_method(
+        current,
+        "live.ui_result",
+        {"call_id": "call-1", "request_id": "ui-1", "result": {"applied": True}},
+        methods,
+    ) == {"accepted": True}
+    assert current.live_calls.answers == [("call-1", "ui-1", {"applied": True}, None)]
     assert "live.create" not in methods
