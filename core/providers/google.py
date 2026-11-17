@@ -49,6 +49,7 @@ _TTS = re.compile(r"-tts(?:-|$)")
 _TRANSCRIBE = re.compile(r"-transcribe(?:-|$)")
 _IMAGE = re.compile(r"(?:-image(?:-|$)|^nano-banana|^gemini-nano-banana)")
 _MUSIC = re.compile(r"^lyria-")
+_MUSIC_WAV = re.compile(r"^lyria-3\.5(?:-|$)")
 _VIDEO = re.compile(r"^gemini-omni-")
 # Bidi Live Models that hold a voice conversation; Live transcription,
 # speech-to-speech translation and robotics streaming are other jobs.
@@ -166,7 +167,7 @@ def _family_capabilities(
     if _IMAGE.search(model_id):
         return _image_generation_capabilities(model_id)
     if _MUSIC.search(model_id):
-        return _music_capabilities()
+        return _music_capabilities(model_id)
     if _VIDEO.search(model_id):
         return _video_capabilities()
     return _chat_capabilities(raw)
@@ -388,9 +389,25 @@ _IMAGE_FAMILIES: tuple[tuple[re.Pattern[str], Mapping[str, tuple[str, ...] | int
 )
 
 
-def _music_capabilities() -> Capabilities:
-    return _task_capabilities(
+def _music_capabilities(model_id: str) -> Capabilities:
+    """Lyria: text and up to 10 images in, one track with lyrics text out.
+
+    Google documents a WAV choice beside the default MP3 only for Lyria 3.5
+    (``generationConfig.responseFormat.audio``; Lyria guide, read 2026-11-17).
+    """
+
+    capabilities = _task_capabilities(
         ("text", "image"), ("text", "audio"), ("music_generation", "audio_generation")
+    )
+    if not _MUSIC_WAV.search(model_id):
+        return capabilities
+    return replace(
+        capabilities,
+        task_options={
+            "music_generation": {
+                "parameters": {"response_format": {"type": "enum", "values": ["mp3", "wav"]}}
+            }
+        },
     )
 
 

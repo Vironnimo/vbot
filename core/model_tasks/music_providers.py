@@ -1,4 +1,10 @@
-"""OpenRouter streaming wire client for the ``music_generation`` Task Model."""
+"""Wire client for the ``music_generation`` Task Model.
+
+Two routes: OpenRouter's streamed Chat Completions audio and Google's native
+Gemini ``generateContent`` (Lyria). Both keep one outcome contract: a refusal
+is a known outcome, every other failure after the Provider accepted the
+request may follow a billed track, and no request is replayed automatically.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,8 @@ import base64
 import binascii
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Any, Literal, override
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -15,6 +22,8 @@ import httpx
 from core.attachments import sniff_media_type
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_types import MusicGenerationResult
+from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
+from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED, TERMINAL_OUTCOME_STOP
 from core.providers.errors import (
     NetworkError,
     ProviderContentRefusedError,
@@ -34,6 +43,7 @@ from core.providers.openai_compatible import (
 from core.providers.task_client import (
     NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,
+    TaskRequestRetryPolicy,
     classify_task_response_for_retry_policy,
     classify_task_transport_error,
     is_omittable_option,
@@ -46,10 +56,20 @@ MUSIC_ENDPOINT = "/chat/completions"
 MUSIC_REQUEST_TIMEOUT_SECONDS = 10 * 60.0
 SSE_DONE_MARKER = "[DONE]"
 _MAX_REASON_CHARS = 500
+# ``response_format`` option values and the Google audio MIME enum they select.
+GOOGLE_MUSIC_AUDIO_FORMATS = {"mp3": "AUDIO_MP3", "wav": "AUDIO_WAV"}
+# Google documents 503 UNAVAILABLE as an overloaded service to retry with
+# backoff (aistudio.google.com/docs/api-errors, read 2026-11-17), so it proves
+# the request was not processed; every other ambiguous failure may follow a
+# billed track. The image route shares this reading.
+_GOOGLE_MUSIC_RETRY_POLICY = TaskRequestRetryPolicy(
+    replay_safe=False,
+    verified_safe_retry_status_codes=frozenset({503}),
+)
 
 
 class ProviderMusicClient(ProviderTaskClient):
-    """Generate Music through OpenRouter Chat Completions audio streaming."""
+    """Generate Music through OpenRouter audio streaming or Google ``generateContent``."""
 
     async def generate(
         self,
@@ -58,6 +78,8 @@ class ProviderMusicClient(ProviderTaskClient):
         options: JsonObject,
         input_images: Sequence[ImageInput] = (),
     ) -> MusicGenerationResult:
+        if self._provider.adapter == "google":
+            return await self._generate_google(prompt, options=options, input_images=input_images)
         payload = _music_payload(
             self._model_id,
             prompt,
@@ -87,6 +109,41 @@ class ProviderMusicClient(ProviderTaskClient):
             text=stream.text(),
         )
 
+    async def _generate_google(
+        self,
+        prompt: str,
+        *,
+        options: JsonObject,
+        input_images: Sequence[ImageInput],
+    ) -> MusicGenerationResult:
+        """Generate one track with a single non-streamed ``generateContent`` call.
+
+        Google documents Lyria only on ``generateContent``; the answer carries
+        the whole track as an inline audio part beside lyrics or structure text.
+        """
+
+        payload = _google_music_payload(prompt, options=options, input_images=input_images)
+        model_id = self._model_id
+        return await self.post_and_parse(
+            f"/models/{quote(model_id, safe='')}:generateContent",
+            timeout=MUSIC_REQUEST_TIMEOUT_SECONDS,
+            parse=lambda response: _google_music_result(response, model_id),
+            json=payload,
+            retry_policy=_GOOGLE_MUSIC_RETRY_POLICY,
+        )
+
+    @override
+    async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        if self._provider.adapter != "google":
+            return await super()._observe_response_usage(response)
+        try:
+            body = response.json()
+        except ValueError, UnicodeError:
+            return None
+        if not isinstance(body, Mapping):
+            return None
+        return _normalize_gemini_usage(body.get("usageMetadata"))
+
     @asynccontextmanager
     async def _stream_response(
         self, payload: JsonObject, *, usage: JsonObject
@@ -114,6 +171,7 @@ class ProviderMusicClient(ProviderTaskClient):
                         retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
                         operation_key=operation_key,
                         extra_retryable_status_codes=frozenset(),
+                        classify_status=self._classify_status,
                     )
                 yield response
             except httpx.TransportError as exc:
@@ -176,6 +234,108 @@ def _music_payload(
             payload[name] = value
     merge_extra_options(payload, options)
     return payload
+
+
+def _google_music_payload(
+    prompt: str,
+    *,
+    options: JsonObject,
+    input_images: Sequence[ImageInput],
+) -> JsonObject:
+    parts: list[JsonObject] = [{"text": prompt}]
+    parts.extend(
+        {
+            "inlineData": {
+                "mimeType": image.media_type,
+                "data": base64.b64encode(image.data).decode("ascii"),
+            }
+        }
+        for image in input_images
+    )
+    payload: JsonObject = {"contents": [{"role": "user", "parts": parts}]}
+    audio_format = options.get("response_format")
+    if not is_omittable_option(audio_format):
+        mime_type = GOOGLE_MUSIC_AUDIO_FORMATS.get(str(audio_format))
+        if mime_type is None:
+            raise ProviderError(
+                f"Unsupported Google music response_format: {audio_format}", retryable=False
+            )
+        payload["generationConfig"] = {
+            "responseModalities": ["AUDIO", "TEXT"],
+            "responseFormat": {"audio": {"mimeType": mime_type}},
+        }
+    merge_extra_options(payload, options)
+    return payload
+
+
+def _google_music_result(response: httpx.Response, model_id: str) -> MusicGenerationResult:
+    """Read one ``generateContent`` answer: the audio part and the text beside it.
+
+    A blocked prompt, a safety finish or a text-only answer is the Model
+    declining. Any other unusable answer raises ``ProviderError``, which the
+    non-replayable request policy reports as an unknown outcome.
+    """
+
+    body = response.json()
+    if not isinstance(body, Mapping):
+        raise ProviderError("Google answered the music request with a non-object body.")
+    feedback = body.get("promptFeedback")
+    if isinstance(feedback, Mapping) and feedback.get("blockReason"):
+        raise ProviderContentRefusedError(f"Google blocked the prompt ({feedback['blockReason']})")
+    candidates = body.get("candidates")
+    candidate = candidates[0] if isinstance(candidates, list) and candidates else None
+    if not isinstance(candidate, Mapping):
+        raise ProviderError("Google answered the music request without a candidate.")
+    content = candidate.get("content")
+    parts = content.get("parts") if isinstance(content, Mapping) else None
+    text_parts: list[str] = []
+    encoded_audio: list[str] = []
+    declared_type = ""
+    for part in parts if isinstance(parts, list) else ():
+        if not isinstance(part, Mapping) or part.get("thought") is True:
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            text_parts.append(text.strip())
+        inline = part.get("inlineData")
+        if not isinstance(inline, Mapping):
+            continue
+        mime_type = inline.get("mimeType")
+        if isinstance(mime_type, str) and mime_type.startswith("audio/"):
+            data = inline.get("data")
+            if not isinstance(data, str):
+                raise ProviderError("Google sent a malformed music audio part.")
+            encoded_audio.append(data)
+            declared_type = declared_type or mime_type
+    text = "\n".join(text_parts)
+    finish_reason = candidate.get("finishReason")
+    outcome = _gemini_finish_reason(finish_reason, has_tool_calls=False)
+    if outcome == TERMINAL_OUTCOME_CONTENT_FILTERED:
+        message = candidate.get("finishMessage")
+        reason = text or (message.strip() if isinstance(message, str) else "")
+        raise ProviderContentRefusedError(
+            reason[:_MAX_REASON_CHARS] or f"Google stopped the track ({finish_reason})"
+        )
+    if finish_reason is not None and outcome != TERMINAL_OUTCOME_STOP:
+        raise ProviderError(f"Google ended the music answer with {finish_reason}.")
+    if not encoded_audio:
+        if text:
+            raise ProviderContentRefusedError(text[:_MAX_REASON_CHARS])
+        raise ProviderError("Google answered without music audio or text.")
+    try:
+        # Each part is complete Base64; decoding them one by one keeps padding valid.
+        audio = b"".join(base64.b64decode(data, validate=True) for data in encoded_audio)
+    except (binascii.Error, ValueError) as exc:
+        raise ProviderError("Google returned undecodable music audio.") from exc
+    if not audio:
+        raise ProviderError("Google returned empty music audio.")
+    sniffed = sniff_media_type(audio, "music")
+    return MusicGenerationResult(
+        data=audio,
+        media_type=sniffed if sniffed.startswith("audio/") else declared_type or "audio/mpeg",
+        model=model_id,
+        text=text,
+    )
 
 
 class _MusicStream:

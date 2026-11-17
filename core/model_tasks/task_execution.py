@@ -80,7 +80,8 @@ def _recoverable(error: BaseException) -> tuple[bool, BaseException]:
             return (
                 bool(cause.retryable)
                 or cause.failure_class in {"auth", "usage_limit"}
-                or cause.status_code in {401, 402, 403, 404}
+                # A 429 is never processed, even when the quota will not recover soon.
+                or cause.status_code in {401, 402, 403, 404, 429}
             ), cause
         if isinstance(cause, NetworkError | ConfigError | TaskModelError | LocalSpeechError):
             return True, cause

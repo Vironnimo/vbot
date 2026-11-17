@@ -19,6 +19,7 @@ from core.model_tasks._option_types import (
     _to_choices,
 )
 from core.model_tasks.constants import (
+    TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
     TASK_VIDEO_GENERATION,
@@ -355,6 +356,8 @@ def _music_generation_fields(
     provider_id: str,
     model: Model | None,
 ) -> tuple[TaskModelOptionField, ...]:
+    if provider_id == "google":
+        return _google_music_fields(model)
     if provider_id != "openrouter":
         return ()
     supported = set(model.capabilities.supported_parameters) if model is not None else set()
@@ -395,3 +398,27 @@ def _music_generation_fields(
             )
         )
     return tuple(fields)
+
+
+def _google_music_fields(model: Model | None) -> tuple[TaskModelOptionField, ...]:
+    """Lyria takes no sampling controls; only a cataloged audio format choice."""
+
+    parameters = _task_options(model, TASK_MUSIC_GENERATION).get("parameters")
+    if not isinstance(parameters, Mapping):
+        return ()
+    values = _string_values(parameters.get("response_format"))
+    if len(values) < 2:
+        return ()
+    return (
+        TaskModelOptionField(
+            name="response_format",
+            type="select",
+            label="Format",
+            default="",
+            options=(
+                TaskModelOptionChoice(value="", label=PROVIDER_DEFAULT_CHOICE_LABEL),
+                *(TaskModelOptionChoice(value=value, label=value.upper()) for value in values),
+            ),
+            description="Audio format of the generated track.",
+        ),
+    )
