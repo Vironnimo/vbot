@@ -88,6 +88,13 @@ def gemini_input_payload(
     return payload
 
 
+# Google's documented stand-in for a Function Call the Model did not sign
+# (https://ai.google.dev/gemini-api/docs/thought-signatures). Without any
+# signature Gemini 3 and later answer HTTP 400 "Function call is missing a
+# thought_signature"; with this value they accept the turn (live 2026-11-17).
+UNSIGNED_CALL_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
+
+
 def _replay_part(part: Mapping[str, Any]) -> dict[str, Any]:
     """Copy a stored Gemini part for replay with its readable unsigned text neutralized.
 
@@ -139,15 +146,20 @@ def _to_gemini_content(
         for tool_call in message.get("tool_calls") or []:
             if not isinstance(tool_call, Mapping):
                 continue
-            parts.append(
-                {
-                    "functionCall": {
-                        "id": tool_call.get("id"),
-                        "name": tool_call.get("name"),
-                        "args": tool_call.get("arguments", {}),
-                    }
+            call_part: dict[str, Any] = {
+                "functionCall": {
+                    "id": tool_call.get("id"),
+                    "name": tool_call.get("name"),
+                    "args": tool_call.get("arguments", {}),
                 }
-            )
+            }
+            if not any("functionCall" in part for part in parts):
+                # Gemini 3+ rejects a Function Call turn whose first call has no
+                # signature (HTTP 400). Calls without retained native parts (another
+                # Model's history, stripped reasoning) carry Google's documented
+                # placeholder instead.
+                call_part["thoughtSignature"] = UNSIGNED_CALL_THOUGHT_SIGNATURE
+            parts.append(call_part)
         return ({"role": "model", "parts": parts} if parts else None), 0
     if role == "tool":
         response = tool_result_function_response(
