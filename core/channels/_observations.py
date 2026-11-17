@@ -7,7 +7,6 @@ the Channel registry: disabling/deleting a transport cannot revoke accepted cont
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import asdict, dataclass, fields
 from typing import TYPE_CHECKING, Any
@@ -209,27 +208,36 @@ class ChannelObservationInbox:
     ) -> None:
         """Finish earlier admissions, including those of deleted/disabled Channels."""
         blocked: set[str] = set()
-        for delivery_id in await self.ids(owner):
-            observation = await self._get(delivery_id)
-            if observation is None or observation.generation_id in blocked:
-                continue
-            if exclude_owners is not None and observation.owner in exclude_owners():
-                continue
-            try:
-                if not observation.routed and await self._can_follow_pointer(observation):
-                    routing = ChannelSessionRouting(observation.config, self._sessions, self._state)
-                    await self.prepare(delivery_id, routing)
-                await self.deliver(delivery_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                blocked.add(observation.generation_id)
-                _LOGGER.error(
-                    "Cannot persist observed Channel context (channel=%s error_type=%s)",
-                    observation.config.id,
-                    type(error).__name__,
-                    exc_info=True,
-                )
+        try:
+            for delivery_id in await self.ids(owner):
+                observation = await self._get(delivery_id)
+                if observation is None or observation.generation_id in blocked:
+                    continue
+                if exclude_owners is not None and observation.owner in exclude_owners():
+                    continue
+                try:
+                    if not observation.routed and await self._can_follow_pointer(observation):
+                        routing = ChannelSessionRouting(
+                            observation.config, self._sessions, self._state
+                        )
+                        await self.prepare(delivery_id, routing)
+                    await self.deliver(delivery_id)
+                except Exception as error:
+                    blocked.add(observation.generation_id)
+                    _LOGGER.error(
+                        "Cannot persist observed Channel context (channel=%s error_type=%s)",
+                        observation.config.id,
+                        type(error).__name__,
+                        exc_info=True,
+                    )
+        except Exception as error:
+            # New conversation workers await this recovery task. Leave unread
+            # rows in the inbox for a later attempt and let those workers run.
+            _LOGGER.error(
+                "Could not read the Channel observation inbox (error_type=%s)",
+                type(error).__name__,
+                exc_info=True,
+            )
 
     async def _can_follow_pointer(self, observation: _Observation) -> bool:
         if self._config_reader is None:

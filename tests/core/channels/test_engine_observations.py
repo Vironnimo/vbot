@@ -8,11 +8,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from core.channels import _conversation_replies as replies_module
 from core.channels._observations import ChannelObservationInbox
+from core.database import DatabaseUnavailableError
+from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 
 from .channels_test_support import make_service
@@ -21,6 +24,7 @@ from .engine_test_support import (
     HeldRuns,
     channel_state,
     drain,
+    make_completed_run,
     make_conversation,
     make_engine,
     make_new_only_dispatcher,
@@ -216,6 +220,42 @@ async def test_service_start_recovers_context_of_a_removed_channel(tmp_path: Pat
     finally:
         await service.aclose()
         service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["ids", "_get"])
+async def test_failed_observation_recovery_leaves_old_context_and_allows_new_ingress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    engine, sessions, _, _ = make_engine(tmp_path, observe_unaddressed=True)
+    sessions.get_or_create(_ADDRESS)
+    async with _held_session(sessions):
+        await engine.handle_inbound_text(make_conversation(kind="group"), "context to retry")
+        await engine.stop()
+    inbox = ChannelObservationInbox(channel_state(tmp_path), sessions)
+    manager = ChatRunManager()
+    successor, _, trigger, _ = make_engine(
+        tmp_path,
+        trigger_run=AsyncMock(return_value=make_completed_run(output_text="new reply")),
+        waiting_work_manager=manager,
+    )
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(inbox, operation, AsyncMock(side_effect=DatabaseUnavailableError()))
+            recovery = asyncio.create_task(inbox.recover())
+            patch.setattr(successor, "_previous_observations", (recovery,))
+            assert await successor.handle_inbound_text(make_conversation(), "new question")
+            await drain(successor, 12345)
+            await recovery
+        trigger.assert_awaited_once()
+        assert manager.waiting_work_count() == 0
+        assert len(await inbox.ids()) == 1
+        await inbox.recover()
+        assert await inbox.ids() == []
+        assert "context to retry" in str(sessions.get(_ADDRESS).load()[0].content)
+    finally:
+        await successor.stop()
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
