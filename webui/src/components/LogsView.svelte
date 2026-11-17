@@ -29,7 +29,6 @@
     LOGS_OLDER_REVEAL,
     applyLogCatalog,
     changedFilterSelectionCount,
-    clearLogEntries,
     createLogsViewState,
     deriveLevelOptions,
     deriveSortOptions,
@@ -218,7 +217,6 @@
           logEntryCount(viewState) === 0);
 
       if (!selectedFile) {
-        clearLogEntries(viewState);
         viewState.readError = '';
         viewState.streamError = '';
         viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
@@ -399,7 +397,8 @@
     }
 
     if (!selectedFile) {
-      clearLogEntries(viewState);
+      viewState.readError = '';
+      viewState.streamError = '';
       viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
       closeCurrentStream();
       return;
@@ -773,16 +772,20 @@
       description={t('logs.emptySubtitle')}
     />
   {:else if visibleCount === 0}
-    <EmptyState
-      fill
-      title={hasActiveFilters
-        ? t('logs.noMatchesTitle')
-        : t('logs.fileEmptyTitle')}
-      description={hasActiveFilters
-        ? t('logs.noMatchesSubtitle')
-        : t('logs.fileEmptySubtitle')}
-      actions={olderState === LOGS_OLDER_LOAD ? olderEntriesButton : undefined}
-    />
+    {#if !viewState.readError || loadedCount > 0}
+      <EmptyState
+        fill
+        title={hasActiveFilters
+          ? t('logs.noMatchesTitle')
+          : t('logs.fileEmptyTitle')}
+        description={hasActiveFilters
+          ? t('logs.noMatchesSubtitle')
+          : t('logs.fileEmptySubtitle')}
+        actions={olderState === LOGS_OLDER_LOAD
+          ? olderEntriesButton
+          : undefined}
+      />
+    {/if}
   {:else}
     <!-- Only the newest rows are mounted; the control past the oldest one
          mounts more or reads the page before them. -->

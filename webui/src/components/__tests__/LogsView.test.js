@@ -311,6 +311,7 @@ describe('LogsView', () => {
           message: `Loaded ${file}`,
         }),
       ],
+      next_before: 1,
       cursor: `cursor-${file}`,
     }));
 
@@ -326,8 +327,16 @@ describe('LogsView', () => {
     expect(simpleTriggerLabel('logs-level-filter')).toBe(warn);
 
     const firstConnection = streamConnections[0];
+    readLogFileMock.mockRejectedValueOnce(new Error('server unavailable'));
     openSimpleDropdown('logs-file');
     selectSimpleOption('logs-file', '2026-05-10');
+    await waitForCondition(() => buttonByText(t('common.retry')) !== null);
+
+    expect(logEntryMessages()).toEqual([]);
+    expect(buttonByText(t('logs.loadOlder'))).toBeNull();
+    expect(document.body.textContent).not.toContain(t('logs.fileEmptyTitle'));
+
+    buttonByText(t('common.retry')).click();
     await waitForCondition(
       () => subscribeLogEventsMock.mock.calls.length === 2,
     );
