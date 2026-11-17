@@ -9,10 +9,10 @@ upload budget) it cuts at the quietest moment it still holds. A change of the
 recording rate closes the piece at once, since one WAV has one rate. Every
 block ends up in exactly one piece; nothing is dropped.
 
-Loudness is the RMS of each capture block. A block counts as quiet when it
-stays below twice the piece's noise floor (a low percentile of its block
-loudness), but never below an absolute floor for digital silence. numpy is
-imported on first use, so importing this module keeps Desktop startup light.
+Loudness is the RMS of each capture block. The quiet threshold is twice the
+piece's noise floor (a low percentile of its block loudness), capped at half
+its louder reference level and never below a floor for digital silence.
+numpy imports on first use, keeping Desktop startup light.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ PAUSE_SECONDS = 0.3
 """How long the audio must stay quiet to count as a pause between words."""
 
 _NOISE_FLOOR_PERCENTILE = 10
+_LOUD_LEVEL_PERCENTILE = 90
 _QUIET_FACTOR = 2.0
 _MIN_QUIET_RMS = 30.0
 
@@ -130,7 +131,9 @@ class PieceCutter:
     def _quiet_level(self) -> float:
         levels = sorted(block.rms for block in self._blocks)
         floor = levels[(len(levels) - 1) * _NOISE_FLOOR_PERCENTILE // 100]
-        return max(_MIN_QUIET_RMS, floor * _QUIET_FACTOR)
+        loud = levels[(len(levels) - 1) * _LOUD_LEVEL_PERCENTILE // 100]
+        # With continuous speech, the quietest block can still be voiced.
+        return max(_MIN_QUIET_RMS, min(floor * _QUIET_FACTOR, loud / _QUIET_FACTOR))
 
     def _ends_in_pause(self) -> bool:
         quiet = self._quiet_level()

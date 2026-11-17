@@ -66,7 +66,7 @@ DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES = 104_857_600
 # Headroom for container overhead beyond the canonical 44-byte WAV header.
 UPLOAD_SAFETY_FRACTION = 0.9
 WAV_HEADER_BYTES = 44
-_MIN_UPLOAD_BUDGET_BYTES = WAV_HEADER_BYTES + 2
+_MIN_WAV_UPLOAD_BYTES = WAV_HEADER_BYTES + 2
 
 ERROR_SERVER_UNREACHABLE = "server_unreachable"
 ERROR_TRANSCRIPTION_FAILED = "transcription_failed"
@@ -163,7 +163,7 @@ class SpeechServerClient:
             limits=httpx.Limits(max_keepalive_connections=0),
         )
         self._budget_lock = threading.Lock()
-        self._upload_budget_bytes: int | None = None
+        self._upload_limit_bytes: int | None = None
         self._request_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -341,20 +341,36 @@ class SpeechServerClient:
         recording is never unbounded; an unreachable server is asked again on
         the next call. Only cancellation raises.
         """
-        with self._budget_lock:
-            if self._upload_budget_bytes is not None:
-                return self._upload_budget_bytes
-        try:
-            budget = _upload_budget_for_limit(self._fetch_upload_limit_bytes())
-        except SpeechServerUnreachable as exc:
-            logger.warning("Speech upload limit unavailable (%s); using the default limit", exc)
+        limit = self._get_upload_limit_bytes()
+        if limit <= WAV_HEADER_BYTES:
             return DEFAULT_UPLOAD_BUDGET_BYTES
-        with self._budget_lock:
-            if self._upload_budget_bytes is None:
-                self._upload_budget_bytes = budget
-            return self._upload_budget_bytes
+        return _upload_budget_for_limit(limit)
+
+    def wav_upload_budget_bytes(self) -> int:
+        """Return a complete WAV budget, including its header and one PCM sample."""
+        limit = self._get_upload_limit_bytes()
+        if limit < _MIN_WAV_UPLOAD_BYTES:
+            raise SpeechServerError(
+                ERROR_SPEECH_TO_TEXT_UNAVAILABLE,
+                "The configured speech upload limit cannot hold a WAV header and sample",
+            )
+        return _wav_upload_budget_for_limit(limit)
 
     # -- Internals -----------------------------------------------------------
+
+    def _get_upload_limit_bytes(self) -> int:
+        with self._budget_lock:
+            if self._upload_limit_bytes is not None:
+                return self._upload_limit_bytes
+        try:
+            limit = self._fetch_upload_limit_bytes()
+        except SpeechServerUnreachable as exc:
+            logger.warning("Speech upload limit unavailable (%s); using the default limit", exc)
+            return DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES
+        with self._budget_lock:
+            if self._upload_limit_bytes is None:
+                self._upload_limit_bytes = limit
+            return self._upload_limit_bytes
 
     def _fetch_upload_limit_bytes(self) -> int:
         try:
@@ -371,7 +387,7 @@ class SpeechServerClient:
             return DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES
         setting = result.get("setting")
         value = setting.get("value") if isinstance(setting, Mapping) else None
-        if isinstance(value, bool) or not isinstance(value, int) or value <= WAV_HEADER_BYTES:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             logger.warning("Speech upload limit is malformed; using the default limit")
             return DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES
         return value
@@ -484,13 +500,23 @@ def _backoff_delay(attempt: int) -> float:
     return float(min(2**attempt + random.random(), MAX_BACKOFF_SECONDS))
 
 
+def _pcm_budget_with_headroom(limit_bytes: int) -> int:
+    return int((limit_bytes - WAV_HEADER_BYTES) * UPLOAD_SAFETY_FRACTION)
+
+
 def _upload_budget_for_limit(limit_bytes: int) -> int:
-    payload_bytes = max(0, limit_bytes - WAV_HEADER_BYTES)
-    return max(_MIN_UPLOAD_BUDGET_BYTES, int(payload_bytes * UPLOAD_SAFETY_FRACTION))
+    return max(_MIN_WAV_UPLOAD_BYTES, _pcm_budget_with_headroom(limit_bytes))
+
+
+def _wav_upload_budget_for_limit(limit_bytes: int) -> int:
+    return max(_MIN_WAV_UPLOAD_BYTES, WAV_HEADER_BYTES + _pcm_budget_with_headroom(limit_bytes))
 
 
 DEFAULT_UPLOAD_BUDGET_BYTES = _upload_budget_for_limit(DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES)
-"""The recording budget that applies while the server's own limit is unknown."""
+"""The PCM recording budget that applies while the server's own limit is unknown."""
+
+DEFAULT_WAV_UPLOAD_BUDGET_BYTES = _wav_upload_budget_for_limit(DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES)
+"""The complete WAV budget that applies while the server's own limit is unknown."""
 
 
 def _json_object(response: httpx.Response) -> dict[str, Any] | None:

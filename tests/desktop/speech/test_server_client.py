@@ -16,6 +16,7 @@ from desktop.speech.server_client import (
     MAX_ATTEMPTS,
     SpeechRequestCancelled,
     SpeechServerClient,
+    SpeechServerError,
     SpeechServerInvalidResponse,
     SpeechServerRejected,
     SpeechServerUnreachable,
@@ -282,8 +283,24 @@ def test_upload_budget_follows_the_server_limit_once(make_client: Callable[..., 
     client = make_client(server)
 
     assert client.upload_budget_bytes() == 900_000
-    assert client.upload_budget_bytes() == 900_000
+    assert client.wav_upload_budget_bytes() == 900_044
     assert server.rpc_calls == [("settings.get_path", {"path": "speech.upload_max_size_bytes"})]
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"), [(1, None), (44, None), (45, None), (46, 46), (100, 94)]
+)
+def test_wav_upload_budget_counts_the_header_once_and_honors_small_limits(
+    make_client: Callable[..., Any], limit: int, expected: int | None
+) -> None:
+    client = make_client(ScriptedServer(rpc_ok({"setting": {"value": limit}})))
+
+    if expected is None:
+        with pytest.raises(SpeechServerError) as raised:
+            client.wav_upload_budget_bytes()
+        assert raised.value.error_code == "speech_to_text_unavailable"
+    else:
+        assert client.wav_upload_budget_bytes() == expected
 
 
 @pytest.mark.parametrize(
