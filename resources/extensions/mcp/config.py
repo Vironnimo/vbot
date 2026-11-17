@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlsplit
@@ -36,7 +35,6 @@ from core.json_documents import (
     validate_collection_root,
     write_json_document,
 )
-from core.utils.owner_only import restrict_to_owner
 
 from ._addresses import is_loopback_host
 from ._credential_fields import looks_like_credential
@@ -304,9 +302,9 @@ class ConnectionStore:
         }
 
     def _read(self) -> dict[str, Any] | None:
-        with suppress(FileNotFoundError):
-            restrict_to_owner(self.path)
-        report, data = read_json_file(self.path, validate_connections_document, missing_ok=True)
+        report, data = read_json_file(
+            self.path, validate_connections_document, missing_ok=True, owner_only=True
+        )
         if not report.exists:
             return None
         if not report.ok:

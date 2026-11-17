@@ -44,7 +44,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from core.storage.layout import DataDirectoryLayout
-from core.utils.owner_only import OWNER_ONLY_MODE, restrict_to_owner
+from core.utils.owner_only import OWNER_ONLY_MODE, read_owner_only_text, restrict_to_owner
 
 # Tests patch this seam instead of the process-wide ``time.sleep``.
 _sleep = time.sleep
@@ -177,8 +177,8 @@ def _atomic_write(
     owner_only: bool = False,
     replace_existing: bool = True,
 ) -> None:
-    if owner_only and mode is None:
-        mode = OWNER_ONLY_MODE
+    if owner_only:
+        mode = OWNER_ONLY_MODE if mode is None else mode & stat.S_IRWXU
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if data_dir is not None:
         temp_path = temporary_path(data_dir, target_path)
@@ -186,15 +186,21 @@ def _atomic_write(
     else:
         temp_path = target_path.with_name(f".{target_path.name}.{uuid4().hex}.tmp")
     try:
-        if mode is not None:
-            # Create the temp file exclusively with the exact permissions so the
-            # replaced result never momentarily carries a wider umask-derived mode.
-            descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+        creation_mode = OWNER_ONLY_MODE if owner_only else mode
+        if creation_mode is not None:
+            # The owner must be able to write the staging file. Apply a custom
+            # owner-only mode once the contents are ready to publish.
+            descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, creation_mode)
             os.close(descriptor)
         if owner_only:
             # Before any content: the secret never sits in a file others can read.
             restrict_to_owner(temp_path)
         write(temp_path)
+        if owner_only and mode is not None and mode != OWNER_ONLY_MODE:
+            # Publish the final mode with the file. The destination pathname
+            # may already refer to a different entry after replacement.
+            with suppress(OSError):
+                os.chmod(temp_path, mode)
         if replace_existing:
             replace_path(temp_path, target_path)
         else:
@@ -205,7 +211,7 @@ def _atomic_write(
         # A streamed writer can fail outside the OS layer; never leave its temp.
         remove_temporary_file(temp_path)
         raise
-    if mode is not None:
+    if mode is not None and not owner_only:
         # Best-effort exactness after the replace: exotic filesystems may ignore
         # creation modes, but a permission-tightening miss must not fail a write
         # that already succeeded.
@@ -231,7 +237,7 @@ def replace_path(temp_path: Path, target_path: Path) -> None:
     os.replace(temp_path, target_path)
 
 
-def read_replaced_text(path: Path) -> str:
+def read_replaced_text(path: Path, *, owner_only: bool = False) -> str:
     """Read a UTF-8 file that atomic writes replace, outlasting a replace on Windows.
 
     While ``os.replace`` swaps a file on Windows, opening it fails with
@@ -242,14 +248,17 @@ def read_replaced_text(path: Path) -> str:
     delays (about 0.4 s in total) before it surfaces.
     """
 
+    def read() -> str:
+        return read_owner_only_text(path) if owner_only else path.read_text(encoding="utf-8")
+
     for delay in _REPLACE_RETRY_DELAYS:
         try:
-            return path.read_text(encoding="utf-8")
+            return read()
         except PermissionError:
             if os.name != "nt" or path.is_dir():
                 raise
         _sleep(delay)
-    return path.read_text(encoding="utf-8")
+    return read()
 
 
 def preserve_windows_file_metadata(source: Path, replacement: Path) -> None:
