@@ -644,6 +644,15 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
             "https://example.com/app has no readable content without JavaScript, or shows an "
             "access check instead.",
         ),
+        (
+            "https://example.com/search?q=needle",
+            "<html><head><title>Catalog</title></head><body>"
+            "<a href='/'><svg aria-label='Catalog Logo'></svg></a><svg></svg>"
+            "<p>Catalog</p></body></html>",
+            "no_content",
+            "https://example.com/search?q=needle has no readable content without JavaScript, "
+            "or shows an access check instead.",
+        ),
     ],
     ids=[
         "reddit-challenge",
@@ -656,6 +665,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "js-wall",
         "app-noscript",
         "titled-js-wall",
+        "search-title-and-icons",
     ],
 )
 async def test_pages_standing_in_for_the_requested_one_are_not_retryable_failures(
@@ -730,6 +740,12 @@ async def test_raw_output_returns_a_challenge_page_unchanged(
             "An essay about patience.",
         ),
         (
+            "https://example.com/search?q=needle",
+            "<html><head><title>Catalog</title></head><body><svg></svg>"
+            "<p>No results found.</p></body></html>",
+            "No results found.",
+        ),
+        (
             "https://example.com/login/",
             "<html><head><title>Sign in</title></head>"
             "<body><p>Welcome back. Enter your credentials.</p></body></html>",
@@ -781,6 +797,7 @@ async def test_raw_output_returns_a_challenge_page_unchanged(
     ],
     ids=[
         "similar-title",
+        "search-empty-state",
         "login-path-elsewhere",
         "post-with-login-links",
         "article",

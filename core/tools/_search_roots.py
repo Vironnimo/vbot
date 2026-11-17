@@ -101,6 +101,11 @@ def _resolve_roots(
             if _exists(resolved):
                 roots.add(_actual_case(resolved))
                 continue
+        if literal_error is not None and text.lstrip().startswith('["'):
+            raise SearchArgumentError(
+                "Nothing was searched. The path list is malformed. "
+                "Send the complete list of files or directories in path."
+            ) from literal_error
         alternatives = _existing_alternatives(text, cwd, permissions, grant, context=context)
         if alternatives:
             for path in alternatives:

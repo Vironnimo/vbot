@@ -177,12 +177,19 @@ def _excerpt(raw: bytes, position: int | None) -> str:
     return prefix + text[start:end].replace("\r", r"\r") + suffix
 
 
-def _event_lines(event: dict[str, Any]) -> list[_Line]:
+def _event_lines(event: dict[str, Any], *, only_matching: bool) -> list[_Line]:
     data = event["data"]
     raw = decode_event_text(data["lines"])
     first = data.get("line_number") or 1
     match = event["type"] == "match"
     submatches = data.get("submatches") or []
+    if only_matching and not match and submatches:
+        # With -vo the result is a non-matching line. A context event can
+        # contain several matched fragments on that same line.
+        return [
+            _Line(first, False, _excerpt(decode_event_text(sub["match"]), None))
+            for sub in submatches
+        ]
     position = submatches[0]["start"] if submatches else None
     # ripgrep counts LF boundaries; bytes.splitlines also splits lone CRs.
     pieces = raw.split(b"\n")
@@ -223,7 +230,7 @@ def content_page(
                 f"{entry.label} contains lone CR line endings, shown as \\r; line numbers "
                 "count LF boundaries and can differ from read."
             )
-        if query.only_matching:
+        if query.only_matching and not query.inverted:
             _only_matching(page, entry, file_events, skip)
             continue
         _file_lines(page, entry, file_events, skip, query, separate)
@@ -264,12 +271,13 @@ def _file_lines(
     # First and last index in lines of each result: a matching line, or with -U one
     # match, which can span lines and share a line with the match before it.
     groups: list[tuple[int, int]] = []
+    by_line = not query.multiline or query.inverted
     for event in file_events:
         start = len(lines)
-        lines.extend(_event_lines(event))
+        lines.extend(_event_lines(event, only_matching=query.only_matching))
         if event["type"] != "match":
             continue
-        if not query.multiline:
+        if by_line:
             groups.append((start, len(lines) - 1))
             continue
         raw = decode_event_text(event["data"]["lines"])
@@ -332,7 +340,11 @@ class _Block:
         rendered: list[str] = []
         previous = self.previous
         for line in lines:
-            if self.separate and previous is not None and line.number != previous + 1:
+            if (
+                self.separate
+                and previous is not None
+                and line.number not in (previous, previous + 1)
+            ):
                 rendered.append("--")
             rendered.append(f"{line.number}{':' if line.match else '-'}{line.text}")
             previous = line.number
@@ -409,6 +421,8 @@ def summary(
         if query.count_matches or query.multiline
         else ("matching line", "matching lines")
     )
+    if query.inverted:
+        matched = ("non-matching line", "non-matching lines")
     newest = ", newest first" if query.sort is None else ""
     shown = "files"
     if query.mode == "content":

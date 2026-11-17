@@ -108,7 +108,6 @@ _POWERSHELL_WRAPPER_OPTIONS = frozenset(
     {"-noprofile", "-nop", "-nologo", "-noninteractive", "-noni"}
 )
 _POWERSHELL_COMMAND_OPTIONS = frozenset({"-command", "-c"})
-_BASH_WRAPPER_OPTION = re.compile(r"-(?:l?c|cl|l)|--login")
 # PowerShell reads numeric-looking bare words as numbers (0x10 becomes 16), so
 # only words that start like a name, path, or flag stay unquoted.
 _PWSH_BARE_ARGUMENT = re.compile(r"(?:[^\W\d]|[/\\]|\.{1,2}[/\\]|--?[^\W\d])[\w./\\:=+-]*")
@@ -163,7 +162,16 @@ def normalize_shell_arguments(arguments: Any) -> Any:
     wrapped = normalized.pop("action", None)
     if isinstance(wrapped, dict):
         # OpenAI local_shell: {"action": {"type": "exec", "command": [...], ...}}.
-        inner = {key: value for key, value in wrapped.items() if spelling(key) != "type"}
+        inner = dict(wrapped)
+        for key, value in wrapped.items():
+            if spelling(key) == "type":
+                if not isinstance(value, str) or value.strip().casefold() != "exec":
+                    raise ValueError(
+                        _not_run(
+                            f'Unsupported action type {value!r}. To run a command, use "exec".'
+                        )
+                    )
+                del inner[key]
         for key, value in normalize_shell_arguments(inner).items():
             if key in normalized and normalized[key] != value:
                 raise ValueError(_not_run(f"{key} is given twice with different values."))
@@ -214,21 +222,24 @@ def _host_shell_script(argv: list[str]) -> str | None:
     # path names a particular executable, even when its basename is pwsh/bash.
     if "/" in argv[0] or "\\" in argv[0]:
         return None
-    program = argv[0].casefold()
-    options = [option.casefold() for option in argv[1:-1]]
     if sys.platform == "win32":
-        if program not in {"pwsh", "pwsh.exe"} or not options:
+        options = [option.casefold() for option in argv[1:-1]]
+        if argv[0].casefold() not in {"pwsh", "pwsh.exe"} or not options:
             return None
         if options[-1] not in _POWERSHELL_COMMAND_OPTIONS:
             return None
         if not all(option in _POWERSHELL_WRAPPER_OPTIONS for option in options[:-1]):
             return None
         return argv[-1]
-    if program != "bash" or not options or "c" not in options[-1]:
-        return None
-    if not all(_BASH_WRAPPER_OPTION.fullmatch(option) for option in options):
-        return None
-    return argv[-1]
+    if argv[0] == "bash" and argv[1:-1] in (
+        ["-c"],
+        ["-lc"],
+        ["-cl"],
+        ["-l", "-c"],
+        ["--login", "-c"],
+    ):
+        return argv[-1]
+    return None
 
 
 def _powershell_command_line(argv: list[str]) -> str:

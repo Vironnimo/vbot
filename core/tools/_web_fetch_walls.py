@@ -36,6 +36,8 @@ _SCRIPT_DEMAND = re.compile(
     r"|^[#>*\s]*javascript (?:is required|must be enabled)",
     re.I | re.M,
 )
+_DECORATIVE_SVG = r"\[Embedded svg: (?:visual content|[^\]\n]*\blogo)\]"
+_SEARCH_CHROME = re.compile(rf"\[{_DECORATIVE_SVG}\]\([^()\n]+\)|{_DECORATIVE_SVG}", re.I)
 
 
 def bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
@@ -124,19 +126,26 @@ def firewall_block(url: str, metadata: dict[str, str], text: str) -> str | None:
     )
 
 
-def is_script_shell(main: str) -> bool:
+def is_script_shell(main: str, *, page: str, url: str, title: str) -> bool:
     """Whether a page's main view is empty, a JavaScript demand or a browser check."""
-    return not main.strip() or (
-        len(main) < 600
-        and bool(
-            _SCRIPT_DEMAND.search(main)
-            or re.match(
-                "checking your browser|verify (?:that )?you are (?:a )?human",
-                re.sub(r"^[#>*\s]+", "", main),
-                re.I,
-            )
-        )
-    )
+    if not main.strip():
+        return True
+    if len(main) >= 600:
+        return False
+    if _SCRIPT_DEMAND.search(main) or re.match(
+        "checking your browser|verify (?:that )?you are (?:a )?human",
+        re.sub(r"^[#>*\s]+", "", main),
+        re.I,
+    ):
+        return True
+    # Some search apps return their title and logo before loading results.
+    # Keep a real result, an explicit empty state, or a meaningful SVG label.
+    if page == main and title and "[Embedded svg:" in main:
+        location = urlparse(url)
+        if location.path.rstrip("/").endswith("/search") and parse_qs(location.query).get("q"):
+            readable = _SEARCH_CHROME.sub("", page).strip()
+            return not readable or re.sub(r"^#{1,6}\s+", "", readable) == title
+    return False
 
 
 __all__ = ["WALL_GUIDANCE", "bot_wall", "firewall_block", "is_script_shell"]

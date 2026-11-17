@@ -374,7 +374,13 @@ async def test_a_file_list_search_for_file_names_names_the_files_with_those_name
         ({"args": ["--files"], "pattern": "app"}, "src/app.py", True),
         ({"args": ["--files", "-e", "view"]}, "src/view.ts", True),
         ({"args": ["--files"], "pattern": "^src/v"}, "src/view.ts", True),
+        ({"args": ["--files", "-v"], "pattern": "^src/v"}, "src/app.py\ndocs/guide.md", True),
+        ({"args": ["--files", "-v"], "pattern": "^app"}, "src/view.ts\ndocs/guide.md", True),
+        ({"args": ["--files", "-v", "--no-invert-match"], "pattern": "^app"}, "src/app.py", True),
         ({"args": ["--files"], "pattern": "*.ts"}, "src/view.ts", True),
+        ({"args": ["--files", "-v"], "pattern": "*.ts"}, "src/app.py\ndocs/guide.md", True),
+        ({"args": ["--files"], "pattern": "^.$"}, "", True),
+        ({"args": ["--files"], "pattern": "./*"}, "", True),
         ({"args": ["--dirs"], "pattern": "^do"}, "docs/", True),
         # A pattern that matches every name lists everything.
         ({"args": ["--files"], "pattern": "."}, "src/app.py\nsrc/view.ts\ndocs/guide.md", False),
@@ -404,6 +410,7 @@ async def test_a_pattern_beside_a_listing_matches_names(
         ({"pattern": "^(.*)$", "args": ["-l"]}, True),
         # Under -x the pattern matches one-character lines only; count output counts lines.
         ({"pattern": ".", "output": "files", "args": ["-x"]}, False),
+        ({"pattern": "^.$", "output": "files"}, False),
         ({"pattern": ".", "output": "count"}, False),
     ],
 )
@@ -493,6 +500,16 @@ async def test_a_glob_shaped_explicit_content_search_keeps_its_matching_rules(
         ),
         ({"pattern": "load", "output": "output>files", "glob": "*.py"}, "src/app.py"),
         ({"pattern": "os", "output": "output>count", "path": "src"}, "src/app.py:2"),
+        ({"pattern": "os", "output": "output</arg_key>count", "path": "src"}, "src/app.py:2"),
+        ({"pattern": "load", "output": "[ ]", "glob": "*.py"}, "src/app.py\n2:def load():"),
+        (
+            {"pattern": "load", "output": 'path</arg_key>["docs"]'},
+            "docs/guide.md\n1:Call load() first.",
+        ),
+        (
+            {"pattern": "def", "output": "output", "context": 1, "path": "src/app.py"},
+            "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
+        ),
         (
             {"pattern": "def", "-C": 1, "path": "src/app.py"},
             "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
@@ -709,6 +726,13 @@ async def test_a_glob_written_as_a_windows_or_absolute_path_selects_what_it_name
         {"pattern": "load", "output": "output>content>files"},
         {"pattern": "load", "output": "target>content"},
         {"pattern": "load", "output": "output>contents"},
+        {"pattern": "load", "output": "output</arg_key>content</arg_key>files"},
+        {"pattern": "load", "output": 'path</arg_key>["docs"'},
+        {"pattern": "load", "output": "path</arg_key>[]"},
+        {"pattern": "load", "output": 'path</arg_key>["docs"]', "path": "src"},
+        {"pattern": "load", "output": "output", "context": 1, "args": ["-c"]},
+        {"pattern": "load", "output": "context"},
+        {"pattern": "load", "output": '["unrecognized"]'},
     ],
 )
 async def test_unclear_or_conflicting_fields_are_rejected(project: Path, arguments: dict):
@@ -923,21 +947,21 @@ async def test_rejected_regex_line_breaks_run_multiline_without_overriding_expli
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flag", ["--no-filename", "-N", "--no-line-number"])
-async def test_display_flags_run_the_search_with_a_note(tmp_path, flag):
+@pytest.mark.parametrize(
+    "args", [["--no-filename"], ["-N"], ["--column"], ["-b"], ["--vimgrep"], ["-M", "1"]]
+)
+async def test_display_flags_run_the_search_with_a_note(tmp_path, args):
     (tmp_path / "cases").mkdir()
     (tmp_path / "cases/a.sql").write_text('-- naming="first"\nSELECT 1;\n')
 
     result = await dispatch(
         tmp_path,
-        {"args": ["-o", flag], "path": "cases", "pattern": 'naming="([^"]+)"', "limit": 45},
+        {"args": ["-o", *args], "path": "cases", "pattern": 'naming="([^"]+)"', "limit": 45},
     )
 
     assert result["ok"], result
-    assert 'naming="first"' in result["data"]["content"]
-    assert result["data"]["note"] == (
-        f"{flag} was ignored: results always name each match's file and line."
-    )
+    assert result["data"]["content"] == 'cases/a.sql\n1:naming="first"'
+    assert args[0] in result["data"]["note"]
 
 
 @pytest.mark.asyncio

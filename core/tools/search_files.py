@@ -74,6 +74,7 @@ from core.tools._search_query import (
     MAX_OFFSET,
     SearchArgumentError,
     SearchQuery,
+    glob_separators,
 )
 from core.tools._search_results import (
     Entry,
@@ -290,30 +291,48 @@ def _list_directories(
         else:
             selection.append(argument)
     query.rg_args = selection
-    files = _Found()
-    skipped: set[str] = set()
-    for index, scope in enumerate(_scopes(roots, execution.cwd)):
-        result = execution.list_scan(query, scope, directories=True)
-        files.take(index, scope, result, execution.cwd)
-        skipped.update(os.path.normcase(path) for path in result.skipped)
-    found.warnings, found.complete, found.ignored = files.warnings, files.complete, files.ignored
-    found.unreadable, found.unreadable_unnamed = files.unreadable, files.unreadable_unnamed
-    holding: set[str] | None = None
-    if any(argument.startswith(("--type=", "--type-not=")) for argument in query.rg_args):
-        holding = set()
-        for entry in files.entries:
-            for parent in entry.path.parents:
-                key = os.path.normcase(parent)
-                if key in holding:
-                    break
-                holding.add(key)
     follow = False
     case_sensitive = False
+    iglobs = []
     for argument in query.rg_args:
         if argument in {"--follow", "--no-follow"}:
             follow = argument == "--follow"
         elif argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
             case_sensitive = argument.startswith("--no-")
+        elif argument.startswith("--iglob="):
+            iglobs.append((argument.removeprefix("--iglob="), False))
+    # ripgrep 15 applies its case-insensitive glob group after its regular globs.
+    filters = [*((glob, case_sensitive) for glob in query.globs), *iglobs]
+    typed = any(arg.startswith(("--type=", "--type-not=")) for arg in query.rg_args)
+    # Directory globs select directory names. A selected directory can hold a
+    # file of the requested type whose own name does not match those globs.
+    type_query = None
+    if typed and any(not glob.startswith("!") for glob, _ in filters):
+        type_query = replace(
+            query,
+            globs=[],
+            rg_args=[arg for arg in query.rg_args if not arg.startswith("--iglob=")],
+        )
+    holding: set[str] | None = set() if typed else None
+    skipped: set[str] = set()
+    for index, scope in enumerate(_scopes(roots, execution.cwd)):
+        listing = execution.list_scan(query, scope, directories=True)
+        skipped_here = {os.path.normcase(path) for path in listing.skipped}
+        skipped.update(skipped_here)
+        found.take(index, scope, listing, execution.cwd)
+        if holding is not None:
+            if type_query is not None:
+                listing = execution.list_scan(type_query, scope, directories=True)
+                found.take(index, scope, listing, execution.cwd)
+            for native, _ in listing.entries:
+                parents = (scope.cwd / os.fsdecode(native)).parents
+                if any(os.path.normcase(parent) in skipped_here for parent in parents):
+                    continue
+                for parent in parents:
+                    key = os.path.normcase(parent)
+                    if key in holding:
+                        break
+                    holding.add(key)
     bases = [root for root in roots.paths if root.is_dir()]
     directories: dict[str, Path] = {}
     for root in bases:
@@ -341,12 +360,12 @@ def _list_directories(
     selected = [
         path
         for path in directories.values()
-        if _directory_selected(path, bases, query.globs, execution.cwd, case_sensitive)
+        if _directory_selected(path, bases, filters, execution.cwd)
         and (
             any(path.is_relative_to(root) for root in roots.plain)
             or any(
                 path.is_relative_to(root)
-                and _directory_selected(path, [root], [glob], execution.cwd, case_sensitive)
+                and _directory_selected(path, [root], [(glob, case_sensitive)], execution.cwd)
                 for root, glob in roots.globs
             )
         )
@@ -438,19 +457,19 @@ def _identity(path: Path) -> tuple[int, int] | str:
 
 
 def _directory_selected(
-    path: Path, roots: list[Path], globs: list[str], cwd: Path, case_sensitive: bool
+    path: Path, roots: list[Path], globs: list[tuple[str, bool]], cwd: Path
 ) -> bool:
     """Apply ordered globs to one directory as ripgrep applies them to files."""
-    selected = all(glob.startswith("!") for glob in globs)
+    selected = all(glob.startswith("!") for glob, _ in globs)
     names = []
     with contextlib.suppress(ValueError):
         names.append(path.relative_to(cwd).as_posix())
     names.extend(path.relative_to(root).as_posix() for root in roots if path.is_relative_to(root))
-    for glob in globs:
+    for glob, case_sensitive in globs:
         negated = glob.startswith("!")
-        body = (glob[1:] if negated else glob).replace("\\", "/").rstrip("/")
-        body = body[2:] if body.startswith("./") else body.lstrip("/")
+        body = glob_separators(glob[1:] if negated else glob).rstrip("/")
         anchored = "/" in body
+        body = body[2:] if body.startswith("./") else body.lstrip("/")
         for alternative in _expand_brace_alternations(body):
             if any(
                 Path(name if anchored else name.rsplit("/", 1)[-1]).full_match(
@@ -517,7 +536,7 @@ def _note_named_files(execution: SearchExecution, query: SearchQuery, scopes: li
     states that none has a matching name; other patterns get no note.
     """
     patterns = query.patterns
-    if len(patterns) != 1 or "--invert-match" in query.rg_args:
+    if len(patterns) != 1 or query.inverted:
         return
     extensions = file_name_extensions(patterns[0])
     if extensions is None:
@@ -577,7 +596,7 @@ def _note_wrapped_phrases(
     if (
         patterns is not query.patterns
         or query.mode not in {"content", "files_with_matches", "count"}
-        or "--invert-match" in query.rg_args
+        or query.inverted
         or "--line-regexp" in query.rg_args
     ):
         return False
@@ -625,7 +644,7 @@ def _note_no_match(
     no name matches it either, and how to list similar names; ``listed`` is the
     listing the names were taken from.
     """
-    if len(patterns) != 1 or "--invert-match" in query.rg_args:
+    if len(patterns) != 1 or query.inverted:
         return
     if (
         repair_note is not None
@@ -681,7 +700,7 @@ def _note_match_count(
     Only text the Agent can mean to count occurrences of qualifies: fixed text,
     not a shape such as ``.`` or ``\\w+``.
     """
-    if query.count_matches or query.multiline or "--invert-match" in query.rg_args:
+    if query.count_matches or query.multiline or query.inverted:
         return
     if not query.literal and not all(finds_fixed_text(pattern) for pattern in patterns):
         return
@@ -707,10 +726,13 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
             names = [entry.label for entry in found.entries]
             names += [entry.path.name for entry in found.entries]
             matched = _matching_names(execution, query, names)
+            # In an inverted search rg returns the non-matching names. Both
+            # spellings must then be present for the file to qualify.
+            accepts = all if query.inverted else any
             found.entries = [
                 entry
                 for entry in found.entries
-                if entry.label in matched or entry.path.name in matched
+                if accepts((entry.label in matched, entry.path.name in matched))
             ]
     if query.mode in LIST_MODES:
         found.finish(query)
