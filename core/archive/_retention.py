@@ -277,22 +277,29 @@ def _purge_if_due(services: ArchiveServices, entry_id: str, stopping: threading.
     entry = services.sessions.archive_ledger.entry(entry_id)
     if entry is None:
         return False
+
+    def still_due(candidate: ArchiveEntry) -> bool:
+        try:
+            days = services.retention_days()
+        except ArchiveRetentionUnknownError:
+            return False
+        ends = purge_at(candidate, days)
+        return ends is not None and ends <= format_canonical_timestamp(services.clock())
+
+    should_claim = None
     if entry.state == ARCHIVE_STATE_PURGING:
         reason = REASON_RESUMED
     elif _is_ephemeral_expiry(entry):
         reason = "ephemeral"
     else:
-        try:
-            days = services.retention_days()
-        except ArchiveRetentionUnknownError:
-            # The period became unreadable since the page was read: delete nothing.
-            return False
-        ends = purge_at(entry, days)
-        if ends is None or ends > format_canonical_timestamp(services.clock()):
+        if not still_due(entry):
             return False
         reason = REASON_RETENTION
-    _purge.purge_entries(services, [entry], reason=reason, actor=ACTOR, stopping=stopping)
-    return True
+        should_claim = still_due
+    outcome = _purge.purge_entries(
+        services, [entry], reason=reason, actor=ACTOR, stopping=stopping, should_claim=should_claim
+    )
+    return bool(outcome.purged or outcome.pending)
 
 
 __all__ = [
