@@ -16,7 +16,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, override
 
-from PIL import Image, ImageCms, ImageOps
+from PIL import Image, ImageCms, ImageMath, ImageOps
 from pillow_heif import register_heif_opener
 
 from core.attachments._png import recompress_png
@@ -40,6 +40,8 @@ _SOURCE_FORMATS = {
     "image/heic": "HEIF",
     "image/heif": "HEIF",
 }
+# PNG accepts Pillow's I;16 mode. Other unsigned 16-bit modes differ in byte order.
+_UINT16_RAW_MODES = {"I;16B": "I;16B", "I;16L": "I;16", "I;16N": "I;16N"}
 _DECODE_ERRORS = (OSError, ValueError, SyntaxError, EOFError, struct.error)
 
 
@@ -109,7 +111,9 @@ class PreparedImage:
                 f"resized from {self.original_size[0]}x{self.original_size[1]} "
                 f"to {self.size[0]}x{self.size[1]} pixels to fit the destination limits"
             )
-        if self.lossy:
+        if self.lossy and self.media_type == "image/webp":
+            details.append("16-bit grayscale was reduced to 8 bits")
+        elif self.lossy:
             details.append("lossy compression was used, so fine details may be reduced")
         details.append("the original file is unchanged")
         return "; ".join(details)
@@ -243,6 +247,12 @@ class ImageConverter:
             with Image.open(io.BytesIO(data)) as original:
                 converted = ImageOps.exif_transpose(original)
                 profile = original.info.get("icc_profile")
+                if raw_mode := _UINT16_RAW_MODES.get(converted.mode):
+                    normalized = Image.frombytes(
+                        "I;16", converted.size, converted.tobytes(), "raw", raw_mode
+                    )
+                    normalized.info.update(converted.info)
+                    converted = normalized
                 if converted.mode == "CMYK" and profile:
                     profiled = ImageCms.profileToProfile(
                         converted,
@@ -363,7 +373,8 @@ class ImageConverter:
                         original.size,
                         image.size,
                         reencoded=True,
-                        lossy=output_type == "image/jpeg",
+                        lossy=output_type == "image/jpeg"
+                        or (image.mode == "I;16" and output_type == "image/webp"),
                     )
             if max_bytes is None or image.size == (1, 1) or attempt == 8:
                 break
@@ -383,6 +394,8 @@ def _encode(
     options: dict[str, Any] = {}
     if profile:
         options["icc_profile"] = profile
+    if image.mode == "I;16" and media_type != "image/png":
+        image = _reduce_grayscale_depth(image)
     if media_type == "image/jpeg":
         rgba = image.convert("RGBA")
         background = Image.new("RGB", rgba.size, "white")
@@ -398,3 +411,18 @@ def _encode(
         if max_bytes is not None and output.encoded_size > max_bytes:
             raise _EncodingTooLargeError(output.encoded_size)
         return output.getvalue()
+
+
+def _reduce_grayscale_depth(image: Image.Image) -> Image.Image:
+    """Scale unsigned samples to 8 bits for formats that cannot encode them."""
+    samples = image.convert("I")
+    gray = samples.point(lambda value: (value + 128) / 257).convert("L")
+    transparent = image.info.get("transparency")
+    if isinstance(transparent, int):
+        # Build alpha from the original samples so quantization cannot make
+        # opaque neighbors of the transparent value disappear too.
+        alpha = ImageMath.lambda_eval(
+            lambda values: (values["samples"] != transparent) * 255, samples=samples
+        ).convert("L")
+        gray.putalpha(alpha)
+    return gray

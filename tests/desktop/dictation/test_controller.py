@@ -301,8 +301,17 @@ def _energy(audio: bytes | np.ndarray) -> int:
 
 def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_transcript(
     make_rig: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rig = make_rig()
+    snapshots: list[tuple[bool, str]] = []
+    publish = rig.page.publish_dictation
+
+    def record_with_snapshot(recording: bool) -> None:
+        snapshots.append((recording, rig.controller.status()["state"]))
+        publish(recording)
+
+    monkeypatch.setattr(rig.page, "publish_dictation", record_with_snapshot)
 
     rig.dictate()
 
@@ -311,6 +320,7 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     assert rig.page.recording[0] is True
     assert rig.page.recording[-1] is False
     assert rig.page.wake_phrases_paused == rig.page.recording
+    assert all(recording == (state == "recording") for recording, state in snapshots)
     # Echo cancellation stays out of a take although the setting enables it.
     assert rig.echo_stages == []
     assert len(rig.server.uploads) == 1

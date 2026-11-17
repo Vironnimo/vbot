@@ -10,6 +10,8 @@ Windows watcher events may duplicate or coalesce changes; derive append/reset ev
 
 Timeout polls compare the selected file's identity as well as its size and modification time, so a replacement that preserves both stamps still resets the tail.
 
+A file removed between directory enumeration and its status read is skipped individually. The catalog still includes its surviving siblings.
+
 ## Tail advance and subscriber queues
 
 - **The live tail re-reads only the open entry.** `_LogTail` keeps the file's size, mtime, identity (`st_dev`, `st_ino`) and `open_start`, where its last entry starts. A change parses only `[open_start, EOF)` and emits `append` with `from_offset`, so a partial last line or a multi-line entry still being written is re-parsed until complete. A `reset` with the newest page is emitted only when the file appears or disappears, shrinks, is replaced (identity change), or the unread span exceeds `LOG_READ_MAX_BYTES`; more than a page of new entries at once also resets instead of appending. An in-place rewrite that keeps or grows the size is not detected.

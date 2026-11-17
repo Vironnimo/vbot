@@ -23,8 +23,8 @@ def test_log_read_prints_every_entry_field_and_its_continuation(
         "timestamp": "2026-05-11 09:00:00",
         "level": "info",
         "logger_name": "vbot.server.app",
-        "message": "Ready",
-        "continuation": "trace line",
+        "message": "Ready\tto run",
+        "continuation": "trace line\n\tnested frame\nlast frame",
     }
     rpc.reply("log.read", {"file": "2026-05-11", "cursor": "cursor-1", "entries": [entry]})
 
@@ -32,8 +32,8 @@ def test_log_read_prints_every_entry_field_and_its_continuation(
 
     assert code == 0
     assert rpc.calls == [("log.read", {"file": "2026-05-11"})]
-    for value in ("2026-05-11", *entry.values()):
-        assert value in out
+    assert "- 2026-05-11 09:00:00 [info] vbot.server.app - Ready\\tto run" in out
+    assert out.splitlines()[-3:] == ["  trace line", "  \\tnested frame", "  last frame"]
 
 
 def test_log_read_filters_the_level_before_keeping_the_last_entries(

@@ -606,9 +606,12 @@ describe('StatisticsView', () => {
   });
 
   it('offers the Extensions tab only while the range has Extension activity', async () => {
+    let recentExtensionActivity = false;
     rpcMock.mockImplementation(
       routedRpc(undefined, (params) =>
-        params.sections.includes('extensions') && params.since
+        params.sections.includes('extensions') &&
+        params.since &&
+        !recentExtensionActivity
           ? makeReport(['extensions'], { extensions: { extensions: [] } })
           : makeReport(params.sections),
       ),
@@ -620,6 +623,15 @@ describe('StatisticsView', () => {
     );
     flushSync();
     expect(buttonNamed('statistics.subview.extensions')).toBeUndefined();
+
+    recentExtensionActivity = true;
+    buttonNamed('common.refresh').click();
+    await waitForCondition(() =>
+      Boolean(buttonNamed('statistics.subview.extensions')),
+    );
+    recentExtensionActivity = false;
+    buttonNamed('common.refresh').click();
+    await waitForCondition(() => !buttonNamed('statistics.subview.extensions'));
 
     buttonNamed('statistics.range.all').click();
     await waitForCondition(() =>

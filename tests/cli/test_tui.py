@@ -949,8 +949,10 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reopen_empty_draft", [False, True])
 async def test_lost_first_response_recovers_exact_session_without_resending(
     monkeypatch: pytest.MonkeyPatch,
+    reopen_empty_draft: bool,
 ) -> None:
     checkpoints: list[JsonObject] = []
 
@@ -961,6 +963,12 @@ async def test_lost_first_response_recovers_exact_session_without_resending(
         @override
         async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
             params = params or {}
+            if method == "project.list":
+                return {
+                    "projects": [
+                        {"project_id": "project-one", "display_name": "One", "cwd": "/one"}
+                    ]
+                }
             if method == "chat.stream":
                 assert (
                     checkpoints
@@ -995,6 +1003,17 @@ async def test_lost_first_response_recovers_exact_session_without_resending(
         assert view is not None and view.uncertain and view.session is None
         assert view.pending_session_id == server.admitted
         assert checkpoints[-1]["new_session"]["working_project_id"] == "project-one"
+        if reopen_empty_draft:
+            editor.load_text("")
+            await pilot.pause()
+            assert view.draft == ""
+            worker = app.action_new()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("down", "down", "enter")
+            await worker.wait()
+            assert app.conversation is view and view.pending_session_id == server.admitted
         editor.load_text("Following request")
         await pilot.pause()
         server.reveal = True

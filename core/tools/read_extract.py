@@ -54,6 +54,7 @@ _MAX_DOCUMENT_EXTRACTED_SIZE_LABEL = "128 MB"
 _PDF_DECOMPRESSION_LOCK = RLock()
 
 _WORDPROCESSING_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_STRICT_WORDPROCESSING_NS = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 _RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
@@ -329,7 +330,12 @@ def _extract_docx(data: bytes, budget: _ExtractionBudget) -> str:
 
     root = _parse_xml(document_xml)
     paragraphs: list[str] = []
-    for paragraph in root.iter(f"{{{_WORDPROCESSING_NS}}}p"):
+    namespace = (
+        _STRICT_WORDPROCESSING_NS
+        if root.tag == f"{{{_STRICT_WORDPROCESSING_NS}}}document"
+        else _WORDPROCESSING_NS
+    )
+    for paragraph in root.iter(f"{{{namespace}}}p"):
         pieces: list[str] = []
         for node in paragraph.iter():
             tag = _local_name(node.tag)

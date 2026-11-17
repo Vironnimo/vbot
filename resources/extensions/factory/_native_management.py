@@ -777,36 +777,8 @@ class NativeFactoryManagement:
             )
         if "limits" in patch:
             patch["limits"] = _limits.normalize(patch["limits"])
-        if action in {"assign", "pause", "cancel", "reopen"} or any(
-            key in patch
-            for key in (
-                "objective",
-                "conditions",
-                "assignee_id",
-                "parent_id",
-                "dependencies",
-                "reviewer_id",
-                "user_approval",
-                "workflow_id",
-            )
-        ):
+        if action in {"assign", "pause", "cancel", "reopen"}:
             patch["epoch"] = previous["epoch"] + 1
-        if (
-            action == "update"
-            and previous["state"] in {"done", "review"}
-            and any(
-                key in patch
-                for key in (
-                    "objective",
-                    "conditions",
-                    "dependencies",
-                    "reviewer_id",
-                    "user_approval",
-                    "workflow_id",
-                )
-            )
-        ):
-            patch["state"] = "ready" if previous.get("assignee_id") else "backlog"
         return await self.store.change_task(
             previous["id"],
             patch,

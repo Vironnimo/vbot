@@ -149,12 +149,14 @@ def test_sweep_never_follows_redirected_category_directories(
     assert operator_file.read_text(encoding="utf-8") == "must survive"
 
 
-def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> None:
+@pytest.mark.parametrize("overlaps", [False, True], ids=["single-lease", "overlapping-leases"])
+def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path, overlaps: bool) -> None:
     manager = TemporaryFileManager(
         tmp_path,
         retention={"subagents": timedelta(seconds=1)},
     )
     lease = manager.create("subagents", ".md")
+    other = manager.reopen(lease.path) if overlaps else None
     _age(lease.path, seconds=60)
 
     lease.finish()
@@ -164,6 +166,11 @@ def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> No
 
     assert lease.path.exists()
     assert lease.path.stat().st_mtime == first_finished_mtime
+    if other is not None:
+        other.finish()
+        manager.sweep()
+        assert lease.path.exists()
+        assert lease.path.stat().st_mtime > first_finished_mtime
 
 
 @pytest.mark.parametrize("removed", [False, True], ids=["kept", "removed"])
@@ -228,12 +235,14 @@ def test_reopen_rejects_paths_outside_the_category_folders(tmp_path: Path) -> No
         assert not path.exists()
 
 
-def test_reopen_that_cannot_touch_the_file_leaves_it_unprotected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("active", [False, True], ids=["inactive-file", "active-lease"])
+def test_a_failed_reopen_preserves_the_existing_protection_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, active: bool
 ) -> None:
     manager = TemporaryFileManager(tmp_path, retention={"subagents": timedelta(seconds=1)})
     lease = manager.create("subagents", ".md")
-    lease.finish()
+    if not active:
+        lease.finish()
     _age(lease.path, seconds=60)
 
     def fail_touch(_path: Path, mode: int = 0o666, exist_ok: bool = True) -> None:
@@ -245,7 +254,7 @@ def test_reopen_that_cannot_touch_the_file_leaves_it_unprotected(
             manager.reopen(lease.path)
     manager.sweep()
 
-    assert not lease.path.exists()
+    assert lease.path.exists() is active
 
 
 def test_start_sweeps_expired_crash_leftovers(tmp_path: Path) -> None:
@@ -341,9 +350,11 @@ async def test_background_sweep_keeps_the_event_loop_responsive(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stopped_first", [False, True], ids=["direct", "after-stop"])
 async def test_aclose_awaits_an_in_flight_sweep_that_stops_between_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stopped_first: bool,
 ) -> None:
     manager = TemporaryFileManager(
         tmp_path,
@@ -369,12 +380,16 @@ async def test_aclose_awaits_an_in_flight_sweep_that_stops_between_files(
 
     manager.start()
     await _wait_for(entered)
+    if stopped_first:
+        manager.stop()
     closing = asyncio.create_task(manager.aclose())
-    await asyncio.sleep(0.05)
-    assert not closing.done()
-
-    release.set()
-    await closing
+    try:
+        # aclose runs until the first wait for the sweep to settle.
+        await asyncio.sleep(0)
+        assert not closing.done()
+    finally:
+        release.set()
+        await closing
 
     assert len(unlinked) == 1
     assert sum(lease.path.exists() for lease in leases) == 2

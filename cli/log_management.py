@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from cli.formatting import inline_text
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -77,14 +78,14 @@ def _format_log_files(files: Sequence[object], default_file: object) -> str:
         return "no log files"
 
     default_text = _string_or_default(default_file, "-")
-    lines = [f"logs: default={default_text}"]
+    lines = [f"logs: default={inline_text(default_text)}"]
     for file_name in files:
-        lines.append(f"- {_string_or_default(file_name, '?')}")
+        lines.append(f"- {inline_text(_string_or_default(file_name, '?'))}")
     return "\n".join(lines)
 
 
 def _format_log_entries(file_name: str, entries: Sequence[object], cursor: str) -> str:
-    lines = [f"log: {file_name}", cursor]
+    lines = [f"log: {inline_text(file_name)}", cursor]
     if not entries:
         lines.append("no entries")
         return "\n".join(lines)
@@ -98,12 +99,13 @@ def _format_log_entry(entry: object) -> str:
     if not isinstance(entry, dict):
         return "- invalid log entry"
 
-    timestamp = _string_or_default(entry.get("timestamp"), "?")
-    level = _string_or_default(entry.get("level"), "?")
-    logger_name = _string_or_default(entry.get("logger_name"), "?")
-    message = _string_or_default(entry.get("message"), "")
+    timestamp = inline_text(_string_or_default(entry.get("timestamp"), "?"))
+    level = inline_text(_string_or_default(entry.get("level"), "?"))
+    logger_name = inline_text(_string_or_default(entry.get("logger_name"), "?"))
+    message = inline_text(_string_or_default(entry.get("message"), ""))
     line = f"- {timestamp} [{level}] {logger_name} - {message}"
     continuation = _string_or_default(entry.get("continuation"), "")
-    if continuation:
-        return f"{line}\n  {continuation}"
-    return line
+    if not continuation:
+        return line
+    detail = "\n".join(f"  {inline_text(part)}" for part in continuation.split("\n"))
+    return f"{line}\n{detail}"

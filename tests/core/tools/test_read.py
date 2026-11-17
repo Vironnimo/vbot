@@ -1114,7 +1114,7 @@ async def test_failed_read_does_not_stamp_the_file(
         assert services["speech"].calls == []
 
 
-_DOCX = docx_bytes(
+_DOCX_BODY = (
     "<w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:t> World</w:t></w:r></w:p>"
     "<w:p><w:r><w:t>Line</w:t><w:tab/><w:t>Two</w:t></w:r></w:p>"
 )
@@ -1127,7 +1127,12 @@ _SHEET = "Name\tAge\nBob\t42"
     [
         # A rendering, not editable source: no line number gutter. Extensions match
         # in any case.
-        ("report.DOCX", _DOCX, "(Word document)]:\nHello World\nLine\tTwo"),
+        ("report.DOCX", docx_bytes(_DOCX_BODY), "(Word document)]:\nHello World\nLine\tTwo"),
+        (
+            "strict.docx",
+            docx_bytes(_DOCX_BODY, strict=True),
+            "(Word document)]:\nHello World\nLine\tTwo",
+        ),
         (
             "nb.ipynb",
             ipynb_bytes(),
@@ -1167,6 +1172,7 @@ _SHEET = "Name\tAge\nBob\t42"
     ],
     ids=[
         "docx",
+        "strict_docx",
         "ipynb",
         "pdf",
         "pdf_without_extension",

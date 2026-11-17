@@ -45,6 +45,7 @@ CREATE TABLE cards (
 ) STRICT;
 CREATE INDEX cards_state_position ON cards(state, position, id);
 CREATE INDEX cards_project_state ON cards(project_id, state);
+CREATE INDEX cards_parent_id ON cards(parent_id);
 CREATE TABLE card_triggers (
  card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, event_json TEXT NOT NULL
 ) STRICT;
@@ -627,6 +628,19 @@ class FactoryStore:
                 is not None
             )
         )
+
+    async def find_child_card(self, parent_id: str, intent: str) -> Json | None:
+        """Recover a child whose creation committed before the parent's step update."""
+
+        def read(connection: sqlite3.Connection) -> Json | None:
+            child = connection.execute(
+                f"SELECT {_CARD_COLUMNS} FROM cards WHERE parent_id = ? "
+                "AND json_extract(runtime_json, '$.parent_intent') = ? LIMIT 1",
+                (parent_id, intent),
+            ).fetchone()
+            return None if child is None else _card(child)
+
+        return await self.database.read_async(read)
 
     async def attention_count(self) -> int:
         return await self.database.read_async(

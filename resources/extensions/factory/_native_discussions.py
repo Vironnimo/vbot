@@ -11,6 +11,8 @@ from ._native_agent_text import native_input
 
 type Json = dict[str, Any]
 
+_POST_PAGE_SIZE = 100
+
 
 def _context_posts(posts: list[Json]) -> list[Json]:
     """Recent shared context stays bounded independently of the post page size."""
@@ -68,10 +70,10 @@ class NativeDiscussions:
                 if current and (current["runtime"].get("pending") or current["state"] == "failed"):
                     continue
                 posts = (
-                    await native.store.recent_posts(topic["id"], limit=100)
+                    await native.store.recent_posts(topic["id"], limit=_POST_PAGE_SIZE)
                     if current is None
                     else await native.store.list_posts(
-                        topic["id"], after=participant["read_sequence"], limit=100
+                        topic["id"], after=participant["read_sequence"], limit=_POST_PAGE_SIZE
                     )
                 )
                 addressed = [
@@ -98,6 +100,8 @@ class NativeDiscussions:
                         await native.store.mark_topic_read(
                             topic["id"], member["id"], posts[-1]["sequence"]
                         )
+                        if len(posts) == _POST_PAGE_SIZE:
+                            native.service.request_schedule()
                     continue
                 active = current is not None and current["state"] == "running"
                 if not active and not await native._capacity(factory, member, limit):
@@ -153,7 +157,7 @@ class NativeDiscussions:
             return
         marks = task["runtime"].get("topic_sequences", {})
         posts = await native.store.list_posts(
-            topic["id"], after=marks.get(topic["id"], 0), limit=100
+            topic["id"], after=marks.get(topic["id"], 0), limit=_POST_PAGE_SIZE
         )
         answers = [
             post
@@ -176,3 +180,5 @@ class NativeDiscussions:
             await native.store.change_task(
                 task["id"], {"runtime": runtime}, actor="factory", event="discussion_observed"
             )
+            if len(posts) == _POST_PAGE_SIZE:
+                native.service.request_schedule()

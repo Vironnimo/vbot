@@ -388,18 +388,21 @@ class DictationController:
             failure = ERROR_DICTATION_FAILED
         finally:
             self._hotkey.arm_escape(False)
-            self._announce_recording(False)
             if failure is not None:
                 logger.warning("Dictation ended without inserting text: %s", failure)
                 self._play(CUE_FAILED)
             with self._lock:
-                self._take = None
                 self._state = STATE_IDLE
                 if failure is not None:
                     self._last_failure = {
                         "code": failure,
                         "at": datetime.now(UTC).isoformat(timespec="seconds"),
                     }
+            try:
+                self._announce_recording(False)
+            finally:
+                with self._lock:
+                    self._take = None
 
     def _dictate(self, take: _Take) -> None:
         if not take.server_url:
@@ -419,9 +422,9 @@ class DictationController:
                 try:
                     self._record(take, transcriber)
                 finally:
+                    with self._lock:
+                        self._state = STATE_TRANSCRIBING
                     self._announce_recording(False)
-                with self._lock:
-                    self._state = STATE_TRANSCRIBING
                 self._play(CUE_DONE)
                 text = transcriber.finish()
             finally:

@@ -173,6 +173,45 @@ async def test_target_switch_and_alpha_preservation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["I;16", "I;16B"], ids=["little-endian", "big-endian"])
+async def test_high_bit_depth_grayscale_preserves_tones_during_conversion(mode):
+    samples = [0, 10000, 32768, 50000, 65535]
+    image = Image.new(mode, (len(samples), 1))
+    image.putdata(samples)
+    stream = io.BytesIO()
+    image.save(stream, format="TIFF")
+    data = stream.getvalue()
+    converter = ImageConverter()
+
+    png = await converter.convert(data, "image/tiff", ImageTarget(frozenset({"image/png"})))
+    webp = await converter.convert(data, "image/tiff", ImageTarget(frozenset({"image/webp"})))
+
+    assert png.lossy is False and webp.lossy is True
+    with Image.open(io.BytesIO(png.data)) as saved_png:
+        assert list(saved_png.get_flattened_data()) == samples
+    with Image.open(io.BytesIO(webp.data)) as saved_webp:
+        assert list(saved_webp.convert("L").get_flattened_data()) == [0, 39, 128, 195, 255]
+
+
+@pytest.mark.asyncio
+async def test_webp_converts_high_bit_depth_transparency_before_quantizing():
+    image = Image.new("I;16", (2, 1))
+    image.putdata([10000, 10002])
+    stream = io.BytesIO()
+    image.save(stream, format="PNG", transparency=10000)
+
+    result = await ImageConverter().convert(
+        stream.getvalue(), "image/png", ImageTarget(frozenset({"image/webp"}))
+    )
+
+    with Image.open(io.BytesIO(result.data)) as webp:
+        assert list(webp.convert("RGBA").get_flattened_data()) == [
+            (39, 39, 39, 0),
+            (39, 39, 39, 255),
+        ]
+
+
+@pytest.mark.asyncio
 async def test_orientation_is_applied_without_resampling():
     exif = Image.Exif()
     exif[274] = 6

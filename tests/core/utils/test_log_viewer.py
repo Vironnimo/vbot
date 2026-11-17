@@ -162,6 +162,27 @@ def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transp
 
 
 @pytest.mark.asyncio
+async def test_catalog_keeps_surviving_siblings_when_one_listed_file_disappears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "logs"
+    directory.mkdir()
+    removed, newest = directory / "2026-05-10", directory / "2026-05-11"
+    newest.touch()
+    original_listing = Path.iterdir
+
+    def stale_listing(path: Path):
+        return iter((removed, newest)) if path == directory else original_listing(path)
+
+    monkeypatch.setattr(Path, "iterdir", stale_listing)
+
+    assert await LogViewer(tmp_path).list_files() == {
+        "files": [newest.name],
+        "default_file": newest.name,
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_files_returns_newest_first_with_default_selection(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()

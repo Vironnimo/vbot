@@ -753,6 +753,63 @@ describe('LogsView', () => {
     expect(listLogsMock).toHaveBeenCalledTimes(3);
     expect(document.body.textContent).not.toContain(reconnecting);
   });
+
+  it('reconnects a silent socket and keeps it alive while heartbeats arrive', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const file = '2026-05-11';
+    listLogsMock.mockResolvedValue({ files: [file], default_file: file });
+    readLogFileMock.mockResolvedValue({ file, entries: [], cursor: 'cursor' });
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1, 40, true);
+
+    const stream = streamConnections[0];
+    stream.emitOpen();
+    await vi.advanceTimersByTimeAsync(25_000);
+    stream.emitEvent({ type: 'heartbeat' });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(stream.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stream.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(streamConnections).toHaveLength(2);
+  });
+
+  it('ignores a reconnect catalog reply after a different file was selected', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const [first, second] = ['2026-05-11', '2026-05-10'];
+    const catalog = { files: [first, second], default_file: first };
+    const recovery = Promise.withResolvers();
+    listLogsMock
+      .mockResolvedValueOnce(catalog)
+      .mockReturnValueOnce(recovery.promise);
+    readLogFileMock.mockImplementation(async (file) => ({
+      file,
+      entries: [entry({ message: file })],
+      cursor: `cursor-${file}`,
+    }));
+    const navigation = createStandaloneNavigation();
+    mountedComponent = mount(LogsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1, 40, true);
+    streamConnections[0].emitClose();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(listLogsMock).toHaveBeenCalledTimes(2);
+
+    navigation.navigate([second]);
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 2, 40, true);
+    recovery.resolve(catalog);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(streamConnections[1].close).not.toHaveBeenCalled();
+    expect(readLogFileMock.mock.calls).toEqual([[first], [second]]);
+    expect(navigation.place).toEqual([second]);
+  });
 });
 
 function stubMatchMedia(initialMatches) {

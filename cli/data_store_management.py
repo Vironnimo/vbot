@@ -59,7 +59,11 @@ def data_store_status(instance: ServerInstance, *, verify_search: bool = False) 
         instance, "data_store.status", {"verify_search": True} if verify_search else {}
     )
     if payload.ok:
-        return _json_result(instance, payload.data)
+        return CommandResult(
+            ok=payload.data.get("state") not in _FAILED_STATES,
+            message=_dump(payload.data),
+            instance=instance,
+        )
     health = probe_health(instance)
     if health.reachable or instance.host not in _LOOPBACK_HOSTS:
         return payload.to_command_result()

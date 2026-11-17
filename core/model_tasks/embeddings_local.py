@@ -462,7 +462,15 @@ class LocalEmbeddingExecutor:
         )
 
     def _can_execute(self, local_id: str) -> bool:
-        return not self._closed and self._setups[local_id].available()
+        return not self._closing and self._setups[local_id].available()
+
+    @property
+    def _closing(self) -> bool:
+        return self._closed or self._close_task is not None
+
+    async def _admit_worker(self) -> None:
+        if self._closing:
+            raise LocalEmbeddingUnavailableError("Local embedding is shutting down")
 
     def add_ready_listener(self, listener: Callable[[str], None]) -> None:
         """Call *listener* with the target id whenever a model finishes installing."""
@@ -520,8 +528,8 @@ class LocalEmbeddingExecutor:
             for turn in turns:
                 await self._turns.acquire(query=query)
                 try:
-                    turn_vectors, turn_tokens = await self._workers.run(
-                        self._embed_turn, model, key, turn
+                    turn_vectors, turn_tokens = await self._workers.run_guarded(
+                        self._admit_worker, self._embed_turn, model, key, turn
                     )
                 except LocalEmbeddingInputTooLongError as error:
                     raise LocalEmbeddingInputTooLongError(
@@ -542,7 +550,7 @@ class LocalEmbeddingExecutor:
         self, model: LocalEmbeddingModel, key: tuple[str, int], texts: list[str]
     ) -> tuple[list[list[float]], list[int]]:
         """Run in the worker thread: (re)load the child if needed, then embed."""
-        if self._closed:
+        if self._closing:
             raise LocalEmbeddingUnavailableError("Local embedding is shutting down")
         child = self._loaded_child(model, key)
         try:
@@ -581,7 +589,7 @@ class LocalEmbeddingExecutor:
             raise LocalEmbeddingError("The local embedding model failed to load") from error
         with self._child_lock:
             self._child, self._child_key = child, key
-        if self._closed:
+        if self._closing:
             self._unload()
             raise LocalEmbeddingUnavailableError("Local embedding is shutting down")
         _LOGGER.info("Loaded local embedding model (model=%s threads=%d)", model.id, key[1])
@@ -620,14 +628,15 @@ class LocalEmbeddingExecutor:
 
     def memory_status(self) -> dict[str, Any]:
         """Which model is loaded; reads state only, never starts a child."""
-        loaded = self._child_key[0] if self._child_key is not None else None
+        key = self._child_key
+        loaded = key[0] if key is not None else None
         return {
             "models": [
                 {
                     "target": f"local/{model.id}",
                     "label": model.label,
                     "loaded": loaded == model.id,
-                    "busy": self._pending[model.id] > 0 or self._closed,
+                    "busy": self._pending[model.id] > 0 or self._closing,
                 }
                 for model in self._models.values()
             ]
@@ -638,14 +647,19 @@ class LocalEmbeddingExecutor:
         local_id = target.removeprefix("local/")
         if not target.startswith("local/") or local_id not in self._models:
             raise ValueError("Unknown local embedding target")
-        loaded = self._child_key is not None and self._child_key[0] == local_id
-        if self._pending[local_id] or self._closed or not loaded:
+        key = self._child_key
+        loaded = key is not None and key[0] == local_id
+        if self._pending[local_id] or self._closing or not loaded:
             return {**self.memory_status(), "released": False}
         self._pending[local_id] += 1
         try:
-            released = await self._workers.run(self._unload, local_id=local_id)
+            released = await self._workers.run_guarded(
+                self._admit_worker, self._unload, local_id=local_id
+            )
             if released:
                 _LOGGER.info("Unloaded local embedding model (target=%s)", target)
+        except LocalEmbeddingUnavailableError:
+            released = False
         finally:
             self._pending[local_id] -= 1
         return {**self.memory_status(), "released": released}

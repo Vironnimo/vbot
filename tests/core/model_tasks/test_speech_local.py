@@ -27,6 +27,7 @@ import pytest
 from core.model_tasks import _speech_context
 from core.model_tasks._speech_engines import _audio_chunks
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
+from core.model_tasks.local_setup import LocalSetup
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
@@ -1235,6 +1236,35 @@ async def test_request_progress_survives_worker_boundary_and_clears_between_reco
         assert len([event for event in events if event[1] == "transcribe"]) == 2
     finally:
         await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_setup_cancel_does_not_reset_a_new_installation(monkeypatch: pytest.MonkeyPatch):
+    setup = LocalSetup(name="test", directory=None)
+    started = asyncio.Event()
+    restarted = asyncio.Event()
+
+    async def perform() -> None:
+        if started.is_set():
+            restarted.set()
+            await asyncio.Future()
+            return
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            asyncio.get_running_loop().call_soon(setup.install)
+
+    monkeypatch.setattr(setup, "_perform", perform)
+    try:
+        setup.install()
+        await started.wait()
+        await setup.cancel()
+        await restarted.wait()
+        assert setup.status()["state"] == "installing"
+    finally:
+        await setup.aclose()
+    assert setup.status()["error"] == "interrupted"
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,24 @@ export function createAppExtensions(context) {
     );
   }
 
+  async function loadPageDescriptors() {
+    const result = await listExtensionPages();
+    extensionPages = Array.isArray(result?.pages) ? result.pages : [];
+    context.onPagesLoaded?.();
+  }
+
+  function applyUiDeclarations(result) {
+    // An unavailable catalog restores built-ins instead of keeping an
+    // Extension replacement whose registration may have been retired.
+    contributions = Array.isArray(result?.contributions)
+      ? result.contributions
+      : [];
+    apiCapabilities = {
+      version: result?.api_version ?? null,
+      features: Array.isArray(result?.features) ? result.features : [],
+    };
+  }
+
   // Page descriptors load on every `connection_ready`, the first included,
   // and after an Extension reload. At most one request runs at once, with one
   // follow-up request coalescing any burst. This fetches descriptors only; it
@@ -136,37 +154,14 @@ export function createAppExtensions(context) {
         extensionInvalidationQueued = false;
         const reload = extensionPagesRequested;
         extensionPagesRequested = true;
-        try {
-          const [pagesResult, uiResult] = await Promise.allSettled([
-            listExtensionPages(),
-            Promise.resolve().then(() => listExtensionContributions()),
-          ]);
-          if (pagesResult.status === 'fulfilled') {
-            extensionPages = Array.isArray(pagesResult.value?.pages)
-              ? pagesResult.value.pages
-              : [];
-            updated = true;
-            context.onPagesLoaded?.();
-          }
-          // An unavailable catalog restores built-ins instead of keeping an
-          // Extension replacement whose registration may have been retired.
-          contributions =
-            uiResult.status === 'fulfilled' &&
-            Array.isArray(uiResult.value?.contributions)
-              ? uiResult.value.contributions
-              : [];
-          apiCapabilities =
-            uiResult.status === 'fulfilled'
-              ? {
-                  version: uiResult.value?.api_version ?? null,
-                  features: Array.isArray(uiResult.value?.features)
-                    ? uiResult.value.features
-                    : [],
-                }
-              : { version: null, features: [] };
-        } catch {
-          // Keep the last valid descriptors while a transient RPC error clears.
-        }
+        const [pagesResult, uiResult] = await Promise.allSettled([
+          loadPageDescriptors(),
+          Promise.resolve().then(() => listExtensionContributions()),
+        ]);
+        updated ||= pagesResult.status === 'fulfilled';
+        applyUiDeclarations(
+          uiResult.status === 'fulfilled' ? uiResult.value : null,
+        );
         if (reload && invalidateSubscribers) {
           // A replaced descriptor reloads its page first. Independently of
           // catalog success, retained pages and the other Extension surfaces

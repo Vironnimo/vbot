@@ -660,6 +660,31 @@ def test_a_pending_purge_fails_and_names_the_call_that_continues_it(
     ) in err
 
 
+@pytest.mark.parametrize("pending_count", [2, 101])
+def test_an_all_purge_only_offers_retry_for_its_existing_pending_entries(
+    rpc: FakeRpc, run_cli: RunCli, pending_count: int
+) -> None:
+    identifiers = [f"arc_pending{index:05d}" for index in range(pending_count)]
+    rpc.reply(
+        "archive.purge",
+        {
+            "pending": [
+                {"entry_id": entry_id, "reason": "PermissionError"} for entry_id in identifiers
+            ]
+        },
+    )
+
+    code, out, err = run_cli("archive", "purge", "--all", "--kind", "session", "--yes")
+
+    assert code == 1
+    assert rpc.calls == [("archive.purge", {"all": True, "kind": "session"})]
+    assert out.count("pending reason=PermissionError") == pending_count
+    assert "vbot archive purge --all" not in err
+    for index in range(0, pending_count, 100):
+        batch = " ".join(identifiers[index : index + 100])
+        assert f"vbot archive purge {batch} --yes " in err
+
+
 @pytest.mark.parametrize(
     ("result", "code", "shown", "attention"),
     [

@@ -298,13 +298,8 @@ class TaskModelService:
         value it would change no longer matches that view.
         """
 
-        prepared = self._prepare_update(model_tasks)
+        prepared = self.prepare_update(model_tasks)
         return cast(JsonObject, self._storage.update_model_task_settings(prepared, base=base))
-
-    def validate_update(self, model_tasks: Mapping[str, Any]) -> None:
-        """Validate a sparse binding update without persisting it."""
-
-        self._prepare_update(model_tasks)
 
     def patch_options(
         self,
@@ -384,14 +379,18 @@ class TaskModelService:
         except TaskModelOptionValidationError as error:
             raise TaskModelValidationError(str(error)) from error
 
-    def _prepare_update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
+    def prepare_update(
+        self, model_tasks: Mapping[str, Any], *, current: Mapping[str, Any] | None = None
+    ) -> JsonObject:
+        """Validate and normalize the changed bindings for a Settings transaction."""
         # Settings also imports Task Model target parsing during initialization.
         from core.settings import settings_values_equal
 
         if not isinstance(model_tasks, Mapping):
             raise TaskModelValidationError("Task model settings must be an object")
 
-        current = self.settings()
+        if current is None:
+            current = self.settings()
         prepared: JsonObject = {}
         for raw_task_type, raw_binding in model_tasks.items():
             task_type = validate_task_type(raw_task_type)
@@ -434,13 +433,12 @@ class TaskModelService:
             except StorageError as exc:
                 raise TaskModelValidationError(str(exc)) from exc
             previous_fallbacks = previous.get("fallbacks", [])
-            if (
-                not target_changed
-                and settings_values_equal(options, previous_options)
-                and settings_values_equal(fallbacks, previous_fallbacks)
+            options_changed = not settings_values_equal(options, previous_options)
+            if not (target_changed or options_changed) and settings_values_equal(
+                fallbacks, previous_fallbacks
             ):
                 continue
-            if not target_changed:
+            if not target_changed and options_changed:
                 options = self._without_stale_options(task_type, target, options, previous_options)
             binding: JsonObject = {"target": target, "options": options}
             if "fallbacks" in raw_binding or "fallbacks" in previous:

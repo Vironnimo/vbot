@@ -673,12 +673,16 @@ class ConversationController:
             if choice is None or self.app.conversation is not origin:
                 return
             selected, project = choice
-        # Keep an existing unsent draft instead of replacing its text silently.
+        # A blank composer can still own a pending first send.
         candidate = Conversation(agent, project=project, project_selected=selected)
         existing = self.views.get(candidate.key)
-        if existing and (existing.draft or existing.attachments):
+        pending = existing is not None and (
+            existing.uncertain or id(existing) in self.app.submissions.pending
+        )
+        if existing and (existing.draft or existing.attachments or pending):
             await self.open(existing)
-            self.app._notice("Resumed this Agent's unsent draft.")
+            if not pending:
+                self.app._notice("Resumed this Agent's unsent draft.")
         else:
             self.views.pop(candidate.key, None)
             await self.open(candidate)
