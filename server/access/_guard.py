@@ -7,7 +7,7 @@ import json
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
 
-from server.access._principal import PRINCIPAL_SCOPE_KEY, Principal
+from server.access._principal import PRINCIPAL_SCOPE_KEY
 from server.access._rules import (
     AUTH_STATUS_PATH,
     RouteClass,
@@ -29,12 +29,14 @@ from server.access._service import (
 )
 
 if TYPE_CHECKING:
+    from server.access._connections import LiveConnections
     from server.file_delivery import FileDelivery
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
+AsgiApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 #: WebSocket close codes accessors act on: stop reconnecting, show pairing or refusal.
 WEBSOCKET_AUTH_REQUIRED = 4401
@@ -194,82 +196,119 @@ class AccessGuard:
             return
         scope[PRINCIPAL_SCOPE_KEY] = principal
         if principal is not None and principal.device is not None:
-            await self._tracked(scope, receive, send, principal)
+            await track_device_request(
+                scope,
+                receive,
+                send,
+                connections=service.connections,
+                device_id=principal.device.id,
+                app=self._app,
+            )
         else:
             await self._app(scope, receive, send)
 
-    async def _tracked(
-        self, scope: Scope, receive: Receive, send: Send, principal: Principal
-    ) -> None:
-        """Run a device's request so that revoking the device ends or refuses it.
 
-        The request is registered from its first moment: revocation cancels
-        body reads, mutation-admission waits and started responses alike. Owners
-        settle admitted durable work; an answer not yet started becomes 401.
-        """
-        assert principal.device is not None
-        connections = self._service.connections
-        websocket = scope.get("type") == "websocket"
-        state = {"accepted": False, "closed": False, "started": False, "finished": False}
-        connection = connections.register(principal.device.id)
+async def track_device_request(
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    *,
+    connections: LiveConnections,
+    device_id: str,
+    app: AsgiApp,
+    abort_http: Callable[[], None] | None = None,
+) -> None:
+    """Run a device's request so that revoking the device ends or refuses it.
 
-        async def tracked_send(message: Message) -> None:
-            kind = message.get("type")
-            if connection.revoked:
-                if kind == "http.response.start" and not state["started"]:
-                    state["started"] = state["finished"] = True
-                    await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Device signed out")
-                raise asyncio.CancelledError
-            if kind == "websocket.accept":
-                state["accepted"] = True
-            elif kind == "websocket.close":
-                state["closed"] = True
-            elif kind == "http.response.start":
-                state["started"] = True
-            elif kind == "http.response.body" and not message.get("more_body", False):
-                state["finished"] = True
-            await send(message)
+    The request is registered from its first moment: revocation cancels
+    body reads, mutation-admission waits and started responses alike. Owners
+    settle admitted durable work; an answer not yet started becomes 401.
+    """
+    websocket = scope.get("type") == "websocket"
+    state = {"accepted": False, "closed": False, "started": False, "finished": False}
+    connection = connections.register(device_id)
+    remaining_bytes: int | None = None
 
-        async def tracked_receive() -> Message:
-            if connection.revoked:
-                raise asyncio.CancelledError
-            message = await receive()
-            # A body reader may complete concurrently with revocation, or may
-            # settle its read despite cancellation. Never deliver that command.
-            if connection.revoked:
-                raise asyncio.CancelledError
-            return message
+    async def tracked_send(message: Message) -> None:
+        nonlocal remaining_bytes
+        kind = message.get("type")
+        if connection.revoked:
+            raise asyncio.CancelledError
+        if kind == "websocket.accept":
+            state["accepted"] = True
+        elif kind == "websocket.close":
+            state["closed"] = True
+        elif kind == "http.response.start":
+            state["started"] = True
+            if (
+                abort_http is not None
+                and scope.get("method") != "HEAD"
+                and message["status"] not in {204, 304}
+            ):
+                remaining_bytes = _content_length(message)
+        await send(message)
+        if kind == "http.response.body":
+            state["finished"] = not message.get("more_body", False)
+            if remaining_bytes is not None:
+                remaining_bytes -= len(message.get("body", b""))
 
+    async def tracked_receive() -> Message:
+        if connection.revoked:
+            raise asyncio.CancelledError
+        message = await receive()
+        # A body reader may complete concurrently with revocation, or may
+        # settle its read despite cancellation. Never deliver that command.
+        if connection.revoked:
+            raise asyncio.CancelledError
+        return message
+
+    try:
         try:
-            try:
-                await self._app(scope, tracked_receive, tracked_send)
-            finally:
-                connections.unregister(connection)
-        except asyncio.CancelledError:
-            if not connection.revoked:
-                raise
+            await app(scope, tracked_receive, tracked_send)
+        finally:
+            connections.unregister(connection)
+    except asyncio.CancelledError:
         if not connection.revoked:
-            return
-        connection.settle()
-        try:
-            if websocket:
-                if not state["closed"]:
-                    if not state["accepted"]:
-                        await send({"type": "websocket.accept"})
-                    await send(
-                        {
-                            "type": "websocket.close",
-                            "code": WEBSOCKET_AUTH_REQUIRED,
-                            "reason": "Device signed out",
-                        }
-                    )
-            elif not state["started"]:
-                await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Device signed out")
-            elif not state["finished"]:
+            raise
+    if not connection.revoked:
+        return
+    connection.settle()
+    try:
+        if websocket:
+            if not state["closed"]:
+                if not state["accepted"]:
+                    await send({"type": "websocket.accept"})
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": WEBSOCKET_AUTH_REQUIRED,
+                        "reason": "Device signed out",
+                    }
+                )
+        elif not state["started"]:
+            await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Device signed out")
+        elif not state["finished"]:
+            if abort_http is not None and remaining_bytes is not None and remaining_bytes > 0:
+                # An empty final body cannot complete a partially sent fixed-length
+                # response. Wait for the protocol to observe its own connection close.
+                abort_http()
+                while (await receive()).get("type") != "http.disconnect":
+                    pass
+            else:
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
-        except OSError, RuntimeError:
-            # The client is already gone.
-            pass
+    except OSError, RuntimeError:
+        # The client is already gone.
+        pass
+
+
+def _content_length(message: Message) -> int | None:
+    for name, value in message.get("headers", ()):
+        if name.lower() == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                break
+    return None
 
 
 async def _refuse(

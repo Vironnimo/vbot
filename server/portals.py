@@ -25,6 +25,7 @@ import contextlib
 import html
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, MutableMapping
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote_plus
 
@@ -34,7 +35,8 @@ from core.tools.portal_registry import PortalRegistry
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.tls import ssl_context_for
-from server.access._service import AccessError, AccessService
+from server.access import AccessError, AccessService, Principal, track_device_request
+from server.access._principal import OPEN
 
 if TYPE_CHECKING:
     from server.access.tls import TlsContextHolder
@@ -49,6 +51,7 @@ Send = Callable[[Message], Awaitable[None]]
 
 PORTAL_QUERY = "vbot_portal"
 PORTAL_COOKIE_PREFIX = "vbot_portal_"
+_ABORT_HTTP_CONNECTION = "vbot.portal_abort_connection"
 #: WebSocket close code for a Portal request without its credential.
 WEBSOCKET_PRIVATE = 4401
 # Every forwarded request goes to an app on this computer over plain HTTP.
@@ -185,9 +188,21 @@ class _Listener:
         state = ServerState()
 
         def create_protocol(_loop: asyncio.AbstractEventLoop | None = None) -> asyncio.Protocol:
-            return config.http_protocol_class(  # type: ignore[call-arg]
-                config=config, server_state=state, app_state={}, _loop=_loop
+            connection_state: dict[str, Any] = {}
+            protocol = config.http_protocol_class(  # type: ignore[call-arg]
+                config=config, server_state=state, app_state=connection_state, _loop=_loop
             )
+
+            def abort_connection() -> None:
+                if tls is not None:
+                    # The sniffing protocol still owns the underlying TCP transport.
+                    protocol.shutdown()  # type: ignore[attr-defined]
+                else:
+                    protocol.transport.abort()  # type: ignore[attr-defined]
+
+            # uvicorn copies the connection's state into each ASGI request.
+            connection_state[_ABORT_HTTP_CONNECTION] = abort_connection
+            return protocol
 
         loop = asyncio.get_running_loop()
         addresses = await loop.getaddrinfo(
@@ -258,11 +273,11 @@ class _PortalApp:
         cookie_token = _cookie(scope, self._auth_cookie)
         token = query_token or cookie_token
         try:
-            authorized = token is not None and self._authorized(token)
+            principal = self._principal(token) if token is not None else None
         except AccessError as exc:
             await _deny(scope, receive, send, exc.status, exc.message)
             return
-        if not authorized:
+        if principal is None:
             await _deny(
                 scope,
                 receive,
@@ -271,6 +286,24 @@ class _PortalApp:
                 "This portal is private. Open it from its card in the vBot chat.",
             )
             return
+        serve = partial(self._serve, query_token=query_token, query=query)
+        if principal.device is not None:
+            await track_device_request(
+                scope,
+                receive,
+                send,
+                connections=access.connections,
+                device_id=principal.device.id,
+                app=serve,
+                abort_http=scope.get("state", {}).get(_ABORT_HTTP_CONNECTION),
+            )
+        else:
+            await serve(scope, receive, send)
+
+    async def _serve(
+        self, scope: Scope, receive: Receive, send: Send, *, query_token: str | None, query: str
+    ) -> None:
+        kind = scope.get("type")
         if query_token is not None and kind == "http" and scope.get("method") in {"GET", "HEAD"}:
             await self._redirect_into_cookie(scope, send, query_token, query)
             return
@@ -285,15 +318,15 @@ class _PortalApp:
     def _auth_cookie(self) -> str:
         return f"{PORTAL_COOKIE_PREFIX}{self.listen_port}"
 
-    def _authorized(self, token: str) -> bool:
+    def _principal(self, token: str) -> Principal | None:
         claims = self._server._file_delivery.portal_claims(token)
         if claims is None or claims[0] != self._portal_id:
-            return False
+            return None
         access = self._server._access
         if access.config.mode != "authenticated":
-            return True
+            return OPEN
         actor = claims[1]
-        return actor is not None and access.principal_for_capability(actor) is not None
+        return None if actor is None else access.principal_for_capability(actor)
 
     async def _redirect_into_cookie(self, scope: Scope, send: Send, token: str, query: str) -> None:
         secure = scope.get("scheme") == "https"
@@ -422,9 +455,17 @@ class _PortalApp:
         # watch an endless answer (an event stream) would hold its app connection
         # and this task for good.
         left = asyncio.ensure_future(browser.left(after_body=has_body))
+        response: httpx.Response | None = None
+
+        async def acquire_response() -> None:
+            nonlocal response
+            # The enclosing request owns the response as soon as it exists,
+            # even when it is cancelled while the connection is being made.
+            response = await client.send(request, stream=True)
+
         try:
             try:
-                response = await _unless_left(left, client.send(request, stream=True))
+                await _unless_left(left, acquire_response())
             except httpx.ConnectError, httpx.ConnectTimeout:
                 self._server._registry.report_listening(self._portal_id, False)
                 await self._waiting(scope, send)
@@ -437,18 +478,19 @@ class _PortalApp:
                     )
                 await _plain(send, 502, "The app did not answer this request.")
                 return
-            if response is None:
+            if response is None or left.done():
                 return
             self._server._registry.report_listening(self._portal_id, True)
             if self._server._request_failures.ended(self._portal_id):
                 _LOGGER.info("Portal requests answered again (id=%s)", self._portal_id)
-            try:
-                await _unless_left(left, self._relay(response, send))
-            finally:
-                await response.aclose()
+            await _unless_left(left, self._relay(response, send))
         finally:
             left.cancel()
-            await asyncio.gather(left, return_exceptions=True)
+            try:
+                if response is not None:
+                    await response.aclose()
+            finally:
+                await asyncio.gather(left, return_exceptions=True)
 
     async def _relay(self, response: httpx.Response, send: Send) -> None:
         """Send the app's answer to the browser as it arrives."""
@@ -525,8 +567,6 @@ class _PortalApp:
                 self._server._registry.report_listening(self._portal_id, False)
             await send({"type": "websocket.close", "code": 1011})
             return
-        self._server._registry.report_listening(self._portal_id, True)
-        await send({"type": "websocket.accept", "subprotocol": upstream.subprotocol})
 
         async def browser_to_app() -> None:
             while True:
@@ -556,8 +596,11 @@ class _PortalApp:
                     }
                 )
 
-        tasks = [asyncio.ensure_future(browser_to_app()), asyncio.ensure_future(app_to_browser())]
+        tasks: list[asyncio.Task[None]] = []
         try:
+            self._server._registry.report_listening(self._portal_id, True)
+            await send({"type": "websocket.accept", "subprotocol": upstream.subprotocol})
+            tasks = [asyncio.create_task(browser_to_app()), asyncio.create_task(app_to_browser())]
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
             for task in tasks:
@@ -675,17 +718,18 @@ class _BrowserChannel:
             pass
 
 
-async def _unless_left[T](left: asyncio.Future[None], work: Coroutine[Any, Any, T]) -> T | None:
-    """The result of *work*, or ``None`` when the browser left first, which cancels it."""
-    task = asyncio.ensure_future(work)
+async def _unless_left(left: asyncio.Future[None], work: Coroutine[Any, Any, None]) -> None:
+    """Run work until it finishes, the browser leaves or the request is cancelled."""
+    task = asyncio.create_task(work)
     waiting: set[asyncio.Future[Any]] = {task, left}
     try:
         await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
     finally:
         if not task.done():
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-    return None if task.cancelled() else task.result()
+        await asyncio.gather(task, return_exceptions=True)
+    if not task.cancelled():
+        task.result()
 
 
 def _wants_page(scope: Scope) -> bool:

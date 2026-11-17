@@ -9,6 +9,7 @@ from server.access._guard import (
     WEBSOCKET_AUTH_REQUIRED,
     WEBSOCKET_DEVICES_UNAVAILABLE,
     AccessGuard,
+    track_device_request,
 )
 from server.access._principal import (
     Principal,
@@ -50,4 +51,5 @@ __all__ = [
     "current_principal",
     "register_access_routes",
     "scope_principal",
+    "track_device_request",
 ]
