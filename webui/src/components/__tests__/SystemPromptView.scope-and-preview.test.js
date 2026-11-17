@@ -107,6 +107,11 @@ describe('SystemPromptView scope and preview', () => {
     // The empty place shows the Prompt tab and the default scope previewed
     // with the first Agent, and records that place.
     expect(navigation.place).toEqual(['prompt', 'default', 'agent:agent-1']);
+    await waitForCondition(() => lastCall('prompt.preview'), 100);
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'agent-1',
+      scope: { type: 'default' },
+    });
 
     // Only the scopes the server offers (default and enabled Agents) appear.
     expect(scopeOptionLabels()).toEqual([DEFAULT_SCOPE(), 'Alpha']);
@@ -140,7 +145,7 @@ describe('SystemPromptView scope and preview', () => {
     await waitForCondition(
       () =>
         agentTrigger()?.textContent.includes('Alpha') &&
-        hasCall('prompt.preview', (params) => params.scope),
+        hasCall('prompt.preview', (params) => params.scope?.type === 'agent'),
       100,
     );
     expect(lastCall('prompt.preview')[1]).toMatchObject({
@@ -200,13 +205,23 @@ describe('SystemPromptView scope and preview', () => {
     expect(blockText('core:intro')).toBe('# Intro');
     expect(blockIsDirty('core:intro')).toBe(false);
 
+    vi.useFakeTimers();
+    typeBlock('core:intro', 'agent draft');
+    await vi.advanceTimersByTimeAsync(800);
+    vi.useRealTimers();
+    expect(lastCall('prompt.update')[1]).toEqual({
+      id: 'core:intro',
+      content: 'agent draft',
+      scope: AGENT_SCOPE,
+    });
+
     defaultSave.resolve({
       id: 'core:intro',
       text: 'default draft',
       is_modified: true,
     });
     await waitForCondition(() => true);
-    expect(blockText('core:intro')).toBe('# Intro');
+    expect(blockText('core:intro')).toBe('agent draft');
     expect(blockIsDirty('core:intro')).toBe(false);
   });
 

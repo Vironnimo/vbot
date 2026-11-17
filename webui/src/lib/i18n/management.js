@@ -1131,7 +1131,7 @@ export default Object.freeze({
   'systemPrompt.blockList.resetLayout': 'Reset order & visibility',
   'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset order & visibility?',
   'systemPrompt.blockList.resetLayoutConfirm':
-    'Every block returns to its default position and switch setting. This cannot be undone.',
+    'Default order and visibility are restored. Your custom blocks move to the end and keep their visibility.',
   'systemPrompt.blockList.customBadge': 'custom',
   'systemPrompt.blockList.customHint':
     'A block you added, not one of vBot’s built-in blocks. It can be removed.',
