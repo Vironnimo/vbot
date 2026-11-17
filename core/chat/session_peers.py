@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.agents import LIBRARIAN_AGENT_ID, LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
-from core.runs import ASSISTANT_OUTPUT_EVENT, USER_MESSAGE_EVENT, Run
+from core.runs import MODEL_STEP_USAGE_EVENT, USER_MESSAGE_EVENT, Run
 from core.sessions import (
     SessionAddress,
     SessionConversationMessage,
@@ -392,7 +392,9 @@ class SessionPeers:
         async def observe(run: Run, after_sequence: int) -> None:
             async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
                 async for event in events:
-                    if event.type in {ASSISTANT_OUTPUT_EVENT, USER_MESSAGE_EVENT}:
+                    # The Assistant preview can arrive before the canonical
+                    # append. Usage follows that append in every Model step.
+                    if event.type in {MODEL_STEP_USAGE_EVENT, USER_MESSAGE_EVENT}:
                         changed.set()
 
         def started(run: Run) -> None:
