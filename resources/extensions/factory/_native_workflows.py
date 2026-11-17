@@ -114,16 +114,20 @@ class NativeWorkflows:
             await self.native.workflow_finished(card)
 
     async def scope(self, card: Json) -> tuple[Json, Json] | None:
-        cards = {item["id"]: item for item in await self.native.service.records().list_cards()}
         root = card
         seen: set[str] = set()
         while root["id"] not in seen:
             seen.add(root["id"])
             if task_id := root["runtime"].get("native_task_id"):
                 return await self.native.store.get_task(task_id), root
-            if root.get("parent_id") not in cards:
+            if not root.get("parent_id"):
                 return None
-            root = cards[root["parent_id"]]
+            try:
+                root = await self.native.service.records().get_card(root["parent_id"])
+            except FactoryError as error:
+                if error.code != "card_not_found":
+                    raise
+                return None
         return None
 
     async def permitted(self, card: Json) -> bool:

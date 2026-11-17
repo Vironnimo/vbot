@@ -131,7 +131,7 @@ class NativeDiscussions:
                     execution["id"], {"runtime": runtime}, actor="factory"
                 )
                 if not active:
-                    native._launch_later(execution)
+                    native.sessions._launch_later(execution)
             await self._wake_origin(topic)
 
     async def acknowledged(self, execution: Json, pending: Json) -> None:

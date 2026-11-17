@@ -142,7 +142,7 @@ class FactoryExtension:
         self.store = FactoryStore(await host.open_database(DATABASE_NAME, SCHEMA_SQL, MIGRATIONS))
         self._states = {card["id"]: card["state"] for card in await self.store.list_cards()}
         await self.native.reconcile()
-        await self.execution.reconcile()
+        await self.execution.sessions.reconcile()
         if host.triggers is not None:
             await self.triggers.sync()
             host.triggers.set_handler(self.triggers.fire)
@@ -226,7 +226,11 @@ class FactoryExtension:
                     await self.changed(saved, current)
 
     def _runtime_owner(self, context: Any) -> Any:
-        return self.native if self.native.owns(context.binding.group_id) else self.execution
+        return (
+            self.native.sessions
+            if self.native.owns(context.binding.group_id)
+            else self.execution.sessions
+        )
 
     async def before_request(self, context: Any) -> Any:
         return await self._runtime_owner(context).before_request(context)
@@ -252,7 +256,7 @@ class FactoryExtension:
 
     async def quiesce(self, reason: str = "extension") -> None:
         self.native.quiescing = True
-        await self.execution.quiesce(reason)
+        await self.execution.sessions.quiesce(reason)
 
     async def config_changed(self, _previous: Json, _current: Json) -> None:
         await self.schedule()

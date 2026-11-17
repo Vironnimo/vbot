@@ -299,7 +299,7 @@ type ToolCallIdProfile = Literal["none", "anthropic", "mistral", "responses"]
 type PromptCacheStyle = Literal["none", "anthropic_breakpoints"]
 type BudgetStrategy = Literal["fraction_of_max", "absolute"]
 type SnapRule = Literal["down", "up"]
-type DecisionProtocol = Literal["none", "system_one", "openai_decisions"]
+type DecisionProtocol = Literal["none", "system_one", "openai_decisions", "google_decisions"]
 type ReasoningDialect = Literal[
     "none",
     "claude_agent",
@@ -308,6 +308,7 @@ type ReasoningDialect = Literal[
     "nous_reasoning",
     "thinking_toggle",
     "thinking_toggle_with_effort",
+    "chat_template_kwargs",
     "minimax_split",
     "minimax_thinking",
     "anthropic_thinking",

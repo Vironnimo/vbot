@@ -24,10 +24,10 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 33
-SDK_VERSION: Final[str] = "33.0.0"
+API_VERSION: Final[int] = 34
+SDK_VERSION: Final[str] = "34.0.0"
 
-def require_api(minimum: int = 33, *, maximum: int | None = None) -> int: ...
+def require_api(minimum: int = 34, *, maximum: int | None = None) -> int: ...
 
 @dataclass(frozen=True)
 class TemporaryAgentConfig:
@@ -232,6 +232,7 @@ class ExtensionHost:
     ) = None
     triggers: Any | None = None
     services: ExtensionServices | None = None
+    execution_usage_changes: Any | None = None
 
 class ExtensionOperations:
     # Supplied by ExtensionAPI; private host wiring is not an authoring constructor.

@@ -191,7 +191,7 @@ class FactoryManagement:
                 approvals.extend((await host.pending_approvals(group_id, list(owned)))["requests"])
             usage.append(await groups.usage(group_id, {}))
         budgets = {
-            step_id: await service.execution.budget_status(card, step_id, report_all=True)
+            step_id: await service.execution.budgets.budget_status(card, step_id, report_all=True)
             for step_id in steps
         }
         return {

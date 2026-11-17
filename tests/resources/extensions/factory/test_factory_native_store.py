@@ -30,7 +30,11 @@ async def test_native_schema_addition_preserves_workflow_cards_and_reopens(tmp_p
         "factory",
         DATABASE_NAME,
         SCHEMA_SQL.removesuffix(NATIVE_SCHEMA_SQL),
-        migrations=tuple(item for item in MIGRATIONS if item.name != "native_factory_teams"),
+        migrations=tuple(
+            item
+            for item in MIGRATIONS
+            if item.name not in {"native_factory_teams", "factory_budget_changes"}
+        ),
     )
     database = open_offline_database(before)
     try:
@@ -432,3 +436,34 @@ async def test_execution_delivery_and_identity_receipts_do_not_retarget(
     ]
     with pytest.raises(FactoryError):
         await native.reserve_identity("create-1", {"name": "Another"})
+
+
+async def test_budget_feed_coalesces_updates_and_retains_delete_tombstones(
+    factory_store: FactoryStore,
+) -> None:
+    factory, _, worker = await team(factory_store)
+    task = await factory_store.native.create_task(
+        factory["id"], "Scope", "Work", assignee_id=worker["id"]
+    )
+    first = await factory_store.budget_changes(limit=1)
+    records = list(first["records"])
+    while first["more"]:
+        first = await factory_store.budget_changes(
+            first["revision"], ledger_id=first["ledger_id"], limit=1
+        )
+        records.extend(first["records"])
+    assert any(item["id"] == task["id"] for item in records)
+    for priority in range(5):
+        await factory_store.native.change_task(task["id"], {"priority": priority})
+    changed = await factory_store.budget_changes(first["revision"], ledger_id=first["ledger_id"])
+    assert [(item["kind"], item["id"]) for item in changed["records"]] == [("task", task["id"])]
+    card = await factory_store.create_card("project", "Deleted", "Scope", origin="operator")
+    await factory_store.change(card["id"], {"state": "discarded"}, actor="user", event="discarded")
+    await factory_store.delete_card(card["id"])
+    deleted = await factory_store.budget_changes(
+        changed["revision"], ledger_id=changed["ledger_id"]
+    )
+    assert deleted["records"] == [{"kind": "card", "id": card["id"], "value": None}]
+    assert (
+        await factory_store.budget_changes(deleted["revision"], ledger_id=deleted["ledger_id"])
+    )["records"] == []

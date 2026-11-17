@@ -48,6 +48,16 @@ class ExecutionUsage(Protocol):
     ) -> Awaitable[JsonObject]: ...
 
 
+class ExecutionUsageChanges(Protocol):
+    def __call__(
+        self,
+        after: int = 0,
+        *,
+        ledger_id: str | None = None,
+        limit: int = 1000,
+    ) -> Awaitable[JsonObject]: ...
+
+
 @dataclass(frozen=True)
 class ExtensionHost:
     """Narrow, injected host capabilities; never exposes the Runtime itself."""
@@ -114,6 +124,8 @@ class ExtensionHost:
     # call it (``core/runtime/_extension_triggers.py``); ``None`` without Cron.
     triggers: Any | None = None
     services: ExtensionServices | None = None
+    # API v34: revisioned settled group totals for incremental owner projections.
+    execution_usage_changes: ExecutionUsageChanges | None = None
 
 
 @dataclass(frozen=True)

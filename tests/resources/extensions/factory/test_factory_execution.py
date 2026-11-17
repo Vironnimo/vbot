@@ -296,7 +296,9 @@ class Groups:
         self.closed.append(group)
         for run in tuple(self.runs.values()):
             if run.execution_owner.group_id == group and run.status.value == "running":
-                await self.service.execution.run_finished(self.context(run), outcome="cancelled")
+                await self.service.execution.sessions.run_finished(
+                    self.context(run), outcome="cancelled"
+                )
                 run.finish("cancelled")
 
     def context(self, run):
@@ -408,7 +410,7 @@ class Service:
             step["workflow"],
             parent_id=card["id"],
             project_id=card["project_id"],
-            title=f"{card['title']} Â· {step['name']}",
+            title=f"{card['title']} · {step['name']}",
             description="\n\n".join(item["result"] for item in earlier),
         )
         return {**child, "workflow_name": self.store.workflows[step["workflow"]]["name"]}
@@ -449,7 +451,7 @@ class Service:
     async def finish(self, step_id: str, outcome="success", card_id: str = CARD):
         run = await self.run(step_id, card_id)
         # Mirrors the real contract: owner callback before terminal publication.
-        await self.execution.run_finished(self.groups.context(run), outcome=outcome)
+        await self.execution.sessions.run_finished(self.groups.context(run), outcome=outcome)
         run.finish({"success": "completed", "error": "failed"}.get(outcome, outcome))
         await self.flush()
 
@@ -677,7 +679,7 @@ async def test_unconfigured_steps_have_no_run_limit(service):
     card = await service.card()
     assert card["state"] == "working"
     assert len(card["runtime"]["budget"]["runs"]) == 32
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -688,28 +690,28 @@ async def test_budget_warning_has_remaining_capacity_and_is_delivered_once(servi
     await started(service)
     context = await service.context("implement")
     if limit == 10:
-        assert await service.execution.before_request(context) is None
+        assert await service.execution.sessions.before_request(context) is None
         for i in range(8):
             assert (
-                await service.execution.before_tool_call(
+                await service.execution.sessions.before_tool_call(
                     context, tool_name="read", tool_call_id=str(i)
                 )
                 is None
             )
-    warning = await service.execution.before_request(context)
+    warning = await service.execution.sessions.before_request(context)
     assert warning is not None and warning.effect_kind == "factory_budget_notice"
-    assert warning == await service.execution.before_request(context)
+    assert warning == await service.execution.sessions.before_request(context)
     # The note holds a snapshot with useful remaining capacity, not a request to change settings.
     assert str(limit) in warning.entries[0]
     assert "factory_report_blocked" in warning.entries[0]
     assert "Board" not in warning.entries[0]
     await service.groups.append_delivery(context, warning)
-    await service.execution.acknowledge_delivery(context, warning)
-    assert await service.execution.before_request(context) is None
+    await service.execution.sessions.acknowledge_delivery(context, warning)
+    assert await service.execution.sessions.before_request(context) is None
     assert (await service.card())["state"] == "working"
     service.execution = FactoryExecution(service)
-    assert await service.execution.before_request(context) is None
-    await service.execution.quiesce()
+    assert await service.execution.sessions.before_request(context) is None
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -722,7 +724,9 @@ async def test_tool_budget_reserves_parallel_calls_and_survives_retry_and_rework
     context = await service.context("implement")
     results = await asyncio.gather(
         *[
-            service.execution.before_tool_call(context, tool_name="read", tool_call_id=f"call-{i}")
+            service.execution.sessions.before_tool_call(
+                context, tool_name="read", tool_call_id=f"call-{i}"
+            )
             for i in range(4)
         ]
     )
@@ -771,7 +775,7 @@ async def test_tool_budget_reserves_parallel_calls_and_survives_retry_and_rework
     assert len(card["runtime"]["budget"]["runs"]) == 3
     if scope == "step":
         assert state["limits"] == {"tool_calls": 3}
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -810,7 +814,7 @@ async def test_resource_limits_stop_inside_a_run_and_unknown_usage_is_not_free(
     context = await service.context("implement")
     queries.clear()
     with pytest.raises(FactoryError) as stopped:
-        await getattr(service.execution, boundary)(context)
+        await getattr(service.execution.sessions, boundary)(context)
     assert stopped.value.code == "budget_exhausted"
     card = await service.card()
     hit = service.state(card, "implement")["limit_hit"]
@@ -836,12 +840,14 @@ async def test_owned_child_requests_share_run_admission_without_becoming_the_par
     root = await service.context("implement")
     child = replace(root, run_id="child-run", agent_id="child", session_id="child-session")
     if limit == 2:
-        await service.execution.before_model_request(child)
-        await service.execution.before_model_request(child)
-        await service.execution.before_tool_call(child, tool_name="read", tool_call_id="child-call")
+        await service.execution.sessions.before_model_request(child)
+        await service.execution.sessions.before_model_request(child)
+        await service.execution.sessions.before_tool_call(
+            child, tool_name="read", tool_call_id="child-call"
+        )
         child = replace(child, run_id="next-child-run")
     with pytest.raises(FactoryError) as refusal:
-        await service.execution.before_model_request(child)
+        await service.execution.sessions.before_model_request(child)
     assert refusal.value.code == "budget_exhausted"
     card = await service.card()
     state = service.state(card, "implement")
@@ -883,7 +889,7 @@ async def test_judging_step_is_nudged_within_budget_and_retries_fresh(service):
     assert len(service.state(await service.card(), "review")["budget"]["runs"]) == 3
     await service.finish("review")
     assert (await service.card())["waiting_reason"] == "budget_exhausted"
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -992,14 +998,14 @@ async def test_resuming_a_card_waits_for_wip_and_keeps_its_snapshot(service, act
         context = await service.context("do")
         for boundary in ("before_request", "before_model_request"):
             with pytest.raises(FactoryError) as refused:
-                await getattr(service.execution, boundary)(context)
+                await getattr(service.execution.sessions, boundary)(context)
             assert refused.value.code == "wrong_state"
-        assert await service.execution.before_tool_call(
+        assert await service.execution.sessions.before_tool_call(
             context, tool_name="read", tool_call_id="late-call"
         )
-        await service.execution.run_finished(context, outcome="success")
+        await service.execution.sessions.run_finished(context, outcome="success")
         assert (await service.card())["runtime"]["steps"]["do"]["pending"] == pending
-    await service.execution.reconcile()
+    await service.execution.sessions.reconcile()
     await service.flush()
     assert len(service.groups.admissions) == admissions
     service.store.workflows["one"]["steps"][0]["task"] = "Unrelated later edit"
@@ -1015,7 +1021,7 @@ async def test_resuming_a_card_waits_for_wip_and_keeps_its_snapshot(service, act
     assert len(service.groups.admissions) == admissions + 1
     assert service.groups.admissions[-1][1].content == pending["content"]
     assert resumed["runtime"]["workflow"]["steps"][0]["task"] == "Do the step."
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1032,8 +1038,8 @@ async def test_restart_is_idempotent_and_second_interruption_waits_for_user(serv
         run.finish("interrupted")
         groups.recovered = True
         service.execution = FactoryExecution(service)
-        await service.execution.reconcile()
-        await service.execution.reconcile()
+        await service.execution.sessions.reconcile()
+        await service.execution.sessions.reconcile()
         await service.flush()
         card = await service.card()
         assert service.state(card, "implement")["restarts"] == interruption
@@ -1075,7 +1081,7 @@ async def test_private_tools_refuse_wrong_participants_states_and_incomplete_sub
         with pytest.raises(FactoryError):
             await handler(context, arguments)
     assert (await service.card())["revision"] == revision
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1100,7 +1106,7 @@ async def test_blocked_step_waits_for_user_and_answer_continues_same_session(ser
     assert participant == "implement" and answer.kind == "continuation"
     assert "Use the first behavior" in answer.content
     assert (await service.store.history(CARD))["comments"][-1]["text"] == "Use the first behavior"
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
 
 
 async def blocked(service: Service) -> Json:
@@ -1167,7 +1173,7 @@ async def test_failed_admission_retries_original_guidance_without_replaying_cano
     await service.finish("implement", "error")
     assert (await service.card())["waiting_reason"] == "run_failed"
     assert len(groups.admissions) == admissions
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1208,7 +1214,7 @@ async def test_retry_authorization_does_not_survive_crash_at_canonical_admission
     monkeypatch.setattr(groups, "start", start)
     groups.recovered = True
     service.execution = FactoryExecution(service)
-    await service.execution.reconcile()
+    await service.execution.sessions.reconcile()
     await service.flush()
     card = await service.card()
     assert (card["state"], card["waiting_reason"]) == ("waiting", "run_failed")
@@ -1220,7 +1226,7 @@ async def test_retry_authorization_does_not_survive_crash_at_canonical_admission
     assert (await service.card())["state"] == "working"
     assert len(groups.admissions) == 3
     assert "unique-answer-guidance" not in groups.admissions[-1][1].content
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1231,7 +1237,7 @@ async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_p
     await started(service)
     groups = service.groups
     previous = await service.run("implement")
-    await service.execution.run_finished(groups.context(previous), outcome="success")
+    await service.execution.sessions.run_finished(groups.context(previous), outcome="success")
     previous.finish()
     card = await service.card()
     pending = service.state(card, "implement")["pending"]
@@ -1241,23 +1247,25 @@ async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_p
     )
     automatic = groups.runs[admission.run_id]
     # A delegated child under the same temporary Agent never becomes the participant.
-    await service.execution.before_request(replace(groups.context(automatic), session_id="child"))
+    await service.execution.sessions.before_request(
+        replace(groups.context(automatic), session_id="child")
+    )
     assert service.state(await service.card(), "implement")["run"] == previous.id
-    delivery = await service.execution.before_request(groups.context(automatic))
+    delivery = await service.execution.sessions.before_request(groups.context(automatic))
     assert delivery is not None and delivery.delivery_id == pending["id"]
     assert delivery.entries == (pending["content"],)
     adopted = await service.card()
     assert service.state(adopted, "implement")["pending"]["id"] == pending["id"]
-    assert await service.execution.before_request(groups.context(automatic)) == delivery
+    assert await service.execution.sessions.before_request(groups.context(automatic)) == delivery
     with pytest.raises(FactoryError) as unacknowledged:
-        await service.execution.acknowledge_delivery(groups.context(automatic), delivery)
+        await service.execution.sessions.acknowledge_delivery(groups.context(automatic), delivery)
     assert unacknowledged.value.code == "delivery_unacknowledged"
     await groups.append_delivery(groups.context(automatic), delivery)
     await groups.append_delivery(groups.context(automatic), delivery)
-    await service.execution.acknowledge_delivery(groups.context(automatic), delivery)
-    assert await service.execution.before_request(groups.context(automatic)) is None
+    await service.execution.sessions.acknowledge_delivery(groups.context(automatic), delivery)
+    assert await service.execution.sessions.before_request(groups.context(automatic)) is None
     revision = (await service.card())["revision"]
-    await service.execution.acknowledge_delivery(groups.context(automatic), delivery)
+    await service.execution.sessions.acknowledge_delivery(groups.context(automatic), delivery)
     assert (await service.card())["revision"] == revision
     assert sum(receipt_id == delivery.delivery_id for receipt_id, _ in groups.carriers) == 1
     declarations = ExtensionDeclarations()
@@ -1290,7 +1298,7 @@ async def test_automatic_owned_continuation_adopts_canonical_run_and_preserves_p
         replace(groups.context(automatic), session_id="child"),
     ):
         with pytest.raises(FactoryError) as refusal:
-            await service.execution.before_request(context)
+            await service.execution.sessions.before_request(context)
         assert refusal.value.code == "wrong_state"
     await service.finish("implement")
 
@@ -1325,17 +1333,17 @@ async def test_final_run_warning_arrives_with_its_pending_continuation(service):
     await service.store.change(
         card["id"], {"runtime": card["runtime"]}, actor="user", event="limits_updated"
     )
-    delivery = await service.execution.before_request(context)
+    delivery = await service.execution.sessions.before_request(context)
     assert delivery.effect_kind == "factory_continuation"
     assert delivery.entries[0] == pending["content"]
     assert len(delivery.entries) == 2
     assert "factory_report_blocked" in delivery.entries[1]
-    assert await service.execution.before_request(context) == delivery
+    assert await service.execution.sessions.before_request(context) == delivery
     await service.groups.append_delivery(context, delivery)
     # Startup reconciliation acknowledges the warning with the same canonical receipt.
     service.execution = FactoryExecution(service)
-    await service.execution.reconcile()
-    assert await service.execution.before_request(context) is None
+    await service.execution.sessions.reconcile()
+    assert await service.execution.sessions.before_request(context) is None
     card = await service.card()
     assert len(service.state(card, "implement")["budget"]["runs"]) == 2
     assert all(notice["seen"] for notice in card["runtime"]["budget_notices"].values())
@@ -1351,10 +1359,10 @@ async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_b
 ):
     context, pending = await automatic_handoff(service)
     groups = service.groups
-    delivery = await service.execution.before_request(context)
+    delivery = await service.execution.sessions.before_request(context)
     assert delivery is not None and "unique-answer-guidance" in delivery.entries[0]
     if recovery == "retry":
-        await service.execution.run_finished(context, outcome="error")
+        await service.execution.sessions.run_finished(context, outcome="error")
         groups.runs[context.run_id].finish("failed")
         await service.flush()
         state = service.state(await service.card(), "implement")
@@ -1363,7 +1371,7 @@ async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_b
         with pytest.raises(OSError):
             await groups.append_delivery(context, delivery, fail=True)
         if recovery == "restart":
-            assert await service.execution.before_request(context) == delivery
+            assert await service.execution.sessions.before_request(context) == delivery
     else:
         await groups.append_delivery(context, delivery)
         if receipt == "conflicting":
@@ -1375,7 +1383,7 @@ async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_b
             groups.runs[context.run_id].finish("interrupted")
             groups.recovered = True
             service.execution = FactoryExecution(service)
-            await service.execution.reconcile()
+            await service.execution.sessions.reconcile()
         else:
             async with service.lock:
                 await service.execution.retry(await service.card())
@@ -1399,7 +1407,7 @@ async def test_pending_handoff_survives_append_failure_and_reconciles_receipts_b
         assert (latest.request_id == pending["id"]) is (receipt == "missing")
         assert sum("unique-answer-guidance" in content for _, content in groups.carriers) == 1
         assert "pending" not in service.state(await service.card(), "implement")
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1414,7 +1422,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
     context, pending = await automatic_handoff(service)
     groups = service.groups
     if boundary != "before_request":
-        delivery = await service.execution.before_request(context)
+        delivery = await service.execution.sessions.before_request(context)
         assert delivery is not None
         if boundary == "before_receipt":
             with pytest.raises(OSError):
@@ -1443,7 +1451,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
         older.finish("failed")
         groups.runs[older.id] = older
         context = groups.context(older)
-    await service.execution.run_finished(context, outcome="error")
+    await service.execution.sessions.run_finished(context, outcome="error")
     groups.runs[original.run_id].finish("failed")
     await service.flush()
     card = await service.card()
@@ -1458,7 +1466,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
         assert state["run"] == original.run_id
         assert card["runtime"]["budget"]["runs"] == ["run-1", original.run_id]
         assert not groups.open[f"{CARD}.implement"]
-        await service.execution.run_finished(context, outcome="error")
+        await service.execution.sessions.run_finished(context, outcome="error")
         await service.flush()
         assert len(groups.admissions) == 2
         async with service.lock:
@@ -1473,7 +1481,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
         assert sum("unique-answer-guidance" in content for _, content in groups.carriers) == 1
     else:
         assert card == before
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1481,7 +1489,7 @@ async def test_root_failure_pauses_exact_handoff_without_replaying_it(
 async def test_quiesce_drains_without_classifying_shutdown_as_step_failure(service):
     await started(service)
     revision = (await service.card())["revision"]
-    await service.execution.quiesce("reload")
+    await service.execution.sessions.quiesce("reload")
     await service.flush()
     card = await service.card()
     assert card["state"] == "working" and card["revision"] == revision
@@ -1572,7 +1580,7 @@ async def test_send_back_to_a_running_step_restarts_it_with_the_comment(service)
     assert "Use variant B" in rework.content
     assert service.state(card, "left")["status"] == "running"
     assert service.state(card, "right")["reason"] == "blocked"
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1675,7 +1683,7 @@ async def test_initial_steps_receive_the_resolved_project(service):
     child = await service.card(service.state(card, "child")["child"])
     assert card["project_id"] == child["project_id"] == "resolved"
     assert '"project_id": "resolved"' in service.groups.admissions[-1][1].content
-    await service.execution.quiesce()
+    await service.execution.sessions.quiesce()
     await service.flush()
 
 
@@ -1746,7 +1754,7 @@ async def test_step_interrupted_by_an_upgrade_waits_and_retry_runs_it_with_kept_
         }
     )
     service.execution = FactoryExecution(service)
-    await service.execution.reconcile()
+    await service.execution.sessions.reconcile()
     card = await service.card()
     assert (card["state"], service.state(card, "review")["reason"]) == ("waiting", "upgraded")
     assert not service.groups.admissions
