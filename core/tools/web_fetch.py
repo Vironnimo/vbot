@@ -375,7 +375,7 @@ def _shape_success(
     wall = bot_wall(final_url, metadata, main)
     if wall is not None:
         return tool_failure("access_denied", wall, retryable=False)
-    if is_script_shell(main):
+    if is_script_shell(main, page=page, url=final_url, title=metadata.get("title", "")):
         return tool_failure(
             "no_content",
             (
