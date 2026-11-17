@@ -101,6 +101,13 @@ def attach_refused_message(terminal_id: str) -> str:
     )
 
 
+def attached_access_refused_message(terminal_id: str) -> str:
+    return (
+        f"terminal was not run: {terminal_id} was started outside your current Permission Rules. "
+        'To continue, start a terminal with {"action": "start"}.'
+    )
+
+
 def screen_hidden_note() -> str:
     return (
         f"Its screen and history are not shown: {_STARTED_OUTSIDE}, and you can read only "

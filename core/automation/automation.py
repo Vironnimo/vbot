@@ -130,6 +130,7 @@ class TriggerService:
         subagent_message: SubAgentMessage | None = None,
         continuation_source: RunContinuationSource | None = None,
         expected_session_generation_id: str | None = None,
+        filter_body: Callable[[SessionAddress, str], Awaitable[str]] | None = None,
     ) -> asyncio.Future[None]:
         """Coalesce one background result at the target Session's next Run boundary.
 
@@ -139,6 +140,8 @@ class TriggerService:
         note, so the conversation shows the message where it arrived.
         ``continuation_source`` preserves captured settings after an origin Run
         leaves bounded lookup retention; cancellation still uses ``origin_run_id``.
+        ``filter_body`` can replace the pending body for the current recipient
+        before it reaches history, capture or a Model request.
         """
         return self._completion_delivery.submit(
             address,
@@ -150,6 +153,7 @@ class TriggerService:
             subagent_message=subagent_message,
             continuation_source=continuation_source,
             expected_session_generation_id=expected_session_generation_id,
+            filter_body=filter_body,
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:

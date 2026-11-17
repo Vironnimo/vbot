@@ -98,6 +98,7 @@ class _CompletionNotice:
     # protect against its current scope, rather than reuse an earlier mask.
     original_body: str | None = None
     original_subagent_message: SubAgentMessage | None = None
+    filter_body: Callable[[SessionAddress, str], Awaitable[str]] | None = None
 
     @property
     def read(self) -> bool:
@@ -246,6 +247,7 @@ class _CompletionDeliveryCoordinator:
         subagent_message: SubAgentMessage | None = None,
         continuation_source: RunContinuationSource | None = None,
         expected_session_generation_id: str | None = None,
+        filter_body: Callable[[SessionAddress, str], Awaitable[str]] | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
         if self._closed or (
@@ -317,6 +319,7 @@ class _CompletionDeliveryCoordinator:
             execution_owner=execution_owner,
             wake=wake,
             subagent_message=subagent_message,
+            filter_body=filter_body,
         )
         bucket.notices[notice_id] = notice
         self._start_delivery(bucket)
@@ -1015,11 +1018,11 @@ class _CompletionDeliveryCoordinator:
     async def _protect_notices(
         self, address: SessionAddress, notices: Sequence[_CompletionNotice]
     ) -> None:
-        if self._secrets is None:
-            return
         sessions = self._sessions
-        if sessions is not None and any(
-            notice.expected_session_generation_id is None for notice in notices
+        if (
+            self._secrets is not None
+            and sessions is not None
+            and any(notice.expected_session_generation_id is None for notice in notices)
         ):
             versions = await sessions.run_async(sessions.list_history_versions, [address])
             version = versions.get(address)
@@ -1029,19 +1032,26 @@ class _CompletionDeliveryCoordinator:
                 if notice.expected_session_generation_id is None:
                     notice.expected_session_generation_id = version[0]
         for notice in notices:
-            if notice.read_after is None:
+            if notice.read_after is not None:
+                continue
+            if self._secrets is None and notice.filter_body is None:
+                continue
+            if notice.original_body is None:
+                notice.original_body = notice.body
+                notice.original_subagent_message = notice.subagent_message
+            body = notice.original_body
+            if notice.filter_body is not None:
+                body = await notice.filter_body(address, body)
+            if self._secrets is None:
+                notice.body = self._secret_masker().mask(body)
+            else:
                 resolve = (
                     partial(sessions.generation_address, notice.expected_session_generation_id)
                     if sessions is not None and notice.expected_session_generation_id is not None
                     else None
                 )
                 protect = partial(self._secrets.protect_output, address, resolve_address=resolve)
-                if notice.original_body is None:
-                    notice.original_body = notice.body
-                    notice.original_subagent_message = notice.subagent_message
-                notice.body = await finish_despite_cancel(
-                    asyncio.to_thread(protect, notice.original_body)
-                )
+                notice.body = await finish_despite_cancel(asyncio.to_thread(protect, body))
                 if display := notice.original_subagent_message:
                     title = await finish_despite_cancel(asyncio.to_thread(protect, display.title))
                     content = await finish_despite_cancel(

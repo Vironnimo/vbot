@@ -1156,6 +1156,42 @@ _SUBAGENT_MESSAGE = SubAgentMessage(
 
 
 @pytest.mark.parametrize("path", ["follow_up_run", "request_boundary", "reminder"])
+async def test_pending_completion_uses_the_body_permitted_at_delivery(
+    tmp_path: Path, path: str
+) -> None:
+    manager = ChatRunManager()
+    service, loop, session = _completion_service(tmp_path, manager)
+    origin: Run | None = None
+    release: asyncio.Event | None = None
+    if path == "request_boundary":
+        origin, release = await _active_origin(manager)
+    readable = True
+
+    async def filter_body(address: SessionAddress, body: str) -> str:
+        assert address == _ADDRESS
+        return body if readable else "Only the completion state is permitted."
+
+    delivery = service.submit_completion(
+        _ADDRESS,
+        notice_id="terminal:example:attention:1",
+        origin_run_id=origin.id if origin is not None else "origin-run",
+        body="Previously permitted screen text.",
+        wake=path != "reminder",
+        filter_body=filter_body,
+    )
+    readable = False
+    if origin is not None:
+        assert await service.deliver_background_completions(origin, session) is not None
+    await asyncio.wait_for(delivery, timeout=1)
+    assert "Only the completion state is permitted." in " ".join([*_notes(session), *loop.messages])
+    assert "Previously permitted screen text." not in " ".join([*_notes(session), *loop.messages])
+    if release is not None:
+        release.set()
+    await service.aclose()
+    await manager.aclose()
+
+
+@pytest.mark.parametrize("path", ["follow_up_run", "request_boundary", "reminder"])
 async def test_a_subagent_message_record_rides_on_the_note_that_delivers_it(
     tmp_path: Path, path: str
 ) -> None:

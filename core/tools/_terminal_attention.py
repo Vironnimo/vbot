@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
+from core.sessions import SessionAddress
 from core.tools.terminal_emulator import (
     ScreenObservation,
 )
@@ -168,12 +169,37 @@ class TerminalNotices:
             )
         else:
             self.revocation_delivered = False
+        allowed = self._services.output_allowed
+        screen_shown = granted
+
+        async def filter_body(address: SessionAddress, original: str) -> str:
+            nonlocal screen_shown
+            assert allowed is not None
+            # An attachment can change while this notice is queued or while
+            # the current Permission Boundary is being resolved.
+            current = self._info()
+            screen_shown = (
+                address == attachment.address
+                and current.attachment == attachment
+                and await allowed(address, current)
+                and self._info().attachment == attachment
+                and self._services.granted(attachment, current.computer_id)
+            )
+            if screen_shown:
+                return original
+            return (
+                f"Terminal {self.terminal_id} reported {attention.kind}. "
+                "Its screen is unavailable under your current permissions. "
+                "The user can view or stop the terminal in Terminals."
+            )
+
         delivery = trigger_service.submit_completion(
             attachment.address,
             notice_id=attention.notice_id,
             origin_run_id=origin_run_id,
             body=body,
             execution_owner=execution_owner,
+            filter_body=filter_body if granted and allowed is not None else None,
         )
         try:
             await delivery
@@ -188,6 +214,8 @@ class TerminalNotices:
             return
         if not granted:
             self.revocation_delivered = True
+            return
+        if not screen_shown:
             return
         # The Agent received it: a wait ends only at a later attention.
         self.acknowledged_revision = max(self.acknowledged_revision, attention.revision)

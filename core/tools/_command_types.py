@@ -227,6 +227,7 @@ class CompletionSink(Protocol):
         body: str,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
+        filter_body: Callable[[SessionAddress, str], Awaitable[str]] | None = None,
     ) -> Awaitable[None]: ...
 
     def cancel_completion(

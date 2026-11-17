@@ -363,6 +363,9 @@ class TerminalSessionServices:
     # Whether the attached Session may still use this computer id; output of a
     # computer it lost stays with the operator.
     granted: Callable[[TerminalOwner, str], bool]
+    # Whether current Permission Rules allow delivering a screen to the
+    # attached Session, independent of the Computer grant.
+    output_allowed: Callable[[SessionAddress, TerminalInfo], Awaitable[bool]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
