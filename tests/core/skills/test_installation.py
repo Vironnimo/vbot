@@ -366,7 +366,8 @@ def test_invalid_document_leaves_existing_skill_untouched(tmp_path, content):
     assert (target / "research/SKILL.md").read_bytes() == DOCUMENT
 
 
-def test_failed_publication_restores_previous_package(tmp_path, monkeypatch):
+@pytest.mark.parametrize("backup_visible", [True, False], ids=["visible-backup", "hidden-status"])
+def test_failed_publication_restores_previous_package(tmp_path, monkeypatch, backup_visible):
     target = tmp_path / "skills"
     service = SkillAuthoringService()
     source = archive(tmp_path, FILES)
@@ -374,13 +375,19 @@ def test_failed_publication_restores_previous_package(tmp_path, monkeypatch):
     original = (target / "research/.vbot-install.json").read_bytes()
     source = archive(tmp_path, {**FILES, "references/new.md": b"new"})
     rename = Path.rename
+    exists = Path.exists
 
     def fail_publish(self, destination):
         if self.name == "package":
             raise OSError("publication failed")
         return rename(self, destination)
 
+    def backup_status(self, **kwargs):
+        # Python's convenience status check can report False on an I/O error.
+        return False if self.name == "previous" and not backup_visible else exists(self, **kwargs)
+
     monkeypatch.setattr(Path, "rename", fail_publish)
+    monkeypatch.setattr(Path, "exists", backup_status)
     with pytest.raises(OSError):
         service.install(target, str(source), replace=True)
     assert (target / "research/.vbot-install.json").read_bytes() == original

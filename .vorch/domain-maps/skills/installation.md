@@ -29,6 +29,8 @@ Read when changing imports, source adapters, package validation or replacement. 
 - Prepare all files and the receipt in a hidden sibling transaction directory before publication. Under the author's write lock, move the old package aside and publish the prepared directory. Restore the old package on publication failure; if restore also fails, retain it at the recovery path in the error. Leftover transaction directories are not discoverable Skills. This is staged replacement with rollback, not a crash-recovery journal. A published install records one Skill History revision after the Background Writer check (`skills/history.md` -> Write rules): `create` with the writer's actor as origin, or `change` for a replacement. RPC, CLI and WebUI install as `HUMAN_WRITER`, the default.
 - `.vbot-install.json` records version 1, source, selected path, content digest and installation time. Generic URL query/fragment credentials are omitted; resolved GitHub commits and ClawHub versions are retained. The receipt is internal, excluded from equality, resource listings and Tool reads; it is not an authority or permission grant. Scoped `skill delete` uninstalls a package by moving it into the Skill Archive, from where it can be restored (`skills/history.md`).
 
+Once replacement has moved the original aside, a failed publication always attempts to restore it. Cleanup keeps the transaction directory if that restore fails.
+
 ## Verification pointers
 
 - `tests/core/skills/test_installation.py`: complete files, metadata, selection, idempotence, overwrite, hostile archives (including portable Windows device aliases and malformed Unicode names), local hard links, limits and rollback.
