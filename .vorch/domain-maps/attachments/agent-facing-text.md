@@ -5,4 +5,4 @@ Why each sentence of the Agent-facing text the Attachments domain owns exists: t
 | Text | Reason |
 | --- | --- |
 | `resized from ... to ... pixels to fit the destination limits` | The Model needs the shown copy's dimensions when interpreting image coordinates; reduction can be required by dimensions or encoded size. The surrounding note states that the original file is unchanged. |
-| `16-bit grayscale was reduced to 8 bits` | A WebP copy can merge close shades even at full resolution. This tells the Model why the shown copy cannot establish subtle brightness differences in the original. |
+| `16-bit grayscale was reduced to 8 bits` | A copy can merge close shades, including when a transparent PNG must be resized to fit. This tells the Model why the shown copy cannot establish subtle brightness differences in the original. |

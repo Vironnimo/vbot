@@ -100,6 +100,7 @@ class PreparedImage:
     size: tuple[int, int]
     reencoded: bool = False
     lossy: bool = False
+    grayscale_depth_reduced: bool = False
 
     @property
     def note(self) -> str | None:
@@ -111,9 +112,9 @@ class PreparedImage:
                 f"resized from {self.original_size[0]}x{self.original_size[1]} "
                 f"to {self.size[0]}x{self.size[1]} pixels to fit the destination limits"
             )
-        if self.lossy and self.media_type == "image/webp":
+        if self.grayscale_depth_reduced:
             details.append("16-bit grayscale was reduced to 8 bits")
-        elif self.lossy:
+        if self.lossy and self.media_type == "image/jpeg":
             details.append("lossy compression was used, so fine details may be reduced")
         details.append("the original file is unchanged")
         return "; ".join(details)
@@ -348,6 +349,7 @@ class ImageConverter:
     ) -> PreparedImage:
         targets = target.output_types
         max_bytes, max_dimension = target.max_output_bytes, target.max_dimension
+        grayscale_16 = original.mode == "I;16"
         image = original
         if max_dimension is not None and max(original.size) > max_dimension:
             factor = max_dimension / max(original.size)
@@ -368,14 +370,17 @@ class ImageConverter:
                     except _EncodingTooLargeError as exc:
                         smallest_overflow = min(smallest_overflow or exc.size, exc.size)
                         continue
+                    depth_reduced = grayscale_16 and (
+                        image.mode != "I;16" or output_type != "image/png"
+                    )
                     return PreparedImage(
                         data,
                         output_type,
                         original.size,
                         image.size,
                         reencoded=True,
-                        lossy=output_type == "image/jpeg"
-                        or (image.mode == "I;16" and output_type == "image/webp"),
+                        lossy=output_type == "image/jpeg" or depth_reduced,
+                        grayscale_depth_reduced=depth_reduced,
                     )
             if max_bytes is None or image.size == (1, 1) or attempt == 8:
                 break
@@ -389,6 +394,8 @@ class ImageConverter:
 
 def _resampling_source(image: Image.Image) -> Image.Image:
     """Expand images whose palette or color key cannot be filtered as stored."""
+    if image.mode == "I;16" and isinstance(image.info.get("transparency"), int):
+        return _reduce_grayscale_depth(image)
     if image.mode == "P":
         return image.convert("RGBA" if image.has_transparency_data else "RGB")
     if image.mode in {"1", "L"}:
