@@ -203,7 +203,7 @@ def performance_history(
     lines = [
         f"performance history: {len(windows)} windows of "
         f"{_value_text(payload.data.get('interval_seconds'))} s, oldest first, "
-        f"times in local time (UTC{datetime.now().astimezone().strftime('%z')})"
+        "window times in local time with UTC offsets"
     ]
     previous_process: object = None
     for window in windows:
@@ -279,12 +279,15 @@ def _window_span(window: Mapping[str, Any]) -> str:
     ended = _local_datetime(window.get("ended_at"))
     if started is None or ended is None:
         return "?"
-    return f"{started:%Y-%m-%d %H:%M}-{ended:%H:%M}"
+    end_text = ended.isoformat(sep=" ", timespec="minutes")
+    if started.date() == ended.date():
+        end_text = end_text.split(" ", 1)[1]
+    return f"{started.isoformat(sep=' ', timespec='minutes')} to {end_text}"
 
 
 def _local_time(value: object) -> str:
     moment = _local_datetime(value)
-    return "?" if moment is None else f"{moment:%Y-%m-%d %H:%M:%S}"
+    return "?" if moment is None else moment.isoformat(sep=" ", timespec="seconds")
 
 
 def _local_datetime(value: object) -> datetime | None:

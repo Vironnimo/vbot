@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -342,10 +343,14 @@ HISTORY_WINDOW: dict[str, Any] = {
     "stalls": [{"started_at": "2026-09-28T14:35:00+00:00", "duration_ms": 900.0, "gc_ms": 0.0}],
     "stalls_dropped": 0,
 }
+WINDOW_START = datetime.fromisoformat(HISTORY_WINDOW["started_at"]).astimezone()
+WINDOW_END = datetime.fromisoformat(HISTORY_WINDOW["ended_at"]).astimezone()
 WINDOW_SPAN = (
-    f"{_local(HISTORY_WINDOW['started_at'])}-{_local(HISTORY_WINDOW['ended_at'], '%H:%M')}"
+    f"{WINDOW_START.isoformat(sep=' ', timespec='minutes')} to "
+    f"{WINDOW_END.isoformat(timespec='minutes').split('T', 1)[1]}"
 )
-STARTED_LINE = f"server started {_local(HISTORY_WINDOW['process_started_at'], '%Y-%m-%d %H:%M:%S')}"
+PROCESS_STARTED = datetime.fromisoformat(HISTORY_WINDOW["process_started_at"]).astimezone()
+STARTED_LINE = f"server started {PROCESS_STARTED.isoformat(sep=' ', timespec='seconds')}"
 
 
 @pytest.mark.parametrize(
@@ -425,6 +430,40 @@ def test_history_at_prints_the_full_windows_containing_a_local_time(
     ]
     assert "top counters:" in lines and "- events.sse=90" in lines
     assert "stalls (newest first, 1 stored):" in lines
+
+
+def test_history_distinguishes_offsets_during_clock_change_and_dates_at_midnight(
+    rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    berlin = ZoneInfo("Europe/Berlin")
+    monkeypatch.setattr(
+        "cli.performance_management._local_datetime",
+        lambda value: datetime.fromisoformat(value).astimezone(berlin),
+    )
+    rpc.reply(
+        "performance.history",
+        {
+            "interval_seconds": 600,
+            "windows": [
+                {
+                    **HISTORY_WINDOW,
+                    "started_at": "2026-10-25T00:55:00+00:00",
+                    "ended_at": "2026-10-25T01:05:00+00:00",
+                },
+                {
+                    **HISTORY_WINDOW,
+                    "started_at": "2026-10-25T22:55:00+00:00",
+                    "ended_at": "2026-10-25T23:05:00+00:00",
+                },
+            ],
+        },
+    )
+
+    code, out, _err = run_cli("performance", "history")
+
+    assert code == 0
+    assert "2026-10-25 02:55+02:00 to 02:05+01:00" in out
+    assert "2026-10-25 23:55+01:00 to 2026-10-26 00:05+01:00" in out
 
 
 @pytest.mark.parametrize(
