@@ -48,10 +48,14 @@ class DesktopSystemActions:
         self._external_url_opener = external_url_opener or _open_external_url
         self._lock = threading.Lock()
 
-    def set_clipboard_text(self, value: Any) -> None:
+    def set_clipboard_text(
+        self, value: Any, *, authorize: Callable[[], None] | None = None
+    ) -> None:
         """Replace the host clipboard with validated plain text."""
         text = _validated_clipboard_text(value)
         with self._lock:
+            if authorize is not None:
+                authorize()
             self._clipboard_writer(text)
 
     def get_clipboard_text(self) -> str:

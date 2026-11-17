@@ -335,6 +335,50 @@ def test_system_actions_validate_and_delegate() -> None:
     assert opened == ["https://example.com/path?q=1"]
 
 
+@pytest.mark.parametrize("action", ["copy", "listen"])
+@pytest.mark.parametrize("consent", ["approved", "declined", "navigated"])
+def test_remote_page_needs_current_native_consent_for_clipboard_write_or_listening(
+    action: str, consent: str
+) -> None:
+    page = ["https://other.example.com"]
+    questions: list[str] = []
+    copied: list[str] = []
+
+    def confirm(_title: str, message: str) -> bool:
+        questions.append(message)
+        if consent == "navigated":
+            page[0] = OWN_SERVER
+            permissions.page_loaded()
+        return consent != "declined"
+
+    permissions = _page_permissions(lambda: page[0], confirm)
+    bridge, voice = _bridge(
+        permissions=permissions,
+        system_actions=DesktopSystemActions(clipboard_writer=copied.append),
+    )
+
+    def invoke() -> None:
+        if action == "copy":
+            bridge.setClipboardText("selected text")
+        else:
+            bridge.setVoiceEnabled(True)
+
+    if consent == "approved":
+        invoke()
+        assert copied == (["selected text"] if action == "copy" else [])
+        assert voice.calls == ([("set_enabled", (True,))] if action == "listen" else [])
+    else:
+        with pytest.raises(BridgeError, match="^declined$"):
+            invoke()
+        assert not copied and not voice.calls
+    assert len(questions) == 1
+    assert "https://other.example.com" in questions[0]
+    if action == "listen":
+        bridge.setVoiceEnabled(False)
+        assert voice.calls[-1] == ("set_enabled", (False,))
+        assert len(questions) == 1
+
+
 # -- Microphone --------------------------------------------------------------------
 
 
