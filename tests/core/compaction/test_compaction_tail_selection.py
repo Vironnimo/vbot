@@ -285,6 +285,25 @@ def _live_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
     ]
 
 
+def test_working_tail_matches_reused_message_ids_in_append_order() -> None:
+    messages = [
+        user("prior", "First instruction"),
+        user("reused", "Original instruction"),
+        assistant("previous-answer", "Previous work"),
+        user("reused", "Revised instruction"),
+        assistant("latest-answer", "Latest work"),
+    ]
+    request = _live_request(messages)
+
+    plan = _plan_working_tail(
+        messages, 4, request_messages=tuple(request), estimate_tail_tokens=len
+    )
+
+    assert plan.retained_messages == tuple(messages[1:])
+    assert plan.request_start == 2
+    assert request[plan.request_start]["content"] == "Original instruction"
+
+
 @pytest.mark.parametrize("merged", [False, True], ids=["rendered-exactly", "merged-in-request"])
 def test_working_tail_keeps_delivered_notes_only_when_the_request_renders_them_exactly(
     merged: bool,
