@@ -51,6 +51,7 @@ describe('ChatComposer', () => {
   it('composes built-ins and keeps Extension draft actions local to each Chat area', async () => {
     setDraft('agent::first', 'first');
     setDraft('agent::second', 'second');
+    let savedSettings = { appearance: { ui_layout: {} } };
     let registry;
     const onSendMessage = vi.fn();
     const instance = mount(ContributionContextHost, {
@@ -62,8 +63,10 @@ describe('ChatComposer', () => {
           { draftKey: 'agent::second', onSendMessage },
         ],
         source: {
-          settings: { appearance: { ui_layout: {} } },
-          writeSettings: async (params) => ({ appearance: params.appearance }),
+          settings: savedSettings,
+          readSettings: async () => savedSettings,
+          writeSettings: async (params) =>
+            (savedSettings = { appearance: params.appearance }),
           entries: [
             {
               id: 'extension:example:insert',

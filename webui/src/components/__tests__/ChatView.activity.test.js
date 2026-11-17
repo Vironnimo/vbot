@@ -61,7 +61,9 @@ describe('ChatView Agent activity', () => {
         project_id: null,
         session_id: 'session-1',
       };
+      const resolve = vi.fn(async () => ({}));
       const approvals = reactiveProps({
+        resolve,
         requests: [
           {
             id: 'approval-child',
@@ -108,13 +110,10 @@ describe('ChatView Agent activity', () => {
       expect(onUnattendedResults).toHaveBeenLastCalledWith(1);
       pending.open = true;
       pending.querySelector('[data-approval="once"]').click();
-      await waitForCondition(() =>
-        rpcMock.mock.calls.some(
-          ([method, params]) =>
-            method === 'permissions.resolve' &&
-            params.id === 'approval-child' &&
-            params.decision === 'allow',
-        ),
+      expect(resolve).toHaveBeenCalledExactlyOnceWith(
+        'approval-child',
+        'allow',
+        {},
       );
       // The server's snapshot, rather than a local click, retires the request.
       approvals.requests = [];

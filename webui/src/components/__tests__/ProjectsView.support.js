@@ -42,6 +42,7 @@ vi.mock('$lib/api.js', () =>
 );
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
+const { listServerDirectory } = await import('$lib/api.js');
 const { default: AutosaveContextHost } =
   await import('./AutosaveContextHost.support.svelte');
 // Loaded after the Svelte mock, so its context lookups share the components'
@@ -303,16 +304,28 @@ function setupProjectsViewSuite() {
   return {
     // Mount the view into the document; the suite unmounts it after the test.
     mount(props = {}, coordinator = null) {
+      const context = new Map([
+        [
+          'pathServices',
+          {
+            listDirectory: listServerDirectory,
+            createDirectory: (params) =>
+              rpcMock('filesystem.create_directory', params),
+            listProjects: (...args) => listProjectsMock(...args),
+          },
+        ],
+      ]);
       mountedComponent = coordinator
         ? mount(AutosaveContextHost, {
             target: document.body,
+            context,
             props: {
               component: ProjectsView,
               componentProps: props,
               coordinator,
             },
           })
-        : mount(ProjectsView, { target: document.body, props });
+        : mount(ProjectsView, { target: document.body, props, context });
       flushSync();
       return mountedComponent;
     },

@@ -10,6 +10,7 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
 
