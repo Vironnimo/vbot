@@ -34,7 +34,7 @@ from core.json_documents import (
 from core.projects import AgentOverrides
 from core.runs import SILENT_ANSWER
 from core.secrets import WEBHOOK_SECRETS
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.errors import VBotError
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
@@ -395,7 +395,11 @@ class DirectInputService:
                 async with asyncio.timeout(timeout):
                     run = submission.run
                     if run is None and submission.queued_item is not None:
-                        run = await asyncio.shield(submission.queued_item.future)
+                        queued = submission.queued_item.future
+                        await asyncio.wait((queued,))
+                        if queued.cancelled():
+                            return await self.result(identity, request_id)
+                        run = queued.result()
                     if run is not None:
                         await run.wait()
             except Exception as error:
@@ -429,8 +433,14 @@ class DirectInputService:
         if not record.live:
             result["status"] = "unavailable"
         elif record.run_id and status in {"completed", "failed", "cancelled", "interrupted"}:
-            session = await self._sessions.get_async(record.address)
-            answer = await session.load_run_result_async(run_id=record.run_id)
-            content = answer.assistant.content if answer and answer.assistant else ""
-            result["content"] = "" if content == SILENT_ANSWER else content
+            try:
+                session = await self._sessions.get_async(record.address)
+                if session.generation_id == record.generation_id:
+                    answer = await session.load_run_result_async(run_id=record.run_id)
+                    content = answer.assistant.content if answer and answer.assistant else ""
+                    result["content"] = "" if content == SILENT_ANSWER else content
+                    return result
+            except SessionNotFoundError:
+                pass
+            result["status"] = "unavailable"
         return result

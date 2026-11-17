@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any, override
 
 import pytest
 
 from core.automation.inputs import DirectInputError, DirectInputNotFoundError, DirectInputService
 from core.runs import ChatRunManager
-from core.sessions.errors import AccessorInputConflictError
+from core.sessions.errors import AccessorInputConflictError, SessionNotFoundError
 from tests.core.automation.cron_test_support import secret_store
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
@@ -122,6 +123,64 @@ async def test_tasks_queue_continue_and_use_run_overrides_without_changing_defau
         third = await inputs.submit(identity, {"prompt": "Independent"}, request_id="three")
         assert third["session_id"] != first["session_id"]
         await inputs.wait(identity, "three", 2)
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_the_durable_status_when_the_queue_entry_is_removed(
+    tmp_path, monkeypatch
+):
+    adapter = HeldAdapter()
+    async with harness(tmp_path, adapter) as (runtime, inputs, _store, loop):
+        inlet = await inputs.configure(None, {"name": "Tasks", "agent_id": "coder"})
+        identity = inlet["id"]
+        first = await inputs.submit(identity, {"prompt": "first"}, request_id="one")
+        await adapter.entered.wait()
+        second = await inputs.submit(
+            identity, {"prompt": "second", "session_id": first["session_id"]}, request_id="two"
+        )
+        assert second["status"] == "queued"
+        entered_wait = asyncio.Event()
+        original_lookup = loop.lookup_accessor_input
+
+        async def lookup(*args, **kwargs):
+            submission = await original_lookup(*args, **kwargs)
+            entered_wait.set()
+            return submission
+
+        monkeypatch.setattr(loop, "lookup_accessor_input", lookup)
+        waiting = asyncio.create_task(inputs.wait(identity, "two", 30))
+        try:
+            await entered_wait.wait()
+            await runtime.chat_runs.clear_queued_async(
+                "coder", first["session_id"], project_id=None
+            )
+            assert (await waiting)["status"] == "removed"
+        finally:
+            adapter.release.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["archived", "replaced"])
+async def test_terminal_result_becomes_unavailable_if_its_session_is_gone(
+    tmp_path, monkeypatch, change
+):
+    async with harness(tmp_path) as (runtime, inputs, _store, _loop):
+        inlet = await inputs.configure(None, {"name": "Tasks", "agent_id": "coder"})
+        identity = inlet["id"]
+        accepted = await inputs.submit(identity, {"prompt": "One task"}, request_id="one")
+        assert (await inputs.wait(identity, "one", 2))["content"] == "answer"
+
+        async def changed_session(*_args, **_kwargs):
+            if change == "archived":
+                raise SessionNotFoundError("Archived while reading the receipt")
+            return SimpleNamespace(generation_id="replacement")
+
+        monkeypatch.setattr(runtime.chat_sessions, "get_async", changed_session)
+        result = await inputs.result(identity, "one")
+
+        assert result["status"] == "unavailable"
+        assert result["session_id"] == accepted["session_id"]
+        assert "content" not in result
 
 
 @pytest.mark.asyncio
