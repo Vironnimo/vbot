@@ -158,6 +158,9 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
     [
         # Codex runs every command through a login shell; the script is the command.
         ("linux", ["bash", "-lc", "ls -la | head -5"], "ls -la | head -5"),
+        ("linux", ["BASH", "-c", "pwd"], "BASH -c pwd"),
+        ("linux", ["bash", "-C", "script.sh"], "bash -C script.sh"),
+        ("linux", ["bash", "-c", "-c", "arg"], "bash -c -c arg"),
         ("linux", ["/bin/bash", "-c", "echo $HOME"], "/bin/bash -c 'echo $HOME'"),
         ("linux", ["/opt/my tools/bash"], "'/opt/my tools/bash'"),
         ("linux", ["./tool;other"], "'./tool;other'"),
