@@ -69,9 +69,16 @@ def is_link_status(status: os.stat_result) -> bool:
     entries.
     """
 
-    if sys.platform == "win32" and status.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT:
+    if sys.platform == "win32" and is_windows_link_tag(status.st_reparse_tag):
         return True
     return stat.S_ISLNK(status.st_mode)
+
+
+def is_windows_link_tag(tag: int) -> bool:
+    """Apply the same link policy to native Windows reparse metadata."""
+    if sys.platform == "win32":
+        return tag in {stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT}
+    return False
 
 
 __all__ = [
@@ -79,5 +86,6 @@ __all__ = [
     "is_dir_strict",
     "is_file_strict",
     "is_link_status",
+    "is_windows_link_tag",
     "stat_or_none",
 ]

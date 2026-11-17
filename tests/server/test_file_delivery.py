@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import threading
+from collections.abc import MutableMapping
 from datetime import UTC, datetime
 from html import unescape
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI  # type: ignore[import-not-found]
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.access.config import access_config
 from core.access.devices import DeviceStore, new_device
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
+from core.extensions import ExtensionRegistrationIdentity
 from core.sessions import SessionAddress
+from server._capability_file import VerifiedFile, open_canonical_file
+from server._file_routes import register_file_routes
 from server.app import create_app
 from server.events import RUN_OUTPUT_SERVER_EVENT
 from server.file_delivery import (
@@ -216,6 +224,7 @@ def test_website_preview_serves_the_site_under_an_opaque_origin_capability(
         external = client.get(url)
         embedded = client.get(preview["url"])
         css = client.get(f"{base}/style.css", headers=null_origin)
+        css_head = client.head(f"{base}/style.css", headers={**null_origin, "Range": "bytes=0-1"})
         module = client.get(f"{base}/main.mjs", headers=null_origin)
         subpage = client.get(f"{base}/sub/", headers=null_origin)
         subpage_redirect = client.get(f"{base}/sub", follow_redirects=False)
@@ -261,6 +270,10 @@ def test_website_preview_serves_the_site_under_an_opaque_origin_capability(
     assert embedded.headers["referrer-policy"] == "no-referrer"
     assert css.status_code == module.status_code == subpage.status_code == 200
     assert css.headers["content-type"].startswith("text/css")
+    assert css_head.status_code == 206
+    assert css_head.headers["content-range"] == f"bytes 0-1/{len(css.content)}"
+    assert css_head.headers["content-length"] == "2"
+    assert css_head.content == b""
     assert module.headers["content-type"].startswith("text/javascript")
     assert css.headers["access-control-allow-origin"] == "null"
     assert "Subpage" in subpage.text
@@ -834,6 +847,190 @@ def test_tool_media_play_from_signed_urls_that_keep_their_kind(tmp_path: Path) -
         assert response.status_code == 206
         assert response.content == video.read_bytes()[:4]
         assert response.headers["content-disposition"].startswith("inline")
+        full = client.get(item["url"])
+        if_range = client.get(
+            item["url"], headers={"Range": "bytes=0-3", "If-Range": full.headers["etag"]}
+        )
+        assert if_range.status_code == 206
+        assert if_range.content == response.content
+        stale = client.get(
+            item["url"], headers={"Range": "bytes=0-3", "If-Range": '"older-version"'}
+        )
+        assert stale.status_code == 200
+        assert stale.content == full.content
+        multipart = client.get(item["url"], headers={"Range": "bytes=0-3,12-15"})
+        assert multipart.status_code == 206
+        assert multipart.headers["content-type"].startswith("multipart/byteranges; boundary=")
+        assert int(multipart.headers["content-length"]) == len(multipart.content)
+        size = len(full.content)
+        for start in (0, 12):
+            assert (
+                f"Content-Range: bytes {start}-{start + 3}/{size}\r\n\r\n".encode()
+                + full.content[start : start + 4]
+                in multipart.content
+            )
+        beyond = client.get(item["url"], headers={"Range": f"bytes={size}-"})
+        assert beyond.status_code == 416
+        assert beyond.headers["content-range"] == f"bytes */{size}"
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        "original",
+        "preview_html",
+        "preview_asset",
+        "extension",
+        "html_redirect",
+        "retired_extension",
+    ],
+)
+def test_capability_responses_follow_the_open_file_across_an_editor_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    entry.write_bytes(b"<h1>Current draft</h1>")
+    filename = "notes.txt" if surface == "original" else "app.js"
+    file = entry if surface in {"preview_html", "html_redirect"} else site / filename
+    if file != entry:
+        file.write_bytes(b"/* Current draft */")
+    expected = file.read_bytes()
+    runtime = StubRuntime(tmp_path / "data", StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+    inspected: list[VerifiedFile] = []
+    live = True
+
+    def open_with_save(path: Path) -> VerifiedFile:
+        nonlocal live
+        opened = open_canonical_file(path)
+        if path == file:
+            inspected.append(opened)
+            # An ordinary editor save moves the old file aside and puts a new
+            # version at its name while the older download is already open.
+            file.rename(site / "previous")
+            file.write_bytes(b"%PDF-1.7 New version")
+            if surface == "retired_extension":
+                live = False
+        return opened
+
+    with TestClient(app) as client:
+        delivery: FileDelivery = cast(Any, client.app).state.file_delivery
+        if surface in {"original", "html_redirect"}:
+            url = _only_file_url(delivery.project_message(_assistant_payload(file))["content"])
+        elif surface in {"extension", "retired_extension"}:
+            identity = ExtensionRegistrationIdentity("fixture", "epoch")
+            page = delivery.open_extension_page(
+                extension="fixture", page="main", epoch="epoch", entry=entry
+            )
+            url = page["url"].removesuffix(entry.name) + file.name
+            monkeypatch.setattr(
+                runtime,
+                "extensions",
+                SimpleNamespace(
+                    page_declarations=lambda: [(identity, SimpleNamespace(page_id="main"), entry)],
+                    is_registration_current=lambda candidate: live and candidate == identity,
+                ),
+            )
+        else:
+            preview = delivery.open_preview(str(entry))
+            url = preview["url"].removesuffix(entry.name) + file.name
+        monkeypatch.setattr("server.file_delivery.open_canonical_file", open_with_save)
+        response = client.get(url, follow_redirects=False)
+
+    [opened] = inspected
+    assert opened.stream.closed
+    if surface == "retired_extension":
+        assert response.status_code == 404 and response.content == b""
+        return
+    if surface == "html_redirect":
+        assert response.status_code == 307
+        return
+    assert response.status_code == 200
+    assert int(response.headers["content-length"]) == len(response.content)
+    if surface == "preview_html":
+        assert response.content.startswith(expected)
+        assert b"vbot-preview-ready" in response.content
+    else:
+        assert response.content == expected
+    if surface == "original":
+        assert response.headers["content-type"].startswith("text/plain")
+    assert file.read_bytes() == b"%PDF-1.7 New version"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("end", ["complete", "send_failure", "opening_cancelled"])
+async def test_capability_response_owns_its_handle_across_asgi_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, end: str
+) -> None:
+    app = FastAPI()
+    register_file_routes(app)
+    file = tmp_path / "notes.txt"
+    file.write_bytes(b"draft")
+    delivery = FileDelivery()
+    app.state.file_delivery = delivery
+    url = _only_file_url(delivery.project_message(_assistant_payload(file))["content"])
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "scheme": "http",
+        "path": url,
+        "method": "GET",
+        "headers": [],
+        "query_string": b"",
+        "extensions": {"http.response.pathsend": {}},
+    }
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    handles: list[VerifiedFile] = []
+    sent: list[MutableMapping[str, Any]] = []
+
+    def delayed_open(path: Path) -> VerifiedFile:
+        handle = open_canonical_file(path)
+        handles.append(handle)
+        if end == "opening_cancelled":
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(2)
+        return handle
+
+    async def receive() -> dict[str, Any]:
+        raise AssertionError("Unexpected request-body read")
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        if end == "send_failure" and message["type"] == "http.response.body":
+            raise OSError("Browser disconnected")
+        sent.append(message)
+
+    monkeypatch.setattr("server.file_delivery.open_canonical_file", delayed_open)
+    if end == "opening_cancelled":
+        request = asyncio.create_task(app(scope, receive, send))
+        try:
+            async with asyncio.timeout(2):
+                await started.wait()
+                request.cancel()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await request
+        finally:
+            release.set()
+            if not request.done():
+                request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
+        assert sent == []
+    elif end == "send_failure":
+        with pytest.raises(OSError):
+            await app(scope, receive, send)
+    else:
+        await app(scope, receive, send)
+        assert [message["type"] for message in sent] == [
+            "http.response.start",
+            "http.response.body",
+        ]
+        assert sent[1]["body"] == b"draft"
+    [handle] = handles
+    assert handle.stream.closed
 
 
 @pytest.mark.parametrize("surface", ["tool", "assistant"])

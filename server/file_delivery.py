@@ -7,8 +7,10 @@ import hashlib
 import hmac
 import html
 import json
+import os
 import re
 import secrets
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -16,7 +18,9 @@ from typing import Any
 from urllib.parse import quote
 
 from core.attachments import sniff_media_type
+from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.workers import BoundedWorkerPool
+from server._capability_file import VerifiedFile, open_canonical_file
 
 JsonObject = dict[str, Any]
 FILE_PREVIEW_WORKERS = BoundedWorkerPool(name="file-preview", max_workers=2)
@@ -142,6 +146,17 @@ class DeliveredFile:
         if self.media_type in ACTIVE_DOCUMENT_TYPES:
             headers["Content-Security-Policy"] = document_csp()
         return headers
+
+
+@dataclass(frozen=True)
+class OpenedFile:
+    """Presentation and bytes of one verified file, owned by the caller."""
+
+    presentation: DeliveredFile
+    handle: VerifiedFile
+
+    def close(self) -> None:
+        self.handle.close()
 
 
 class FileDelivery:
@@ -305,7 +320,13 @@ class FileDelivery:
                 entry = entry.resolve(strict=True)
             except (OSError, RuntimeError, ValueError) as exc:
                 raise ValueError("HTML file is not available") from exc
-        if not entry.is_file() or entry.suffix.lower() not in {".html", ".htm"}:
+            if not entry.is_file():
+                raise ValueError("Select an HTML file")
+        return self.preview_for_html(entry)
+
+    def preview_for_html(self, entry: Path) -> JsonObject:
+        """Build a preview link for the HTML entry already selected by the caller."""
+        if entry.suffix.lower() not in {".html", ".htm"}:
             raise ValueError("Select an HTML file")
         root = entry.parent
         token = self._preview_token(root)
@@ -360,12 +381,20 @@ class FileDelivery:
     def extension_page_asset(
         self, token: str, relative_path: str
     ) -> tuple[JsonObject, DeliveredFile]:
-        """Resolve one asset without deciding whether its owner is still live."""
+        """Inspect one asset without retaining its file handle."""
         payload = self.extension_page_claims(token)
+        opened = self._open_extension_asset(payload, relative_path)
         try:
-            root = Path(payload["root"])
-            delivered = self._scoped_asset_file(root, relative_path)
-            return payload, delivered
+            return payload, opened.presentation
+        finally:
+            opened.close()
+
+    def open_extension_asset(self, token: str, relative_path: str) -> OpenedFile:
+        return self._open_extension_asset(self.extension_page_claims(token), relative_path)
+
+    def _open_extension_asset(self, claims: JsonObject, relative_path: str) -> OpenedFile:
+        try:
+            return self._open_scoped_asset(Path(claims["root"]), relative_path)
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             raise ValueError("Extension page is unavailable") from exc
 
@@ -497,31 +526,28 @@ class FileDelivery:
         except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Extension Run is unavailable") from exc
 
-    def _scoped_asset_file(self, root: Path, relative_path: str) -> DeliveredFile:
+    @staticmethod
+    def _open_scoped_asset(
+        root: Path, relative_path: str, *, directory_index: bool = False
+    ) -> OpenedFile:
         if "\\" in relative_path or "\0" in relative_path:
-            raise ValueError("Invalid extension asset path")
+            raise ValueError("Invalid asset path")
         relative = PurePosixPath(relative_path)
         if relative.is_absolute() or any(
             part.startswith(".") or ":" in part or part.casefold() in PREVIEW_EXCLUDED
             for part in relative.parts
         ):
-            raise ValueError("Invalid extension asset path")
-        try:
-            path = root.joinpath(*relative.parts)
-            cursor = root
-            for part in relative.parts:
-                cursor = cursor / part
-                if cursor.resolve(strict=True) != cursor:
-                    raise ValueError("Invalid extension asset path")
-            resolved = path.resolve(strict=True)
-            if resolved != path or not resolved.is_relative_to(root) or not resolved.is_file():
-                raise ValueError("Invalid extension asset path")
-            media_type = PREVIEW_TYPES.get(resolved.suffix.lower())
-            if media_type is None:
-                raise ValueError("Unsupported extension asset")
-            return DeliveredFile(resolved, media_type, True)
-        except (OSError, RuntimeError) as exc:
-            raise ValueError("Extension asset is unavailable") from exc
+            raise ValueError("Invalid asset path")
+        path = root.joinpath(*relative.parts)
+        if directory_index:
+            status = stat_or_none(path, follow_symlinks=False)
+            if status is not None and stat.S_ISDIR(status.st_mode) and not is_link_status(status):
+                path /= "index.html"
+        media_type = PREVIEW_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            raise ValueError("Unsupported asset type")
+        handle = open_canonical_file(path)
+        return OpenedFile(DeliveredFile(handle.path, media_type, True), handle)
 
     @staticmethod
     def extension_page_headers(base_url: str, token: str) -> dict[str, str]:
@@ -636,33 +662,18 @@ class FileDelivery:
             raise ValueError("Preview folder is no longer available") from exc
 
     def preview_file(self, token: str, relative_path: str) -> DeliveredFile:
-        root = self._preview_root(token)
-        if "\\" in relative_path or "\0" in relative_path:
-            raise ValueError("Invalid preview path")
-        relative = PurePosixPath(relative_path)
-        if relative.is_absolute() or any(
-            part.startswith(".") or ":" in part or part.casefold() in PREVIEW_EXCLUDED
-            for part in relative.parts
-        ):
-            raise ValueError("Invalid preview path")
+        """Inspect one preview asset without retaining its file handle."""
+        opened = self.open_preview_file(token, relative_path)
         try:
-            path = root.joinpath(*relative.parts)
-            # Reject symlinks/junctions even when their current target is in-tree.
-            cursor = root
-            for part in relative.parts:
-                cursor = cursor / part
-                if cursor.resolve(strict=True) != cursor:
-                    raise ValueError("Invalid preview path")
-            if path.is_dir():
-                path = path / "index.html"
-            resolved = path.resolve(strict=True)
-            if resolved != path or not resolved.is_relative_to(root) or not resolved.is_file():
-                raise ValueError("Invalid preview path")
-            media_type = PREVIEW_TYPES.get(resolved.suffix.lower())
-            if media_type is None:
-                raise ValueError("Unsupported preview file")
-            return DeliveredFile(resolved, media_type, True)
-        except (OSError, RuntimeError) as exc:
+            return opened.presentation
+        finally:
+            opened.close()
+
+    def open_preview_file(self, token: str, relative_path: str) -> OpenedFile:
+        root = self._preview_root(token, require_directory=False)
+        try:
+            return self._open_scoped_asset(root, relative_path, directory_index=True)
+        except (OSError, RuntimeError, ValueError) as exc:
             raise ValueError("Preview file is no longer available") from exc
 
     def preview_revision(self, token: str) -> str:
@@ -732,9 +743,8 @@ class FileDelivery:
         return content, headers
 
     @staticmethod
-    def preview_html(path: Path, revision_url: str) -> bytes:
-        with path.open("rb") as handle:
-            content = handle.read(4 * 1024 * 1024 + 1)
+    def preview_html(handle: VerifiedFile, revision_url: str) -> bytes:
+        content = handle.read(0, 4 * 1024 * 1024 + 1)
         if len(content) > 4 * 1024 * 1024:
             raise ValueError("HTML preview exceeds 4 MiB")
         return content + FileDelivery._preview_bridge(revision_url)
@@ -835,10 +845,14 @@ class FileDelivery:
                 or not isinstance(end_index, int)
             ):
                 continue
-            presentation = self._presentation_for_path(path_value)
-            if presentation is None:
+            opened = self._open_original_file(Path(path_value))
+            if opened is None:
                 continue
-            token = self._mint_token(presentation.path)
+            try:
+                presentation = opened.presentation
+                token = self._mint_token(presentation.path, opened.handle.status)
+            finally:
+                opened.close()
             label = _escape_markdown_label(presentation.path.name)
             title = html.escape(str(presentation.path).replace("\\", "\\\\"), quote=True)
             title = title.replace("\r", "&#13;").replace("\n", "&#10;")
@@ -884,8 +898,15 @@ class FileDelivery:
             if not path.is_absolute():
                 continue
             filename = reference.get("filename")
+            try:
+                handle = open_canonical_file(path)
+            except OSError, RuntimeError, ValueError:
+                status = None
+            else:
+                status = handle.status
+                handle.close()
             item: JsonObject = {
-                "url": f"{FILE_URL_PREFIX}{self._mint_token(path)}",
+                "url": f"{FILE_URL_PREFIX}{self._mint_token(path, status)}",
                 "filename": filename if isinstance(filename, str) and filename else path.name,
                 "kind": kind,
             }
@@ -895,7 +916,17 @@ class FileDelivery:
         return media
 
     def resolve_token(self, token: str) -> DeliveredFile | None:
-        """Verify one capability and return the original file's current facts."""
+        """Verify one capability and inspect the file without retaining its handle."""
+        opened = self.open_original(token)
+        if opened is None:
+            return None
+        try:
+            return opened.presentation
+        finally:
+            opened.close()
+
+    def open_original(self, token: str) -> OpenedFile | None:
+        """Verify one capability and prepare its current opened file for transfer."""
         token = self._inner_token(token)
         if not self._valid_signature(token, b""):
             return None
@@ -909,18 +940,18 @@ class FileDelivery:
                 return None
         except OSError, RuntimeError, UnicodeDecodeError, ValueError:
             return None
-        return self._presentation_for_path(str(path))
+        return self._open_original_file(path)
 
-    def _mint_token(self, path: Path) -> str:
+    def _mint_token(self, path: Path, status: os.stat_result | None) -> str:
         # Browsers may reuse an already-decoded image at the same URL even with
         # revalidation headers. Give each observed file revision a distinct URL.
         # The revision changes cache identity only: old links still serve the
         # current original, and missing files retain an address for UI recovery.
-        try:
-            stat = path.stat()
-            revision = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
-        except OSError:
-            revision = None
+        revision = (
+            [status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns]
+            if status is not None
+            else None
+        )
         payload = _urlsafe_encode(
             json.dumps({"path": str(path), "revision": revision}, separators=(",", ":")).encode(
                 "utf-8"
@@ -932,46 +963,44 @@ class FileDelivery:
         return f"{payload}.{signature}"
 
     @staticmethod
-    def _presentation_for_path(path_value: str) -> DeliveredFile | None:
+    def _open_original_file(path: Path) -> OpenedFile | None:
         try:
-            path = Path(path_value)
-            if not path.is_absolute():
-                return None
-            resolved = path.resolve(strict=True)
-            # History and capabilities name the original's canonical location.
-            # A later symlink/junction must not redirect that authority to a
-            # different file, including when History is projected again.
-            if resolved != path or not resolved.is_file():
-                return None
-            with resolved.open("rb") as file_handle:
-                probe = file_handle.read(FILE_SNIFF_BYTES)
+            handle = open_canonical_file(path)
+            try:
+                return OpenedFile(_original_presentation(handle), handle)
+            except BaseException:
+                handle.close()
+                raise
         except OSError, RuntimeError, ValueError:
             return None
-        # A bounded probe may split the final UTF-8 character of a large report.
-        if len(probe) == FILE_SNIFF_BYTES:
-            try:
-                probe.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                if exc.reason == "unexpected end of data":
-                    probe = probe[: exc.start]
-        media_type = sniff_media_type(probe, resolved.name)
-        if media_type == "text/plain" and b"\0" in probe:
-            media_type = "application/octet-stream"
-        # The storage sniffer intentionally labels all UTF-8 source as plain text.
-        # Refine only verified text here; never let a suffix override binary magic.
-        if media_type == "text/plain":
-            media_type = {
-                ".html": "text/html",
-                ".htm": "text/html",
-                ".svg": "image/svg+xml",
-            }.get(resolved.suffix.lower(), media_type)
-        return DeliveredFile(
-            path=resolved,
-            media_type=media_type,
-            inline=(
-                media_type in BROWSER_MEDIA_TYPES or media_type.startswith(("audio/", "video/"))
-            ),
-        )
+
+
+def _original_presentation(handle: VerifiedFile) -> DeliveredFile:
+    probe = handle.read(0, FILE_SNIFF_BYTES)
+    resolved = handle.path
+    # A bounded probe may split the final UTF-8 character of a large report.
+    if len(probe) == FILE_SNIFF_BYTES:
+        try:
+            probe.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.reason == "unexpected end of data":
+                probe = probe[: exc.start]
+    media_type = sniff_media_type(probe, resolved.name)
+    if media_type == "text/plain" and b"\0" in probe:
+        media_type = "application/octet-stream"
+    # The storage sniffer intentionally labels all UTF-8 source as plain text.
+    # Refine only verified text here; never let a suffix override binary magic.
+    if media_type == "text/plain":
+        media_type = {
+            ".html": "text/html",
+            ".htm": "text/html",
+            ".svg": "image/svg+xml",
+        }.get(resolved.suffix.lower(), media_type)
+    return DeliveredFile(
+        path=resolved,
+        media_type=media_type,
+        inline=(media_type in BROWSER_MEDIA_TYPES or media_type.startswith(("audio/", "video/"))),
+    )
 
 
 def _markdown_destination_end(content: str, start: int) -> int:
