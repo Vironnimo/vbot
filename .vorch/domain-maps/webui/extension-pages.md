@@ -12,6 +12,8 @@ Extension pages use generic shell routes and `ExtensionPage.svelte`; the opaque 
 
 A bridge addition that is optional on either side keeps `BRIDGE_VERSION` and the Extension `API_VERSION` unchanged; a method a page relies on raises the Extension API version (`extensions.md`).
 
+App applies the Page catalog as soon as it arrives, so a pending Contribution read cannot delay resolving a Page link.
+
 ## Contribution surfaces
 
 `lib/contributions.js` owns deterministic composition: core snippets use `core:` IDs and Extensions use owner-qualified IDs. Additions follow declared order then ID; saved order takes precedence. Replacements render only after an explicit user choice and only while available and matching the surface's scalar context. Missing, disabled or hidden replacements restore the core contribution. Server Settings own shared preferences at `appearance.ui_layout`; Settings Appearance edits them through shared sortable/toggle controls. Unknown surfaces, uninstalled IDs and future layout fields survive read-modify-write updates. An uncustomizable recovery button opens the same editor whenever a layout is customized, so hiding navigation or Settings cannot strand the user. The registry participates in the App autosave coordinator; failed writes keep the visible draft and offer Save retry. A cold read failure has an explicit reload action.

@@ -335,12 +335,15 @@ describe('App navigation', () => {
   });
 
   it('opens an Extension page deep link once the page catalog has loaded', async () => {
-    let releasePages;
-    const pages = new Promise((resolve) => {
-      releasePages = () => resolve({ pages: [FIXTURE_EXTENSION_PAGE] });
-    });
+    const pages = Promise.withResolvers();
+    const declarations = Promise.withResolvers();
     rpcMock.mockImplementation(
-      createAppRpcMock({ methods: { 'extensions.pages': () => pages } }),
+      createAppRpcMock({
+        methods: {
+          'extensions.pages': () => pages.promise,
+          'extensions.contributions': () => declarations.promise,
+        },
+      }),
     );
     window.history.replaceState(null, '', `#${FIXTURE_EXTENSION_ROUTE}`);
     mountApp();
@@ -350,7 +353,7 @@ describe('App navigation', () => {
     expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);
     expect(document.querySelector('iframe')).toBeFalsy();
 
-    releasePages();
+    pages.resolve({ pages: [FIXTURE_EXTENSION_PAGE] });
 
     await waitForCondition(() => {
       expect(document.querySelector('iframe')).toBeTruthy();
@@ -358,6 +361,7 @@ describe('App navigation', () => {
       expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);
       expect(window.history.state?.view).toBe(FIXTURE_EXTENSION_ROUTE);
     });
+    declarations.resolve({ contributions: [] });
   });
 
   describe('Session links from outside the page', () => {
