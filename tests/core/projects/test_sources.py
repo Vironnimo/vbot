@@ -636,6 +636,23 @@ def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
     assert any(finding.type is FindingType.INVALID_SOURCE for finding in rescanned.report.findings)
 
 
+def test_a_codex_profile_with_a_non_text_sandbox_mode_keeps_its_finding(repo):
+    write(repo, ".codex/agents/reviewer.toml", 'sandbox_mode = ["read-only"]')
+    write(repo, ".cursor/agents/healthy.md", "---\nmodel: openai/gpt-5.2\n---\nHealthy.")
+    sources = [SourceSelection("codex.agents"), SourceSelection("cursor.agents")]
+
+    scanned = scan_project(repo, sources=sources)
+    (reviewer,) = (member for member in scanned.team if member.agent_id == "reviewer")
+    assert {member.agent_id for member in scanned.team} == {"healthy", "reviewer"}
+    assert reviewer.unavailable_reason is not None
+    assert any(
+        finding.type is FindingType.INVALID_SOURCE and finding.agent_id == "reviewer"
+        for finding in scanned.report.findings
+    )
+    reloaded = read_profile(repo, sources, "reviewer", selected=reviewer)
+    assert reloaded is not None and reloaded.unavailable_reason == reviewer.unavailable_reason
+
+
 # The old readers: Claude walked its agents folder, OpenCode read only its top level.
 @pytest.mark.parametrize(
     ("ecosystem", "legacy_team"), [("claude", ["new", "reviewer"]), ("opencode", ["reviewer"])]
@@ -937,6 +954,39 @@ def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo, externa
         repo / (".claude/skills" if external_target else ".agents/skills")
     ]
     assert skill_roots(repo, list(reversed(sources))) == [repo / ".agents/skills"]
+    # The report follows the Project's enabled Source order, like the runtime.
+    scanned = scan_project(repo, sources=list(reversed(sources)))
+    assert [(row["id"], row["skills"]) for row in scanned.sources] == [
+        ("shared.skills", 1),
+        ("claude.skills", 0),
+    ]
+    if not external_target:
+        sources[1] = SourceSelection("shared.skills", enabled=False)
+        scanned = scan_project(repo, sources=sources)
+        assert scanned.sources[0]["skills"] == 1
+        assert skill_roots(repo, sources) == [repo / ".claude/skills"]
+
+
+def test_unavailable_skill_folder_does_not_break_a_different_linked_source(repo, monkeypatch):
+    target = repo / "other-skills"
+    write(target, "review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
+    alias = repo / ".claude/skills"
+    alias.parent.mkdir()
+    link_directory(alias, target)
+    unavailable = repo / ".agents/skills"
+    resolve = Path.resolve
+
+    def resolve_path(path, *args, **kwargs):
+        if path == unavailable:
+            raise PermissionError("Unavailable Skill folder")
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_path)
+    sources = [SourceSelection("claude.skills"), SourceSelection("shared.skills")]
+    scanned = scan_project(repo, sources=sources)
+    assert scanned.sources[0]["skills"] == 1
+    assert scanned.sources[0]["problem"] is None
+    assert alias in skill_roots(repo, sources)
 
 
 def test_skill_folder_sources_load_in_source_order_wherever_they_live(repo, tmp_path):

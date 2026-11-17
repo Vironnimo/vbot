@@ -201,6 +201,8 @@ def _sandbox_rules(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
     """
     draft = RuleDraft()
     mode = fields.get("sandbox_mode")
+    if mode is not None and not isinstance(mode, str):
+        raise reading.SourceError("sandbox_mode must be a string.")
     if mode in _SANDBOX_BASES:
         base, detail = _SANDBOX_BASES[mode]
         draft.narrow(

@@ -164,13 +164,16 @@ def detect_sources(
         ),
     ]
     skill_folders = [path for item in definitions if item.kind == "skills" for path in item.paths]
+    active_ids = {item.id for item in selections or () if item.enabled}
+    active_folders = _selected_skill_folders(selections or [])
     detected: list[DetectedSource] = []
     for definition in definitions:
         paths: list[str] = []
+        peers = active_folders if definition.id in active_ids else skill_folders
         try:
             for relative in definition.paths:
                 path = root / relative
-                if definition.kind == "skills" and _links_to_other(root, relative, skill_folders):
+                if definition.kind == "skills" and _links_to_other(root, relative, peers):
                     continue
                 if is_dir_strict(path) or is_file_strict(path):
                     paths.append(relative)
@@ -236,7 +239,12 @@ def initial_sources(detected: list[DetectedSource]) -> list[SourceSelection]:
 
 
 def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
-    folders = [
+    folders = _selected_skill_folders(selections)
+    return [root / path for path in folders if not _links_to_other(root, path, folders)]
+
+
+def _selected_skill_folders(selections: list[SourceSelection]) -> list[str]:
+    return [
         path
         for selection in selections
         if selection.enabled
@@ -244,7 +252,6 @@ def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
         and definition.kind == "skills"
         for path in definition.paths
     ]
-    return [root / path for path in folders if not _links_to_other(root, path, folders)]
 
 
 def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
@@ -263,11 +270,17 @@ def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
         return False
     position = folders.index(relative)
     for index, other in enumerate(folders):
-        other_path = root / other
-        if other == relative or other_path.resolve() != target:
+        if other == relative:
             continue
-        if index < position or not is_link_status(other_path.lstat()):
-            return True
+        other_path = root / other
+        try:
+            if other_path.resolve() == target and (
+                index < position or not is_link_status(other_path.lstat())
+            ):
+                return True
+        except OSError:
+            # An unavailable candidate cannot establish that it supplies these Skills.
+            continue
     return False
 
 
