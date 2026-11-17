@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reportClientMetrics } from '../api/performance.js';
 import { rpc } from '../api/transport.js';
 import {
   INVALIDATION_WAVE_MS,
@@ -154,5 +155,37 @@ describe('client metrics', () => {
 
     expect(FakeObserver.instances[0].disconnected).toBe(true);
     expect(reports).toEqual([]);
+  });
+
+  it('cancels a stalled report at the next interval and on teardown', async () => {
+    const requests = [];
+    const fetch = (_url, { body, signal }) =>
+      new Promise((_resolve, reject) => {
+        requests.push({ body: JSON.parse(body), signal });
+        signal?.addEventListener('abort', () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    stop = startClientMetrics({
+      report: (payload, options) =>
+        reportClientMetrics(payload, { ...options, fetch }),
+      Observer: FakeObserver,
+    });
+    noteInvalidation('agents');
+    await flush();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].signal?.aborted).toBe(false);
+
+    noteInvalidation('projects');
+    await flush();
+    expect(requests).toHaveLength(2);
+    expect(requests[0].signal.aborted).toBe(true);
+    expect(requests[1].body.params.counters).toEqual({
+      'webui.invalidations.projects': 1,
+    });
+    expect(requests[1].signal.aborted).toBe(false);
+
+    stop();
+    expect(requests[1].signal.aborted).toBe(true);
   });
 });
