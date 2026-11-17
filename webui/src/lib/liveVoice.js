@@ -846,13 +846,15 @@ export function createLiveVoice({
       const blocked = await microphoneAccessNotice();
       if (!isCurrent(call)) return;
       if (blocked) throw failure(blocked);
+      // A browser permission prompt can wait for the user indefinitely.
+      cancel(call, call.startupTimer);
+      call.startupTimer = null;
       const microphone = await openMicrophone();
       if (!isCurrent(call)) {
         stopTracks(microphone);
         return;
       }
       call.microphone = microphone;
-      // The permission prompt is user time; bound only the connection from here.
       armStartupTimer(call);
       applyMicrophone(call);
       for (const track of microphone.getAudioTracks()) {
