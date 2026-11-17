@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, MutableMapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast, override
@@ -19,11 +19,11 @@ from core.access.config import access_config
 from core.sessions import SessionAddress
 from core.tools.portal import register_portal_tool
 from core.tools.portal_registry import PortalRegistry
-from server.access._principal import HOST_PRINCIPAL
+from server.access._principal import HOST, HOST_PRINCIPAL
 from server.access._service import AccessService
 from server.app import create_app
 from server.file_delivery import FileDelivery
-from server.portals import PortalServer
+from server.portals import _ABORT_HTTP_CONNECTION, PortalServer, _PortalApp
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
@@ -354,3 +354,189 @@ async def test_signed_in_access_needs_a_capability_bound_to_a_live_principal(
     await access.close()
 
     assert statuses == {"unbound": 401, "unknown device": 401, "other portal": 401, "host": 200}
+
+
+@pytest.mark.asyncio
+async def test_only_the_browsers_own_portal_cookie_reaches_the_app() -> None:
+    def app(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/sign-in":
+            return httpx.Response(
+                200,
+                headers={"set-cookie": "sid=first-browser; Domain=localhost; Path=/; HttpOnly"},
+                stream=httpx.ByteStream(b"signed in"),
+            )
+        sid = request.headers.get("cookie", "anonymous")
+        return httpx.Response(200, stream=httpx.ByteStream(sid.encode()))
+
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(app))
+    shop = _PortalApp(server, "shop", 5173)
+    shop.listen_port = 7000
+    other = _PortalApp(server, "other", 5174)
+    other.listen_port = 7001
+
+    def browser(portal: _PortalApp, portal_id: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=portal),
+            base_url=f"http://127.0.0.1:{portal.listen_port}",
+            cookies={f"vbot_portal_{portal.listen_port}": delivery.portal_token(portal_id)},
+        )
+
+    try:
+        async with browser(shop, "shop") as first:
+            signed_in = await first.get("/sign-in")
+            assert signed_in.headers["set-cookie"] == "vp_shop_sid=first-browser; Path=/; HttpOnly"
+            assert (await first.get("/")).text == "sid=first-browser"
+        async with browser(shop, "shop") as second:
+            assert (await second.get("/")).text == "anonymous"
+        async with browser(other, "other") as separate_portal:
+            assert (await separate_portal.get("/")).text == "anonymous"
+    finally:
+        await registry.aclose()
+        await server.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["pending_http", "streaming_http", "fixed_http", "websocket"])
+async def test_device_revocation_ends_open_portal_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    delivery = FileDelivery()
+    access = AccessService(
+        access_config(
+            "authenticated", public_url="https://vbot.example", trusted_proxies=["10.0.0.1"]
+        ),
+        local_token=None,
+        bind_host="127.0.0.1",
+    )
+    await access.start(tmp_path)
+    websocket = kind == "websocket"
+    scope: dict[str, Any] = {
+        "type": "websocket" if websocket else "http",
+        "scheme": "wss" if websocket else "https",
+        "method": "GET",
+        "path": "/events",
+        "client": ("203.0.113.7", 40000),
+        "headers": [(b"host", b"vbot.example")],
+    }
+    facts = access.inspect(scope)
+    pending = access.pair_start({"kind": "desktop", "name": "Desktop"}, facts)
+    access.decide_pairing(pending["code"], HOST, approved=True)
+    paired, _cookie = await access.pair_poll(pending, facts)
+    device_id = paired["device"]["id"]
+    token = delivery.bind_payload(delivery.portal_token("portal"), device_id)
+    scope["headers"].append((b"cookie", f"vbot_portal_0={token}".encode()))
+    first_message = asyncio.Event()
+    upstream_closed = asyncio.Event()
+    browser_waiting = asyncio.Event()
+    browser_read_ended = asyncio.Event()
+    browser_aborted = asyncio.Event()
+    upstream_read_ended = asyncio.Event()
+    sent: list[MutableMapping[str, Any]] = []
+    scope["state"] = {_ABORT_HTTP_CONNECTION: browser_aborted.set}
+
+    class Events(httpx.AsyncByteStream):
+        @override
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            try:
+                yield b"first"
+                await asyncio.Future()
+            finally:
+                upstream_read_ended.set()
+
+        @override
+        async def aclose(self) -> None:
+            upstream_closed.set()
+
+    async def respond(_request: httpx.Request) -> httpx.Response:
+        if kind == "pending_http":
+            # The response becomes available during revocation. Its body has
+            # never been relayed, but its stream still needs closing.
+            assert access.connections.revoke({device_id}) == 1
+        headers = {"content-length": "10"} if kind == "fixed_http" else {}
+        return httpx.Response(200, headers=headers, stream=Events())
+
+    class Upstream:
+        subprotocol = None
+
+        async def __aiter__(self) -> AsyncIterator[str]:
+            try:
+                yield "first"
+                await asyncio.Future()
+            finally:
+                upstream_read_ended.set()
+
+        async def close(self) -> None:
+            upstream_closed.set()
+
+    async def connect(*args: Any, **kwargs: Any) -> Upstream:
+        return Upstream()
+
+    monkeypatch.setattr("websockets.asyncio.client.connect", connect)
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(respond))
+    portal = _PortalApp(server, "portal", 5173)
+    incoming = [{"type": "websocket.connect"}] if websocket else []
+
+    async def receive() -> dict[str, Any]:
+        if incoming:
+            return incoming.pop()
+        browser_waiting.set()
+        try:
+            await browser_aborted.wait()
+            return {"type": "http.disconnect"}
+        finally:
+            browser_read_ended.set()
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent.append(message)
+        if message["type"] == "websocket.close":
+            raise OSError("browser connection ended")
+        if message.get("body") == b"first" or message.get("text") == "first":
+            first_message.set()
+
+    try:
+        async with asyncio.timeout(2):
+            request = asyncio.create_task(portal(scope, receive, send))
+            try:
+                if kind != "pending_http":
+                    await browser_waiting.wait()
+                    await first_message.wait()
+                    assert access.connections.count(device_id) == 1
+                    await access.revoke_devices([device_id], HOST)
+                await asyncio.shield(request)
+            finally:
+                if not request.done():
+                    request.cancel()
+                    await asyncio.gather(request, return_exceptions=True)
+    finally:
+        await registry.aclose()
+        await server.aclose()
+        await access.close()
+
+    assert access.connections.count(device_id) == 0
+    assert upstream_closed.is_set()
+    assert browser_read_ended.is_set()
+    assert browser_aborted.is_set() == (kind == "fixed_http")
+    if kind == "pending_http":
+        assert [message["type"] for message in sent] == [
+            "http.response.start",
+            "http.response.body",
+        ]
+        assert sent[0]["status"] == 401
+    elif websocket:
+        assert upstream_read_ended.is_set()
+        assert [message["type"] for message in sent] == [
+            "websocket.accept",
+            "websocket.send",
+            "websocket.close",
+        ]
+        assert sent[-1]["code"] == 4401
+    else:
+        assert upstream_read_ended.is_set()
+        types = ["http.response.start", "http.response.body"]
+        if kind == "streaming_http":
+            types.append("http.response.body")
+            assert not sent[-1].get("more_body")
+        assert [message["type"] for message in sent] == types
+        assert sent[0]["status"] == 200
