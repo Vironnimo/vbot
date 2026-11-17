@@ -15,7 +15,7 @@ retention sweep, continues.
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from core.archive._operations import (
@@ -69,6 +69,7 @@ def purge_entries(
     reason: str,
     actor: str,
     stopping: threading.Event | None = None,
+    should_claim: Callable[[ArchiveEntry], bool] | None = None,
 ) -> PurgeOutcome:
     """Purge ``entries`` one after another; one that does not finish is reported pending.
 
@@ -78,7 +79,8 @@ def purge_entries(
     pending stays ``purging`` and is continued later. An entry another operation
     holds is skipped unchanged, and one that is no longer in the archive is
     reported gone. When ``stopping`` is set, the purge ends before the next
-    Session or file it would delete.
+    Session or file it would delete. ``should_claim`` can recheck eligibility
+    just before the claim, after importing Usage.
     """
     ledger = services.sessions.archive_ledger
     usage_import = ("usage_import", services.data_dir)
@@ -111,6 +113,8 @@ def purge_entries(
     gone: list[str] = []
     for entry in entries:
         try:
+            if should_claim is not None and not should_claim(entry):
+                continue
             claimed.append(ledger.begin_purge(entry.entry_id))
         except ArchiveEntryNotFoundError:
             # Another operation deleted or restored it first: an expected outcome.

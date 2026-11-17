@@ -588,14 +588,30 @@ async def test_an_owner_error_code_fails_the_operation(live: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
+@pytest.mark.parametrize("delivery", ["delivered", "queued", "disconnected"])
+async def test_an_unanswered_ui_request_times_out_as_uncertain(delivery: str) -> None:
     harness = Harness(LiveCallLimits(ui_request_timeout_seconds=0.05))
     try:
         call = await harness.start()
-        harness.attach(call)
+        owner = harness.registry.attach(call.id)
+        assert owner is not None
+        if delivery == "disconnected":
+            owner.detach()
+        if delivery == "delivered":
+            reader = OwnerReader(owner)
+            harness.readers.append(reader)
         result = await run_tool(call, "open", {"view": "terminals"})
         assert result["error"]["code"] == "ui_timeout"
         assert "may or may not show the change" in result["error"]["message"]
+        if delivery == "queued":
+            reader = OwnerReader(owner)
+            harness.readers.append(reader)
+        if delivery == "disconnected":
+            reader = harness.attach(call)
+        await settle(lambda: "action" in reader.types())
+        assert reader.types() == (
+            ["ui_request", "action"] if delivery == "delivered" else ["action"]
+        )
     finally:
         await harness.close()
 

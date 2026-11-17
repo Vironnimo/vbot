@@ -24,6 +24,7 @@ from desktop import main as desktop_main
 from desktop import page_events as desktop_page_events
 from desktop import probe as desktop_probe
 from desktop import restart as desktop_restart
+from desktop import taskbar_badge as desktop_badge
 from desktop.dictation import controller as desktop_dictation
 from desktop.probe import DesktopProbeResult, DesktopTarget
 from desktop.speech import cues as desktop_cues
@@ -229,6 +230,7 @@ class FakeEvent:
 class FakeWindowEvents:
     def __init__(self) -> None:
         self.before_show = FakeEvent()
+        self.before_load = FakeEvent()
         self.shown = FakeEvent()
         self.loaded = FakeEvent()
         self.closing = FakeEvent()
@@ -330,6 +332,25 @@ def _launch(
 
 def _bridge(fake_webview: FakeWebview) -> Any:
     return fake_webview.created_windows[0][1]["js_api"]
+
+
+def test_page_load_clears_the_old_badge_before_the_new_page_can_set_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    labels: list[str] = []
+    monkeypatch.setattr(
+        desktop_badge, "bind_window_badge", lambda _window: lambda label, _: labels.append(label)
+    )
+    webview = _launch(tmp_path)
+    bridge = _bridge(webview)
+    bridge.setTaskbarBadge(2)
+
+    webview.window.events.before_load.emit()
+    # pywebview injects the bridge before it emits the loaded event.
+    bridge.setTaskbarBadge(3)
+    webview.window.events.loaded.emit()
+
+    assert labels == ["2", "", "3"]
 
 
 def _webui_url(host: str, port: int) -> str:

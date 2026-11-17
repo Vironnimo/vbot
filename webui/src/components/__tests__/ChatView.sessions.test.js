@@ -109,6 +109,28 @@ describe('ChatView Sessions', () => {
     expect(composerInput().disabled).toBe(false);
   });
 
+  it('clears a failed Session History read when switching to a draft', async () => {
+    const agents = [
+      createAgent(),
+      createAgent({ id: 'beta', name: 'Beta', current_session_id: '' }),
+    ];
+    const fallback = createChatRpcMock({ agents });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'chat.timeline') throw new Error('history offline');
+      return fallback(method, params);
+    });
+    const parent = createChatViewParentHarness();
+    await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }), {
+      ready: null,
+    });
+    await waitForText('history offline');
+
+    await selectAgentFromPicker('Beta');
+    await waitForCondition(() => selectedAgentName() === 'Beta');
+    expect(composerInput().disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('history offline');
+  });
+
   it.each(['alpha', 'beta@project'])(
     'keeps Beta/main when a deletion belongs to %s/main',
     async (owner) => {
@@ -352,6 +374,32 @@ describe('ChatView Sessions', () => {
     const alphaSessionId = () =>
       testChatStateRefs[0].agents.find((agent) => agent.id === 'alpha')
         .current_session_id;
+
+    it('closes the previous Session stream and reattaches it when returning', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          activeRuns: { 'session-1': runningRun('still-running') },
+        }),
+      );
+      listedSessions({ id: 'session-1', title: 'Running session' });
+      await chat.mountChat();
+      await waitForCondition(
+        () => subscribeRunEventsMock.mock.calls.length === 1,
+      );
+      const subscription = subscribeRunEventsMock.mock.results[0].value;
+
+      findNewSessionButton().click();
+      await waitForCondition(() => alphaSessionId() === '');
+      expect(subscription.close).toHaveBeenCalledOnce();
+
+      await openFromDrawer('Running session');
+      await waitForCondition(
+        () => subscribeRunEventsMock.mock.calls.length === 2,
+      );
+      expect(subscribeRunEventsMock.mock.calls[1][0]).toBe(
+        subscribeRunEventsMock.mock.calls[0][0],
+      );
+    });
 
     it.each([
       ['keeps an already empty Session', { 'session-1': [] }, false],

@@ -511,8 +511,8 @@
   let composerDraftKey = $derived(target.displayedSessionKey());
 
   $effect(() => {
-    target.displayedSessionKey();
-    untrack(() => chatController.syncDisplayedHistoryLoad());
+    const key = target.displayedSessionKey();
+    untrack(() => chatController.syncDisplayedSession(key));
   });
   let composerHistoryKey = $derived.by(() => {
     const separator = composerDraftKey.indexOf('::');

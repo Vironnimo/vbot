@@ -58,35 +58,6 @@ def occurrence_key(moment: datetime, *, all_day: bool) -> str:
     return moment.replace(microsecond=0).isoformat()
 
 
-def window_occurrences(
-    event: CalendarEvent,
-    window_start: datetime,
-    window_end: datetime,
-    system_tz: ZoneInfo,
-    limit: int | None,
-) -> list[EventOccurrence]:
-    """The occurrences of ``event`` overlapping the half-open UTC window, in start order."""
-    series = event_series(event, system_tz)
-    if series.rule is None:
-        single = _occurrence(series, series.start, None)
-        return [single] if _overlaps(single, window_start, window_end) else []
-    low = _local(series, window_start) - series.length - _MARGIN
-    high = _local(series, window_end) + _MARGIN
-    found: dict[str, EventOccurrence] = {}
-    for moment in series.rule.between(low, high, inc=True):
-        key = occurrence_key(moment, all_day=series.zone is None)
-        if key in event.exdates:
-            continue
-        item = _occurrence(series, moment, event.overrides.get(key))
-        if _overlaps(item, window_start, window_end):
-            found[key] = item
-    for item in _moved_occurrences(series):
-        if item.original_start not in found and _overlaps(item, window_start, window_end):
-            found[str(item.original_start)] = item
-    ordered = sorted(found.values(), key=lambda item: (item.start_utc, item.id))
-    return ordered if limit is None else ordered[:limit]
-
-
 def iter_occurrences(
     event: CalendarEvent, after: datetime, system_tz: ZoneInfo
 ) -> Iterator[EventOccurrence]:
@@ -253,7 +224,3 @@ def _local(series: _Series, instant: datetime) -> datetime:
 
 def _midnight(day: date, zone: ZoneInfo) -> datetime:
     return datetime.combine(day, time.min, tzinfo=zone).astimezone(UTC)
-
-
-def _overlaps(item: EventOccurrence, window_start: datetime, window_end: datetime) -> bool:
-    return item.end_utc > window_start and item.start_utc < window_end

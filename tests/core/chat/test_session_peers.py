@@ -13,7 +13,7 @@ from core.activity import SessionActivityState
 from core.chat import ChatMessage
 from core.chat.messages import MessageSender
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
-from core.runs import ASSISTANT_OUTPUT_EVENT, RunKind
+from core.runs import ASSISTANT_OUTPUT_EVENT, MODEL_STEP_USAGE_EVENT, RunKind
 from core.sessions import SessionWriteLeaseScope
 from core.subagents.links import link_session
 from tests.core.chat.session_peers_support import PeerHarness
@@ -201,31 +201,43 @@ async def test_peer_wait_ignores_old_results_and_own_sent_input_without_skipping
 
 
 async def test_peer_wait_wakes_for_persisted_output_and_cleans_up_subscriptions(
-    peer_harness: PeerHarness,
+    peer_harness: PeerHarness, monkeypatch: pytest.MonkeyPatch
 ):
     h = peer_harness
     peer = h.create("reviewer", "review")
-    release = asyncio.Event()
-    ready = asyncio.Event()
+    preview, scanned, persist, finish = (asyncio.Event() for _ in range(4))
+    original_page = h.peers._page
+
+    async def observe_page(peer, **kwargs):
+        page = await original_page(peer, **kwargs)
+        if "after_sequence" in kwargs:
+            scanned.set()
+        return page
+
+    monkeypatch.setattr(h.peers, "_page", observe_page)
 
     async def execute(run):
-        await run.wait_admitted()
-        ready.set()
-        await release.wait()
         message = ChatMessage.assistant(model="test", content="New result")
-        await h.sessions.get(peer.address).for_run(run.id).append_async(message)
         run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})
+        preview.set()
+        await persist.wait()
+        await h.sessions.get(peer.address).for_run(run.id).append_async(message)
+        run.emit(MODEL_STEP_USAGE_EVENT, {"message_id": message.id})
+        await finish.wait()
 
     run = await h.runs.start(peer.address, execute)
-    await ready.wait()
+    await preview.wait()
     baseline = (await h.call({"action": "read", "id": h.reference(peer)}))["data"]["cursor"]
     wait = asyncio.create_task(
         h.call({"action": "wait", "id": h.reference(peer), "cursor": baseline, "timeout": 60})
     )
-    await h.activity.subscribed.wait()
-    release.set()
-    result = await asyncio.wait_for(wait, timeout=2)
-    await run.wait()
+    try:
+        await scanned.wait()
+        persist.set()
+        result = await asyncio.wait_for(wait, timeout=1)
+    finally:
+        finish.set()
+        await run.wait()
     assert result["data"]["status"] == "changed", result
     assert result["data"]["messages"][0]["text"] == "New result"
     assert run.subscriber_count == 0

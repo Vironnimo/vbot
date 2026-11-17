@@ -141,7 +141,16 @@ describe('Live voice startup', () => {
   it('fails a call that never goes live and stops it on the server', async () => {
     vi.useFakeTimers();
     const f = liveFixture();
-    await f.controller.start();
+    const grant = deferred();
+    f.mediaDevices.getUserMedia.mockReturnValue(grant.promise);
+    const started = f.controller.start();
+    await flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.state.phase).toBe('connecting');
+    expect(f.onNotice).not.toHaveBeenCalled();
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+    grant.resolve(f.microphone);
+    await started;
     await vi.advanceTimersByTimeAsync(44999);
     expect(f.onNotice).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);

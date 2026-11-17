@@ -469,15 +469,17 @@ def test_an_online_snapshot_never_copies_inside_a_compound_mutation(data_dir: Pa
     assert list(manifest["documents"]) == ["agents/renamed/agent.json"]
 
 
-@pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", 17])
-def test_a_health_record_with_a_non_canonical_time_is_malformed(
-    data_dir: Path, observed_at: object
+@pytest.mark.parametrize(
+    "change", [{"observed_at": "2026-09-01T10:00:00Z"}, {"observed_at": 17}, {"state": []}]
+)
+def test_a_health_record_with_invalid_fields_is_malformed(
+    data_dir: Path, change: dict[str, object]
 ) -> None:
     snapshot_with_notes(data_dir, "hello")
     health_path = snapshot_root(data_dir) / SNAPSHOT_HEALTH_FILE_NAME
     payload = json.loads(health_path.read_text(encoding="utf-8"))
     assert read_snapshot_health(data_dir) == payload
-    health_path.write_text(json.dumps({**payload, "observed_at": observed_at}), encoding="utf-8")
+    health_path.write_text(json.dumps({**payload, **change}), encoding="utf-8")
 
     health = read_snapshot_health(data_dir)
 
@@ -785,9 +787,12 @@ def test_named_retention_survives_count_and_disk_pressure_until_released(
     assert list_data_snapshots(data_dir) == [final]
 
 
-def test_unreadable_retention_refuses_snapshot_cleanup(data_dir: Path) -> None:
+@pytest.mark.parametrize(
+    "payload", ["{broken", "[" * 20000 + "0" + "]" * 20000], ids=["syntax", "depth"]
+)
+def test_unreadable_retention_refuses_snapshot_cleanup(data_dir: Path, payload: str) -> None:
     retained = snapshot_with_notes(data_dir, "kept")
-    (snapshot_root(data_dir) / "retention.json").write_text("{broken", encoding="utf-8")
+    (snapshot_root(data_dir) / "retention.json").write_text(payload, encoding="utf-8")
     assert create_data_snapshot(data_dir, reason="cannot prove retention") is None
     assert retained.is_dir()
     assert read_snapshot_health(data_dir)["state"] == "degraded"
@@ -947,18 +952,22 @@ def test_only_the_staging_of_interrupted_attempts_is_removed(
     assert "Removed staging left by interrupted data-store operations" in caplog.text
 
 
+@pytest.mark.parametrize("payload", ["{", "1" * 5000], ids=["syntax", "oversized-integer"])
 def test_retention_leaves_malformed_directories_untouched(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, payload: str
 ) -> None:
     malformed = snapshot_root(data_dir) / "20260101T000000Z-deadbeef"
     malformed.mkdir(parents=True)
-    (malformed / SNAPSHOT_MANIFEST_NAME).write_text("{", encoding="utf-8")
+    (malformed / SNAPSHOT_MANIFEST_NAME).write_text(payload, encoding="utf-8")
     (malformed / "notes.db").write_bytes(b"evidence")
     monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
 
     published = snapshot_with_notes(data_dir, "hello")
 
     assert published.is_dir()
+    assert list_data_snapshots(data_dir) == [published]
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+    assert stored_bodies(notes_spec(data_dir)) == ["hello"]
     assert (malformed / "notes.db").read_bytes() == b"evidence"
 
 

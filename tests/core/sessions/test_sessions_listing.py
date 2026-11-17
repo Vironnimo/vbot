@@ -336,7 +336,11 @@ def test_pinning_a_missing_session_raises(manager) -> None:
         manager.set_pinned(_address("coder", "missing"), True)
 
 
-def test_project_groups_keep_pins_in_their_group(manager) -> None:
+@pytest.mark.parametrize("pin_limit", [200, 2], ids=["all-pins", "cap-per-group"])
+def test_project_groups_keep_pins_in_their_group(manager, monkeypatch, pin_limit: int) -> None:
+    from core.sessions import _store_queries
+
+    monkeypatch.setattr(_store_queries, "_PINNED_READ_LIMIT", pin_limit)
     grouping = SessionProjectGrouping(("alpha", "beta"), excluded_agent_ids=("librarian",))
     for minute in range(4):
         _listed(_address("coder", f"alpha-{minute}"), manager, minute, working_project_id="alpha")
@@ -357,7 +361,8 @@ def test_project_groups_keep_pins_in_their_group(manager) -> None:
     groups = manager.list_project_groups(grouping, limit=2, filters=filters)
 
     alpha = groups["alpha"]
-    assert {summary["id"] for summary in alpha.pinned} == {"alpha-0", "team", "pinned-cron"}
+    assert len(alpha.pinned) == min(3, pin_limit)
+    assert {summary["id"] for summary in alpha.pinned} <= {"alpha-0", "team", "pinned-cron"}
     assert [summary["id"] for summary in alpha.sessions] == ["alpha-3", "alpha-2"]
     assert alpha.total_count == 6
     assert [summary["id"] for summary in groups[None].pinned] == ["workspace"]
@@ -372,7 +377,7 @@ def test_project_groups_keep_pins_in_their_group(manager) -> None:
     assert (rest.total_count, rest.next_cursor) == (6, None)
 
     start = manager.list_project_page(grouping, "alpha", limit=1, filters=filters)
-    assert {summary["id"] for summary in start.pinned} == {"alpha-0", "team", "pinned-cron"}
+    assert start.pinned == alpha.pinned
     assert start.total_count == 6
 
 

@@ -185,8 +185,8 @@ async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_ent
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["restore", "raised-period"])
-async def test_a_restore_or_a_raised_period_after_the_page_read_wins(
+@pytest.mark.parametrize("change", ["restore", "raised-period", "disabled-during-usage-import"])
+async def test_a_restore_or_retention_change_before_the_claim_wins(
     world: ArchiveWorld, timer: _Timer, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     entry_id = await _archived_agent(world, "coder", days=31)
@@ -197,16 +197,26 @@ async def test_a_restore_or_a_raised_period_after_the_page_read_wins(
         page = due_page(*args)
         if change == "restore":
             world.sessions.archive_ledger.begin_restore(entry_id, {"target_id": None})
-        else:
+        elif change == "raised-period":
             setting.days = 60
         return page
 
     monkeypatch.setattr(_retention, "_due_page", change_after_reading)
 
+    if change == "disabled-during-usage-import":
+
+        def import_usage() -> None:
+            world.usage_imports.append(None)
+            setting.days = None
+
+        world.services = replace(world.services, import_usage=import_usage)
+
     await _sweep_once(_service(world, setting), timer)
 
     assert world.entry(entry_id).state == ("restoring" if change == "restore" else "archived")
     assert len(world.session_rows("coder")) == 1
+    if change == "disabled-during-usage-import":
+        assert world.usage_imports == [None]
 
 
 @pytest.mark.asyncio

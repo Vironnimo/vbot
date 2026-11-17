@@ -10,7 +10,7 @@ from cli.application._service_prerequisites import ActionRequiredError
 from cli.application.services import ManagedService, search_restore_operations
 from cli.application.state import ApplicationError
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 from server.rpc._mutations import require_mutation_available, state_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -217,7 +217,8 @@ async def _apply(state: Any, params: JsonObject) -> JsonObject:
     require_mutation_available(state, "_settings_mutation_lock")
     async with state_lock(state, "_managed_service_lock"):
         try:
-            return await _operations(state).start(action, plan_id, allow)
+            # Durable admission and scheduling the operation must finish together.
+            return await settle_before_cancelling(_operations(state).start(action, plan_id, allow))
         except (ApplicationError, OSError) as exc:
             raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
 

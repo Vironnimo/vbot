@@ -282,14 +282,20 @@ _DAILY_QUOTA = _error(
             _error(
                 429,
                 "Resource exhausted.",
-                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17s"},
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17.25s"},
             ),
             ProviderRateLimitError,
             True,
-            17.0,
+            17.25,
+        ),
+        (
+            _error(429, "Resource exhausted. Please retry in 41.25s."),
+            ProviderRateLimitError,
+            True,
+            41.25,
         ),
     ],
-    ids=["invalid-key", "zero-quota", "daily-quota", "per-minute-throttle"],
+    ids=["invalid-key", "zero-quota", "daily-quota", "retry-info", "retry-message"],
 )
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio

@@ -501,7 +501,7 @@ def test_invalid_incident_evidence_is_reported_and_never_rewritten(data_dir: Pat
     evidence = incident_path(data_dir, "notes")
     evidence.parent.mkdir(parents=True, exist_ok=True)
 
-    for serialized in (b"{", b"\xff", b"[]"):
+    for serialized in (b"{", b"\xff", b"[]", b"1" * 5000):
         evidence.write_bytes(serialized)
         with pytest.raises(DatabaseCorruptError):
             open_database(notes_spec(data_dir))

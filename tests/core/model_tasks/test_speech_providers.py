@@ -615,11 +615,12 @@ async def test_streamed_tts_plays_before_provider_completion_and_closes_without_
                         "speakerLabel": "spk:0",
                         "words": [
                             {"word": "Hello,", "startOffset": "0.300s", "endOffset": "0.800s"},
+                            {"word": "invalid", "startOffset": "NaNs", "endOffset": "1s"},
                             {"word": "vBot.", "startOffset": "1s", "endOffset": "2.300s"},
                         ],
                     },
                 },
-                {"audioTranscription": {"text": "Hi.", "speakerLabel": "spk:1"}},
+                {"audioTranscription": {"text": "Hi.", "speakerLabel": "spk:1", "words": 1}},
             ],
             "Hello, vBot.\nHi.",
             [

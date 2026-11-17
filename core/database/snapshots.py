@@ -189,11 +189,11 @@ def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
     """Return the durable outcome of the latest snapshot attempt."""
     try:
         payload = json.loads(_health_path(data_dir).read_text(encoding="utf-8"))
-    except OSError, UnicodeError, json.JSONDecodeError:
+    except OSError, ValueError, RecursionError:
         return {"state": "unknown", "reason": None, "snapshot_id": None, "observed_at": None}
     if (
         not isinstance(payload, dict)
-        or payload.get("state") not in {"healthy", "degraded"}
+        or payload.get("state") not in ("healthy", "degraded")
         # The record is written with a canonical time; any other is damage.
         or not is_canonical_timestamp(payload.get("observed_at"))
     ):

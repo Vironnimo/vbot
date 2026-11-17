@@ -1370,6 +1370,42 @@ async def test_work_snapshot_refuses_unreadable_tree_instead_of_reporting_idle(
         await harness.coordinator.work_snapshot(harness.parent)
 
 
+async def test_stop_all_survives_caller_cancellation_during_queue_withdrawal(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.loop.hold("child")
+    child = await harness.spawn("child")
+    child_session = harness.subagent_session(child["id"])
+    [run] = harness.manager.active_runs()
+
+    async def should_not_start(_run: Run) -> None:
+        pytest.fail("withdrawn input started")
+
+    queued = await harness.manager.enqueue(
+        child_session, should_not_start, admission=RunAdmission(accessor_input_id="input")
+    )
+    withdrawing, release = asyncio.Event(), asyncio.Event()
+
+    async def remove_input(address: SessionAddress, input_id: str) -> bool:
+        assert (address, input_id) == (child_session, "input")
+        withdrawing.set()
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(harness.manager, "_input_withdrawer", remove_input)
+    stop = asyncio.create_task(harness.coordinator.stop_tree(harness.parent))
+    try:
+        await withdrawing.wait()
+        stop.cancel()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+
+    assert queued.future.cancelled()
+    assert run.status is RunStatus.CANCELLED
+
+
 async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     harness: SubAgentHarness,
     monkeypatch: pytest.MonkeyPatch,

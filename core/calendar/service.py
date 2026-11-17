@@ -578,7 +578,10 @@ class CalendarService(CalendarProjection):
     ) -> tuple[str | None, str | None]:
         if zone is None:
             return None, None
-        explicit_end = "end" in fields and datetime.fromisoformat(fields["end"]).tzinfo is not None
+        end_text = fields.get("end")
+        explicit_end = (
+            end_text is not None and datetime.fromisoformat(end_text.strip()).tzinfo is not None
+        )
         return input_span(start, end, zone, explicit_end=explicit_end)
 
     def _input_time(

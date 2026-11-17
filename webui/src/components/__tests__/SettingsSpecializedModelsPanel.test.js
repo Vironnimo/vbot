@@ -877,6 +877,9 @@ describe('SettingsSpecializedModelsPanel', () => {
 
         selectTarget('image_generation', 'GPT Image 1.5');
         if (delayed) {
+          expect(
+            document.getElementById('task-model-image_generation-quality'),
+          ).toBeNull();
           button('Save').click();
           await settle();
           expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
@@ -909,6 +912,7 @@ describe('SettingsSpecializedModelsPanel', () => {
       'resets stale options without changing the target: %j',
       async (options) => {
         const target = 'openrouter/voice::api-key';
+        targetsFor('text_to_speech', [{ id: target, label: 'Voice model' }]);
         api.getTaskModelOptions.mockResolvedValue({
           fields: [
             {
@@ -925,8 +929,16 @@ describe('SettingsSpecializedModelsPanel', () => {
           settings: { model_tasks: { text_to_speech: { target, options } } },
         });
         await waitForCondition(
-          () => button('Reset options') && !button('Reset options').disabled,
+          () =>
+            button('Reset options') &&
+            !document.getElementById('settings-specialized-text_to_speech')
+              ?.disabled,
         );
+        const reads = api.getTaskModelOptions.mock.calls.length;
+        selectTarget('text_to_speech', 'Voice model');
+        await settle();
+        expect(api.getTaskModelOptions).toHaveBeenCalledTimes(reads);
+        expect(button('Save')).toBeUndefined();
         button('Reset options').click();
         flushSync();
         document.getElementById('task-model-text_to_speech-voice').click();

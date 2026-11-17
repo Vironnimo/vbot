@@ -229,7 +229,8 @@ class SessionStore:
             provenance = (metadata or {}).get("external_import")
             if initial_messages and isinstance(provenance, dict):
                 existing = connection.execute(
-                    "SELECT session_id, generation_id FROM sessions WHERE state = 'live' "
+                    "SELECT session_id, generation_id FROM sessions "
+                    "WHERE state = 'live' AND forked_at IS NULL "
                     "AND project_id = ? AND agent_id = ? AND working_project_id IS ? "
                     "AND json_extract(metadata_json, '$.external_import.source') = ? "
                     "AND json_extract(metadata_json, '$.external_import.session_id') = ? "

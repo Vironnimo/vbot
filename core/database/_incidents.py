@@ -158,7 +158,7 @@ def read_incident(data_dir: Path, name: str) -> dict[str, Any] | None:
         raise DatabaseUnavailableError(f"the {name} recovery incident could not be read") from exc
     try:
         payload = json.loads(serialized)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         raise DatabaseCorruptError(f"the {name} recovery incident is not valid JSON") from exc
     return _parse_incident(payload, name)
 

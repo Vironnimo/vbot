@@ -64,7 +64,8 @@ while Chat holds each caller's own write lease.
 
 `next_cursor` continues list pagination or reads older conversation; `cursor`
 records the target's current follow baseline for `wait`. Wait subscribes to Run,
-Activity and accepted queued-input events, then rechecks canonical facts. Tool
+Activity and accepted queued-input events, then rechecks canonical facts. It
+follows the persisted User message and post-append Model-step events. Tool
 progress alone and incoming peer messages are not replies. Wait returns at most
 20 new messages and advances its cursor only over returned messages when more
 remain; an already-delivered completion is not repeated. Cancellation and return

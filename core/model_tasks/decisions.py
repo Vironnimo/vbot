@@ -21,6 +21,7 @@ from core.model_tasks.model_tasks import (
 from core.model_tasks.task_execution import (
     TaskAttempt,
     TaskBindingResolver,
+    TaskCandidateMismatchError,
     TaskUsage,
     TaskUsageContext,
 )
@@ -144,14 +145,16 @@ class DecisionService:
 
                 async def execute(attempt: TaskAttempt) -> dict[str, Any]:
                     target = targets[attempt.binding.target]
-                    sized = await _DECISION_SETUP_WORKERS.run(
-                        _sized_state, state, questions, target
-                    )
+                    try:
+                        await _DECISION_SETUP_WORKERS.run(_check_size, state, questions, target)
+                    except DecisionError as exc:
+                        raise TaskCandidateMismatchError(exc) from exc
                     return await self._evaluate(
-                        target, sized, questions, usage_context=usage_context
+                        target, state, questions, usage_context=usage_context
                     )
 
                 async with slots:
+                    state = await _DECISION_SETUP_WORKERS.run(json_copy, state)
                     return await self._resolver.execute("decision", execute, bindings=bindings)
             except DecisionError as exc:
                 return exc
@@ -235,13 +238,12 @@ class _Target(NamedTuple):
     options: dict[str, Any]
 
 
-def _sized_state(state: Any, questions: list[dict[str, Any]], target: _Target) -> Any:
-    """Copy evidence and check its native wire footprint against reported limits.
+def _check_size(state: Any, questions: list[dict[str, Any]], target: _Target) -> None:
+    """Check the evidence's native wire footprint against reported limits.
 
     Scoring Usage can count shared evidence once per question; it is not the
     Context footprint and must never calibrate this estimate.
     """
-    state = json_copy(state)
     ref = parse_task_model_target_id(target.target)
     body, _ = decision_payload(ref.model_id, state, questions, target.profile, target.options)
     encoded = json.dumps(body, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
@@ -271,4 +273,3 @@ def _sized_state(state: Any, questions: list[dict[str, Any]], target: _Target) -
             "questions.",
             code="too_large",
         )
-    return state

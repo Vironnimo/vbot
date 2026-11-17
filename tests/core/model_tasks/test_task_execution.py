@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any, override
 
@@ -223,8 +224,6 @@ async def test_fallbacks_use_their_options_and_remember_failed_routes(monkeypatc
     "failure", ["ambiguous", "refused", "input", "cancelled", "sealed", "unexpected"]
 )
 async def test_fallback_never_replays_an_unsafe_or_unrelated_failure(failure):
-    import asyncio
-
     from core.providers.errors import (
         NetworkError,
         ProviderContentRefusedError,
@@ -298,3 +297,47 @@ async def test_unusable_and_incompatible_candidates_do_not_block_later_candidate
     assert await resolver.execute("image_generation", execute) == "image"
     assert calls == ["incompatible", "ready"]
     assert resolver.resolve("image_generation")[2].local_id == "incompatible"
+
+
+@pytest.mark.asyncio
+async def test_route_recovery_can_overlap_a_cooldown_preflight(monkeypatch):
+    from core.model_tasks import task_execution
+    from core.providers.errors import ProviderError
+
+    task_type = "text_to_speech"
+    backup = TaskModelBinding(task_type, "local/backup")
+    primary = TaskModelBinding(task_type, "local/primary", {}, (backup,))
+    resolver = TaskBindingResolver(
+        _StubModelTasks(primary), configuration_error=_StubConfigurationError
+    )
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    selecting = asyncio.Event()
+    recovered = threading.Event()
+
+    def clock():
+        if threading.get_ident() != loop_thread:
+            loop.call_soon_threadsafe(selecting.set)
+            assert recovered.wait(timeout=2)
+        return 0.0
+
+    async def reject(_attempt):
+        error = ProviderError("quota exhausted", retryable=False)
+        error.status_code = 429
+        raise error
+
+    monkeypatch.setattr(task_execution, "_clock", clock)
+    with pytest.raises(ProviderError):
+        await resolver.execute(task_type, reject)
+
+    async def recover(attempt):
+        await selecting.wait()
+        return attempt.target.local_id
+
+    preflight = asyncio.create_task(resolver.resolve_async(task_type))
+    try:
+        assert await resolver.execute(task_type, recover) == "primary"
+    finally:
+        recovered.set()
+
+    assert (await preflight)[2].local_id == "primary"

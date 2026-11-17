@@ -424,8 +424,9 @@ kept; others convert) with no prompt. Options map to
 and vocabulary together with word timestamps or speaker labels, so those two win and the
 others are dropped (Google answers HTTP 400 otherwise, live 2026-11-17). The answer's parts each hold an `audioTranscription.text` utterance
 (joined by newlines); with word times or speaker labels each becomes a segment
-`{text, start, end, speaker, words}` with offsets in seconds. The 25 MB vBot audio ceiling
-stays well below Google's 100 MB inline request limit.
+`{text, start, end, speaker, words}` with offsets in seconds. Malformed optional word
+timings are omitted while text, speaker labels and valid timings still survive. The
+25 MB vBot audio ceiling stays well below Google's 100 MB inline request limit.
 
 Google Chat Models with audio input are not STT targets: like Mistral, audio chat derives
 only `audio_input`, never `speech_to_text` (`models.md`), because a Chat Model needs a

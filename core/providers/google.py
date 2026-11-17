@@ -506,8 +506,8 @@ def _retry_delay_seconds(error: Mapping[str, Any]) -> str | None:
     for info in _details(error, "google.rpc.RetryInfo"):
         delay = info.get("retryDelay")
         if isinstance(delay, str) and (match := _RETRY_DELAY.match(delay)):
-            return str(max(1, round(float(match.group(1)))))
+            return str(float(match.group(1)))
     message = error.get("message")
     if isinstance(message, str) and (match := _RETRY_IN.search(message)):
-        return str(max(1, round(float(match.group(1)))))
+        return str(float(match.group(1)))
     return None
