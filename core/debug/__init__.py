@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.debug._privacy import protect_retained_debug_artifacts
     from core.debug.recorder import DebugContext, ProviderDebugRecorder
     from core.debug.redaction import redact_headers, redact_url
     from core.debug.speech import SpeechDebugDisabledError, SpeechDebugStore
@@ -17,6 +18,7 @@ __all__ = [
     "SpeechDebugStore",
     "SpeechDebugDisabledError",
     "drain_debug_traces",
+    "protect_retained_debug_artifacts",
     "redact_headers",
     "redact_url",
 ]
@@ -29,6 +31,7 @@ _EXPORT_MODULES = {
     "DebugTraceStore": "store",
     "InvalidTraceIdError": "store",
     "drain_debug_traces": "store",
+    "protect_retained_debug_artifacts": "_privacy",
     "redact_headers": "redaction",
     "redact_url": "redaction",
 }

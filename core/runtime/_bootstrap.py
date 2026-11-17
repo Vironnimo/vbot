@@ -41,7 +41,7 @@ from core.database import (
     remove_interrupted_staging,
     retire_core_databases,
 )
-from core.debug import SpeechDebugStore
+from core.debug import SpeechDebugStore, protect_retained_debug_artifacts
 from core.extensions import ExtensionRegistry
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -206,6 +206,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._storage.ensure_directories()
         runtime.logger = runtime._open_log_manager().get_logger("core")
         runtime.logger.debug("Runtime startup initiated")
+        protect_retained_debug_artifacts(runtime._storage.data_dir)
         if runtime._operational_producers == "enabled":
             runtime._storage.temporary_files.start()
         try:

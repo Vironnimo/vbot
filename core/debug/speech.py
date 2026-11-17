@@ -17,6 +17,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from core.debug._privacy import PRIVATE_FILE_MODE, ensure_debug_directory
 from core.debug.store import _TRACE_THREAD
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text, write_new_bytes
@@ -205,7 +206,7 @@ class SpeechDebugStore:
         try:
             if not self._settings().get("enabled", False):
                 return
-            self._directory.mkdir(parents=True, exist_ok=True)
+            ensure_debug_directory(self._directory)
             self._check_directory()
             # Validate existing records before publishing or pruning anything.
             self._list()
@@ -214,7 +215,7 @@ class SpeechDebugStore:
                 # empty reserved sidecar is an unpublished, recoverable take.
                 path = write_id_file(self._directory, "stt", ".json", b"")
                 try:
-                    write_new_bytes(path.with_suffix(".audio"), audio)
+                    write_new_bytes(path.with_suffix(".audio"), audio, mode=PRIVATE_FILE_MODE)
                 except FileExistsError:
                     path.unlink()
                     continue
@@ -228,6 +229,7 @@ class SpeechDebugStore:
                     ),
                     ensure_ascii=False,
                 ),
+                mode=PRIVATE_FILE_MODE,
             )
             published = True
             self._prune()

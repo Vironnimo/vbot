@@ -9,8 +9,8 @@ trusted only as far as the user chose it:
   already runs with the user's rights on this computer.
 - Any other server's page needs the user's native confirmation to add or
   remove a remembered server (selecting one that is not remembered adds it),
-  to read the clipboard (asked once per server origin while the Desktop runs)
-  and to install a wake word model.
+  to read the clipboard (asked once per server origin while the Desktop runs),
+  to write the clipboard, to start Voice listening and to install a wake word model.
 
 Connecting, pairing and forgetting a sign-in are no page's business at all:
 only the Desktop's own connection screen may call them
@@ -120,6 +120,21 @@ class PagePermissions:
             with self._lock:
                 self._clipboard_origins.add(origin)
 
+    def write_clipboard(self) -> None:
+        """Approve replacement of the host clipboard for this loaded page."""
+        self._ask_loaded_page(
+            "Copy to the clipboard",
+            "{page} asks to replace the text on your clipboard. Allow this copy?",
+        )
+
+    def enable_voice(self) -> None:
+        """Approve starting native Voice listening for this loaded page."""
+        self._ask_loaded_page(
+            "Start Voice listening",
+            "{page} asks to start vBot Desktop's microphone listening. "
+            "Voice recordings go to the connected server. Allow listening?",
+        )
+
     def import_model(self, filename: Any) -> None:
         """Let the page install a wake word model; raises when declined."""
         self._ask(
@@ -168,6 +183,14 @@ class PagePermissions:
         origin = url_origin(self._page_url())
         with self._lock:
             return origin if origin == self._loaded_origin else None
+
+    def _ask_loaded_page(self, title: str, message: str) -> None:
+        origin = self._page_origin()
+        if origin is None:
+            raise PageActionDeclined(f"{title}: no loaded server page")
+        self._ask(title, message, origin=origin)
+        if self._page_origin() != origin:
+            raise PageActionDeclined(f"{title}: the server page changed")
 
     def _ask(self, title: str, message: str, *, server: str = "", **known: Any) -> None:
         origin = known["origin"] if "origin" in known else self._page_origin()

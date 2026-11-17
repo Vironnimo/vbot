@@ -289,7 +289,7 @@ class DesktopBridge:
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
         """Replace the host clipboard with validated plain text."""
-        self._system_actions.set_clipboard_text(text)
+        self._system_actions.set_clipboard_text(text, authorize=self._permissions.write_clipboard)
         return {"copied": True}
 
     def getClipboardText(self) -> str:  # noqa: N802
@@ -328,6 +328,8 @@ class DesktopBridge:
 
     def setVoiceEnabled(self, enabled: Any) -> dict[str, Any]:  # noqa: N802
         """Enable or disable Voice listening; returns ``{enabled, error_code}``."""
+        if enabled is True:
+            self._permissions.enable_voice()
         return self._voice.set_enabled(enabled)
 
     def updateVoiceConfig(self, changes: Any) -> dict[str, Any]:  # noqa: N802

@@ -283,10 +283,10 @@ class TestLifecycle:
         release = threading.Event()
         write = store_module.atomic_write_text
 
-        def slow_write(path, text):
+        def slow_write(path, text, **options):
             entered.set()
             release.wait(timeout=5)
-            write(path, text)
+            write(path, text, **options)
 
         monkeypatch.setattr(store_module, "atomic_write_text", slow_write)
         recorder.set_context(_make_context())
