@@ -176,10 +176,10 @@ def test_execution_rejects_disabled_connection_even_while_credential_remains() -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["rate_limit", "network", "unavailable"])
+@pytest.mark.parametrize("failure", ["rate_limit", "quota", "network", "unavailable"])
 async def test_fallbacks_use_their_options_and_remember_failed_routes(monkeypatch, failure):
     from core.model_tasks import task_execution
-    from core.providers.errors import NetworkError, ProviderRateLimitError
+    from core.providers.errors import NetworkError, ProviderError, ProviderRateLimitError
 
     now = [0.0]
     monkeypatch.setattr(task_execution, "_clock", lambda: now[0])
@@ -197,6 +197,11 @@ async def test_fallbacks_use_their_options_and_remember_failed_routes(monkeypatc
                 raise ProviderRateLimitError("busy")
             if failure == "unavailable":
                 raise TaskModelError("removed")
+            if failure == "quota":
+                # Google's zero or daily quota: non-retryable, yet never processed.
+                exhausted = ProviderError("quota exhausted", retryable=False)
+                exhausted.status_code = 429
+                raise exhausted
             raise NetworkError("unreachable")
         return attempt.options["voice"]
 
