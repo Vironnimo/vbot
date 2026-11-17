@@ -140,7 +140,9 @@ async def test_upload_stops_consuming_chunked_body_after_file_limit() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ending", ["disconnect", "cancel", "incomplete", "malformed", "complete"])
+@pytest.mark.parametrize(
+    "ending", ["disconnect", "cancel", "incomplete", "unfinished-field", "malformed", "complete"]
+)
 async def test_upload_parser_releases_every_unclaimed_spool(
     monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
@@ -169,6 +171,10 @@ async def test_upload_parser_releases_every_unclaimed_spool(
             raise asyncio.CancelledError
         tail = {
             "incomplete": b"",
+            "unfinished-field": (
+                b'\r\n--vbot\r\nContent-Disposition: form-data; name="description"\r\n\r\n'
+                b"partial description"
+            ),
             "malformed": b"\r\n--vbot\r\ninvalid header\r\n\r\n",
             "complete": b"\r\n--vbot--\r\n",
         }[ending]
@@ -196,6 +202,7 @@ async def test_upload_parser_releases_every_unclaimed_spool(
                 "disconnect": ClientDisconnect,
                 "cancel": asyncio.CancelledError,
                 "incomplete": HTTPException,
+                "unfinished-field": HTTPException,
                 "malformed": HTTPException,
             }[ending]
             with pytest.raises(error) as caught:
@@ -203,7 +210,7 @@ async def test_upload_parser_releases_every_unclaimed_spool(
                     request, max_size_bytes=1024, upload_kind="Attachment"
                 )
             if isinstance(caught.value, HTTPException):
-                assert caught.value.status_code == (400 if ending == "malformed" else 422)
+                assert caught.value.status_code == (422 if ending == "incomplete" else 400)
         assert len(opened) == 1 and opened[0].closed
     finally:
         for spool in opened:
