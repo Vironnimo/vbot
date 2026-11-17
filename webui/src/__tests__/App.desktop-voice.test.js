@@ -93,6 +93,7 @@ describe('App Desktop Voice feedback', () => {
   } = {}) {
     api = {
       getDesktopCapabilities: vi.fn().mockResolvedValue(capabilities),
+      getDictation: vi.fn().mockResolvedValue({ state: 'idle' }),
       getVoiceStatus: vi.fn().mockResolvedValue(status),
       stopVoiceRecording: vi.fn().mockResolvedValue({ stopped: true }),
     };
@@ -354,6 +355,36 @@ describe('App Desktop Voice feedback', () => {
     // Leaving the page releases a recording that never reported its end.
     pushDictation(true);
     mountedComponent = await cleanupAppHarness(mountedComponent);
+    expect(microphoneInUse()).toBe(false);
+  });
+
+  it('reads an ongoing Desktop dictation when the page mounts', async () => {
+    installDesktop({
+      capabilities: { ...VOICE_CAPABILITIES, dictation: true },
+    });
+    api.getDictation.mockResolvedValue({ state: 'recording' });
+    await mountApp();
+    expect(microphoneInUse()).toBe(true);
+
+    pushDictation(false);
+    expect(microphoneInUse()).toBe(false);
+  });
+
+  it('keeps a dictation end received while loading the initial state', async () => {
+    installDesktop({
+      capabilities: { ...VOICE_CAPABILITIES, dictation: true },
+    });
+    let answer;
+    api.getDictation.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await mountApp();
+    expect(api.getDictation).toHaveBeenCalledOnce();
+    pushDictation(false);
+    answer({ state: 'recording' });
+    await settle();
     expect(microphoneInUse()).toBe(false);
   });
 

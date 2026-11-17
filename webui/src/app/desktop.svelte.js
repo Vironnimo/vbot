@@ -5,6 +5,7 @@ import {
   desktopErrorCode,
   disabledDesktopCapabilities,
   getDesktopCapabilities,
+  getDesktopDictation,
   getDesktopUpdate,
   getVoiceStatus,
   isDesktopAccessor,
@@ -35,22 +36,35 @@ const UPDATE_STATE_RETRY_MS = 1000;
 /**
  * While a Desktop dictation records, the microphone counts as in use for this
  * page, so a running Live voice call holds instead of hearing the dictation.
- * Holds at most one claim; returns the cleanup function, which releases it.
+ * Holds at most one claim and seeds it once the Desktop bridge is ready.
  */
 function followDesktopDictation() {
   let release = null;
-  const stopPushes = onDesktopDictationRecording(({ recording }) => {
+  let pushed = false;
+  let stopped = false;
+  function applyRecording(recording) {
     if (recording) {
       release ??= claimMicrophone();
     } else {
       release?.();
       release = null;
     }
+  }
+  const stopPushes = onDesktopDictationRecording(({ recording }) => {
+    pushed = true;
+    applyRecording(recording);
   });
-  return () => {
-    stopPushes();
-    release?.();
-    release = null;
+  return {
+    async refresh() {
+      if (pushed || stopped) return;
+      const status = await getDesktopDictation();
+      if (!pushed && !stopped) applyRecording(status.state === 'recording');
+    },
+    stop() {
+      stopped = true;
+      stopPushes();
+      applyRecording(false);
+    },
   };
 }
 
@@ -460,6 +474,7 @@ export function createAppDesktop(context) {
 
   onMount(() => {
     let cancelled = false;
+    const dictation = isDesktopAccessor() ? followDesktopDictation() : null;
     let desktopCapabilityRetryTimer = null;
     const scheduleDesktopCapabilityRetry = () => {
       if (cancelled || desktopCapabilityRetryTimer !== null) return;
@@ -485,6 +500,7 @@ export function createAppDesktop(context) {
         if (supportsDesktopVoice(caps)) voice.start();
         if (caps.restart) updateSync.start();
         if (caps.zoom) zoom.start();
+        if (caps.dictation) await dictation?.refresh();
       } catch {
         scheduleDesktopCapabilityRetry();
       }
@@ -492,17 +508,15 @@ export function createAppDesktop(context) {
 
     // Detect desktop capabilities and keep probing while the asynchronously
     // injected bridge is absent or temporarily rejects a capability call.
-    let stopDictation = () => {};
-    if (isDesktopAccessor()) {
+    if (dictation) {
       void initializeDesktopCapabilities();
-      stopDictation = followDesktopDictation();
     } else {
       desktopCapabilities = disabledDesktopCapabilities();
     }
 
     return () => {
       cancelled = true;
-      stopDictation();
+      dictation?.stop();
       clearToastDismissTimers();
       if (desktopCapabilityRetryTimer !== null) {
         clearTimeout(desktopCapabilityRetryTimer);
