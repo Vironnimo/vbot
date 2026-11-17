@@ -230,6 +230,29 @@ async def test_synchronous_shutdown_releases_the_loaded_child(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_shutdown_rejects_a_queued_turn_without_submitting_to_the_closed_worker(
+    tmp_path: Path,
+) -> None:
+    async with running(tmp_path) as executor:
+        install_fake(tmp_path, GRANITE)
+        started, proceed = threading.Event(), threading.Event()
+        FakeChild.gate = {"active": started, "active:proceed": proceed}
+        active = asyncio.create_task(executor.embed(GRANITE.id, ["active"], query=True, options={}))
+        assert await asyncio.to_thread(started.wait, 2)
+        queued = asyncio.create_task(executor.embed(GRANITE.id, ["queued"], query=True, options={}))
+        try:
+            await asyncio.sleep(0)
+        finally:
+            proceed.set()
+        executor.close()
+
+        await active
+        with pytest.raises(LocalEmbeddingUnavailableError):
+            await queued
+        assert ["queued"] not in FakeChild.events
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["setup", "child"])
 async def test_shutdown_settles_after_cancellation_and_concurrent_closers_join(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
@@ -257,6 +280,7 @@ async def test_shutdown_settles_after_cancellation_and_concurrent_closers_join(
             )
         closing = asyncio.create_task(executor.aclose())
         assert await asyncio.to_thread(started.wait, 2)
+        assert not executor.targets.get(GRANITE.id).can_execute()
         closing.cancel()
         joined = asyncio.create_task(executor.aclose())
         try:
