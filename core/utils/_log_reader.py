@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -572,11 +573,14 @@ class LogReader:
                 if is_link_status(directory.lstat()):
                     continue
                 for path in directory.iterdir():
-                    if (
-                        not is_link_status(path.lstat())
-                        and path.is_file()
-                        and not is_reserved_name(path.name)
-                    ):
+                    if is_reserved_name(path.name):
+                        continue
+                    try:
+                        status = path.lstat()
+                    except FileNotFoundError:
+                        # Retention can remove one file after it was listed.
+                        continue
+                    if stat.S_ISREG(status.st_mode) and not is_link_status(status):
                         yield f"{namespace}/{path.name}" if namespace else path.name
             except FileNotFoundError:
                 continue
@@ -589,9 +593,12 @@ class LogReader:
     def resolve_existing_file(self, file_name: str) -> Path:
         normalized_name = self._normalize_file_name(file_name)
         file_path = self.file_path(normalized_name)
-        if is_link_status(file_path.parent.lstat()) or is_link_status(file_path.lstat()):
+        if is_link_status(file_path.parent.lstat()):
             raise ValueError("log files must not be links")
-        if not file_path.is_file():
+        status = file_path.lstat()
+        if is_link_status(status):
+            raise ValueError("log files must not be links")
+        if not stat.S_ISREG(status.st_mode):
             raise FileNotFoundError(f"log file not found: {normalized_name}")
         return file_path
 
