@@ -504,10 +504,16 @@ def find_run(
 
 
 def run_messages(
-    connection: sqlite3.Connection, address: SessionAddress, run_id: str
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    run_id: str,
+    *,
+    expected_generation_id: str | None = None,
 ) -> Callable[[], list[ChatMessage]]:
-    """Load the current entries one Run wrote."""
+    """Load the current entries one Run wrote in the requested Session generation."""
     state, ranges = current_view(connection, address)
+    if expected_generation_id is not None and str(state["generation_id"]) != expected_generation_id:
+        raise SessionNotFoundError(f"session generation changed: {address.session_id}")
     run = find_run(connection, state, ranges, run_id=run_id)
     if run is None:
         return list

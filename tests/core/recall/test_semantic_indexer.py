@@ -23,6 +23,7 @@ from core.model_tasks import (
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import ProviderAuthError
 from core.recall import IndexStatus, PassageIndex, SemanticIndexer
+from core.recall.passage_index import VectorHeader
 from core.recall.semantic_indexer import _index_scopes
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress, SessionReadCursor
@@ -506,6 +507,71 @@ async def test_batch_whose_every_text_fails_alone_stops_without_skipping(
     assert status.last_error is not None
     assert status.last_error.code == "provider_rejected"
     assert status.next_attempt_at == _at(30)
+
+
+@pytest.mark.parametrize("change", ["binding", "rebuild", "repin"])
+async def test_an_inflight_failure_cannot_change_a_new_pass(
+    index: PassageIndex, sessions: ChatSessionManager, change: str
+) -> None:
+    _conversation(sessions, "one", "fruit a", 1)
+    sent, release = asyncio.Event(), asyncio.Event()
+    failure = (
+        _provider_failure(503, retryable=True) if change == "binding" else _provider_failure(400)
+    )
+    attempts = 0
+
+    class BlockedAttempt(_Embeddings):
+        @override
+        async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                sent.set()
+                await release.wait()
+            if attempts == 1 or (change == "repin" and attempts == 2):
+                raise failure
+            return await super().embed(texts, purpose=purpose)
+
+    embeddings = BlockedAttempt()
+    indexer = _indexer(index, sessions, embeddings)
+    header = dataclasses.replace(VectorHeader.for_space(embeddings.resolve_space()), dimension=4)
+    if change == "repin":
+        await index.use_space(header)
+    first = asyncio.create_task(indexer.run_pass())
+    try:
+        await asyncio.wait_for(sent.wait(), timeout=2)
+        if change == "binding":
+            embeddings.space_fingerprint = "replacement"
+            indexer.settings_changed()
+        elif change == "rebuild":
+            await indexer.rebuild()
+        else:
+            await index.use_space(dataclasses.replace(header, dimension=5))
+    finally:
+        release.set()
+        await first
+    queued = await indexer.status()
+    if change == "repin":
+        assert attempts == 2
+        assert (queued.state, queued.waiting, queued.skipped) == ("idle", 0, 1)
+        return
+    assert queued.next_attempt_at == _at(0)
+    assert queued.last_error is None
+    assert (queued.waiting, queued.skipped) == (1, 0)
+    await indexer.run_pass()
+    assert (await indexer.status()).indexed == 1
+
+
+async def test_rebuild_records_completion_for_an_empty_index(
+    index: PassageIndex, sessions: ChatSessionManager
+) -> None:
+    indexer = _indexer(index, sessions, _Embeddings())
+    await indexer.run_pass()
+    assert (await indexer.status()).last_completed_at == _at(0)
+    await indexer.rebuild()
+    assert (await indexer.status()).last_completed_at is None
+    await indexer.run_pass()
+    assert (await indexer.status()).last_completed_at == _at(0)
 
 
 @pytest.mark.parametrize("prior_failures", [0, 1024])

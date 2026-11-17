@@ -27,7 +27,7 @@ from desktop.dictation.insertion import (
 )
 from desktop.dictation.pieces import PieceCutter
 from desktop.speech.microphone import MicrophoneService
-from desktop.speech.server_client import SpeechServerRejected
+from desktop.speech.server_client import SpeechServerError, SpeechServerRejected
 from tests.desktop.hotkey_test_support import FakeHotkeyApi
 from tests.desktop.speech.speech_test_support import (
     FakeInputStream,
@@ -108,7 +108,7 @@ class FakeServer:
         self.urls: list[str] = []
         # Answer "Teil <n>" per upload that holds sound, "" for silence.
         self.numbered = False
-        self.budget_bytes = 10_000_000
+        self.budget_bytes: int | SpeechServerError = 10_000_000
         self.release_budget = threading.Event()
         self.release_budget.set()
 
@@ -127,9 +127,12 @@ class _FakeClient:
     def prepare_transcription(self) -> str | None:
         return "loaded"
 
-    def upload_budget_bytes(self) -> int:
+    def wav_upload_budget_bytes(self) -> int:
         assert self.server.release_budget.wait(5)
-        return self.server.budget_bytes
+        budget = self.server.budget_bytes
+        if isinstance(budget, SpeechServerError):
+            raise budget
+        return budget
 
     def transcribe(self, audio: bytes, *, filename: str) -> str:
         self.server.uploads.append(audio)
@@ -332,10 +335,11 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     assert (status["state"], status["last_failure"]) == ("idle", None)
 
 
+@pytest.mark.parametrize("tap_stage", ["opening", "awaiting-pcm"])
 def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
-    make_rig: Any,
+    make_rig: Any, monkeypatch: pytest.MonkeyPatch, tap_stage: str
 ) -> None:
-    rig = make_rig(mode="hold")
+    rig: Rig = make_rig(mode="hold")
     rig.api.down |= HELD_KEYS
 
     rig.start_take()
@@ -344,11 +348,30 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     rig.wait_idle()
     assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
 
-    # A tap: the keys are already up while the microphone is still opening.
-    rig.sd.can_open.clear()
-    rig.press()
-    wait_until(lambda: "cancel" in rig.cues.played)
-    rig.sd.can_open.set()
+    # A tap may also occur after the backend opens, while the first read blocks.
+    release_pcm = threading.Event()
+    awaiting_pcm = threading.Event()
+    if tap_stage == "opening":
+        rig.sd.can_open.clear()
+    else:
+        read_pcm = rig.sd.read
+
+        def read_when_ready(stream: FakeInputStream, frames: int) -> tuple[np.ndarray, bool]:
+            awaiting_pcm.set()
+            assert release_pcm.wait(5)
+            return read_pcm(stream, frames)
+
+        monkeypatch.setattr(rig.sd, "read", read_when_ready)
+        rig.api.down |= HELD_KEYS
+    try:
+        rig.press()
+        if tap_stage == "awaiting-pcm":
+            assert awaiting_pcm.wait(5)
+            rig.api.down -= HELD_KEYS
+        wait_until(lambda: "cancel" in rig.cues.played)
+    finally:
+        rig.sd.can_open.set()
+        release_pcm.set()
     rig.wait_idle()
 
     assert rig.cues.played == ["listen", "done", "cancel"]
@@ -441,24 +464,39 @@ def test_a_take_that_types_nothing_signals_and_reports_why(
 
 
 @pytest.mark.parametrize(
-    ("server_url", "readiness", "devices", "code"),
+    ("server_url", "readiness", "devices", "budget_error", "code"),
     [
-        ("", None, True, "server_unreachable"),
+        ("", None, True, None, "server_unreachable"),
         (
             "http://server.lan:8420",
             "speech_to_text_unconfigured",
             True,
+            None,
             "speech_to_text_unconfigured",
         ),
-        ("http://server.lan:8420", None, False, "microphone_unavailable"),
+        ("http://server.lan:8420", None, False, None, "microphone_unavailable"),
+        (
+            "http://server.lan:8420",
+            None,
+            True,
+            SpeechServerError("speech_to_text_unavailable", "WAV does not fit"),
+            "speech_to_text_unavailable",
+        ),
     ],
-    ids=["no-server", "no-speech-to-text", "no-microphone"],
+    ids=["no-server", "no-speech-to-text", "no-microphone", "upload-limit-below-wav-minimum"],
 )
 def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
-    make_rig: Any, server_url: str, readiness: str | None, devices: bool, code: str
+    make_rig: Any,
+    server_url: str,
+    readiness: str | None,
+    devices: bool,
+    budget_error: SpeechServerError | None,
+    code: str,
 ) -> None:
     rig = make_rig(server_url=server_url)
     rig.server.readiness = readiness
+    if budget_error is not None:
+        rig.server.budget_bytes = budget_error
     if not devices:
         rig.sd.devices.clear()
 
@@ -569,6 +607,19 @@ def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any)
     assert rig.controller.status()["last_failure"]["code"] == "transcription_failed"
 
 
+def test_piece_cutter_waits_for_the_search_window_in_continuous_loud_audio() -> None:
+    block = tone(0.125, RATE).tobytes()
+    cutter = PieceCutter(budget_bytes=lambda: 100_000, target_seconds=0.5, search_seconds=0.5)
+    for _ in range(7):
+        assert cutter.add(block, RATE, 0.125) == []
+
+    pieces = cutter.add(block, RATE, 0.125)
+    assert len(pieces) == 1
+    remainder = cutter.finish()
+    assert remainder is not None
+    assert pieces[0].pcm + remainder.pcm == block * 8
+
+
 @pytest.mark.parametrize("stored_mode", ["toggle", "push", [], {}])
 def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
     make_rig: Any,
@@ -605,12 +656,31 @@ def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
     assert stored["hotkey"]["key"] == "KeyJ"
 
 
-def test_stop_cancels_a_running_take_and_is_final(make_rig: Any) -> None:
+@pytest.mark.parametrize("during", ["recording", "transcribing"])
+def test_stop_cancels_a_running_take_and_is_final(
+    make_rig: Any, monkeypatch: pytest.MonkeyPatch, during: str
+) -> None:
     rig = make_rig()
-    rig.press()
-    wait_until(lambda: "listen" in rig.cues.played)
+    if during == "recording":
+        rig.press()
+        wait_until(lambda: "listen" in rig.cues.played)
+        rig.controller.stop()
+    else:
+        rig.server.release_transcription.clear()
+        rig.start_take()
+        rig.press()
+        assert rig.server.transcribing.wait(5)
+        shortcut = rig.controller._hotkey  # noqa: SLF001
+        original_stop = shortcut.stop
 
-    rig.controller.stop()
+        def slow_shortcut_teardown() -> None:
+            rig.server.release_transcription.set()
+            rig.wait_idle()
+            original_stop()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(shortcut, "stop", slow_shortcut_teardown)
+            rig.controller.stop()
 
     assert not rig.controller.is_busy()
     assert rig.inserter.inserted == []

@@ -205,38 +205,88 @@ describe('DesktopDictationSettings', () => {
     },
   );
 
-  it('reads the state again until a pushed dictation ended', async () => {
-    vi.useFakeTimers();
-    await renderWithFakeTimers();
-    expect(lastResult()).toBeNull();
+  it.each([false, true])(
+    'reads through the end of a pushed dictation (interrupted read: %s)',
+    async (interrupted) => {
+      vi.useFakeTimers();
+      await renderWithFakeTimers();
+      expect(lastResult()).toBeNull();
 
-    // The end of the recording can arrive before the Desktop's state moved on.
-    api.getDictation.mockResolvedValue(status({ state: 'recording' }));
-    pushRecording(true);
-    await settle();
-    pushRecording(false);
-    await settle();
-    expect(api.getDictation).toHaveBeenCalledTimes(3);
+      // The end of the recording can arrive before the Desktop's state moved on.
+      api.getDictation.mockResolvedValue(status({ state: 'recording' }));
+      pushRecording(true);
+      await settle();
+      pushRecording(false);
+      await settle();
+      expect(api.getDictation).toHaveBeenCalledTimes(3);
 
-    // Still running: read again a second later.
-    api.getDictation.mockResolvedValue(status({ state: 'transcribing' }));
-    await vi.advanceTimersByTimeAsync(1000);
-    await settle();
-    expect(api.getDictation).toHaveBeenCalledTimes(4);
+      // Still running: read again a second later.
+      api.getDictation.mockResolvedValue(status({ state: 'transcribing' }));
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle();
+      expect(api.getDictation).toHaveBeenCalledTimes(4);
 
-    api.getDictation.mockResolvedValue(
-      status({ last_failure: { code: 'transcription_failed', at: null } }),
-    );
-    await vi.advanceTimersByTimeAsync(1000);
-    await settle();
-    expect(lastResult()).toBe(
-      t('settings.dictation.result.transcriptionFailed'),
-    );
+      if (interrupted) {
+        api.getDictation.mockRejectedValueOnce(new Error('bridge busy'));
+        await vi.advanceTimersByTimeAsync(1000);
+        await settle();
+        expect(lastResult()).toBeNull();
+      }
 
-    // Idle: no more reads.
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(api.getDictation).toHaveBeenCalledTimes(5);
-  });
+      api.getDictation.mockResolvedValue(
+        status({ last_failure: { code: 'transcription_failed', at: null } }),
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle();
+      expect(lastResult()).toBe(
+        t('settings.dictation.result.transcriptionFailed'),
+      );
+
+      // Idle: no more reads.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(api.getDictation).toHaveBeenCalledTimes(interrupted ? 6 : 5);
+    },
+  );
+
+  it.each(['before', 'during'])(
+    'rereads a status push received %s a pending settings write',
+    async (timing) => {
+      vi.useFakeTimers();
+      await renderWithFakeTimers();
+      const write = Promise.withResolvers();
+      const earlyRead = Promise.withResolvers();
+      let written = false;
+      api.getDictation.mockImplementation(() =>
+        written
+          ? Promise.resolve(
+              status({
+                enabled: true,
+                last_failure: { code: 'transcription_failed', at: null },
+              }),
+            )
+          : earlyRead.promise,
+      );
+      api.setDictation.mockReturnValueOnce(write.promise);
+      if (timing === 'before') {
+        pushRecording(false);
+        await settle();
+      }
+      enableSwitch().click();
+      if (timing === 'during') pushRecording(false);
+      await settle();
+
+      written = true;
+      write.resolve(status({ enabled: true }));
+      await settle();
+      earlyRead.resolve(status());
+      await settle();
+
+      expect(enableSwitch().getAttribute('aria-checked')).toBe('true');
+      expect(lastResult()).toBe(
+        t('settings.dictation.result.transcriptionFailed'),
+      );
+    },
+  );
 
   it('retries when the Desktop does not answer the first load', async () => {
     api.getDictation

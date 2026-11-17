@@ -8,6 +8,7 @@ import {
   SystemPromptView,
   baseBlocks,
   createRpcMock,
+  deferred,
   blockIds,
   blockElement,
   blockToggle,
@@ -215,6 +216,29 @@ describe('SystemPromptView blocks', () => {
     });
   });
 
+  it('autosaves when the text returns to the prior value during an active save', async () => {
+    await mountView();
+    const initialContent =
+      blockElement('core:intro').querySelector('textarea').value;
+    const firstSave = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'prompt.update' && params.content === 'first edit'
+        ? firstSave.promise
+        : base(method, params),
+    );
+
+    vi.useFakeTimers();
+    editBlock('core:intro', 'first edit');
+    await advanceAutosave();
+    expect(lastCall('prompt.update')[1].content).toBe('first edit');
+    editBlock('core:intro', initialContent);
+    firstSave.resolve({ text: 'first edit', is_modified: true });
+    await advanceAutosave();
+
+    expect(lastCall('prompt.update')[1].content).toBe(initialContent);
+  });
+
   it('resets a block through prompt.reset after confirmation', async () => {
     await mountView({
       promptReset: {
@@ -247,6 +271,36 @@ describe('SystemPromptView blocks', () => {
     );
   });
 
+  it('autosaves typing made during a reset that later fails', async () => {
+    await mountView();
+    const reset = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'prompt.reset') {
+        await reset.promise;
+        throw new Error('reset failed');
+      }
+      return base(method, params);
+    });
+    vi.useFakeTimers();
+    Array.from(blockElement('core:intro').querySelectorAll('button'))
+      .find(
+        (button) =>
+          button.textContent.trim() === t('systemPrompt.fragmentEditor.reset'),
+      )
+      .click();
+    flushSync();
+    confirmDialog(t('common.reset'));
+    expect(hasCall('prompt.reset')).toBe(true);
+    editBlock('core:intro', 'typed during reset');
+    await advanceAutosave();
+    expect(hasCall('prompt.update')).toBe(false);
+
+    reset.resolve();
+    await advanceAutosave();
+    expect(lastCall('prompt.update')?.[1].content).toBe('typed during reset');
+  });
+
   it.each([
     ['a valid slug', 'my-note', null, null],
     [
@@ -266,6 +320,10 @@ describe('SystemPromptView blocks', () => {
     async (_case, slug, createBlockError, errorKey) => {
       await mountView({ createBlockError });
 
+      if (!errorKey) {
+        vi.useFakeTimers();
+        editBlock('core:intro', 'draft before creating another block');
+      }
       clickToolbarButton(t('systemPrompt.blockList.newBlock'));
       flushSync();
       const input = document.getElementById('sp-new-block-name');
@@ -285,11 +343,18 @@ describe('SystemPromptView blocks', () => {
         expect(hasCall('prompt.create_block')).toBe(createBlockError !== null);
         expect(document.getElementById('sp-new-block-name').value).toBe(slug);
       } else {
-        await waitForCondition(
-          () => !document.getElementById('sp-new-block-name'),
-          100,
-        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(document.getElementById('sp-new-block-name')).toBeNull();
         expect(lastCall('prompt.create_block')[1]).toMatchObject({ slug });
+        expect(
+          rpcMock.mock.calls.filter(([method]) => method === 'prompt.list'),
+        ).toHaveLength(2);
+        expect(hasCall('prompt.update')).toBe(false);
+        await advanceAutosave();
+        expect(lastCall('prompt.update')[1]).toMatchObject({
+          id: 'core:intro',
+          content: 'draft before creating another block',
+        });
       }
     },
   );
@@ -330,13 +395,34 @@ describe('SystemPromptView blocks', () => {
 
   it('resets the layout through prompt.reset_layout after confirmation', async () => {
     await mountView();
+    const reload = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'prompt.list' ? reload.promise : base(method, params),
+    );
 
+    vi.useFakeTimers();
+    editBlock('core:intro', 'a save made while refreshing');
     clickToolbarButton(t('systemPrompt.blockList.resetLayout'));
     flushSync();
     expect(hasCall('prompt.reset_layout')).toBe(false);
 
     confirmDialog(t('common.reset'));
     flushSync();
-    await waitForCondition(() => hasCall('prompt.reset_layout'), 100);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasCall('prompt.reset_layout')).toBe(true);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'prompt.list'),
+    ).toHaveLength(2);
+    await advanceAutosave();
+    expect(lastCall('prompt.update')[1].content).toBe(
+      'a save made while refreshing',
+    );
+
+    reload.resolve(await base('prompt.list'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(blockElement('core:intro').querySelector('textarea').value).toBe(
+      'a save made while refreshing',
+    );
   });
 });

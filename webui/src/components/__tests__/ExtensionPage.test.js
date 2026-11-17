@@ -237,14 +237,28 @@ describe('ExtensionPage frame bridge', () => {
         .querySelector('iframe')
         .classList.contains('extension-page--layer'),
     ).toBe(true);
-    document.querySelector('iframe').dispatchEvent(new Event('load'));
+    component.update({
+      descriptor: { ...descriptor, epoch: 'epoch-b', entry_url: '/next-asset' },
+    });
     flushSync();
+    // Search must stop offering entries from the old registration while the
+    // new frame is still loading and cannot reveal them.
     expect(document.querySelector('[data-extension-search]')).toBeNull();
     expect(
       document
         .querySelector('iframe')
         .classList.contains('extension-page--layer'),
     ).toBe(false);
+    const replacement = loadFrame();
+    replacement.ready();
+    replacement.call('index', 'search.index', {
+      entries: [{ id: 'two', label: 'Two connections', terms: 'next.test' }],
+    });
+    await replacement.replied('index');
+    flushSync();
+    expect(
+      document.querySelector('[data-extension-search]').dataset.searchTerms,
+    ).toBe('next.test');
   });
 
   it('opens explicit external HTTP links and rejects executable or credential-bearing URLs', async () => {
@@ -1222,6 +1236,21 @@ describe('ExtensionPage Run stream recovery', () => {
   const deliver = (stream, type, sequence) =>
     stream.handlers.onEvent({ type, data: { run_id: 'run', sequence } });
 
+  it('abandons a late initial capability read before it can open an orphan stream', async () => {
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers();
+    api.openExtensionPageRun.mockReturnValue(pending.promise);
+    const page = openPage();
+    page.call('sub', 'run.subscribe', { group_id: 'group', run_id: 'run' });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(api.openExtensionPageRun.mock.calls[0][5].signal.aborted).toBe(true);
+    pending.resolve(initial);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(api.subscribeRunEvents).not.toHaveBeenCalled();
+    expect(page.reply('sub')).toMatchObject({ type: 'vbot.extension.error' });
+  });
+
   it('reports a transport that cannot start without leaving a watchdog behind', async () => {
     vi.useFakeTimers();
     api.openExtensionPageRun.mockResolvedValue(initial);
@@ -1255,11 +1284,12 @@ describe('ExtensionPage Run stream recovery', () => {
       'group',
       'run',
       5,
-      { timeline: true, childLimit: 100 },
+      { timeline: true, childLimit: 100, signal: expect.any(AbortSignal) },
     );
     expect(api.openExtensionPageRun.mock.calls[0][5]).toEqual({
       timeline: true,
       childLimit: 100,
+      signal: expect.any(AbortSignal),
     });
     expect(streams[1].options.afterSequence).toBe(5);
     expect(resyncs()).toBe(1);
@@ -1304,23 +1334,32 @@ describe('ExtensionPage Run stream recovery', () => {
     expect(streams).toHaveLength(2);
   });
 
-  it('stops recovery after unsubscribe, including a capability refresh in flight', async () => {
+  it('cancels stalled capability refreshes and stops retrying after unsubscribe', async () => {
     const { page, streams, opens, resyncs } = await subscribe();
-    let resolve;
-    api.openExtensionPageRun.mockReturnValue(
-      new Promise((finish) => {
-        resolve = finish;
-      }),
+    const recoveries = [];
+    api.openExtensionPageRun.mockImplementation(
+      (_name, _page, _group, _run, _sequence, { signal }) =>
+        new Promise((resolve) => recoveries.push({ resolve, signal })),
     );
     streams[0].handlers.onError();
     await vi.advanceTimersByTimeAsync(500);
     expect(opens()).toHaveLength(2);
+    expect(recoveries[0].signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(recoveries[0].signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(opens()).toHaveLength(3);
+    expect(recoveries[1].signal.aborted).toBe(false);
+
     page.call('unsub', 'run.unsubscribe', { id: 'sub' });
-    resolve({ stream: { url: '/api/extension-runs/late' } });
+    expect(recoveries[1].signal.aborted).toBe(true);
+    for (const recovery of recoveries)
+      recovery.resolve({ stream: { url: '/api/extension-runs/late' } });
     await vi.advanceTimersByTimeAsync(0);
     streams[0].handlers.onError();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(opens()).toHaveLength(2);
+    expect(opens()).toHaveLength(3);
     expect(streams).toHaveLength(1);
     expect(resyncs()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);

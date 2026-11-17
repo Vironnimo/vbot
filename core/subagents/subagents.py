@@ -194,6 +194,7 @@ class SubAgentCoordinator:
             lambda addresses, reason, initiator: trigger_service.suppress_completion_wakes(
                 addresses, reason=reason, initiator=initiator
             ),
+            lambda address: trigger_service.pending_completion_wakes(address),
         )
 
     async def _limit_refusal(
@@ -260,9 +261,11 @@ class SubAgentCoordinator:
         """Return additional targets for the Tool-owned System Prompt block."""
         return build_subagent_prompt_targets(self._runtime, agent, project_id)
 
-    def subagent_reply_to_user(self, address: SessionAddress, message_id: str) -> None:
+    def subagent_reply_to_user(
+        self, address: SessionAddress, message_id: str, generation_id: str | None = None
+    ) -> None:
         """Handle an input that switches a Sub-Agent to user-directed answers."""
-        self._forwarding.reply_to_user(address, message_id)
+        self._forwarding.reply_to_user(address, message_id, generation_id)
 
     def subagent_tool_usable(self, address: SessionAddress) -> bool:
         """Return whether the Session at *address* has a use for ``subagent``. Blocking.
@@ -351,7 +354,9 @@ class SubAgentCoordinator:
         if not await sessions.run_async(sessions.exists, link.parent):
             return tool_failure("parent_not_found", MESSAGE_PARENT_PARENT_GONE_MESSAGE)
         parent = link.parent
-        activity = await self._activities.ensure(_caller(context), parent=parent)
+        activity = await self._activities.ensure(
+            _caller(context), link.generation_id, parent=parent
+        )
         delivery_id = new_id("subagent-message")
         content = cast(str, arguments["content"]).strip()
         caller = _caller(context)
@@ -710,8 +715,10 @@ class SubAgentCoordinator:
                 await release_preparation()
                 await _remove_unstarted_session(runtime, address, session.generation_id)
                 raise
-        activity = await self._activities.ensure(address, parent=_caller(context))
-        activity_file = self._activities.path(address)
+        activity = await self._activities.ensure(
+            address, session.generation_id, parent=_caller(context)
+        )
+        activity_file = self._activities.path(address, session.generation_id)
         _LOGGER.info(
             "Sub-agent started (subagent=%s parent_run=%s parent_session=%s child_session=%s "
             "agent=%s run=%s)",
@@ -990,7 +997,7 @@ class SubAgentCoordinator:
                 pass
             else:
                 status, note = "steered", SUBAGENT_SEND_STEERED_NOTE
-        await self._activities.ensure(address, parent=_caller(context))
+        await self._activities.ensure(address, generation_id, parent=_caller(context))
         await _emit(
             context,
             SUBAGENT_SESSION_STARTED_EVENT,
@@ -998,7 +1005,7 @@ class SubAgentCoordinator:
                 subagent_id,
                 address,
                 status="running" if status != "queued" else "queued",
-                activity_file=self._activities.path(address),
+                activity_file=self._activities.path(address, generation_id),
             ),
         )
         result = _public_identity(subagent_id, address)

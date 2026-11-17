@@ -12,6 +12,8 @@ export function createAppExtensions(context) {
 
   let extensionPagesRefreshQueued = false;
   let extensionInvalidationQueued = false;
+  let contributionDeclarationsLoading = false;
+  let contributionDeclarationsQueued = false;
 
   // Whether descriptors were requested before. The first load finds every
   // subscriber holding what it read when it mounted; each later load follows
@@ -134,6 +136,26 @@ export function createAppExtensions(context) {
     };
   }
 
+  // A slow Contribution read cannot delay a Page reload or its invalidation.
+  async function loadContributionDeclarations() {
+    contributionDeclarationsQueued = true;
+    if (contributionDeclarationsLoading) return;
+    contributionDeclarationsLoading = true;
+    while (contributionDeclarationsQueued) {
+      contributionDeclarationsQueued = false;
+      try {
+        const declarations = await listExtensionContributions();
+        // Let the shell apply the snapshots that arrived with this read
+        // before mounting source controls for the new declarations.
+        await tick();
+        applyUiDeclarations(declarations);
+      } catch {
+        applyUiDeclarations(null);
+      }
+    }
+    contributionDeclarationsLoading = false;
+  }
+
   // Page descriptors load on every `connection_ready`, the first included,
   // and after an Extension reload. At most one request runs at once, with one
   // follow-up request coalescing any burst. This fetches descriptors only; it
@@ -141,6 +163,8 @@ export function createAppExtensions(context) {
   const loadExtensionPages = async ({
     invalidate: shouldInvalidate = true,
   } = {}) => {
+    if (shouldInvalidate)
+      void Promise.resolve().then(loadContributionDeclarations);
     extensionInvalidationQueued ||= shouldInvalidate;
     if (extensionPagesLoadInFlight) {
       extensionPagesRefreshQueued = true;
@@ -154,14 +178,12 @@ export function createAppExtensions(context) {
         extensionInvalidationQueued = false;
         const reload = extensionPagesRequested;
         extensionPagesRequested = true;
-        const [pagesResult, uiResult] = await Promise.allSettled([
-          loadPageDescriptors(),
-          Promise.resolve().then(() => listExtensionContributions()),
-        ]);
-        updated ||= pagesResult.status === 'fulfilled';
-        applyUiDeclarations(
-          uiResult.status === 'fulfilled' ? uiResult.value : null,
-        );
+        try {
+          await loadPageDescriptors();
+          updated = true;
+        } catch {
+          // Keep the last usable Page catalog until a later read succeeds.
+        }
         if (reload && invalidateSubscribers) {
           // A replaced descriptor reloads its page first. Independently of
           // catalog success, retained pages and the other Extension surfaces

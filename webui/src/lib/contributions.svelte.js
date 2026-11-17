@@ -113,9 +113,9 @@ export function createContributions(source) {
           acceptSettings(settings);
           source.onSettingsCommit?.(settings);
         } catch (failure) {
-          if (revision === readRevision)
-            error = `${t('settings.saveError')} ${failure.message}`;
-          return false;
+          if (revision !== readRevision) continue;
+          error = `${t('settings.saveError')} ${failure.message}`;
+          if (!refreshQueued || saving) return false;
         }
       }
       return true;
@@ -313,6 +313,7 @@ export function createContributions(source) {
       return () => {
         connected = false;
         ++readRevision;
+        refreshQueued = false;
         unsubscribe?.();
         window.removeEventListener('storage', changed);
       };

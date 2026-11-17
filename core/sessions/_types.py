@@ -479,10 +479,11 @@ class SessionWorkingProject:
 
 @dataclass(frozen=True)
 class SubagentLinkSnapshot:
-    """Parent-link metadata and its validated generation from one read snapshot."""
+    """Parent-link metadata and both Session generations from one read snapshot."""
 
     metadata: JsonObject
     parent_generation_id: str | None
+    generation_id: str | None = None
 
 
 @dataclass(frozen=True)

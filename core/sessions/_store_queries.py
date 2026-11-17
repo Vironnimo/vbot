@@ -139,6 +139,7 @@ def subagent_link_metadata(
     return SubagentLinkSnapshot(
         metadata=_store_values._session_metadata_from_state(row),
         parent_generation_id=str(generation) if generation else None,
+        generation_id=str(row["generation_id"]),
     )
 
 

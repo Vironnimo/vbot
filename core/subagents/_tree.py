@@ -61,12 +61,14 @@ class SubAgentTreeControl:
         activities: SubAgentActivities,
         forwarding: SubAgentForwarding,
         suppress_wakes: Callable[[Sequence[SessionAddress], str, str], Awaitable[int]],
+        pending_wakes: Callable[[SessionAddress], int],
     ) -> None:
         self._runtime = runtime
         self._admission_lock = admission_lock
         self._activities = activities
         self._forwarding = forwarding
         self._suppress_wakes = suppress_wakes
+        self._pending_wakes = pending_wakes
 
     async def inspect(
         self,
@@ -174,7 +176,9 @@ class SubAgentTreeControl:
                 )
                 is not None
             )
-            background = any(is_working(runtime, child) for child in below)
+            background = any(
+                is_working(runtime, child) or self._forwarding.pending(child) for child in below
+            ) or any(self._pending_wakes(owner) for owner in tree)
             commands = runtime.command_manager
             if commands is not None:
                 background |= bool(commands.busy_addresses() & below) or any(
@@ -318,7 +322,7 @@ class SubAgentTreeControl:
                     parent_id=ids.get(link.parent) if link.parent != caller else None,
                     status=status,
                     last_tool=last_tool,
-                    activity_file=self._activities.path(address),
+                    activity_file=self._activities.path(address, link.generation_id),
                     reply_target=link.reply_target,
                 )
             )

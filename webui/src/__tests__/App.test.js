@@ -425,6 +425,7 @@ describe('App', () => {
 
   it('re-reads Extension input requests and Computer Use status only on their changes', async () => {
     let pagesUnavailable = false;
+    let declarations;
     rpcMock.mockImplementation(
       createAppRpcMock({
         agents: ALPHA,
@@ -434,21 +435,22 @@ describe('App', () => {
             return { pages: [] };
           },
           'extensions.requests': () => ({ requests: [] }),
-          'extensions.contributions': () => ({
-            contributions: [
-              {
-                id: 'extension:computer_use:control',
-                local_id: 'control',
-                extension: 'computer_use',
-                epoch: 'fixture-epoch',
-                surface: 'chat.composer.actions',
-                kind: 'status',
-                title: 'Computer Use',
-                source: { operation: 'read', resource: 'control' },
-                operations: ['read'],
-              },
-            ],
-          }),
+          'extensions.contributions': () =>
+            declarations?.promise ?? {
+              contributions: [
+                {
+                  id: 'extension:computer_use:control',
+                  local_id: 'control',
+                  extension: 'computer_use',
+                  epoch: 'fixture-epoch',
+                  surface: 'chat.composer.actions',
+                  kind: 'status',
+                  title: 'Computer Use',
+                  source: { operation: 'read', resource: 'control' },
+                  operations: ['read'],
+                },
+              ],
+            },
           'extensions.contribution_sources': ({ requests }) => ({
             results: requests.map(() => ({ ok: true, result: { items: [] } })),
           }),
@@ -503,6 +505,9 @@ describe('App', () => {
     expect(counts()).toEqual([requests, status]);
     expect(calls('extensions.pages')).toBe(1);
     expect(calls('extensions.contributions')).toBe(1);
+    await change('computer_use', 'page_badges');
+    await waitForCondition(() => expect(calls('extensions.pages')).toBe(2));
+    expect(calls('extensions.contributions')).toBe(1);
     await handlers.onEvent({
       type: 'extension_resource_changed',
       payload: {
@@ -518,7 +523,7 @@ describe('App', () => {
       expect(counts()).toEqual([requests, status + 1]),
     );
     status++;
-    expect(calls('extensions.pages')).toBe(1);
+    expect(calls('extensions.pages')).toBe(2);
     expect(calls('extensions.contributions')).toBe(1);
 
     await change('swarm', 'swarms');
@@ -540,11 +545,17 @@ describe('App', () => {
     // A transient page-catalog failure cannot suppress unrelated surfaces'
     // catch-up reads; those keep using their own Extension operations.
     pagesUnavailable = true;
-    await extensionsChanged(null);
-    await waitForCondition(() => {
-      expect(counts()[0]).toBe(requests + 3);
-      expect(counts()[1]).toBeGreaterThan(refreshedStatus);
-    });
+    declarations = Promise.withResolvers();
+    const reload = extensionsChanged(null);
+    try {
+      await waitForCondition(() => {
+        expect(counts()[0]).toBe(requests + 3);
+        expect(counts()[1]).toBeGreaterThan(refreshedStatus);
+      });
+    } finally {
+      declarations.resolve({ contributions: [] });
+      await reload;
+    }
   });
 
   it('shows app_error events as error Toasts that stay until dismissed', () => {

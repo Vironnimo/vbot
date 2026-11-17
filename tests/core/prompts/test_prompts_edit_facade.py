@@ -2,11 +2,15 @@
 
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, override
 
 import pytest
 
+from core.database import DatabaseUnavailableError, capture_config_backup
+from core.database.snapshot_barrier import capture_members
 from core.prompts.blocks import LayoutEntry
 from core.prompts.prompts import PromptError, SystemPromptManager
 from core.runtime._prompt_blocks import _StorageManagerBlockStore
@@ -212,6 +216,13 @@ def test_set_layout_persists_order_keeps_user_blocks_and_prunes_inert_ids(
     ]
     assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
 
+    # A stale layout payload can omit a custom block added by another editor.
+    manager.set_layout([{"id": "core:tools", "enabled": True}])
+    assert [(entry.id, entry.enabled) for entry in store.read_layout("default")] == [
+        ("core:tools", True),
+        ("user:note", True),
+    ]
+
 
 def test_layouts_holding_case_variant_custom_blocks_keep_every_entry(tmp_path: Path) -> None:
     # Only creation rejects a case variant; a layout that already holds both spellings
@@ -269,19 +280,73 @@ def test_create_and_remove_manage_custom_user_blocks(tmp_path: Path) -> None:
     assert store.read_block_override("default", "user:greeting") is None
     assert all(entry.id != "user:greeting" for entry in store.read_layout("default"))
     assert all(entry["id"] != "user:greeting" for entry in removed["layout"])
+    with pytest.raises(PromptError, match="unknown block: user:greeting"):
+        manager.update_block("user:greeting", "a stale edit")
+    assert store.read_block_override("default", "user:greeting") is None
 
 
 def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
-    store = StubBlockStore(layouts={"default": [LayoutEntry(id="core:tools", enabled=False)]})
+    store = StubBlockStore(
+        layouts={
+            "default": [
+                LayoutEntry(id="user:note", enabled=False, source="user"),
+                LayoutEntry(id="core:tools", enabled=False),
+                LayoutEntry(id="user:agenda", source="user"),
+            ]
+        },
+        overrides={("default", "user:note"): "my note"},
+    )
     manager = _facade_manager(tmp_path, store=store)
 
     result = manager.reset_layout()
 
     persisted = store.read_layout("default")
-    assert [entry.id for entry in persisted] == _BUNDLED_LAYOUT
-    # Everything ships enabled except the opt-in tool list.
-    assert {entry.id for entry in persisted if not entry.enabled} == {"core:tools_list"}
-    assert [entry["id"] for entry in result["layout"]] == _BUNDLED_LAYOUT
+    expected_ids = [*_BUNDLED_LAYOUT, "user:note", "user:agenda"]
+    assert [entry.id for entry in persisted] == expected_ids
+    assert {entry.id for entry in persisted if not entry.enabled} == {
+        "core:tools_list",
+        "user:note",
+    }
+    assert [entry["id"] for entry in result["layout"]] == expected_ids
+    note = next(block for block in manager.list_blocks() if block["id"] == "user:note")
+    assert note["text"] == "my note"
+
+
+def test_configuration_backup_cannot_capture_half_a_custom_block(tmp_path: Path) -> None:
+    storage = StorageManager(data_dir=tmp_path / "data")
+    body_written = Event()
+    finish_create = Event()
+
+    class StoreWithDelayedLayout(_StorageManagerBlockStore):
+        @override
+        def write_block_override(self, scope_key: str, block_id: str, content: str) -> None:
+            super().write_block_override(scope_key, block_id, content)
+            body_written.set()
+            assert finish_create.wait(5)
+
+    manager = _facade_manager(tmp_path, store=StoreWithDelayedLayout(storage))
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        create = worker.submit(manager.create_block, "note", "my note")
+        try:
+            assert body_written.wait(5)
+            with pytest.raises(
+                DatabaseUnavailableError, match="a data change was still in progress"
+            ):
+                capture_members(
+                    storage.data_dir,
+                    {},
+                    copy_database=lambda _name: None,
+                    copy_documents=lambda: None,
+                    discard_copies=lambda: None,
+                    drain_seconds=0,
+                )
+        finally:
+            finish_create.set()
+        create.result(timeout=5)
+
+    backup = capture_config_backup(storage.data_dir, reason="test custom block")
+    assert backup is not None
+    assert {"prompts/layout.json", "prompts/blocks/user/note.md"} <= backup.files.keys()
 
 
 @pytest.mark.parametrize(
@@ -338,10 +403,19 @@ def test_corrupt_persisted_layout_builds_with_defaults_until_it_is_reset(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
+    storage.write_block_override(scope, "user:note", "preserve this")
 
     assert manager.build_system_prompt(agent) == baseline
     with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
         manager.set_layout([{"id": "core:tools", "enabled": False}], edit_scope)
+    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
+        manager.remove_block("user:note", edit_scope)
+    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
+        manager.create_block("note", "do not overwrite", edit_scope)
+    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
+        manager.create_block("new", "do not leave an orphan", edit_scope)
+    assert storage.read_block_override(scope, "user:note") == "preserve this"
+    assert storage.read_block_override(scope, "user:new") is None
     assert path.read_bytes() == body
 
     result = manager.reset_layout(edit_scope)

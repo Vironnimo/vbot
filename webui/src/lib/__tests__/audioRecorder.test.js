@@ -36,70 +36,96 @@ class FakeMediaRecorder {
 }
 
 describe('audioRecorder', () => {
-  it('records in the first audio format the browser supports and names the file after it', async () => {
-    class OggRecorder extends FakeMediaRecorder {
-      static isTypeSupported(mimeType) {
-        return mimeType.startsWith('audio/ogg');
+  it.each(['chunk', 'recorder'])(
+    'records in a supported format and names the file after the %s MIME type',
+    async (source) => {
+      class OggRecorder extends FakeMediaRecorder {
+        static isTypeSupported(mimeType) {
+          return mimeType.startsWith('audio/ogg');
+        }
       }
-    }
-    const ogg = await createAudioRecorder({
-      navigator: navigatorWithTrack({ stop: vi.fn() }),
-      MediaRecorder: OggRecorder,
-    });
-    expect(FakeMediaRecorder.lastInstance.options).toEqual({
-      mimeType: 'audio/ogg;codecs=opus',
-    });
-    expect(ogg.filename()).toBe('recording.ogg');
+      const ogg = await createAudioRecorder({
+        navigator: navigatorWithTrack({ stop: vi.fn() }),
+        MediaRecorder: OggRecorder,
+      });
+      expect(FakeMediaRecorder.lastInstance.options).toEqual({
+        mimeType: 'audio/ogg;codecs=opus',
+      });
+      expect(ogg.filename()).toBe('recording.ogg');
 
-    // A browser that cannot report its formats records in its default one.
-    class UntypedRecorder extends FakeMediaRecorder {
-      static isTypeSupported = undefined;
-    }
-    const untyped = await createAudioRecorder({
-      navigator: navigatorWithTrack({ stop: vi.fn() }),
-      MediaRecorder: UntypedRecorder,
-    });
-    expect(FakeMediaRecorder.lastInstance.options).toEqual({});
-    untyped.start();
-    const recorded = untyped.stop();
-    FakeMediaRecorder.lastInstance.emit('dataavailable', {
-      data: new Blob(['aac'], { type: 'audio/mp4' }),
-    });
-    FakeMediaRecorder.lastInstance.emit('stop', {});
-    expect((await recorded).type).toBe('audio/mp4');
-    expect(untyped.filename()).toBe('recording.m4a');
-    ogg.cancel();
-    untyped.cancel();
-  });
+      // A browser that cannot report its formats records in its default one.
+      class UntypedRecorder extends FakeMediaRecorder {
+        static isTypeSupported = undefined;
 
-  it('records the audio in the chosen format and releases the microphone after stopping', async () => {
-    const track = { stop: vi.fn() };
-    const uses = [];
-    const unsubscribe = onMicrophoneUse((inUse) => uses.push(inUse));
-    const recorder = await createAudioRecorder({
-      navigator: navigatorWithTrack(track),
-      MediaRecorder: FakeMediaRecorder,
-    });
-    // The page knows a recording holds the microphone, so Live voice pauses.
-    expect(microphoneInUse()).toBe(true);
+        start() {
+          super.start();
+          this.mimeType = source === 'recorder' ? 'audio/mp4' : 'audio/ogg';
+        }
 
-    recorder.start();
-    expect(recorder.state).toBe('recording');
-    const stopped = recorder.stop();
-    FakeMediaRecorder.lastInstance.emit('dataavailable', {
-      data: new Blob(['abc'], { type: 'audio/webm' }),
-    });
-    FakeMediaRecorder.lastInstance.emit('stop', {});
+        stop() {
+          super.stop();
+          this.mimeType = '';
+        }
+      }
+      const untyped = await createAudioRecorder({
+        navigator: navigatorWithTrack({ stop: vi.fn() }),
+        MediaRecorder: UntypedRecorder,
+      });
+      expect(FakeMediaRecorder.lastInstance.options).toEqual({});
+      untyped.start();
+      const recorded = untyped.stop();
+      FakeMediaRecorder.lastInstance.emit('dataavailable', {
+        data: new Blob(['aac'], {
+          type: source === 'chunk' ? 'audio/mp4' : '',
+        }),
+      });
+      FakeMediaRecorder.lastInstance.emit('stop', {});
+      expect((await recorded).type).toBe('audio/mp4');
+      expect(untyped.filename()).toBe('recording.m4a');
+      ogg.cancel();
+      untyped.cancel();
+    },
+  );
 
-    const blob = await stopped;
-    expect(blob.type).toBe('audio/webm');
-    expect(await blob.text()).toBe('abc');
-    expect(recorder.filename()).toBe('recording.webm');
-    expect(track.stop).toHaveBeenCalledOnce();
-    expect(microphoneInUse()).toBe(false);
-    unsubscribe();
-    expect(uses).toEqual([true, false]);
-  });
+  it.each(['requested', 'simultaneous', 'native'])(
+    'collects final audio and releases the microphone after a %s stop',
+    async (mode) => {
+      const track = { stop: vi.fn() };
+      const uses = [];
+      const unsubscribe = onMicrophoneUse((inUse) =>
+        uses.push([inUse, track.stop.mock.calls.length]),
+      );
+      const recorder = await createAudioRecorder({
+        navigator: navigatorWithTrack(track),
+        MediaRecorder: FakeMediaRecorder,
+      });
+      // The page knows a recording holds the microphone, so Live voice pauses.
+      expect(microphoneInUse()).toBe(true);
+
+      recorder.start();
+      expect(recorder.state).toBe('recording');
+      if (mode === 'native') FakeMediaRecorder.lastInstance.stop();
+      const stopped = recorder.stop();
+      const simultaneous = mode === 'simultaneous' ? recorder.stop() : stopped;
+      FakeMediaRecorder.lastInstance.emit('dataavailable', {
+        data: new Blob(['abc'], { type: 'audio/webm' }),
+      });
+      FakeMediaRecorder.lastInstance.emit('stop', {});
+
+      const blob = await stopped;
+      expect(blob.type).toBe('audio/webm');
+      expect(await blob.text()).toBe('abc');
+      expect(await (await simultaneous).text()).toBe('abc');
+      expect(recorder.filename()).toBe('recording.webm');
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(microphoneInUse()).toBe(false);
+      unsubscribe();
+      expect(uses).toEqual([
+        [true, 0],
+        [false, 1],
+      ]);
+    },
+  );
 
   it.each(['stop', 'error'])(
     'releases the microphone when the browser sends %s on its own',
@@ -170,28 +196,37 @@ describe('audioRecorder', () => {
     expect(track.stop).toHaveBeenCalledOnce();
   });
 
-  it('keeps releasing the other tracks when one track fails to stop', async () => {
-    const failingTrack = {
-      stop: vi.fn(() => {
-        throw new Error('track stop failed');
-      }),
-    };
-    const remainingTrack = { stop: vi.fn() };
-    const recorder = await createAudioRecorder({
-      navigator: {
-        mediaDevices: {
-          getUserMedia: vi.fn().mockResolvedValue({
-            getTracks: () => [failingTrack, remainingTrack],
-          }),
+  it.each(['before starting', 'while a stop is pending'])(
+    'releases every possible track after cancellation %s',
+    async (when) => {
+      const failingTrack = {
+        stop: vi.fn(() => {
+          throw new Error('track stop failed');
+        }),
+      };
+      const remainingTrack = { stop: vi.fn() };
+      const recorder = await createAudioRecorder({
+        navigator: {
+          mediaDevices: {
+            getUserMedia: vi.fn().mockResolvedValue({
+              getTracks: () => [failingTrack, remainingTrack],
+            }),
+          },
         },
-      },
-      MediaRecorder: FakeMediaRecorder,
-    });
+        MediaRecorder: FakeMediaRecorder,
+      });
 
-    expect(() => recorder.cancel()).not.toThrow();
-    expect(failingTrack.stop).toHaveBeenCalledOnce();
-    expect(remainingTrack.stop).toHaveBeenCalledOnce();
-  });
+      let stopped;
+      if (when === 'while a stop is pending') {
+        recorder.start();
+        stopped = recorder.stop();
+      }
+      expect(() => recorder.cancel()).not.toThrow();
+      expect(failingTrack.stop).toHaveBeenCalledOnce();
+      expect(remainingTrack.stop).toHaveBeenCalledOnce();
+      await stopped;
+    },
+  );
 });
 
 function navigatorWithTrack(track) {

@@ -214,6 +214,14 @@ export function createPromptScope(context) {
   async function loadBlocksForScope(scopeKey) {
     const requestId = scopeLoadRequestId + 1;
     scopeLoadRequestId = requestId;
+    const baselines = new SvelteMap(
+      scopeKey === blocksScopeKey
+        ? context.blocks.map(({ id, content, isModified, inheritance }) => [
+            id,
+            { content, isModified, inheritance },
+          ])
+        : [],
+    );
     isLoadingData = true;
 
     try {
@@ -223,7 +231,7 @@ export function createPromptScope(context) {
       }
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(scopeKey);
-      applyBlocks(promptsResult?.blocks, scopeKey);
+      applyBlocks(promptsResult?.blocks, scopeKey, baselines);
       return true;
     } catch {
       if (requestId !== scopeLoadRequestId) {
@@ -241,7 +249,7 @@ export function createPromptScope(context) {
   // Map the server block metadata into the local row model. Editable text blocks
   // get the live-edit fields; non-editable data blocks get a `preview` of their
   // current text. The id is the stable identity used everywhere.
-  function applyBlocks(rawBlocks, scopeKey) {
+  function applyBlocks(rawBlocks, scopeKey, baselines) {
     const source = Array.isArray(rawBlocks) ? rawBlocks : [];
     // Another scope's blocks share ids but not content: a draft stays with
     // the scope it was typed in.
@@ -250,16 +258,31 @@ export function createPromptScope(context) {
     const previousById = new SvelteMap(
       sameScope ? context.blocks.map((block) => [block.id, block]) : [],
     );
-    context.clearAutoSaveTimers();
+    if (!sameScope) context.clearAutoSaveTimers();
 
     context.blocks = source.map((raw) => {
       const editable = raw.editable === true && raw.kind === 'text';
-      const content = typeof raw.text === 'string' ? raw.text : '';
       const previous = previousById.get(raw.id);
+      const baseline = baselines?.get(raw.id);
+      // A save can finish while the listing still carries an older snapshot.
+      const savedWhileLoading =
+        editable &&
+        previous &&
+        baseline &&
+        (previous.content !== baseline.content ||
+          previous.isModified !== baseline.isModified ||
+          previous.inheritance !== baseline.inheritance);
+      const content = savedWhileLoading
+        ? previous.content
+        : typeof raw.text === 'string'
+          ? raw.text
+          : '';
       // Preserve an in-flight unsaved edit across a re-list (e.g. after a
       // toggle/reorder of another block) so the user's typing is not lost.
       const keepDraft =
-        editable && previous?.isDirty && previous.editedContent !== content;
+        editable &&
+        (previous?.isDirty || previous?.isSaving || previous?.isBusy) &&
+        previous.editedContent !== content;
       return {
         id: raw.id,
         owner: typeof raw.owner === 'string' ? raw.owner : 'always',
@@ -270,14 +293,19 @@ export function createPromptScope(context) {
         content,
         editedContent: keepDraft ? previous.editedContent : content,
         isDirty: keepDraft,
-        isModified: editable ? raw.is_modified === true : false,
-        inheritance:
-          typeof raw.inheritance === 'string' ? raw.inheritance : null,
+        isModified: savedWhileLoading
+          ? previous.isModified
+          : editable && raw.is_modified === true,
+        inheritance: savedWhileLoading
+          ? previous.inheritance
+          : typeof raw.inheritance === 'string'
+            ? raw.inheritance
+            : null,
         preview: !editable ? content : '',
         previewExpanded: previous?.previewExpanded ?? false,
         editorExpanded: previous?.editorExpanded ?? false,
-        isSaving: false,
-        isBusy: false,
+        isSaving: previous?.isSaving ?? false,
+        isBusy: previous?.isBusy ?? false,
       };
     });
   }
@@ -393,7 +421,7 @@ export function createPromptScope(context) {
       return null;
     }
 
-    return { agent_id: selectedAgentId };
+    return { agent_id: selectedAgentId, scope: { type: 'default' } };
   }
 
   function canRefreshPreview() {

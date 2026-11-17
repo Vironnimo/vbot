@@ -202,20 +202,23 @@ export function createPromptEditor(context) {
   }
 
   function saveBlock(blockId) {
-    const activeSave = blockSavePromises.get(blockId);
+    const scopeKey = context.blocksScopeKey;
+    const saveKey = `${scopeKey}/${blockId}`;
+    const activeSave = blockSavePromises.get(saveKey);
     if (activeSave) {
       return activeSave.then((saved) => {
         if (!saved) return false;
+        if (context.blocksScopeKey !== scopeKey) return true;
         const block = blocks.find((entry) => entry.id === blockId);
         return block?.isDirty ? saveBlock(blockId) : true;
       });
     }
 
     const operation = persistBlock(blockId);
-    blockSavePromises.set(blockId, operation);
+    blockSavePromises.set(saveKey, operation);
     void operation.finally(() => {
-      if (blockSavePromises.get(blockId) === operation) {
-        blockSavePromises.delete(blockId);
+      if (blockSavePromises.get(saveKey) === operation) {
+        blockSavePromises.delete(saveKey);
       }
     });
     return operation;
@@ -257,6 +260,7 @@ export function createPromptEditor(context) {
       } else {
         blocks[liveIndex].isDirty =
           blocks[liveIndex].editedContent !== blocks[liveIndex].content;
+        if (blocks[liveIndex].isDirty) scheduleAutoSaveTimer(blockId);
       }
       blocks[liveIndex].isModified = result.is_modified === true;
       if (typeof result.inheritance === 'string') {
@@ -269,7 +273,7 @@ export function createPromptEditor(context) {
       return false;
     } finally {
       const liveIndex = blockIndexById(blockId);
-      if (liveIndex !== -1) {
+      if (liveIndex !== -1 && context.blocksScopeKey === scopeKey) {
         blocks[liveIndex].isSaving = false;
       }
     }
@@ -307,6 +311,8 @@ export function createPromptEditor(context) {
     }
     const block = blocks[index];
 
+    const scopeKey = context.blocksScopeKey;
+    const previousDraft = block.editedContent;
     clearAutoSaveTimer(blockId);
     blocks[index].isBusy = true;
 
@@ -315,24 +321,31 @@ export function createPromptEditor(context) {
         context.scopedParams({ id: block.id }),
       );
       const liveIndex = blockIndexById(blockId);
-      if (liveIndex === -1) {
+      if (liveIndex === -1 || context.blocksScopeKey !== scopeKey) {
         return;
       }
       const restored = typeof result.text === 'string' ? result.text : '';
-      blocks[liveIndex].content = restored;
-      blocks[liveIndex].editedContent = restored;
-      blocks[liveIndex].isDirty = false;
-      blocks[liveIndex].isModified = result.is_modified === true;
+      const liveBlock = blocks[liveIndex];
+      liveBlock.content = restored;
+      if (liveBlock.editedContent === previousDraft) {
+        liveBlock.editedContent = restored;
+      }
+      liveBlock.isDirty = liveBlock.editedContent !== restored;
+      liveBlock.isModified = result.is_modified === true;
       if (typeof result.inheritance === 'string') {
-        blocks[liveIndex].inheritance = result.inheritance;
+        liveBlock.inheritance = result.inheritance;
       }
       context.schedulePreviewRefresh();
     } catch {
       context.showToast(t('systemPrompt.error.resetFailed'), 'error');
     } finally {
       const liveIndex = blockIndexById(blockId);
-      if (liveIndex !== -1) {
-        blocks[liveIndex].isBusy = false;
+      if (liveIndex !== -1 && context.blocksScopeKey === scopeKey) {
+        const liveBlock = blocks[liveIndex];
+        liveBlock.isBusy = false;
+        if (liveBlock.isDirty && liveBlock.editedContent !== previousDraft) {
+          scheduleAutoSaveTimer(blockId);
+        }
       }
     }
   }
@@ -411,6 +424,7 @@ export function createPromptEditor(context) {
       return;
     }
 
+    const scopeKey = context.blocksScopeKey;
     newBlockSaving = true;
     try {
       await createPromptBlock(context.scopedParams({ slug: trimmed }));
@@ -421,7 +435,9 @@ export function createPromptEditor(context) {
       newBlockSaving = false;
     }
     newBlockOpen = false;
-    await context.loadBlocksForScope(context.selectedScopeKey);
+    if (context.selectedScopeKey !== scopeKey) return;
+    const loaded = await context.loadBlocksForScope(scopeKey);
+    if (!loaded || context.blocksScopeKey !== scopeKey) return;
     const created = blocks.find((block) => block.id === `user:${trimmed}`);
     if (created) {
       created.editorExpanded = true;
@@ -449,11 +465,14 @@ export function createPromptEditor(context) {
       return;
     }
 
+    const scopeKey = context.blocksScopeKey;
     clearAutoSaveTimer(blockId);
     try {
       await removePromptBlock(context.scopedParams({ id: blockId }));
-      await context.loadBlocksForScope(context.selectedScopeKey);
-      context.schedulePreviewRefresh();
+      if (context.selectedScopeKey === scopeKey) {
+        await context.loadBlocksForScope(scopeKey);
+        context.schedulePreviewRefresh();
+      }
     } catch {
       context.showToast(t('systemPrompt.blockList.removeFailed'), 'error');
     }
@@ -470,10 +489,13 @@ export function createPromptEditor(context) {
   async function confirmResetLayout() {
     resetLayoutConfirmOpen = false;
 
+    const scopeKey = context.blocksScopeKey;
     try {
       await resetPromptLayout(context.scopedParams());
-      await context.loadBlocksForScope(context.selectedScopeKey);
-      context.schedulePreviewRefresh();
+      if (context.selectedScopeKey === scopeKey) {
+        await context.loadBlocksForScope(scopeKey);
+        context.schedulePreviewRefresh();
+      }
     } catch {
       context.showToast(t('systemPrompt.error.layoutFailed'), 'error');
     }

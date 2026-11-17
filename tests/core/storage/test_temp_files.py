@@ -8,11 +8,13 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from core.storage import DataDirectoryLayout, TemporaryFileManager
+from core.storage import temp_files as temp_files_module
 from core.storage.temp_files import artifact_owner, terminal_log_scope
 from tests.directory_links import link_directory
 
@@ -91,6 +93,14 @@ def test_terminal_launch_record_lives_as_long_as_its_raw_logs(tmp_path: Path) ->
     assert not first.path.exists()
     assert second.path.exists()
     assert scope_reader.allows(relative, scope)
+
+    # The process that owned the leases stopped after writing more output.
+    # The next manager has no active lease and the record is older than the log.
+    second.path.write_text("retained output", encoding="utf-8")
+    TemporaryFileManager(tmp_path).sweep()
+    assert second.path.read_text(encoding="utf-8") == "retained output"
+    assert scope_reader.allows(relative, scope)
+
     second.finish()
     for path in (second.path, record):
         _age(path, seconds=80 * 60 * 60)
@@ -200,6 +210,34 @@ def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path, overl
         manager.sweep()
         assert lease.path.exists()
         assert lease.path.stat().st_mtime > first_finished_mtime
+
+
+def test_failed_completion_timestamp_preserves_retention_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retention = {"commands": timedelta(seconds=1)}
+    manager = TemporaryFileManager(tmp_path, retention=retention)
+    lease = manager.create("commands", ".log")
+    _age(lease.path, seconds=60)
+    now = time.time()
+    monkeypatch.setattr(temp_files_module, "time", SimpleNamespace(time=lambda: now))
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError("File timestamp temporarily unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "utime", unavailable)
+        lease.finish()
+        manager.sweep()
+        assert lease.path.exists()
+
+    manager.sweep()
+    restarted = TemporaryFileManager(tmp_path, retention=retention)
+    restarted.sweep()
+    assert lease.path.exists()
+    now += 2
+    restarted.sweep()
+    assert not lease.path.exists()
 
 
 @pytest.mark.parametrize("removed", [False, True], ids=["kept", "removed"])

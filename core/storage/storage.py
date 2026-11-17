@@ -16,8 +16,9 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Protocol, cast
+from weakref import WeakValueDictionary
 
 from core.json_documents import (
     FORMAT_VERSION_FIELD,
@@ -92,6 +93,8 @@ if TYPE_CHECKING:
 # A settings file modified this recently may change again within the same
 # filesystem timestamp tick, so its stat stamp cannot prove it unchanged yet.
 _SETTINGS_RACY_WINDOW_NS = 3_000_000_000
+_SETTINGS_LOCKS: WeakValueDictionary[str, RLock] = WeakValueDictionary()
+_SETTINGS_LOCKS_GUARD = Lock()
 _LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
@@ -121,7 +124,7 @@ class StorageManager:
         self.layout = DataDirectoryLayout(self.data_dir)
         #: The data directory's Secret Store; one instance per data directory and process.
         self.secrets = secrets if secrets is not None else SecretStore(self.data_dir)
-        self._settings_lock = RLock()
+        self._settings_lock = _settings_lock(self.layout.settings_file)
         self._settings_diagnostic_signature: tuple[str, ...] | None = None
         # Usable Settings of the last loaded file version as JSON, with its stat stamp.
         self._settings_cache: tuple[tuple[int, int, int], str] | None = None
@@ -898,6 +901,17 @@ class StorageManager:
         if resources_dir is not None:
             return Path(resources_dir)
         return Path(__file__).resolve().parents[2] / "resources"
+
+
+def _settings_lock(path: Path) -> RLock:
+    # Resolve directory aliases only: a save replaces the file's own entry.
+    key = os.path.normcase(os.path.join(os.path.realpath(path.parent), path.name))
+    with _SETTINGS_LOCKS_GUARD:
+        lock = _SETTINGS_LOCKS.get(key)
+        if lock is None:
+            lock = RLock()
+            _SETTINGS_LOCKS[key] = lock
+        return lock
 
 
 def _spellings(transaction: SecretTransaction, key: str) -> tuple[str, ...]:

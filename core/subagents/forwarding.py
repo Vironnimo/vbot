@@ -70,19 +70,22 @@ class SubAgentActivities:
 
     def __init__(self, runtime: RuntimeServices) -> None:
         self._runtime = runtime
-        self._files: dict[SessionAddress, SubAgentActivity | None] = {}
-        self._creating: dict[SessionAddress, asyncio.Task[SubAgentActivity | None]] = {}
+        self._files: dict[tuple[SessionAddress, str | None], SubAgentActivity | None] = {}
+        self._creating: dict[
+            tuple[SessionAddress, str | None], asyncio.Task[SubAgentActivity | None]
+        ] = {}
 
     async def ensure(
-        self, address: SessionAddress, *, parent: SessionAddress
+        self, address: SessionAddress, generation_id: str | None, *, parent: SessionAddress
     ) -> SubAgentActivity | None:
         """Return the Session's activity file, creating it on first use.
 
         The file lies in the temporary-file folder of *parent*, which reads it.
         """
-        if address in self._files:
-            return self._files[address]
-        task = self._creating.get(address)
+        key = (address, generation_id)
+        if key in self._files:
+            return self._files[key]
+        task = self._creating.get(key)
         if task is None:
             task = asyncio.ensure_future(
                 SubAgentActivity.create(
@@ -92,18 +95,18 @@ class SubAgentActivities:
                     owner=artifact_owner(parent.project_id, parent.agent_id, parent.session_id),
                 )
             )
-            self._creating[address] = task
+            self._creating[key] = task
         try:
             activity = await asyncio.shield(task)
         finally:
             if task.done():
-                self._creating.pop(address, None)
-        self._files[address] = activity
+                self._creating.pop(key, None)
+        self._files[key] = activity
         return activity
 
-    def path(self, address: SessionAddress) -> str | None:
-        """Return the Session's activity file path as the Agent reads it, if one exists."""
-        activity = self._files.get(address)
+    def path(self, address: SessionAddress, generation_id: str | None) -> str | None:
+        """Return this Session generation's activity file path, if one exists."""
+        activity = self._files.get((address, generation_id))
         return model_path(activity.path) if activity is not None else None
 
     async def drain(self) -> None:
@@ -136,12 +139,11 @@ class SubAgentForwarding:
 
     def silence(self, run_id: str) -> bool:
         """Do not forward the outcome of a Run its Parent stopped itself."""
-        if run_id in self._silenced:
+        followed = self._followed.get(run_id)
+        if followed is None or followed[1].done() or run_id in self._silenced:
             return False
         self._silenced.add(run_id)
-        followed = self._followed.get(run_id)
-        if followed is not None:
-            self._notify_forwarded(_run_address(followed[0]))
+        self._notify_forwarded(_run_address(followed[0]))
         return True
 
     def followed_runs(self) -> list[Run]:
@@ -167,12 +169,17 @@ class SubAgentForwarding:
         very same selection as delivery, including failures without an answer.
         """
         for run in self._pending_runs(address):
-            if run.status != RunStatus.RUNNING:
-                directed = await _turn_outcome(self._runtime, run) is not None
-            else:
-                session = await self._runtime.chat_sessions.get_async(address)
-                messages = await session.load_run_messages_async(run.id)
-                directed = bool(_parent_answers(messages))
+            try:
+                if run.status != RunStatus.RUNNING:
+                    directed = await _turn_outcome(self._runtime, run) is not None
+                else:
+                    session = await self._runtime.chat_sessions.get_async(address)
+                    if run.expected_session_generation_id not in (None, session.generation_id):
+                        continue
+                    messages = await session.load_run_messages_async(run.id)
+                    directed = bool(_parent_answers(messages))
+            except SessionNotFoundError:
+                continue
             if directed and run in self._pending_runs(address):
                 return True
         return False
@@ -190,9 +197,11 @@ class SubAgentForwarding:
 
         return remove
 
-    def reply_to_user(self, address: SessionAddress, message_id: str) -> None:
+    def reply_to_user(
+        self, address: SessionAddress, message_id: str, generation_id: str | None
+    ) -> None:
         """Tell the Parent when a user input redirects the Sub-Agent's answers."""
-        task = asyncio.create_task(self._notify_user_reply(address, message_id))
+        task = asyncio.create_task(self._notify_user_reply(address, message_id, generation_id))
         task.add_done_callback(_log_task_failure)
 
     def _on_run_started(self, run: Run) -> None:
@@ -221,23 +230,32 @@ class SubAgentForwarding:
         sessions = self._runtime.chat_sessions
         address = _run_address(run)
         link = await self._read_link(address)
-        if link is None:
+        if link is None or run.expected_session_generation_id not in (None, link.generation_id):
             return
-        activity = await self._activities.ensure(address, parent=link.parent)
+        generation_id = link.generation_id
+        activity = await self._activities.ensure(address, generation_id, parent=link.parent)
         if activity is not None:
             activity.follow(run)
         try:
             result = await _read_for_forwarding(
-                address, "answer history", lambda: _turn_outcome(self._runtime, run)
+                address,
+                "answer history",
+                lambda: _turn_outcome(self._runtime, run, generation_id=generation_id),
             )
         except SessionNotFoundError:
             return
         if result is None:
             return
         outcome, answer, answer_ids = result
-        link = await self._read_link(address)
-        if link is None or run.id in self._silenced:
+        current = await self._read_link(address)
+        if (
+            current is None
+            or current.generation_id != generation_id
+            or current.id != link.id
+            or run.id in self._silenced
+        ):
             return
+        link = current
         if not await sessions.run_async(sessions.exists, link.parent):
             _LOGGER.info(
                 "Sub-Agent answer dropped: its Parent Session no longer exists "
@@ -320,25 +338,41 @@ class SubAgentForwarding:
             return FACTS_NO_SIBLINGS_PENDING_TEXT
         return FACTS_SIBLINGS_PENDING_TEMPLATE.format(entries="; ".join(pending))
 
-    async def _notify_user_reply(self, address: SessionAddress, message_id: str) -> None:
+    async def _notify_user_reply(
+        self, address: SessionAddress, message_id: str, generation_id: str | None
+    ) -> None:
         sessions = self._runtime.chat_sessions
         link = await self._read_link(address)
         if (
             link is None
+            or generation_id not in (None, link.generation_id)
             or link.reply_target != "user"
             or not await sessions.run_async(sessions.exists, link.parent)
         ):
             return
-        parent = link.parent
-        delivery = self._trigger_service.submit_completion(
-            parent,
-            notice_id=f"subagent-user-reply:{message_id}",
-            origin_run_id=f"subagent-user-reply:{message_id}",
-            expected_session_generation_id=link.parent_generation_id,
-            body=REPLY_TO_USER_NOTICE_TEMPLATE.format(id=link.id, title=link.title or link.id),
-            wake=False,
-        )
-        delivery.add_done_callback(lambda done: _log_delivery(done, link, None))
+        # Parent input and message_parent restore the reply target under this
+        # lock. Submit only if their switch has not already committed.
+        async with sessions.write_lock(address):
+            current = await sessions.run_async(read_link, sessions, address, strict=True)
+            if (
+                current is None
+                or current.generation_id != link.generation_id
+                or current.id != link.id
+                or current.parent != link.parent
+                or current.reply_target != "user"
+            ):
+                return
+            delivery = self._trigger_service.submit_completion(
+                current.parent,
+                notice_id=f"subagent-user-reply:{message_id}",
+                origin_run_id=f"subagent-user-reply:{message_id}",
+                expected_session_generation_id=current.parent_generation_id,
+                body=REPLY_TO_USER_NOTICE_TEMPLATE.format(
+                    id=current.id, title=current.title or current.id
+                ),
+                wake=False,
+            )
+        delivery.add_done_callback(lambda done: _log_delivery(done, current, None))
 
 
 async def _read_for_forwarding[T](
@@ -426,7 +460,7 @@ def is_working(runtime: RuntimeServices, address: SessionAddress) -> bool:
 
 
 async def _turn_outcome(
-    runtime: RuntimeServices, run: Run
+    runtime: RuntimeServices, run: Run, *, generation_id: str | None = None
 ) -> tuple[str, str, tuple[str, ...]] | None:
     """Return the Run's outcome and every complete answer, in persistence order.
 
@@ -452,6 +486,9 @@ async def _turn_outcome(
         outcome, fallback = "failed", FORWARDED_FAILURE_TEXT_TEMPLATE.format(error=error)
 
     session = await runtime.chat_sessions.get_async(_run_address(run))
+    expected = generation_id or run.expected_session_generation_id
+    if expected is not None and expected != session.generation_id:
+        return None
     messages = await session.load_run_messages_async(run.id)
     progression = [m for m in messages if m.role in {"user", "assistant", "tool", "error"}]
     ended_silent = bool(progression) and _is_silent_answer(progression[-1])

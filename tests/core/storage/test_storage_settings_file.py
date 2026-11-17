@@ -10,6 +10,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -79,6 +80,37 @@ def test_settings_reads_continue_while_a_write_waits_for_a_snapshot(
     assert storage.load_settings() == {"keep_awake": True}
     assert gate.capture is not None
     assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 1)
+
+
+def test_managers_for_one_settings_path_serialize_read_modify_write(tmp_path: Path) -> None:
+    sibling = tmp_path / "child"
+    sibling.mkdir()
+    first = StorageManager(tmp_path)
+    second = StorageManager(sibling / "..")
+    entered = Event()
+    release = Event()
+
+    def change(settings: dict[str, Any]) -> None:
+        entered.set()
+        assert release.wait(2)
+        settings["keep_awake"] = True
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        writing = workers.submit(first.update_settings, change)
+        try:
+            assert entered.wait(2)
+            # Probe lock admission without timing a second blocked worker.
+            acquired = second._settings_lock.acquire(blocking=False)
+            if acquired:
+                second._settings_lock.release()
+            assert not acquired
+            another = workers.submit(second.set_model_favorite, "openai/two", True)
+        finally:
+            release.set()
+        writing.result(timeout=2)
+        another.result(timeout=2)
+
+    assert second.load_settings() == {"keep_awake": True, "model_favorites": ["openai/two"]}
 
 
 def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:

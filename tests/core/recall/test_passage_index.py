@@ -873,6 +873,7 @@ async def test_literal_search_returns_multiple_source_faithful_passages(
         ("missing gamma", "any_term", {"term"}),
         ("alpha\u2003beta", "all_terms", {"phrase"}),
         ("\u2003alpha\u00a0beta\t", "phrase", {"phrase"}),
+        ("first word second", "phrase", {"lines"}),
         ("Straße\u2003lang", "all_terms", {"unicode"}),
         ('"hello"', "all_terms", {"quoted"}),
         ("ai", "all_terms", {"short"}),
@@ -883,6 +884,7 @@ async def test_literal_search_returns_multiple_source_faithful_passages(
         "any-term",
         "all-terms-whitespace",
         "phrase-whitespace",
+        "phrase-through-line-break",
         "unicode-terms",
         "quoted-term",
         "short-token",
@@ -897,6 +899,7 @@ async def test_literal_search_honours_the_match_mode(
 ) -> None:
     for session_id, text in (
         ("phrase", "alpha beta"),
+        ("lines", "first word\n\tsecond"),
         ("term", "gamma"),
         ("unicode", "Die Straße ist lang"),
         ("quoted", 'Say "hello" now'),

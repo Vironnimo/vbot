@@ -75,7 +75,7 @@ from desktop.speech.cues import (
 )
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import (
-    DEFAULT_UPLOAD_BUDGET_BYTES,
+    DEFAULT_WAV_UPLOAD_BUDGET_BYTES,
     ERROR_SERVER_UNREACHABLE,
     ERROR_SPEECH_TO_TEXT_UNAVAILABLE,
     ERROR_SPEECH_TO_TEXT_UNCONFIGURED,
@@ -265,11 +265,11 @@ class DictationController:
             self._running = False
             self._stopped = True
             take = self._take
+            if take is not None:
+                take.cancel()
         self._hotkey.stop()
-        if take is not None:
-            take.cancel()
-            if take.thread is not None:
-                take.thread.join(_STOP_JOIN_SECONDS)
+        if take is not None and take.thread is not None:
+            take.thread.join(_STOP_JOIN_SECONDS)
 
     def set_server_url(self, server_url: str) -> None:
         """Follow the window's server; the next take transcribes there."""
@@ -470,13 +470,14 @@ class DictationController:
         subscription = capture.subscribe(max_seconds=_SUBSCRIPTION_SECONDS)
         capture.start()
         cutter = PieceCutter(
-            budget_bytes=lambda: take.budget_bytes or DEFAULT_UPLOAD_BUDGET_BYTES,
+            budget_bytes=lambda: take.budget_bytes or DEFAULT_WAV_UPLOAD_BUDGET_BYTES,
             target_seconds=self._piece_target_seconds,
             search_seconds=self._piece_search_seconds,
         )
         seconds = 0.0
         skipped = 0.0
-        capturing = False
+        stream_opened = False
+        has_audio = False
         end_at: float | None = None
         try:
             while True:
@@ -488,18 +489,17 @@ class DictationController:
                     raise _Failed(transcriber.failure)
                 # An end requested before the start cue (a tap) drops the take.
                 if take.finish_requested.is_set() and end_at is None:
-                    if not capturing:
+                    if not has_audio:
                         self._play(CUE_CANCEL)
                         raise _Cancelled
                     end_at = self._clock() + TAIL_SECONDS
                 state = capture.status.state
-                if not capturing and state == CAPTURE_CAPTURING:
-                    capturing = True
-                    self._play(CUE_LISTEN)
-                elif not capturing and state != CAPTURE_OPENING:
-                    raise _Failed(ERROR_MICROPHONE_UNAVAILABLE)
-                elif capturing and state != CAPTURE_CAPTURING:
+                if state == CAPTURE_CAPTURING:
+                    stream_opened = True
+                elif stream_opened:
                     raise _Failed(ERROR_MICROPHONE_READ_FAILED)
+                elif state != CAPTURE_OPENING:
+                    raise _Failed(ERROR_MICROPHONE_UNAVAILABLE)
                 if end_at is not None and self._clock() >= end_at:
                     break
                 item = subscription.read(timeout=_READ_TIMEOUT_SECONDS)
@@ -512,6 +512,12 @@ class DictationController:
                     )
                 if not isinstance(item, AudioBlock):
                     continue
+                if not has_audio:
+                    if take.finish_requested.is_set() or take.cancelled.is_set():
+                        continue
+                    has_audio = True
+                    self._play(CUE_LISTEN)
+                    continue  # This block arrived before the cue.
                 if skipped < START_SKIP_SECONDS:
                     skipped += item.duration
                     continue
@@ -608,7 +614,7 @@ class _Transcriber:
                 self.failure = self._take.server_problem
                 return
             pcm, rate, _seconds = item
-            budget = self._take.budget_bytes or DEFAULT_UPLOAD_BUDGET_BYTES
+            budget = self._take.budget_bytes or DEFAULT_WAV_UPLOAD_BUDGET_BYTES
             for piece in upload_pieces(pcm, rate, budget):
                 if self._stopped.is_set() or self._take.cancelled.is_set():
                     return
@@ -640,9 +646,11 @@ def _prepare_server(take: _Take, client: SpeechServerClient) -> None:
             take.server_problem = problem
             return
         client.prepare_transcription()
-        take.budget_bytes = client.upload_budget_bytes()
+        take.budget_bytes = client.wav_upload_budget_bytes()
     except SpeechRequestCancelled:
         return
+    except SpeechServerError as exc:
+        take.server_problem = exc.error_code
     except Exception:
         logger.warning("Dictation could not prepare the server", exc_info=True)
 

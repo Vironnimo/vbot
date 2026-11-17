@@ -4,7 +4,9 @@ How `core/storage/layout.py` publishes a new data-directory root and what `initi
 
 ## Root publication
 
-A new root is prepared with its bootstrap marker listing no databases (`core.database.marker.write_bootstrap_marker`) in a private sibling, then published atomically without replacing any existing entry (Windows rename; Linux `renameat2(RENAME_NOREPLACE)`). Concurrent initializers therefore never see a newly published root without its marker, and losing publication never authorizes an unrelated existing directory. A failed marker write leaves the target absent and retryable; handled failures clean up their staging, while a killed process can leave only its private `.<root-name>.initializing-*` sibling, which is never adopted. Unsupported no-replace publication fails rather than falling back to a replacing rename. Canonical subdirectories created concurrently count as existing, while a non-directory at a canonical path still raises `NotADirectoryError` (`test_layout.py`).
+A new root is prepared with its initial Settings and bootstrap marker listing no databases (`core.database.marker.write_bootstrap_marker`) in a private sibling. It is published atomically without replacing any existing entry (Windows rename, Linux `renameat2(RENAME_NOREPLACE)`). Losing publication never authorizes an unrelated existing directory. A failed Settings or marker write leaves the target absent and retryable. Handled failures clean up their staging, while a killed process can leave its private `.<root-name>.initializing-*` sibling. Canonical subdirectories created concurrently count as existing, while a non-directory at a canonical path raises `NotADirectoryError` (`test_layout.py`).
+
+Seeding missing Settings into an existing root also stages the document privately and publishes without replacing an existing entry. A failed write leaves the name available for retry. A concurrent creator's settings remain intact.
 
 ## Fresh roots
 

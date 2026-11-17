@@ -39,6 +39,8 @@
   // after it: the change's own answer is newer.
   let reads = 0;
   let changes = 0;
+  let refreshing = false;
+  let refreshAfterUpdate = false;
   let refreshTimer = null;
 
   let controlsDisabled = $derived(
@@ -120,19 +122,29 @@
   }
 
   async function refresh() {
+    if (busy) {
+      refreshAfterUpdate = true;
+      return;
+    }
     const read = ++reads;
+    refreshing = true;
     const changesAtStart = changes;
     try {
       const status = await getDesktopDictation();
       if (destroyed || read !== reads || changes !== changesAtStart) return;
       apply(status);
     } catch {
-      if (!destroyed && read === reads && !dictation) loadError = true;
+      if (destroyed || read !== reads || changes !== changesAtStart) return;
+      if (!dictation) loadError = true;
+      else scheduleRefresh();
+    } finally {
+      if (read === reads) refreshing = false;
     }
   }
 
   async function update(change) {
     changes += 1;
+    refreshAfterUpdate ||= refreshing;
     busy = true;
     try {
       const status = await setDesktopDictation(change);
@@ -146,6 +158,10 @@
         });
     } finally {
       busy = false;
+      if (!destroyed && refreshAfterUpdate) {
+        refreshAfterUpdate = false;
+        void refresh();
+      }
     }
   }
 

@@ -782,8 +782,10 @@ def bootstrap(runtime: Runtime) -> None:
             get_command_manager=lambda: runtime._command_manager,
             get_context_command_runner=lambda: runtime._watch_checks,
             subagent_ancestors=subagent_ancestors,
-            subagent_reply_to_user=lambda address, message_id: (
-                runtime._subagent_coordinator.subagent_reply_to_user(address, message_id)
+            subagent_reply_to_user=lambda address, message_id, generation_id: (
+                runtime._subagent_coordinator.subagent_reply_to_user(
+                    address, message_id, generation_id
+                )
                 if runtime._subagent_coordinator is not None
                 else None
             ),

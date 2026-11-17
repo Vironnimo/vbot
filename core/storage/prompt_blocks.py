@@ -308,7 +308,7 @@ class PromptBlockStore:
 
         try:
             return override_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise StorageError(f"Cannot read block override {override_path}: {exc}") from exc
 
     def write_block_override(self, scope: str | None, block_id: str, content: str) -> Path:

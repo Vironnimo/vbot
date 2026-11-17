@@ -92,13 +92,27 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path, require_new: 
     assert data_dir / "data-store.json" in result.created_files
 
 
-def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("racing", [False, True], ids=["present", "concurrent"])
+def test_initialize_preserves_existing_configuration_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, racing: bool
+) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     environment_bytes = b"# existing\r\nTOKEN=value\r\n"
     settings_bytes = b'{"deliberately": "unformatted"}'
     (data_dir / ".env").write_bytes(environment_bytes)
-    (data_dir / "settings.json").write_bytes(settings_bytes)
+    settings = data_dir / "settings.json"
+    if racing:
+        original = layout_module._publish_noreplace
+
+        def race(staging: Path, target: Path) -> None:
+            assert target == settings
+            target.write_bytes(settings_bytes)
+            original(staging, target)
+
+        monkeypatch.setattr(layout_module, "_publish_noreplace", race)
+    else:
+        settings.write_bytes(settings_bytes)
 
     first = initialize_data_directory(data_dir)
     second = initialize_data_directory(data_dir)
@@ -139,14 +153,14 @@ def _race_mkdir(
 
 
 def _race_root_publication(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
-    original = layout_module._publish_root
+    original = layout_module._publish_noreplace
 
     def publish(staging: Path, target: Path) -> None:
-        assert target == root
-        root.mkdir()
+        if target == root:
+            root.mkdir()
         original(staging, target)
 
-    monkeypatch.setattr(layout_module, "_publish_root", publish)
+    monkeypatch.setattr(layout_module, "_publish_noreplace", publish)
 
 
 def test_initialize_losing_root_creation_race_never_writes_marker(
@@ -216,6 +230,33 @@ def test_failed_marker_write_leaves_the_new_data_path_available_for_retry(
     monkeypatch.setattr(marker_module, "write_bootstrap_marker", original)
     initialize_data_directory(data_dir)
     assert read_marker(data_dir) is not None
+
+
+@pytest.mark.parametrize("existing_root", [False, True], ids=["new-root", "existing-root"])
+def test_failed_settings_seed_leaves_no_partial_document_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_root: bool
+) -> None:
+    data_dir = tmp_path / "data"
+    if existing_root:
+        data_dir.mkdir()
+
+    def interrupted(staging: Path) -> None:
+        staging.write_text("{", encoding="utf-8")
+        raise OSError("interrupted Settings write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layout_module, "_write_initial_settings", interrupted)
+        with pytest.raises(OSError):
+            initialize_data_directory(data_dir, require_new=not existing_root)
+
+    assert data_dir.exists() is existing_root
+    assert not (data_dir / "settings.json").exists()
+    assert not list(tmp_path.glob(".data.initializing-*"))
+    assert not list(data_dir.glob(".settings.initializing-*"))
+
+    result = initialize_data_directory(data_dir, require_new=not existing_root)
+    assert result.layout.settings_file in result.created_files
+    assert validate_settings_file(result.layout.settings_file).diagnostics == ()
 
 
 @pytest.mark.parametrize("concurrent", [False, True])

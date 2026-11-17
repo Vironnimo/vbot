@@ -101,9 +101,12 @@ def _runtime(tmp_path: Path, adapter: StubAdapter) -> Any:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.user_reply_switches = []
     runtime.tool_calls = calls
-    runtime.subagent_reply_to_user = lambda address, _message_id: (
+
+    def note_reply_switch(address: SessionAddress, _message_id: str, generation_id: str) -> None:
+        assert generation_id == runtime.chat_sessions.get(address).generation_id
         runtime.user_reply_switches.append(address)
-    )
+
+    runtime.subagent_reply_to_user = note_reply_switch
     runtime.subagent_tool_usable = SubAgentCoordinator(runtime, None).subagent_tool_usable
     return runtime
 

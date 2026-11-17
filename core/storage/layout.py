@@ -265,14 +265,14 @@ def _create_directory(path: Path) -> bool:
     return True
 
 
-def _publish_root(staging: Path, root: Path) -> None:
-    """Publish the marked root atomically, never replacing an existing entry."""
+def _publish_noreplace(staging: Path, target: Path) -> None:
+    """Publish a prepared path atomically, never replacing an existing entry."""
     if sys.platform == "win32":
-        # Windows rename refuses even an empty existing directory.
-        staging.rename(root)
+        # Windows rename fails if the destination exists.
+        staging.rename(target)
         return
     if sys.platform != "linux":
-        raise OSError(errno.ENOTSUP, "Atomic data-directory creation is unsupported", str(root))
+        raise OSError(errno.ENOTSUP, "Atomic data-directory creation is unsupported", str(target))
 
     import ctypes
 
@@ -285,11 +285,10 @@ def _publish_root(staging: Path, root: Path) -> None:
         raise OSError(errno.ENOTSUP, "Atomic data-directory creation is unsupported") from exc
     rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     rename.restype = ctypes.c_int
-    if rename(-100, os.fsencode(staging), -100, os.fsencode(root), 1) != 0:
+    if rename(-100, os.fsencode(staging), -100, os.fsencode(target), 1) != 0:
         code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code), str(root))
-    # The marker writer syncs the staged directory; persist its publication too.
-    descriptor = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+        raise OSError(code, os.strerror(code), str(target))
+    descriptor = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)
     finally:
@@ -308,6 +307,7 @@ def _create_marked_root(root: Path) -> bool:
     root.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=f".{root.name}.initializing-", dir=root.parent) as temporary:
         staging = Path(temporary)
+        _write_initial_settings(staging / SETTINGS_FILE_NAME)
         # Import at call time: storage is at the bottom of the import graph.
         # The fallback also supports executing layout.py as a standalone script.
         try:
@@ -317,7 +317,32 @@ def _create_marked_root(root: Path) -> bool:
         else:
             write_bootstrap_marker(staging)
         try:
-            _publish_root(staging, root)
+            _publish_noreplace(staging, root)
+        except FileExistsError:
+            return False
+    return True
+
+
+def _write_initial_settings(path: Path) -> None:
+    with path.open("x", encoding="utf-8", newline="\n") as settings:
+        settings.write(INITIAL_SETTINGS_DOCUMENT)
+        settings.flush()
+        os.fsync(settings.fileno())
+
+
+def _seed_missing_settings(path: Path) -> bool:
+    """Publish complete initial Settings unless another entry already owns the name."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        return False
+    with TemporaryDirectory(prefix=".settings.initializing-", dir=path.parent) as temporary:
+        staging = Path(temporary) / path.name
+        _write_initial_settings(staging)
+        try:
+            _publish_noreplace(staging, path)
         except FileExistsError:
             return False
     return True
@@ -348,7 +373,7 @@ def initialize_data_directory(
     created_files: list[Path] = []
     if _create_marked_root(layout.root):
         created_directories.append(layout.root)
-        created_files.append(layout.data_store_marker_path)
+        created_files.extend((layout.data_store_marker_path, layout.settings_file))
     elif require_new:
         raise FileExistsError(f"Data-directory path already exists: {layout.root}")
     elif not layout.root.is_dir():
@@ -361,12 +386,8 @@ def initialize_data_directory(
             raise NotADirectoryError(
                 f"Canonical data-directory path is not a directory: {directory}"
             )
-    try:
-        with layout.settings_file.open("x", encoding="utf-8", newline="\n") as settings_file:
-            settings_file.write(INITIAL_SETTINGS_DOCUMENT)
+    if layout.settings_file not in created_files and _seed_missing_settings(layout.settings_file):
         created_files.append(layout.settings_file)
-    except FileExistsError:
-        pass
 
     return DataDirectoryInitializationResult(
         layout=layout,

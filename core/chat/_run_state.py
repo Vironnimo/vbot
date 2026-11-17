@@ -221,7 +221,7 @@ class ChatLoopDependencies:
         return self.secrets.masker if self.secrets is not None else EMPTY_MASKER
 
     # Called when a persisted user input switches a Sub-Agent's answer destination.
-    subagent_reply_to_user: Callable[[SessionAddress, str], None] | None = None
+    subagent_reply_to_user: Callable[[SessionAddress, str, str | None], None] | None = None
     # The vBot server's own port, which restricted Runs may not reach on loopback;
     # ``None`` outside a server.
     server_port: Callable[[], int | None] | None = None
@@ -278,15 +278,15 @@ async def switches_subagent_reply_to_user(
 
 
 def report_subagent_user_input(
-    dependencies: ChatLoopDependencies, address: SessionAddress, message_id: str
+    dependencies: ChatLoopDependencies, session: ChatSession, message_id: str
 ) -> None:
     """Tell the Parent after the input and its answer destination committed together."""
     if dependencies.subagent_reply_to_user is not None:
         try:
-            dependencies.subagent_reply_to_user(address, message_id)
+            dependencies.subagent_reply_to_user(session.address, message_id, session.generation_id)
         except Exception:
             _LOGGER.warning(
-                "Sub-Agent reply destination report failed for %s", address, exc_info=True
+                "Sub-Agent reply destination report failed for %s", session.address, exc_info=True
             )
 
 

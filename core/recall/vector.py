@@ -83,8 +83,7 @@ class PreparedSemanticSearch:
 
     ``page`` ranks at any depth without repeating freshness or query embedding.
     ``header`` is ``None`` when the request selects no candidate Session.
-    ``pending`` counts the candidates' Passages in the period still waiting
-    for a vector; while any wait, every page reports partial coverage.
+    Each ranked page reads coverage alongside its hits.
     """
 
     backend: VectorRecallBackend
@@ -93,7 +92,6 @@ class PreparedSemanticSearch:
     candidates: Candidates | None = None
     header: VectorHeader | None = None
     query_vector: tuple[float, ...] = ()
-    pending: int = 0
 
     async def page(self, offset: int, limit: int) -> RecallSearchPage:
         return await self.backend._search_prepared(self, offset=offset, limit=limit)
@@ -221,7 +219,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         if pinned is not None:
             # A pinned header already names the complete embedding space, so a
             # stale continuation fails before the query is paid for.
-            self._check_snapshot(request, self._vector_snapshot(scope, pinned))
+            self._check_snapshot(request, self._vector_snapshot(scope, pinned), base_only=True)
         if not scope.candidates:
             snapshot_id = self._vector_snapshot(scope, pinned or binding)
             self._check_snapshot(request, snapshot_id)
@@ -230,17 +228,12 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         # The query embedding observes the live dimension and actual model.
         query_vector, header = await self._embed_query(binding, request.query, usage)
         snapshot_id = self._vector_snapshot(scope, header)
-        self._check_snapshot(request, snapshot_id)
+        self._check_snapshot(request, snapshot_id, base_only=True)
         if stored != header and await self.index.use_space(header):
             self._log_space_change(stored, header)
         if refresh:
             await self.index.refresh(self.sessions, request.agent_id, request.project_id, scope)
         candidates = Candidates.of(request.agent_id, request.project_id, scope)
-        pending = await self.index.count_pending(
-            candidates, since=request.since, until=request.until
-        )
-        if pending and self._on_waiting is not None:
-            self._on_waiting()
         return PreparedSemanticSearch(
             self,
             request,
@@ -248,7 +241,6 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             candidates,
             header,
             tuple(query_vector),
-            pending,
         )
 
     async def _search_prepared(
@@ -281,6 +273,10 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             ),
             recover=False,
         )
+        snapshot_id = f"{prepared.snapshot_id}.{result.generation}.{result.pending}"
+        self._check_snapshot(request, snapshot_id)
+        if result.pending and self._on_waiting is not None:
+            self._on_waiting()
         ranked = [
             RecallSearchHit(
                 result_type="passage",
@@ -306,15 +302,15 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             hits=tuple(page_hits),
             result_type="passage",
             ranking="cosine_distance",
-            snapshot_id=prepared.snapshot_id,
+            snapshot_id=snapshot_id,
             # A capped ranking that this page reaches the end of still has more
             # Passages beyond what the index can rank.
             has_more=(
                 len(ranked) > offset + len(page_hits) or (result.truncated and bool(page_hits))
             ),
             total_candidate_sessions=len(candidates.creation_orders),
-            degraded=prepared.pending > 0,
-            degradation_reason=SEMANTIC_PARTIAL_REASON if prepared.pending > 0 else None,
+            degraded=result.pending > 0,
+            degradation_reason=SEMANTIC_PARTIAL_REASON if result.pending > 0 else None,
         )
 
     async def _semantic_operation[T](
@@ -360,8 +356,11 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         return hashlib.sha256(payload).hexdigest()
 
     @staticmethod
-    def _check_snapshot(request: RecallSearchRequest, snapshot_id: str) -> None:
-        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+    def _check_snapshot(
+        request: RecallSearchRequest, snapshot_id: str, *, base_only: bool = False
+    ) -> None:
+        cursor = request.snapshot_id
+        if cursor is not None and (cursor.split(".", 1)[0] if base_only else cursor) != snapshot_id:
             raise RecallSearchError(
                 "stale_cursor",
                 "Session search source changed; repeat the search.",

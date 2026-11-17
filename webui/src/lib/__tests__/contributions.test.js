@@ -275,6 +275,38 @@ describe('public UI contribution composition', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('honors a new preferences invalidation when the current read fails', async () => {
+    let rejectRead;
+    let invalidate;
+    const remote = { [surface]: { hidden: ['core:stop'] } };
+    const readSettings = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (rejectRead = reject)),
+      )
+      .mockResolvedValue({ appearance: { ui_layout: remote } });
+    const registry = createContributions({
+      settings: { appearance: { ui_layout: {} } },
+      readSettings,
+      subscribe: (listener) => {
+        invalidate = listener;
+        return () => {};
+      },
+    });
+    const disconnect = registry.connect();
+    try {
+      const first = registry.refresh();
+      invalidate({ owner: null, change: { resource: 'settings' } });
+      rejectRead(new Error('offline'));
+      expect(await first).toBe(true);
+      expect(readSettings).toHaveBeenCalledTimes(2);
+      expect(registry.layout(surface)).toEqual(remote[surface]);
+      expect(registry.error).toBe('');
+    } finally {
+      disconnect();
+    }
+  });
+
   it('rebases competing browser edits with saved conflicts winning and unrelated draft edits retained', async () => {
     const initial = { [surface]: { hidden: [], order: [] } };
     const remote = {
