@@ -44,9 +44,8 @@ def smaller_compaction_request(
     messages: Sequence[dict[str, Any]],
     *,
     tool_characters: int,
-    target_tokens: int,
     omit_old_exchanges: bool,
-    estimate: Callable[[Sequence[dict[str, Any]]], int],
+    within_target: Callable[[Sequence[dict[str, Any]]], bool],
 ) -> OverflowProjection:
     """Reduce Tool observations before dropping oldest complete User exchanges.
 
@@ -56,7 +55,7 @@ def smaller_compaction_request(
     """
     projected = [_bounded_tool_message(message, tool_characters) for message in messages]
     starts = _safe_exchange_starts(projected)
-    if not omit_old_exchanges or len(starts) < 2 or estimate(projected) <= target_tokens:
+    if not omit_old_exchanges or len(starts) < 2 or within_target(projected):
         return OverflowProjection(projected)
 
     first = starts[0]
@@ -74,7 +73,7 @@ def smaller_compaction_request(
             notice,
             projected[-1],
         ]
-        if estimate(candidate) <= target_tokens:
+        if within_target(candidate):
             break
     return OverflowProjection(candidate, omitted)
 
