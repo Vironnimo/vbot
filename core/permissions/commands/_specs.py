@@ -15,6 +15,9 @@ from typing import Literal
 
 type AccessKind = Literal["read", "write"]
 
+# Python accepts attached code/module names and clusters of no-value flags.
+PYTHON_SHORT_VALUE_OPTION = re.compile(r"-[bBdEiIOPqRsSuvx]*([cmWX])(.*)", re.DOTALL)
+
 
 @dataclass(frozen=True, slots=True)
 class CmdletParameter:

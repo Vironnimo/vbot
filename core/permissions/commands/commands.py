@@ -27,6 +27,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.permissions.commands import _patterns
+from core.permissions.commands._environment import (
+    controls_command_analysis as controls_command_analysis,
+)
+from core.permissions.commands._environment import (
+    controls_command_execution as controls_command_execution,
+)
 from core.permissions.commands._powershell import (
     HelperLauncher,
     HelperLimits,
@@ -43,7 +49,9 @@ if TYPE_CHECKING:
 
 type ShellKind = Literal["powershell", "bash", "cmd"]
 type PathAccessKind = Literal["read", "write", "start_dir"]
-type UnresolvedKind = Literal["path_read", "path_write", "cwd", "command", "url"]
+type UnresolvedKind = Literal[
+    "path_read", "path_write", "cwd", "command", "url", "inline_code", "environment"
+]
 
 PowerShellHelperLimits = HelperLimits
 
@@ -81,9 +89,6 @@ class SimpleCommand:
     words: tuple[CommandWord, ...]
     source: str
     shell: ShellKind
-    # Python launch context, retained for protecting vBot's own modules outside its cwd.
-    executable: str | None = None
-    python_path: CommandWord | None = None
 
 
 @dataclass(frozen=True, slots=True)

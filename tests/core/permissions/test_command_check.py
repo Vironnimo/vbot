@@ -166,8 +166,22 @@ async def test_hard_command_refusal_precedes_missing_access(tmp_path: Path) -> N
         pytest.param(
             "python -m cli.main agent list", True, None, "protected_location", id="cli-module"
         ),
-        pytest.param("python -m cli.main agent list", False, None, None, id="other-cli-module"),
+        pytest.param(
+            "python -m cli.main agent list", False, None, "protected_location", id="editable-cli"
+        ),
+        pytest.param(
+            "python -Imserver.main", False, None, "protected_location", id="editable-server"
+        ),
+        pytest.param(
+            "python -IW ignore -m cli.main",
+            False,
+            None,
+            "protected_location",
+            id="clustered-value-option",
+        ),
+        pytest.param("uv run --module cli.main", False, None, "protected_location", id="uv-module"),
         pytest.param("python tools/build.py", True, None, None, id="other-script"),
+        pytest.param("python tools/build.py -m cli.main", False, None, None, id="script-argument"),
         pytest.param(
             '"{root}/.venv/Scripts/python.exe" -m cli agent list',
             False,
@@ -196,20 +210,26 @@ async def test_hard_command_refusal_precedes_missing_access(tmp_path: Path) -> N
             "protected_location",
             id="relative-pythonpath",
         ),
-        pytest.param("python -m cli agent list", False, "{other}", None, id="unrelated-pythonpath"),
+        pytest.param(
+            "python -m cli agent list",
+            False,
+            "{other}",
+            "protected_location",
+            id="unrelated-pythonpath",
+        ),
         pytest.param("python -m compileall .", False, "{root}", None, id="unrelated-module"),
         pytest.param(
             "PYTHONPATH={root} python -m cli agent list",
             False,
             None,
-            "unanalyzable",
+            "protected_location",
             id="changed-pythonpath",
         ),
         pytest.param(
             "env PYTHONPATH={root} python -m cli agent list",
             False,
             None,
-            "unanalyzable",
+            "protected_location",
             id="wrapped-changed-pythonpath",
         ),
     ],
@@ -244,6 +264,36 @@ async def test_vbots_own_cli_cannot_be_started(
     assert (refusal.reason if refusal else None) == reason
     if reason == "protected_location":
         assert refusal is not None and refusal.location == "vbot_cli"
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("python -c 'print(1)'", "unanalyzable"),
+        ("python -Ic'print(1)'", "unanalyzable"),
+        ("node --import tools/setup.mjs --eval='1'", "unanalyzable"),
+        ("node -p '1 + 1'", "unanalyzable"),
+        ("node tools/build.js -e literal", None),
+        ("BASH_ENV=setup.sh bash -c 'echo ok'", "unanalyzable"),
+        ("env NODE_OPTIONS=--trace-warnings node --version", "unanalyzable"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_restricted_commands_refuse_unchecked_inline_code_and_startup_hooks(
+    real_analyzer: CommandAnalyzer, tmp_path: Path, command: str, reason: str | None
+) -> None:
+    checker = CommandChecker(lambda: real_analyzer)
+
+    refusal = await checker.check_line(
+        boundary(tmp_path, RESTRICTED),
+        command,
+        shell="bash",
+        cwd=tmp_path,
+        env={},
+        home=tmp_path,
+    )
+
+    assert (refusal.reason if refusal else None) == reason
 
 
 @pytest.mark.asyncio

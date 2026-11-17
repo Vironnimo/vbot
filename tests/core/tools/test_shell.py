@@ -71,6 +71,7 @@ from core.tools.update_handoff import (
     read_update_handoff_ticket,
 )
 from core.utils.paths import model_path
+from tests.core.permissions.command_check_support import FakeAnalyzer, plan, restricted
 from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.command_manager_helpers import (
     OWNER,
@@ -280,7 +281,10 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
 
 
 @pytest.mark.asyncio
-async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) -> None:
+@pytest.mark.parametrize("confined", [False, True])
+async def test_agent_secrets_reach_only_the_command_environment(
+    tmp_path: Path, confined: bool
+) -> None:
     store = SecretStore(
         data_directory(tmp_path, "secrets-data"),
         protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
@@ -295,8 +299,34 @@ async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) 
         lifetime="once",
         session_id="session-a",
     )
-    async with started_shell(tmp_path, secrets=secrets) as shell:
+    analyzer = FakeAnalyzer(plan("login"))
+    permissions = restricted(tmp_path) if confined else PermissionBoundary.UNRESTRICTED
+    async with started_shell(
+        tmp_path, secrets=secrets, analyzer=analyzer, permissions=permissions
+    ) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        if confined:
+            startup = secrets.create(
+                name="BASH_ENV",
+                kind="token",
+                values={"value": "setup.sh"},
+                actor="user",
+                agents=["agent-a@project-a"],
+            )
+            for env in (
+                {"BASH_ENV": "setup.sh"},
+                {"BASH_ENV": "{{secret:GITHUB.password}}"},
+                {"Path": "{{secret:GITHUB.password}}"},
+                {"GIT_CONFIG_SYSTEM": "alternate.conf"},
+            ):
+                blocked = await shell.call({"command": "echo ok", "env": env})
+                assert blocked["error"]["code"] == "invalid_arguments"
+            blocked = await shell.call({"command": "echo ok", "env_keys": [startup.name]})
+            assert blocked["error"]["code"] == "invalid_arguments"
+            assert secrets.recent_uses(startup.id) == []
+            assert secrets.get(secret.id) == secret
+            assert secrets.recent_uses(secret.id) == []
+            assert shell.launcher.processes == []
         call = shell.call(
             {
                 # An escaped reference runs as the reference text itself.
@@ -313,6 +343,16 @@ async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) 
         await eventually(lambda: shell.live_output)
         process.exit(0)
         await shell.returned(call)
+
+    if confined:
+        assert analyzer.lines
+        for command, _, _, checked_env in analyzer.lines:
+            assert command == "login {{secret:GITHUB}}"
+            assert (
+                not {"GITHUB_USERNAME", "GITHUB_PASSWORD", "PGPASSWORD", "API_TOKEN"}
+                & checked_env.keys()
+            )
+            assert checked_env["DOC"] == "{{secret:A}} b"
 
     assert shell.live_output[-1]["output"] == (
         "found {{secret:GITHUB_TOKEN}}\ngot {{secret:GITHUB.password}}\nnext "
@@ -367,8 +407,6 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
 
     monkeypatch.setattr(secrets, "environment", resolve)
     if failure == "permissions":
-        from tests.core.permissions.command_check_support import restricted
-
         revalidate = ToolContext.revalidate_permissions
 
         async def changed(context: ToolContext, **kwargs: Any) -> None:

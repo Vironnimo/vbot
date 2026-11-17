@@ -65,6 +65,7 @@ Shell environment (`core/tools/_shell_arguments.py`, `shell.py`):
 - An `env` value that is exactly one reference becomes that value.
 - A reference in `command`, or inside an `env` value with other text, refuses the call before it runs (`invalid_arguments`, naming both ways): command lines reach process listings and shell history. An escaped reference there runs as the reference text.
 - Resolution runs on a worker after the call is parsed, without consumption; a refusal is `secret_unavailable`. The shell consumes only after environment/PATH preparation and workdir validation; it rechecks dynamic source/TOTP values, then fresh Permission Rules after worker admission, immediately before launch. A later launch failure names any spent one-time Secrets and disables an automatic retry until renewed. Reports and background checkpoints retain only the consumed Secret names, so shell bootstrap refusals keep that guidance in foreground results, background status and recovered deliveries. A granted credential a command received through `env_keys` is remembered for masking.
+- The `environment` sink gives the child process the plaintext value. A full-access shell command can transmit it directly without showing it to the Model or passing it through output masking.
 
 ## Automatic capture
 
@@ -85,6 +86,7 @@ Shell environment (`core/tools/_shell_arguments.py`, `shell.py`):
   - every Chat Model request: `model_facing_request` masks `content`, `reasoning`, Tool result content blocks and Tool Call arguments of every message, System messages included; media and `reasoning_meta` stay unchanged;
   - every Compaction Model request (`CompactionService(secret_masker=...)`, the same projection).
 - Persisted history is never rewritten: a value that entered history before vBot knew it stays there, and every later request masks it.
+- The `typing` sink can expose a value on the screen. A Computer Use screenshot can preserve the plaintext in attachment pixels and send it to the Model. Text masking leaves image pixels as captured.
 - Opaque Extension payloads and command checkpoints preserve exact contents through storage encryption (`sessions/storage.md` -> Protected Tool data). User decision 2026-11-12: the ordinary command/Terminal output files remain unchanged; they can contain raw values, just like a source file. This protection is not a blanket guarantee for the data directory or existing snapshots.
 
 ## Secret Sources
@@ -129,7 +131,7 @@ For a Command with `secret_argument` and a non-empty argument, the engine calls 
 ## RPCs and events
 
 - `agent_secrets.list|create|update|delete|reveal|answer|give|decline|source_unlock|source_lock|source_entries` (`server/rpc/agent_secret_methods.py`), distinct from the credential RPCs `secrets.*` (`secrets/credential-rpcs.md`).
-- Values enter through `create`, `update`, `answer` and `give`. Only `reveal` returns a concealed value: a stored field as stored (a `totp` field's seed, not a code), a bound field from its source; it logs the Secret and field name at INFO. Other results describe Secrets as `describe()` does plus `recent_uses`; `source_entries` returns only non-concealed field values. Refusals are `invalid_request` and name fields, never values.
+- Values enter through `create`, `update`, `answer` and `give`. Only `reveal` returns a concealed value: a stored field as stored (including a `totp` seed), or a bound field from its source. Reveal logs the Secret, field and request principal at INFO; Secret writes from `create`, `update`, `delete`, `answer` and `give` carry that principal into the owner's audit line. Other results describe Secrets as `describe()` does plus `recent_uses`; `source_entries` returns only non-concealed field values. Refusals are `invalid_request` and name fields, never values.
 - `list` returns `{secrets, sources, requests, kinds, lifetimes, sinks}` and sweeps expired Secrets first. `create` defaults the lifetime to `permanent`. `give` and `answer` without `lifetime` keep a replaced Secret's lifetime; `give` creates a new one for the Session, `answer` with the requested lifetime; an `expires_at` alone means `until`. `give` returns the replaced Secret's `previous_lifetime` so a client can say when it changed.
 - `list`, `create`, `update`, `delete`, `reveal` and the three source RPCs run in order on one worker under `_agent_secrets_mutation_lock`; `answer`, `give` and `decline` do not, so an answer never waits behind a slow source call. Request overviews snapshot the pending requests before projection, so concurrent additions and withdrawals on the Event Loop cannot interrupt a worker's listing.
 - Unscoped `resource_changed(kind="agent_secrets")` follows every `AgentSecrets` create, update, delete, expiry, pass-through and use of a `once` Secret, and every request that appears or ends (listeners wired by `_publish_secret_changes`); `source_unlock` and `source_lock` publish it themselves, because a source's lock state has no listener.

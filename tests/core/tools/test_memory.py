@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.memory import MemoryService
-from core.permissions import PermissionBoundary
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import ProjectStore
 from core.runs import RunKind
 from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
@@ -70,7 +70,7 @@ def run(
         data_root=workspace.parent,
         vbot_root=workspace.parent,
         allowed_tools=[MEMORY_TOOL_NAME],
-        permissions=PermissionBoundary.UNRESTRICTED,
+        permissions=context_fields.pop("permissions", PermissionBoundary.UNRESTRICTED),
         **context_fields,
     )
     tool_calls = [
@@ -146,6 +146,46 @@ def test_list_renders_scopes_like_the_memory_block(workspace: Path) -> None:
     assert agent["data"]["count"] == 3
 
 
+def test_personal_memory_obeys_file_rules_before_opening_scopes(workspace: Path) -> None:
+    rules = normalize_permission_rules(
+        {"deny": ["Read({workspace}/USER.md)", "Edit({workspace}/MEMORY.md)"]}
+    )
+    context = BoundaryContext(
+        workdir=workspace,
+        home=workspace.parent,
+        data_dir=workspace.parent / "data",
+        workspace=workspace,
+    )
+    permissions = PermissionBoundary.build(rules, context)
+    previous = files(workspace)
+    results = run(
+        workspace,
+        {"action": "list"},
+        {"action": "list", "scope": "agent"},
+        {"action": "replace", "entry_id": 1},
+        {"action": "add", "scope": "user", "content": "New preference."},
+        {"action": "remove", "scope": "agent", "old_text": AGENT.splitlines()[0][2:]},
+        permissions=permissions,
+    )
+
+    assert results[1]["data"]["count"] == 3
+    for result in (*results[:1], *results[2:]):
+        message = failure(result, "permission_denied")
+        assert all(line[2:] not in message for line in USER.splitlines())
+    assert files(workspace) == previous
+
+    (inferred,) = run(
+        workspace,
+        {"action": "remove", "old_text": AGENT.splitlines()[0][2:]},
+        permissions=PermissionBoundary.build(
+            normalize_permission_rules({"deny": ["Edit({workspace}/MEMORY.md)"]}),
+            context,
+        ),
+    )
+    failure(inferred, "permission_denied")
+    assert files(workspace) == previous
+
+
 def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: Path) -> None:
     projects = ProjectStore(workspace.parent / "data")
     projects.create("atlas", "Atlas", workspace.parent)
@@ -153,6 +193,25 @@ def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: 
     registry = ToolRegistry()
     register_memory_tool(registry, service, projects)
     fields: JsonObject = {"working_project_id": "atlas", "project_memory_enabled": True}
+    restricted_results = run(
+        workspace,
+        {"action": "list", "scope": "project"},
+        {"action": "add", "scope": "project", "content": "Denied project change."},
+        registry=registry,
+        permissions=PermissionBoundary.build(
+            normalize_permission_rules({"write": "work_area"}),
+            BoundaryContext(
+                workdir=workspace.parent,
+                home=workspace.parent,
+                data_dir=projects.data_dir,
+                workspace=workspace,
+            ),
+        ),
+        **fields,
+    )
+    for result in restricted_results:
+        failure(result, "permission_denied")
+    assert not (projects.memory_workspace("atlas") / "MEMORY.md").exists()
 
     added = run(
         workspace,

@@ -15,7 +15,9 @@ from core.memory import (
     MemoryScope,
     MemoryService,
     MemoryWriter,
+    memory_file,
 )
+from core.permissions import PathAccess, PermissionDenied
 from core.projects import ProjectError, ProjectStore
 from core.tools.availability import MEMORY_TOOL_NAME
 from core.tools.call_syntax import normalize_call_arguments, spelling
@@ -311,6 +313,13 @@ def _run_memory_operation(
     project_id: str | None = None,
 ) -> JsonObject:
     action = str(arguments["action"])
+    if context.permissions.restricted:
+        # An unscoped search (including error suggestions) reads both files.
+        # Check both before opening either, then check the inferred write target.
+        access: PathAccess = "write" if action != "list" and scope is not None else "read"
+        for item in _scopes(scope):
+            if refusal := context.permissions.check_path(memory_file(workspace, item), access):
+                raise PermissionDenied(refusal)
     if action == "list":
         try:
             return tool_success(_list_result(memory_service, workspace, scope))
@@ -424,6 +433,10 @@ def _mutate(
             f"with {_call('remove', scope, old_text, project_id=project_id)}. Nothing changed.",
         )
     target = _memory_scope(scope) if scope is not None else _scope_for(service, workspace, old_text)
+    if scope is None and (
+        refusal := context.permissions.check_path(memory_file(workspace, target), "write")
+    ):
+        raise PermissionDenied(refusal)
     if action == "replace":
         change = service.replace_matching(workspace, target, old_text, str(content), writer=writer)
         if change.current == change.previous:

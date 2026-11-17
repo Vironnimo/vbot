@@ -47,7 +47,7 @@ type CommandRefusal = Callable[[SimpleCommand], tuple[str, str] | None]
 # Longest command text a refusal quotes.
 _TARGET_CHARS: Final = 300
 _PYTHONS: Final = re.compile(r"^(?:python[\d.]*w?|py|pythonw|uv)$", re.IGNORECASE)
-_VBOT_MODULE: Final = re.compile(r"^(?:cli|server)(?:\.|$)")
+_VBOT_MODULE: Final = re.compile(r"^(?:cli|server)(?:\.|$)", re.IGNORECASE)
 # ``host:port`` inside a word, as in ``localhost:8765/api`` or ``ws://[::1]:8765``.
 _HOST_PORT: Final = re.compile(r"(\[[0-9A-Za-z:.%]+\]|[A-Za-z0-9._-]+):(\d{1,5})(?!\d)")
 _UNRESOLVED: Final[dict[str, tuple[str, str]]] = {
@@ -66,6 +66,14 @@ _UNRESOLVED: Final[dict[str, tuple[str, str]]] = {
     "command": (
         "so the check cannot tell what it runs",
         "Write each command and its arguments literally.",
+    ),
+    "inline_code": (
+        "whose effects the check cannot inspect",
+        "Use individual shell commands whose file paths and arguments can be checked.",
+    ),
+    "environment": (
+        "which can change what code the command runs",
+        "Leave that variable unset and use ordinary command arguments.",
     ),
     "url": (
         "so the check cannot tell which address it reaches",
@@ -530,63 +538,32 @@ class CommandChecker:
     def _vbot_cli(
         self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
     ) -> PermissionRefusal | None:
-        root = self._key(self._vbot_root, windows)
         scripts = (
             self._key(self._vbot_root / "cli", windows),
             self._key(self._vbot_root / "server" / "main.py", windows),
         )
         folders = [cwd, *(access.path for access in plan.paths if access.kind == "start_dir")]
-        in_checkout = any(is_inside(self._key(folder, windows), root) for folder in folders)
         for command in plan.commands:
             name = command.name.casefold().removesuffix(".ps1")
             if name == "vbot" or (
                 _PYTHONS.match(command.name) is not None
-                and self._starts_vbot(command, folders, scripts, in_checkout, windows)
+                and (
+                    _vbot_module(command)
+                    or self._starts_vbot_script(command, folders, scripts, windows)
+                )
             ):
                 return boundary.refusal(
                     "command", _shown(command.source), "protected_location", location="vbot_cli"
                 )
-            if (
-                _PYTHONS.match(command.name) is not None
-                and command.python_path is not None
-                and not command.python_path.static
-                and _vbot_module(command)
-            ):
-                return boundary.refusal(
-                    "command",
-                    _shown(command.source),
-                    "unanalyzable",
-                    detail="the check cannot resolve PYTHONPATH to identify the Python module",
-                    hint=(
-                        "Run the module without changing PYTHONPATH, "
-                        "or name its script by a literal path."
-                    ),
-                )
         return None
 
-    def _starts_vbot(
+    def _starts_vbot_script(
         self,
         command: SimpleCommand,
         folders: Sequence[Path],
         scripts: tuple[str, ...],
-        in_checkout: bool,
         windows: bool,
     ) -> bool:
-        root = self._key(self._vbot_root, windows)
-        module_folders = list(folders) if in_checkout else []
-        if command.executable and any(separator in command.executable for separator in ("/", "\\")):
-            module_folders.extend(folder / command.executable for folder in folders)
-        if command.python_path is not None and command.python_path.static:
-            separator = ";" if windows else ":"
-            module_folders.extend(
-                folder / entry
-                for entry in command.python_path.text.split(separator)
-                for folder in folders
-            )
-        if _vbot_module(command) and any(
-            is_inside(self._key(folder, windows), root) for folder in module_folders
-        ):
-            return True
         words = [word.text for word in command.words if word.static]
         for word in words:
             if word.startswith("-") or not word.lower().endswith(".py"):
@@ -625,15 +602,28 @@ class CommandChecker:
 
 
 def _vbot_module(command: SimpleCommand) -> bool:
+    """An editable installation can import these entry points from any directory."""
+    from core.permissions.commands._specs import PYTHON_SHORT_VALUE_OPTION
+
     words = command.words
+    skip_value = False
     for index, word in enumerate(words):
-        if not word.static:
-            continue
-        if word.text == "-m" and index + 1 < len(words):
-            module = words[index + 1]
-            return module.static and _VBOT_MODULE.match(module.text) is not None
-        if word.text.startswith("-m") and _VBOT_MODULE.match(word.text[2:]):
-            return True
+        if skip_value:
+            skip_value = False
+        elif not word.static or word.text in ("-", "--") or not word.text.startswith("-"):
+            break
+        elif word.text == "--check-hash-based-pycs":
+            skip_value = True
+        elif option := PYTHON_SHORT_VALUE_OPTION.fullmatch(word.text):
+            if option[1] in ("W", "X"):
+                skip_value = not option[2]
+                continue
+            if option[1] == "c":
+                return False
+            module = option[2]
+            if module == "" and index + 1 < len(words) and words[index + 1].static:
+                module = words[index + 1].text
+            return _VBOT_MODULE.match(module) is not None
     return False
 
 
@@ -674,7 +664,7 @@ def _unresolved_refusal(
         hint = _CWD_HINT_WITH_WORKDIR
     reason = element.reason.rstrip(".")
     source = _shown(element.source)
-    where = "" if source == _shown(text) else f" ({source})"
+    where = "" if not source or source == _shown(text) else f" ({source})"
     return boundary.refusal(
         "command",
         _shown(text),

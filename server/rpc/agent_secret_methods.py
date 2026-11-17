@@ -8,8 +8,9 @@ message or log carries one.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
+from functools import wraps
 from typing import Any
 
 from core.chat.secret_giving import give_secret
@@ -26,6 +27,7 @@ from core.secrets.agent_secrets import (
 from core.secrets.sources import SecretSource
 from core.sessions import SessionAddress
 from core.utils.workers import BoundedWorkerPool
+from server.access import current_principal
 from server.events import RESOURCE_KIND_AGENT_SECRETS
 from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
@@ -213,7 +215,29 @@ async def _list(state: Any, params: JsonObject) -> JsonObject:
     return await _run(_overview, state)
 
 
-def _create_secret(state: Any, params: JsonObject) -> JsonObject:
+def _actor() -> str:
+    principal = current_principal()
+    return principal.actor if principal is not None else "user"
+
+
+def _audited_mutation(
+    handler: Callable[[Any, JsonObject, str], Awaitable[JsonObject]],
+) -> RpcMethodHandler:
+    async def run(state: Any, params: JsonObject) -> JsonObject:
+        # The mutation settles in a separate Task. Carry only the audit label
+        # into it and leave the access principal bound to the request Task.
+        actor = _actor()
+
+        @wraps(handler)
+        async def apply(state: Any, params: JsonObject) -> JsonObject:
+            return await handler(state, params, actor)
+
+        return await serialized_mutation(apply, lock_attribute=_LOCK)(state, params)
+
+    return run
+
+
+def _create_secret(state: Any, params: JsonObject, actor: str) -> JsonObject:
     secrets = _secrets(state)
     source_name = _optional_text(params, "source")
     binding = None
@@ -226,7 +250,7 @@ def _create_secret(state: Any, params: JsonObject) -> JsonObject:
         name=_text(params, "name"),
         kind=_choice(params, "kind", SECRET_KINDS, None),
         values=_values(params) or {},
-        actor="user",
+        actor=actor,
         lifetime=_choice(params, "lifetime", LIFETIMES, "permanent"),
         session_id=_optional_text(params, "session_id"),
         expires_at=_time(params, "expires_at"),
@@ -240,19 +264,19 @@ def _create_secret(state: Any, params: JsonObject) -> JsonObject:
     return {"secret": _describe(secrets, secret)}
 
 
-async def _create(state: Any, params: JsonObject) -> JsonObject:
+async def _create(state: Any, params: JsonObject, actor: str) -> JsonObject:
     _reject_unsupported(params, _CREATE_FIELDS, "agent_secrets.create")
-    return await _run(_create_secret, state, params)
+    return await _run(_create_secret, state, params, actor)
 
 
-def _update_secret(state: Any, params: JsonObject) -> JsonObject:
+def _update_secret(state: Any, params: JsonObject, actor: str) -> JsonObject:
     secrets = _secrets(state)
     description = params.get("description")
     if description is not None and not isinstance(description, str):
         raise _invalid("params.description must be a string")
     secret = secrets.update(
         _text(params, "id"),
-        actor="user",
+        actor=actor,
         values=_values(params),
         description=description,
         concealed=_flags(params, "concealed"),
@@ -265,22 +289,22 @@ def _update_secret(state: Any, params: JsonObject) -> JsonObject:
     return {"secret": _describe(secrets, secret)}
 
 
-async def _update(state: Any, params: JsonObject) -> JsonObject:
+async def _update(state: Any, params: JsonObject, actor: str) -> JsonObject:
     _reject_unsupported(params, _UPDATE_FIELDS, "agent_secrets.update")
-    return await _run(_update_secret, state, params)
+    return await _run(_update_secret, state, params, actor)
 
 
-def _delete_secret(state: Any, params: JsonObject) -> JsonObject:
-    secret = _secrets(state).delete(_text(params, "id"), actor="user")
+def _delete_secret(state: Any, params: JsonObject, actor: str) -> JsonObject:
+    secret = _secrets(state).delete(_text(params, "id"), actor=actor)
     return {"id": secret.id, "deleted": True}
 
 
-async def _delete(state: Any, params: JsonObject) -> JsonObject:
+async def _delete(state: Any, params: JsonObject, actor: str) -> JsonObject:
     _reject_unsupported(params, {"id"}, "agent_secrets.delete")
-    return await _run(_delete_secret, state, params)
+    return await _run(_delete_secret, state, params, actor)
 
 
-def _reveal_value(state: Any, params: JsonObject) -> JsonObject:
+def _reveal_value(state: Any, params: JsonObject, actor: str) -> JsonObject:
     secrets = _secrets(state)
     secret_id = _text(params, "id")
     field_name = _text(params, "field")
@@ -299,13 +323,13 @@ def _reveal_value(state: Any, params: JsonObject) -> JsonObject:
         )
     except SecretUseError as error:
         raise _invalid(str(error)) from None
-    _LOGGER.info("Agent Secret %s.%s revealed to the user", secret.name, target.name)
+    _LOGGER.info("Agent Secret %s.%s revealed (actor=%s)", secret.name, target.name, actor)
     return {"id": secret.id, "field": target.name, "value": value}
 
 
 async def _reveal(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "field"}, "agent_secrets.reveal")
-    return await _run(_reveal_value, state, params)
+    return await _run(_reveal_value, state, params, _actor())
 
 
 async def _answer(state: Any, params: JsonObject) -> JsonObject:
@@ -317,6 +341,7 @@ async def _answer(state: Any, params: JsonObject) -> JsonObject:
             _values(params) or {},
             lifetime=_optional_lifetime(params),
             expires_at=_time(params, "expires_at"),
+            actor=_actor(),
         )
     except SecretRecordError as error:
         raise _invalid(str(error)) from None
@@ -345,6 +370,7 @@ async def _give(state: Any, params: JsonObject) -> JsonObject:
             lifetime=_optional_lifetime(params),
             expires_at=_time(params, "expires_at"),
             description=description,
+            actor=_actor(),
         )
     except SecretRecordError as error:
         raise _invalid(str(error)) from None
@@ -465,9 +491,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the Agent Secret handlers."""
     return {
         "agent_secrets.list": serialized_read(_list, lock_attribute=_LOCK),
-        "agent_secrets.create": serialized_mutation(_create, lock_attribute=_LOCK),
-        "agent_secrets.update": serialized_mutation(_update, lock_attribute=_LOCK),
-        "agent_secrets.delete": serialized_mutation(_delete, lock_attribute=_LOCK),
+        "agent_secrets.create": _audited_mutation(_create),
+        "agent_secrets.update": _audited_mutation(_update),
+        "agent_secrets.delete": _audited_mutation(_delete),
         "agent_secrets.reveal": serialized_read(_reveal, lock_attribute=_LOCK),
         # Not serialized: an answer must not wait behind a slow source call.
         "agent_secrets.answer": _answer,

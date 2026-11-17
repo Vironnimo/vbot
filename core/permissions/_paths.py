@@ -68,8 +68,29 @@ class NormalizedPath:
 
 
 def path_key(text: str, *, windows: bool) -> str:
-    """The comparison key of a normalized path: case-folded on Windows."""
-    return text.casefold() if windows else text
+    """Windows path comparison uses single-character case mappings."""
+    if not windows:
+        return text
+    if text.isascii():
+        return text.lower()
+    return "".join(_windows_path_character(char) for char in text)
+
+
+@functools.lru_cache(maxsize=2048)
+def _windows_path_character(char: str) -> str:
+    if char.isascii():
+        return char.lower()
+    # Windows filesystems compare UTF-16 code units. A multi-character fold
+    # such as sharp s -> ss cannot identify one name.
+    if ord(char) > 0xFFFF:
+        return char
+    if sys.platform == "win32":
+        char = chr(_upcase_unicode_char()(ord(char)))
+        return char.lower() if char.isascii() else char
+    upper = char.upper()
+    if len(upper) != 1:
+        return char
+    return upper.lower() if upper.isascii() else upper
 
 
 def is_inside(key: str, folder_key: str) -> bool:
@@ -418,11 +439,7 @@ def _normalize_segments(raw: list[str], *, windows: bool, absolute: bool) -> tup
 
 def _expand_short_names(lexical: LexicalPath) -> LexicalPath:
     """Expand Windows 8.3 short names on the longest existing prefix."""
-    if not any("~" in segment for segment in lexical.segments):
-        return lexical
     for end in range(len(lexical.segments), 0, -1):
-        if not any("~" in segment for segment in lexical.segments[:end]):
-            break
         prefix = lexical.root + "/".join(lexical.segments[:end])
         expanded = _long_path_name(prefix)
         if expanded is not None:
@@ -449,6 +466,15 @@ def _long_path_name(path: str) -> str | None:
 
 
 if sys.platform == "win32":
+
+    @functools.cache
+    def _upcase_unicode_char() -> Callable[[int], int]:
+        import ctypes
+
+        function = ctypes.WinDLL("ntdll").RtlUpcaseUnicodeChar
+        function.argtypes = [ctypes.c_ushort]
+        function.restype = ctypes.c_ushort
+        return function
 
     @functools.cache
     def _get_long_path_name() -> Callable[..., int]:

@@ -264,7 +264,7 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             "GIT_CONFIG_GLOBAL=../../outside/cfg git config --global a.b c",
             id="git environment assignments cannot hide redirected writes",
             paths=("write w/p/** (work tree) (git)", "write w/p", "read w/p/** (git)"),
-            unresolved=("path_write",),
+            unresolved=("environment", "path_write"),
         ),
         case(
             "git -C sub commit -m x; git --no-pager -c a=b log; git --git-dir=.g push",

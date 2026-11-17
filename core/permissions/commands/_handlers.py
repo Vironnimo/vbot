@@ -21,6 +21,7 @@ from core.permissions.commands._specs import (
     OUTPUT_OPTIONS,
     POSIX_SHELLS,
     PROGRAMS,
+    PYTHON_SHORT_VALUE_OPTION,
     VENV_MODULES,
     AccessKind,
 )
@@ -869,20 +870,26 @@ def handle_python(
         word = arguments[index]
         text = analysis.value(context, word, location).text
         if text is None:
-            break
-        if text in ("-X", "-W", "--check-hash-based-pycs"):
+            analysis.unresolve("command", raw.source, "Python's entry point is computed at runtime")
+            return
+        if text == "--check-hash-based-pycs":
             index += 2
             continue
-        if text == "-c":
-            analysis.tier_b(context, raw, arguments[index + 2 :])
+        option = PYTHON_SHORT_VALUE_OPTION.fullmatch(text)
+        if option is not None and option[1] in ("W", "X"):
+            index += 1 if option[2] else 2
+            continue
+        if option is not None and option[1] == "c":
+            analysis.unresolve("inline_code", raw.source, "the command runs inline Python code")
             return
-        if text.startswith("-m"):
+        if option is not None:
+            attached = option[2]
             module_word = (
-                word.part(text[2:])
-                if len(text) > 2
+                word.part(attached)
+                if attached
                 else (arguments[index + 1] if index + 1 < len(arguments) else None)
             )
-            rest = arguments[index + (1 if len(text) > 2 else 2) :]
+            rest = arguments[index + (1 if attached else 2) :]
             module = (
                 None if module_word is None else analysis.value(context, module_word, location).text
             )
@@ -899,7 +906,15 @@ def handle_python(
             if module is not None:
                 program_outputs(analysis, context, raw, module.lower(), rest)
                 return
-            analysis.tier_b(context, raw, rest)
+            if module_word is not None:
+                analysis.unresolve(
+                    "command", raw.source, "Python's module name is computed at runtime"
+                )
+            return
+        if text == "--":
+            if index + 1 < len(arguments):
+                analysis.access(context, raw, "read", arguments[index + 1], glob=False, tier="a")
+            analysis.tier_b(context, raw, arguments[index + 2 :])
             return
         if text.startswith("-") and text != "-":
             index += 1
@@ -909,6 +924,45 @@ def handle_python(
         analysis.tier_b(context, raw, arguments[index + 1 :])
         return
     analysis.tier_b(context, raw, arguments[index:])
+
+
+def _handle_node(
+    analysis: Analysis,
+    context: Context,
+    raw: RawCommand,
+    name: str,
+    arguments: Sequence[Word],
+    fed: bool,
+) -> None:
+    location = analysis.first(context, raw)
+    skip_value = False
+    for index, word in enumerate(arguments):
+        if skip_value:
+            skip_value = False
+            continue
+        text = analysis.value(context, word, location).text
+        if text is None:
+            analysis.unresolve("command", raw.source, "Node's entry point is computed at runtime")
+            return
+        if index == 0 and text == "inspect":
+            continue
+        if text in ("-", "--") or not text.startswith("-"):
+            break
+        option = text.partition("=")[0]
+        if option in ("--eval", "--print") or re.match(r"^-[ep]", option):
+            analysis.unresolve("inline_code", raw.source, "the command runs inline JavaScript code")
+            return
+        skip_value = text in {
+            "-r",
+            "--require",
+            "--import",
+            "--loader",
+            "--experimental-loader",
+            "--env-file",
+            "--env-file-if-exists",
+            "--input-type",
+        }
+    program_outputs(analysis, context, raw, name, arguments)
 
 
 def program_outputs(
@@ -1112,6 +1166,8 @@ def _handle_forfiles(
 
 
 HANDLERS: Mapping[str, Handler] = {
+    "node": _handle_node,
+    "nodejs": _handle_node,
     "docker": handle_docker,
     "forfiles": _handle_forfiles,
     "ln": _handle_ln,
