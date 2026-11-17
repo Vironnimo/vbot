@@ -2,7 +2,8 @@
 
 Speaks native Gemini ``generateContent`` through the shared
 :class:`GeminiCompatibleAdapter` codec. This module owns only what is specific
-to Google's own endpoint: the ``/v1beta/models`` catalog shape and Google's
+to Google's own endpoint: the ``/v1beta/models`` catalog shape (which also
+classifies Google's task Models for their Task Model wires) and Google's
 error semantics (an invalid key is HTTP 400, an exhausted daily or zero quota
 is HTTP 429 like a per-minute throttle).
 """
@@ -16,7 +17,12 @@ from typing import Any, override
 
 import httpx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
 from core.providers._chat_completions_catalog import (
     _parse_optional_int,
     _read_non_empty_string,
@@ -33,15 +39,20 @@ __all__ = ["GoogleAdapter"]
 # maximum and returns the whole public lineup in one page.
 _MODELS_PAGE_SIZE = "1000"
 
-# Families whose generateContent output is not chat text (speech, images,
-# music), plus agent ids Google serves only through its Interactions API
-# (``antigravity-*`` answered generateContent with HTTP 400 "This model only
-# supports Interactions API", live 2026-11-17; Deep Research is documented as
-# an Interactions-only agent).
-_NON_CHAT_ID = re.compile(
-    r"(?:-tts(?:-|$)|-image(?:-|$)|^nano-banana|^gemini-nano-banana|^lyria-|^imagen-|^veo-"
-    r"|^antigravity-|^deep-research-)"
-)
+# Agents Google serves only through its Interactions API (``antigravity-*``
+# answered generateContent with HTTP 400 "This model only supports
+# Interactions API", live 2026-11-17; Deep Research is documented as an
+# Interactions-only agent).
+_INTERACTIONS_ONLY = re.compile(r"^(?:antigravity-|deep-research-)")
+_TTS = re.compile(r"-tts(?:-|$)")
+_TRANSCRIBE = re.compile(r"-transcribe(?:-|$)")
+_IMAGE = re.compile(r"(?:-image(?:-|$)|^nano-banana|^gemini-nano-banana)")
+_MUSIC = re.compile(r"^lyria-")
+_VIDEO = re.compile(r"^gemini-omni-")
+# Bidi Live Models that hold a voice conversation; Live transcription,
+# speech-to-speech translation and robotics streaming are other jobs.
+_LIVE_VOICE = re.compile(r"(?:-live(?:-|$)|-native-audio-)")
+_LIVE_OTHER = re.compile(r"(?:-transcribe-|-translate-|^gemini-robotics-)")
 
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
@@ -67,38 +78,32 @@ class GoogleAdapter(GeminiCompatibleAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one native ``models/<id>`` entry into a chat Model.
+        """Normalize one native ``models/<id>`` entry into a vBot Model.
 
-        Only entries that support ``generateContent`` and produce chat text are
-        kept; embedding, live, speech, image and music Models are skipped. The
-        listing reports limits and a ``thinking`` flag but no modalities, so
-        input modalities stay text until models.dev enrichment widens them.
+        Each entry becomes the Model of the vBot task its API method and id
+        family serve (Chat, embeddings, Decisions, speech, image, music, video
+        or Live voice); entries without such a task are skipped. The listing
+        reports limits and a ``thinking`` flag but no modalities, so a Chat
+        Model's inputs stay text until models.dev enrichment widens them.
         """
 
         del defaults
-        name = _read_non_empty_string(raw, "name")
-        model_id = name.removeprefix("models/")
-        methods = raw.get("supportedGenerationMethods")
-        if not isinstance(methods, list) or "generateContent" not in methods:
-            raise CatalogEntrySkipped(f"Skipped model without generateContent: {model_id}")
-        if _NON_CHAT_ID.search(model_id):
-            raise CatalogEntrySkipped(f"Skipped non-chat model: {model_id}")
-        thinking = raw.get("thinking")
+        model_id = _read_non_empty_string(raw, "name").removeprefix("models/")
+        listed = raw.get("supportedGenerationMethods")
+        methods = frozenset(
+            method
+            for method in (listed if isinstance(listed, list) else ())
+            if isinstance(method, str)
+        )
+        capabilities = _family_capabilities(model_id, methods, raw)
+        if capabilities is None:
+            raise CatalogEntrySkipped(f"Skipped model without a vBot task: {model_id}")
         return Model(
             model_id=model_id,
             name=_read_optional_non_empty_string(raw, "displayName") or model_id,
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(
-                    supported=thinking if isinstance(thinking, bool) else None
-                ),
-                input_modalities=("text",),
-                output_modalities=("text",),
-            ),
+            capabilities=capabilities,
             context_window=_parse_optional_int(raw.get("inputTokenLimit")),
-            max_output_tokens=_parse_optional_int(raw.get("outputTokenLimit")),
+            max_output_tokens=_output_limit(capabilities, raw),
         )
 
     @override
@@ -110,6 +115,108 @@ class GoogleAdapter(GeminiCompatibleAdapter):
         response_headers: httpx.Headers,
     ) -> None:
         _classify_google_status(status_code, detail=detail, response_headers=response_headers)
+
+
+def _family_capabilities(
+    model_id: str, methods: frozenset[str], raw: Mapping[str, Any]
+) -> Capabilities | None:
+    """Map one listing entry to the capabilities of the vBot task it serves.
+
+    The listing names the API method of each Model but no modalities, so the
+    method and Google's id families decide the task. ``None`` skips the entry.
+    """
+
+    if "embedContent" in methods:
+        return _embedding_capabilities()
+    if "createDecision" in methods:
+        return _decision_capabilities()
+    if "bidiGenerateContent" in methods:
+        if _LIVE_VOICE.search(model_id) and not _LIVE_OTHER.search(model_id):
+            return _live_voice_capabilities()
+        return None
+    if "generateContent" not in methods or _INTERACTIONS_ONLY.search(model_id):
+        return None
+    if _TTS.search(model_id):
+        return _speech_synthesis_capabilities()
+    if _TRANSCRIBE.search(model_id):
+        return _transcription_capabilities()
+    if _IMAGE.search(model_id):
+        return _image_generation_capabilities()
+    if _MUSIC.search(model_id):
+        return _music_capabilities()
+    if _VIDEO.search(model_id):
+        return _video_capabilities()
+    return _chat_capabilities(raw)
+
+
+def _output_limit(capabilities: Capabilities, raw: Mapping[str, Any]) -> int | None:
+    """Return the text output ceiling; vector and judgment outputs have none."""
+
+    if {"embeddings", "decisions"} & set(capabilities.output_modalities):
+        return None
+    return _parse_optional_int(raw.get("outputTokenLimit"))
+
+
+def _chat_capabilities(raw: Mapping[str, Any]) -> Capabilities:
+    thinking = raw.get("thinking")
+    return Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=True,
+        reasoning=ReasoningCapabilities(supported=thinking if isinstance(thinking, bool) else None),
+        input_modalities=("text",),
+        output_modalities=("text",),
+    )
+
+
+def _task_capabilities(
+    inputs: tuple[str, ...],
+    outputs: tuple[str, ...],
+    task_types: tuple[str, ...] = (),
+) -> Capabilities:
+    return Capabilities(
+        vision="image" in inputs,
+        tools=False,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(supported=False),
+        input_modalities=inputs,
+        output_modalities=outputs,
+        task_types=task_types,
+    )
+
+
+def _embedding_capabilities() -> Capabilities:
+    return text_embedding_capabilities()
+
+
+def _decision_capabilities() -> Capabilities:
+    return _task_capabilities(("text",), ("decisions",))
+
+
+def _live_voice_capabilities() -> Capabilities:
+    return _task_capabilities(("text", "audio"), ("text", "audio"), ("live_voice",))
+
+
+def _speech_synthesis_capabilities() -> Capabilities:
+    return _task_capabilities(("text",), ("speech",))
+
+
+def _transcription_capabilities() -> Capabilities:
+    return _task_capabilities(("audio",), ("transcription",))
+
+
+def _image_generation_capabilities() -> Capabilities:
+    return _task_capabilities(("text", "image"), ("text", "image"), ("image_generation",))
+
+
+def _music_capabilities() -> Capabilities:
+    return _task_capabilities(
+        ("text", "image"), ("text", "audio"), ("music_generation", "audio_generation")
+    )
+
+
+def _video_capabilities() -> Capabilities:
+    return _task_capabilities(("text", "image"), ("text", "video"), ("video_generation",))
 
 
 def _classify_google_status(
