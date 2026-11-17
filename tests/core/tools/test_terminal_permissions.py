@@ -13,13 +13,21 @@ import pytest
 import core.tools.shell_environment as shell_environment
 import core.tools.terminal as terminal_module
 import core.tools.terminal_manager as manager_module
-from core.permissions import PermissionBoundary
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    ScopedArtifactReads,
+    normalize_permission_rules,
+)
 from core.projects import ProjectStore
 from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
+from core.storage import TemporaryFileManager
+from core.storage.temp_files import artifact_owner, terminal_log_scope
 from core.tools import _workdir
 from core.tools._terminal_permissions import may_attach, permission_scope
 from core.tools._terminal_shell_state import ShellState
+from core.tools.search_files import register_search_files_tool
 from core.tools.terminal import register_terminal_tool
 from core.tools.terminal_manager import (
     TerminalInfo,
@@ -36,6 +44,8 @@ from tests.core.permissions.command_check_support import (
 )
 from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.secrets.test_agent_secrets import Clock
+from tests.core.tools.read_test_support import make_context as read_context
+from tests.core.tools.read_test_support import read_registry
 from tests.core.tools.shell_test_support import FakeProjects
 from tests.core.tools.terminal_helpers import call, make_context, manager
 from tests.core.tools.terminal_manager_helpers import (
@@ -44,6 +54,7 @@ from tests.core.tools.terminal_manager_helpers import (
     eventually,
 )
 from tests.core.tools.tools_test_support import dispatch_as_executor
+from tests.directory_links import link_directory
 
 __all__ = ["manager"]
 
@@ -204,8 +215,14 @@ async def test_a_restricted_shell_starts_confined_and_its_prompt_lines_are_check
     assert analyzer.argvs == []
     assert not {"VBOT_DATA_DIR", "OPENAI_API_KEY"} & set(factory.calls[0][2])
     assert factory.calls[0][2]["FLAVOR"] == "release"
-    assert terminal_manager.terminal(terminal_id, _OWNER).permission_scope == permission_scope(
-        boundary
+    info = terminal_manager.terminal(terminal_id, _OWNER)
+    assert info.permission_scope == permission_scope(boundary)
+    assert info.log_path is not None and info.permission_scope is not None
+    log_policy = terminal_log_scope(
+        work.parent / "temp", artifact_owner(_OWNER.project_id, _OWNER.agent_id, _OWNER.session_id)
+    )
+    assert log_policy.allows(
+        info.log_path.relative_to(log_policy.root).as_posix(), info.permission_scope
     )
     # Typing is not submitting; Enter checks the whole line in the reported folder.
     assert (await send(text="Remove-Item secret"))["ok"] is True
@@ -414,6 +431,126 @@ async def test_a_wait_rechecks_scope_before_returning_output(
 
     assert denied["error"]["code"] == "permission_denied"
     assert "previously available output" not in denied["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_raw_terminal_logs_use_the_recipient_scope_in_file_tools_and_command_plans(
+    tmp_path: Path, work: Path
+) -> None:
+    data = tmp_path / "data"
+    owner = artifact_owner(_OWNER.project_id, _OWNER.agent_id, _OWNER.session_id)
+    logs = terminal_log_scope(data, owner)
+    context = BoundaryContext(
+        workdir=work,
+        home=tmp_path,
+        data_dir=data,
+        scoped_artifact_reads=ScopedArtifactReads(logs.root, logs.allows),
+        # Even a broad readable directory must not expose other launch scopes.
+        readable_dirs=(data,),
+    )
+    rules = normalize_permission_rules(
+        {"read": "work_area", "allow": [f"Read({logs.root.as_posix()})"]}
+    )
+    narrow_rules = normalize_permission_rules({"deny": ["Shell(exit)"]})
+    broader = PermissionBoundary.build(rules, context)
+    bound_extra = PermissionBoundary.build(narrow_rules, context)
+    extra = bound_extra.ceiling(source="parent")
+    retagged = bound_extra.ceiling(source="extension")
+    assert extra is not None and retagged is not None
+    launched = PermissionBoundary.build(rules, context, ceilings=(extra,))
+    later = PermissionBoundary.build(
+        rules,
+        context,
+        ceilings=(retagged,),
+    )
+    absent = PermissionBoundary.build(
+        normalize_permission_rules({"deny": ["Read({workdir}/later.txt)"]}), context
+    ).ceiling(source="parent")
+    assert absent is not None
+    narrowed = PermissionBoundary.build(rules, context, ceilings=(extra, absent))
+
+    manager = TemporaryFileManager(data)
+    log = manager.create_terminal_log(owner=owner, scope=permission_scope(launched))
+    log.path.write_text("terminal sample\n", encoding="utf-8")
+    group = log.path.parent
+    record = group.with_suffix(".scope")
+    legacy = manager.create("terminals", ".log", owner=owner)
+    legacy.path.write_text("old terminal sample\n", encoding="utf-8")
+    foreign = manager.create_terminal_log(
+        owner=artifact_owner(None, "foreign", "example"), scope=permission_scope(launched)
+    )
+    alias = work / "logs"
+    link_directory(alias, group.parent)
+
+    registry = read_registry()
+    register_search_files_tool(registry)
+
+    async def dispatch(
+        tool: str,
+        arguments: JsonObject,
+        boundary: PermissionBoundary,
+    ) -> JsonObject:
+        return await dispatch_as_executor(
+            registry, replace(read_context(work, tool), permissions=boundary), arguments
+        )
+
+    for boundary in (launched, later, broader):
+        report = await dispatch("read", {"path": str(log.path)}, boundary)
+        assert report["ok"] and "terminal sample" in report["data"]["content"]
+    listing = await dispatch("read", {"path": str(group)}, broader)
+    assert listing["ok"] and log.path.name in listing["data"]["content"]
+    result = await dispatch(
+        "search_files", {"path": str(group), "pattern": "terminal sample"}, broader
+    )
+    assert result["ok"] and log.path.name in str(result["data"])
+
+    for path in (legacy.path, foreign.path, group.parent, record):
+        result = await dispatch("read", {"path": str(path)}, broader)
+        assert result["error"]["code"] == "permission_denied"
+    for boundary in (broader, narrowed):
+        refused = boundary.check_path(alias / record.name, "write")
+        assert refused is not None and refused.location == "data_dir"
+    assert broader.check_path(data, "read") is None
+    mixed_scope = broader.check_path(data, "read", subtree=True)
+    assert mixed_scope is not None and mixed_scope.location == "data_dir"
+    aliased_log = alias / group.name / log.path.name
+    assert broader.check_path(aliased_log, "read") is None
+    refused_alias = narrowed.check_path(aliased_log, "read")
+    assert refused_alias is not None and refused_alias.location == "data_dir"
+    checker = fake_checker(FakeAnalyzer(plan("list", subtree_reads=[group])))
+    assert (
+        await checker.check_line(broader, "list", shell="bash", cwd=work, env={}, home=tmp_path)
+        is None
+    )
+    refused = await checker.check_line(
+        narrowed, "list", shell="bash", cwd=work, env={}, home=tmp_path
+    )
+    assert refused is not None and refused.location == "data_dir"
+    result = await dispatch("search_files", {"path": str(group), "pattern": "sample"}, narrowed)
+    assert result["error"]["code"] == "permission_denied"
+
+    initial = read_context(work)
+
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
+        return narrowed, initial.execution
+
+    waiting = replace(initial, permissions=broader, approval_refresh_hook=refresh)
+    denied = await dispatch_as_executor(registry, waiting, {"path": str(log.path)})
+    assert denied["error"]["code"] == "permission_denied"
+
+    denying = PermissionBoundary.build(
+        normalize_permission_rules({"deny": [f"Read({logs.root.as_posix()}/**/*.log)"]}),
+        context,
+    )
+    unreadable = manager.create_terminal_log(owner=owner, scope=permission_scope(denying))
+    denied_path = denying.check_path(unreadable.path, "read")
+    assert denied_path is not None and denied_path.reason == "deny_rule"
+    denied_result = await dispatch("read", {"path": str(unreadable.path)}, denying)
+    assert denied_result["error"]["code"] == "permission_denied"
+
+    record.write_bytes(b"invalid")
+    denied = await dispatch("read", {"path": str(log.path)}, broader)
+    assert denied["error"]["code"] == "permission_denied"
 
 
 @pytest.mark.asyncio

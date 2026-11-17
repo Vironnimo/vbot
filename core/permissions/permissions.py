@@ -123,6 +123,18 @@ class RefusedBelow:
         return bool(self.rules) or self.protected
 
 
+@dataclass(frozen=True, slots=True)
+class ScopedArtifactReads:
+    """A protected data-directory category with launch-scoped read grants.
+
+    Its owner decides whether the relative path belongs to an authorized
+    artifact subtree, using the current layer fingerprints.
+    """
+
+    root: PathLike
+    allows: Callable[[str, frozenset[str]], bool]
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BoundaryContext:
     """The facts of one Run that a boundary needs, supplied by its caller.
@@ -135,7 +147,9 @@ class BoundaryContext:
     there. ``data_dir`` is protected except for the Workspace (only within the
     Agent's own folder beside ``agent_config``), the Scratch Area
     and ``readable_dirs`` (vBot-owned folders this Session may read, such as its
-    Skill directories and artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
+    Skill directories and artifact folders). A ``scoped_artifact_reads`` category
+    requires its own provenance even inside an otherwise readable directory.
+    ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
     writable. ``rule_files`` are the repository locations a Team member's rules come
     from (its profile, the settings files its translation reads and every location
@@ -158,6 +172,7 @@ class BoundaryContext:
     rule_files: tuple[PathLike, ...] = ()
     install_dirs: tuple[PathLike, ...] = ()
     readable_dirs: tuple[PathLike, ...] = ()
+    scoped_artifact_reads: ScopedArtifactReads | None = None
     loopback_port: int | None = None
     own_hosts: tuple[str, ...] = ()
     platform: str = sys.platform
@@ -183,6 +198,8 @@ class PermissionBoundary:
         "_own_data",
         "_scratch",
         "_readable",
+        "_scoped_root",
+        "_scope_fingerprints",
         "_agent_config",
         "_rule_files",
         "_install_dirs",
@@ -212,6 +229,15 @@ class PermissionBoundary:
         self._scratch = _Area.optional(context.scratch_root, windows=windows)
         self._readable = tuple(
             _Area.of(os.fspath(folder), windows=windows) for folder in context.readable_dirs
+        )
+        scoped = context.scoped_artifact_reads
+        self._scoped_root = _Area.optional(
+            scoped.root if scoped is not None else None, windows=windows
+        )
+        self._scope_fingerprints = (
+            frozenset(layer.fingerprint for layer in self.layers)
+            if self._scoped_root is not None
+            else frozenset()
         )
         self._agent_config = _Area.optional(context.agent_config, windows=windows)
         # Inside the data directory the Workspace counts only within the Agent's
@@ -376,7 +402,8 @@ class PermissionBoundary:
             keys = tuple(dict.fromkeys((lexical_key, self._key(normalized.resolved))))
         # Name where a link leads, so a refusal of a path inside reads right.
         shown = normalized.resolved if len(keys) == 2 else None
-        location = self._protected(keys, access)
+        scoped = self._scoped_grants(keys, access)
+        location = self._protected(keys, access, scoped)
         if location is not None:
             return self.refusal(
                 access, target, "protected_location", location=location, resolved=shown
@@ -399,11 +426,14 @@ class PermissionBoundary:
             if subtree or not reach:
                 reach += ("**",)
             names = frozenset(path_key(name, windows=self._windows) for name in pruned)
-            refused = self._subtree_refusal(keys, access, target, shown, reach, names, git)
+            refused = self._subtree_refusal(keys, access, target, shown, reach, names, git, scoped)
             if refused is not None:
                 return refused
         for layer in () if deny_only else self._compiled:
-            if not all(self._granted(key, access) or layer.permits(key, access) for key in keys):
+            if not all(
+                key in scoped or self._granted(key, access) or layer.permits(key, access)
+                for key in keys
+            ):
                 return self.refusal(
                     access,
                     target,
@@ -423,6 +453,7 @@ class PermissionBoundary:
         reach: tuple[str, ...],
         pruned: frozenset[str],
         git: bool,
+        scoped: frozenset[str],
     ) -> PermissionRefusal | None:
         """A refusal for what the access reaches below the permitted folder ``keys`` name.
 
@@ -433,8 +464,17 @@ class PermissionBoundary:
         ]
         # A folder in a part of the data directory the access may reach (the
         # Scratch Area, the Workspace, a readable folder) has only such parts below.
-        if not all(self._data_dir_allowed(key, access) for key in keys):
+        if not all(key in scoped or self._data_dir_allowed(key, access) for key in keys):
             protected.append(("data_dir", self._data_dirs))
+        if self._scoped_root is not None and any(
+            reaches(key, reach, folder)
+            for key in keys
+            if key not in scoped
+            for folder in self._scoped_root.keys
+        ):
+            return self.refusal(
+                access, target, "protected_location", location="data_dir", resolved=shown
+            )
         if access == "write" and not git:
             protected.append(("agent_config", self._rule_files))
         if access == "write":
@@ -507,6 +547,13 @@ class PermissionBoundary:
         folders = tuple(
             dict.fromkeys((self._key(normalized.lexical), self._key(normalized.resolved)))
         )
+        scoped = self._scoped_grants(folders, access)
+        if self._scoped_root is not None:
+            for folder in folders:
+                if folder not in scoped:
+                    for root in self._scoped_root.keys:
+                        for pattern in sorted(patterns_below(root, folder)):
+                            yield pattern, None
         sources: list[tuple[str, str | None]] = []
         for layer in self._compiled:
             rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
@@ -514,7 +561,7 @@ class PermissionBoundary:
         writes = (self._rule_files, *self._install_dirs) if access == "write" else ()
         for area in (self._agent_config, *writes):
             sources.extend((key, None) for key in (area.keys if area is not None else ()))
-        if not all(self._data_dir_allowed(key, access) for key in folders):
+        if not all(key in scoped or self._data_dir_allowed(key, access) for key in folders):
             sources.extend((key, None) for key in self._data_dirs.keys)
         for key, written in sources:
             for below in folders:
@@ -729,7 +776,22 @@ class PermissionBoundary:
         # Every layer refuses unsafe forms by itself, so each must name the path.
         return all(layer.names_exactly(key, access) for layer in self._compiled)
 
-    def _protected(self, keys: tuple[str, ...], access: PathAccess) -> ProtectedLocation | None:
+    def _scoped_grants(self, keys: tuple[str, ...], access: PathAccess) -> frozenset[str]:
+        context = self._context
+        policy = context.scoped_artifact_reads if context is not None else None
+        if access == "write" or policy is None or self._scoped_root is None:
+            return frozenset()
+        return frozenset(
+            key
+            for key in keys
+            for root in self._scoped_root.keys
+            if key.startswith(root + "/")
+            and policy.allows(key[len(root) + 1 :], self._scope_fingerprints)
+        )
+
+    def _protected(
+        self, keys: tuple[str, ...], access: PathAccess, scoped: frozenset[str]
+    ) -> ProtectedLocation | None:
         for key in keys:
             if self._agent_config is not None and self._agent_config.contains(key):
                 return "agent_config"
@@ -737,7 +799,11 @@ class PermissionBoundary:
                 return "agent_config"
             if access == "write" and any(area.contains(key) for area in self._install_dirs):
                 return "installation"
-            if self._data_dirs.contains(key) and not self._data_dir_allowed(key, access):
+            if key in scoped:
+                continue
+            if _contains(self._scoped_root, key) or (
+                self._data_dirs.contains(key) and not self._data_dir_allowed(key, access)
+            ):
                 return "data_dir"
         return None
 

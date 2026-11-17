@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 from core.event_stream import ReplayEventStream
 from core.sessions import SessionAddress
+from core.storage.temp_files import TERMINAL_TEMPORARY_CATEGORY as TERMINAL_TEMPORARY_CATEGORY
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -47,7 +48,6 @@ TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 # A message that brings a screen holds at most this many characters; screen
 # rows beyond it are left out from the top, and the message says how many.
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
-TERMINAL_TEMPORARY_CATEGORY = "terminals"
 # Output paused this long after input or start ends the reply a Tool call shows,
 # and, with the evidence that the work ended, the cycle (``TerminalActivity``).
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0

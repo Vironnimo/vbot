@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from core.storage import DataDirectoryLayout, TemporaryFileManager
+from core.storage.temp_files import artifact_owner, terminal_log_scope
 from tests.directory_links import link_directory
 
 
@@ -68,6 +69,34 @@ def test_create_rejects_unknown_categories_and_unsafe_suffixes(
 def test_constructor_rejects_category_path_traversal(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         TemporaryFileManager(tmp_path, retention={"..": timedelta(hours=1)})
+
+
+def test_terminal_launch_record_lives_as_long_as_its_raw_logs(tmp_path: Path) -> None:
+    manager = TemporaryFileManager(tmp_path)
+    owner = artifact_owner(None, "main", "example")
+    scope = frozenset({"layer"})
+    first = manager.create_terminal_log(owner=owner, scope=scope)
+    second = manager.create_terminal_log(owner=owner, scope=scope)
+    group = second.path.parent
+    assert first.path.parent == group
+    record = group.with_suffix(".scope")
+    scope_reader = terminal_log_scope(tmp_path, owner)
+    relative = second.path.relative_to(scope_reader.root).as_posix()
+
+    first.finish()
+    for path in (first.path, second.path, record):
+        _age(path, seconds=80 * 60 * 60)
+    manager.sweep()
+
+    assert not first.path.exists()
+    assert second.path.exists()
+    assert scope_reader.allows(relative, scope)
+    second.finish()
+    for path in (second.path, record):
+        _age(path, seconds=80 * 60 * 60)
+    manager.sweep()
+    assert not second.path.exists() and not record.exists()
+    assert not scope_reader.allows(relative, scope)
 
 
 @pytest.mark.parametrize("command_folder", ["commands", "bash"])
