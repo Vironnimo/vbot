@@ -14,7 +14,7 @@ import pytest
 
 from desktop import execution, servers
 from desktop.connection import ConnectionController
-from desktop.credentials import DeviceTokenStore
+from desktop.credentials import CredentialStoreError, DeviceTokenStore, StoredComputerIdentity
 from desktop.execution import ComputerSharing, SharingError
 from desktop.extensions import BeforeReload, DesktopExtensionCatalog, EventSink, NativeCapability
 from desktop.probe import (
@@ -181,6 +181,42 @@ def test_grants_and_private_identity_belong_to_one_server(tmp_path: Path) -> Non
     assert sharing.status()["capabilities"]["terminal"] is True
 
 
+def test_new_grants_require_a_saved_identity_and_revocation_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "settings.json"
+    identities = DeviceTokenStore(tmp_path / "device-tokens.json")
+    sharing = ComputerSharing(
+        settings_path=path,
+        identities=identities,
+        authorization=Authorization(),
+        factories={"terminal": lambda _emit: Capability(), "printer": lambda _emit: Capability()},
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"printer": True}, expected_server=url)
+    unchanged = path.read_bytes()
+    identity = identities.computer_identity
+    unavailable = True
+
+    def store(origin: str, *, create: bool = False) -> StoredComputerIdentity | None:
+        if unavailable and create:
+            raise CredentialStoreError("Identity store unavailable")
+        return identity(origin, create=create)
+
+    monkeypatch.setattr(identities, "computer_identity", store)
+    with pytest.raises(CredentialStoreError):
+        sharing.update({"terminal": True}, expected_server=url)
+    assert sharing.status()["capabilities"] == {"terminal": False, "printer": True}
+    assert path.read_bytes() == unchanged
+
+    unavailable = False
+    assert sharing.update({"terminal": True}, expected_server=url)["capabilities"]["terminal"]
+    unavailable = True
+    revoked = sharing.update({"terminal": False}, expected_server=url)
+    assert revoked["capabilities"] == {"terminal": False, "printer": True}
+
+
 @pytest.mark.asyncio
 async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
     tmp_path: Path,
@@ -292,6 +328,147 @@ async def test_a_native_lifetime_survives_only_a_reconnect_to_the_same_server(
             assert handlers[1].active_count == 0
         assert handlers[0].disconnects >= 1
     finally:
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_fails", [False, True], ids=["settings-wake", "failed-hook"])
+async def test_reconnect_waits_for_every_disconnected_handler(
+    tmp_path: Path, hook_fails: bool
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    class Delayed(Capability):
+        @override
+        async def disconnected(self) -> None:
+            started.set()
+            await release.wait()
+            finished.set()
+            await super().disconnected()
+
+    class Failure(Capability):
+        @override
+        async def disconnected(self) -> None:
+            await super().disconnected()
+            if hook_fails and self.disconnects == 1:
+                raise RuntimeError("native handler failed to disconnect")
+
+    connections = Connections()
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=Authorization(),
+        factories={"printer": lambda _emit: Failure(), "terminal": lambda _emit: Delayed()},
+        connector=connections,
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True, "printer": True}, expected_server=url)
+    first, next_link = await connections.add(), await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(first.outgoing.get(), timeout=2)
+        assert (await first.call("before", "status"))["ok"] is True
+        await first.incoming.put(OSError("connection dropped"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        sharing.update({"name": "Renamed"}, expected_server=url)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert next_link.outgoing.empty()
+        release.set()
+        assert (await asyncio.wait_for(next_link.outgoing.get(), timeout=2))["name"] == "Renamed"
+        assert finished.is_set()
+        assert (await next_link.call("after", "status"))["ok"] is True
+    finally:
+        release.set()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["name", "credential"])
+async def test_registration_changes_during_live_reload_reconnect(
+    tmp_path: Path, change: str
+) -> None:
+    closing = asyncio.Event()
+    release = asyncio.Event()
+
+    class Retiring(Capability):
+        @override
+        async def close(self) -> None:
+            closing.set()
+            await release.wait()
+            await super().close()
+
+    class RotatingAuthorization(Authorization):
+        current = "Bearer first-fake"
+
+        @override
+        def header(self, url: str) -> str:
+            return self.current
+
+    old = NativeCapability(
+        "printer", "office", "Printer", "", lambda _emit: Retiring(), source="local", revision="1"
+    )
+    new = NativeCapability(
+        "printer", "office", "Printer", "", lambda _emit: Capability(), source="local", revision="2"
+    )
+
+    def reload_catalog(
+        _previous: DesktopExtensionCatalog, before_load: BeforeReload
+    ) -> DesktopExtensionCatalog:
+        before_load(frozenset({old.id}))
+        return DesktopExtensionCatalog({new.id: new})
+
+    authorization = RotatingAuthorization()
+    connection_headers: list[str | None] = []
+    connections = Connections()
+
+    @asynccontextmanager
+    async def connector(url: str, header: str | None) -> AsyncIterator[Socket]:
+        connection_headers.append(header)
+        async with connections(url, "Bearer test-credential") as socket:
+            yield socket
+
+    sharing = ComputerSharing(
+        settings_path=tmp_path / "settings.json",
+        identities=DeviceTokenStore(tmp_path / "device-tokens.json"),
+        authorization=authorization,
+        factories={old.id: old.factory},
+        capabilities={old.id: old},
+        connector=connector,
+        reload_extensions=reload_catalog,
+    )
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({old.id: True, "name": "Original name"}, expected_server=url)
+    first, second = await connections.add(), await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        before = await asyncio.wait_for(first.outgoing.get(), timeout=2)
+        assert (await first.call("initial", "status", old.id))["ok"] is True
+        assert sharing.reload_extensions(expected_server=url)["reloading"]
+        await asyncio.wait_for(closing.wait(), timeout=2)
+        if change == "name":
+            sharing.update({"name": "Renamed"}, expected_server=url)
+        else:
+            authorization.current = "Bearer replacement-fake"
+            sharing.set_server_url(url)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        release.set()
+        after = await asyncio.wait_for(second.outgoing.get(), timeout=2)
+        assert after["type"] == "hello"
+        assert after["instance_id"] == before["instance_id"]
+        assert after["name"] == ("Renamed" if change == "name" else "Original name")
+        assert connection_headers == ["Bearer first-fake", authorization.current]
+        assert (await second.call("reconnected", "status", new.id))["ok"] is True
+        assert first.closed and not sharing.status()["reloading"]
+    finally:
+        release.set()
         sharing.close()
         await asyncio.wait_for(running, timeout=2)
 
