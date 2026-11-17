@@ -37,6 +37,7 @@ from core.permissions import (
     PermissionBoundary,
     PermissionCeiling,
     PermissionRules,
+    ScopedArtifactReads,
 )
 from core.prompts import (
     BLOCK_KIND_DATA,
@@ -47,7 +48,7 @@ from core.prompts import (
 )
 from core.skills.policy import SkillPackageRef
 from core.storage.layout import DataDirectoryLayout
-from core.storage.temp_files import artifact_owner, session_artifact_dirs
+from core.storage.temp_files import artifact_owner, session_artifact_dirs, terminal_log_scope
 from core.utils.config import VBOT_ROOT
 from core.utils.logging import get_logger
 
@@ -145,13 +146,13 @@ class SessionPermissions:
         """
         if not self.restricted:
             return PermissionBoundary.UNRESTRICTED
-        artifacts = (
-            session_artifact_dirs(
-                data_dir, artifact_owner(owner.project_id, owner.agent_id, owner.session_id)
-            )
+        artifact_folder = (
+            artifact_owner(owner.project_id, owner.agent_id, owner.session_id)
             if owner is not None
-            else ()
+            else None
         )
+        artifacts = session_artifact_dirs(data_dir, artifact_folder) if artifact_folder else ()
+        terminal_logs = terminal_log_scope(data_dir, artifact_folder)
         context = BoundaryContext(
             workdir=self.workdir,
             home=Path.home(),
@@ -163,6 +164,7 @@ class SessionPermissions:
             rule_files=self.rule_files,
             install_dirs=installation_dirs(),
             readable_dirs=(*artifacts, *skill_dirs),
+            scoped_artifact_reads=ScopedArtifactReads(terminal_logs.root, terminal_logs.allows),
             loopback_port=loopback_port,
             own_hosts=own_hosts() if own_hosts is not None and loopback_port is not None else (),
         )

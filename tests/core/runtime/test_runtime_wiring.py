@@ -34,6 +34,7 @@ from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
+from core.storage.temp_files import artifact_owner
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
 from core.tools._terminal_permissions import permission_scope
@@ -309,12 +310,26 @@ async def test_terminal_notices_resolve_current_rules_with_the_live_scratch(
     can_show_screen = runtime.terminal_manager._services.output_allowed
     assert can_show_screen is not None
     assert await can_show_screen(address, info)
+    log = runtime.storage.temporary_files.create_terminal_log(
+        owner=artifact_owner(address.project_id, address.agent_id, address.session_id),
+        scope=permission_scope(boundary),
+    )
+    assert boundary.check_path(log.path, "read") is None
     await runtime.chat_sessions.run_async(
         resolver.set_session_permission_rules,
         address,
         {"read": "work_area", "deny": ["Read({scratch}/private)", "Shell(stop)"]},
     )
     assert not await can_show_screen(address, info)
+    narrowed_agent = await resolver.resolve_agent_async(
+        None, "main", session_id=address.session_id, require_model=False
+    )
+    narrowed = session_permissions(
+        narrowed_agent, data_dir=data_dir, project_root=None, ceiling=None
+    ).boundary(data_dir, owner=address, scratch_root=scratch.area)
+    denied = narrowed.check_path(log.path, "read")
+    assert denied is not None and denied.location == "data_dir"
+    log.finish()
 
 
 @pytest.mark.asyncio

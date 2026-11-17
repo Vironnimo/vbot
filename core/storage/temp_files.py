@@ -14,7 +14,16 @@ from datetime import timedelta
 from pathlib import Path
 from threading import Event, RLock
 
+from core.storage._terminal_log_scopes import (
+    SCOPE_NAME,
+    SCOPE_SUFFIX,
+    TERMINAL_TEMPORARY_CATEGORY,
+    TerminalLogScope,
+    read_scope_record,
+    scope_record,
+)
 from core.storage.layout import DataDirectoryLayout
+from core.utils.atomic import atomic_write_bytes
 from core.utils.file_status import is_link_status
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
@@ -27,7 +36,7 @@ TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
     "computer_use": timedelta(hours=72),
     "speech": timedelta(hours=72),
     "subagents": timedelta(hours=24),
-    "terminals": timedelta(hours=72),
+    TERMINAL_TEMPORARY_CATEGORY: timedelta(hours=72),
     "web_fetch": timedelta(hours=72),
     "providers": timedelta(minutes=5),
 }
@@ -35,7 +44,9 @@ TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
 # folder of the Session it belongs to (``<category>/<owner>/``), so a restricted
 # Session may read its own files and no other Session's (``session_artifact_dirs``).
 SESSION_ARTIFACT_CATEGORIES: tuple[str, ...] = tuple(
-    category for category in TEMPORARY_FILE_RETENTION if category != "providers"
+    category
+    for category in TEMPORARY_FILE_RETENTION
+    if category not in {"providers", TERMINAL_TEMPORARY_CATEGORY}
 )
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -63,6 +74,13 @@ def session_artifact_dirs(data_dir: str | Path, owner: str) -> tuple[Path, ...]:
     return tuple(temporary / category / owner for category in SESSION_ARTIFACT_CATEGORIES)
 
 
+def terminal_log_scope(data_dir: str | Path, owner: str | None) -> TerminalLogScope:
+    """The protected Terminal log category and the one owner a boundary can name."""
+    if owner is not None:
+        _require_owner(owner)
+    return TerminalLogScope(DataDirectoryLayout(data_dir).terminal_temporary, owner)
+
+
 def _require_owner(owner: str) -> None:
     if not _OWNER_PATTERN.fullmatch(owner):
         raise ValueError(f"Invalid temporary-file owner: {owner!r}")
@@ -74,6 +92,7 @@ class TemporaryFileLease:
 
     path: Path
     _manager: TemporaryFileManager = field(repr=False)
+    _companions: tuple[Path, ...] = field(default=(), repr=False)
     _finished: bool = field(default=False, init=False, repr=False)
 
     def finish(self) -> None:
@@ -151,6 +170,29 @@ class TemporaryFileManager:
             path.touch(exist_ok=True)
             self._active[path] = self._active.get(path, 0) + 1
         return TemporaryFileLease(path=path, _manager=self)
+
+    def create_terminal_log(
+        self, *, owner: str | None, scope: frozenset[str] | None
+    ) -> TemporaryFileLease:
+        """Allocate a raw Terminal log and retain its launch-scope record beside it."""
+        if owner is None or scope is None:
+            return self.create(TERMINAL_TEMPORARY_CATEGORY, ".log", owner=owner)
+        _require_owner(owner)
+        if TERMINAL_TEMPORARY_CATEGORY not in self._retention:
+            raise ValueError("Unknown temporary-file category: terminals")
+        name, data = scope_record(scope)
+        parent = self.root / TERMINAL_TEMPORARY_CATEGORY / owner
+        marker = parent / (name + SCOPE_SUFFIX)
+        with self._lock:
+            # Its content-addressed name proves the same scope when a previous
+            # launch already published this record. A missing record fails
+            # closed for reads until a launch with this exact scope restores it.
+            if read_scope_record(marker) != data:
+                atomic_write_bytes(marker, data)
+            path = write_id_file(parent / name, "tmp", ".log", b"")
+            self._active[path] = 1
+            self._active[marker] = self._active.get(marker, 0) + 1
+        return TemporaryFileLease(path=path, _manager=self, _companions=(marker,))
 
     def start(self) -> None:
         """Sweep crash leftovers and start periodic cleanup when possible.
@@ -230,7 +272,13 @@ class TemporaryFileManager:
                     return
                 if not _OWNER_PATTERN.fullmatch(entry.name):
                     continue
-                self._sweep_owner(Path(entry.path), active, expires_before, stopping)
+                self._sweep_owner(
+                    Path(entry.path),
+                    active,
+                    expires_before,
+                    stopping,
+                    terminal_owner=category == TERMINAL_TEMPORARY_CATEGORY,
+                )
 
     def _cleanup_retention(self) -> dict[str, timedelta]:
         """Include the retired shell-log folder under its replacement's policy."""
@@ -240,7 +288,13 @@ class TemporaryFileManager:
         return policies
 
     def _sweep_owner(
-        self, folder: Path, active: set[str], expires_before: float, stopping: Event | None
+        self,
+        folder: Path,
+        active: set[str],
+        expires_before: float,
+        stopping: Event | None,
+        *,
+        terminal_owner: bool = False,
     ) -> None:
         """Sweep one Session's folder of a category; remove it once empty and expired."""
         try:
@@ -256,6 +310,12 @@ class TemporaryFileManager:
             return
         if not self._sweep_files(entries, active, expires_before, stopping):
             return
+        if terminal_owner:
+            for entry in entries:
+                if stopping is not None and stopping.is_set():
+                    return
+                if SCOPE_NAME.fullmatch(entry.name):
+                    self._sweep_owner(Path(entry.path), active, expires_before, stopping)
         try:
             with self._lock:
                 if folder.stat(follow_symlinks=False).st_mtime < expires_before:
@@ -316,19 +376,19 @@ class TemporaryFileManager:
             if lease._finished:
                 return
             lease._finished = True
-            path = lease.path
-            count = self._active[path]
-            if count > 1:
-                self._active[path] = count - 1
-                return
-            try:
-                os.utime(path, None)
-            except OSError as error:
-                _LOGGER.warning(
-                    "Temporary-file completion timestamp failed path=%s: %s", path, error
-                )
-            finally:
-                del self._active[path]
+            for path in (lease.path, *lease._companions):
+                count = self._active[path]
+                if count > 1:
+                    self._active[path] = count - 1
+                    continue
+                try:
+                    os.utime(path, None)
+                except OSError as error:
+                    _LOGGER.warning(
+                        "Temporary-file completion timestamp failed path=%s: %s", path, error
+                    )
+                finally:
+                    del self._active[path]
 
     async def _sweep_loop(self) -> None:
         # A cancelled pool call returns only after the started sweep settles, so
@@ -349,4 +409,5 @@ __all__ = [
     "TemporaryFileManager",
     "artifact_owner",
     "session_artifact_dirs",
+    "terminal_log_scope",
 ]

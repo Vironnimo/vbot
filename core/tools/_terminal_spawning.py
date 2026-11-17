@@ -36,7 +36,6 @@ from ._terminal_session import (
     TerminalSessionServices,
 )
 from ._terminal_state import (
-    TERMINAL_TEMPORARY_CATEGORY,
     TerminalClosedError,
     TerminalLaunchError,
     TerminalOwner,
@@ -116,7 +115,9 @@ class TerminalSessionFactory:
         integration: ShellLaunch | None = None
         try:
             screen = await self.open_screen(columns, rows)
-            log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log, owner)
+            log_path, log_handle, log_lease = await asyncio.to_thread(
+                self._open_raw_log, owner, launch.permission_scope if remote is None else None
+            )
             if not can_start():
                 raise TerminalClosedError("Terminal Session is no longer running")
             if remote is not None:
@@ -277,23 +278,22 @@ class TerminalSessionFactory:
         return self._render_host.open_screen(columns, rows, scrollback_lines=self._scrollback_lines)
 
     def _open_raw_log(
-        self, owner: TerminalOwner | None
+        self, owner: TerminalOwner | None, scope: frozenset[str] | None
     ) -> tuple[Path | None, BinaryIO | None, TemporaryFileLease | None]:
         """Open the log that receives the output as the terminal receives it.
 
-        A Session's terminal logs to that Session's folder, which only it may read
-        under Permission Rules; an operator terminal's log has no owner.
+        A restricted terminal records its launch scope within its Session's folder.
+        An operator terminal's log has no owner.
         """
         if self._temporary_files is None:
             return None, None, None
-        lease = self._temporary_files.create(
-            TERMINAL_TEMPORARY_CATEGORY,
-            ".log",
+        lease = self._temporary_files.create_terminal_log(
             owner=(
                 artifact_owner(owner.project_id, owner.agent_id, owner.session_id)
                 if owner is not None
                 else None
             ),
+            scope=scope,
         )
         try:
             handle = lease.path.open("ab")
