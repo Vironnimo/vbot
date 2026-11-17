@@ -316,8 +316,8 @@ def _google_music_result(response: httpx.Response, model_id: str) -> MusicGenera
         raise ProviderContentRefusedError(
             reason[:_MAX_REASON_CHARS] or f"Google stopped the track ({finish_reason})"
         )
-    if finish_reason is not None and outcome != TERMINAL_OUTCOME_STOP:
-        raise ProviderError(f"Google ended the music answer with {finish_reason}.")
+    if outcome != TERMINAL_OUTCOME_STOP:
+        raise ProviderError(f"Google music finish reason: {finish_reason or 'missing'}.")
     if not encoded_audio:
         if text:
             raise ProviderContentRefusedError(text[:_MAX_REASON_CHARS])

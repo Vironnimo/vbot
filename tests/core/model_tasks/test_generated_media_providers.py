@@ -452,6 +452,12 @@ async def test_google_music_sends_one_generate_content_and_reads_track_and_lyric
             id="unexpected-finish",
         ),
         pytest.param(
+            httpx.Response(200, json=_google_music_answer(_google_audio(b"ID3"), finish=None)),
+            ProviderOutcomeUnknownError,
+            1,
+            id="missing-finish",
+        ),
+        pytest.param(
             httpx.Response(
                 200,
                 json=_google_music_answer({"inlineData": {"mimeType": "audio/mpeg", "data": "!"}}),
