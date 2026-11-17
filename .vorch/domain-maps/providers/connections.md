@@ -42,6 +42,8 @@ OAuth Accounts are stored per Account in `TokenStore(storage.secrets)`, the `oau
 
 Accounts are credential choices only. Model catalogs, discovery, Connection enablement, and task-target expansion stay Connection-level; Account suffixes are not a catalog or target cross-product.
 
+Keyless Connections have one usable slot, `default`. Credential lookup and Runtime Adapter construction reject an explicit different Account.
+
 `TokenStore` uses the Secret Store transaction for write serialization, including refresh comparison and publication. Its separate lock protects only the per-Account refresh-lock catalog, never persistence, so constructing an OAuth getter stays independent of writes waiting at the snapshot freeze (`test_snapshot_waiting_token_writes_leave_reads_and_refresh_locks_available`).
 
 ## Enablement, credentials, and usability
