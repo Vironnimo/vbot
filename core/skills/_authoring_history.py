@@ -25,6 +25,7 @@ from core.skills._history import (
     SkillRevisionKind,
 )
 from core.skills._packages import is_redirect
+from core.skills._restore_journal import read_intent, require_idle
 from core.skills._revert import (
     RevertActor,
     RevertConflictError,
@@ -58,6 +59,7 @@ class SkillRevisions:
                 raise SkillAuthoringError("Only a person can pin or unpin a Skill.")
             skill_dir = self._owner._existing_skill_dir(target_root, skill_name)
             history = SkillHistory(skill_dir.parent)
+            require_idle(history.home, skill_name)
             revision: int | None = None
             try:
                 record = history.observe(skill_name, skill_dir)
@@ -94,12 +96,18 @@ class SkillRevisions:
             history = SkillHistory(root)
             records: dict[str, SkillRecord] = {}
             try:
+                intent = read_intent(root)
                 known = history.records()
                 for package in _live_packages(root):
-                    record = known.get(package.name) or history.observe(package.name, package)
+                    record = known.get(package.name)
+                    if intent is not None and package.name == intent.name:
+                        if not intent.matches(package):
+                            continue
+                    elif record is None:
+                        record = history.observe(package.name, package)
                     if record is not None:
                         records[package.name] = record
-            except OSError as error:
+            except (OSError, SkillAuthoringError) as error:
                 _LOGGER.warning("Skill history of %s cannot be read: %s", root, error)
                 return {}
             return records
@@ -132,8 +140,11 @@ class SkillRevisions:
                 return None
             history = SkillHistory(root)
             try:
+                intent = read_intent(root)
+                if intent is not None and intent.name == skill_name:
+                    return history.record(skill_name) if intent.matches(package) else None
                 return history.record(skill_name) or history.observe(skill_name, package)
-            except OSError as error:
+            except (OSError, SkillAuthoringError) as error:
                 _LOGGER.warning("Skill history of %s cannot be read: %s", root, error)
                 return None
 
@@ -150,14 +161,23 @@ class SkillRevisions:
             if skill_name is not None:
                 _validate_skill_name(skill_name)
             try:
+                intent = read_intent(root)
                 if skill_name is not None:
                     names = {skill_name}
                 else:
                     names = {package.name for package in _live_packages(root)}
                     names |= set(history.records())
+                if intent is not None:
+                    names.discard(intent.name)
                 for name in sorted(names):
                     history.observe(name, _live_package(root, name))
                 revisions = history.revisions(skill_name)
+                if intent is not None:
+                    revisions = [
+                        revision
+                        for revision in revisions
+                        if revision.restore_transaction != intent.transaction
+                    ]
             except OSError as error:
                 raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
             return list(reversed(revisions))[: max(limit, 0)]
@@ -240,7 +260,9 @@ class SkillRevisions:
         _check_writer(writer)
         if writer.background:
             raise SkillAuthoringError("Background writers cannot revert Skill revisions.")
-        return SkillHistory(self._owner._writable_root(target_root))
+        root = self._owner._writable_root(target_root)
+        require_idle(root)
+        return SkillHistory(root)
 
     def _observe(
         self,
@@ -255,6 +277,9 @@ class SkillRevisions:
         existing Skill: it cannot know whether the user pinned the Skill, and the
         change could not be recorded for undo, so it is refused.
         """
+        require_idle(
+            history.home, skill_name, skill_dir.name if skill_dir is not None else skill_name
+        )
         try:
             record = history.observe(skill_name, skill_dir)
             pinned = record is not None and record.pinned

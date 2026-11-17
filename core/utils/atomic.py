@@ -161,7 +161,7 @@ def write_new_bytes(target_path: Path, data: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         if os.name == "posix":
-            _fsync_directory(target_path.parent)
+            sync_directory(target_path.parent)
     except BaseException:
         with suppress(OSError):
             target_path.unlink(missing_ok=True)
@@ -377,12 +377,15 @@ def _fsync_replace_directories(temp_path: Path, target_path: Path) -> None:
     if os.name != "posix":
         return
 
-    _fsync_directory(target_path.parent)
+    sync_directory(target_path.parent)
     if temp_path.parent != target_path.parent:
-        _fsync_directory(temp_path.parent)
+        sync_directory(temp_path.parent)
 
 
-def _fsync_directory(path: Path) -> None:
+def sync_directory(path: Path) -> None:
+    """Flush directory entries to storage on POSIX."""
+    if os.name != "posix":
+        return
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = os.open(path, flags)
     try:

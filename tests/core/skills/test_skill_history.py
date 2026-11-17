@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from core.skills import _authoring_archive as archive_module
 from core.skills import _history as history_module
 from core.skills import _revert as revert_module
 from core.skills._history import SkillHistory
@@ -405,6 +406,117 @@ def test_restore_keeps_the_archive_while_its_history_cannot_be_read(
     service.restore(root, archive_id, writer=HUMAN_WRITER)
     record = service.record(root, "demo")
     assert record is not None and (record.origin, record.pinned) == ("agent", True)
+
+
+@pytest.mark.parametrize("failure", ["before-append", "during-history-sync", "after-move"])
+def test_restore_retry_keeps_provenance_and_pin_without_recording_twice(
+    service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    service.write_file(root, "demo", "references/guide.md", "Guide", writer=AGENT)
+    service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
+    original = service.records(root)["demo"]
+    deleted = service.delete(root, "demo", writer=HUMAN_WRITER)
+    archive_id = str(deleted.archive_id)
+    destination = root / "demo"
+    append, sync_directory = SkillHistory.append, archive_module.sync_directory
+
+    def fail_sync(_descriptor: int) -> None:
+        raise OSError("history fsync failed")
+
+    def append_restore(history: SkillHistory, **fields: Any) -> history_module.SkillRevision:
+        if fields.get("kind") != "restore":
+            return append(history, **fields)
+        if failure == "before-append":
+            raise OSError("history is read-only")
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "fsync", fail_sync)
+            return append(history, **fields)
+
+    def sync_after_move(path: Path) -> None:
+        if path == root and destination.exists():
+            raise OSError("directory sync failed")
+        sync_directory(path)
+
+    with monkeypatch.context() as patch:
+        if failure == "after-move":
+            patch.setattr(archive_module, "sync_directory", sync_after_move)
+        else:
+            patch.setattr(SkillHistory, "append", append_restore)
+        with pytest.raises(SkillAuthoringError, match="Retry restoring archive"):
+            service.restore(root, archive_id, writer=AGENT)
+    assert destination.is_dir() == (failure == "after-move")
+    assert deleted.path.is_dir() == (failure != "after-move")
+
+    # Reopen the service, including the case where an append reached disk even
+    # though its fsync failed. Listing and history leave the pending restore intact.
+    reopened = SkillAuthoringService()
+    assert [entry.archive_id for entry in reopened.archived(root)] == [archive_id]
+    assert all(revision.kind != "restore" for revision in reopened.history(root, "demo"))
+    with pytest.raises(SkillAuthoringError, match="Retry restoring archive"):
+        reopened.purge(root, archive_id)
+    if failure == "after-move":
+        with pytest.raises(SkillAuthoringError, match="pending restore"):
+            reopened.set_pinned(root, "demo", False, writer=HUMAN_WRITER)
+    else:
+        with pytest.raises(SkillAuthoringError, match="pending restore"):
+            reopened.create(root, "demo", skill_document(), writer=HUMAN_WRITER)
+    reopened.create(root, "unrelated", skill_document("unrelated"), writer=HUMAN_WRITER)
+
+    restored = reopened.restore(root, archive_id, writer=HUMAN_WRITER)
+    [revision] = [r for r in reopened.history(root, "demo") if r.kind == "restore"]
+    assert revision.id == restored.revision
+    assert (revision.actor, revision.run_id) == (AGENT.actor, AGENT.run_id)
+    assert "restore_transaction" not in revision.to_dict()
+    assert {change.path for change in restored.changes} == {"SKILL.md", "references/guide.md"}
+    record = reopened.records(root)["demo"]
+    assert (record.origin, record.created_at, record.pinned) == (
+        original.origin,
+        original.created_at,
+        True,
+    )
+    assert reopened.archived(root) == []
+    with pytest.raises(SkillProtectedError, match="pinned"):
+        reopened.check_writable(root, "demo", writer=REFLECTION)
+
+
+def test_pending_restore_leaves_an_outside_destination_and_replaced_archive_untouched(
+    service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    deleted = service.delete(root, "demo", writer=HUMAN_WRITER)
+    archive_id = str(deleted.archive_id)
+    rename = Path.rename
+
+    def lock_archive(path: Path, destination: Path) -> Path:
+        if path == deleted.path:
+            raise PermissionError("package in use")
+        return rename(path, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "rename", lock_archive)
+        with pytest.raises(SkillAuthoringError, match="Retry restoring archive"):
+            service.restore(root, archive_id, writer=HUMAN_WRITER)
+
+    other = root / "another-folder"
+    other.mkdir()
+    document = other / "SKILL.md"
+    document.write_text(skill_document(body="Outside copy"), encoding="utf-8")
+    with pytest.raises(SkillAuthoringError, match="appeared during the restore"):
+        service.restore(root, archive_id, writer=HUMAN_WRITER)
+    assert "Outside copy" in document.read_text(encoding="utf-8")
+    other.rename(root.parent / "outside")
+
+    held = deleted.path.rename(root.parent / "held")
+    deleted.path.mkdir()
+    (deleted.path / "SKILL.md").write_text(skill_document(body="Replacement"), encoding="utf-8")
+    with pytest.raises(SkillAuthoringError, match="changed or is missing"):
+        service.restore(root, archive_id, writer=HUMAN_WRITER)
+    assert not (root / "demo").exists()
+    deleted.path.rename(root.parent / "replacement")
+    held.rename(deleted.path)
+    service.restore(root, archive_id, writer=HUMAN_WRITER)
+    assert "Replacement" not in (root / "demo" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_publish_moves_a_skill_into_another_home_with_its_provenance(

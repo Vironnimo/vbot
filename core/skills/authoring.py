@@ -72,6 +72,7 @@ from core.skills._history import (
 )
 from core.skills._installation import SkillInstallResult, install_package
 from core.skills._packages import PackageError
+from core.skills._restore_journal import require_idle
 from core.skills.requirements import RequirementParseError, parse_vbot_requirements
 from core.skills.skill_validator import (
     ValidationResult,
@@ -366,6 +367,7 @@ class SkillAuthoringService:
         with self._write_lock:
             _check_writer(writer)
             source_dir = self._resolved_skill_dir(source_root, skill_name)
+            require_idle(source_dir.parent, skill_name, source_dir.name)
             destination = self._skill_dir(target_root, skill_name)
             if destination.exists():
                 raise SkillAuthoringError(f"Skill '{skill_name}' already exists.")
