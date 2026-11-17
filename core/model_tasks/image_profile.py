@@ -4,7 +4,7 @@ The Model DB publishes each image Model's raw parameter facts
 (``capabilities.task_options.image_generation``). The same Model behaves
 differently per wire: the ChatGPT subscription renders through a carrier Model
 that rejects ``n``, and OpenAI's native sizes are pixel strings rather than the
-aspect ratio and resolution tiers OpenRouter accepts. :class:`ImageProfile`
+aspect ratio and resolution tiers OpenRouter and Google accept. :class:`ImageProfile`
 combines the facts with the wire once, so Settings fields, the Agent Tool's
 per-call choices and the request translation all read the same answer.
 """
@@ -20,7 +20,7 @@ from typing import Any, Literal
 from core.model_tasks.constants import TASK_IMAGE_GENERATION
 
 JsonObject = dict[str, Any]
-ImageWire = Literal["openrouter", "openai_images", "openai_subscription", "unsupported"]
+ImageWire = Literal["openrouter", "openai_images", "openai_subscription", "google", "unsupported"]
 
 # Per-call intent the image Tool can carry; every other image option is Settings-only.
 CALL_OPTION_NAMES: tuple[str, ...] = ("aspect_ratio", "resolution", "background")
@@ -56,6 +56,7 @@ _WIRE_HIDDEN_PARAMETERS: Mapping[ImageWire, frozenset[str]] = MappingProxyType(
         "openrouter": frozenset({"input_references", "stream"}),
         "openai_images": frozenset({"response_format", "stream"}),
         "openai_subscription": frozenset({"n", "response_format", "stream", "model"}),
+        "google": frozenset({"input_references"}),
         "unsupported": frozenset(),
     }
 )
@@ -76,6 +77,8 @@ def image_wire(provider_id: str, adapter: str, connection_mode: str | None) -> I
 
     if provider_id == "openrouter":
         return "openrouter"
+    if adapter == "google":
+        return "google"
     if adapter in {"openai", "openai_compatible"}:
         if connection_mode == CODEX_RESPONSES_MODE:
             return "openai_subscription"

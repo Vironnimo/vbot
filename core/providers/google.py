@@ -164,7 +164,7 @@ def _family_capabilities(
     if _TRANSCRIBE.search(model_id):
         return _transcription_capabilities()
     if _IMAGE.search(model_id):
-        return _image_generation_capabilities()
+        return _image_generation_capabilities(model_id)
     if _MUSIC.search(model_id):
         return _music_capabilities()
     if _VIDEO.search(model_id):
@@ -309,8 +309,83 @@ def _transcription_capabilities() -> Capabilities:
     )
 
 
-def _image_generation_capabilities() -> Capabilities:
-    return _task_capabilities(("text", "image"), ("text", "image"), ("image_generation",))
+def _image_generation_capabilities(model_id: str) -> Capabilities:
+    """Nano Banana on ``generateContent``, with the image controls its family documents."""
+
+    capabilities = _task_capabilities(("text", "image"), ("text", "image"), ("image_generation",))
+    for pattern, family in _IMAGE_FAMILIES:
+        if pattern.search(model_id):
+            parameters: dict[str, Any] = {
+                name: {"type": "enum", "values": list(values)}
+                for name, values in family.items()
+                if isinstance(values, tuple)
+            }
+            maximum = family.get("max_references")
+            if isinstance(maximum, int):
+                parameters["input_references"] = {"max": maximum}
+            return replace(
+                capabilities,
+                task_options={"image_generation": {"parameters": parameters}},
+            )
+    return capabilities
+
+
+# Nano Banana image controls per family, from Google's image generation guide
+# and Model pages (read 2026-11-17): ``imageConfig.aspectRatio`` and
+# ``imageSize`` values, the thinking levels callers may choose, and the
+# documented number of reference images. Other image ids get no facts.
+_STANDARD_ASPECT_RATIOS = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+_EXTREME_ASPECT_RATIOS = ("1:4", "4:1", "1:8", "8:1")
+_IMAGE_FAMILIES: tuple[tuple[re.Pattern[str], Mapping[str, tuple[str, ...] | int]], ...] = (
+    (
+        re.compile(r"^gemini-nano-banana-2\.1(?:-|$)"),
+        {
+            "aspect_ratio": _STANDARD_ASPECT_RATIOS + _EXTREME_ASPECT_RATIOS,
+            "resolution": ("1K", "2K", "4K"),
+            "thinking_level": ("minimal", "medium", "high"),
+            "max_references": 14,
+        },
+    ),
+    (
+        # 1K only, so no resolution choice; no documented reference maximum.
+        re.compile(r"^gemini-3\.1-flash-lite-image(?:-|$)"),
+        {"aspect_ratio": _STANDARD_ASPECT_RATIOS, "thinking_level": ("minimal", "high")},
+    ),
+    (
+        re.compile(r"^gemini-3\.1-flash-image(?:-|$)"),
+        {
+            "aspect_ratio": _STANDARD_ASPECT_RATIOS + _EXTREME_ASPECT_RATIOS,
+            "resolution": ("512", "1K", "2K", "4K"),
+            "thinking_level": ("minimal", "high"),
+            "max_references": 14,
+        },
+    ),
+    (
+        # Thinking is always on and has no level control.
+        re.compile(r"^(?:gemini-3-pro-image|nano-banana-pro)(?:-|$)"),
+        {
+            "aspect_ratio": _STANDARD_ASPECT_RATIOS,
+            "resolution": ("1K", "2K", "4K"),
+            "max_references": 14,
+        },
+    ),
+    (
+        # One size only; Google: "works best with up to 3 images as input".
+        re.compile(r"^gemini-2\.5-flash-image(?:-|$)"),
+        {"aspect_ratio": _STANDARD_ASPECT_RATIOS, "max_references": 3},
+    ),
+)
 
 
 def _music_capabilities() -> Capabilities:

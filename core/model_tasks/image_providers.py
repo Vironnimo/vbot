@@ -7,6 +7,7 @@ import binascii
 import json
 from collections.abc import Mapping
 from typing import Any, override
+from urllib.parse import quote
 
 import httpx
 
@@ -17,6 +18,8 @@ from core.model_tasks.image_types import (
     ImageInput,
     JsonObject,
 )
+from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
+from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.http import parse_sse_json_data, split_stream_lines
 from core.providers.openai import (
@@ -54,6 +57,25 @@ _OPENROUTER_IMAGE_RETRY_POLICY = TaskRequestRetryPolicy(
     replay_safe=False,
     verified_safe_retry_status_codes=frozenset({503}),
 )
+# Google documents 503 UNAVAILABLE as an overloaded service to retry with
+# backoff (aistudio.google.com/docs/api-errors, read 2026-11-17); it is common
+# on new Models. Other ambiguous failures may already have rendered an image.
+_GOOGLE_IMAGE_RETRY_POLICY = TaskRequestRetryPolicy(
+    replay_safe=False,
+    verified_safe_retry_status_codes=frozenset({503}),
+)
+# Nano Banana renders take tens of seconds and, under load, minutes.
+_GOOGLE_IMAGE_TIMEOUT = 300.0
+# Text beside the image carries the Model's reason when it renders nothing.
+_GOOGLE_RESPONSE_MODALITIES = ("TEXT", "IMAGE")
+# Settings option -> ``generationConfig.imageConfig`` field.
+_GOOGLE_IMAGE_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
+    ("aspect_ratio", "aspectRatio"),
+    ("resolution", "imageSize"),
+)
+# Finish reasons with which Google renders nothing on purpose: an image
+# blocked for an unnamed reason, or no image although one was expected.
+_GOOGLE_DECLINED_FINISH_REASONS = frozenset({"IMAGE_OTHER", "NO_IMAGE"})
 _LOGGER = get_logger("image.providers")
 
 # OpenRouter's unified image API top-level parameters. The wire layer only
@@ -138,6 +160,8 @@ class ProviderImageClient(ProviderTaskClient):
                 options=options,
                 input_images=input_images,
             )
+        if self._provider.adapter == "google":
+            return await self._generate_google(prompt, options=options, input_images=input_images)
         if self._provider.adapter in {"openai", "openai_compatible"}:
             if self._connection.mode == CODEX_RESPONSES_MODE:
                 return await self._generate_openai_codex_responses(
@@ -189,6 +213,36 @@ class ProviderImageClient(ProviderTaskClient):
             ),
             json=payload,
             retry_policy=_OPENROUTER_IMAGE_RETRY_POLICY,
+        )
+
+    async def _generate_google(
+        self,
+        prompt: str,
+        *,
+        options: JsonObject,
+        input_images: tuple[ImageInput, ...],
+    ) -> ImageGenerationResult:
+        """Render through Gemini ``generateContent``; source images ride as inline parts."""
+
+        payload = _build_google_image_payload(prompt, options, input_images=input_images)
+        endpoint = f"/models/{quote(self._model_id, safe='')}:generateContent"
+
+        _LOGGER.debug(
+            "Image generation request: url=%s%s model=%s inputs=%d",
+            self._base_url,
+            endpoint,
+            self._model_id,
+            len(input_images),
+        )
+
+        return await self.post_and_parse(
+            endpoint,
+            timeout=_GOOGLE_IMAGE_TIMEOUT,
+            parse=lambda response: _parse_google_image_response(
+                response.json(), model=self._model_id
+            ),
+            json=payload,
+            retry_policy=_GOOGLE_IMAGE_RETRY_POLICY,
         )
 
     async def _edit_openai(
@@ -288,6 +342,14 @@ class ProviderImageClient(ProviderTaskClient):
 
     @override
     async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        if self._provider.adapter == "google":
+            try:
+                payload = response.json()
+            except ValueError, UnicodeError:
+                return None
+            return _normalize_gemini_usage(
+                payload.get("usageMetadata") if isinstance(payload, Mapping) else None
+            )
         if self._connection.mode != CODEX_RESPONSES_MODE:
             return await super()._observe_response_usage(response)
         completed: Mapping[str, Any] | None = None
@@ -371,6 +433,122 @@ def _build_openrouter_image_payload(
 
     merge_extra_options(payload, options)
     return payload
+
+
+def _build_google_image_payload(
+    prompt: str,
+    options: JsonObject,
+    *,
+    input_images: tuple[ImageInput, ...] = (),
+) -> JsonObject:
+    """Build the Gemini ``generateContent`` image request.
+
+    The prompt comes first, then each source image as an ``inlineData`` part
+    in order. ``aspect_ratio`` and ``resolution`` become
+    ``generationConfig.imageConfig``, ``thinking_level`` its ``thinkingConfig``;
+    unset options are left to Google's defaults. ``extra_options`` adds
+    top-level request fields such as ``safetySettings`` or ``tools``.
+    """
+
+    parts: list[JsonObject] = [{"text": prompt}]
+    parts.extend(
+        {
+            "inlineData": {
+                "mimeType": image.media_type,
+                "data": base64.b64encode(image.data).decode("ascii"),
+            }
+        }
+        for image in input_images
+    )
+    generation_config: JsonObject = {"responseModalities": list(_GOOGLE_RESPONSE_MODALITIES)}
+    image_config = {
+        wire_key: options[key]
+        for key, wire_key in _GOOGLE_IMAGE_CONFIG_KEYS
+        if key in options and not is_omittable_option(options[key])
+    }
+    if image_config:
+        generation_config["imageConfig"] = image_config
+    thinking_level = options.get("thinking_level")
+    if not is_omittable_option(thinking_level):
+        generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
+    payload: JsonObject = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": generation_config,
+    }
+    merge_extra_options(payload, options)
+    return payload
+
+
+def _parse_google_image_response(payload: Any, *, model: str) -> ImageGenerationResult:
+    """Extract the rendered images of a Gemini ``generateContent`` answer.
+
+    Final images are the ``inlineData`` image parts outside the thoughts (the
+    interim thought images are drafts). When nothing was rendered, a blocked
+    prompt, a safety or prohibited-content finish, ``IMAGE_OTHER``,
+    ``NO_IMAGE`` or a text-only answer is a refusal whose reason is the
+    Model's own text when it wrote one; anything else is unconfirmed.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ProviderError("Google image response must be a JSON object", retryable=True)
+    candidates = payload.get("candidates")
+    candidate = (
+        candidates[0]
+        if isinstance(candidates, list) and candidates and isinstance(candidates[0], Mapping)
+        else {}
+    )
+    content = candidate.get("content")
+    raw_parts = content.get("parts") if isinstance(content, Mapping) else None
+    parts = [
+        part
+        for part in (raw_parts if isinstance(raw_parts, list) else ())
+        if isinstance(part, Mapping) and part.get("thought") is not True
+    ]
+    entries: list[JsonObject] = []
+    texts: list[str] = []
+    for part in parts:
+        inline = part.get("inlineData")
+        if isinstance(inline, Mapping) and str(inline.get("mimeType", "")).startswith("image/"):
+            entries.append({"b64_json": inline.get("data"), "media_type": inline.get("mimeType")})
+        elif isinstance(part.get("text"), str):
+            texts.append(part["text"])
+    finish = candidate.get("finishReason")
+    usage = _normalize_gemini_usage(payload.get("usageMetadata"))
+    raw: JsonObject = {
+        key: payload[key]
+        for key in ("modelVersion", "responseId", "usageMetadata")
+        if key in payload
+    }
+    raw["finishReason"] = finish
+    raw["text"] = "".join(texts)
+
+    images, failures = _decode_image_entries(
+        entries, field="b64_json", requested_output_format=None
+    )
+    if images:
+        return ImageGenerationResult(
+            images=images, model=model, usage=usage, raw=raw, failures=failures
+        )
+    if entries:
+        raise ProviderError("Google image response images could not be decoded", retryable=True)
+
+    feedback = payload.get("promptFeedback")
+    block_reason = feedback.get("blockReason") if isinstance(feedback, Mapping) else None
+    if block_reason:
+        raise ProviderContentRefusedError(f"Google blocked the prompt ({block_reason})")
+    filtered = (
+        _gemini_finish_reason(finish, has_tool_calls=False) == TERMINAL_OUTCOME_CONTENT_FILTERED
+    )
+    if filtered or finish in _GOOGLE_DECLINED_FINISH_REASONS or (finish == "STOP" and texts):
+        reply = _carrier_reply(texts)
+        message = candidate.get("finishMessage")
+        if reply is None and isinstance(message, str) and message.strip():
+            reply = _carrier_reply([message])
+        raise ProviderContentRefusedError(reply or f"Google returned no image ({finish})")
+    raise ProviderError(
+        f"Google image response contains no image (finish reason {finish or 'missing'})",
+        retryable=True,
+    )
 
 
 def _build_openai_image_edit_form(

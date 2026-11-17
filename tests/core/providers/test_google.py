@@ -12,6 +12,7 @@ import respx
 
 from core.chat.streaming import StreamingAccumulator
 from core.model_tasks.decision_profile import decision_profile
+from core.model_tasks.image_profile import build_image_profile
 from core.model_tasks.options import option_schema_for, validate_task_model_options
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.errors import (
@@ -116,6 +117,62 @@ def test_speech_models_publish_their_option_schema(
         assert by_name["language"].default == "auto"
         assert "de-DE" in [choice.value for choice in by_name["language"].options]
         assert [choice.value for choice in by_name["mode"].options] == ["verbatim", "smart"]
+
+
+@pytest.mark.parametrize(
+    ("model_id", "values", "max_sources"),
+    [
+        pytest.param(
+            "gemini-nano-banana-2.1",
+            {"aspect_ratio": 14, "resolution": ["1K", "2K", "4K"], "thinking_level": 3},
+            14,
+            id="nano-banana-2.1",
+        ),
+        pytest.param(
+            "gemini-3.1-flash-image-preview",
+            {"aspect_ratio": 14, "resolution": ["512", "1K", "2K", "4K"], "thinking_level": 2},
+            14,
+            id="flash-image",
+        ),
+        # One size only, and no documented reference maximum.
+        pytest.param(
+            "gemini-3.1-flash-lite-image",
+            {"aspect_ratio": 10, "thinking_level": 2},
+            None,
+            id="flash-lite-image",
+        ),
+        # Thinking is always on and has no level.
+        pytest.param(
+            "nano-banana-pro-preview",
+            {"aspect_ratio": 10, "resolution": ["1K", "2K", "4K"]},
+            14,
+            id="pro-image",
+        ),
+        pytest.param("gemini-2.5-flash-image", {"aspect_ratio": 10}, 3, id="2.5-flash-image"),
+    ],
+)
+def test_image_models_publish_the_controls_of_their_family(
+    model_id: str, values: dict[str, int | list[str]], max_sources: int | None
+) -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry(model_id))
+
+    schema = option_schema_for(
+        "image_generation", "google", f"google/{model_id}::api-key", model=model
+    )
+    profile = build_image_profile(model, "google")
+
+    offered = {
+        field.name: [choice.value for choice in field.options if choice.value]
+        for field in schema.fields
+        if field.type == "select"
+    }
+    assert {
+        name: len(choices) if isinstance(values[name], int) else choices
+        for name, choices in offered.items()
+    } == values
+    validate_task_model_options(schema, schema.default_options())
+    assert profile.max_source_images == max_sources
+    assert set(profile.call_choices) <= {"aspect_ratio", "resolution"}
 
 
 def test_decision_model_publishes_its_documented_limits_and_input_price() -> None:

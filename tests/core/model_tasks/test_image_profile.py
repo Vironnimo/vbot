@@ -49,6 +49,14 @@ _OPENROUTER = _model(
         "seed": {"type": "boolean"},
     }
 )
+_GOOGLE = _model(
+    {
+        "aspect_ratio": {"type": "enum", "values": ["1:1", "21:9"]},
+        "resolution": {"type": "enum", "values": ["512", "4K"]},
+        "thinking_level": {"type": "enum", "values": ["minimal", "high"]},
+        "input_references": {"max": 14},
+    }
+)
 
 
 @pytest.mark.parametrize(
@@ -100,6 +108,16 @@ _OPENROUTER = _model(
             3,
             {},
             id="openrouter",
+        ),
+        # Google takes ratio and tier natively; the reference maximum is no Setting.
+        pytest.param(
+            _GOOGLE,
+            "google",
+            {"aspect_ratio", "resolution", "thinking_level"},
+            {"aspect_ratio": ("1:1", "21:9"), "resolution": ("512", "4K")},
+            14,
+            {},
+            id="google",
         ),
         pytest.param(None, "openrouter", set(), {}, 0, {}, id="unknown-model"),
         pytest.param(_GPT_IMAGE, "unsupported", set(), {}, 0, {}, id="unsupported-provider"),
