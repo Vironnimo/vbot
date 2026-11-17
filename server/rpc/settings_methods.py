@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
 from core.fetch_config import WEB_FETCH_CREDENTIALS, WEB_FETCH_PRICING, WEB_FETCH_PROVIDERS
-from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
+from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS, WEB_SEARCH_CREDENTIALS
 from core.settings import (
@@ -228,7 +228,9 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     _validate_model_connections(state.runtime.models, settings_update)
     if "model_tasks" in settings_update:
         try:
-            state.runtime.model_tasks.validate_update(settings_update["model_tasks"])
+            settings_update["model_tasks"] = await _SETTINGS_READS.run(
+                state.runtime.model_tasks.prepare_update, settings_update["model_tasks"]
+            )
         except Exception as exc:
             raise _map_expected_error(exc) from exc
 
@@ -352,20 +354,22 @@ def _validate_public_settings_candidate(
         # Invalid old bindings must not prevent a patch from repairing/removing them.
         with suppress(StorageError):
             previous_tasks = normalize_model_task_settings(previous.get("model_tasks"))
+    task_updates = {}
     for task_type in changed_tasks:
         binding = effective["model_tasks"].get(task_type)
-        previous_binding = previous_tasks.get(task_type, {})
-        if (
-            isinstance(binding, dict)
-            and binding.get("target")
-            and (
-                not task_model_targets_equal(binding["target"], previous_binding.get("target"))
-                or not settings_values_equal(
-                    binding.get("options", {}), previous_binding.get("options", {})
-                )
-            )
-        ):
-            runtime.model_tasks.validate_binding(task_type, binding)
+        if isinstance(binding, dict) and binding.get("target"):
+            task_updates[task_type] = {
+                "target": binding["target"],
+                "options": binding.get("options", {}),
+                "fallbacks": binding.get("fallbacks", []),
+            }
+    if task_updates:
+        prepared = runtime.model_tasks.prepare_update(task_updates, current=previous_tasks)
+        for task_type, binding in prepared.items():
+            raw_binding = candidate["model_tasks"][task_type]
+            for field in ("options", "fallbacks"):
+                if field in raw_binding:
+                    raw_binding[field] = binding[field]
     _validate_changed_provider_connections(runtime, operations)
 
 

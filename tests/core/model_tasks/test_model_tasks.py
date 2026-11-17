@@ -381,7 +381,7 @@ def test_unchanged_stale_binding_does_not_block_other_updates(
         TASK_TEXT_TO_SPEECH: binding(stale),
         TASK_SPEECH_TO_TEXT: {"target": "openrouter/transcribe::api-key", "options": {}},
     }
-    service.validate_update(update)
+    service.prepare_update(update)
     saved = service.update(update)
     assert selected(saved) == stale
     assert saved[TASK_SPEECH_TO_TEXT] == update[TASK_SPEECH_TO_TEXT]
@@ -417,16 +417,11 @@ def test_fallback_settings_preserve_options_and_allow_repairing_an_unavailable_p
     models = _Models(
         [_model("primary", (TASK_SPEECH_TO_TEXT,)), _model("backup", (TASK_SPEECH_TO_TEXT,))]
     )
-    storage = _Storage()
-    service = TaskModelService(_Providers(), models, _Credentials(), storage)
-    service.update(
-        {
-            TASK_SPEECH_TO_TEXT: {
-                "target": "openrouter/primary::api-key",
-                "options": {"language": "de"},
-            }
-        }
+    primary_options = {"language": "de", "retired": True}
+    storage = _Storage(
+        {TASK_SPEECH_TO_TEXT: {"target": "openrouter/primary::api-key", "options": primary_options}}
     )
+    service = TaskModelService(_Providers(), models, _Credentials(), storage)
     models._models.pop(0)
     service.update(
         {
@@ -438,7 +433,7 @@ def test_fallback_settings_preserve_options_and_allow_repairing_an_unavailable_p
         }
     )
     binding = service.binding_for(TASK_SPEECH_TO_TEXT)
-    assert binding.options == {"language": "de"}
+    assert binding.options == primary_options
     assert binding.fallbacks[0].options == {"language": "en"}
     assert service.binding_is_usable(TASK_SPEECH_TO_TEXT)
     service.update({TASK_SPEECH_TO_TEXT: {"fallbacks": []}})

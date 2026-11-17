@@ -1274,6 +1274,55 @@ async def test_equivalent_task_target_spelling_preserves_options(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
+async def test_settings_persists_the_validated_task_options(tmp_path: Path, method: str) -> None:
+    state = _tts_state(tmp_path)
+    storage = state.runtime.storage
+    storage.update_model_task_settings(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": "openai/gpt-4o-mini-tts::api-key",
+                "options": {"voice": "alloy", "retired_option": True},
+                "fallbacks": [{"target": "openai/retired-fallback::api-key"}],
+            }
+        }
+    )
+    options = {"voice": "echo", "retired_option": True}
+    params = (
+        _patch(_set('model_tasks["text_to_speech"].options', options))
+        if method == "settings.patch"
+        else {"model_tasks": {TASK_TEXT_TO_SPEECH: {"options": options}}}
+    )
+
+    await rpc_result(state, method, **params)
+
+    saved = storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
+    assert saved["options"] == {"voice": "echo"}
+    assert saved["fallbacks"][0]["target"] == "openai/retired-fallback::api-key"
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_validates_the_changed_task_fallback(tmp_path: Path) -> None:
+    state = _tts_state(tmp_path)
+    storage = state.runtime.storage
+    storage.update_model_task_settings(
+        {TASK_TEXT_TO_SPEECH: {"target": "openai/gpt-4o-mini-tts::api-key"}}
+    )
+    before = storage.settings_path.read_bytes()
+
+    error = await rpc_error(
+        state,
+        "settings.patch",
+        **_patch(
+            _set('model_tasks["text_to_speech"].fallbacks', [{"target": "local/no-such-engine"}])
+        ),
+    )
+
+    assert error["code"] == "invalid_request"
+    assert storage.settings_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
 async def test_unchanged_task_binding_does_not_block_other_settings(
     tmp_path: Path, method: str
 ) -> None:
