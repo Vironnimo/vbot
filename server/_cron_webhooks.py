@@ -6,7 +6,7 @@ job's own secret (``Authorization: Bearer <secret>`` or GitHub's
 ``X-Hub-Signature-256``), which the Cron service checks. Before the body is
 read, the access service counts the request against the webhook rate limits.
 
-Answers: 202 once the request is stored for the job's next Run; 404 for an
+Answers: 202 for a durably queued request, duplicate signed body or setup ping; 404 for an
 unknown, inactive or non-webhook job and for a wrong or missing secret alike;
 413 for a body over ``WEBHOOK_BODY_MAX_BYTES``; 429 with ``Retry-After`` while
 the client is over a limit; 503 when a request that proved the secret could

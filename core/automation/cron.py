@@ -366,8 +366,9 @@ class CronService:
         """Accept one request to a webhook job's URL for the job's next Run.
 
         ``headers`` are the request's header pairs with lowercase names and
-        ``body`` its raw body of at most ``WEBHOOK_BODY_MAX_BYTES``. The request
-        is stored before this returns ``accepted``. An unknown, inactive or
+        ``body`` its raw body of at most ``WEBHOOK_BODY_MAX_BYTES``. This returns
+        ``accepted`` for a stored request, duplicate signed body or setup ping.
+        An unknown, inactive or
         non-webhook job and a wrong secret are all ``refused``; ``unavailable``
         means the request proved the secret but could not be stored.
         """

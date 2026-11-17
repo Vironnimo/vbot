@@ -10,9 +10,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode
 
 import pytest
 
+from core.automation import _cron_inbox as cron_inbox
 from core.automation import _cron_timing as cron_timing
 from core.automation import _cron_webhooks as cron_webhooks
 from core.automation._cron_webhook_events import WEBHOOK_STATE_DIR_NAME, WebhookState, state_path
@@ -68,6 +70,11 @@ async def _until(service: CronService, done: Any) -> None:
 
 def _bearer(secret: str, **headers: str) -> list[tuple[str, str]]:
     return [("authorization", f"Bearer {secret}"), *headers.items()]
+
+
+def _signed(secret: str, body: bytes, **headers: str) -> list[tuple[str, str]]:
+    digest = hmac.digest(secret.encode(), body, "sha256").hex()
+    return [("x-hub-signature-256", f"sha256={digest}"), *headers.items()]
 
 
 def _state(service: CronService, job_id: str) -> dict[str, Any]:
@@ -218,7 +225,7 @@ async def test_refused_requests_are_alike_whatever_is_wrong(tmp_path: Path) -> N
             await service.receive_webhook(job_id, [("x-hub-signature-256", proof)], body)
             == "accepted"
         )
-    assert len(_state(service, job_id)["requests"]) == 2
+    assert len(_state(service, job_id)["requests"]) == 1
 
     # GitHub's ping for a new webhook is acknowledged once it proves the secret, but starts no Run.
     ping = _bearer(secret, **{"x-github-event": "ping"})
@@ -229,7 +236,120 @@ async def test_refused_requests_are_alike_whatever_is_wrong(tmp_path: Path) -> N
         )
         == "refused"
     )
-    assert len(_state(service, job_id)["requests"]) == 2
+    assert len(_state(service, job_id)["requests"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_signed_webhook_receipts_outlive_the_run_pause_and_restart(
+    tmp_path: Path,
+) -> None:
+    service, trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    body = b'{"event": "sample"}'
+    headers = _signed(secret, body, **{"x-github-delivery": "delivery-1"})
+    results = await asyncio.gather(
+        service.receive_webhook(job_id, headers, body),
+        service.receive_webhook(job_id, _signed(secret, body), body),
+    )
+    assert results == ["accepted", "accepted"]
+    assert len(_state(service, job_id)["requests"]) == 1
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Done."))
+    await service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
+    await service.update_job(job_id, status="paused")
+    await service.aclose()
+
+    restarted, _trigger = make_service(tmp_path)
+    restarted.set_webhook_secrets(secret_store(tmp_path))
+    await restarted.enable_job(job_id)
+    assert await restarted.receive_webhook(job_id, headers, body) == "accepted"
+    assert _state(restarted, job_id)["requests"] == []
+
+    # Delivery IDs are unsigned metadata. A distinct authenticated body can
+    # share the metadata, and a replay remains recognized after that admission.
+    following = b'{"event": "following"}'
+    assert (
+        await restarted.receive_webhook(
+            job_id, _signed(secret, following, **{"x-github-delivery": "delivery-1"}), following
+        )
+        == "accepted"
+    )
+    assert (
+        await restarted.receive_webhook(
+            job_id, _signed(secret, body, **{"x-github-delivery": "delivery-2"}), body
+        )
+        == "accepted"
+    )
+    assert [request["body"] for request in _state(restarted, job_id)["requests"]] == [
+        {"event": "following"}
+    ]
+    # Bearer clients can send the same body for independent events.
+    assert await restarted.receive_webhook(job_id, _bearer(secret), b"sample") == "accepted"
+    assert await restarted.receive_webhook(job_id, _bearer(secret), b"sample") == "accepted"
+    assert len(_state(restarted, job_id)["requests"]) == 3
+    await restarted.aclose()
+
+
+@pytest.mark.asyncio
+async def test_signed_ping_acknowledgment_remembers_the_body_without_queuing(
+    tmp_path: Path,
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    ping = '{"zen": "sample", "hook_id": 1, "hook": {}}'
+    for body in (ping.encode(), urlencode({"payload": ping}).encode()):
+        assert await service.receive_webhook(job_id, _signed(secret, body), body) == "accepted"
+    assert _state(service, job_id)["requests"] == []
+    assert _state(service, job_id)["last_received_at"] is None
+
+    event = b'{"action": "opened"}'
+    headers = _signed(secret, event, **{"x-github-event": "ping"})
+    assert await service.receive_webhook(job_id, headers, event) == "accepted"
+    assert [item["body"] for item in _state(service, job_id)["requests"]] == [{"action": "opened"}]
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step", ["ledger", "inbox"])
+async def test_signed_receipt_handoff_survives_interrupted_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    service, trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Done."))
+    first, next_body = b"first accepted delivery", b"next delivery"
+    assert await service.receive_webhook(job_id, _signed(secret, first), first) == "accepted"
+    await service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
+
+    def unavailable(*_args: Any) -> None:
+        raise OSError("temporary test storage failure")
+
+    with monkeypatch.context() as interrupted:
+        if step == "ledger":
+            interrupted.setattr(cron_webhooks, "write_new_bytes", unavailable)
+        else:
+            interrupted.setattr(cron_inbox, "atomic_write_text", unavailable)
+        assert (
+            await service.receive_webhook(job_id, _signed(secret, next_body), next_body)
+            == "unavailable"
+        )
+    await service.aclose()
+
+    restarted, _trigger = make_service(tmp_path)
+    restarted.set_webhook_secrets(secret_store(tmp_path))
+    await restarted.load_projection()
+    assert await restarted.receive_webhook(job_id, _signed(secret, first), first) == "accepted"
+    assert _state(restarted, job_id)["requests"] == []
+    assert (
+        await restarted.receive_webhook(job_id, _signed(secret, next_body), next_body) == "accepted"
+    )
+    assert await restarted.receive_webhook(job_id, _signed(secret, first), first) == "accepted"
+    state = _state(restarted, job_id)
+    assert [request["body"] for request in state["requests"]] == [next_body.decode()]
+    assert state["latest_receipt"] != _signed(secret, next_body)[0][1].removeprefix("sha256=")
+    await restarted.aclose()
 
 
 @pytest.mark.asyncio
@@ -576,6 +696,8 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
     assert store.entry(WEBHOOK_SECRETS, job_id) == secret
     jobs_text = (service._cron_dir / "jobs.json").read_text(encoding="utf-8")
     assert secret not in jobs_text and '"schedule_type": "webhook"' in jobs_text
+    body = b"sample event"
+    assert await service.receive_webhook(job_id, _signed(secret, body), body) == "accepted"
 
     # A cache-miss read that started before rotation must not restore the old secret.
     service.set_webhook_secrets(store)
@@ -600,13 +722,20 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
         assert await reading == rotated
     assert await service.webhook_secret(job_id) == rotated
     assert rotated != secret
+    assert await service.receive_webhook(job_id, _signed(secret, body), body) == "refused"
+    assert await service.receive_webhook(job_id, _signed(rotated, body), body) == "accepted"
     assert await service.receive_webhook(job_id, _bearer(secret), b"x") == "refused"
     assert await service.receive_webhook(job_id, _bearer(rotated), b"x") == "accepted"
+    assert len(_state(service, job_id)["requests"]) == 3
+    inbox_path = state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id)
+    receipts = inbox_path.with_suffix(".receipts")
+    assert receipts.is_dir()
 
     # Leaving the webhook schedule drops the secret and the waiting requests.
     await service.update_job(job_id, schedule_type="cron", cron_expression="0 9 * * *")
     assert store.entry(WEBHOOK_SECRETS, job_id) is None
-    assert not state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id).exists()
+    assert not inbox_path.exists()
+    assert not receipts.exists()
     assert service.webhook_status(service.get_job(job_id)) is None
     with pytest.raises(CronJobValidationError, match="has no webhook"):
         await service.webhook_secret(job_id)

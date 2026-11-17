@@ -20,7 +20,7 @@ import hmac
 import json
 import secrets
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
@@ -45,6 +45,7 @@ WEBHOOK_SECRET_PREFIX = "vbw_"
 
 _SIGNATURE_HEADER = "x-hub-signature-256"
 _SIGNATURE_PREFIX = "sha256="
+_RECEIPT_KEY_LABEL = b"vbot cron webhook receipt"
 
 # Headers kept with a request: the content type, the user agent, and the event
 # name and delivery id a sender such as GitHub, GitLab or Gitea puts in an
@@ -154,40 +155,70 @@ type WebhookState = InboxState[WebhookRequest]
 
 def accept_request(
     secret: str, headers: list[tuple[str, str]], body: bytes, *, seq: int, received_at: str
-) -> WebhookRequest | None:
-    """The rendered request when it proves ``secret``; None when it does not. CPU-bound.
+) -> tuple[WebhookRequest, str | None, bool] | None:
+    """Render an authenticated request, with its signed-body receipt and ping status. CPU-bound.
 
     ``headers`` are the request's header pairs with lowercase names.
     """
-    if not verify(secret, headers, body):
+    secret_bytes = secret.encode("utf-8")
+    proof = _verify(secret_bytes, headers, body)
+    if proof is None:
         return None
     kept = select_headers(headers)
     value, cut = render_body(kept.get("content-type", ""), body)
-    return WebhookRequest(seq, received_at, kept, value, cut)
+    receipt = None
+    if proof == "signed":
+        receipt_key = hmac.digest(secret_bytes, _RECEIPT_KEY_LABEL, "sha256")
+        receipt = hmac.digest(receipt_key, body, "sha256").hex()
+        ping = _is_signed_github_ping(body)
+    else:
+        ping = any(name == "x-github-event" and value.strip() == "ping" for name, value in headers)
+    return WebhookRequest(seq, received_at, kept, value, cut), receipt, ping
 
 
-def verify(secret: str, headers: list[tuple[str, str]], body: bytes) -> bool:
-    """Whether the request proves ``secret``, comparing in constant time.
+def _is_signed_github_ping(body: bytes) -> bool:
+    """Recognize GitHub's setup payload from exact signed JSON or form bytes."""
+    text = body.decode("utf-8", errors="replace")
+    if text.lstrip().startswith("{"):
+        payload = _json_value(text, None)
+    elif text.startswith("payload="):
+        payload = _form_value(text)
+    else:
+        return False
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("zen"), str)
+        and type(payload.get("hook_id")) is int
+        and isinstance(payload.get("hook"), dict)
+    )
+
+
+def _verify(
+    secret_bytes: bytes, headers: list[tuple[str, str]], body: bytes
+) -> Literal["signed", "bearer"] | None:
+    """How the request proves the secret, comparing each proof in constant time.
 
     Either a single ``Authorization: Bearer <secret>`` or a single
     ``X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the body>`` proves it; a
     header sent twice proves nothing.
     """
-    secret_bytes = secret.encode("utf-8")
-    proven = False
+    bearer = False
+    signed = False
     authorizations = [value for name, value in headers if name == "authorization"]
     if len(authorizations) == 1:
         scheme, _separator, token = authorizations[0].strip().partition(" ")
         if scheme.casefold() == "bearer":
-            proven |= hmac.compare_digest(token.strip().encode("utf-8"), secret_bytes)
+            bearer = hmac.compare_digest(token.strip().encode("utf-8"), secret_bytes)
     signatures = [value for name, value in headers if name == _SIGNATURE_HEADER]
     if len(signatures) == 1:
         signature = signatures[0].strip()
         expected = hmac.new(secret_bytes, body, hashlib.sha256).hexdigest()
         if signature[: len(_SIGNATURE_PREFIX)].casefold() == _SIGNATURE_PREFIX:
             presented = signature[len(_SIGNATURE_PREFIX) :].casefold()
-            proven |= hmac.compare_digest(presented.encode("utf-8"), expected.encode("ascii"))
-    return proven
+            signed = hmac.compare_digest(presented.encode("utf-8"), expected.encode("ascii"))
+    if signed:
+        return "signed"
+    return "bearer" if bearer else None
 
 
 def select_headers(headers: list[tuple[str, str]]) -> dict[str, str]:

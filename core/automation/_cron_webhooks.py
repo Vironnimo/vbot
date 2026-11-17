@@ -5,19 +5,25 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import re
+import shutil
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, override
 
 from core.automation import _cron_timing as _timing
 from core.automation import _cron_webhook_events as _events
-from core.automation._cron_inbox import CronInbox, InboxWriteError
+from core.automation._cron_inbox import CronInbox, InboxWriteError, state_path
 from core.automation._cron_jobs import CronJob, CronJobValidationError, CronStorageError
 from core.automation._cron_webhook_events import (
     WEBHOOK_INBOX,
     WEBHOOK_PATH_PREFIX,
     WebhookRequest,
+    WebhookState,
 )
 from core.secrets import WEBHOOK_SECRETS, SecretStoreError
+from core.utils.atomic import sync_directory, write_new_bytes
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -29,7 +35,7 @@ if TYPE_CHECKING:
 #: public URL), the local network, or only this computer.
 WebhookReach = Literal["internet", "network", "computer"]
 
-#: What became of a request: accepted and stored, refused (unknown job, paused
+#: What became of a request: acknowledged, refused (unknown job, paused
 #: job, no webhook, wrong secret: all alike), or authenticated but not stored.
 WebhookReceipt = Literal["accepted", "refused", "unavailable"]
 
@@ -63,7 +69,7 @@ class CronWebhooks(CronInbox[WebhookRequest]):
 
     A request is checked against the job's secret from the Secret Store and,
     once accepted, stored for the job's next Run before the sender is
-    answered (``_cron_inbox``); a request that cannot be stored is not accepted.
+    answered. Setup pings and recognized signed duplicates start no Run.
     """
 
     def __init__(self, owner: CronService) -> None:
@@ -141,12 +147,18 @@ class CronWebhooks(CronInbox[WebhookRequest]):
 
     @override
     async def discard(self, job_id: str, *, require_removal: bool = False) -> None:
-        """Forget what the job kept as a webhook: its waiting requests and its secret.
+        """Retire the job's webhook activation, including its secret and receipts.
 
         Failures are logged; a secret left behind belongs to no job and opens nothing.
         """
         await super().discard(job_id, require_removal=require_removal)
         await self.discard_secret(job_id)
+        try:
+            await self._owner._writer.call_async(partial(shutil.rmtree, self._receipt_dir(job_id)))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _LOGGER.warning("Cron webhook receipts not removed (job=%s)", job_id)
 
     async def prepare(self, job_id: str) -> None:
         """Give a newly enabled webhook schedule a fresh secret and empty inbox."""
@@ -180,7 +192,7 @@ class CronWebhooks(CronInbox[WebhookRequest]):
         if job is not None and job.schedule_type == "webhook" and job.status == "active":
             secret = await self._secret_for_request(job_id)
         received_at = _timing._utc_now_iso()
-        request = await _WEBHOOK_WORKERS.run(
+        verified = await _WEBHOOK_WORKERS.run(
             _events.accept_request,
             secret if secret is not None else self._decoy_secret,
             headers,
@@ -188,10 +200,11 @@ class CronWebhooks(CronInbox[WebhookRequest]):
             seq=0,
             received_at=received_at,
         )
-        if secret is None or request is None:
+        if secret is None or verified is None:
             if secret is not None:
                 _LOGGER.debug("Cron webhook request refused: wrong secret (job=%s)", job_id)
             return "refused"
+        request, receipt, ping = verified
 
         def wanted() -> bool:
             # Rotation or a schedule change may retire the proof while its
@@ -204,16 +217,15 @@ class CronWebhooks(CronInbox[WebhookRequest]):
                 and self._secrets.get(job_id) == secret
             )
 
-        if _is_github_ping(headers):
-            if not wanted():
-                return "refused"
-            # GitHub's check that a new webhook reaches its URL starts no Run.
-            _LOGGER.debug("Cron webhook ping acknowledged (job=%s)", job_id)
-            return "accepted"
+        if ping and receipt is None:
+            return "accepted" if wanted() else "refused"
+
+        def make_request(seq: int) -> WebhookRequest:
+            return dataclasses.replace(request, seq=seq)
 
         try:
             added, state = await self.add(
-                job_id, lambda seq: dataclasses.replace(request, seq=seq), wanted=wanted
+                job_id, None if ping else make_request, key=receipt, wanted=wanted
             )
         except InboxWriteError as error:
             _LOGGER.error(
@@ -224,8 +236,10 @@ class CronWebhooks(CronInbox[WebhookRequest]):
             return "unavailable"
         except CronStorageError:
             return "unavailable" if wanted() else "refused"
-        if added != "added" or state is None:
+        if added == "refused" or state is None:
             return "refused"
+        if ping or added == "duplicate":
+            return "accepted"
         _LOGGER.debug(
             "Cron webhook request accepted (job=%s bytes=%d waiting=%d dropped=%d)",
             job_id,
@@ -234,6 +248,31 @@ class CronWebhooks(CronInbox[WebhookRequest]):
             state.dropped,
         )
         return "accepted"
+
+    @override
+    async def _already_took(self, state: WebhookState, key: str) -> bool:
+        return state.latest_receipt == key or await self._owner._writer.call_async(
+            partial(_has_receipt, self._receipt_dir(state.job_id) / key)
+        )
+
+    @override
+    def _remember_key(self, state: WebhookState, key: str) -> None:
+        state.latest_receipt = key
+
+    @override
+    async def _write(self, state: WebhookState) -> None:
+        previous = self._states.get(state.job_id)
+        old_receipt = None if previous is None else previous.latest_receipt
+        if old_receipt is not None and old_receipt != state.latest_receipt:
+            # Keep the old receipt independently before replacing its checkpoint.
+            # The new receipt commits atomically with its event in the inbox itself.
+            await self._owner._writer.call_async(
+                partial(_save_receipt, self._receipt_dir(state.job_id) / old_receipt)
+            )
+        await super()._write(state)
+
+    def _receipt_dir(self, job_id: str) -> Path:
+        return state_path(self.state_dir, job_id).with_suffix(".receipts")
 
     async def _secret_for_request(self, job_id: str) -> str | None:
         try:
@@ -267,6 +306,23 @@ def _entry_name(job_id: str) -> str:
     return "sha256-" + hashlib.sha256(job_id.encode("utf-8")).hexdigest()
 
 
-def _is_github_ping(headers: list[tuple[str, str]]) -> bool:
-    """Whether the request is the ping GitHub sends when a webhook is created or tested."""
-    return any(name == "x-github-event" and value.strip() == "ping" for name, value in headers)
+def _has_receipt(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise CronStorageError("Webhook replay receipts could not be read.") from error
+    return True
+
+
+def _save_receipt(path: Path) -> None:
+    try:
+        # A failed inbox write leaves both the checkpoint and its ledger entry.
+        with suppress(FileExistsError):
+            write_new_bytes(path, b"")
+        # Make the newly created receipts directory itself durable before
+        # replacing the inbox's copy of this receipt.
+        sync_directory(path.parent.parent)
+    except OSError as error:
+        raise CronStorageError("Webhook replay receipt could not be saved.") from error
