@@ -193,7 +193,8 @@ export function createFactoryPageModel(bridgeClient) {
       next === '' ||
       next === '/' ||
       next === '/cards' ||
-      /^\/(?:factory|task|topic)(?:\/[^/]+)*(?:\/)?$/.test(next) ||
+      /^\/factory\/[^/]+(?:\/(?:team|discussions|settings))?$/.test(next) ||
+      /^\/(?:task|topic)\/[^/]+$/.test(next) ||
       /^\/card\/[^/]+$/.test(next) ||
       /^\/workflows(?:\/[^/]+)?$/.test(next);
     if (!valid) {
@@ -332,6 +333,13 @@ export function createFactoryPageModel(bridgeClient) {
       context(next);
     });
     const offInvalidation = client.onInvalidation(({ change } = {}) => {
+      if (
+        change &&
+        ['factories', 'members', 'tasks', 'topics', 'page_badges'].includes(
+          change.resource,
+        )
+      )
+        return;
       void refresh({
         full: !change,
         workflowsChanged: change?.resource === 'workflows',

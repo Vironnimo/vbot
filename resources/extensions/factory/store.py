@@ -752,9 +752,36 @@ class FactoryStore:
                 raise FactoryError(
                     "card_not_final", "The Card is unfinished. Discard it before deleting it."
                 )
+            self._check_native_card_deletion(connection, card_id)
             connection.execute("DELETE FROM cards WHERE id = ?", (card_id,))
 
         await self.database.write_async(write)
+
+    async def check_card_deletion(self, card_id: str) -> None:
+        await self.database.read_async(
+            lambda connection: self._check_native_card_deletion(connection, card_id)
+        )
+
+    @staticmethod
+    def _check_native_card_deletion(connection: sqlite3.Connection, card_id: str) -> None:
+        linked = connection.execute(
+            "WITH RECURSIVE ancestry(id, parent_id, runtime_json) AS ("
+            "SELECT id, parent_id, runtime_json FROM cards WHERE id = ? UNION "
+            "SELECT c.id, c.parent_id, c.runtime_json FROM cards c "
+            "JOIN ancestry a ON c.id = a.parent_id) "
+            "SELECT 1 FROM ancestry a JOIN native_tasks t ON "
+            "t.id = json_extract(a.runtime_json, '$.native_task_id') OR "
+            "json_extract(t.body_json, '$.workflow_card_id') = a.id "
+            "JOIN native_factories f ON f.id = t.factory_id "
+            "WHERE f.state != 'archived' LIMIT 1",
+            (card_id,),
+        ).fetchone()
+        if linked:
+            raise FactoryError(
+                "card_in_use",
+                "This Card retains a Factory task's results and resource consumption. "
+                "Archive its Factory before deleting it.",
+            )
 
     async def move_card(self, card_id: str, position: float) -> Json:
         at = utc_now_timestamp()

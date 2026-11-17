@@ -738,3 +738,42 @@ async def test_nowait_workflow_descendant_retains_authority_until_native_task_co
     assert child_run.status.value == "cancelled"
     assert resumed_child.status.value == "cancelled"
     assert (await harness.operation("task.get", id=task["id"]))["task"]["state"] == "done"
+
+
+@pytest.mark.parametrize("source,denied", [("bash", False), ("subagent", False), ("bash", True)])
+async def test_native_follower_tool_admission_matches_offered_tools_for_descendants(
+    native_factory_runtime: NativeFactoryRuntime,
+    tmp_path: Path,
+    source: str,
+    denied: bool,
+) -> None:
+    harness = native_factory_runtime
+    factory = await establish(
+        harness,
+        tmp_path,
+        config={
+            "allowed_tools": [source],
+            "denied_tools": ["background_tasks"] if denied else [],
+        },
+    )
+    await harness.operation(
+        "task.create",
+        factory_id=factory["id"],
+        title="Follower",
+        objective="test-owned-policy",
+        assignee_id=factory["leader_member_id"],
+    )
+    request = await harness.request()
+    offered = {item["name"] for item in request["kwargs"]["tools"]}
+    assert ("background_tasks" in offered) is not denied
+    run = harness.runtime.chat_run_manager.active_runs()[0]
+    root = context(harness, run)
+    for index, current in enumerate(
+        [root, replace(root, run_id="child-run", session_id="child-session")]
+    ):
+        result = await harness.service.before_tool_call(
+            current, tool_name="background_tasks", tool_call_id=f"follower-{index}"
+        )
+        assert (result is not None) is denied
+    request["answer"].set_result({"content": "test-owned-policy-end", "tool_calls": None})
+    await harness.settle()

@@ -902,7 +902,19 @@ class NativeFactoryExecution:
             self._launch_later(execution)
         elif execution["kind"] in {"task", "review"}:
             task = await self.store.get_task(execution["scope_id"])
-            if task["state"] == "working":
+            if (
+                execution["kind"] == "review"
+                and task["state"] == "review"
+                and not (task.get("submission") or {}).get("reviewer_approved")
+            ):
+                task = await self.store.change_task(
+                    task["id"],
+                    {"state": "blocked", "reason": "review_input"},
+                    actor="factory",
+                    event="awaiting_review",
+                )
+                await self._publish("tasks", task)
+            elif task["state"] == "working":
                 task = await self.store.change_task(
                     task["id"],
                     {

@@ -6,7 +6,7 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 from core.agents.temporary import TemporaryAgentConfig
 from core.tools.availability import ToolAccess
@@ -22,6 +22,29 @@ type Json = dict[str, Any]
 class NativeWorkflows:
     def __init__(self, native: Any) -> None:
         self.native = native
+
+    async def linked_card(self, task: Json) -> Json | None:
+        if not task.get("workflow_card_id"):
+            return None
+        try:
+            return cast(
+                Json, await self.native.service.records().get_card(task["workflow_card_id"])
+            )
+        except FactoryError as error:
+            if error.code != "card_not_found":
+                raise
+        patch: Json = {"workflow_card_id": ""}
+        if task["state"] not in {"done", "cancelled", "paused"}:
+            patch.update(state="blocked", reason="workflow_missing", epoch=task["epoch"] + 1)
+            if isinstance(task.get("submission"), dict):
+                patch["submission"] = {**task["submission"], "epoch": patch["epoch"]}
+        previous = deepcopy(task)
+        saved = await self.native.store.change_task(
+            task["id"], patch, actor="factory", event="workflow_missing"
+        )
+        task.update(saved)
+        await self.native.changed("tasks", saved, previous)
+        return None
 
     async def _policy(self, task: Json) -> str:
         factory = await self.native.store.get_factory(task["factory_id"])
@@ -261,7 +284,17 @@ class NativeWorkflows:
         if not card_id:
             return
         service = self.native.service
-        card = await service.records().get_card(card_id)
+        if task.get("workflow_card_id"):
+            card = await self.linked_card(task)
+            if card is None:
+                return
+        else:
+            try:
+                card = await service.records().get_card(card_id)
+            except FactoryError as error:
+                if error.code != "card_not_found":
+                    raise
+                return
         ended = task["state"] in {"done", "cancelled"}
         replaced = (
             previous is not None
@@ -297,7 +330,9 @@ class NativeWorkflows:
         if not task.get("workflow_card_id"):
             return False
         service = self.native.service
-        card = await service.records().get_card(task["workflow_card_id"])
+        card = await self.linked_card(task)
+        if card is None:
+            return True
         root_done = card["state"] == "done"
         result_version = card["runtime"].get("native_result_version", card["revision"])
         if card["state"] == "discarded" or (

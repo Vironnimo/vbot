@@ -321,10 +321,10 @@ class FactoryExecution:
             return "queued", ""
         steps = runtime["steps"]
         order = [step["id"] for step in runtime["workflow"]["steps"]]
+        if any(steps[step_id]["status"] == "approval" for step_id in order):
+            return "waiting", "checkpoint"
         for step_id in order:
             state = steps[step_id]
-            if state["status"] == "approval":
-                return "waiting", "checkpoint"
             if state["status"] == "waiting":
                 return "waiting", str(state.get("reason") or "blocked")
         if all(steps[step_id]["status"] == "done" for step_id in order):
@@ -1169,6 +1169,7 @@ class FactoryExecution:
     async def delete(self, card: Json) -> Json:
         if card["state"] not in FINAL_STATES:
             raise self._error("wrong_state")
+        await self.store.check_card_deletion(card["id"])
         runtime = self._runtime(card)
         runtime["deleting"] = True
         for state in runtime.get("steps", {}).values():

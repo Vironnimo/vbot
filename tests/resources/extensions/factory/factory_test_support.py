@@ -117,6 +117,8 @@ class FakeHost:
         self.state_dir = directory / "state"
         self.data_dir = directory / "data"
         self.catalog_data: Json = {
+            "tools": [],
+            "tool_activations": [],
             "projects": [
                 {
                     "id": project_id,

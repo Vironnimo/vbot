@@ -21,17 +21,11 @@ async def tool_permitted(
         if tool_name in active:
             continue
         if catalog is None:
-            catalog = (await service.host.catalog())["tools"]
+            catalog = (await service.host.catalog())["tool_activations"]
         while True:
             followed = set()
             for tool in catalog:
-                source = tool.get("activation_source")
-                sources = [source] if isinstance(source, str) else (source or [])
-                if (
-                    tool.get("activation") == "follows"
-                    and tool["name"] not in denied
-                    and any(name in active for name in sources)
-                ):
+                if tool["name"] not in denied and any(name in active for name in tool["sources"]):
                     followed.add(tool["name"])
             expanded = active | followed
             if expanded == active:

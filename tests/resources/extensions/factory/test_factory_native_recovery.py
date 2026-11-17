@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.extensions.operations import ExtensionOperationError
 from core.sessions import SessionAddress
 from tests.core.runtime.runtime_test_support import extension_record, tool_context
 from tests.resources.extensions.factory.test_factory_execution import step, workflow
@@ -386,3 +387,101 @@ async def test_restart_recovers_a_linked_workflow_result_before_its_native_wake(
     await harness.settle()
     assert len(harness.model.requests) == count == 2
     assert (await harness.operation("task.get", id=work["id"]))["task"]["state"] == "blocked"
+
+
+@pytest.mark.parametrize("completed_review", [False, True])
+async def test_review_without_decision_can_resume_after_restart(
+    native_factory_runtime: NativeFactoryRuntime,
+    tmp_path: Path,
+    completed_review: bool,
+) -> None:
+    harness = native_factory_runtime
+    factory = await establish(harness, tmp_path)
+    reviewer = await member(harness, factory, "reviewer")
+    work = await task(
+        harness,
+        factory,
+        factory["leader_member_id"],
+        reviewer_id=reviewer["id"],
+        user_approval=True,
+    )
+    request = await harness.request()
+    complete(harness, work, request)
+    review = await harness.request()
+    review["answer"].set_result({"content": "test-owned-review-progress", "tool_calls": None})
+    await harness.settle()
+    current = (await harness.operation("task.get", id=work["id"]))["task"]
+    assert (current["state"], current["reason"]) == ("blocked", "review_input")
+    submission = current["submission"]
+    if completed_review:
+        # Simulate the old persisted projection, repaired without relying on a callback.
+        await harness.service.records().native.change_task(
+            work["id"], {"state": "review", "reason": "review"}, actor="factory"
+        )
+    await restart(harness)
+    await harness.settle()
+    current = (await harness.operation("task.get", id=work["id"]))["task"]
+    assert current["state"] == "blocked"
+    await harness.operation("task.resume", id=current["id"], expected_revision=current["revision"])
+    request = await harness.request()
+    assert request["kwargs"]["test_context"]["agent_id"] == "reviewer"
+    harness.model.tool(
+        "factory_tasks", {"action": "review", "id": work["id"], "approve": True}, request=request
+    )
+    await harness.settle()
+    current = (await harness.operation("task.get", id=work["id"]))["task"]
+    assert current["state"] == "review"
+    assert current["submission"]["reviewer_approved"]
+    assert not current["submission"]["user_approved"]
+    assert current["submission"]["agreement_revision"] == submission["agreement_revision"]
+    done = await harness.operation(
+        "task.review", id=current["id"], expected_revision=current["revision"], approve=True
+    )
+    assert done["task"]["state"] == "done"
+
+
+async def test_deleted_linked_card_does_not_poison_mutations_or_restart(
+    native_factory_runtime: NativeFactoryRuntime,
+    tmp_path: Path,
+) -> None:
+    harness = native_factory_runtime
+    factory = await establish(harness, tmp_path)
+    native = harness.service.records().native
+    work = await task(harness, factory, "")
+    card = await harness.service.records().create_card(
+        "product", "Linked", "Scope", origin="operator"
+    )
+    await harness.service.records().change(
+        card["id"], {"state": "discarded"}, actor="user", event="discarded"
+    )
+    work = await native.change_task(
+        work["id"], {"state": "blocked", "reason": "workflow", "workflow_card_id": card["id"]}
+    )
+    with pytest.raises(ExtensionOperationError) as refused:
+        await harness.operation("card.delete", id=card["id"])
+    assert refused.value.code == "card_in_use"
+    assert not (await harness.service.records().get_card(card["id"]))["runtime"].get("deleting")
+    # Reproduce a database left by the previous version, bypassing the new guard.
+    await harness.service.records().database.write_async(
+        lambda connection: (
+            connection.execute("DELETE FROM cards WHERE id = ?", (card["id"],)) and None
+        )
+    )
+    await harness.operation(
+        "task.update", id=work["id"], expected_revision=work["revision"], title="Edited"
+    )
+    current = await native.get_task(work["id"])
+    assert (current["state"], current["reason"]) == ("blocked", "workflow_missing")
+    assert current["workflow_card_id"] == ""
+    # Leave another stale reference for startup rather than the mutation path.
+    await native.change_task(
+        work["id"], {"state": "blocked", "reason": "workflow", "workflow_card_id": card["id"]}
+    )
+    await restart(harness)
+    current = (await harness.operation("task.get", id=work["id"]))["task"]
+    assert current["reason"] == "workflow_missing"
+    later = await task(harness, factory, factory["leader_member_id"])
+    request = await harness.request()
+    complete(harness, later, request)
+    await harness.settle()
+    assert (await harness.operation("task.get", id=later["id"]))["task"]["state"] == "done"

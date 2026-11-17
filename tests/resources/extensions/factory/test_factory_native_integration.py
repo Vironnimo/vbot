@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 
 from core.extensions.operations import ExtensionOperations
+from core.projects import AgentOverrides
 from core.runs import Run, RunCancelledError
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
@@ -215,6 +216,14 @@ async def test_native_assignment_runs_the_real_identity_without_a_workflow(
     )
     assert resolved.id == identity.id
     assert resolved.workspace == identity.workspace
+    with pytest.raises(ValueError):
+        runtime.agent_resolver.resolve_agent(
+            None, identity.id, session_id=run.session_id, new_session_overrides=AgentOverrides()
+        )
+    with pytest.raises(ValueError):
+        await runtime.agent_resolver.resolve_agent_async(
+            None, identity.id, session_id=run.session_id, new_session_overrides=AgentOverrides()
+        )
     text = str(request["messages"])
     assert "test-owned-identity-sentinel" in text
     assert "test-owned-private-skill" in text

@@ -116,6 +116,20 @@ class NativeLimits:
         self, execution: Json, *, resources: bool = True, report_all: bool = False
     ) -> Json:
         factory_id = execution["factory_id"]
+        factory = await self.native.store.get_factory(factory_id)
+        ancestors: dict[str, Json] = {}
+        task_id = await self._task_id(execution)
+        while task_id and task_id not in ancestors:
+            task = await self.native.store.get_task(task_id)
+            ancestors[task_id] = task
+            task_id = task.get("parent_id", "")
+        metrics = {"runs", "tool_calls", "tokens", "cost_usd"} if resources else {"tool_calls"}
+        if not report_all and not any(
+            item.get("limits", {}).get(metric)
+            for item in [factory, *ancestors.values()]
+            for metric in metrics
+        ):
+            return {}
         tasks = {task["id"]: task for task in await self.native.all_tasks(factory_id)}
         executions = await self.native.all_executions(factory_id)
         # Include a newly created or updated record supplied by admission even if
@@ -138,7 +152,6 @@ class NativeLimits:
                 descendants = expanded
             scopes.append((f"task:{task_id}", task.get("limits", {}), descendants))
             task_id = task.get("parent_id", "")
-        factory = await self.native.store.get_factory(factory_id)
         scopes.append(("factory", factory.get("limits", {}), None))
         result: Json = {}
         reports: dict[str, Json] = {}

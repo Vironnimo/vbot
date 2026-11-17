@@ -146,6 +146,22 @@ describe('App', () => {
     );
     expect(document.querySelectorAll('.toast')).toHaveLength(0);
     const frame = document.querySelector('iframe');
+    const child = frame.contentWindow;
+    const sent = vi.spyOn(child, 'postMessage');
+    frame.dispatchEvent(new Event('load'));
+    const init = sent.mock.calls.find(
+      ([value]) => value.type === 'vbot.extension.init',
+    )[0];
+    const ready = new MessageEvent('message', {
+      data: { ...init, type: 'vbot.extension.ready' },
+    });
+    Object.defineProperties(ready, {
+      source: { value: child },
+      origin: { value: 'null' },
+    });
+    window.dispatchEvent(ready);
+    flushSync();
+    sent.mockClear();
     badge = 125;
     connection.onEvent({
       type: 'resource_changed',
@@ -164,6 +180,11 @@ describe('App', () => {
     );
     expect(document.querySelector('iframe')).toBe(frame);
     expect(pageButton().getAttribute('aria-label')).toContain('125');
+    expect(
+      sent.mock.calls.filter(
+        ([value]) => value.type === 'vbot.extension.invalidate',
+      ),
+    ).toEqual([]);
     badge = 0;
     connection.onEvent({ type: 'connection_ready', active_runs: [] });
     await waitForCondition(() =>

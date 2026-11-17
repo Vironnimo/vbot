@@ -270,8 +270,10 @@ def _task_links(connection: sqlite3.Connection, record: Json, previous: Json | N
         parent = _get(connection, "task", parent_id)
         if parent["factory_id"] != factory_id:
             raise _error("factory_mismatch", "Parent tasks must belong to the same Factory.")
-        if parent["state"] in {"done", "review"} and (
-            previous is None or previous["parent_id"] != record["parent_id"]
+        if (
+            parent["id"] == record["parent_id"]
+            and parent["state"] in {"done", "review"}
+            and (previous is None or previous["parent_id"] != record["parent_id"])
         ):
             raise _error(
                 "parent_finished", "Reopen the parent before adding unfinished child work."

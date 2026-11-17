@@ -253,14 +253,18 @@ class NativeFactoryManagement:
                         " topic."
                     ),
                 )
-            if resource == "factory" and any(
-                key in args for key in ("limits", "config", "capacity", "remit", "clear_fields")
+            if resource == "factory" and (
+                action != "update"
+                or any(
+                    key in args
+                    for key in ("state", "limits", "config", "capacity", "remit", "clear_fields")
+                )
             ):
                 raise FactoryError(
                     "operator_boundary",
                     (
-                        "The user sets Factory remit, limits and configuration boundaries. "
-                        "Propose that change in a topic."
+                        "The user sets Factory lifecycle, remit, limits and configuration "
+                        "boundaries. Propose that change in a topic."
                     ),
                 )
         if (
@@ -518,7 +522,11 @@ class NativeFactoryManagement:
         request_id = text(args, "request_id")
         name = text(args, "leader_name" if leader else "name", maximum=200)
         payload = {key: value for key, value in args.items() if key != "expected_revision"}
-        reservation = await self.store.reserve_identity(request_id, payload)
+        reservation = await self.store.identity_reservation(request_id) or {}
+        if reservation and reservation["payload"] != payload:
+            raise FactoryError(
+                "receipt_conflict", "This request id already describes another identity creation."
+            )
         if reservation.get("proof"):
             info = await self._identity(reservation["agent_id"])
             if info["incarnation"] != reservation["proof"]:
@@ -550,6 +558,16 @@ class NativeFactoryManagement:
             raise FactoryError(
                 "model_required", "Choose a Model from catalog for this Identity Agent."
             )
+        if args.get("factory_id"):
+            factory = await self.store.get_factory(args["factory_id"])
+            self._check_model_boundary(model, factory.get("config", {}).get("allowed_models"))
+            self._check_model_boundary(
+                args.get("config", {}).get("model")
+                or factory.get("config", {}).get("model")
+                or model,
+                factory.get("config", {}).get("allowed_models"),
+            )
+        reservation = await self.store.reserve_identity(request_id, payload)
         identity_config = reservation.get("identity_config") or {"name": name, "model": model}
         await self.store.save_identity_reservation(request_id, {"identity_config": identity_config})
         info = await self._identity(
@@ -851,6 +869,13 @@ class NativeFactoryManagement:
                     "Resume applies to paused or blocked tasks. Read the current task state.",
                 )
             patch = {"state": state, "reason": ""}
+            if action == "resume" and isinstance(previous.get("submission"), dict):
+                patch.update(
+                    state="review",
+                    reason="review",
+                    epoch=previous["epoch"] + 1,
+                    submission={**previous["submission"], "epoch": previous["epoch"] + 1},
+                )
         elif action == "complete":
             return await self.store.submit_task(
                 previous["id"],

@@ -172,6 +172,9 @@ class Store:
     async def delete_card(self, card_id):
         self.cards.pop(card_id, None)
 
+    async def check_card_deletion(self, card_id):
+        pass
+
 
 class Run:
     def __init__(self, run_id: str, owner: RunExecutionOwner, binding) -> None:
@@ -405,7 +408,7 @@ class Service:
             step["workflow"],
             parent_id=card["id"],
             project_id=card["project_id"],
-            title=f"{card['title']} · {step['name']}",
+            title=f"{card['title']} Â· {step['name']}",
             description="\n\n".join(item["result"] for item in earlier),
         )
         return {**child, "workflow_name": self.store.workflows[step["workflow"]]["name"]}
@@ -1584,6 +1587,14 @@ async def test_approval_waits_before_its_step_and_send_back_targets_the_chosen_s
         ],
     )
     groups = service.groups
+    mixed = {
+        "workflow": {"steps": [{"id": "waiting"}, {"id": "approval"}]},
+        "steps": {
+            "waiting": {"status": "waiting", "reason": "blocked"},
+            "approval": {"status": "approval"},
+        },
+    }
+    assert service.execution.derive(mixed) == ("waiting", "checkpoint")
     await started(service, workflow_id="planimpl")
     await hand_in(service, "plan", "First plan")
     card = await hand_in(service, "planreview", "Sound plan.")
@@ -1609,6 +1620,9 @@ async def test_approval_waits_before_its_step_and_send_back_targets_the_chosen_s
     assert "Second plan" in implement.content and "First plan" not in implement.content
     card = await hand_in(service, "implement")
     assert service.state(card, "review")["participant"] == "review-r1"
+    card = await send_back_work(service, "review", "test-owned-changes")
+    assert service.state(card, "implement")["status"] == "running"
+    assert service.state(card, "implement").get("approved") is True
 
 
 @pytest.mark.asyncio

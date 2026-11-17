@@ -779,3 +779,26 @@ async def test_live_wip_config_change_releases_capacity_without_reload(
         await callback(previous, dict(factory.config))
     assert (await factory.store.get_card(cards[2]["id"]))["state"] == "queued"
     assert (await factory.operation("board.get"))["wip"] == {"running": 2, "limit": 1}
+
+
+async def test_nested_workflows_stop_after_five_child_levels(
+    factory: FactoryHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(factory.service, "request_schedule", lambda: None)
+    parent = await factory.card("done")
+    child_step = {
+        "id": "child",
+        "name": "Child",
+        "kind": "workflow",
+        "workflow": "implement",
+        "task": "test-owned-nesting",
+        "wait": True,
+    }
+    for depth in range(1, 6):
+        parent = await factory.service.create_child(parent, child_step, [])
+        assert parent["runtime"]["depth"] == depth
+    count = len(await factory.store.list_cards())
+    with pytest.raises(FactoryError) as refused:
+        await factory.service.create_child(parent, child_step, [])
+    assert refused.value.code == "too_deep"
+    assert len(await factory.store.list_cards()) == count

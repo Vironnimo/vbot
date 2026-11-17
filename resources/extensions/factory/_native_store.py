@@ -301,6 +301,17 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
 
         return await self.database.write_async(write)
 
+    async def identity_reservation(self, request_id: str) -> Json | None:
+        def read(connection: sqlite3.Connection) -> Json | None:
+            row = connection.execute(
+                "SELECT request_id, agent_id, state, payload_json, detail_json, "
+                "created_at, updated_at FROM native_identity_reservations WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            return self._reservation(row) if row else None
+
+        return await self.database.read_async(read)
+
     async def reserve_identity(self, request_id: str, payload: Json) -> Json:
         """Persist the exact cross-owner creation intention before creating an Agent."""
         request_id = _text(request_id, "request_id", 500, required=True)

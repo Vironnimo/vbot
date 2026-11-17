@@ -17,6 +17,7 @@ export function createNativeFactoryModel(model) {
     refreshPromise = null,
     again = false;
   let cursors = $state({});
+  let selectedProject = null;
   const pageCounts = {
     factory: 1,
     member: 1,
@@ -77,7 +78,10 @@ export function createNativeFactoryModel(model) {
   const factoryId = $derived(
     parts[0] === 'factory'
       ? parts[1]
-      : detail?.task?.factory_id || topic?.topic?.factory_id || '',
+      : detail?.task?.factory_id ||
+          topic?.topic?.factory_id ||
+          factory?.id ||
+          '',
   );
   async function refresh() {
     again = true;
@@ -110,7 +114,14 @@ export function createNativeFactoryModel(model) {
           const id =
             parts[0] === 'factory'
               ? parts[1]
-              : nextDetail?.task?.factory_id || nextTopic?.topic?.factory_id;
+              : nextDetail?.task?.factory_id ||
+                nextTopic?.topic?.factory_id ||
+                (list.factories || []).find(
+                  (item) =>
+                    item.state !== 'archived' &&
+                    (selectedProject == null ||
+                      item.project_id === selectedProject),
+                )?.id;
           const reads = id
             ? await Promise.all([
                 model.call('factory.get', { id }),
@@ -156,7 +167,23 @@ export function createNativeFactoryModel(model) {
           };
           error = '';
         } catch (cause) {
-          if (!disposed && route === model.route) error = failureText(cause);
+          if (!disposed && route === model.route) {
+            if (
+              [
+                'factory_not_found',
+                'task_not_found',
+                'topic_not_found',
+              ].includes(cause?.code)
+            ) {
+              const parent =
+                detail?.task?.factory_id || topic?.topic?.factory_id;
+              await model.client.replaceRoute(
+                parent && cause.code !== 'factory_not_found'
+                  ? `/factory/${encodeURIComponent(parent)}`
+                  : '',
+              );
+            } else error = failureText(cause);
+          }
         } finally {
           if (!disposed && route === model.route) loading = false;
         }
@@ -207,7 +234,19 @@ export function createNativeFactoryModel(model) {
     });
   });
   onMount(() => {
-    const off = model.client.onInvalidation(() => void refresh());
+    const off = model.client.onInvalidation(({ change } = {}) => {
+      if (
+        !change ||
+        [
+          'factories',
+          'members',
+          'tasks',
+          'topics',
+          'permissions_approvals',
+        ].includes(change.resource)
+      )
+        void refresh();
+    });
     return () => {
       disposed = true;
       generation++;
@@ -216,6 +255,9 @@ export function createNativeFactoryModel(model) {
   });
   return {
     refresh,
+    selectProject(id) {
+      selectedProject = id;
+    },
     more,
     get cursors() {
       return cursors;
