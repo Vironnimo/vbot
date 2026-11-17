@@ -567,8 +567,19 @@ def classify_task_response_for_retry_policy(
 # declined the requested content. OpenAI sends ``moderation_blocked``;
 # OpenRouter forwards the upstream message under a numeric code ("Your request
 # was rejected by the safety system", 2026-10) or reports its own moderation as
-# "... was flagged ...".
-_REFUSAL_ERROR_CODES = frozenset({"moderation_blocked", "content_policy_violation"})
+# "... was flagged ...". Google's Decisions API names its input-filter block as
+# the string ``code`` of an HTTP 400 (aistudio.google.com/docs/decisions-api).
+_REFUSAL_ERROR_CODES = frozenset(
+    {
+        "moderation_blocked",
+        "content_policy_violation",
+        "safety",
+        "prohibited_content",
+        "blocklist",
+        "image_safety",
+        "content_blocked",
+    }
+)
 _REFUSAL_PHRASES = ("rejected by the safety system", "content policy", "was flagged")
 
 

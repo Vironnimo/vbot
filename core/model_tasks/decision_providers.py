@@ -13,6 +13,7 @@ import httpx
 from core.model_tasks.decision_pricing import price_decision_usage
 from core.model_tasks.decision_profile import DecisionProfile
 from core.model_tasks.decision_types import DecisionError, validate_answers, wire_questions
+from core.providers.errors import ProviderContentRefusedError
 from core.providers.task_client import (
     DEFAULT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,
@@ -37,14 +38,20 @@ def decision_payload(
     if not profile.supported:
         raise DecisionError("This target has no native Decision route.", code="not_configured")
     ids = {q["id"]: q["id"] for q in questions}
-    if wire.protocol == "system_one" and any(
-        re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", q["id"]) is None for q in questions
-    ):
+    id_pattern = _QUESTION_ID_PATTERNS.get(wire.protocol)
+    if id_pattern is not None and any(id_pattern.fullmatch(q["id"]) is None for q in questions):
         ids = {q["id"]: f"q{index}" for index, q in enumerate(questions, 1)}
-    if wire.protocol == "openai_decisions":
+    if wire.protocol == "google_decisions":
+        # Google reads JSON evidence best as text, so keys never become content blocks.
+        body: dict[str, Any] = {
+            "model": model_id,
+            "input": state if isinstance(state, str) else _json_text(state),
+            "questions": {ids[q["id"]]: _google_question(q) for q in questions},
+        }
+    elif wire.protocol == "openai_decisions":
         # State is evidence. JSON keys never become instructions or image fetches.
         evidence: Any = state if isinstance(state, str) else _json_text(state)
-        body: dict[str, Any] = {
+        body = {
             "model": model_id,
             "input": evidence,
             "questions": [_openai_question(q) for q in questions],
@@ -75,6 +82,21 @@ def decision_payload(
     return body, {sent: original for original, sent in ids.items()}
 
 
+# Question ids each protocol accepts; other caller ids are substituted per request.
+_QUESTION_ID_PATTERNS = {
+    "system_one": re.compile(r"[A-Za-z0-9_.-]{1,100}"),
+    "google_decisions": re.compile(r"[A-Za-z0-9_-]{1,64}"),
+}
+
+# Reasons with which Google's Decisions API reports that its input filters
+# blocked the whole request: ``prompt_feedback.block_reason`` of a response
+# without answers (the HTTP 400 ``error.code`` form is a content refusal of the
+# shared task client).
+_GOOGLE_BLOCK_REASONS = frozenset(
+    {"safety", "prohibited_content", "blocklist", "image_safety", "content_blocked", "other"}
+)
+
+
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
@@ -100,6 +122,19 @@ def _openai_question(question: dict[str, Any]) -> dict[str, Any]:
         result["levels"] = [
             {"label": str(index), "description": text} for index, text in enumerate(criteria)
         ]
+    return result
+
+
+def _google_question(question: dict[str, Any]) -> dict[str, Any]:
+    result = {"type": question["type"], "instructions": question["instructions"]}
+    criteria = question.get("criteria")
+    if question["type"] == "noul" and criteria:
+        result["criteria"] = {
+            "true_description": criteria["true"],
+            "false_description": criteria["false"],
+        }
+    elif criteria is not None:
+        result["criteria"] = criteria
     return result
 
 
@@ -130,19 +165,27 @@ class ProviderDecisionClient(ProviderTaskClient):
         body, ids = decision_payload(self._model_id, state, questions, profile, options or {})
         base = urlsplit(self._base_url)
         endpoint = urlunsplit((base.scheme, base.netloc, profile.wire.endpoint, "", ""))
-        return await self.post_and_parse(
-            endpoint,
-            timeout=60,
-            http_client=http_client,
-            retry_policy=DEFAULT_TASK_REQUEST_RETRY_POLICY,
-            json=body,
-            parse=lambda response: _parse(response, questions, profile, ids),
-        )
+        try:
+            return await self.post_and_parse(
+                endpoint,
+                timeout=60,
+                http_client=http_client,
+                retry_policy=DEFAULT_TASK_REQUEST_RETRY_POLICY,
+                json=body,
+                parse=lambda response: _parse(response, questions, profile, ids, self._model_id),
+            )
+        except ProviderContentRefusedError:
+            if profile.wire.protocol != "google_decisions":
+                raise
+            # Google's input filter declined the shared input, so every question.
+            return _refused(questions, self._model_id, None, profile)
 
     @override
     async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
         raw = await super()._observe_response_usage(response)
         profile = self._decision_profile
+        if profile is not None and profile.wire.protocol == "google_decisions":
+            raw = _google_usage(raw)
         return price_decision_usage(raw or {}, profile.pricing if profile is not None else None)
 
 
@@ -151,11 +194,22 @@ def _parse(
     questions: list[dict[str, Any]],
     profile: DecisionProfile,
     ids: dict[str, str],
+    model_id: str,
 ) -> dict[str, Any]:
     try:
         payload = response.json()
     except ValueError, UnicodeError:
         payload = None
+    if isinstance(payload, dict) and profile.wire.protocol == "google_decisions":
+        payload = dict(payload)
+        # Google answers without echoing the Model and with its own usage counters.
+        payload.setdefault("model", model_id)
+        usage = _google_usage(payload.pop("usage", None))
+        if usage is not None:
+            payload["usage"] = usage
+        feedback = payload.get("prompt_feedback")
+        if isinstance(feedback, dict) and feedback.get("block_reason") in _GOOGLE_BLOCK_REASONS:
+            return _refused(questions, model_id, usage, profile)
     if isinstance(payload, dict):
         payload = dict(payload)
         if profile.wire.protocol == "openai_decisions":
@@ -200,4 +254,40 @@ def _openai_answers(answers: Any) -> Any:
                 values[label] = entry.get("probability")
             normalized["probabilities"] = values
         result[name] = normalized
+    return result
+
+
+def _refused(
+    questions: list[dict[str, Any]],
+    model_id: str,
+    usage: dict[str, Any] | None,
+    profile: DecisionProfile,
+) -> dict[str, Any]:
+    """Answer every question as declined, keeping any reported Usage."""
+    payload = {
+        "model": model_id,
+        "answers": {q["id"]: {"type": "refusal"} for q in questions},
+        "usage": usage or {},
+    }
+    result = validate_answers(payload, questions)
+    result["usage"] = price_decision_usage(result["usage"], profile.pricing)
+    return result
+
+
+def _google_usage(usage: Any) -> dict[str, Any] | None:
+    """Project Google's ``total_*`` counters onto the canonical Usage fields.
+
+    Only reported counters are carried; a missing one stays unknown.
+    """
+    if not isinstance(usage, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for wire_name, canonical_name in (
+        ("total_input_tokens", "input_tokens"),
+        ("total_output_tokens", "output_tokens"),
+    ):
+        if wire_name in usage:
+            result[canonical_name] = usage[wire_name]
+    if "total_cached_tokens" in usage:
+        result["input_tokens_details"] = {"cached_tokens": usage["total_cached_tokens"]}
     return result

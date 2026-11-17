@@ -95,10 +95,15 @@ PROTOCOLS: tuple[Protocol, ...] = (
     "claude_agent",
 )
 
-type DecisionProtocol = Literal["none", "system_one", "openai_decisions"]
+type DecisionProtocol = Literal["none", "system_one", "openai_decisions", "google_decisions"]
 """Native Decision protocols, independent of the target's Chat protocol."""
 
-DECISION_PROTOCOLS: tuple[DecisionProtocol, ...] = ("none", "system_one", "openai_decisions")
+DECISION_PROTOCOLS: tuple[DecisionProtocol, ...] = (
+    "none",
+    "system_one",
+    "openai_decisions",
+    "google_decisions",
+)
 DECISION_OPTION_NAMES: tuple[str, ...] = ("provider_options", "keep_alive", "prompt_cache_key")
 
 ReasoningDialect = Literal[

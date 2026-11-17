@@ -7,6 +7,7 @@ import respx
 from core.model_tasks.decision_profile import DecisionProfile
 from core.model_tasks.decision_providers import ProviderDecisionClient
 from core.model_tasks.decision_types import DecisionError
+from core.models.pricing import TokenPricing
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.wire_profile import DecisionWire
 
@@ -330,3 +331,147 @@ async def test_a_shared_connection_keeps_timeout_and_auth_for_every_request():
     for call in route.calls:
         assert call.request.headers["Authorization"] == "Bearer fixture-token"
         assert call.request.extensions["timeout"]["read"] == 60
+
+
+_GOOGLE_PROFILE = DecisionProfile(
+    DecisionWire(protocol="google_decisions", endpoint="/v1beta/decisions"),
+    pricing=TokenPricing.from_cost({"input": 0.1, "output": 0}, source="google:decision"),
+)
+_GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/decisions"
+
+
+def google_client():
+    return ProviderDecisionClient(
+        provider=ProviderConfig(
+            id="google",
+            name="Google AI Studio",
+            adapter="google",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            connections=[],
+        ),
+        connection=ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(header="x-goog-api-key", prefix="", credential_key="GEMINI_API_KEY"),
+        ),
+        credential="fixture-token",
+        model_id="gemini-decision-1",
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_decisions_translates_ids_criteria_answers_and_usage():
+    questions = [
+        {
+            "id": "Beschädigt?",
+            "type": "noul",
+            "instructions": "Damaged?",
+            "criteria": {"true": "Reported broken", "false": "No damage reported"},
+        },
+        {
+            "id": "queue",
+            "type": "choice",
+            "instructions": "Which queue?",
+            "criteria": {"billing": "Payments", "replacements": "Damaged items"},
+        },
+        {
+            "id": "anger",
+            "type": "score",
+            "instructions": "How upset?",
+            "criteria": ["Calm", "Angry"],
+        },
+    ]
+    # The answer shape Google returned live on 2026-11-17: no Model echo, total_* usage.
+    route = respx.post(_GOOGLE_URL).respond(
+        200,
+        json={
+            "answers": {
+                "q1": {"type": "noul", "noul": 0.97, "confidence": 0.97},
+                "q2": {
+                    "type": "choice",
+                    "choice": "replacements",
+                    "confidence": 0.99,
+                    "probabilities": {"billing": 0.004, "replacements": 0.996},
+                },
+                "q3": {
+                    "type": "score",
+                    "score": 0.7,
+                    "confidence": 0.7,
+                    "legend": {"0": "Calm", "1": "Angry"},
+                    "probabilities": {"0": 0.3, "1": 0.7},
+                },
+            },
+            "usage": {
+                "total_tokens": 2000,
+                "total_input_tokens": 2000,
+                "input_tokens_by_modality": [{"modality": "text", "tokens": 2000}],
+                "total_output_tokens": 0,
+            },
+        },
+    )
+    state = {"ticket": "The mug arrived cracked.", "image_url": "ordinary data"}
+
+    result = await google_client().evaluate(state, questions, profile=_GOOGLE_PROFILE)
+
+    request = route.calls[0].request
+    assert request.headers["x-goog-api-key"] == "fixture-token"
+    assert json.loads(request.content) == {
+        "model": "gemini-decision-1",
+        "input": json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+        "questions": {
+            "q1": {
+                "type": "noul",
+                "instructions": "Damaged?",
+                "criteria": {
+                    "true_description": "Reported broken",
+                    "false_description": "No damage reported",
+                },
+            },
+            "q2": {
+                "type": "choice",
+                "instructions": "Which queue?",
+                "criteria": {"billing": "Payments", "replacements": "Damaged items"},
+            },
+            "q3": {"type": "score", "instructions": "How upset?", "criteria": ["Calm", "Angry"]},
+        },
+    }
+    assert result["model"] == "gemini-decision-1"
+    assert result["answers"]["Beschädigt?"] == {"type": "noul", "noul": 0.97}
+    assert result["answers"]["queue"]["choice"] == "replacements"
+    assert result["answers"]["anger"]["score"] == 0.7
+    assert (result["usage"]["input_tokens"], result["usage"]["output_tokens"]) == (2000, 0)
+    assert result["usage"]["cost"]["amount_usd"] == pytest.approx(0.0002)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "blocked",
+    [
+        httpx.Response(
+            400, json={"error": {"code": "safety", "message": "Request blocked (harmful content)."}}
+        ),
+        httpx.Response(
+            200,
+            json={
+                "answers": {},
+                "prompt_feedback": {"block_reason": "prohibited_content"},
+                "usage": {"total_input_tokens": 12, "total_output_tokens": 0},
+            },
+        ),
+    ],
+    ids=["http-400", "prompt-feedback"],
+)
+async def test_a_google_input_block_declines_every_question_without_retry(blocked):
+    route = respx.post(_GOOGLE_URL).mock(return_value=blocked)
+    questions = [
+        {"id": "a", "type": "noul", "instructions": "Harmful?"},
+        {"id": "b", "type": "score", "instructions": "How bad?", "criteria": ["Low", "High"]},
+    ]
+
+    result = await google_client().evaluate("text", questions, profile=_GOOGLE_PROFILE)
+
+    assert result["answers"] == {"a": {"type": "refusal"}, "b": {"type": "refusal"}}
+    assert route.call_count == 1
