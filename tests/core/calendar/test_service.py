@@ -19,6 +19,7 @@ from core.calendar import (
     CalendarService,
     CalendarStorageError,
     CalendarValidationError,
+    _expansion,
     occurrence_id,
     parse_occurrence_id,
     validate_calendar_events_file,
@@ -36,15 +37,25 @@ def _window(service: CalendarService, lower: str, upper: str) -> list[Any]:
 
 
 @pytest.mark.parametrize("start", ["2026-09-03", "2026-09-03T09:00:00"])
-def test_occurrence_limit_applies_to_each_event(service, start):
+def test_occurrence_limit_applies_to_each_event(service, start, monkeypatch):
     events = [
         service.create_event(title=title, start=start, rrule="FREQ=DAILY")
         for title in ("First", "Second")
     ]
+    resolved = 0
+    occurrence = _expansion._occurrence
+
+    def resolve(*args):
+        nonlocal resolved
+        resolved += 1
+        return occurrence(*args)
+
+    monkeypatch.setattr(_expansion, "_occurrence", resolve)
     occurrences = service.occurrences_in_window(
-        datetime(2026, 9, 3, tzinfo=UTC), datetime(2026, 9, 10, tzinfo=UTC), max_per_event=2
+        datetime(2026, 9, 3, tzinfo=UTC), datetime(2050, 9, 10, tzinfo=UTC), max_per_event=2
     )
     assert len(occurrences) == 4
+    assert resolved < 20
     for event in events:
         assert sum(item.event_id == event.id for item in occurrences) == 2
 
@@ -82,7 +93,7 @@ class TestCreateEvent:
         event = service.create_event(
             title=" Review ",
             start="2026-09-03T15:00",
-            end="2026-09-03T17:30",
+            end=" 2026-09-03T17:30+02:00 ",
             description="Bring the draft.\nPrint it.",
             location="  Room 4 ",
         )

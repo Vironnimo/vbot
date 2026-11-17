@@ -23,7 +23,6 @@ from core.calendar._expansion import (
     iter_occurrences,
     occurrence_at,
     single_occurrence,
-    window_occurrences,
 )
 from core.calendar._time import (
     _as_utc,
@@ -96,7 +95,7 @@ class CalendarProjection:
         occurrences: list[EventOccurrence] = []
         for event in self._events.values():
             occurrences.extend(
-                window_occurrences(event, window_start, window_end, self._timezone, max_per_event)
+                islice(self._iter_event_window(event, window_start, window_end), max_per_event)
             )
         occurrences.sort(key=lambda item: (item.start_utc, item.event_id, item.id))
         return occurrences
@@ -109,6 +108,11 @@ class CalendarProjection:
         """
         return iter_occurrences(event, _as_utc(after), self._timezone)
 
+    def _iter_event_window(
+        self, event: CalendarEvent, start: datetime, end: datetime
+    ) -> Iterator[EventOccurrence]:
+        return takewhile(lambda item: item.start_utc < end, self.iter_occurrences(event, start))
+
     def iter_window_occurrences(
         self, window_start_utc: datetime, window_end_utc: datetime
     ) -> Iterator[EventOccurrence]:
@@ -116,10 +120,7 @@ class CalendarProjection:
         start, end = _checked_window(window_start_utc, window_end_utc)
         self._ensure_events_loaded()
         return merge(
-            *(
-                takewhile(lambda item: item.start_utc < end, self.iter_occurrences(event, start))
-                for event in self._events.values()
-            ),
+            *(self._iter_event_window(event, start, end) for event in self._events.values()),
             key=lambda item: (item.start_utc, item.event_id, item.id),
         )
 
