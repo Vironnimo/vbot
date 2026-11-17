@@ -28,6 +28,7 @@ from core.chat.content_blocks import TextBlock
 from core.runs import SILENT_ANSWER, RunStatus
 
 if TYPE_CHECKING:
+    from core.channels.config import EmailSettings
     from core.runs import CompletionActivity
 
 # The failure count of a streak that alerts once before the job stops.
@@ -47,6 +48,9 @@ class ChannelOwner(Protocol):
 
     @property
     def platform(self) -> str: ...
+
+    @property
+    def email(self) -> EmailSettings | None: ...
 
 
 class ChatDelivery(Protocol):

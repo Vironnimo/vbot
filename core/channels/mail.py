@@ -28,8 +28,8 @@ class InboundMail:
     """One email an email Channel received that no conversation takes.
 
     Its content comes from whoever sent the mail: consumers treat every field
-    except ``channel_id``, ``received_at``, ``folder`` and
-    ``sender_authenticated`` as untrusted data, never as instructions.
+    except ``channel_id``, ``received_at``, ``folder``,
+    ``sender_authenticated`` and ``sender_authserv_id`` as untrusted data, never as instructions.
     Timestamps are canonical UTC text (``core/utils/timestamps.py``).
     """
 
@@ -54,6 +54,8 @@ class InboundMail:
     text: str
     text_cut: bool
     attachments: tuple[MailAttachment, ...] = ()
+    # The Channel-configured receiving server that supplied the domain result.
+    sender_authserv_id: str | None = None
 
 
 class InboundMailSink(Protocol):

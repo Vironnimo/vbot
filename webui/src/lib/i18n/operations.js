@@ -519,9 +519,9 @@ export default Object.freeze({
   'cron.email.channelPlaceholder': 'Select an email Channel',
   'cron.email.channelNone':
     'This Agent has no email Channel. Add one under Settings → Channels.',
-  'cron.email.senders': 'From',
+  'cron.email.senders': 'From header',
   'cron.email.sendersHelp':
-    'Addresses or domains such as @example.com, separated by commas. Leave empty for any sender.',
+    'Addresses or domains such as @example.com, separated by commas. With trusted authentication servers configured, the From domain must also be verified. Without them, the From header alone is used and can be forged. Leave empty for any sender.',
   'cron.email.sendersPlaceholder': 'Any sender',
   'cron.email.subject': 'Subject contains',
   'cron.email.subjectHelp': 'Ignores case. Leave empty for any subject.',

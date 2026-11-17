@@ -1354,9 +1354,9 @@ export default Object.freeze({
   'settings.channels.email.folders.description':
     'Folders to watch, separated by commas. vBot never marks, moves or deletes mails.',
   'settings.channels.email.require_sender_authentication':
-    'Require verified senders',
+    'Require verified From domains',
   'settings.channels.email.require_sender_authentication.help':
-    'Answer a mail only when your mail server verified the sender’s domain (DKIM or DMARC), so nobody can write in an allowed person’s name. Turn this off only if your server does not verify senders.',
+    'Start a conversation only when a trusted receiving server verifies the From domain using DKIM or DMARC. The individual mailbox remains unverified. Cron From filters use the trusted authentication servers independently of this setting.',
   'settings.channels.email.allowed': 'Allowed senders',
   'settings.channels.email.allowed.description':
     'Separate addresses with commas. An empty list answers nobody.',
