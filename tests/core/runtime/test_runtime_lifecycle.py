@@ -793,10 +793,10 @@ async def test_aclose_cancels_work_and_persists_handed_off_traces(
     release_write = threading.Event()
     write = debug_store.atomic_write_text
 
-    def blocked_write(path: Path, text: str) -> None:
+    def blocked_write(path: Path, text: str, **options: Any) -> None:
         write_entered.set()
         release_write.wait(timeout=10)
-        write(path, text)
+        write(path, text, **options)
 
     drain_entered = asyncio.Event()
     trace_written_when_drained: list[bool] = []
@@ -818,6 +818,7 @@ async def test_aclose_cancels_work_and_persists_handed_off_traces(
         await drain_entered.wait()
     finally:
         release_write.set()
+        await runtime.aclose()
     await closing
 
     assert trace_written_when_drained == [True]
