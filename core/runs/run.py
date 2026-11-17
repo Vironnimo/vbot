@@ -10,7 +10,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.event_stream import ReplayEventStream
 from core.runs._errors import detached_error
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from core.projects import AgentOverrides
 
 JsonObject = dict[str, Any]
+type ApprovalAnswer = bool | Literal["permitted"]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
 # Decides from the final status and result whether a finished Run counts as
@@ -424,7 +425,7 @@ class Run:
             on_lagged=lambda: _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id),
         )
         self._done = asyncio.Event()
-        self._approval_ids: dict[str, tuple[asyncio.Future[bool], bool]] = {}
+        self._approval_ids: dict[str, tuple[asyncio.Future[ApprovalAnswer], bool]] = {}
         self._approvals_changed = asyncio.Event()
         # Set once the Run's Session admission committed (or the Run needs none).
         self._admitted = asyncio.Event()
@@ -727,7 +728,9 @@ class Run:
         if self.cancel_requested:
             raise asyncio.CancelledError
 
-    def set_approval_pending(self, request_id: str, future: asyncio.Future[bool] | None) -> None:
+    def set_approval_pending(
+        self, request_id: str, future: asyncio.Future[ApprovalAnswer] | None
+    ) -> None:
         """Publish live approval waits independently of bounded event replay."""
         if future is not None:
             self._approval_ids.setdefault(request_id, (future, False))

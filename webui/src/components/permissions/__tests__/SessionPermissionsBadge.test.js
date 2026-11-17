@@ -120,6 +120,7 @@ describe('SessionPermissionsBadge', () => {
       restricted: true,
       layers: [OWN_LAYER],
       session_grants: ['Edit(/notes)'],
+      session_read_folders: [{ computer_id: 'server', folder: '/library' }],
     });
     removeGrantsMock.mockResolvedValue({ session_grants: ['Edit(/notes)'] });
     await render({ sessionId: 's1' });
@@ -140,6 +141,24 @@ describe('SessionPermissionsBadge', () => {
     });
     expect(list().textContent).not.toContain('Shell(git push *)');
     expect(list().textContent).toContain('Edit(/notes)');
+    const rule = t('permissions.session.readFolder', {
+      folder: '/library',
+      computer: 'server',
+    });
+    list()
+      .querySelector(
+        '[aria-label="' +
+          t('permissions.session.grantRemoveRule', { rule }) +
+          '"]',
+      )
+      .click();
+    await settle();
+    expect(removeGrantsMock).toHaveBeenLastCalledWith({
+      agentId: 'coder',
+      sessionId: 's1',
+      readFolder: '/library',
+      computerId: 'server',
+    });
   });
 
   it('gives a Session its own access, asking before full access lifts inherited limits', async () => {

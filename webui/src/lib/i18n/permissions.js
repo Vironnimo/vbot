@@ -127,8 +127,9 @@ export default Object.freeze({
     'This also removes the limits it inherited from a scheduled job or the Session that started it. They return when that job or Session runs here again.',
   'permissions.session.fullConfirm': 'Give full access',
   'permissions.session.grants': 'Allowed while approving',
+  'permissions.session.readFolder': 'Read folder {folder} on {computer}',
   'permissions.session.grantsHelp':
-    'Rules you allowed for this Session when you approved a Tool call. They add to its rules but never lift a limit it inherited.',
+    'Access you allowed while approving a Tool call. A folder allows reading it and its subfolders in the requesting Session.',
   'permissions.session.grantRemove': 'Remove',
   'permissions.session.grantRemoveRule': 'Remove {rule}',
   'permissions.session.grantsFailed': 'The rule could not be removed.',

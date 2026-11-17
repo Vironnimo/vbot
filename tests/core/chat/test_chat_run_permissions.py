@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -301,7 +302,7 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
     )
     address = SessionAddress(None, "coder", "s1")
     creator = PermissionBoundary.build(
-        normalize_permission_rules({"write": "scratch"}),
+        normalize_permission_rules({"read": "work_area", "write": "scratch"}),
         BoundaryContext(workdir=tmp_path / "creator", home=tmp_path, data_dir=tmp_path / "data"),
     )
     ceiling = creator.ceiling(source=cast(Any, inherited_from))
@@ -320,7 +321,10 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
                 "tool_call_index": None,
                 "project_id": None,
             }
-            stored = AgentOverrides(permission_ceiling=ceiling.to_ceiling_dict())
+            stored = AgentOverrides(
+                permission_ceiling=ceiling.to_ceiling_dict(),
+                read_folders={"server": ((tmp_path / "library").as_posix(),)},
+            )
             metadata.update(stored.session_metadata())
 
         runtime.chat_sessions.mutate_metadata(address, link)
@@ -333,6 +337,9 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
 
     for context in seen:
         assert [layer.source for layer in context.permissions.layers] == [inherited_from]
+        folder_read = context.permissions.check_path(tmp_path / "library" / "client.py", "read")
+        assert (folder_read is None) == (inherited_from == "parent")
+        assert context.permissions.ceiling(source="parent") == ceiling
         refused = context.permissions.check_path(tmp_path / "elsewhere.md", "write")
         assert refused is not None and refused.source == inherited_from
         for access in ("read", "write"):
@@ -344,6 +351,98 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
     # The System Prompt says where the inherited rules come from.
     source = {"parent": "Session that started you", "cron": "Session that scheduled this job"}
     assert source[inherited_from] in _system_prompt(runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("computer", ["server", "laptop"])
+async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
+    tmp_path: Path, computer: str
+) -> None:
+    from core.tools.file_state import FileReadState
+    from core.tools.read import register_read_tool
+    from core.tools.search_files import register_search_files_tool
+    from tests.core.chat.chat_loop_tools_test_support import tool_results
+
+    client = tmp_path / "library" / "client"
+    auth = client / "auth" / "oauth2.py"
+    stdio = client / "stdio" / "win32.py"
+    for file in (auth, stdio):
+        file.parent.mkdir(parents=True)
+        file.write_text("library_marker", encoding="utf-8")
+    runtime, seen = _runtime(
+        tmp_path,
+        None,
+        turns=[
+            tool_turn(
+                ("search", "search_files", {"pattern": "library_marker", "path": str(auth)}),
+                ("read", "read", {"path": str(stdio)}),
+            ),
+            tool_turn(("list", "read", {"path": str(client)})),
+            final("Done"),
+            tool_turn(("next", "probe")),
+            final("Done"),
+        ],
+    )
+    register_read_tool(
+        runtime.tools,
+        attachment_store=None,
+        speech_service=None,
+        file_state=FileReadState(),
+        speech_max_size_bytes=1024,
+    )
+    register_search_files_tool(runtime.tools)
+    creator = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=tmp_path / "work", home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    ceiling = creator.to_ceiling_dict(source="parent")
+    address = SessionAddress(None, "coder", "s1")
+    runtime.chat_sessions.mutate_metadata(
+        address,
+        lambda meta: meta.update(
+            execution={"computer_id": computer},
+            **AgentOverrides(permission_ceiling=ceiling).session_metadata(),
+        ),
+    )
+    waiting = asyncio.Event()
+
+    def observe(snapshot):
+        if len(snapshot["requests"]) == 2:
+            waiting.set()
+
+    runtime.chat_runs.add_approvals_changed_callback(observe)
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Read the library", session_id="s1")
+    async with asyncio.timeout(8):
+        await waiting.wait()
+        requests = runtime.chat_runs.approvals_snapshot()["requests"]
+        search = next(r for r in requests if r["tool_name"] == "search_files")
+        assert search["session_grant"]["folders"][:2] == [auth.parent.as_posix(), client.as_posix()]
+
+        async def save(_request):
+            resolver = runtime.agent_resolver
+            updated = replace(
+                resolver.session_overrides(address), read_folders={computer: (client.as_posix(),)}
+            )
+            resolver._session_overrides[address] = updated.session_metadata()["agent_overrides"]
+
+        assert await runtime.chat_runs.remember_approval(search["id"], save, folder_read=True)
+        await run.wait()
+    results = tool_results(history(runtime, "s1"))
+    assert len(results) == 3
+    assert all(result["ok"] for result in results), results
+    assert "library_marker" in str(results[0]["data"])
+    assert "library_marker" in str(results[1]["data"])
+    assert "stdio" in str(results[2]["data"])
+    assert runtime.chat_runs.approvals_snapshot()["requests"] == []
+
+    other_computer = "laptop" if computer == "server" else "server"
+    runtime.chat_sessions.mutate_metadata(
+        address, lambda meta: meta.update(execution={"computer_id": other_computer})
+    )
+    await loop.send("coder", "Follow up", session_id="s1")
+    [follow_up] = seen
+    assert follow_up.permissions.check_path(stdio, "read") is not None
 
 
 def test_a_ceiling_only_session_boundary_keeps_the_agents_workspace_and_config(

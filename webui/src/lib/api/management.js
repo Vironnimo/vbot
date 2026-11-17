@@ -8,9 +8,14 @@ import {
 
 // `remember` lists the Session Grants to keep for the request's Session; the
 // request's `session_grant` suggests them.
-export function resolvePermissionApproval(id, decision, { remember } = {}) {
+export function resolvePermissionApproval(
+  id,
+  decision,
+  { remember, read_folder } = {},
+) {
   const params = { id, decision };
   if (remember) params.remember = remember;
+  if (read_folder) params.read_folder = read_folder;
   return rpc('permissions.resolve', params);
 }
 
@@ -191,7 +196,7 @@ export function setSessionPermissions(
 
 // Take back Session Grants the user gave while approving Tool calls.
 export function removeSessionGrants(
-  { agentId, sessionId, rules } = {},
+  { agentId, sessionId, rules, readFolder, computerId } = {},
   options = {},
 ) {
   requireNonEmptyString(
@@ -206,7 +211,13 @@ export function removeSessionGrants(
   );
   return rpc(
     'permissions.remove_session_grants',
-    { agent_id: agentId, session_id: sessionId, rules },
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      ...(readFolder
+        ? { read_folder: readFolder, computer_id: computerId }
+        : { rules }),
+    },
     options,
   );
 }

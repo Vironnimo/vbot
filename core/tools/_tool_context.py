@@ -20,6 +20,7 @@ from core.permissions import (
     PermissionGrant,
 )
 from core.runs import RunExecutionOwner, RunKind, is_unattended_run_kind
+from core.runs.run import ApprovalAnswer
 from core.secrets._references import map_strings
 from core.skills.policy import SkillPackageRef
 from core.tools._display_diff import (
@@ -195,10 +196,11 @@ ToolCallCancelRegistrar = Callable[[str, ToolCancelCallback], None]
 ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
 ToolApprovalHook = Callable[
-    ["ToolContext", str, Sequence[ApprovalRequirement], JsonObject, Path | None], Awaitable[bool]
+    ["ToolContext", str, Sequence[ApprovalRequirement], JsonObject, Path | None],
+    Awaitable[ApprovalAnswer],
 ]
 ToolApprovalRefreshHook = Callable[[bool], Awaitable[tuple[PermissionBoundary, JsonObject]]]
-ToolApprovalWaitHook = Callable[[Awaitable[bool]], Awaitable[bool]]
+ToolApprovalWaitHook = Callable[[Awaitable[ApprovalAnswer]], Awaitable[ApprovalAnswer]]
 
 
 # (skill_name, wrapped_content, loaded_package) -> newly_activated. The content
@@ -493,9 +495,9 @@ class ToolContext:
             raise ToolApprovalCancelledError
         if not allowed and not self.is_cancelled() and not is_unattended_run_kind(self.run_kind):
             object.__setattr__(self, "approval_rejected", True)
-        if allowed:
+        if allowed is True:
             self._approved_invocations.add(invocation)
-        return allowed and not self.is_cancelled()
+        return bool(allowed) and not self.is_cancelled()
 
     def invocation_approved(self, arguments: JsonObject, *, cwd: Path | None = None) -> bool:
         """Whether the operator approved this exact invocation in this Tool call."""
@@ -585,7 +587,8 @@ class ToolContext:
         object.__setattr__(self, "permissions", boundary)
         self.permission_access.boundary = boundary
         object.__setattr__(self, "_approval_waited", False)
-        self.permission_access.approve(requirements)
+        if self.invocation_approved(arguments, cwd=cwd):
+            self.permission_access.approve(requirements)
         return True
 
     @property

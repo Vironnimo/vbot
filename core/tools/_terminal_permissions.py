@@ -79,7 +79,7 @@ def permission_scope(boundary: PermissionBoundary) -> frozenset[str] | None:
     """
     if not boundary.restricted:
         return None
-    return frozenset(layer.fingerprint for layer in boundary.layers)
+    return boundary.scope_fingerprints()
 
 
 def may_attach(boundary: PermissionBoundary, info: TerminalInfo) -> bool:

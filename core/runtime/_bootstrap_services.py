@@ -11,6 +11,7 @@ from core.agents.agents import AgentStore
 from core.archive import ArchiveRetentionUnknownError, ArchiveServices
 from core.automation import LibrarianService
 from core.chat import SessionPermissions, session_permissions
+from core.computers import normalize_execution
 from core.performance import PerformanceService
 from core.permissions import run_permission_decision
 from core.runs import ChatRunManager
@@ -316,11 +317,17 @@ async def _terminal_output_allowed(
             address.project_id, agent, session_id=address.session_id
         )
         root = Path(projects.get(work_project).cwd) if work_project is not None else None
+        overrides = resolver.session_overrides(address)
+        folders: tuple[str, ...] = ()
+        if overrides.read_folders:
+            execution = normalize_execution(sessions.metadata_value(address, "execution"))
+            folders = overrides.read_folders.get(execution["computer_id"], ())
         return session_permissions(
             agent,
             data_dir=data_dir,
             project_root=root,
-            ceiling=resolver.session_overrides(address).ceiling(),
+            ceiling=overrides.ceiling(),
+            read_folders=folders,
         )
 
     try:

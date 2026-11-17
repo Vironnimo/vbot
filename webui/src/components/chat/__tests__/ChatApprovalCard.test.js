@@ -147,6 +147,43 @@ describe('ChatApprovalCard', () => {
     component = null;
   });
 
+  it.each([false, true])(
+    'grants the displayed folder or its selected ancestor (%s)',
+    async (chooseParent) => {
+      const folders = [
+        '/python/mcp/client/auth',
+        '/python/mcp/client',
+        '/python/mcp',
+      ];
+      component = mount(ChatApprovalCard, {
+        context: new Map([['permissionApprovals', { resolve }]]),
+        target: document.body,
+        props: {
+          subAgent: 'coder',
+          request: approval({
+            session_grant: { rules: [], exact: null, folders },
+          }),
+        },
+      });
+      flushSync();
+      expect(
+        document.querySelector('.approval-card__scope').textContent,
+      ).toContain(folders[0]);
+      if (chooseParent) {
+        document.querySelector('[data-approval="session-menu"]').click();
+        flushSync();
+        [...document.querySelectorAll('[role="menuitem"]')]
+          .find((item) => item.textContent.trim() === folders[1])
+          .click();
+      } else {
+        button(t('approvals.session.readFolder', { folder: 'auth' })).click();
+      }
+      expect(resolve).toHaveBeenCalledWith('approval-one', 'allow', {
+        read_folder: folders[chooseParent ? 1 : 0],
+      });
+    },
+  );
+
   it('offers only Allow once when no Session Grant could help', () => {
     component = mount(ChatApprovalCard, {
       context: new Map([['permissionApprovals', { resolve }]]),

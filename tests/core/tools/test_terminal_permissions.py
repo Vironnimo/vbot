@@ -470,6 +470,10 @@ async def test_raw_terminal_logs_use_the_recipient_scope_in_file_tools_and_comma
     narrowed = PermissionBoundary.build(rules, context, ceilings=(extra, absent))
 
     manager = TemporaryFileManager(data)
+    folder_launch = launched.with_read_folder((tmp_path / "library").as_posix())
+    folder_log = manager.create_terminal_log(owner=owner, scope=permission_scope(folder_launch))
+    assert folder_launch.check_path(folder_log.path, "read") is None
+    assert launched.check_path(folder_log.path, "read") is not None
     log = manager.create_terminal_log(owner=owner, scope=permission_scope(launched))
     log.path.write_text("terminal sample\n", encoding="utf-8")
     group = log.path.parent

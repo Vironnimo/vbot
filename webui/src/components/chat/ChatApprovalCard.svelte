@@ -28,6 +28,7 @@
 
   const resolveApproval = getContext('permissionApprovals')?.resolve;
   const grant = $derived(request?.session_grant ?? null);
+  const folders = $derived(grant?.folders ?? []);
   const disabled = $derived(
     busy || sent || typeof resolveApproval !== 'function',
   );
@@ -58,49 +59,71 @@
 
   const needs = $derived((request?.requirements ?? []).map(describe));
 
-  async function decide(decision, remember = null) {
+  async function decide(decision, options = {}) {
     if (disabled) return;
     busy = true;
     error = '';
     try {
-      await resolveApproval(request.id, decision, remember ? { remember } : {});
+      await resolveApproval(request.id, decision, options);
       sent = true;
       editing = false;
     } catch (failure) {
       if (failure?.code === 'approval_not_found') sent = true;
-      else if (remember && editing && failure?.message) error = failure.message;
+      else if (options.remember && editing && failure?.message)
+        error = failure.message;
       else error = t('approvals.error');
     } finally {
       busy = false;
     }
   }
 
+  function allowSession(event) {
+    if (grant.choose_folder) return openMenu(event);
+    if (folders.length) return decide('allow', { read_folder: folders[0] });
+    return decide('allow', { remember: grant.rules });
+  }
+
+  function sessionLabel() {
+    if (grant.choose_folder) return t('approvals.session.chooseFolder');
+    if (folders.length)
+      return t('approvals.session.readFolder', {
+        folder: folders[0].split('/').at(-1),
+      });
+    return t('approvals.allowSession');
+  }
+
   function openMenu(event) {
     if (!grant) return;
-    const items = [
-      {
+    const items = folders.map((folder) => ({
+      id: folder,
+      label: folder,
+      onSelect: () => decide('allow', { read_folder: folder }),
+    }));
+    if (!folders.length)
+      items.push({
         id: 'default',
         label: t('approvals.session.default'),
         hint: grant.rules.join(', '),
-        onSelect: () => decide('allow', grant.rules),
-      },
-    ];
+        onSelect: () => decide('allow', { remember: grant.rules }),
+      });
     if (grant.exact) {
       items.push({
         id: 'exact',
         label: t('approvals.session.exact'),
         hint: grant.exact.join(', '),
-        onSelect: () => decide('allow', grant.exact),
+        onSelect: () => decide('allow', { remember: grant.exact }),
       });
     }
-    items.push({
-      id: 'edit',
-      label: t('approvals.session.edit'),
-      group: 'edit',
-      onSelect: startEditing,
-    });
+    if (grant.rules?.length)
+      items.push({
+        id: 'edit',
+        label: t('approvals.session.edit'),
+        group: 'edit',
+        onSelect: startEditing,
+      });
     menu = {
       ...contextMenuAnchor(event),
+      wrapLabels: folders.length > 0,
       label: t('approvals.session.menu'),
       items,
     };
@@ -164,6 +187,11 @@
       </li>
     {/each}
   </ul>
+  {#if folders.length && !grant.choose_folder}
+    <div class="approval-card__scope">
+      {t('approvals.session.readScope')} <code>{folders[0]}</code>
+    </div>
+  {/if}
   {#if editing}
     <div class="approval-card__edit">
       <label class="approval-card__edit-label" for={`grant-${request.id}`}
@@ -187,7 +215,7 @@
       <Button
         variant="primary"
         disabled={disabled || draftRules.length === 0}
-        onClick={() => decide('allow', draftRules)}
+        onClick={() => decide('allow', { remember: draftRules })}
         >{t('approvals.session.allowEdited')}</Button
       >
       <Button
@@ -211,25 +239,31 @@
             variant="secondary"
             {disabled}
             tooltip={t('approvals.session.tooltip', {
-              rules: grant.rules.join(', '),
+              rules: folders[0] ?? grant.rules.join(', '),
             })}
             data-approval="session"
-            onClick={() => decide('allow', grant.rules)}
-            >{t('approvals.allowSession')}</Button
+            onClick={allowSession}>{sessionLabel()}</Button
           >
-          <Button
-            variant="secondary"
-            icon
-            {disabled}
-            ariaLabel={t('approvals.session.menu')}
-            tooltip={t('approvals.session.menu')}
-            data-approval="session-menu"
-            onClick={openMenu}
-          >
-            <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-              <path d="M4 6l4 4 4-4" />
-            </svg>
-          </Button>
+          {#if !grant.choose_folder}
+            <Button
+              variant="secondary"
+              icon
+              {disabled}
+              ariaLabel={t('approvals.session.menu')}
+              tooltip={t('approvals.session.menu')}
+              data-approval="session-menu"
+              onClick={openMenu}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="10"
+                height="10"
+                aria-hidden="true"
+              >
+                <path d="M4 6l4 4 4-4" />
+              </svg>
+            </Button>
+          {/if}
         </span>
       {/if}
       <Button
@@ -326,6 +360,9 @@
   .approval-card pre {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
+  }
+  .approval-card__scope {
+    overflow-wrap: anywhere;
   }
   .approval-card__target {
     color: var(--text-hi);

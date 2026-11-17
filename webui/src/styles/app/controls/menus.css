@@ -258,6 +258,16 @@
   text-overflow: ellipsis;
 }
 
+.context-menu--wrapped {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
+.context-menu--wrapped .context-menu__label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .context-menu__hint {
   flex: 0 1 auto;
   min-width: 0;

@@ -12,6 +12,7 @@
   //                      room below opens above it instead of covering it
   //   returnFocus,       element focused again after Escape or an action
   //   label,             accessible name of the menu
+  //   wrapLabels?,         wrap long choices such as absolute folder paths
   //   items: [{ id, label, onSelect, danger?, disabled?, group?, hint? }]
   // }
   // A `group` change between consecutive items renders a separator. `hint`
@@ -195,6 +196,7 @@
     use:portal
     bind:this={element}
     class="context-menu"
+    class:context-menu--wrapped={menu.wrapLabels}
     role="menu"
     tabindex="-1"
     aria-label={menu.label || undefined}

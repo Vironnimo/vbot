@@ -461,6 +461,9 @@ def fork(
         _store_values._WORKING_PROJECT_KEY,
     ):
         metadata.pop(key, None)
+    overrides = metadata.get("agent_overrides")
+    if isinstance(overrides, dict):
+        overrides.pop("read_folders", None)
     if title is not None:
         if title:
             metadata[SESSION_TITLE_KEY] = title

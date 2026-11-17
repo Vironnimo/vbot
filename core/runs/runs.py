@@ -21,6 +21,7 @@ from core.runs.run import (
     DEFAULT_WAITING_WORK_LIMIT,
     RUN_STARTED_EVENT,
     ActiveRunError,
+    ApprovalAnswer,
     JsonObject,
     QueuedRunItem,
     Run,
@@ -228,10 +229,23 @@ class ChatRunManager:
             raise ValueError("decision must be allow or reject")
         return self._approvals.resolve(request_id, cast(Literal["allow", "reject"], decision))
 
-    async def request_approval(
-        self, run: Run, payload: JsonObject, keys: Sequence[str], rejected_keys: Sequence[str]
+    async def remember_approval(
+        self, request_id: str, save: Callable[[JsonObject], Awaitable[None]], *, folder_read: bool
     ) -> bool:
-        return await self._approvals.request(run, payload, keys, rejected_keys)
+        return await settle_before_cancelling(
+            self._approvals.remember(request_id, save, folder_read=folder_read)
+        )
+
+    async def request_approval(
+        self,
+        run: Run,
+        payload: JsonObject,
+        keys: Sequence[str],
+        rejected_keys: Sequence[str],
+        *,
+        recheck: Callable[[], Awaitable[bool]] | None = None,
+    ) -> ApprovalAnswer:
+        return await self._approvals.request(run, payload, keys, rejected_keys, recheck)
 
     def reserve_waiting_work(
         self,

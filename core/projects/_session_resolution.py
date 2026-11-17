@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
-from core.permissions import normalize_session_grants
+from core.permissions import normalize_read_folders, normalize_session_grants
 from core.projects._resolution_context import _RESOLUTION_WORKERS, _session_address
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -18,6 +18,7 @@ from core.projects._runtime_agent import (
     WorkingProjectMissingError,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT
+from core.utils.ids import is_safe_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -293,6 +294,9 @@ class SessionResolution:
         *,
         add: Sequence[str] = (),
         remove: Sequence[str] = (),
+        read_folder: str | None = None,
+        remove_folder: str | None = None,
+        computer_id: str = "server",
     ) -> AgentOverrides:
         """Add and remove Session Grants of one Session in one write.
 
@@ -303,12 +307,28 @@ class SessionResolution:
         """
         if self._owner._sessions is None:
             raise AgentResolutionError("Session Agent overrides are unavailable")
+        if not is_safe_id(computer_id):
+            raise ValueError("A Session folder grant needs a Computer id.")
         added = normalize_session_grants(list(add))
         removed = normalize_session_grants(list(remove))
 
         def mutate(metadata: Any) -> None:
             stored = metadata.get(AGENT_OVERRIDES_META_KEY)
             merged = dict(stored) if isinstance(stored, dict) else {}
+            by_computer = dict(AgentOverrides.from_stored(merged).read_folders)
+            folders = by_computer.get(computer_id, ())
+            if read_folder is not None:
+                folders = normalize_read_folders((*folders, read_folder))
+            if remove_folder is not None:
+                folders = tuple(folder for folder in folders if folder != remove_folder)
+            if folders:
+                by_computer[computer_id] = folders
+            else:
+                by_computer.pop(computer_id, None)
+            if by_computer:
+                merged["read_folders"] = {key: list(paths) for key, paths in by_computer.items()}
+            else:
+                merged.pop("read_folders", None)
             current = normalize_session_grants(list(merged.get("permission_grants") or ()))
             grants = [rule for rule in (*current, *added) if rule not in removed]
             texts = list(dict.fromkeys(rule.text for rule in grants))
@@ -328,8 +348,8 @@ class SessionResolution:
             address.agent_id,
             address.project_id,
             address.session_id,
-            len(added),
-            len(removed),
+            len(added) + (read_folder is not None),
+            len(removed) + (remove_folder is not None),
         )
         return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
 

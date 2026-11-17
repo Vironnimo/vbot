@@ -105,6 +105,7 @@ class SessionPermissions:
     agent_config: Path | None
     rule_files: tuple[Path, ...]
     allowed_skills: tuple[str, ...] | None
+    read_folders: tuple[str, ...] = ()
 
     @property
     def restricted(self) -> bool:
@@ -112,7 +113,7 @@ class SessionPermissions:
 
     def without_agent_rules(self) -> SessionPermissions:
         """Only the ceilings, as a Cron watch check applies them: it runs no Agent."""
-        return replace(self, rules=None)
+        return replace(self, rules=None, read_folders=())
 
     def placeholder_values(self) -> dict[str, str | None]:
         """The Agent's rule placeholders in this Session; ``{scratch}`` stays per conversation."""
@@ -165,6 +166,7 @@ class SessionPermissions:
             install_dirs=installation_dirs(),
             readable_dirs=(*artifacts, *skill_dirs),
             scoped_artifact_reads=ScopedArtifactReads(terminal_logs.root, terminal_logs.allows),
+            session_read_folders=self.read_folders,
             loopback_port=loopback_port,
             own_hosts=own_hosts() if own_hosts is not None and loopback_port is not None else (),
         )
@@ -177,6 +179,7 @@ def session_permissions(
     data_dir: Path,
     project_root: Path | None,
     ceiling: PermissionCeiling | None,
+    read_folders: tuple[str, ...] = (),
 ) -> SessionPermissions:
     """Compose the boundary of a Session of *agent* working in *project_root*.
 
@@ -200,6 +203,7 @@ def session_permissions(
     return SessionPermissions(
         rules=rules,
         ceilings=ceilings,
+        read_folders=read_folders,
         workdir=workdir,
         project_root=project_root,
         workspace=workspace,
@@ -252,7 +256,12 @@ async def _session_overrides(
 def _session_rule_state(overrides: AgentOverrides) -> str:
     """What a Session stores that decides its boundary: its rules, grants and ceiling."""
     return json.dumps(
-        [overrides.permission_rules, overrides.permission_grants, overrides.permission_ceiling],
+        [
+            overrides.permission_rules,
+            overrides.permission_grants,
+            overrides.permission_ceiling,
+            overrides.read_folders,
+        ],
         sort_keys=True,
         default=str,
     )
@@ -328,8 +337,20 @@ async def run_permission_boundary(
     overrides = await _session_overrides(dependencies, address)
     session_state = _session_rule_state(overrides)
     data_dir = Path(dependencies.storage.data_dir)
+    folders: tuple[str, ...] = ()
+    if overrides.read_folders:
+        from core.computers import normalize_execution
+
+        execution = normalize_execution(
+            await dependencies.sessions.metadata_value_async(address, "execution")
+        )
+        folders = overrides.read_folders.get(execution["computer_id"], ())
     permissions = session_permissions(
-        agent, data_dir=data_dir, project_root=project_root, ceiling=overrides.ceiling()
+        agent,
+        data_dir=data_dir,
+        project_root=project_root,
+        ceiling=overrides.ceiling(),
+        read_folders=folders,
     )
     if not permissions.restricted:
         sources = permissions.rule_sources(data_dir)

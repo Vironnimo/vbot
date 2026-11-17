@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -13,14 +14,15 @@ from core.permissions import (
     PermissionCeiling,
     join_ceilings,
     normalize_permission_rules,
+    normalize_read_folders,
     normalize_session_grants,
     permission_rules_to_dict,
     resolve_rule_set,
 )
 from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
+from core.utils.ids import is_safe_id
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from typing import Any
 
     from core.permissions import PermissionRules
@@ -175,6 +177,7 @@ class AgentOverrides:
     permission_ceiling: Mapping[str, Any] | None = None
     permission_rules: Mapping[str, Any] | None = None
     permission_grants: tuple[str, ...] = ()
+    read_folders: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.permission_ceiling is not None:
@@ -191,6 +194,15 @@ class AgentOverrides:
             self,
             "permission_grants",
             tuple(rule.text for rule in normalize_session_grants(self.permission_grants)),
+        )
+        if not isinstance(self.read_folders, Mapping) or not all(
+            is_safe_id(key) for key in self.read_folders
+        ):
+            raise ValueError("Session read folders must be grouped by Computer id.")
+        object.__setattr__(
+            self,
+            "read_folders",
+            {key: normalize_read_folders(paths) for key, paths in self.read_folders.items()},
         )
         if not isinstance(self.thinking_effort_default, bool):
             raise ValueError("thinking_effort_default must be a boolean")
@@ -234,6 +246,7 @@ class AgentOverrides:
             permission_ceiling=value.get("permission_ceiling"),
             permission_rules=value.get("permission_rules"),
             permission_grants=tuple(value.get("permission_grants") or ()),
+            read_folders=value.get("read_folders", {}),
         )
 
     def ceiling(self) -> PermissionCeiling | None:
@@ -310,6 +323,7 @@ class AgentOverrides:
             and self.permission_ceiling is None
             and self.permission_rules is None
             and not self.permission_grants
+            and not self.read_folders
             and all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
         )
 
@@ -346,6 +360,8 @@ class AgentOverrides:
             stored["permission_rules"] = dict(self.permission_rules)
         if self.permission_grants:
             stored["permission_grants"] = list(self.permission_grants)
+        if self.read_folders:
+            stored["read_folders"] = {key: list(paths) for key, paths in self.read_folders.items()}
         return {AGENT_OVERRIDES_META_KEY: stored}
 
 

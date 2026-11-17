@@ -479,14 +479,21 @@ async def test_the_user_remembers_an_approval_for_the_session(tmp_path: Path) ->
     state.runtime.chat_sessions.create("coder", session_id="s1")
     state.runtime.chat_sessions.create("coder", session_id="s2")
     resolved: list[tuple[str, str]] = []
+    folder = (tmp_path / "client").as_posix()
 
     class Approvals:
         def approvals_snapshot(self) -> JsonObject:
             request = {"id": "approval-one", "project_id": None, "agent_id": "coder"}
-            return {"revision": 1, "requests": [{**request, "session_id": "s1"}]}
+            return {
+                "revision": 1,
+                "requests": [
+                    {**request, "session_id": "s1", "session_grant": {"folders": [folder]}}
+                ],
+            }
 
-        def resolve_approval(self, request_id: str, decision: str) -> bool:
-            resolved.append((request_id, decision))
+        async def remember_approval(self, request_id, save, *, folder_read):
+            await save(self.approvals_snapshot()["requests"][0])
+            resolved.append((request_id, "allow"))
             return True
 
     state.chat_runs = Approvals()
@@ -524,4 +531,18 @@ async def test_the_user_remembers_an_approval_for_the_session(tmp_path: Path) ->
         assert removed == {"session_grants": []}
         allow = resolver.resolve_agent(None, "coder", session_id="s1").permission_rules.allow
         assert [rule.text for rule in allow] == ["Shell(ls *)"]
-    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 2
+        choose = {"id": "approval-one", "decision": "allow", "read_folder": folder}
+        assert (
+            await rpc_error(
+                state, "permissions.resolve", **{**choose, "read_folder": tmp_path.as_posix()}
+            )
+        )["code"] == "invalid_request"
+        assert await rpc_result(state, "permissions.resolve", **choose) == {"resolved": True}
+        assert (await rpc_result(state, "permissions.session", **params))[
+            "session_read_folders"
+        ] == [{"computer_id": "server", "folder": folder}]
+        assert resolver.session_overrides(SessionAddress(None, "coder", "s2")).read_folders == {}
+        assert await rpc_result(
+            state, "permissions.remove_session_grants", **params, read_folder=folder
+        ) == {"session_grants": []}
+    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 4

@@ -273,7 +273,7 @@ async def test_unrestricted_preflight_needs_no_permission_workers_or_refresh(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wait", ["approval", "review"])
+@pytest.mark.parametrize("wait", ["approval", "folder", "review"])
 async def test_unrestricted_call_refreshes_authority_after_a_real_wait(
     tmp_path: Path, wait: str
 ) -> None:
@@ -289,13 +289,19 @@ async def test_unrestricted_call_refreshes_authority_after_a_real_wait(
     context = make_context(
         "bash",
         cwd=tmp_path,
-        approval_hook=AsyncMock(return_value=True),
+        approval_hook=AsyncMock(return_value="permitted" if wait == "folder" else True),
         approval_refresh_hook=refresh,
     )
     if wait == "approval":
         assert await context.request_approval(
             "review", [ApprovalRequirement.review("command")], arguments={}
         )
+        assert context.invocation_approved({})
+    elif wait == "folder":
+        read = ApprovalRequirement.path(boundary, tmp_path / "library", "read")
+        assert await context.authorize([read], reason="Permission Rules", arguments={})
+        assert not context.invocation_approved({})
+        assert not context.permission_access.permits(read)
     await context.revalidate_permissions(force_refresh=wait == "review")
     refresh.assert_awaited_once_with(True)
     assert context.permissions is boundary
@@ -355,6 +361,55 @@ def test_session_grant_suggestion_lets_the_same_access_run(tmp_path: Path, case:
         assert widened.check_path(notes.parent / "elsewhere.md", "write") is not None
     elif case == "host":
         assert widened.check_host("example.org", "connect", by_program=True) is None
+
+
+def test_folder_choice_covers_library_reads_only_in_the_requesting_session(tmp_path: Path) -> None:
+    from core.permissions import permitted_folder_reads, suggest_session_grants
+
+    package = tmp_path / "Lib" / "mcp" / "client"
+    auth = package / "auth"
+    context = BoundaryContext(
+        workdir=tmp_path / "work", home=tmp_path, data_dir=package / "vbot-data"
+    )
+    rules = normalize_permission_rules(
+        {"read": "work_area", "commands": "listed", "deny": [f"Read({package}/private)"]}
+    )
+    parent = PermissionBoundary.build(rules, context)
+    ceiling = parent.ceiling(source="parent")
+    assert ceiling is not None
+    boundary = PermissionBoundary.build(None, context, ceilings=(ceiling,))
+    search = ApprovalRequirement.path(
+        boundary, auth / "oauth2.py", "read", subtree=True, filtered=True
+    )
+    suggestion = suggest_session_grants(boundary, [search], is_dir=lambda _: False)
+    assert suggestion is not None
+    assert suggestion.folders[:2] == (auth.as_posix(), package.as_posix())
+    assert not suggestion.rules and not suggestion.choose_folder
+    allowed = boundary.with_read_folder(suggestion.folders[1])
+    sibling = ApprovalRequirement.path(boundary, package / "stdio" / "win32.py", "read")
+    assert permitted_folder_reads(allowed, [search, sibling])
+    assert not permitted_folder_reads(boundary, [search])
+    together = suggest_session_grants(boundary, [search, sibling])
+    assert together and together.choose_folder and together.folders[0] == package.as_posix()
+    assert boundary.ceiling(source="parent") == allowed.ceiling(source="parent")
+    # A terminal started under the widened scope cannot be attached under the old scope.
+    assert not boundary.scope_fingerprints() <= allowed.scope_fingerprints()
+    assert allowed.check_path(auth, "write") is not None
+    assert allowed.check_path(auth, "start_dir") is not None
+    for path in (package.parent, package / "private", package / "vbot-data" / "settings"):
+        assert allowed.check_path(path, "read") is not None
+    assert not permitted_folder_reads(allowed, [search, ApprovalRequirement.review("command")])
+    assert not permitted_folder_reads(
+        allowed, [search, ApprovalRequirement.path(boundary, package.parent / "else.py", "read")]
+    )
+    cron = parent.ceiling(source="cron")
+    assert cron is not None
+    assert (
+        suggest_session_grants(
+            PermissionBoundary.build(None, context, ceilings=(ceiling, cron)), [search]
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

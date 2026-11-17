@@ -102,14 +102,16 @@
     }
   }
 
-  async function removeGrant(rule) {
+  async function removeGrant(rule, folder, computer) {
     removingGrant = rule;
     grantError = '';
     try {
       await removeSessionGrants({
         agentId: agentAddress,
         sessionId,
-        rules: [rule],
+        ...(folder
+          ? { readFolder: folder, computerId: computer }
+          : { rules: [rule] }),
       });
       await load(requestKey);
     } catch (error) {
@@ -259,7 +261,20 @@
     Boolean(summary?.restricted && summary.stored_ceiling && sessionId),
   );
   let restricted = $derived(Boolean(summary?.restricted));
-  let grants = $derived(sessionId ? (summary?.session_grants ?? []) : []);
+  let grants = $derived(
+    sessionId
+      ? [
+          ...(summary?.session_grants ?? []).map((rule) => ({ rule })),
+          ...(summary?.session_read_folders ?? []).map(
+            ({ folder, computer_id: computer }) => ({
+              rule: t('permissions.session.readFolder', { folder, computer }),
+              folder,
+              computer,
+            }),
+          ),
+        ]
+      : [],
+  );
 </script>
 
 {#if summary}
@@ -340,7 +355,7 @@
             <InfoHint text={t('permissions.session.grantsHelp')} />
           </div>
           <ul>
-            {#each grants as rule (rule)}
+            {#each grants as { rule, folder, computer } (rule)}
               <li>
                 <span class="app-tooltip__mono">{rule}</span>
                 <Button
@@ -353,7 +368,7 @@
                   ariaLabel={t('permissions.session.grantRemoveRule', {
                     rule,
                   })}
-                  onClick={() => removeGrant(rule)}
+                  onClick={() => removeGrant(rule, folder, computer)}
                 >
                   <svg
                     viewBox="0 0 16 16"

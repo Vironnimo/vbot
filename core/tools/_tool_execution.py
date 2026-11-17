@@ -64,7 +64,7 @@ class _ExecutionSlots:
             self._per_run.release()
             self._held_run = False
 
-    async def wait(self, pending: Awaitable[bool]) -> bool:
+    async def wait[T](self, pending: Awaitable[T]) -> T:
         self._release()
         result = await pending
         await self.__aenter__()
