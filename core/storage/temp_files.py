@@ -232,6 +232,8 @@ class TemporaryFileManager:
         self.stop()
         if sweeper_task is not None and not sweeper_task.done():
             await asyncio.gather(sweeper_task, return_exceptions=True)
+        if self._sweeper_task is sweeper_task:
+            self._sweeper_task = None
 
     def sweep(self) -> None:
         """Remove expired inactive regular files, isolating filesystem errors.
