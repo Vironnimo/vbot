@@ -142,6 +142,81 @@ describe('Projects controller loading', () => {
     expect(state.toolCatalog).toEqual([]);
   });
 
+  it('uses the latest Model and Tool catalogs after overlapping reloads', async () => {
+    const older = deferred();
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: operations({
+        listModels: vi
+          .fn()
+          .mockReturnValueOnce(older.promise)
+          .mockResolvedValueOnce({ models: [{ id: 'new' }] }),
+        listTools: vi
+          .fn()
+          .mockResolvedValueOnce({ tools: [{ name: 'old' }] })
+          .mockResolvedValueOnce({ tools: [{ name: 'new' }] }),
+      }),
+      state,
+    });
+    controller.trackModelDropdownOpen(true);
+    const olderLoad = controller.loadCatalogs({ reload: true });
+    await controller.loadCatalogs({ reload: true });
+    older.resolve({ models: [{ id: 'old' }] });
+    await olderLoad;
+
+    expect(state.availableModels).toEqual([]);
+    controller.trackModelDropdownOpen(false);
+    expect(state.availableModels).toEqual([{ id: 'new' }]);
+    expect(state.toolCatalog).toEqual([{ name: 'new' }]);
+  });
+
+  it.each(['before', 'after'])(
+    'keeps a stored Project reorder when a stale list answers %s the save',
+    async (timing) => {
+      const stale = deferred();
+      const saved = deferred();
+      const listing = (ids, revision) => ({
+        projects: ids.map((project_id) => ({ project_id })),
+        order_revision: revision,
+      });
+      const initial = listing(['alpha', 'beta'], 1);
+      const result = listing(['beta', 'alpha'], 2);
+      const projectOperations = operations({
+        listProjects: vi
+          .fn()
+          .mockResolvedValueOnce(initial)
+          .mockReturnValueOnce(stale.promise)
+          .mockResolvedValueOnce(result),
+        reorderProjects: vi.fn().mockReturnValueOnce(saved.promise),
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
+      });
+      const state = createProjectsState();
+      const controller = createProjectsController({
+        operations: projectOperations,
+        state,
+      });
+      await controller.loadProjects();
+      const oldLoad = controller.loadProjects({ reload: true });
+      const reordered = controller.reorderProjects(['beta', 'alpha']);
+      if (timing === 'before') {
+        stale.resolve(initial);
+        await oldLoad;
+      }
+      saved.resolve(result);
+      await reordered;
+      if (timing === 'after') {
+        stale.resolve(initial);
+        await oldLoad;
+      }
+      expect(state.projects.map((project) => project.project_id)).toEqual([
+        'beta',
+        'alpha',
+      ]);
+      expect(state.orderRevision).toBe(2);
+      expect(projectOperations.listProjects).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it('rejects an older Projects list response after a newer load wins', async () => {
     const older = deferred();
     const newer = deferred();
