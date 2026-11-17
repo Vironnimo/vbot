@@ -3,7 +3,10 @@
   import { SvelteMap } from 'svelte/reactivity';
   import { t } from '$lib/i18n.js';
   import { formatAgentAddress } from '$lib/agentAddress.js';
-  import { createExtensionRunStream } from '$lib/extensionRunStream.js';
+  import {
+    createExtensionRunStream,
+    RUN_STREAM_TIMEOUT_MS,
+  } from '$lib/extensionRunStream.js';
   import { noteExtensionPageInvalidation } from '$lib/clientMetrics.js';
   import {
     isDesktopAccessor,
@@ -275,7 +278,9 @@
   function invalidateContext(reason) {
     const previous = frameContext;
     frameContext = null;
+    searchEntries = [];
     if (previous) showPageLayers(previous, false);
+    for (const request of previous?.runReads ?? []) request.abort();
     for (const finish of previous?.autosaveFlushes.values() ?? []) {
       finish(false);
     }
@@ -299,7 +304,6 @@
 
   function onFrameLoad() {
     invalidateContext('reload');
-    searchEntries = [];
     const captured = captureDescriptor(descriptor);
     const child = frame?.contentWindow;
     if (disposed || !captured || !child) return;
@@ -313,6 +317,7 @@
       ready: false,
       allowedUrls: [],
       autosaveFlushes: new Map(),
+      runReads: new Set(),
       // What changed while the browser tab was hidden (`{revision, change}`),
       // delivered once it shows again.
       heldInvalidation: null,
@@ -655,15 +660,31 @@
         data.method === 'run.subscribe' &&
         validRunSubscription(data.params)
       ) {
-        const opened = await openExtensionPageRun(
-          context.descriptor.owner,
-          { id: context.descriptor.page, epoch: context.descriptor.epoch },
-          data.params.group_id,
-          data.params.run_id,
-          data.params.after_sequence ?? 0,
-          runOptions(data.params),
-        );
+        const afterSequence = data.params.after_sequence ?? 0;
+        const openRun = (sequence, options) =>
+          openExtensionPageRun(
+            context.descriptor.owner,
+            { id: context.descriptor.page, epoch: context.descriptor.epoch },
+            data.params.group_id,
+            data.params.run_id,
+            sequence,
+            { ...runOptions(data.params), ...options },
+          );
+        const request = new AbortController();
+        context.runReads.add(request);
+        const timer = setTimeout(() => request.abort(), RUN_STREAM_TIMEOUT_MS);
+        request.signal.addEventListener('abort', () => clearTimeout(timer), {
+          once: true,
+        });
+        const opened = await openRun(afterSequence, {
+          signal: request.signal,
+        }).finally(() => {
+          clearTimeout(timer);
+          context.runReads.delete(request);
+        });
         if (frameContext !== context) return;
+        if (request.signal.aborted)
+          throw new Error(t('extensions.page.requestTimedOut'));
         const url = opened?.stream?.url;
         if (typeof url === 'string' && url.startsWith('/api/extension-runs/')) {
           const runScope =
@@ -672,20 +693,9 @@
               : null;
           const subscription = createExtensionRunStream({
             opened,
-            afterSequence: data.params.after_sequence ?? 0,
+            afterSequence,
             subscribeRunEvents,
-            openRun: (afterSequence) =>
-              openExtensionPageRun(
-                context.descriptor.owner,
-                {
-                  id: context.descriptor.page,
-                  epoch: context.descriptor.epoch,
-                },
-                data.params.group_id,
-                data.params.run_id,
-                afterSequence,
-                runOptions(data.params),
-              ),
+            openRun,
             onResync: () => {
               noteExtensionPageInvalidation('run_stream_recovered');
               post(context, {

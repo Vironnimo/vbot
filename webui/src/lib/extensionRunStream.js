@@ -1,7 +1,7 @@
 import { isTerminalRunEvent } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
-const HEARTBEAT_TIMEOUT_MS = 25_000;
+export const RUN_STREAM_TIMEOUT_MS = 25_000;
 
 // The Extension host owns this lifecycle; page code still owns its History
 // projection and refreshes it through the existing invalidation bridge.
@@ -18,6 +18,7 @@ export function createExtensionRunStream({
   let cursor = afterSequence;
   let attempt = 0;
   let stream = null;
+  let capabilityRead = null;
   let watchdog = null;
   let retry = null;
 
@@ -26,6 +27,8 @@ export function createExtensionRunStream({
   function stopTransport() {
     clearTimeout(watchdog);
     clearTimeout(retry);
+    capabilityRead?.abort();
+    capabilityRead = null;
     stream?.close();
     stream = null;
   }
@@ -38,7 +41,7 @@ export function createExtensionRunStream({
 
   function armWatchdog(value) {
     clearTimeout(watchdog);
-    watchdog = setTimeout(() => recover(value), HEARTBEAT_TIMEOUT_MS);
+    watchdog = setTimeout(() => recover(value), RUN_STREAM_TIMEOUT_MS);
   }
 
   function recover(value) {
@@ -107,11 +110,13 @@ export function createExtensionRunStream({
   async function reopen() {
     if (closed) return;
     const value = ++generation;
+    capabilityRead = new AbortController();
     // Bound a stalled capability refresh as well as a silent EventSource.
     armWatchdog(value);
     try {
-      const result = await openRun(cursor);
+      const result = await openRun(cursor, { signal: capabilityRead.signal });
       if (!current(value)) return;
+      capabilityRead = null;
       attach(result, value);
       if (current(value)) onResync();
     } catch {
