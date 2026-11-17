@@ -15,6 +15,8 @@ from datetime import UTC, tzinfo
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 from urllib.parse import urlparse
 
+import httpx
+
 from core.models.models import Model
 from core.providers._tool_calls import (
     ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
@@ -40,6 +42,7 @@ from core.providers._tool_result_text import (
     tool_result_function_response,
     tool_result_text,
 )
+from core.providers.http import classify_http_status
 from core.providers.providers import RequestInput, curated_output_limit
 from core.providers.reasoning import (
     ReasoningIntent,
@@ -695,6 +698,33 @@ class ProviderAdapter(ABC):
         """
 
         return base_url
+
+    @classmethod
+    def classify_task_http_status(
+        cls,
+        status_code: int,
+        *,
+        idempotent: bool,
+        extra_retryable: set[int] | None,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Raise the Provider error a task endpoint's HTTP status reports.
+
+        Task wire clients (``ProviderTaskClient``) classify their responses
+        through this hook, so a Provider whose error semantics differ from the
+        shared status policy (for example an invalid key reported as HTTP 400,
+        or an exhausted daily quota as HTTP 429) applies them to task requests
+        too. The default is the shared policy.
+        """
+
+        classify_http_status(
+            status_code,
+            idempotent=idempotent,
+            extra_retryable=extra_retryable,
+            detail=detail,
+            response_headers=response_headers,
+        )
 
     # ------------------------------------------------------------------
     # Catalog normalization policy

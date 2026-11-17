@@ -9,6 +9,11 @@ against OpenRouter's :code:`/api/v1/embeddings` endpoint — the same
 shape the standard OpenAI platform endpoint returns — so the client
 is reusable for any provider that mirrors that contract.
 
+Google's own Gemini API (Provider ``google``) has a native route instead:
+``POST <base>/models/{model}:batchEmbedContents`` with one request per text,
+answered by ``embeddings[].values`` in request order (see
+:meth:`ProviderEmbeddingClient.embed`).
+
 Mirrors :mod:`core.model_tasks.image_providers` and
 :mod:`core.model_tasks.speech_providers`: all three share the request
 plumbing (target resolution, auth headers, POST/classify/parse cycle,
@@ -21,8 +26,13 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from functools import partial
+from typing import Any, cast, override
+from urllib.parse import quote
+
+import httpx
 
 from core.model_tasks.options import (
     TaskModelOptionValidationError,
@@ -35,6 +45,15 @@ JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
 DEFAULT_EMBEDDING_TIMEOUT = 60.0
 _PAYLOAD_DETAIL_LIMIT = 500
+
+# Google's batchEmbedContents refuses more than 100 requests ("at most 100
+# requests can be in one batch", HTTP 400, live 2026-11-17).
+GOOGLE_EMBEDDING_BATCH_LIMIT = 100
+# The profile's purpose values (OpenRouter's ``input_type``) as Google task types.
+_GOOGLE_TASK_TYPES = {
+    "search_query": "RETRIEVAL_QUERY",
+    "search_document": "RETRIEVAL_DOCUMENT",
+}
 
 
 @dataclass(frozen=True)
@@ -79,7 +98,11 @@ class ProviderEmbeddingResponse:
 
 
 class ProviderEmbeddingClient(ProviderTaskClient):
-    """OpenAI-compatible embedding HTTP client bound to one target."""
+    """Embedding HTTP client bound to one target.
+
+    OpenAI-compatible ``/embeddings`` for every Provider except Google, whose
+    native ``batchEmbedContents`` route the client speaks instead.
+    """
 
     EXTRA_RETRYABLE_STATUS_CODES = frozenset({529})
 
@@ -102,6 +125,8 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         profile decides it (:mod:`core.model_tasks.embedding_profiles`).
         """
 
+        if self._provider.adapter == "google":
+            return await self._embed_google(inputs, options, input_type)
         payload = _build_embeddings_payload(
             self._model_id,
             inputs,
@@ -116,6 +141,51 @@ class ProviderEmbeddingClient(ProviderTaskClient):
             ),
             json=payload,
         )
+
+    async def _embed_google(
+        self,
+        inputs: list[str],
+        options: JsonObject,
+        input_type: str | None,
+    ) -> ProviderEmbeddingResponse:
+        """Embed through Google's native ``batchEmbedContents``.
+
+        Texts beyond Google's batch limit go out as consecutive requests, each
+        with its own attempt Usage; their vectors keep input order.
+        """
+
+        endpoint = f"/models/{quote(self._model_id, safe='')}:batchEmbedContents"
+        vectors: list[list[float]] = []
+        usage = EmbeddingUsage()
+        for start in range(0, len(inputs), GOOGLE_EMBEDDING_BATCH_LIMIT):
+            chunk = inputs[start : start + GOOGLE_EMBEDDING_BATCH_LIMIT]
+            payload = _build_google_payload(self._model_id, chunk, options, input_type=input_type)
+            response = await self.post_and_parse(
+                endpoint,
+                timeout=DEFAULT_EMBEDDING_TIMEOUT,
+                parse=partial(_parse_google_http_response, expected_count=len(chunk)),
+                json=payload,
+            )
+            if vectors and len(response.vectors[0]) != len(vectors[0]):
+                raise ProviderError(
+                    "Embeddings response vectors have inconsistent dimensions",
+                    retryable=False,
+                )
+            vectors.extend(response.vectors)
+            usage = usage.combined(response.usage)
+        return ProviderEmbeddingResponse(vectors=tuple(vectors), model_id=None, usage=usage)
+
+    @override
+    async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        if self._provider.adapter != "google":
+            return await super()._observe_response_usage(response)
+        try:
+            payload = response.json()
+        except ValueError, UnicodeError:
+            return None
+        metadata = payload.get("usageMetadata") if isinstance(payload, Mapping) else None
+        tokens = metadata.get("promptTokenCount") if isinstance(metadata, Mapping) else None
+        return {"input_tokens": tokens} if _non_negative_int(tokens) is not None else None
 
 
 def _build_embeddings_payload(
@@ -153,6 +223,92 @@ def _build_embeddings_payload(
     if input_type is not None:
         payload["input_type"] = input_type
     return payload
+
+
+def _build_google_payload(
+    model_id: str,
+    inputs: list[str],
+    options: JsonObject,
+    *,
+    input_type: str | None = None,
+) -> JsonObject:
+    """Build Google's ``batchEmbedContents`` body: one request per text.
+
+    The profile's purpose arrives as *input_type* and becomes Google's
+    ``taskType``; ``dimensions`` becomes ``outputDimensionality``. Both are
+    top-level request fields, which every Gemini embedding Model honors in a
+    batch (``gemini-embedding-001`` ignored them inside ``embedContentConfig``,
+    live 2026-11-17). ``autoTruncate: false`` makes an over-long text fail
+    instead of being embedded truncated; ``gemini-embedding-2`` honors it,
+    ``gemini-embedding-001`` truncates past its limit regardless.
+    ``extra_options`` add fields to each request without overriding these.
+    """
+
+    try:
+        validate_text_embedding_options(options)
+    except TaskModelOptionValidationError as error:
+        raise ProviderError(str(error), retryable=False) from error
+    task_type: str | None = None
+    if input_type is not None:
+        task_type = _GOOGLE_TASK_TYPES.get(input_type)
+        if task_type is None:
+            raise ProviderError(
+                f"Google embeddings have no task type for input_type {input_type}",
+                retryable=False,
+            )
+    dimensions = options.get("dimensions")
+    requests: list[JsonObject] = []
+    for text in inputs:
+        request: JsonObject = {
+            "model": f"models/{model_id}",
+            "content": {"parts": [{"text": text}]},
+            "embedContentConfig": {"autoTruncate": False},
+        }
+        if task_type is not None:
+            request["taskType"] = task_type
+        if isinstance(dimensions, int) and not isinstance(dimensions, bool):
+            request["outputDimensionality"] = dimensions
+        merge_extra_options(request, options)
+        requests.append(request)
+    return {"requests": requests}
+
+
+def _parse_google_http_response(
+    response: httpx.Response, *, expected_count: int
+) -> ProviderEmbeddingResponse:
+    return _parse_google_response(response.json(), expected_count=expected_count)
+
+
+def _parse_google_response(payload: Any, *, expected_count: int) -> ProviderEmbeddingResponse:
+    """Validate ``{"embeddings": [{"values": [...]}], "usageMetadata": ...}``.
+
+    Embeddings follow request order. ``usageMetadata.promptTokenCount`` is the
+    input token count (``gemini-embedding-2`` reports it, ``-001`` does not);
+    the response names no Model and no cost. The vectors pass the same checks
+    as the OpenAI-compatible shape.
+    """
+
+    if not isinstance(payload, dict):
+        raise ProviderError(
+            f"Embeddings response must be a JSON object: {_describe_payload(payload)}",
+            retryable=False,
+        )
+    embeddings = payload.get("embeddings")
+    if not isinstance(embeddings, list) or not embeddings:
+        raise ProviderError(
+            f"Embeddings response contains no data: {_describe_payload(payload)}",
+            retryable=not payload.get("error"),
+        )
+    normalized: JsonObject = {
+        "data": [
+            {"embedding": entry.get("values")} if isinstance(entry, dict) else entry
+            for entry in embeddings
+        ]
+    }
+    metadata = payload.get("usageMetadata")
+    if isinstance(metadata, dict):
+        normalized["usage"] = {"input_tokens": metadata.get("promptTokenCount")}
+    return _parse_embeddings_response(normalized, expected_count=expected_count)
 
 
 def _parse_embeddings_response(

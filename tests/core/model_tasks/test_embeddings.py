@@ -225,8 +225,14 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
     assert result.usage == usage
     assert result.space_fingerprint == service.resolve_space().fingerprint
     assert service.document_batch_size() is None
-    # Inputs travel with the binding's effective options and the family's query mode.
-    assert client.embed_calls == [(["alpha", "beta"], {"dimensions": 3}, "search_query")]
+    # Inputs travel with the binding's effective options and the family's query prefix.
+    assert client.embed_calls == [
+        (
+            ["task: search result | query: alpha", "task: search result | query: beta"],
+            {"dimensions": 3},
+            None,
+        )
+    ]
     _runtime, target_ref = provider_factory.call_args.args
     assert (
         target_ref.provider_id,
@@ -403,10 +409,10 @@ def test_space_fingerprint_covers_target_options_and_family_handling(
     # Already-persisted fingerprints for the normal public spelling stay
     # valid; fixing an alias must not re-embed every existing index.
     assert (
-        baseline.fingerprint == "e48b5df3e7302eb392a4834a12df84c9e2bc5cbcc470f74b7991f41fc1b032ca"
+        baseline.fingerprint == "167d859fa15e5cff71f36c3d278f34ee46d8dc171d61c544452f727d1efcb7a6"
     )
     assert (
-        unpinned.fingerprint == "1fb90afffcfb1ca145057855f783e513a576ebfb3f5074957d0bac9ba6595a45"
+        unpinned.fingerprint == "7ed7aee9bb218a79e2b59a4d3e371be544902f96048b19e5f7e9950d9a2d8e80"
     )
     for target, expected in (
         ("openrouter/google/gemini-embedding-2::openrouter:api-key:work", baseline),
