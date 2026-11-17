@@ -275,7 +275,7 @@ def _video_generation_fields(
     provider_id: str,
     model: Model | None,
 ) -> tuple[TaskModelOptionField, ...]:
-    if provider_id != "openrouter":
+    if provider_id not in {"openrouter", "google"}:
         return ()
     task_options = _task_options(model, TASK_VIDEO_GENERATION)
     parameters = task_options.get("parameters")

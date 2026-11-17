@@ -57,6 +57,7 @@ _LIVE_VOICE = re.compile(r"(?:-live(?:-|$)|-native-audio-)")
 _LIVE_OTHER = re.compile(r"(?:-transcribe-|-translate-|^gemini-robotics-)")
 
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
+_ZERO_LIMIT = re.compile(r"\blimit: 0(?![\d.])")
 # Throttle messages name the wait ("Please retry in 41.5s."); the Decisions API
 # sends only that message, with a string ``code`` and no RetryInfo detail.
 _RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s(?![a-z])", re.IGNORECASE)
@@ -169,7 +170,7 @@ def _family_capabilities(
     if _MUSIC.search(model_id):
         return _music_capabilities(model_id)
     if _VIDEO.search(model_id):
-        return _video_capabilities()
+        return _video_capabilities(model_id)
     return _chat_capabilities(raw)
 
 
@@ -411,8 +412,38 @@ def _music_capabilities(model_id: str) -> Capabilities:
     )
 
 
-def _video_capabilities() -> Capabilities:
-    return _task_capabilities(("text", "image"), ("text", "video"), ("video_generation",))
+# Omni generations limited to 10-second clips: 1.1 Flash and the shut-down
+# preview, which Google now serves as 1.1 Flash (its quota errors name
+# ``gemini-omni-1.1-flash``, live 2026-11-17).
+_VIDEO_TEN_SECONDS = re.compile(r"^gemini-omni-(?:1\.1-|flash-preview)")
+
+
+def _video_capabilities(model_id: str) -> Capabilities:
+    """Gemini Omni Flash on the Interactions API, with its ``response_format`` controls.
+
+    Durations are whole seconds from 3 to 15 (1.1 Flash: 3 to 10), aspect
+    ratios 16:9 and 9:16, resolutions 360p to 4k; up to two images become the
+    first and last frame (Omni guide and Model page, read 2026-11-17). Omni
+    also edits uploaded videos, which vBot does not send.
+    """
+
+    longest = 10 if _VIDEO_TEN_SECONDS.search(model_id) else 15
+    return replace(
+        _task_capabilities(("text", "image", "video"), ("text", "video"), ("video_generation",)),
+        task_options={
+            "video_generation": {
+                "parameters": {
+                    "duration": {
+                        "type": "enum",
+                        "values": [str(seconds) for seconds in range(3, longest + 1)],
+                    },
+                    "aspect_ratio": {"type": "enum", "values": ["16:9", "9:16"]},
+                    "resolution": {"type": "enum", "values": ["360p", "720p", "1080p", "4k"]},
+                },
+                "frame_images": ["first_frame", "last_frame"],
+            }
+        },
+    )
 
 
 def _classify_google_status(
@@ -452,15 +483,21 @@ def _classify_google_status(
 
 
 def _google_error(detail: str) -> Mapping[str, Any]:
-    """Return the ``error`` object of a Google error body inside ``detail``."""
+    """Return the ``error`` object of a Google error body inside ``detail``.
 
-    start = detail.find("{")
-    if start < 0:
+    The Interactions API wraps some errors in a one-element array
+    (``[{"error": {...}}]`` for an invalid key, live 2026-11-17).
+    """
+
+    starts = [index for index in (detail.find("{"), detail.find("[")) if index >= 0]
+    if not starts:
         return {}
     try:
-        body = json.loads(detail[start:])
+        body = json.loads(detail[min(starts) :])
     except ValueError:
         return {}
+    if isinstance(body, list) and body:
+        body = body[0]
     if isinstance(body, Mapping):
         error = body.get("error", body)
         if isinstance(error, Mapping):
@@ -488,9 +525,15 @@ def _error_reason(error: Mapping[str, Any]) -> str | None:
 
 
 def _quota_exhausted(error: Mapping[str, Any], detail: str) -> bool:
-    """Whether retrying cannot succeed soon: a zero limit or a daily quota."""
+    """Whether retrying cannot succeed soon: a zero limit or a daily quota.
 
-    if "limit: 0," in detail:
+    Gemini RPC errors name a zero limit in the message (``limit: 0,``; the
+    Interactions API writes ``limit: 0 input tokens per minute``) and a daily
+    quota in ``QuotaFailure``; the Interactions API reports a daily quota as
+    the string code ``quota_exceeded``.
+    """
+
+    if _ZERO_LIMIT.search(detail) or error.get("code") == "quota_exceeded":
         return True
     for failure in _details(error, "google.rpc.QuotaFailure"):
         violations = failure.get("violations")

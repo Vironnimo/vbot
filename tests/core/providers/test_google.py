@@ -14,6 +14,7 @@ from core.chat.streaming import StreamingAccumulator
 from core.model_tasks.decision_profile import decision_profile
 from core.model_tasks.image_profile import build_image_profile
 from core.model_tasks.options import option_schema_for, validate_task_model_options
+from core.model_tasks.video import build_video_profile
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.errors import (
     CatalogEntrySkipped,
@@ -175,6 +176,38 @@ def test_image_models_publish_the_controls_of_their_family(
     assert set(profile.call_choices) <= {"aspect_ratio", "resolution"}
 
 
+@pytest.mark.parametrize(
+    ("model_id", "longest"),
+    [
+        ("gemini-omni-1.2-flash", 15),
+        ("gemini-omni-1.1-flash", 10),
+        ("gemini-omni-flash-preview", 10),
+    ],
+)
+def test_omni_models_publish_their_video_controls(model_id: str, longest: int) -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry(model_id))
+
+    schema = option_schema_for(
+        "video_generation", "google", f"google/{model_id}::api-key", model=model
+    )
+    profile = build_video_profile(model)
+
+    assert {"text", "image", "video"} <= set(model.capabilities.input_modalities)
+    offered = {
+        field.name: [choice.value for choice in field.options if choice.value]
+        for field in schema.fields
+        if field.type == "select"
+    }
+    assert offered == {
+        "resolution": ["360p", "720p", "1080p", "4k"],
+        "aspect_ratio": ["16:9", "9:16"],
+        "duration": [str(seconds) for seconds in range(3, longest + 1)],
+    }
+    validate_task_model_options(schema, schema.default_options())
+    assert profile.frame_images == ("first_frame", "last_frame")
+    assert profile.generate_audio is False
+
+
 def test_decision_model_publishes_its_documented_limits_and_input_price() -> None:
     model = GoogleAdapter.normalize_catalog_entry(_entry("gemini-decision-1", ("createDecision",)))
 
@@ -276,8 +309,52 @@ _DAILY_QUOTA = _error(
             False,
             None,
         ),
+        (
+            httpx.Response(
+                400,
+                json=[
+                    {
+                        "error": {
+                            "code": 400,
+                            "message": "API key not valid.",
+                            "details": [
+                                {
+                                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                                    "reason": "API_KEY_INVALID",
+                                }
+                            ],
+                        }
+                    }
+                ],
+            ),
+            ProviderAuthError,
+            False,
+            None,
+        ),
         (_ZERO_QUOTA, ProviderError, False, None),
+        (
+            httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": "resource_exhausted",
+                        "message": "limit: 0 input tokens per minute",
+                    }
+                },
+            ),
+            ProviderError,
+            False,
+            None,
+        ),
         (_DAILY_QUOTA, ProviderError, False, None),
+        (
+            httpx.Response(
+                429, json={"error": {"code": "quota_exceeded", "message": "Daily quota exceeded."}}
+            ),
+            ProviderError,
+            False,
+            None,
+        ),
         (
             _error(
                 429,
@@ -295,7 +372,16 @@ _DAILY_QUOTA = _error(
             41.25,
         ),
     ],
-    ids=["invalid-key", "zero-quota", "daily-quota", "retry-info", "retry-message"],
+    ids=[
+        "invalid-key",
+        "invalid-key-array",
+        "zero-quota",
+        "zero-quota-interactions",
+        "daily-quota",
+        "daily-quota-interactions",
+        "retry-info",
+        "retry-message",
+    ],
 )
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio

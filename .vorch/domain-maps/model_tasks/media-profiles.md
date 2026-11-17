@@ -36,6 +36,7 @@ The Model DB publishes raw parameter facts per Model (`capabilities.task_options
 ## VideoProfile
 
 - `build_video_profile(model)` reads `task_options.video_generation`. `call_choices` holds `duration`, `aspect_ratio` and `resolution` with at least two values each, `auto` dropped; durations keep only whole seconds, sorted numerically, as text. `generate_audio` is true when the Model publishes that parameter. `frame_images` lists `first_frame`/`last_frame` among the published frame positions.
+- Google Omni's facts come from `core/providers/google.py` (`model_tasks/video.md` -> Google route): `aspect_ratio`, `resolution` and per-generation `duration` enums, `first_frame`/`last_frame`, no `generate_audio`.
 - `validated_options()` accepts `6s` and `9x16`, sends `duration` as an integer and `generate_audio` as a boolean, and raises `VideoOptionError` (`invalid_arguments`) with the image wording ("video model").
 - A requested `aspect_ratio` or `resolution` drops the Settings `size`, which would otherwise override it on the wire; the half the call leaves out is taken from that size when the Model offers it (`1280x720` -> `16:9`, `720p`; a short edge of 2160 or more -> `4K`), so an omitted choice keeps its configured value (`_shape_options`). `size` and `seed` are Settings-only.
 - The Tool shows `duration` as an integer enum, or as `minimum`/`maximum` when the seconds are contiguous; `aspect_ratio` and `resolution` as string enums.
