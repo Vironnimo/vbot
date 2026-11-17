@@ -358,6 +358,10 @@ class FactoryExecution:
         state["child"] = child["id"]
         if step["wait"]:
             state["status"] = "child"
+            if child["state"] in FINAL_STATES:
+                # The recovered child can already have ended. This callback
+                # takes the service lock after the parent transition commits.
+                self.service.spawn(self.child_finished(child["id"]))
             return None
         state["status"] = "done"
         return {

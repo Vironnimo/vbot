@@ -25,7 +25,13 @@ from resources.extensions.factory._execution import FactoryExecution
 from resources.extensions.factory._management import FactoryManagement
 from resources.extensions.factory._registration import register
 from resources.extensions.factory.extension import FactoryExtension
-from resources.extensions.factory.store import FINAL_STATES, FactoryError, _upgraded_runtime
+from resources.extensions.factory.store import (
+    FINAL_STATES,
+    FactoryError,
+    FactoryStore,
+    _upgraded_runtime,
+)
+from tests.resources.extensions.factory.factory_test_support import build_factory
 
 type Json = dict[str, Any]
 CARD = "fct_card"
@@ -1668,6 +1674,80 @@ async def test_workflow_step_waits_for_its_child_card_and_rework_discards_it(ser
     sub = [item for item in outputs if item["step"] == "sub"]
     assert len(sub) == 1 and sub[0]["result"] == "Plan: Plan text"
     assert sub[0]["summary"] == "Wrote Plan text"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_state", ["queued", "done", "discarded", "parent-edited"])
+async def test_workflow_child_creation_survives_a_failed_parent_commit(
+    factory_store: FactoryStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    child_state: str,
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    service = harness.service
+    service.execution = FactoryExecution(service)
+    monkeypatch.setattr(service, "request_schedule", lambda: None)
+    child_workflow = await harness.workflow(
+        workflow("child", [step("work", after=[], agent="worker")])
+    )
+    await harness.workflow(
+        workflow("parent", [child_step("child", "child", after=[])], final_approval=True)
+    )
+    parent = await factory_store.create_card(
+        "", "Parent Card", "Objective", origin="operator", workflow_id="parent"
+    )
+    write_card = factory_store.change
+
+    async def reject_parent(card_id: str, patch: Json, **options: Any) -> Json:
+        if card_id == parent["id"] and options["event"] == "started":
+            raise OSError("parent step write rejected")
+        return await write_card(card_id, patch, **options)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(factory_store, "change", reject_parent)
+        async with service.lock:
+            with pytest.raises(OSError):
+                await service.execution.start(parent)
+    [child] = [
+        card for card in await factory_store.list_cards() if card["parent_id"] == parent["id"]
+    ]
+    if child_state in FINAL_STATES:
+        await factory_store.change(
+            child["id"],
+            {"state": child_state, "runtime": {**child["runtime"], "workflow": child_workflow}},
+            actor="factory",
+            event="test_child_settled",
+        )
+    if child_state == "parent-edited":
+        await harness.operation("card.update", id=parent["id"], description="Edited objective")
+
+    async with service.lock:
+        await service.execution.start(await factory_store.get_card(parent["id"]))
+    await asyncio.gather(*service._tasks)
+    current = await factory_store.get_card(parent["id"])
+    recovered_step = current["runtime"]["steps"]["child"]
+    assert recovered_step["passes"] == 1
+    if child_state == "parent-edited":
+        new_child = await factory_store.get_card(recovered_step["child"])
+        assert new_child["id"] != child["id"]
+        assert "Edited objective" in new_child["description"]
+        return
+
+    assert recovered_step["child"] == child["id"]
+    assert [
+        card["id"] for card in await factory_store.list_cards() if card["parent_id"] == parent["id"]
+    ] == [child["id"]]
+    assert (
+        recovered_step["status"]
+        == {"queued": "child", "done": "done", "discarded": "waiting"}[child_state]
+    )
+    if child_state == "discarded":
+        async with service.lock:
+            retried = await service.execution.retry(current)
+        new_step = retried["runtime"]["steps"]["child"]
+        assert new_step["child"] != child["id"]
+        assert new_step["passes"] == 2
 
 
 @pytest.mark.asyncio

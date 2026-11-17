@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 from collections.abc import Coroutine
 from typing import Any, cast
@@ -540,13 +541,27 @@ class FactoryExtension:
                     f"{item['step_name']}: {item['result'] or item['summary']}" for item in earlier
                 )
             )
+        project_id = workflow["project_id"] or card["project_id"]
+        description = "\n\n".join(part for part in parts if part)[:20000]
+        previous_passes = card["runtime"]["steps"][step["id"]].get("passes", 0)
+        # The child commits before its parent's step transition. Reuse that
+        # exact attempt if the parent write did not land.
+        intent = hashlib.sha256(
+            json.dumps(
+                (step["id"], previous_passes, workflow["id"], project_id, description),
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        existing = await self.records().find_child_card(card["id"], intent)
+        if existing is not None:
+            return {**existing, "workflow_name": workflow["name"]}
         return await self._new_card(
             workflow,
-            project_id=workflow["project_id"] or card["project_id"],
+            project_id=project_id,
             title=f"{card['title']} · {step['name']}"[:200],
-            description="\n\n".join(part for part in parts if part)[:20000],
+            description=description,
             origin="workflow",
-            runtime={"depth": depth},
+            runtime={"depth": depth, "parent_intent": intent},
             parent_id=card["id"],
         )
 
