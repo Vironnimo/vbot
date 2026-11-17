@@ -145,13 +145,17 @@ def binary_notice(label: str, *, shell: bool = True) -> str:
     return f"[{label} is a binary file, so it is not shown as text.{inspect}]"
 
 
-def docx_bytes(body_xml: str) -> bytes:
+def docx_bytes(body_xml: str, *, strict: bool = False) -> bytes:
+    namespace = (
+        "http://purl.oclc.org/ooxml/wordprocessingml/main"
+        if strict
+        else "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    )
     buffer = BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr(
             "word/document.xml",
-            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            f"<w:body>{body_xml}</w:body></w:document>",
+            f'<w:document xmlns:w="{namespace}"><w:body>{body_xml}</w:body></w:document>',
         )
     return buffer.getvalue()
 
