@@ -272,17 +272,21 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("verify_search", [False, True])
+@pytest.mark.parametrize(
+    ("state", "expected_code"),
+    [("healthy", 0), ("degraded", 0), ("maintenance", 1), ("unavailable", 1)],
+)
 def test_status_rpc_is_rendered_without_database_content(
-    rpc: FakeRpc, run_cli: RunCli, verify_search: bool
+    rpc: FakeRpc, run_cli: RunCli, verify_search: bool, state: str, expected_code: int
 ) -> None:
-    payload = {"state": "healthy", "databases": {"sessions": {"database_id": "db-1"}}}
+    payload = {"state": state, "databases": {"sessions": {"database_id": "db-1"}}}
     rpc.reply("data_store.status", payload)
 
     code, output, _stderr = run_cli(
         "data-store", "status", *(["--verify-search"] if verify_search else []), "--output", "plain"
     )
 
-    assert code == 0
+    assert code == expected_code
     assert json.loads(output) == payload
     assert rpc.calls == [("data_store.status", {"verify_search": True} if verify_search else {})]
 

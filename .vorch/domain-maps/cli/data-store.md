@@ -6,7 +6,7 @@ Offline mutations share `core.utils.server_control.offline_data_change`: after s
 
 ## Status
 
-`status` prefers the live `data_store.status` projection and falls back to an explicitly labeled local projection (`source: "local"`, kernel `data_store_status` with this vBot's specs from `core/runtime/databases.canonical_database_specs`) only for an unreachable loopback target; `maintenance` and `unavailable` exit non-zero. Ordinary status reads Session search lifecycle markers plus the latest process-local coverage check when known. `status --verify-search` requests a current full coverage check through `data_store.status {verify_search: true}` with unbounded read timeout; the local fallback requests the same read-only coverage mode from `canonical_database_specs(data_dir, verify_search=True)`, without constructing an owner spec or database path itself.
+`status` prefers the live `data_store.status` projection and falls back to an explicitly labeled local projection (`source: "local"`, kernel `data_store_status` with this vBot's specs from `core/runtime/databases.canonical_database_specs`) only for an unreachable loopback target; `maintenance` and `unavailable` exit non-zero for both sources. Ordinary status reads Session search lifecycle markers plus the latest process-local coverage check when known. `status --verify-search` requests a current full coverage check through `data_store.status {verify_search: true}` with unbounded read timeout; the local fallback requests the same read-only coverage mode from `canonical_database_specs(data_dir, verify_search=True)`, without constructing an owner spec or database path itself.
 
 ## Snapshots and incidents
 
