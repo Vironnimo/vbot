@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
@@ -59,6 +58,7 @@ from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
 from server._computer_socket import serve_computer_socket
 from server._cron_webhooks import register_webhook_routes, webhook_base_url
 from server._direct_inputs import register_input_routes
+from server._file_routes import register_file_routes
 from server._http_dependencies import (
     _FASTAPI_IMPORT_ERROR,
     FastAPI,
@@ -66,7 +66,6 @@ from server._http_dependencies import (
     FileResponse,
     HTTPException,
     PydanticSerializationError,
-    RedirectResponse,
     Request,
     Response,
     StaticFiles,
@@ -118,7 +117,7 @@ from server.events import (
     RESOURCE_KIND_DEVICES,
     SERVER_STOPPING_EVENT,
 )
-from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX, FileDelivery
+from server.file_delivery import FileDelivery
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.portals import PortalServer
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
@@ -476,123 +475,7 @@ def create_app(
     register_speech_routes(app)
     register_widget_routes(app)
 
-    @app.get("/api/files/{token}")
-    async def get_assistant_file(request: Request, token: str, download: bool = False) -> Response:
-        delivery = request.app.state.file_delivery
-        delivered = await FILE_PREVIEW_WORKERS.run(delivery.resolve_token, token)
-        if delivered is None:
-            raise HTTPException(status_code=404)
-        if delivered.media_type == "text/html" and not download:
-            try:
-                preview = await FILE_PREVIEW_WORKERS.run(
-                    delivery.open_preview, f"/api/files/{token}"
-                )
-                principal = scope_principal(request.scope)
-                preview = delivery.bind_payload(
-                    preview,
-                    principal.actor if principal else None,
-                    expires_at=request.scope.get("vbot.capability_expires_at"),
-                )
-            except (ValueError, OSError) as exc:
-                raise HTTPException(status_code=404) from exc
-            return RedirectResponse(
-                preview["url"],
-                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
-            )
-        return FileResponse(
-            delivered.path,
-            media_type=delivered.media_type,
-            filename=delivered.path.name,
-            content_disposition_type=(
-                "inline" if delivered.inline and not download else "attachment"
-            ),
-            headers=delivered.response_headers,
-        )
-
-    @app.get("/api/preview-assets/{token}/.revision")
-    async def get_preview_revision(request: Request, token: str) -> Response:
-        delivery = request.app.state.file_delivery
-        try:
-            revision = await FILE_PREVIEW_WORKERS.run(delivery.preview_revision, token)
-        except (ValueError, OSError) as exc:
-            raise HTTPException(status_code=404) from exc
-        return Response(
-            json.dumps({"revision": revision}),
-            media_type="application/json",
-            headers=delivery.preview_headers(str(request.base_url), token),
-        )
-
-    @app.api_route("/api/preview-assets/{token}/{asset_path:path}", methods=["GET", "HEAD"])
-    async def get_preview_asset(request: Request, token: str, asset_path: str) -> Response:
-        delivery = request.app.state.file_delivery
-        try:
-            delivered = await FILE_PREVIEW_WORKERS.run(delivery.preview_file, token, asset_path)
-            headers = delivery.preview_headers(str(request.base_url), token)
-            if (
-                delivered.path.name == "index.html"
-                and asset_path
-                and not asset_path.endswith("/")
-                and asset_path.rsplit("/", 1)[-1] != "index.html"
-            ):
-                return RedirectResponse(
-                    str(request.url.replace(path=request.url.path + "/")), headers=headers
-                )
-            if delivered.media_type == "text/html":
-                headers["Content-Disposition"] = "inline"
-                content = await FILE_PREVIEW_WORKERS.run(
-                    delivery.preview_html, delivered.path, f"{PREVIEW_URL_PREFIX}{token}/.revision"
-                )
-                return Response(content, media_type="text/html", headers=headers)
-            return FileResponse(delivered.path, media_type=delivered.media_type, headers=headers)
-        except ValueError, OSError:
-            content, headers = await FILE_PREVIEW_WORKERS.run(
-                delivery.preview_unavailable, str(request.base_url), token
-            )
-            return Response(
-                content,
-                status_code=404,
-                media_type="text/html",
-                headers=headers,
-            )
-
-    @app.api_route("/api/extension-assets/{token}/{asset_path:path}", methods=["GET", "HEAD"])
-    async def get_extension_asset(request: Request, token: str, asset_path: str) -> Response:
-        """Serve a page asset only while its exact Extension registration survives."""
-        delivery = request.app.state.file_delivery
-        try:
-            claims = await FILE_PREVIEW_WORKERS.run(delivery.extension_page_claims, token)
-            from core.extensions import ExtensionRegistrationIdentity
-
-            identity = ExtensionRegistrationIdentity(claims["extension"], claims["epoch"])
-            registry = request.app.state.runtime.extensions
-            if registry is None or not registry.is_registration_current(identity):
-                raise ValueError("Extension page is unavailable")
-            declarations = await FILE_PREVIEW_WORKERS.run(registry.page_declarations)
-            current = next(
-                (
-                    (declaration, entry)
-                    for candidate, declaration, entry in declarations
-                    if candidate == identity and declaration.page_id == claims["page"]
-                ),
-                None,
-            )
-            if current is None or current[1].parent != Path(claims["root"]):
-                raise ValueError("Extension page is unavailable")
-            _claims, delivered = await FILE_PREVIEW_WORKERS.run(
-                delivery.extension_page_asset, token, asset_path
-            )
-            if (
-                request.app.state.runtime.extensions is not registry
-                or not registry.is_registration_current(identity)
-            ):
-                raise ValueError("Extension page is unavailable")
-            return FileResponse(
-                delivered.path,
-                media_type=delivered.media_type,
-                headers=delivery.extension_page_headers(str(request.base_url), token),
-            )
-        except OSError, ValueError, KeyError:
-            return Response(status_code=404)
+    register_file_routes(app)
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
