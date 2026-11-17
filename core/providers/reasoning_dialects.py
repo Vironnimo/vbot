@@ -18,7 +18,7 @@ attributed to what it actually carried.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +32,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     ReasoningIntent,
 )
-from core.providers.wire_profile import ReasoningDialect, ReasoningWire, WireProfile
+from core.providers.wire_profile import ReasoningDialect, ReasoningWire, WireProfile, thaw_json
 from core.utils.logging import get_logger
 
 __all__ = [
@@ -372,6 +372,60 @@ def _describe_thinking_toggle_with_effort(
     return _SENDS_NOTHING
 
 
+# -- chat_template_kwargs -----------------------------------------------------------
+# ``chat_template_kwargs: {<switch>: true|false}``, which vLLM, SGLang and NVIDIA
+# NIM pass to the Model's chat template. ``reasoning.options.switch`` names the
+# switch (default ``enable_thinking``; DeepSeek templates read ``thinking``).
+# ``reasoning.options.level_kwargs`` maps a ladder rung to further template keys
+# sent with the enabled switch (``{"medium": {"medium_effort": true}}``); a rung
+# without an entry is the plain switch. Like any rendered field, a caller value or
+# ``request.extra_body`` entry replaces the whole object, and a
+# ``request.body_defaults`` entry applies only when nothing was rendered.
+
+_CHAT_TEMPLATE_KWARGS = "chat_template_kwargs"
+_DEFAULT_TEMPLATE_SWITCH = "enable_thinking"
+
+
+def _template_switch(wire: ReasoningWire) -> str:
+    switch = wire.options.get("switch")
+    return switch if isinstance(switch, str) and switch else _DEFAULT_TEMPLATE_SWITCH
+
+
+def _template_level_kwargs(wire: ReasoningWire, level: str | None) -> dict[str, Any]:
+    table = wire.options.get("level_kwargs")
+    if level is None or not isinstance(table, Mapping):
+        return {}
+    extra = thaw_json(table.get(level))
+    return extra if isinstance(extra, dict) else {}
+
+
+def _render_chat_template_kwargs(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del output_allowance
+    if intent.kind in _ACTIVE_KINDS:
+        payload[_CHAT_TEMPLATE_KWARGS] = {
+            _template_switch(wire): True,
+            **_template_level_kwargs(wire, intent.effort_level),
+        }
+    elif intent.kind == REASONING_INTENT_OFF:
+        payload[_CHAT_TEMPLATE_KWARGS] = {_template_switch(wire): False}
+
+
+def _describe_chat_template_kwargs(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire
+    if intent.kind in _ACTIVE_KINDS:
+        if intent.effort_level is not None:
+            return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
+        return ReasoningIntent(REASONING_INTENT_ON)
+    if intent.kind == REASONING_INTENT_OFF:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    return _SENDS_NOTHING
+
+
 # -- gemini_thinking ---------------------------------------------------------------
 # Gemini ``generationConfig.thinkingConfig: {includeThoughts: true, thinkingLevel}``.
 # Like ``reasoning_effort``, ``on``/``budget`` degrade to their snapped level and
@@ -606,6 +660,11 @@ _DIALECTS: dict[str, _Dialect] = {
         ReasoningCarriers(
             effort=("reasoning_effort",), off_switch=_THINKING_SWITCH, off_value="disabled"
         ),
+    ),
+    "chat_template_kwargs": _Dialect(
+        _render_chat_template_kwargs,
+        _describe_chat_template_kwargs,
+        (_CHAT_TEMPLATE_KWARGS,),
     ),
     "gemini_thinking": _Dialect(
         _render_gemini_thinking,

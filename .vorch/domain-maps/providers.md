@@ -85,6 +85,7 @@ Read these only when your task matches - not by default.
 - Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior -> `providers/kimi.md`
 - Changing MiniMax wire, reasoning, catalog, or usage parsing -> `providers/minimax.md`
 - Changing Mistral request policy or catalog normalization -> `providers/mistral.md`
+- Changing NVIDIA API Catalog auth, catalog filter, per-Model reasoning controls, or the `chat_template_kwargs` dialect -> `providers/nvidia.md`
 - Changing Nous API-key/Portal OAuth Connections, single-use refresh, catalog policy, or request limits -> `providers/nous.md`
 - Changing StepFun Direct API/Step Plan Connections, routing, request limits, or catalog policy -> `providers/stepfun.md`
 - Changing Ollama native chat, local/cloud Connections, enrichment, or context enforcement -> `providers/ollama.md`

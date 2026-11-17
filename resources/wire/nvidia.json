@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "_comment": "NVIDIA API Catalog (build.nvidia.com) Chat Completions at integrate.api.nvidia.com. Each hosted Model keeps its own reasoning control: Nemotron 3 and 3.5 read chat_template_kwargs, gpt-oss takes reasoning_effort, the rest keeps the protocol default. Controls come from NVIDIA's per-Model API reference (read 2026-11-17), not from live requests. Images are carried as image_url data URIs.",
+  "defaults": {
+    "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+  },
+  "family_defaults": [
+    {
+      "when": {"prefix": "nvidia/nemotron-3"},
+      "set": {
+        "reasoning": {
+          "dialect": "chat_template_kwargs",
+          "control": "on_off",
+          "floor": [],
+          "options": {"switch": "enable_thinking"}
+        }
+      },
+      "note": "Nemotron 3 and 3.5 (Nano Omni, Lightning, Bolt, Super VL) switch reasoning with chat_template_kwargs.enable_thinking (docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-omni-30b-a3b-reasoning, -3-5-lightning-30b-a3b, -3_5-bolt-e4b, -3_5-super-vl-120b-a12b, read 2026-11-17)."
+    },
+    {
+      "when": {"prefix": "nvidia/nemotron-3-ultra"},
+      "set": {
+        "reasoning": {
+          "dialect": "chat_template_kwargs",
+          "control": "levels",
+          "floor": ["medium", "high"],
+          "options": {
+            "switch": "enable_thinking",
+            "level_kwargs": {"medium": {"medium_effort": true}}
+          }
+        }
+      },
+      "note": "Nemotron 3 Ultra: reasoning_effort none|medium|high maps to enable_thinking false, enable_thinking with medium_effort, and enable_thinking (docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-ultra-550b-a55b, read 2026-11-17)."
+    },
+    {
+      "when": {"prefix": "openai/gpt-oss-"},
+      "set": {
+        "reasoning": {
+          "dialect": "reasoning_effort",
+          "control": "levels",
+          "floor": ["low", "medium", "high"],
+          "off": "lowest"
+        }
+      },
+      "note": "gpt-oss takes reasoning_effort low|medium|high and always reasons (docs.api.nvidia.com/nim/reference/openai-gpt-oss-20b, read 2026-11-17)."
+    }
+  ]
+}

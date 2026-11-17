@@ -1,0 +1,24 @@
+{
+  "id": "nvidia",
+  "name": "NVIDIA",
+  "adapter": "nvidia",
+  "base_url": "https://integrate.api.nvidia.com/v1",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key (build.nvidia.com)",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "NVIDIA_API_KEY"
+      },
+      "models_endpoint": "/models",
+      "catalog_requires_credentials": false
+    }
+  ],
+  "defaults": {
+    "max_tokens": 16384
+  },
+  "models_dev_id": "nvidia"
+}

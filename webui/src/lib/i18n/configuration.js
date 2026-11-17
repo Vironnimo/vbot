@@ -1200,7 +1200,7 @@ export default Object.freeze({
     '{\n  "defaults": {\n    "reasoning": {"dialect": "thinking_toggle"},\n    "response": {"reasoning_fields": ["reasoning_content"]}\n  }\n}',
   'settings.providers.custom.wireFieldsTitle': 'Field reference',
   'settings.providers.custom.wireFieldDialect':
-    'How an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
+    'How an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; chat_template_kwargs sends "chat_template_kwargs": {"enable_thinking": true} or false, as vLLM and SGLang read it; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
   'settings.providers.custom.wireFieldLevels':
     'The effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
   'settings.providers.custom.wireFieldOff':

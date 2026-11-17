@@ -21,6 +21,7 @@ from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.nous import NousAdapter
+from core.providers.nvidia import NvidiaAdapter
 from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -38,6 +39,7 @@ ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "nous": NousAdapter,
+    "nvidia": NvidiaAdapter,
     "stepfun": StepFunAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "opencode_zen": OpenCodeZenAdapter,
