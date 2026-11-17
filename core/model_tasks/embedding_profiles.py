@@ -166,13 +166,18 @@ _PROFILES: tuple[tuple[re.Pattern[str], EmbeddingProfile], ...] = (
         ),
     ),
     (
-        # OpenRouter honors input_type for this family (live probe 2026-10-01).
+        # Google's embeddings guide (task types with Embeddings 2): the Model
+        # takes no task type; retrieval queries carry "task: search result |
+        # query: " and documents "title: {title} | text: ", with "none" when
+        # there is no title. Live 2026-11-17 on Google's API: taskType left the
+        # vector unchanged, the prefixes changed it (cosine 0.88-0.95).
+        # Also matches gemini-embedding-2-preview.
         _family(r"gemini-embedding-2"),
         EmbeddingProfile(
             family="gemini-embedding-2",
-            handling="input_type",
-            query=_SEARCH_QUERY,
-            document=_SEARCH_DOCUMENT,
+            handling="prefix",
+            query="task: search result | query: ",
+            document="title: none | text: ",
             multilingual=True,
             recommended_rank=5,
             max_input_tokens=8192,
@@ -181,7 +186,9 @@ _PROFILES: tuple[tuple[re.Pattern[str], EmbeddingProfile], ...] = (
     ),
     (
         # Google documents a 2,048-token input limit; OpenRouter honors
-        # input_type for this family (live probe 2026-10-01).
+        # input_type for this family (live probe 2026-10-01), and Google's own
+        # API takes the purpose as taskType RETRIEVAL_QUERY/RETRIEVAL_DOCUMENT
+        # (embeddings_providers.py translates).
         _family(r"gemini-embedding-001"),
         EmbeddingProfile(
             family="gemini-embedding-001",

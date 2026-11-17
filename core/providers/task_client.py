@@ -25,7 +25,7 @@ import httpx
 from core.debug import DebugContext, ProviderDebugRecorder
 from core.providers._openrouter_policy import openrouter_in_flight_budget_exhausted
 from core.providers.accounts import ConnectionRef
-from core.providers.adapter_types import openai_compatible_base_url
+from core.providers.adapter_types import adapter_type_for_config
 from core.providers.errors import (
     ProviderContentRefusedError,
     ProviderError,
@@ -46,6 +46,22 @@ from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
+
+
+class StatusClassifier(Protocol):
+    """Raise the Provider error an HTTP status reports (``classify_http_status``)."""
+
+    def __call__(
+        self,
+        status_code: int,
+        *,
+        idempotent: bool,
+        extra_retryable: set[int] | None,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None: ...
+
+
 _TASK_CLIENT_WORKERS = BoundedWorkerPool(name="task-client-setup", max_workers=4)
 
 # Option name of the JSON escape hatch every provider task target carries:
@@ -227,9 +243,14 @@ class ProviderTaskClient:
         self._model_id = model_id
         # Task endpoints are OpenAI-compatible paths below the Adapter's
         # OpenAI-compatible base, which can differ from a native chat base.
-        self._base_url = openai_compatible_base_url(
-            provider,
-            connection.base_url or provider.base_url,
+        # The Adapter also owns its Provider's HTTP error semantics.
+        adapter_type = adapter_type_for_config(provider)
+        base_url = connection.base_url or provider.base_url
+        self._base_url = (
+            adapter_type.openai_compatible_base_url(base_url) if adapter_type else base_url
+        )
+        self._classify_status: StatusClassifier = (
+            adapter_type.classify_task_http_status if adapter_type else classify_http_status
         )
         self._usage_observer = usage_observer
         self._debug_recorder = debug_recorder
@@ -393,6 +414,7 @@ class ProviderTaskClient:
                                 retry_policy=retry_policy,
                                 operation_key=operation_key,
                                 extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                                classify_status=self._classify_status,
                             )
                             try:
                                 parsed = (
@@ -475,6 +497,7 @@ class ProviderTaskClient:
                     response,
                     extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
                     idempotent=True,
+                    classify_status=self._classify_status,
                 )
                 return parse(response)
 
@@ -537,6 +560,7 @@ def classify_task_response_for_retry_policy(
     retry_policy: TaskRequestRetryPolicy,
     operation_key: str,
     extra_retryable_status_codes: frozenset[int],
+    classify_status: StatusClassifier = classify_http_status,
 ) -> None:
     refusal = content_refusal(response)
     if refusal is not None:
@@ -546,6 +570,7 @@ def classify_task_response_for_retry_policy(
         classify_task_response(
             response,
             extra_retryable_status_codes=extra_retryable_status_codes | verified_status_codes,
+            classify_status=classify_status,
         )
     except ProviderRateLimitError:
         # 429 is an explicit refusal rather than an ambiguous execution result.
@@ -631,6 +656,7 @@ def classify_task_response(
     *,
     extra_retryable_status_codes: frozenset[int] = frozenset(),
     idempotent: bool = False,
+    classify_status: StatusClassifier = classify_http_status,
 ) -> None:
     """Classify a task HTTP response, including body detail on error.
 
@@ -638,7 +664,8 @@ def classify_task_response(
     non-idempotent generation cannot share the wrong retry branch: a status
     poll or result download GET may retry HTTP 500, a generation POST may not.
     OpenRouter's in-flight budget 402 never reached a provider and is a
-    retryable rate limit for every policy.
+    retryable rate limit for every policy. *classify_status* is the Provider's
+    status policy (``ProviderAdapter.classify_task_http_status``).
     """
 
     detail = response.text if response.status_code >= 400 else ""
@@ -649,7 +676,7 @@ def classify_task_response(
         throttled.status_code = response.status_code
         throttled.retry_after = parse_retry_after(response.headers)
         raise throttled
-    classify_http_status(
+    classify_status(
         response.status_code,
         idempotent=idempotent,
         extra_retryable=set(extra_retryable_status_codes),

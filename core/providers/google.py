@@ -55,6 +55,9 @@ _LIVE_VOICE = re.compile(r"(?:-live(?:-|$)|-native-audio-)")
 _LIVE_OTHER = re.compile(r"(?:-transcribe-|-translate-|^gemini-robotics-)")
 
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
+# Throttle messages name the wait ("Please retry in 41.5s."); the Decisions API
+# sends only that message, with a string ``code`` and no RetryInfo detail.
+_RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s(?![a-z])", re.IGNORECASE)
 
 
 class GoogleAdapter(GeminiCompatibleAdapter):
@@ -115,6 +118,25 @@ class GoogleAdapter(GeminiCompatibleAdapter):
         response_headers: httpx.Headers,
     ) -> None:
         _classify_google_status(status_code, detail=detail, response_headers=response_headers)
+
+    @classmethod
+    @override
+    def classify_task_http_status(
+        cls,
+        status_code: int,
+        *,
+        idempotent: bool,
+        extra_retryable: set[int] | None,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        _classify_google_status(
+            status_code,
+            detail=detail,
+            response_headers=response_headers,
+            idempotent=idempotent,
+            extra_retryable=extra_retryable,
+        )
 
 
 def _family_capabilities(
@@ -186,7 +208,8 @@ def _task_capabilities(
 
 
 def _embedding_capabilities() -> Capabilities:
-    return text_embedding_capabilities()
+    # Every Gemini embedding Model shortens its vector with outputDimensionality.
+    return text_embedding_capabilities(("dimensions",))
 
 
 def _decision_capabilities() -> Capabilities:
@@ -249,6 +272,8 @@ def _classify_google_status(
     *,
     detail: str,
     response_headers: httpx.Headers,
+    idempotent: bool = False,
+    extra_retryable: set[int] | None = None,
 ) -> None:
     """Apply Google's error semantics on top of the shared status policy."""
 
@@ -271,7 +296,8 @@ def _classify_google_status(
             response_headers = httpx.Headers({**response_headers, "retry-after": delay})
     classify_http_status(
         status_code,
-        idempotent=False,
+        idempotent=idempotent,
+        extra_retryable=extra_retryable,
         detail=detail,
         response_headers=response_headers,
     )
@@ -333,4 +359,7 @@ def _retry_delay_seconds(error: Mapping[str, Any]) -> str | None:
         delay = info.get("retryDelay")
         if isinstance(delay, str) and (match := _RETRY_DELAY.match(delay)):
             return str(max(1, round(float(match.group(1)))))
+    message = error.get("message")
+    if isinstance(message, str) and (match := _RETRY_IN.search(message)):
+        return str(max(1, round(float(match.group(1)))))
     return None
