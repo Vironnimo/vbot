@@ -142,29 +142,36 @@ def atomic_write_stream(
     _atomic_write(target_path, write_temporary, data_dir=data_dir, mode=mode)
 
 
-def write_new_bytes(target_path: Path, data: bytes) -> None:
+def write_new_bytes(target_path: Path, data: bytes, *, mode: int | None = None) -> None:
     """Durably create ``target_path`` holding ``data``; never replace anything there.
 
     Raises ``FileExistsError`` when an entry already exists at ``target_path``
     and leaves it untouched. The data is flushed and fsynced and, on POSIX, the
     new directory entry too - the durability of the atomic writes. The file is
-    written in place, not staged, so the caller publishes it through a later
+    written in place, not staged. The optional ``mode`` applies before any bytes
+    are written. The caller publishes the file through a later
     step (for example metadata written afterwards). On any failure after the
     file was created it is removed and the error re-raised.
     """
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = target_path.open("xb")
+
+    def open_with_mode(path: str, flags: int) -> int:
+        return os.open(path, flags, mode if mode is not None else 0o666)
+
+    created = False
     try:
-        with handle:
+        with open(target_path, "xb", opener=open_with_mode if mode is not None else None) as handle:
+            created = True
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         if os.name == "posix":
             sync_directory(target_path.parent)
     except BaseException:
-        with suppress(OSError):
-            target_path.unlink(missing_ok=True)
+        if created:
+            with suppress(OSError):
+                target_path.unlink(missing_ok=True)
         raise
 
 

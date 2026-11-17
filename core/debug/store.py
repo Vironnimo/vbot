@@ -21,6 +21,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from core.debug._privacy import PRIVATE_FILE_MODE, ensure_debug_directory
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
@@ -250,7 +251,7 @@ class DebugTraceStore:
         retained = self._prune_oldest(list(entries))
         pruned = {item["trace_id"] for item in entries} - {item["trace_id"] for item in retained}
         try:
-            atomic_write_text(trace_path, trace_json)
+            atomic_write_text(trace_path, trace_json, mode=PRIVATE_FILE_MODE)
             self._write_index(retained)
         except OSError:
             # The next operation reads the index again and sweeps what this
@@ -313,7 +314,7 @@ class DebugTraceStore:
 
     def _ensure_directories(self) -> None:
         """Create the debug and traces directories if they do not exist."""
-        self._traces_dir.mkdir(parents=True, exist_ok=True)
+        ensure_debug_directory(self._traces_dir)
 
     def _trace_path(self, trace_id: str) -> Path:
         """Return the trace path after validating its canonical UUID4 hex id."""
@@ -368,7 +369,9 @@ class DebugTraceStore:
         """Write the index entries to disk."""
         self._ensure_directories()
         atomic_write_text(
-            self._index_path, json.dumps(entries, ensure_ascii=False, separators=_COMPACT)
+            self._index_path,
+            json.dumps(entries, ensure_ascii=False, separators=_COMPACT),
+            mode=PRIVATE_FILE_MODE,
         )
 
     def _prune_oldest(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:

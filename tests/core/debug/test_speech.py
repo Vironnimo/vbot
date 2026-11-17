@@ -1,5 +1,7 @@
 """Speech diagnostics preserve exact uploads under live Debug and retention policy."""
 
+import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,10 @@ async def test_original_upload_and_outcome_survive_reopening(
         None if error is None else {"type": "RuntimeError", "message": str(error)}
     )
     assert await reopened.audio_async(record["recording_id"]) == (audio, "audio/webm")
+    if os.name == "posix":
+        directory = DataDirectoryLayout(tmp_path).debug / "speech"
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in directory.iterdir())
 
 
 @pytest.mark.asyncio

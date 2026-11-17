@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.debug import protect_retained_debug_artifacts
 from core.debug import store as store_module
 from core.debug.store import DebugTraceStore, InvalidTraceIdError, drain_debug_traces
 from core.storage.layout import DataDirectoryLayout
@@ -75,11 +77,11 @@ def blocked_trace_writes(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BlockedTr
     blocked = _BlockedTraceWrites()
     write = store_module.atomic_write_text
 
-    def slow_write(path: Path, text: str) -> None:
+    def slow_write(path: Path, text: str, *, mode: int | None = None) -> None:
         if not blocked.release.is_set():
             blocked.entered.set()
             blocked.release.wait(timeout=5)
-        write(path, text)
+        write(path, text, mode=mode)
 
     monkeypatch.setattr(store_module, "atomic_write_text", slow_write)
     try:
@@ -95,6 +97,37 @@ def blocked_trace_writes(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BlockedTr
 
 
 class TestSaveTrace:
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+    def test_existing_diagnostics_are_protected_and_new_traces_use_private_modes(
+        self, tmp_path: Path
+    ) -> None:
+        root = DataDirectoryLayout(tmp_path).debug
+        traces = root / "traces"
+        speech = root / "speech"
+        traces.mkdir(parents=True)
+        speech.mkdir()
+        for directory in (root, traces, speech):
+            directory.chmod(0o755)
+        old = speech / "previous.audio"
+        old.write_bytes(b"previous diagnostic")
+        old.chmod(0o644)
+        outside = tmp_path / "unrelated"
+        outside.write_bytes(b"outside the Debug store")
+        outside.chmod(0o644)
+        (speech / "link").symlink_to(outside)
+
+        protect_retained_debug_artifacts(tmp_path)
+        store = DebugTraceStore(tmp_path, trace_limit=1)
+        store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+
+        assert all(
+            stat.S_IMODE(directory.stat().st_mode) == 0o700 for directory in (root, traces, speech)
+        )
+        for file in (old, root / "index.json", traces / f"{TRACE_ID_1}.json"):
+            assert stat.S_IMODE(file.stat().st_mode) == 0o600
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o644
+        assert old.read_bytes() == b"previous diagnostic"
+
     @pytest.mark.parametrize(
         "index_problem",
         [
