@@ -18,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
+import tempfile
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
@@ -26,6 +28,8 @@ from functools import partial
 from pathlib import Path
 
 import httpx
+
+from core.utils.file_status import stat_or_none
 
 _CHUNK_BYTES = 1024 * 1024
 _ATTEMPTS = 4
@@ -123,7 +127,7 @@ def fetch_model_files(
     for item in missing:
         target = directory / item.path
         partial_path = target.with_name(target.name + ".part")
-        present = partial_path.stat().st_size if partial_path.is_file() else 0
+        present = _file_size(partial_path) or 0
         # Resuming appends only the remaining bytes. If the server ignores Range,
         # truncating the partial file releases its existing bytes first.
         needed += item.size - present if 0 <= present <= item.size else item.size
@@ -146,18 +150,18 @@ def _offset(progress: Callable[[int], None], done: int, current: int) -> None:
     progress(done + current)
 
 
+def _file_size(path: Path) -> int | None:
+    status = stat_or_none(path)
+    return status.st_size if status is not None and stat.S_ISREG(status.st_mode) else None
+
+
 def _complete(
     target: Path,
     item: ModelFile,
     cancelled: threading.Event,
     report: Callable[[int], None],
 ) -> bool:
-    try:
-        if not target.is_file() or target.stat().st_size != item.size:
-            return False
-    except OSError:
-        return False
-    return _sha256(target, cancelled, report) == item.sha256
+    return _file_size(target) == item.size and _sha256(target, cancelled, report) == item.sha256
 
 
 def _sha256(path: Path, cancelled: threading.Event, report: Callable[[int], None]) -> str:
@@ -214,19 +218,22 @@ def _adopt(
         try:
             if not candidate.is_file() or candidate.stat().st_size != item.size:
                 continue
-            partial.unlink(missing_ok=True)
-            try:
-                os.link(candidate.resolve(), partial)
-            except OSError:
-                # The system copy routine clones blocks where the file system can
-                # (CopyFile2 on Windows, reflink or copy_file_range on Linux).
-                candidate.copy(partial)
-            if _sha256(partial, cancelled, report) == item.sha256:
-                os.replace(partial, target)
-                return True
+            # A rejected cache candidate must not remove bytes from a resumable download.
+            with tempfile.TemporaryDirectory(prefix=".model-adopt-", dir=target.parent) as staging:
+                staged = Path(staging) / target.name
+                try:
+                    os.link(candidate.resolve(), staged)
+                except OSError:
+                    # The system copy routine clones blocks where the file system can
+                    # (CopyFile2 on Windows, reflink or copy_file_range on Linux).
+                    candidate.copy(staged)
+                if _sha256(staged, cancelled, report) != item.sha256:
+                    continue
+                os.replace(staged, target)
         except OSError:
-            pass
+            continue
         partial.unlink(missing_ok=True)
+        return True
     return False
 
 
@@ -248,7 +255,7 @@ def _download(
             raise ModelFilesCancelledError
         digest = hashlib.sha256()
         offset = 0
-        if partial.is_file() and 0 < partial.stat().st_size <= item.size:
+        if 0 < (_file_size(partial) or 0) <= item.size:
             # An earlier attempt or installation left these bytes; continue after them.
             with partial.open("rb") as handle:
                 while chunk := handle.read(_CHUNK_BYTES):
