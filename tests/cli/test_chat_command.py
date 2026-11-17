@@ -5,8 +5,9 @@ from __future__ import annotations
 import io
 import json
 import sys
+import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -47,6 +48,29 @@ def completed(sequence: int) -> dict[str, Any]:
     return event(
         sequence, "run_completed", {"status": "completed", "timing": {"duration_ms": 1234}}
     )
+
+
+def test_chat_event_reader_stops_prefetching_when_output_stalls() -> None:
+    reading = threading.Event()
+    overrun = threading.Event()
+    closed = threading.Event()
+
+    def source() -> Iterator[dict[str, Any]]:
+        try:
+            for sequence in range(1, 2_000):
+                if sequence == 8:
+                    reading.set()
+                if sequence == 1_000:
+                    overrun.set()
+                yield event(sequence, "provider_heartbeat")
+        finally:
+            closed.set()
+
+    with closing(chat_management._in_background(source())) as events:
+        assert next(events)["sequence"] == 1
+        assert reading.wait(1)
+        assert not overrun.wait(0.1)
+    assert closed.wait(1)
 
 
 # The Run a chat.stream reply starts: what it already recorded, then its SSE stream.

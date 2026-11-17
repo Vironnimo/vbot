@@ -15,7 +15,8 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -59,6 +60,7 @@ _PREVIEW_CHARACTERS = 500
 _PROGRESS_CHARACTERS = 200
 # The caller waits for streamed events in short polls so Ctrl-C lands promptly.
 _POLL_SECONDS = 0.2
+_EVENT_HANDOFF_LIMIT = 128
 # Reconnects in a row that deliver no new event before the stream counts as lost.
 _RECONNECT_LIMIT = 3
 # Attachments of these types are media blocks (the Model sees or hears them);
@@ -578,9 +580,10 @@ def _follow(instance: ServerInstance, sse_path: str, timeline: _RunTimeline) -> 
         before = timeline.last_sequence
         events = stream_run_events(instance, sse_path, after_sequence=before)
         try:
-            for event in _in_background(events):
-                if timeline.apply(event):
-                    return None
+            with closing(_in_background(events)) as received:
+                for event in received:
+                    if timeline.apply(event):
+                        return None
             problem = "the stream closed before the Run finished"
         except RunEventStreamError as error:
             if error.status_code == 404:
@@ -591,25 +594,24 @@ def _follow(instance: ServerInstance, sse_path: str, timeline: _RunTimeline) -> 
             return problem
 
 
-def _in_background(events: Iterator[JsonObject]) -> Iterator[JsonObject]:
+def _in_background(events: Iterator[JsonObject]) -> Generator[JsonObject]:
     """Iterate ``events`` on a worker thread while this thread waits in short polls.
 
     A blocking socket read does not see Ctrl-C on Windows until data arrives;
     the polling thread does. What the worker raises is raised here.
     """
-    handoff: queue.Queue[tuple[str, Any]] = queue.Queue()
-    stop = threading.Event()
+    handoff: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=_EVENT_HANDOFF_LIMIT)
 
     def pump() -> None:
         try:
             for item in events:
-                if stop.is_set():
-                    break
                 handoff.put(("item", item))
-            else:
-                handoff.put(("end", None))
+            handoff.put(("end", None))
+        except queue.ShutDown:
+            return
         except BaseException as error:  # noqa: BLE001 - re-raised by the consumer
-            handoff.put(("error", error))
+            with suppress(queue.ShutDown):
+                handoff.put(("error", error))
         finally:
             close = getattr(events, "close", None)
             if callable(close):
@@ -629,7 +631,7 @@ def _in_background(events: Iterator[JsonObject]) -> Iterator[JsonObject]:
             else:
                 raise value
     finally:
-        stop.set()
+        handoff.shutdown(immediate=True)
 
 
 class _RunTimeline:
