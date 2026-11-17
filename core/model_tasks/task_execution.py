@@ -410,8 +410,10 @@ class TaskBindingResolver:
                 [getattr(binding, "task_type", ""), identity, dict(binding.options)], sort_keys=True
             )
             candidates.append((binding, key))
-        ready = [item for item in candidates if self._failures.get(item[1], (0, 0))[0] <= _clock()]
-        return ready or [min(candidates, key=lambda item: self._failures[item[1]][0])]
+        failures = self._failures.copy()
+        now = _clock()
+        ready = [item for item in candidates if failures.get(item[1], (0, 0))[0] <= now]
+        return ready or [min(candidates, key=lambda item: failures[item[1]][0])]
 
     def resolve(
         self, task_type: str, *, validate: Callable[[TaskAttempt], object] | None = None
