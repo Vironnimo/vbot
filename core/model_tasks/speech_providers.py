@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import wave
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Mapping
 from pathlib import Path
@@ -809,9 +810,10 @@ def _google_offset(value: Any) -> float | None:
     if not isinstance(value, str) or not value.endswith("s"):
         return None
     try:
-        return float(value[:-1])
+        seconds = float(value[:-1])
     except ValueError:
         return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _google_transcription_result(payload: Any) -> SpeechTranscriptionResult:
@@ -835,11 +837,15 @@ def _google_transcription_result(payload: Any) -> SpeechTranscriptionResult:
             continue
         texts.append(text.strip())
         words: list[JsonObject] = []
-        for word in details.get("words") or ():
-            start = _google_offset(word.get("startOffset")) if isinstance(word, Mapping) else None
-            end = _google_offset(word.get("endOffset")) if isinstance(word, Mapping) else None
-            if start is not None and end is not None and isinstance(word.get("word"), str):
-                words.append({"word": word["word"], "start": start, "end": end})
+        raw_words = details.get("words")
+        for word in raw_words if isinstance(raw_words, list) else ():
+            if not isinstance(word, Mapping):
+                continue
+            label = word.get("word")
+            start = _google_offset(word.get("startOffset"))
+            end = _google_offset(word.get("endOffset"))
+            if isinstance(label, str) and start is not None and end is not None and start <= end:
+                words.append({"word": label, "start": start, "end": end})
         speaker = details.get("speakerLabel")
         if not words and not isinstance(speaker, str):
             continue
