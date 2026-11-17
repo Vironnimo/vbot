@@ -555,6 +555,12 @@ describe('Live call frames', () => {
     ],
     ['after idling', true, 'idle', { code: 'idle', severity: 'info' }],
     [
+      'after idling with no live state in the replay',
+      false,
+      'idle',
+      { code: 'idle', severity: 'info' },
+    ],
+    [
       'at the provider limit',
       true,
       'expired',

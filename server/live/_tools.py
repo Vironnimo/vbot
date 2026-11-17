@@ -425,7 +425,6 @@ class LiveToolExecutor:
         return live_success(f"Showing the page of Agent {agent.name}.")
 
     async def _navigate(self, args: JsonObject) -> None:
-        self._ctx.ensure_active()
         outcome = await self._ctx.ui(UI_ACTION_OPEN, args)
         if outcome.get("applied") is not True:
             raise LiveUiError(NAVIGATION_NOT_APPLIED)

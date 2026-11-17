@@ -22,6 +22,7 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected, PlaybackReceipt
 from server.app import create_app
 from server.events import ServerEventBus
+from server.live._call import LiveCallEntry
 from server.live.owner import (
     LIVE_AUDIO_FRAME_MAX_BYTES,
     LIVE_SOCKET_CLOSE_ENDED,
@@ -255,9 +256,8 @@ async def test_start_buffers_updates_until_the_owner_attaches(live: Harness) -> 
     call.host.publish({"type": "state", "phase": "live"})
     reader = live.attach(call)
     call.host.publish({"type": "caption", "role": "user", "text": "hi", "final": True})
-    await settle(lambda: len(reader.frames) == 3)
+    await settle(lambda: len(reader.frames) == 2)
     assert [frame.get("phase", frame["type"]) for frame in reader.frames] == [
-        "connecting",
         "live",
         "caption",
     ]
@@ -269,10 +269,31 @@ async def test_keeps_only_the_newest_updates_while_no_owner_is_attached() -> Non
     try:
         call = await harness.start()
         for index in range(5):
-            call.host.publish({"type": "activity", "busy": True, "label": str(index)})
+            call.host.publish({"type": "action", "label": str(index)})
         reader = harness.attach(call)
         await settle(lambda: len(reader.frames) == 3)
         assert [frame["label"] for frame in reader.frames] == ["2", "3", "4"]
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_full_buffer_keeps_the_final_reason() -> None:
+    harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
+    try:
+        call = await harness.start()
+        call.host.publish({"type": "state", "phase": "connecting"})
+        call.host.publish({"type": "state", "phase": "live"})
+        for _ in range(8):
+            call.host.publish({"type": "error", "code": "notification_failed", "fatal": False})
+        call.finish("idle")
+        await settle(lambda: harness.registry.active_call_id is None)
+        reader = harness.attach(call)
+        await settle(lambda: reader.done)
+        assert reader.frames == [
+            {"type": "state", "phase": "live"},
+            {"type": "closed", "reason": "idle", "usage": {"total_tokens": 3}},
+        ]
     finally:
         await harness.close()
 
@@ -370,7 +391,7 @@ async def test_a_lagging_owner_is_disconnected_and_its_updates_wait_for_the_next
         owner = harness.registry.attach(call.id)
         assert owner is not None
         for index in range(3):
-            call.host.publish({"type": "activity", "busy": True, "label": str(index)})
+            call.host.publish({"type": "action", "label": str(index)})
         assert owner.close_code == LIVE_SOCKET_CLOSE_LAGGED
         stale = OwnerReader(owner)
         harness.readers.append(stale)
@@ -380,6 +401,26 @@ async def test_a_lagging_owner_is_disconnected_and_its_updates_wait_for_the_next
         fresh = harness.attach(call)
         await settle(lambda: len(fresh.frames) == 2)
         assert [frame["label"] for frame in fresh.frames] == ["1", "2"]
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_relay_replay_reserves_room_for_playback_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
+    try:
+        call = await harness.start_relay()
+        phase = {"type": "state", "phase": "live"}
+        clear = {"type": "playback_clear", "generation": 2}
+        call.host.publish(phase)
+        call.host.publish({"type": "action"})
+        monkeypatch.setattr(call, "sync_playback", lambda: call.host.publish(clear))
+        owner = harness.attach(call)
+        await settle(lambda: len(owner.frames) == 2)
+        assert owner.frames == [phase, clear]
+        assert owner.owner.close_code is None
     finally:
         await harness.close()
 
@@ -499,20 +540,35 @@ async def test_stop_closes_gracefully_and_forwards_the_final_update(live: Harnes
     reader = live.attach(call)
     assert live.registry.stop(call.id) is True
     assert live.registry.active_call_id is None
-    # Checked at every Event Loop step: the step that ends the call also releases
-    # it, so no owner socket can attach to an ended call and miss its final update.
-    for _ in range(100):
-        if live.registry.stop(call.id) is False:
-            break
-        await asyncio.sleep(0)
-    assert live.registry.attach(call.id) is None
     await settle(lambda: reader.done)
+    await settle(lambda: cast(LiveCallEntry, call.host).ended)
+    assert live.registry.attach(call.id) is None
     assert reader.frames == [
         {"type": "closed", "reason": "user_stopped", "usage": {"total_tokens": 3}}
     ]
     assert reader.owner.close_code == LIVE_SOCKET_CLOSE_ENDED
     assert call.close_calls == 1
     assert call.abort_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_replays_a_final_update_an_owner_took_without_draining(
+    live: Harness,
+) -> None:
+    call = await live.start()
+    owner = live.registry.attach(call.id)
+    assert owner is not None
+    call.finish("idle")
+    await settle(lambda: live.registry.active_call_id is None)
+    terminal = {"type": "closed", "reason": "idle", "usage": {"total_tokens": 3}}
+    # The sender took the frame but disconnected before confirming its send.
+    async with aclosing(owner.frames()) as frames:
+        assert await anext(frames) == terminal
+    owner.detach()
+    replay = live.attach(call)
+    await settle(lambda: replay.done)
+    assert replay.frames == [terminal]
+    assert live.registry.attach(call.id) is None
 
 
 @pytest.mark.asyncio
@@ -636,6 +692,57 @@ async def test_ui_requests_wait_for_a_returning_owner_and_fail_without_one(
     await call.abort()
     ended = await task
     assert ended["error"]["code"] == "ui_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_full_buffer_preserves_an_admitted_ui_request() -> None:
+    harness = Harness(LiveCallLimits(update_buffer_limit=3, owner_queue_limit=3))
+    try:
+        call = await harness.start()
+        entry = cast(LiveCallEntry, call.host)
+        owner = harness.registry.attach(call.id)
+        assert owner is not None
+        owner.detach()
+        tasks = [
+            asyncio.create_task(entry.ui_request("open", {"view": view}))
+            for view in ("chat", "projects")
+        ]
+        await drain()
+        for _ in range(8):
+            call.host.publish({"type": "error", "code": "notification_failed", "fatal": False})
+        refused = await run_tool(call, "open", {"view": "terminals"})
+        assert refused["error"]["code"] == "ui_busy"
+
+        reader = harness.attach(call)
+        await settle(lambda: len(reader.frames) == 3)
+        assert reader.types() == ["ui_request", "ui_request", "error"]
+        assert [frame["args"] for frame in reader.frames[:2]] == [
+            {"view": "chat"},
+            {"view": "projects"},
+        ]
+        for request in reader.frames[:2]:
+            assert harness.registry.resolve_ui_request(
+                call.id, request["request_id"], result={"applied": True}
+            )
+        assert await asyncio.gather(*tasks) == [{"applied": True}] * 2
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_ended_call_replays_the_closure_without_queued_ui_effects(live: Harness) -> None:
+    call = await live.start()
+    owner = live.registry.attach(call.id)
+    assert owner is not None
+    owner.detach()
+    task = asyncio.create_task(run_tool(call, "open", {"view": "terminals"}))
+    await drain()
+    call.finish("idle")
+    await settle(lambda: live.registry.active_call_id is None)
+    reader = live.attach(call)
+    await settle(lambda: reader.done)
+    assert reader.types() == ["closed"]
+    assert (await task)["error"]["code"] == "ui_unavailable"
 
 
 @pytest.mark.asyncio

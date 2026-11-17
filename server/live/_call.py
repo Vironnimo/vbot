@@ -24,7 +24,7 @@ from typing import Any
 from core.model_tasks.live import LiveCall, PlaybackReceipt
 from core.utils.ids import new_id
 from server.events import ServerEventBus
-from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
+from server.live._context import UI_BUSY, UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server.live._feed import LiveRunFeed
 from server.live._tools import LiveToolExecutor
 from server.live.owner import (
@@ -46,9 +46,10 @@ CLOSED_REASON_HUNG_UP = "hung_up"
 CLOSED_REASON_IDLE = "idle"
 _NOTIFICATION_FAILED = "notification_failed"
 
-# Updates that may be dropped first when a buffer is full; the rest carry
-# state an owner must see.
-_DISPOSABLE_UPDATES = frozenset({"caption", "activity", "heartbeat", "action"})
+_DISPOSABLE_UPDATES = frozenset({"caption", "heartbeat", "action"})
+_SNAPSHOT_UPDATES = frozenset(
+    {"state", "sessions", "connection", "activity", "idle", "expiry", "playback_clear"}
+)
 # Updates that show someone speaks; they keep a call from idling.
 _SPEECH_UPDATES = frozenset({"caption", "playback_clear"})
 
@@ -72,10 +73,18 @@ class LiveCallLimits:
     idle_warning_seconds: float = 60.0
 
     def __post_init__(self) -> None:
+        if self.update_buffer_limit < 2:
+            raise ValueError("update_buffer_limit must hold a UI request and the final update")
         if self.owner_queue_limit < self.update_buffer_limit:
             raise ValueError("owner_queue_limit must hold the whole update buffer")
         if not 0 < self.idle_warning_seconds < self.idle_seconds:
             raise ValueError("idle_warning_seconds must fall within idle_seconds")
+
+
+@dataclass(frozen=True)
+class _PendingUiRequest:
+    frame: JsonObject
+    future: asyncio.Future[JsonObject]
 
 
 class LiveCallEntry:
@@ -104,14 +113,14 @@ class LiveCallEntry:
         self.active = True
         self.ended = False
         self._closing = False
-        self._closed_published = False
+        self._closed_update: JsonObject | None = None
         self._finalized = False
         self._buffer: deque[JsonObject] = deque()
         self._owner: LiveOwnerStream | None = None
         self._owner_attached = False
         self._malformed_audio_logged = False
         self._app_context: JsonObject | None = None
-        self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
+        self._ui_requests: dict[str, _PendingUiRequest] = {}
         self._executor = LiveToolExecutor(
             rpc=rpc,
             ui=self.ui_request,
@@ -143,8 +152,12 @@ class LiveCallEntry:
         return self.call.log_id if self.call is not None else ""
 
     @property
-    def has_undelivered_updates(self) -> bool:
-        return bool(self._buffer)
+    def can_attach(self) -> bool:
+        return (
+            self._closed_update is None
+            or bool(self._buffer)
+            or (self._owner is not None and not self._owner.finished)
+        )
 
     def _is_active(self) -> bool:
         return self.active
@@ -174,16 +187,18 @@ class LiveCallEntry:
 
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
-        if self._closed_published:
+        if self._closed_update is not None:
             return
         kind = update.get("type")
         if kind == "closed":
-            self._closed_published = True
             self.active = False
             self._cancel_timer()
             self._stop_idle_watch()
+            for request in self._ui_requests.values():
+                self._discard_ui_request(request.frame)
             if self._end_reason is not None and update.get("reason") != CLOSED_REASON_REPLACED:
                 update = {**update, "reason": self._end_reason}
+            self._closed_update = update
         elif kind == "state" and update.get("phase") == "live":
             self._start_idle_watch()
         elif kind == "activity":
@@ -192,13 +207,13 @@ class LiveCallEntry:
         elif kind in _SPEECH_UPDATES:
             self._mark_active()
         self._deliver(update)
-        if self._closed_published and self._owner is not None:
+        if self._closed_update is not None and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
 
     def publish_audio(self, pcm: bytes, *, generation: int = 1, start_samples: int = 0) -> None:
         """Send assistant audio to the attached owner; dropped while none is attached."""
         owner = self._owner
-        if owner is None or self._closed_published or not pcm:
+        if owner is None or self._closed_update is not None or not pcm:
             return
         if not owner.send(struct.pack("<II", generation, start_samples) + pcm):
             self._owner_lagged(owner)
@@ -249,7 +264,7 @@ class LiveCallEntry:
     def _mark_active(self) -> None:
         """Speech or work happened: the idle period starts over."""
         self._active_at = time.monotonic()
-        if self._idle_warned and not self._closed_published:
+        if self._idle_warned and self._closed_update is None:
             self._idle_warned = False
             self._deliver({"type": "idle", "ends_in": None})
 
@@ -350,10 +365,10 @@ class LiveCallEntry:
         self.ended = True
         self.active = False
         self._cancel_timer()
-        for future in self._ui_requests.values():
-            if not future.done():
-                future.set_exception(LiveUiError(UI_UNAVAILABLE))
-        if not self._closed_published:
+        for request in self._ui_requests.values():
+            if not request.future.done():
+                request.future.set_exception(LiveUiError(UI_UNAVAILABLE))
+        if self._closed_update is None:
             self.publish({"type": "closed", "reason": None, "usage": None})
         # Ending, the final update and the registry's release happen in one step:
         # an owner socket attaching meanwhile would otherwise find an ended call
@@ -372,20 +387,26 @@ class LiveCallEntry:
         previous = self._owner
         if previous is not None:
             previous.end(LIVE_SOCKET_CLOSE_REPLACED)
-            self._requeue(previous.take_undelivered())
-            if self.call is not None:
+            self._requeue_owner(previous)
+            if self.call is not None and self._closed_update is None:
                 self.call.reset_playback()
         owner = LiveOwnerStream(
             self, self._limits.owner_queue_limit, self._limits.owner_audio_limit_bytes
         )
+        call = self.call if self._closed_update is None else None
+        capacity = self._limits.update_buffer_limit
+        if call is not None and call.media["type"] == "relay":
+            # The new socket also needs the current playback generation.
+            capacity = min(capacity, self._limits.owner_queue_limit - 1)
+        self._compact_buffer(capacity)
         while self._buffer:
             owner.send(self._buffer.popleft())
         self._owner = owner
         self._owner_attached = True
         self._cancel_timer()
-        if self.call is not None and not self.ended and not self._closed_published:
-            self.call.sync_playback()
-        if self.ended or self._closed_published:
+        if call is not None:
+            call.sync_playback()
+        if self._closed_update is not None:
             owner.end(LIVE_SOCKET_CLOSE_ENDED)
         return owner
 
@@ -397,7 +418,10 @@ class LiveCallEntry:
         if self._owner is not owner:
             return
         self._owner = None
-        self._requeue(owner.take_undelivered())
+        self._requeue_owner(owner)
+        if self.ended:
+            self._on_finalized(self)
+            return
         if self.call is not None:
             self.call.reset_playback()
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
@@ -452,18 +476,48 @@ class LiveCallEntry:
             self._buffer.extendleft(reversed(updates))
             self._trim_buffer()
 
+    def _requeue_owner(self, owner: LiveOwnerStream) -> None:
+        updates = owner.take_undelivered()
+        terminal = self._closed_update
+        if terminal is not None and not owner.finished and terminal not in updates:
+            # The stream may have taken the final frame before its send failed.
+            updates.append(terminal)
+        self._requeue(updates)
+
     def _trim_buffer(self) -> None:
-        """Bound the buffer, dropping the oldest disposable updates first."""
-        excess = len(self._buffer) - self._limits.update_buffer_limit
-        if excess <= 0:
-            return
-        kept: deque[JsonObject] = deque()
-        for update in self._buffer:
-            if excess and update.get("type") in _DISPOSABLE_UPDATES:
-                excess -= 1
-                continue
-            kept.append(update)
-        self._buffer = kept
+        if len(self._buffer) > self._limits.update_buffer_limit:
+            self._compact_buffer(self._limits.update_buffer_limit)
+
+    def _compact_buffer(self, capacity: int) -> None:
+        """Keep recent updates in their original order, reserving reliable delivery."""
+        ranked: list[tuple[int, int]] = []
+        seen: set[tuple[str, str]] = set()
+        for index, update in reversed(list(enumerate(self._buffer))):
+            kind = update["type"]
+            key = None
+            if kind in {"ui_request", "closed"}:
+                priority = 3
+            elif kind in _SNAPSHOT_UPDATES:
+                priority = 2
+                key = (kind, "")
+            elif kind == "error" and update.get("fatal") is not True:
+                priority = 1
+                key = (kind, str(update.get("code")))
+            else:
+                priority = 0 if kind in _DISPOSABLE_UPDATES else 2
+            if key is not None:
+                if key in seen:
+                    continue
+                seen.add(key)
+            ranked.append((priority, index))
+        keep = {index for _, index in sorted(ranked, reverse=True)[:capacity]}
+        self._buffer = deque(update for index, update in enumerate(self._buffer) if index in keep)
+
+    def _discard_ui_request(self, request: JsonObject) -> None:
+        if self._owner is not None:
+            self._owner.discard_update(request)
+        with suppress(ValueError):
+            self._buffer.remove(request)
 
     def _owner_lagged(self, owner: LiveOwnerStream) -> None:
         _LOGGER.warning("Live owner socket fell behind (call=%s)", self.log_id)
@@ -476,7 +530,7 @@ class LiveCallEntry:
 
     def _arm_timer(self, seconds: float, reason: str) -> None:
         self._cancel_timer()
-        if self.call is None or self.ended or self._closed_published:
+        if self.call is None or self.ended or self._closed_update is not None:
             return
         self._timer = self._spawn(self._expire(seconds, reason), "timer")
 
@@ -501,12 +555,14 @@ class LiveCallEntry:
         While the owner reconnects, the request waits for it within the UI
         request timeout; before any owner attached, there is nobody to ask.
         """
-        if self.ended or self._closed_published or not self._owner_attached:
+        if self.ended or self._closed_update is not None or not self._owner_attached:
             raise LiveUiError(UI_UNAVAILABLE)
+        if len(self._ui_requests) >= self._limits.update_buffer_limit - 1:
+            raise LiveUiError(UI_BUSY)
         request_id = new_id("ui", claim=lambda candidate: candidate not in self._ui_requests)
         future: asyncio.Future[JsonObject] = asyncio.get_running_loop().create_future()
-        self._ui_requests[request_id] = future
         request = {"type": "ui_request", "request_id": request_id, "action": action, "args": args}
+        self._ui_requests[request_id] = _PendingUiRequest(request, future)
         try:
             self._deliver(request)
             return await asyncio.wait_for(future, self._limits.ui_request_timeout_seconds)
@@ -514,22 +570,19 @@ class LiveCallEntry:
             raise LiveUiError(UI_TIMEOUT, uncertain=True) from exc
         finally:
             self._ui_requests.pop(request_id, None)
-            if self._owner is not None:
-                self._owner.discard_update(request)
-            with suppress(ValueError):
-                self._buffer.remove(request)
+            self._discard_ui_request(request)
 
     def resolve_ui_request(
         self, request_id: str, *, result: JsonObject | None, error: str | None
     ) -> bool:
         """Complete a pending UI request; ``False`` when it is unknown or already done."""
-        future = self._ui_requests.get(request_id)
-        if future is None or future.done():
+        request = self._ui_requests.get(request_id)
+        if request is None or request.future.done():
             return False
         if error is not None:
-            future.set_exception(LiveUiError(error))
+            request.future.set_exception(LiveUiError(error))
         else:
-            future.set_result(result if result is not None else {})
+            request.future.set_result(result if result is not None else {})
         return True
 
     def _spawn(self, coroutine: Coroutine[Any, Any, None], purpose: str) -> asyncio.Task[None]:
