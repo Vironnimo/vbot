@@ -12,7 +12,7 @@ from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceEr
 from server.extension_services import bind_application_services
 from server.rpc import managed_service_methods as methods
 from server.rpc import settings_methods
-from server.rpc._mutations import serialized_mutation
+from server.rpc._mutations import serialized_mutation, state_lock
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.methods import METHODS
 
@@ -136,6 +136,41 @@ async def test_managed_service_development_checkout_is_inspectable_without_host_
     assert result["available"] is False
     assert result["plan"] is None
     assert result["actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_managed_service_finishes_admission_after_caller_cancellation(
+    service_state, monkeypatch
+):
+    state, service, raw, _ = service_state
+    loop = asyncio.get_running_loop()
+    admitted = asyncio.Event()
+    admit = service.admit
+
+    def report_admission(*args, **kwargs):
+        admit(*args, **kwargs)
+        loop.call_soon_threadsafe(admitted.set)
+
+    monkeypatch.setattr(service, "admit", report_admission)
+    async with state_lock(state, "_settings_mutation_lock"):
+        caller = asyncio.create_task(
+            dispatch_method(
+                state,
+                "managed_service.apply",
+                {"id": "searxng", "action": "install", "plan_id": "reviewed"},
+                methods.method_handlers(),
+            )
+        )
+        await admitted.wait()
+        caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    operation = state._managed_service_operations.task
+    assert operation is not None
+    await operation
+    assert service.record["state"] == "completed"
+    assert raw["web_search"]["provider"] == "searxng"
 
 
 @pytest.mark.asyncio
