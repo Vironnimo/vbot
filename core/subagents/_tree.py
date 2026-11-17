@@ -139,12 +139,14 @@ class SubAgentTreeControl:
         above them that are stopped too. The complete subtree is stopped regardless
         of where its answers go.
         """
-        stopped = await self._stop_subtree(
-            address,
-            reason=reason,
-            initiator=initiator,
-            silence_root=False,
-            clear_root_queue=False,
+        stopped = await settle_before_cancelling(
+            self._stop_subtree(
+                address,
+                reason=reason,
+                initiator=initiator,
+                silence_root=False,
+                clear_root_queue=False,
+            )
         )
         # Without stopped_by the Session the user works in is always stopped.
         return stopped or 0
@@ -340,12 +342,14 @@ class SubAgentTreeControl:
         Sub-Agent's stopped turn is not forwarded to it; a deeper one's is
         forwarded to its own Parent when its answer is addressed there.
         """
-        stopped = await self._stop_subtree(
-            subagent.session,
-            reason=PARENT_AGENT_CANCEL_REASON,
-            initiator=f"parent_run:{context.run_id}",
-            silence_root=subagent.parent_id is None,
-            clear_root_queue=True,
+        stopped = await settle_before_cancelling(
+            self._stop_subtree(
+                subagent.session,
+                reason=PARENT_AGENT_CANCEL_REASON,
+                initiator=f"parent_run:{context.run_id}",
+                silence_root=subagent.parent_id is None,
+                clear_root_queue=True,
+            )
         )
         if not stopped:
             return "idle"
@@ -440,4 +444,4 @@ class SubAgentTreeControl:
                 raise failures[0]
             return closed
 
-        return stopped + await settle_before_cancelling(cleanup())
+        return stopped + await cleanup()
