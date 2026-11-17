@@ -50,6 +50,7 @@ Image preparation runs against the complete rendered Messages payload, including
 
 ## Reasoning
 
+- **Claude Fable 5.2 (2026-11-17).** The [Model page](https://platform.claude.com/docs/en/models/fable-5-2/overview) documents mandatory adaptive thinking. The direct Messages stream rejected the disabled switch and accepted adaptive thinking at `low`. The catalog Override marks Reasoning mandatory, so Agent effort `none` selects `low`. The live catalog's existing sampling rule drops `temperature`, `top_p`, and `top_k`.
 - `ReasoningWire.plan()` (see `providers/request-policy.md` -> Reasoning intent) snaps the effort against the Model's catalog ladder or the Messages protocol floor (`minimal` .. `max`), and the `anthropic_thinking` dialect in `core/providers/reasoning_dialects.py` renders the intent onto Anthropic's `thinking` shape:
   - **effort** -> `thinking: {type: adaptive, display: summarized}` plus `output_config.effort` for efforts above `minimal`.
   - **budget** (a `budget`-control Claude) -> native `thinking: {type: enabled, budget_tokens: N}`, where `N` is the effort->budget mapping scaled by `budget_max` when seeded (else the absolute fallback ladder), clamped strictly under `max_tokens`.

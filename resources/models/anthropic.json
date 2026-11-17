@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-04T21:23:39.111146+00:00",
+  "fetched_at": "2026-11-17T19:12:03.198978+00:00",
   "models": {
     "claude-fable-5": {
       "canonical": "anthropic/claude-fable-5",
@@ -111,6 +111,62 @@
           "output": 50.0
         },
         "source": "models.dev:anthropic/claude-fable-5-1"
+      }
+    },
+    "claude-fable-5-2": {
+      "canonical": "anthropic/claude-fable-5-2",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-fable",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Fable 5.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0
+        },
+        "source": "models.dev:anthropic/claude-fable-5-2"
       }
     },
     "claude-haiku-4-5-20251001": {

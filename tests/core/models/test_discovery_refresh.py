@@ -379,7 +379,7 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
                         "display_name": "Future Codex",
                         "visibility": "list",
                         "context_window": 272_000,
-                        "input_modalities": ["text", "image"],
+                        "input_modalities": ["text", "image", "audio"],
                         "supported_parameters": ["tools", "response_format", "reasoning"],
                     },
                     {"slug": "codex-auto-review", "display_name": "Review", "visibility": "hide"},
@@ -407,6 +407,8 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
     assert shared.context_window_for("subscription") == 272_000
     assert shared.context_window == 272_000
     assert shared.capabilities.json_mode is True
+    assert "audio_input" in shared.capabilities.task_types
+    assert "speech_to_text" not in shared.capabilities.task_types
     headers = route.calls.last.request.headers
     assert headers["Authorization"] == f"Bearer {access_token}"
     assert headers["chatgpt-account-id"] == "acct_openai"

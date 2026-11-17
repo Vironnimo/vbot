@@ -617,6 +617,17 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
         pytest.param(
             "gpt-6.1-terra", codex_adapter, codex_payload, "max", "max", id="terra-codex-max"
         ),
+        pytest.param(
+            "gpt-6.2-astra",
+            platform_adapter,
+            platform_payload,
+            "none",
+            "low",
+            id="gpt62-astra-platform-minimum",
+        ),
+        pytest.param(
+            "gpt-6.2-sol", codex_adapter, codex_payload, "none", "low", id="gpt62-sol-codex-minimum"
+        ),
     ],
 )
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-04T21:23:42.362225+00:00",
+  "fetched_at": "2026-11-17T19:12:10.087352+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -202,7 +202,7 @@
           "interleaved_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "pricing": {
         "rates": {
           "cache_read": 0.003,
@@ -689,6 +689,49 @@
         "source": "models.dev:opencode-go/hy4"
       }
     },
+    "hy4-flash-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "Hy",
+      "max_output_tokens": 65536,
+      "name": "Hy4 flash Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode-go/hy4-flash-free"
+      }
+    },
     "hy4-preview": {
       "capabilities": {
         "input_modalities": [
@@ -843,7 +886,7 @@
       ],
       "context_window": 1048576,
       "family": "kimi-k3",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 1048576,
       "metadata": {
         "opencode_go": {
           "interleaved_field": "reasoning_content"
@@ -894,7 +937,7 @@
       ],
       "context_window": 1048576,
       "family": "kimi-k3",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 1048576,
       "metadata": {
         "opencode_go": {
           "interleaved_field": "reasoning_content"
@@ -952,6 +995,50 @@
           "output": 1.2
         },
         "source": "models.dev:opencode-go/longcat-2.0"
+      }
+    },
+    "longcat-2.5-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "longcat",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "opencode_go": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "LongCat 2.5 Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode-go/longcat-2.5-free"
       }
     },
     "mimo-v2.6-flash": {
@@ -1419,6 +1506,57 @@
           "output": 6.0
         },
         "source": "models.dev:opencode-go/qwen3.8-max"
+      }
+    },
+    "qwen4-max": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen4-max",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
+      "name": "Qwen4 Max",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "cache_write": 1.875,
+          "input": 1.5,
+          "output": 4.5
+        },
+        "source": "models.dev:opencode-go/qwen4-max"
       }
     },
     "step-5-preview": {

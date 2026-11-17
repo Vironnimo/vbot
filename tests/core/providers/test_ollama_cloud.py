@@ -625,11 +625,11 @@ async def test_cloud_models_replay_persisted_reasoning_on_fresh_adapter(
         payload = sent_body(route)
         replayed = payload["messages"][1]
         assert payload["model"] == model_id
-        expected_effort = (
-            "low"
-            if effort == "none" and model_id in {"beam", "minimax-m3.1-flash"}
-            else wire_effort
-        )
+        expected_effort = {
+            ("beam", "none"): "low",
+            ("minimax-m3.1-flash", "none"): "low",
+            ("muse-spark-open", "xhigh"): "xhigh",
+        }.get((model_id, effort), wire_effort)
         assert payload["reasoning_effort"] == expected_effort
         # The wire profile curates V4.1 Flash's allowance above the general cap.
         expected_limit = (

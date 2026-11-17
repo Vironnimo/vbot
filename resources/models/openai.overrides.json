@@ -1,6 +1,24 @@
 {
   "provider_id": "openai",
   "models": {
+    "gpt-6.2-astra": {
+      "canonical": "openai/gpt-6.2-astra",
+      "connections": ["api-key", "subscription"],
+      "connection_context_windows": {"api-key": 1050000},
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {"mandatory": true}
+      }
+    },
+    "gpt-6.2-sol": {
+      "canonical": "openai/gpt-6.2-sol",
+      "connections": ["api-key", "subscription"],
+      "connection_context_windows": {"api-key": 1050000},
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {"mandatory": true}
+      }
+    },
     "gpt-6.1-terra": {
       "canonical": "openai/gpt-6.1-terra",
       "connections": ["api-key", "subscription"],
@@ -264,55 +282,6 @@
       "context_window": 4096,
       "max_output_tokens": 4096
     },
-    "gpt-image-1": {
-      "name": "GPT Image 1",
-      "connections": ["api-key"],
-      "capabilities": {
-        "vision": true,
-        "tools": false,
-        "json_mode": false,
-        "reasoning": { "supported": false },
-        "input_modalities": ["image", "text"],
-        "output_modalities": ["image"],
-        "supported_parameters": [
-          "size",
-          "quality",
-          "background",
-          "moderation",
-          "n",
-          "output_format",
-          "output_compression"
-        ],
-        "task_types": ["image_generation"],
-        "task_options": {
-          "image_generation": {
-            "parameters": {
-              "size": {
-                "type": "enum",
-                "values": ["auto", "1024x1024", "1536x1024", "1024x1536"]
-              },
-              "quality": {
-                "type": "enum",
-                "values": ["auto", "low", "medium", "high"]
-              },
-              "background": {
-                "type": "enum",
-                "values": ["auto", "transparent", "opaque"]
-              },
-              "moderation": { "type": "enum", "values": ["auto", "low"] },
-              "output_format": {
-                "type": "enum",
-                "values": ["png", "jpeg", "webp"]
-              },
-              "output_compression": { "type": "range", "min": 0, "max": 100 },
-              "n": { "type": "range", "min": 1, "max": 10 }
-            }
-          }
-        }
-      },
-      "context_window": 4096,
-      "max_output_tokens": 4096
-    },
     "gpt-image-1-mini": {
       "name": "GPT Image 1 Mini",
       "connections": ["api-key"],
@@ -449,70 +418,105 @@
         }
       }
     },
-    "dall-e-3": {
-      "name": "DALL-E 3",
+    "gpt-image-2.5-sunburst": {
+      "name": "GPT Image 2.5 Sunburst",
       "connections": ["api-key"],
       "capabilities": {
-        "vision": false,
+        "vision": true,
         "tools": false,
         "json_mode": false,
-        "reasoning": { "supported": false },
-        "input_modalities": ["text"],
+        "reasoning": {"supported": false},
+        "input_modalities": ["image", "text"],
         "output_modalities": ["image"],
-        "supported_parameters": [
-          "size",
-          "quality",
-          "style",
-          "n",
-          "response_format"
-        ],
         "task_types": ["image_generation"],
         "task_options": {
           "image_generation": {
             "parameters": {
-              "size": {
-                "type": "enum",
-                "values": ["1024x1024", "1792x1024", "1024x1792"]
-              },
-              "quality": { "type": "enum", "values": ["standard", "hd"] },
-              "style": { "type": "enum", "values": ["vivid", "natural"] },
-              "response_format": {
-                "type": "enum",
-                "values": ["b64_json", "url"]
-              },
-              "n": { "type": "range", "min": 1, "max": 1 }
+              "size": {"type": "string"},
+              "quality": {"type": "enum", "values": ["auto", "low", "medium", "high", "xhigh", "max"]},
+              "background": {"type": "enum", "values": ["auto", "opaque", "transparent"]},
+              "moderation": {"type": "enum", "values": ["auto", "low"]},
+              "output_format": {"type": "enum", "values": ["png", "jpeg", "webp"]},
+              "output_compression": {"type": "range", "min": 0, "max": 100},
+              "n": {"type": "range", "min": 1, "max": 10}
             }
           }
         }
-      },
-      "context_window": 4096,
-      "max_output_tokens": 4096
+      }
     },
-    "dall-e-2": {
-      "name": "DALL-E 2",
+    "gpt-image-2.5-flare": {
+      "name": "GPT Image 2.5 Flare",
       "connections": ["api-key"],
       "capabilities": {
-        "vision": false,
+        "vision": true,
         "tools": false,
         "json_mode": false,
-        "reasoning": { "supported": false },
-        "input_modalities": ["text"],
+        "reasoning": {"supported": false},
+        "input_modalities": ["image", "text"],
         "output_modalities": ["image"],
-        "supported_parameters": ["size", "quality", "n", "response_format"],
         "task_types": ["image_generation"],
         "task_options": {
           "image_generation": {
             "parameters": {
-              "size": {
-                "type": "enum",
-                "values": ["256x256", "512x512", "1024x1024"]
-              },
-              "quality": { "type": "enum", "values": ["standard"] },
-              "response_format": {
-                "type": "enum",
-                "values": ["b64_json", "url"]
-              },
-              "n": { "type": "range", "min": 1, "max": 10 }
+              "size": {"type": "string"},
+              "quality": {"type": "enum", "values": ["auto", "low", "medium", "high", "xhigh", "max"]},
+              "background": {"type": "enum", "values": ["auto", "opaque", "transparent"]},
+              "moderation": {"type": "enum", "values": ["auto", "low"]},
+              "output_format": {"type": "enum", "values": ["png", "jpeg", "webp"]},
+              "output_compression": {"type": "range", "min": 0, "max": 100},
+              "n": {"type": "range", "min": 1, "max": 10}
+            }
+          }
+        }
+      }
+    },
+    "gpt-image-2.6-sunburst": {
+      "name": "GPT Image 2.6 Sunburst",
+      "connections": ["api-key"],
+      "capabilities": {
+        "vision": true,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["image", "text"],
+        "output_modalities": ["image"],
+        "task_types": ["image_generation"],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "size": {"type": "string"},
+              "quality": {"type": "enum", "values": ["auto", "low", "medium", "high", "xhigh", "max"]},
+              "background": {"type": "enum", "values": ["auto", "opaque", "transparent"]},
+              "moderation": {"type": "enum", "values": ["auto", "low"]},
+              "output_format": {"type": "enum", "values": ["png", "jpeg", "webp"]},
+              "output_compression": {"type": "range", "min": 0, "max": 100},
+              "n": {"type": "range", "min": 1, "max": 10}
+            }
+          }
+        }
+      }
+    },
+    "gpt-image-2.6-flare": {
+      "name": "GPT Image 2.6 Flare",
+      "connections": ["api-key"],
+      "capabilities": {
+        "vision": true,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["image", "text"],
+        "output_modalities": ["image"],
+        "task_types": ["image_generation"],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "size": {"type": "string"},
+              "quality": {"type": "enum", "values": ["auto", "low", "medium", "high", "xhigh", "max"]},
+              "background": {"type": "enum", "values": ["auto", "opaque", "transparent"]},
+              "moderation": {"type": "enum", "values": ["auto", "low"]},
+              "output_format": {"type": "enum", "values": ["png", "jpeg", "webp"]},
+              "output_compression": {"type": "range", "min": 0, "max": 100},
+              "n": {"type": "range", "min": 1, "max": 10}
             }
           }
         }

@@ -51,14 +51,6 @@
                 }
             }
         },
-        "minimax-m2.7": {
-            "max_output_tokens": 131072,
-            "capabilities": {
-                "reasoning": {
-                    "supported": true
-                }
-            }
-        },
         "minimax-m3": {
             "capabilities": {
                 "reasoning": {

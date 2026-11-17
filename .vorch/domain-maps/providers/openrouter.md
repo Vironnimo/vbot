@@ -14,9 +14,13 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 
-## Crouton Alpha (2026-11-03)
+## GPT-6.2 and Qwen4 Max (2026-11-17)
 
-The catalog lists `stealth/crouton-alpha` with free input/output, Context 1048576, output 943718, Tools, structured output, and text, image, file, audio and video inputs. It advertises mandatory Reasoning with `minimal` through `max`, so Agent effort `none` selects `minimal`. The Override fills the published price and ladder and keeps audio as Chat input. The separate transcription catalog does not list this id. Sources are the live [Model catalog](https://openrouter.ai/api/v1/models) and [endpoint feed](https://openrouter.ai/api/v1/models/stealth/crouton-alpha/endpoints).
+The [Model catalog](https://openrouter.ai/api/v1/models) adds Astra and Sol with their Pro variants, plus `qwen/qwen4-max`. All use the existing Chat Completions route. GPT-6.2 lists mandatory Reasoning and a 1,050,000 / 128,000 Context and output limit. [Qwen4 Max](https://openrouter.ai/qwen/qwen4-max) lists 1,000,000 / 131,072 and `none/low/high/xhigh`. API-key smokes passed streaming and Tool continuation for GPT-6.2 Astra and Qwen4 Max. The Qwen off request returned zero Reasoning tokens. The advertised video input requires a separate wire encoding.
+
+## Crouton Alpha (listed 2026-11-03, removed 2026-11-17)
+
+The catalog listed `stealth/crouton-alpha` with Context 1048576, output 943718 and mandatory Reasoning with `minimal` through `max`. The 2026-11-17 refresh removed the entry and its partial Override.
 
 OpenRouter checks `input + max_tokens` against the window before the Model runs and answers HTTP 400 without Model output. Two Sub-Agent Runs on 2026-11-05 ended this way with the catalog ceiling as `max_tokens`, because `stealth/crouton-alpha` lists 943718 of a 1048576 window. Live 2026-11-05 on that Model with padding text: the stated input was characters / 4 (650000 characters -> 162515, while Usage reported 168488), and the two real rejections stated about 1.6% above characters / 4 of their text, so the count is a rough estimate of the payload, above or below Usage. At stated inputs of 162515, 325014 and 975013, `max_tokens` 943718 was refused every time, 128000 passed the first two and was refused at the third, and no `max_tokens` passed all three. Long answers without `max_tokens` ended regularly: 11221 tokens on Crouton and 21314 on `anthropic/claude-haiku-5.5` (`end_turn`). So OpenRouter Chat sends only an explicit limit (`resources/wire/openrouter.json`; generic rule in `providers/request-policy.md` -> Request limits and context). Inference from two Models: other routed Models end long answers the same way.
 

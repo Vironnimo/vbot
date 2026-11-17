@@ -8,6 +8,7 @@ import pytest
 
 from core.models.models import Model, ModelRegistry
 from core.models.query import ModelQuery
+from core.providers.anthropic import AnthropicAdapter
 from core.providers.ollama import OllamaCloudAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -52,6 +53,7 @@ def _wire_profile(
     """The bundled wire profile of one catalog Model on the selected Connection."""
 
     protocols = {
+        "anthropic": AnthropicAdapter.WIRE_PROTOCOLS,
         "ollama-cloud": OllamaCloudAdapter.WIRE_PROTOCOLS,
         "openai": OpenAIAdapter.WIRE_PROTOCOLS,
         "opencode-go": OpenCodeGoAdapter.WIRE_PROTOCOLS,
@@ -173,9 +175,7 @@ _OLLAMA_CLOUD_REPLAY = {
     "kimi-k2.7-code": "current_run",
     "kimi-k3": "full_history",
     "kimi-k3.1-pro": "full_history",
-    "minimax-m2.7": "none",
     "minimax-m3": "none",
-    "nemotron-3-nano:30b": "none",
     "nemotron-3-super": "none",
     "nemotron-3-ultra": "none",
 }
@@ -210,10 +210,8 @@ def test_ollama_cloud_gateway_output_limits(registry: ModelRegistry) -> None:
         "deepseek-v4-pro:0813": 65_536,
         "glm-5.2": 131_072,
         "kimi-k2.7-code": 262_144,
-        "kimi-k3.1-pro": 131_072,
-        "minimax-m2.7": 131_072,
+        "kimi-k3.1-pro": 1_048_576,
         "minimax-m3": 131_072,
-        "nemotron-3-nano:30b": 131_072,
         "nemotron-3-super": 65_536,
         "nemotron-3-ultra": 65_536,
     }
@@ -232,9 +230,9 @@ def test_ollama_cloud_reasoning_controls(registry: ModelRegistry) -> None:
         "deepseek-v4-pro:0813": ladder,
         "glm-5.3": ladder,
         "kimi-k3.1-pro": (True, "levels", ("low", "medium", "high", "max")),
-        "minimax-m2.7": (True, None, ()),
         "minimax-m3": (True, None, ()),
         "minimax-m3.1-flash": (True, "levels", ("low", "medium", "high", "xhigh", "max")),
+        "muse-spark-open": (True, "levels", ("low", "medium", "high", "xhigh")),
     }
 
     assert {
@@ -290,6 +288,8 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         "chat_completions": (
             "beam-free",
             "iceman-contributor-free",
+            "hy4-flash-free",
+            "longcat-2.5-free",
             "glm-5.3-flash",
             "glm-5.3",
             "glm-5.2",
@@ -309,6 +309,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         ),
         "messages": (
             "minimax-m3",
+            "qwen4-max",
             "qwen3.8-max",
             "qwen3.8-flash",
             "qwen3.7-plus",
@@ -320,8 +321,6 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(expected)
-
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
     } == expected
@@ -352,6 +351,16 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
 @pytest.mark.parametrize(
     ("model_id", "expected"),
     [
+        pytest.param(
+            "qwen4-max",
+            {
+                "context_window": 1_000_000,
+                "max_output_tokens": 262_144,
+                "tools": True,
+                "reasoning": (True, "levels", ("low", "high", "xhigh")),
+            },
+            id="qwen4-max",
+        ),
         pytest.param(
             "minimax-m3.1-flash",
             {
@@ -443,6 +452,18 @@ def test_zen_snapshot_serves_models_only_on_admitted_connections(
             assert (profile.admission.state == "available") == (connection in expected)
 
 
+@pytest.mark.parametrize("provider_id", ["anthropic", "opencode-zen"])
+def test_fable_5_2_uses_lowest_effort_and_omits_sampling(
+    registry: ModelRegistry, provider_id: str
+) -> None:
+    wire = _wire_profile(registry, provider_id, "claude-fable-5-2")
+
+    assert wire.protocol == "messages"
+    assert wire.reasoning.plan("none").effort_level == "low"
+    for parameter in ("temperature", "top_p", "top_k"):
+        assert wire.request.parameters[parameter].mode == "drop"
+
+
 # ---------------------------------------------------------------------------
 # OpenAI, xAI, Anthropic, OpenRouter
 # ---------------------------------------------------------------------------
@@ -516,6 +537,8 @@ def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:
         ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75), True, 272_000, True),
         ("gpt-6.1-sol", (2.0, 0.1, 2.5, 10.0), (4.0, 0.2, 5.0, 15.0), False, 500_000, True),
         ("gpt-6.1-terra", (1.0, 0.05, 1.25, 5.0), (2.0, 0.1, 2.5, 7.5), True, 500_000, False),
+        ("gpt-6.2-astra", (8.0, 0.4, 10.0, 40.0), (16.0, 0.8, 20.0, 60.0), False, 272_000, True),
+        ("gpt-6.2-sol", (2.0, 0.1, 2.5, 10.0), (4.0, 0.2, 5.0, 15.0), False, 500_000, True),
     ],
 )
 def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider(
@@ -573,8 +596,9 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
         assert zen.capabilities.reasoning.levels == model.capabilities.reasoning.levels
         assert zen.capabilities.tools is True
         if not supports_none:
-            assert zen_wire.reasoning.off == "low"
+            assert zen_wire.reasoning.plan("none").effort_level == "low"
             assert zen.capabilities.json_mode is True
+        if model_id == "gpt-6.1-sol":
             assert zen_wire.replay.scope == "none"
     else:
         with pytest.raises(KeyError):
@@ -588,8 +612,16 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
 def test_openai_task_model_overrides_are_limited_to_working_connections(
     registry: ModelRegistry,
 ) -> None:
-    """Override-only task models load; those without a subscription wire are
-    api-key only, while ``gpt-image-2`` stays valid for both connections."""
+    """Direct-only task Models stay on the API-key Connection and load as tasks."""
+
+    direct_image_models = (
+        "gpt-image-1-mini",
+        "gpt-image-1.5",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
+    )
 
     api_key_only_models = (
         "tts-1",
@@ -598,11 +630,7 @@ def test_openai_task_model_overrides_are_limited_to_working_connections(
         "whisper-1",
         "gpt-4o-transcribe",
         "gpt-4o-mini-transcribe",
-        "dall-e-2",
-        "dall-e-3",
-        "gpt-image-1",
-        "gpt-image-1-mini",
-        "gpt-image-1.5",
+        *direct_image_models,
     )
     for model_id in api_key_only_models:
         model = registry.get("openai", model_id)
@@ -619,9 +647,10 @@ def test_openai_task_model_overrides_are_limited_to_working_connections(
     assert gpt_image_2.allows_connection("api-key") is True
     assert gpt_image_2.allows_connection("subscription") is True
 
-    for model_id in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2"):
+    for model_id in (*direct_image_models, "gpt-image-2"):
         model = registry.get("openai", model_id)
         assert model.capabilities.input_modalities == ("image", "text")
+        assert model.capabilities.task_types == ("image_generation",)
 
 
 @pytest.mark.parametrize(

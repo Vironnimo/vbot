@@ -238,7 +238,7 @@
       "note": "Zen forwards Messages to Anthropic, where these adaptive-only Models reject thinking type disabled (resources/wire/anthropic.json), so effort none sends no thinking field."
     },
     {
-      "when": {"ids": ["claude-haiku-5-5"]},
+      "when": {"ids": ["claude-haiku-5-5", "claude-fable-5-2"]},
       "set": {
         "request": {
           "parameters": {
@@ -248,7 +248,7 @@
           }
         }
       },
-      "note": "Zen forwards Messages to Anthropic, where Claude Haiku 5.5 removed sampling parameters (catalog supports_temperature false in resources/wire/anthropic.json); temperature answers HTTP 400 \"`temperature` is deprecated for this model\" (live 2026-10-08), so they are never sent."
+      "note": "Zen Messages rejects these sampling parameters for Claude Haiku 5.5 (live 2026-10-08) and Claude Fable 5.2 (live 2026-11-17)."
     },
     {
       "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},

@@ -34,8 +34,8 @@ from tests.core.providers.openrouter_test_support import (
         pytest.param(
             "openai/gpt-6.1-sol", "none", "low", id="off-becomes-cheapest-supported-effort"
         ),
-        pytest.param("stealth/crouton-alpha", "none", "minimal", id="crouton-lowest-effort"),
-        pytest.param("stealth/crouton-alpha", "max", "max", id="crouton-max-effort"),
+        pytest.param("openai/gpt-6.2-astra", "none", "low", id="gpt62-astra-lowest-effort"),
+        pytest.param("openai/gpt-6.2-sol-pro", "max", "max", id="gpt62-sol-pro-max-effort"),
     ],
 )
 @respx.mock

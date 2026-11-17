@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-04T21:23:43.455145+00:00",
+  "fetched_at": "2026-11-17T19:12:11.092867+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -201,6 +201,60 @@
           "output": 50.0
         },
         "source": "models.dev:opencode/claude-fable-5-1"
+      }
+    },
+    "claude-fable-5-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1000000,
+      "family": "claude-fable",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
+      "name": "Claude Fable 5.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0
+        },
+        "source": "models.dev:opencode/claude-fable-5-2"
       }
     },
     "claude-haiku-4-5": {
@@ -849,61 +903,12 @@
       "name": "Claude Sonnet 5.5",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
+          "cache_read": 0.1,
           "cache_write": 2.5,
           "input": 2.0,
           "output": 10.0
         },
         "source": "models.dev:opencode/claude-sonnet-5-5"
-      }
-    },
-    "crouton-alpha-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "pdf"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 270000,
-      "name": "Crouton Alpha Free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/crouton-alpha-free"
       }
     },
     "deepseek-v4-pro": {
@@ -994,7 +999,7 @@
           "interleaved_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "pricing": {
         "rates": {
           "cache_read": 0.006,
@@ -1260,9 +1265,9 @@
       "name": "Gemini 3.6 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.15,
-          "input": 1.5,
-          "output": 7.5
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
         },
         "source": "models.dev:opencode/gemini-3.6-flash"
       }
@@ -1313,9 +1318,9 @@
       "name": "Gemini 3.7 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.15,
-          "input": 1.5,
-          "output": 7.5
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
         },
         "source": "models.dev:opencode/gemini-3.7-flash"
       }
@@ -1366,9 +1371,9 @@
       "name": "Gemini 3.8 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.15,
-          "input": 1.5,
-          "output": 7.5
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
         },
         "source": "models.dev:opencode/gemini-3.8-flash"
       }
@@ -1424,6 +1429,113 @@
           "output": 10.0
         },
         "source": "models.dev:opencode/gemini-4-argon"
+      }
+    },
+    "gemini-4-carbon": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
+      "name": "Gemini 4 Carbon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:opencode/gemini-4-carbon"
+      }
+    },
+    "gemini-4-hydrogen": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
+      "name": "Gemini 4 Hydrogen",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:opencode/gemini-4-hydrogen"
       }
     },
     "glm-5.1": {
@@ -2779,6 +2891,138 @@
         "source": "models.dev:opencode/gpt-6.1-sol"
       }
     },
+    "gpt-6.2-astra": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-astra",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
+      "name": "GPT-6.2 Astra",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode/gpt-6.2-astra"
+      }
+    },
+    "gpt-6.2-sol": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-sol",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
+      "name": "GPT-6.2 Sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode/gpt-6.2-sol"
+      }
+    },
     "grok-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -3010,6 +3254,141 @@
         "source": "models.dev:opencode/grok-build-0.1"
       }
     },
+    "hy4-flash-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "Hy",
+      "max_output_tokens": 65536,
+      "name": "Hy4 flash Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/hy4-flash-free"
+      }
+    },
+    "iceman-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "name": "Iceman Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/iceman-free"
+      }
+    },
+    "inkling-2-small-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "ling",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "Inkling 2 Small Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/inkling-2-small-free"
+      }
+    },
     "kimi-k2.6": {
       "capabilities": {
         "input_modalities": [
@@ -3136,7 +3515,7 @@
       ],
       "context_window": 1048576,
       "family": "kimi-k3",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 1048576,
       "metadata": {
         "opencode_zen": {
           "interleaved_field": "reasoning_content"
@@ -3151,6 +3530,51 @@
           "output": 15.0
         },
         "source": "models.dev:opencode/kimi-k3"
+      }
+    },
+    "longcat-2.5-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1000000,
+      "family": "longcat",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "LongCat 2.5 Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/longcat-2.5-free"
       }
     },
     "minimax-m2.7": {
@@ -3289,6 +3713,74 @@
           "output": 2.09
         },
         "source": "models.dev:opencode/mistral-large-4"
+      }
+    },
+    "muse-ember-1.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "muse",
+      "max_output_tokens": 270000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
+      "name": "Muse Ember 1.0",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.004,
+          "cache_write": 0.0,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.012,
+              "cache_write": 0.0,
+              "input": 0.3,
+              "output": 1.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode/muse-ember-1.0"
       }
     },
     "muse-spark-1.2": {
@@ -3550,50 +4042,6 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/nemotron-3.5-super-vl-free"
-      }
-    },
-    "pulse-alpha-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 131072,
-      "name": "Pulse Alpha Free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/pulse-alpha-free"
       }
     },
     "qwen3.5-plus": {

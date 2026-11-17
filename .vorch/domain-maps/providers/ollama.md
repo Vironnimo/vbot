@@ -48,7 +48,7 @@ The native `/api/chat` and Anthropic-compatible `/v1/messages` probes produced n
 
 ### Kimi K3.1 Pro (2026-11-04)
 
-The shared catalog now lists `kimi-k3.1-pro` on `ollama-cloud:api-key`. Its `/api/show` facts supply images, Tools, Context 1,048,576 and the exact `low/medium/high/max` ladder. The Override joins `moonshotai/kimi-k3.1-pro` for the missing upstream facts (including the catalog output limit 131,072) and fixes the display name. An oversized raw request was rejected with a gateway ceiling of 1,048,576; this is front-door validation, not proof of that generation capacity, so it does not inflate the catalog limit.
+The shared catalog lists `kimi-k3.1-pro` on `ollama-cloud:api-key`. Its `/api/show` facts supply images, Tools, Context 1,048,576 and the exact `low/medium/high/max` ladder. The Override joins `moonshotai/kimi-k3.1-pro` and fixes the display name. The 2026-11-17 catalog records an output limit of 1,048,576, matching the ceiling from the earlier oversized request rejection. Normal requests are still bounded by the shared output allowance and the remaining Context.
 
 Production Adapter send, stream, all four efforts, explicit off, sampling acceptance, PNG input and Tool continuation passed. Raw and streamed `reasoning_effort: none` returned no Reasoning; two parallel Tool Calls and their continuation also completed with Reasoning off. Response and history use `reasoning`; the exact id joins the carrier rule so a fresh Adapter can replay persisted history before observing any response. Replay stays `full_history` with `readable_only` fidelity.
 
@@ -84,6 +84,8 @@ Raw non-streaming replays of the current-Tool and plain-without-Tools bodies mat
 Send, stream, sampling acceptance, supported effort requests and PNG input (all except text-only Beam) passed. Acceptance establishes the wire vocabulary, not effort monotonicity or sampling effectiveness. Beam still reasons at raw `none`; its off selection now sends `low`, which completed two parallel Tool Calls and continuation. MiMo Flash/Pro and Muse actually stop Reasoning at `none` and also completed two parallel Calls and continuation. Limits, other media, structured output, local Ollama and alternate endpoints were not audited; these scoped results add no blanket `verified` marker.
 
 Official references read 2026-11-04: [MiniMax history contract](https://platform.minimax.io/docs/api-reference/text-openai-api), [MiMo thinking contract](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking), and Ollama's [Beam](https://ollama.com/library/beam) and [Muse](https://ollama.com/library/muse-spark-open) pages. Upstream preserved-thinking contracts do not replace the gateway measurements above.
+
+The 2026-11-17 refresh caps the reported Muse Spark Open effort ladder at `xhigh`. Live streaming through the direct Cloud Adapter completed with Reasoning when `xhigh` was selected or when the Adapter snapped `max` to `xhigh`.
 
 ### MiniMax M3.1 Flash (2026-10-19)
 

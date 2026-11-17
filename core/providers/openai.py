@@ -326,6 +326,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return base_model
         return normalize_subscription_catalog_entry(raw, base_model)
 
+    @classmethod
+    @override
+    def finalize_discovered_model(
+        cls,
+        model: Model,
+        connection: ConnectionConfig | None,
+    ) -> Model:
+        if (
+            not _is_codex_connection(connection)
+            or "speech_to_text" not in model.capabilities.task_types
+        ):
+            return model
+        # Audio input to Codex Responses does not imply a transcription endpoint.
+        task_types = tuple(
+            task for task in model.capabilities.task_types if task != "speech_to_text"
+        )
+        return replace(model, capabilities=replace(model.capabilities, task_types=task_types))
+
     @override
     def request_context_kwargs(
         self,

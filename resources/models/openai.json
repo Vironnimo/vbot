@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-04T21:23:41.480888+00:00",
+  "fetched_at": "2026-11-17T19:12:08.840756+00:00",
   "models": {
     "gpt-5.2": {
       "capabilities": {
@@ -493,6 +493,121 @@
           ]
         },
         "source": "models.dev:openai/gpt-6.1-terra"
+      }
+    },
+    "gpt-6.2-astra": {
+      "canonical": "openai/gpt-6.2-astra",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 272000,
+      "family": "gpt-astra",
+      "max_output_tokens": 128000,
+      "name": "GPT-6.2-Astra",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openai/gpt-6.2-astra"
+      }
+    },
+    "gpt-6.2-sol": {
+      "canonical": "openai/gpt-6.2-sol",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "audio_input"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 500000,
+      "family": "gpt-sol",
+      "max_output_tokens": 128000,
+      "name": "GPT-6.2-Sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openai/gpt-6.2-sol"
       }
     }
   },
