@@ -104,6 +104,7 @@ export function appendRunEvent(sessionState, event) {
   }
   if (
     normalizedEvent.type === 'compaction_aborted' &&
+    normalizedEvent.payload?.reason !== 'cancelled' &&
     normalizedEvent.payload?.requested_by_user &&
     sessionState.currentRun?.runId === normalizedEvent.run_id
   ) {

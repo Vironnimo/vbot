@@ -252,6 +252,7 @@ class CompactionRunCoordinator:
         """
         session = session.for_run(run.id)
         request: Any | None = None
+        announced = False
         # The divider appears at this emit; its visible duration ends when the
         # checkpoint is stamped below.
         compaction_started_perf = time.perf_counter()
@@ -262,9 +263,12 @@ class CompactionRunCoordinator:
             context_usage = latest_session_context_usage(messages)
             if context_usage is not None:
                 run.terminal_payload_extras["context_usage"] = context_usage
-            run.emit(
-                COMPACTION_STARTED_EVENT,
-                {"context_usage": context_usage} if context_usage is not None else {},
+            announced = (
+                run.emit(
+                    COMPACTION_STARTED_EVENT,
+                    {"context_usage": context_usage} if context_usage is not None else {},
+                )
+                is not None
             )
             settings = await self._host.run_transform(
                 self._load_compaction_settings,
@@ -400,7 +404,8 @@ class CompactionRunCoordinator:
             run.terminal_payload_extras["checkpoint_id"] = checkpoint.id
             return checkpoint
         except asyncio.CancelledError:
-            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})
+            if announced:
+                self._emit_compaction_cancelled(run)
             raise
         except Exception:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
@@ -585,16 +590,20 @@ class CompactionRunCoordinator:
         compaction_track = session_track(run.agent_id, run.session_id, run.project_id)
         # Chat restarts its request-build measurement after any attempt.
         context.compaction_attempts += 1
+        announced = False
         try:
             # Keep the acquired Adapter owned here even if cancellation wins the
             # worker await after construction has already completed.
             summary_model_id, summary_provider_id = await self._host.run_transform(acquire_summary)
-            run.emit(
-                COMPACTION_STARTED_EVENT,
-                {
-                    "context_tokens_before": input_tokens,
-                    "context_usage": effective_context_usage,
-                },
+            announced = (
+                run.emit(
+                    COMPACTION_STARTED_EVENT,
+                    {
+                        "context_tokens_before": input_tokens,
+                        "context_usage": effective_context_usage,
+                    },
+                )
+                is not None
             )
             try:
                 checkpoint = await self._host.compaction_service.compact(
@@ -743,6 +752,9 @@ class CompactionRunCoordinator:
                 ):
                     committed_checkpoint = projected
                     break
+                # The commit waits through Stop to learn whether it stored a
+                # checkpoint. A refused write grants no permission to try again.
+                run.raise_if_cancelled()
             if committed_checkpoint is None:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
                 _LOGGER.debug(
@@ -779,6 +791,10 @@ class CompactionRunCoordinator:
                 carried_notes=carried_notes,
             )
             return rebuilt_state
+        except asyncio.CancelledError:
+            if announced:
+                self._emit_compaction_cancelled(run)
+            raise
         finally:
             try:
                 if summary_adapter is not target.adapter:
@@ -791,6 +807,11 @@ class CompactionRunCoordinator:
                     name="compaction",
                     args={"run_id": run.id, "trigger": "auto"},
                 )
+
+    @staticmethod
+    def _emit_compaction_cancelled(run: Run) -> None:
+        # Settle the already published start without introducing any late output.
+        run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"}, allow_after_cancel=True)
 
     @staticmethod
     def _abort_failed_projection(run: Run) -> None:
