@@ -833,6 +833,21 @@ async def test_search_does_not_adopt_a_hidden_replacement_generation(
     assert sessions.list_history_revisions("coder")[0].recall_visibility == "hidden"
 
 
+async def test_a_search_selection_cannot_prune_a_newly_indexed_live_session(
+    sessions: ChatSessionManager, recall: HybridRecallBackend
+) -> None:
+    await recall.index.refresh(sessions, "coder", None, RecallScope(frozenset(), {}, "", {}))
+    stale = await sessions.run_async(recall._read_scope, request("needle"))
+    recent = sessions.create("coder", session_id="recent")
+    recent.append(ChatMessage.user("recent needle"))
+    current = await sessions.run_async(recall._read_scope, request("needle"))
+    await recall.index.refresh(sessions, "coder", None, current)
+
+    await recall.index.refresh(sessions, "coder", None, stale)
+
+    assert await recall.index.list_indexed_sessions("coder") == current.candidates
+
+
 async def test_literal_search_returns_multiple_source_faithful_passages(
     sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:

@@ -23,6 +23,7 @@ from core.model_tasks import (
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import ProviderAuthError
 from core.recall import IndexStatus, PassageIndex, SemanticIndexer
+from core.recall.semantic_indexer import _index_scopes
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress, SessionReadCursor
 from core.utils.errors import ProviderError
@@ -406,6 +407,28 @@ async def test_pass_indexes_recall_visible_sessions_rereads_changed_ones_and_evi
     assert reread == ["draft"]
     assert await index.indexed_scopes() == {(None, "coder")}
     assert (await indexer.status()).indexed == 2
+
+
+async def test_pass_preserves_scopes_indexed_while_it_reads_catalog_stamps(
+    index: PassageIndex, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    indexer = _indexer(index, sessions, _Embeddings())
+    read_stamps = index._stamps
+
+    async def add_scope_before_stamps(*args: Any) -> Any:
+        monkeypatch.setattr(index, "_stamps", read_stamps)
+        recent = sessions.create("writer", session_id="recent")
+        recent.append(ChatMessage.user("recent document"))
+        scope = (await sessions.run_async(_index_scopes, sessions))[(None, "writer")]
+        await index.refresh(sessions, "writer", None, scope)
+        return await read_stamps(*args)
+
+    monkeypatch.setattr(index, "_stamps", add_scope_before_stamps)
+
+    await indexer.run_pass()
+
+    assert await index.indexed_scopes() == {(None, "writer")}
+    assert (await indexer.status()).indexed == 1
 
 
 # ---------------------------------------------------------------------------

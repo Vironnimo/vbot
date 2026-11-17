@@ -343,6 +343,8 @@ def plan_refresh(
     project_id: str | None,
     scope: RecallScope,
     stamps: Mapping[str, SessionStamp],
+    *,
+    recheck_live: bool = False,
 ) -> CatalogPlan:
     """Reread the candidates whose stamp changed and build their Passages.
 
@@ -381,6 +383,13 @@ def plan_refresh(
             # any index stamp that differs from the selected version.
             continue
         changes.append(_session_passages(session_id, previous, batch, incremental=incremental))
+    if recheck_live and pruned:
+        # Search selects its candidates before reading index stamps. Another
+        # refresh may have added live Sessions after that selection.
+        addresses = [SessionAddress(project_id, agent_id, session_id) for session_id in pruned]
+        pruned.difference_update(
+            address.session_id for address in sessions.existing_addresses(addresses)
+        )
     return CatalogPlan(
         agent_id,
         stored_scope(project_id),
@@ -790,31 +799,36 @@ class PassageCatalog:
             sessions.history_id,
             lambda connection: read_stamps(connection, agent_id=agent_id, project=project),
         )
-        await self._refresh_scope(sessions, agent_id, project_id, scope, stamps)
+        await self._refresh_scope(sessions, agent_id, project_id, scope, stamps, recheck_live=True)
 
     async def refresh_scopes(
         self,
         sessions: ChatSessionManager,
-        scopes: Mapping[tuple[str | None, str], RecallScope],
+        select_scopes: Callable[[], Mapping[tuple[str | None, str], RecallScope]],
         *,
         proceed: Callable[[], bool] | None = None,
     ) -> None:
         """Bring the whole catalog in line with *scopes*, keyed ``(project_id, agent_id)``.
 
-        *scopes* names every scope whose Sessions the catalog keeps. One stamp
-        read covers every indexed Session, so a scope that is already current
-        costs no further read; each other scope is refreshed as by
+        *select_scopes* reads every scope whose Sessions the catalog keeps,
+        after reading the stamps. A scope that is already current costs no
+        further read; each other scope is refreshed as by
         :meth:`refresh`. Indexed scopes missing from *scopes* are then evicted
         in one transaction. Between scopes, a false *proceed* stops the
         refresh before the eviction.
         """
         stamps = await self._stamps(sessions.history_id, read_all_stamps)
+        # Stamps added after selection must never be used to prune against it.
+        try:
+            scopes = await sessions.run_async(select_scopes)
+        except Exception as error:
+            raise SourceReadError(error) from error
         for (project_id, agent_id), scope in scopes.items():
             if proceed is not None and not proceed():
                 return
             indexed = stamps.pop((stored_scope(project_id), agent_id), {})
             await self._refresh_scope(sessions, agent_id, project_id, scope, indexed)
-        if not stamps:
+        if not stamps or (proceed is not None and not proceed()):
             return
         evicted = [
             CatalogPlan(
@@ -849,13 +863,21 @@ class PassageCatalog:
         project_id: str | None,
         scope: RecallScope,
         stamps: Mapping[str, SessionStamp],
+        *,
+        recheck_live: bool = False,
     ) -> None:
         """Reread the changed candidates of one scope and write the plan."""
         if is_current(scope, stamps):
             return
         try:
             plan = await sessions.run_async(
-                plan_refresh, sessions, agent_id, project_id, scope, stamps
+                plan_refresh,
+                sessions,
+                agent_id,
+                project_id,
+                scope,
+                stamps,
+                recheck_live=recheck_live,
             )
         except Exception as error:
             raise SourceReadError(error) from error

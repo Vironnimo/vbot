@@ -591,10 +591,12 @@ class SemanticIndexer:
         the catalog, so only scopes that changed are reread and written.
         """
         sessions = self._sessions
-        scopes = await sessions.run_async(_index_scopes, sessions)
         await self._index.recovering(
             functools.partial(
-                self._index.refresh_scopes, sessions, scopes, proceed=self._proceeding
+                self._index.refresh_scopes,
+                sessions,
+                functools.partial(_index_scopes, sessions),
+                proceed=self._proceeding,
             ),
             warning=self._warn_index_failure,
         )
