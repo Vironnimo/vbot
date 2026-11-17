@@ -18,15 +18,9 @@ const INPUT_CHUNK_CHARS = 32_768;
 // per-message limit; reject a larger insertion whole, with visible feedback.
 const INPUT_BACKLOG_CHARS = 65_536;
 
-// A socket that still sits in WS_CONNECTING past this budget is treated as
-// wedged (half-open after a sleep/radio/network handoff) and force-closed so
-// the ordinary close path schedules a reconnect; such sockets never fire
-// open or close on their own.
+// The stream is usable only after its initial snapshot, even if the socket
+// handshake has already completed.
 const CONNECT_TIMEOUT_MS = 8_000;
-
-const WS_CONNECTING = 0;
-
-const WS_OPEN = 1;
 
 /**
  * The live connection of one Terminal Session: its WebSocket, the ordered
@@ -85,20 +79,12 @@ export function createTerminalConnection({
         },
         onClose: handleClose,
       });
-      const socket = connection?.socket;
-      if (socket && socket.readyState === WS_CONNECTING) {
-        connectTimer = setTimeoutFn(() => {
-          connectTimer = null;
-          const current = connection?.socket;
-          if (closed || !current || current.readyState === WS_OPEN || ended) {
-            return;
-          }
-          // Still connecting past the budget: treat as wedged. The socket
-          // never opened, so nothing is lost.
-          dropSocket();
-          scheduleReconnect(0);
-        }, CONNECT_TIMEOUT_MS);
-      }
+      connectTimer = setTimeoutFn(() => {
+        connectTimer = null;
+        if (ready || closed || ended) return;
+        dropSocket();
+        scheduleReconnect(0);
+      }, CONNECT_TIMEOUT_MS);
     } catch (error) {
       onStatus('error', error);
       scheduleReconnect();
@@ -167,6 +153,7 @@ export function createTerminalConnection({
     }
     connection = null;
     ready = false;
+    clearConnectTimer();
     requeueResizeInFlight();
     if (accessLossFromClose(event)) {
       // The server refused this page's access; the access gate takes over.
@@ -191,6 +178,7 @@ export function createTerminalConnection({
     const current = connection;
     connection = null;
     ready = false;
+    clearConnectTimer();
     requeueResizeInFlight();
     if (reason) current?.close(1000, reason);
     else current?.close();
