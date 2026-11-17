@@ -39,8 +39,9 @@ def floor_hour(value: datetime) -> datetime:
 
 def ceil_hour(value: datetime) -> datetime:
     """Return the first UTC hour start at or after an aware ``value``."""
-    floored = floor_hour(value)
-    return floored if floored == value else floored + _HOUR
+    utc = value.astimezone(UTC)
+    floored = floor_hour(utc)
+    return floored if floored == utc else floored + _HOUR
 
 
 def zone_for(name: str) -> ZoneInfo:
@@ -86,6 +87,8 @@ class ReportWindow:
         measurement_period: bool = False,
     ) -> ReportWindow:
         """Align requested bounds to hours; ``since`` after ``until`` raises ``ValueError``."""
+        since = since.astimezone(UTC) if since is not None else None
+        until = until.astimezone(UTC) if until is not None else None
         if since is not None and until is not None and since > until:
             raise ValueError("since must not be after until")
         return cls(
