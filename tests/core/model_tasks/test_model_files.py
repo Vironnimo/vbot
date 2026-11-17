@@ -158,10 +158,17 @@ def test_fetch_adopts_verified_copies_from_earlier_revisions_and_the_cache(
 
 
 @pytest.mark.parametrize("ranges", [True, False], ids=["resumed", "range-ignored"])
+@pytest.mark.parametrize("corrupt_candidate", [False, True], ids=["no-cache", "invalid-cache"])
 def test_fetch_continues_a_partial_download(
-    tmp_path: Path, hub, monkeypatch: pytest.MonkeyPatch, ranges: bool
+    tmp_path: Path, hub, monkeypatch: pytest.MonkeyPatch, ranges: bool, corrupt_candidate: bool
 ) -> None:
     model = pinned(**{"model.bin": WEIGHTS})
+    if corrupt_candidate:
+        corrupt_blob = (
+            tmp_path / "hf-cache" / "models--example--model" / "blobs" / model.files[0].sha256
+        )
+        corrupt_blob.parent.mkdir(parents=True)
+        corrupt_blob.write_bytes(b"x" * len(WEIGHTS))
     target = tmp_path / "model"
     target.mkdir()
     (target / "model.bin.part").write_bytes(WEIGHTS[:1000])
@@ -179,6 +186,25 @@ def test_fetch_continues_a_partial_download(
 
     assert server.requests == [("model.bin", "bytes=1000-")]
     assert (target / "model.bin").read_bytes() == WEIGHTS
+    assert list(target.iterdir()) == [target / "model.bin"]
+
+
+@pytest.mark.parametrize("filename", ["model.bin", "model.bin.part"])
+def test_fetch_preserves_unavailable_destination_entries(
+    tmp_path: Path, hub, monkeypatch: pytest.MonkeyPatch, deny_access, filename: str
+) -> None:
+    model = pinned(**{"model.bin": WEIGHTS})
+    server = hub(Hub({"model.bin": WEIGHTS}))
+    path = tmp_path / filename
+    path.write_bytes(WEIGHTS[:1000])
+    deny_access(path)
+
+    with pytest.raises(PermissionError):
+        fetch(model, tmp_path)
+
+    monkeypatch.undo()
+    assert not server.requests
+    assert path.read_bytes() == WEIGHTS[:1000]
 
 
 Failure = namedtuple("Failure", "served status free error requests")

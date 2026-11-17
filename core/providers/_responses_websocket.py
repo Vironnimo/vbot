@@ -894,7 +894,7 @@ class ResponsesWebSocket:
         message_size: int | None = None
         unsent = False
         events_received = False
-        model_delta_received = False
+        model_output_received = False
         completed = False
         try:
             message = await _REQUEST_BODY_WORKERS.run(
@@ -944,7 +944,7 @@ class ResponsesWebSocket:
                 code = _responses_error_code(event_data)
                 if (
                     code in _FRESH_SOCKET_CODES
-                    and not model_delta_received
+                    and not model_output_received
                     and (continued or code != "previous_response_not_found")
                 ):
                     raise _FreshSocketRequiredError(code)
@@ -979,16 +979,13 @@ class ResponsesWebSocket:
                     output_items.setdefault(index, None)
                     if index is not None and final_item is not None:
                         output_items[index] = final_item
+                # Even an item without visible text changes decoder state. A new exchange
+                # cannot reuse the state or retract deltas such as opaque Reasoning.
+                model_output_received = model_output_received or bool(deltas) or bool(output_items)
                 if any(delta.get("type") == "finish" for delta in deltas):
                     pooled.continuation = _completed_continuation(digest, state, output_items)
                     completed = True
                 for delta in deltas:
-                    if delta.get("type") in {
-                        "content_delta",
-                        "reasoning_delta",
-                        "tool_call_delta",
-                    }:
-                        model_delta_received = True
                     yield delta
                 if completed:
                     return

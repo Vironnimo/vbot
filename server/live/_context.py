@@ -26,12 +26,14 @@ UI_ACTION_TERMINAL_VIEW = "terminal_view"
 
 UI_UNAVAILABLE = "ui_unavailable"
 UI_TIMEOUT = "ui_timeout"
+UI_BUSY = "ui_busy"
 VOICE_STOPPED = "voice_stopped"
 NAVIGATION_NOT_APPLIED = "navigation_not_applied"
 OPERATION_FAILED = "operation_failed"
 
 # Agent-facing: these sentences reach the Model inside failure results.
 _UI_MESSAGES = {
+    UI_BUSY: "The app is busy with earlier requests. This request was skipped.",
     UI_UNAVAILABLE: (
         "No vBot app window is attached to the voice call, so the app could not show or "
         "report this."
@@ -147,11 +149,12 @@ class LiveContext:
 
     async def ui(self, action: str, args: JsonObject) -> JsonObject:
         """Send one UI request to the owning accessor."""
+        self.ensure_active()
         return await self._ui(action, args)
 
     async def view(self, op: str, **args: Any) -> JsonObject:
         """Send one Terminals view operation to the owning accessor."""
-        return await self._ui(UI_ACTION_TERMINAL_VIEW, {"op": op, **args})
+        return await self.ui(UI_ACTION_TERMINAL_VIEW, {"op": op, **args})
 
     def ensure_active(self) -> None:
         """Stop before a further effect once the voice call ended."""

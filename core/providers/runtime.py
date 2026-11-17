@@ -840,14 +840,14 @@ class ProviderRuntime:
         account_id: str | None,
     ) -> TokenGetter:
         provider_id = connection.provider_id
-        if connection_config.type in {"none", "external"}:
+        if connection_config.type == "external":
             return StaticTokenGetter("")
         resolved_connection_id = (
             f"{provider_id}:{connection_config.id}:{account_id}"
             if account_id is not None
             else connection.connection_id
         )
-        if connection_config.type == "api_key":
+        if connection_config.type in {"none", "api_key"}:
             return StaticTokenGetter(
                 self._credentials.get_credentials(provider_id, resolved_connection_id)
             )

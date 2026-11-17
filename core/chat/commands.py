@@ -36,7 +36,7 @@ from core.runs import (
 from core.sessions import SessionAddress
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
@@ -833,8 +833,7 @@ class CommandDispatcher:
         if argument is not None:
             if argument.strip().casefold() != "all" or self._stop_all is None:
                 return _notice("stop", "Use /stop or /stop all.")
-            stopped = await self._stop_all(address)
-            goal_paused = await self._pause_goal_for_stop(address)
+            stopped, goal_paused = await self.stop_all(address)
             if not stopped:
                 if goal_paused:
                     return _notice("stop", "Goal paused. Resume it with /goal resume.")
@@ -861,6 +860,19 @@ class CommandDispatcher:
                 "stop", "Run cancelled. The goal is paused; resume it with /goal resume."
             )
         return _notice("stop", "Run cancelled.")
+
+    async def stop_all(self, address: SessionAddress) -> tuple[int, bool]:
+        """Stop the work tree and pause the user's Session Goal, if open."""
+        stop_tree = self._stop_all
+        if stop_tree is None:
+            raise RuntimeError("Stop all is unavailable")
+
+        async def stop() -> tuple[int, bool]:
+            stopped = await stop_tree(address)
+            goal_paused = await self._pause_goal_for_stop(address)
+            return stopped, goal_paused
+
+        return await settle_before_cancelling(stop())
 
     async def _pause_goal_for_stop(self, address: SessionAddress) -> bool:
         """Stop always ends a goal's automatic turns; True when it paused one."""

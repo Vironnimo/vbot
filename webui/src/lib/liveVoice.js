@@ -580,12 +580,16 @@ export function createLiveVoice({
     state.usage = isPlainObject(frame.usage) ? frame.usage : null;
     state.closeReason = isText(frame.reason) ? frame.reason : null;
     if (!call.stopRequested && !call.errorReported) {
+      const notice = Object.hasOwn(ENDED_NOTICES, state.closeReason)
+        ? ENDED_NOTICES[state.closeReason]
+        : null;
       if (state.closeReason === 'replaced') notify('replaced', 'info');
+      else if (notice) notify(notice, 'info');
       else if (call.failed || !call.reachedLive) {
         const code = call.failed ? 'call_failed' : 'connection_failed';
         state.error = code;
         notify(code, 'error');
-      } else notify(ENDED_NOTICES[state.closeReason] ?? 'ended', 'info');
+      } else notify('ended', 'info');
     }
     finish(call);
   }

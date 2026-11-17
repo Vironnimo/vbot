@@ -25,7 +25,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.token_getter import StaticTokenGetter
 from core.runtime.runtime import Runtime
 from core.storage.layout import DataDirectoryLayout
-from core.utils.errors import StorageError
+from core.utils.errors import ConfigError, StorageError
 from core.utils.retry import retry_async
 
 LOCAL = ConnectionRef("ollama", "ollama:local")
@@ -74,6 +74,13 @@ async def test_keyless_local_connection_is_usable_only_after_opt_in(runtime: Run
     # A local server's prefill can be silent for minutes: no stall guard.
     assert adapter.local_endpoint is True
     assert stream_stall_timeout(adapter) is None
+
+    # An explicit nonexistent Account stays invalid after enabling the Connection.
+    missing_account = ConnectionRef("ollama", "ollama:local:other")
+    with pytest.raises(ConfigError):
+        runtime.get_connection_token_getter(missing_account)
+    with pytest.raises(ConfigError):
+        runtime.get_adapter(missing_account)
 
 
 @pytest.mark.parametrize(

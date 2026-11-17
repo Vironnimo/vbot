@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.access.config import access_config
+from core.computers import ComputerError
 from core.tools.terminal_manager import TerminalClosedError, TerminalNotFoundError
 from server._streams import _stream_websocket_events
 from server._terminal_socket import TERMINAL_SOCKET_QUEUE_LIMIT, serve_terminal_socket
@@ -457,6 +458,79 @@ def test_terminal_websocket_closes_cleanly_when_subscription_setup_fails(
         websocket.receive_json()
 
     assert exc_info.value.code == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resize_error", ["offline", "os_error", "unexpected"])
+async def test_terminal_socket_recovers_or_releases_a_failed_request_worker(
+    resize_error: str,
+) -> None:
+    ready = asyncio.Event()
+    resized = asyncio.Event()
+    frames: list[dict[str, Any]] = []
+    requests = iter(
+        [
+            {"type": "input", "data": "x"},
+            {"type": "resize", "request": 1, "columns": 50, "rows": 30},
+            {"type": "resize", "request": 2, "columns": 100, "rows": 30},
+        ]
+    )
+
+    class Manager:
+        async def watch_for_operator(self, _terminal_id: str) -> AsyncGenerator[dict[str, Any]]:
+            yield {"type": "terminal_ready"}
+            await asyncio.Event().wait()
+
+        async def send_operator_input(self, _terminal_id: str, _data: str) -> None:
+            raise ComputerError("computer_offline", "Desktop offline")
+
+        async def resize_for_operator(
+            self, _terminal_id: str, *, columns: int, rows: int
+        ) -> dict[str, Any]:
+            if columns == 50:
+                if resize_error == "os_error":
+                    raise OSError("Native resize failed")
+                if resize_error == "unexpected":
+                    raise RuntimeError("Worker failed")
+                raise ComputerError("computer_offline", "Desktop offline")
+            return {"columns": columns, "rows": rows}
+
+    class Socket:
+        async def receive(self) -> dict[str, Any]:
+            await ready.wait()
+            request = next(requests, None)
+            if request is not None:
+                return {"type": "websocket.receive", "text": json.dumps(request)}
+            await resized.wait()
+            return {"type": "websocket.disconnect"}
+
+        async def send_text(self, text: str) -> None:
+            frame = json.loads(text)
+            frames.append(frame)
+            if frame["type"] == "terminal_ready":
+                ready.set()
+            elif frame["type"] == "resize_done":
+                resized.set()
+
+    async with asyncio.timeout(1):
+        if resize_error == "unexpected":
+            with pytest.raises(RuntimeError, match="Worker failed"):
+                await serve_terminal_socket(cast(Any, Socket()), cast(Any, Manager()), "term-1")
+            assert not resized.is_set()
+            return
+        await serve_terminal_socket(cast(Any, Socket()), cast(Any, Manager()), "term-1")
+
+    resize_message = (
+        "Desktop offline"
+        if resize_error == "offline"
+        else "The Terminal could not confirm the requested size"
+    )
+    assert frames == [
+        {"type": "terminal_ready"},
+        {"type": "input_failed", "message": "Desktop offline"},
+        {"type": "resize_failed", "request": 1, "message": resize_message},
+        {"type": "resize_done", "request": 2, "terminal": {"columns": 100, "rows": 30}},
+    ]
 
 
 @pytest.mark.asyncio

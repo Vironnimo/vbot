@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from desktop import servers as desktop_servers
+from desktop import settings as desktop_settings
 from desktop.servers import ServerEntry
 from tests.desktop.server_test_support import CLOUD_ENTRY, _settings, _stored
 
@@ -182,6 +183,7 @@ def test_add_server_validates_the_target_before_persisting(
 )
 def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     removed_target: tuple[str, int],
     last_used: dict[str, Any] | None,
     removed: bool,
@@ -198,6 +200,14 @@ def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
     if last_used is not None:
         saved["last_used"] = last_used
     settings_file = _settings(tmp_path, saved)
+    persisted: list[dict[str, Any]] = []
+    write = desktop_settings._write_settings_unlocked
+
+    def record_write(settings: dict[str, Any], path: Path) -> None:
+        write(settings, path)
+        persisted.append(_stored(path))
+
+    monkeypatch.setattr(desktop_settings, "_write_settings_unlocked", record_write)
 
     host, port = removed_target
     assert desktop_servers.remove_server(host, port, settings_file=settings_file) is removed
@@ -205,6 +215,7 @@ def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
     stored = _stored(settings_file)
     assert stored["servers"] == servers
     assert stored.get("last_used") == last_used_after
+    assert persisted == ([stored] if removed else [])
 
 
 @pytest.mark.parametrize(

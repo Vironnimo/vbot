@@ -436,6 +436,47 @@ async def test_codex_websocket_lost_continuation_reconnects_with_full_context(co
     await adapter.aclose()
 
 
+@pytest.mark.asyncio
+async def test_codex_websocket_does_not_replay_after_opaque_reasoning_output() -> None:
+    reasoning = {"id": "rs_interrupted", "type": "reasoning", "encrypted_content": "opaque"}
+    first_websocket = FakeCodexWebSocket(
+        [
+            _tool_call_turn("resp_1"),
+            [
+                _output_item_done(0, reasoning),
+                {
+                    "type": "error",
+                    "status": 400,
+                    "error": {"code": "websocket_connection_limit_reached"},
+                },
+            ],
+        ]
+    )
+    replacement_websocket = FakeCodexWebSocket([_final_turn("replacement")])
+    connector = FakeCodexWebSocketConnector([first_websocket, replacement_websocket])
+    adapter = codex_adapter(responses_websocket_connect=connector)
+
+    try:
+        first = await _send(adapter, tools=CODEX_TOOLS)
+        deltas = []
+        with pytest.raises(ProviderError):
+            async for delta in adapter.stream(
+                _messages_with_tool_result(first),
+                model_id=MODEL_ID,
+                conversation_id=CONVERSATION_ID,
+                tools=CODEX_TOOLS,
+            ):
+                deltas.append(delta)
+
+        assert deltas == [
+            {"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [reasoning]}}
+        ]
+        assert len(connector.calls) == 1
+        assert first_websocket.closed
+    finally:
+        await adapter.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Route isolation
 # ---------------------------------------------------------------------------

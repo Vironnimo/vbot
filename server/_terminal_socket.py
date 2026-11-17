@@ -22,11 +22,13 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
 from typing import Any
 
+from core.computers import ComputerError
 from core.tools.terminal_manager import (
     TERMINAL_INPUT_MAX_CHARS,
     TerminalManager,
     TerminalManagerError,
 )
+from core.utils.workers import cancel_and_wait
 from server._http_dependencies import WebSocket
 from server._streams import _stream_websocket_events
 
@@ -63,16 +65,21 @@ async def serve_terminal_socket(
     try:
         events = manager.watch_for_operator(terminal_id)
         async with aclosing(_merge(events, replies)) as stream:
-            await _stream_websocket_events(websocket, stream, on_text=receive)
+            streaming = asyncio.create_task(
+                _stream_websocket_events(websocket, stream, on_text=receive),
+                name=f"terminal:{terminal_id}:socket-stream",
+            )
+            try:
+                await asyncio.wait({worker, streaming}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                await cancel_and_wait(streaming)
     except asyncio.QueueFull:
         # Keep receiving independent of PTY writes and socket sends, so overload
         # can close this connection instead of retaining unlimited operator input.
         worker.cancel()
         await websocket.close(code=1013, reason="Terminal socket backlog exceeded")
     finally:
-        worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await worker
+        await cancel_and_wait(worker)
 
 
 async def _apply_requests(
@@ -102,7 +109,7 @@ async def _apply(
                     f"Terminal input must not exceed {TERMINAL_INPUT_MAX_CHARS} characters"
                 )
             await manager.send_operator_input(terminal_id, data)
-        except (TerminalManagerError, ValueError) as error:
+        except (ComputerError, TerminalManagerError, ValueError) as error:
             return {"type": "input_failed", "message": str(error)}
         return None
     if kind == "resize":
@@ -115,8 +122,14 @@ async def _apply(
             if isinstance(columns, bool) or isinstance(rows, bool):
                 raise ValueError("columns and rows must be integers")
             summary = await manager.resize_for_operator(terminal_id, columns=columns, rows=rows)
-        except (TerminalManagerError, ValueError) as error:
+        except (ComputerError, TerminalManagerError, ValueError) as error:
             return {"type": "resize_failed", "request": request, "message": str(error)}
+        except OSError, EOFError:
+            return {
+                "type": "resize_failed",
+                "request": request,
+                "message": "The Terminal could not confirm the requested size",
+            }
         return {"type": "resize_done", "request": request, "terminal": summary}
     return {"type": "protocol_error", "message": f"Unknown request type: {kind!r}"}
 

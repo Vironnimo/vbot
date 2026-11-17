@@ -141,10 +141,11 @@ class LiveCallRegistry:
         entry = self._entries.get(call_id)
         if entry is None:
             return None
-        owner = entry.attach()
-        if entry.ended:
-            self._forget(entry)
-        return owner
+        if not entry.can_attach:
+            if entry.ended:
+                self._forget(entry)
+            return None
+        return entry.attach()
 
     def resolve_ui_request(
         self,
@@ -176,13 +177,14 @@ class LiveCallRegistry:
     def _entry_finalized(self, entry: LiveCallEntry) -> None:
         if self._active is entry:
             self._active = None
-        if self._closed or not entry.has_undelivered_updates:
+        if self._closed or not entry.can_attach:
             self._forget(entry)
             return
         # Keep final updates attachable briefly for an owner that is reconnecting.
-        self._linger[entry.call_id] = asyncio.get_running_loop().call_later(
-            self._limits.reattach_grace_seconds, self._forget, entry
-        )
+        if self._entries.get(entry.call_id) is entry and entry.call_id not in self._linger:
+            self._linger[entry.call_id] = asyncio.get_running_loop().call_later(
+                self._limits.reattach_grace_seconds, self._forget, entry
+            )
 
     def _forget(self, entry: LiveCallEntry) -> None:
         call_id = entry.call_id

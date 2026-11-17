@@ -28,6 +28,8 @@ A `ModelFile.url` can instead pin a fixed external URL (used by Desktop wakeword
 
 A file takes its final name only after its size and SHA-256 match. Before anything is fetched, the missing bytes plus a 512 MB margin must be free; resumable `.part` bytes already on disk do not count as missing. Error codes: `insufficient_space`, `checksum_mismatch`, `download_failed`; cancelling the job sets a `threading.Event`, the thread stops within one chunk (`interrupted`) and `.part` files stay for the next install. Engines never download at use: a ready target runs offline.
 
+Local adoption stages its candidate separately from the resumable `.part`; a rejected candidate leaves the partial download available. An unavailable destination or partial file stops the fetch before it can be overwritten.
+
 ## Generic local engine RPCs
 
 `server/rpc/task_model_methods.py` serves every local target, whichever service runs it (`_LOCAL_OWNERS`: speech, embeddings; each owner's `local_setup_for(target)` raises `ValueError` for targets it does not run). The RPCs accept only the listed params, never commands, packages or paths; a missing, non-`local/` or unknown target is `invalid_request`.

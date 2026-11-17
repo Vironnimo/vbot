@@ -124,7 +124,7 @@ class MemoryRevision:
 class _Log:
     """One history file as read: its revisions and each scope's current state."""
 
-    signature: tuple[int, int] | None
+    signature: tuple[int, int, int, int] | None
     revisions: list[MemoryRevision] = field(default_factory=list)
     states: dict[str, list[str]] = field(default_factory=dict)
     hashes: dict[str, str] = field(default_factory=dict)
@@ -726,7 +726,7 @@ def _state_hash(entries: Sequence[str]) -> str:
     return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()[:16]
 
 
-def _signature(path: Path) -> tuple[int, int] | None:
+def _signature(path: Path) -> tuple[int, int, int, int] | None:
     try:
         stat = path.stat()
     except FileNotFoundError:
@@ -735,7 +735,7 @@ def _signature(path: Path) -> tuple[int, int] | None:
         from core.memory.memory import MemoryError
 
         raise MemoryError(f"failed to read Memory history {path}: {exc}") from exc
-    return stat.st_size, stat.st_mtime_ns
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
 
 
 def _modified_at(file: Path) -> str:

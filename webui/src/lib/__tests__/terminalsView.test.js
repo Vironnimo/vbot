@@ -259,7 +259,7 @@ describe('terminal catalog', () => {
     expect(state.streams).toEqual({});
 
     controller.setServerUnavailable(false);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(streams).toHaveLength(4);
     expect(Object.keys(state.streams)).toEqual(['term-1', 'term-2']);
   });
@@ -387,7 +387,7 @@ describe('terminal streams', () => {
       errorCode,
     });
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(streams).toHaveLength(3);
     expect(state.streams['term-2']).toMatchObject({
       status: 'connected',
@@ -425,26 +425,27 @@ describe('terminal streams', () => {
     expect(state.selectedTerminalId).toBe('term-1');
   });
 
-  it('force-closes a socket stuck connecting past the budget and reconnects once', async () => {
-    vi.useFakeTimers();
-    const { state, streams } = await startTerminals({ socketReadyState: 0 });
+  it.each([0, 1])(
+    'reconnects without a ready snapshot (socket state %s)',
+    async (socketReadyState) => {
+      vi.useFakeTimers();
+      const { state, streams } = await startTerminals({ socketReadyState });
 
-    // Nothing arrived and the socket never opened: after the budget the
-    // controller closes it and reconnects immediately.
-    await vi.advanceTimersByTimeAsync(8_001);
-    expect(streams[0].connection.close).toHaveBeenCalled();
-    expect(streams).toHaveLength(2);
-    expect(state.streams['term-1'].status).toBe('reconnecting');
+      await vi.advanceTimersByTimeAsync(8_001);
+      expect(streams[0].connection.close).toHaveBeenCalled();
+      expect(streams).toHaveLength(2);
+      expect(state.streams['term-1'].status).toBe('reconnecting');
 
-    // A socket that opens within the budget is never force-closed.
-    streams[1].connection.socket.readyState = 1;
-    streams[1].emit(readyEvent('term-1', 1, 'ready'));
-    await vi.advanceTimersByTimeAsync(20_000);
+      // The snapshot establishes a live stream and cancels the deadline.
+      streams[1].connection.socket.readyState = 1;
+      streams[1].emit(readyEvent('term-1', 1, 'ready'));
+      await vi.advanceTimersByTimeAsync(20_000);
 
-    expect(streams[1].connection.close).not.toHaveBeenCalled();
-    expect(streams).toHaveLength(2);
-    expect(state.streams['term-1'].status).toBe('connected');
-  });
+      expect(streams[1].connection.close).not.toHaveBeenCalled();
+      expect(streams).toHaveLength(2);
+      expect(state.streams['term-1'].status).toBe('connected');
+    },
+  );
 
   it('holds a torn escape sequence until its frame completes and passes everything else byte-exact', async () => {
     const output = [];
@@ -534,7 +535,7 @@ describe('terminal input', () => {
 
     controller.queueInput('ab', { immediate: true });
     controller.queueInput('c', { immediate: true });
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(streams).toHaveLength(2);
     expect(streams[1].sent).toEqual([]);
 
@@ -728,7 +729,7 @@ describe('terminal resize', () => {
 
     controller.resize(100, 30, 'term-1', true);
     streams[0].close();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(controller.resizeSettling('term-1')).toBe(true);
 
     streams[1].emit(readyEvent('term-1', 9));

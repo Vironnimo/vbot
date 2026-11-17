@@ -258,7 +258,9 @@ class ProviderCredentialResolver:
         account_id: str,
     ) -> str:
         if connection.type == "none":
-            return ""
+            if account_id == DEFAULT_ACCOUNT_ID:
+                return ""
+            raise ConfigError("Keyless connections use the default account")
         if connection.type == "external":
             if account_id == DEFAULT_ACCOUNT_ID and self._connection_added(provider_id, connection):
                 return ""

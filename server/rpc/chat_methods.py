@@ -449,14 +449,14 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("chat.stop_all"), "chat.stop_all")
     address = _required_session_address(params)
     try:
-        stopped = await state.runtime.subagents.stop_tree(
-            address,
-            **(
-                {"reason": "extension_cancelled", "initiator": "extension_stop_all"}
-                if is_extension_service_call()
-                else {}
-            ),
-        )
+        if is_extension_service_call():
+            stopped = await state.runtime.subagents.stop_tree(
+                address, reason="extension_cancelled", initiator="extension_stop_all"
+            )
+        else:
+            dispatcher: CommandDispatcher = state.command_dispatcher
+            stopped, goal_paused = await dispatcher.stop_all(address)
+            stopped += int(goal_paused)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True, "stopped": stopped}

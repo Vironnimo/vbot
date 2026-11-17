@@ -126,7 +126,8 @@ conversations (user decision 2026-10-15).
   its row. `resume` works from `paused`, `blocked` and `complete`; when the Session is
   idle it starts a visible `user` Run like a set, with `GOAL_RESUMED_TEXT` as
   the context note, otherwise it writes the row alone and the current Run
-  continues the goal when it ends.
+  continues the goal when it ends. A set or resume whose Run admission is instead
+  rejected restores its previous Goal without adding a row.
 - `/stop` always pauses an open goal with `stop`, also without an active Run.
   Live goal transitions and automatic Run admission share a per-Session lock;
   preparation outside it cannot start a Run after a pause or clear. A Stop

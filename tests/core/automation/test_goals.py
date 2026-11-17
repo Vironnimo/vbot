@@ -19,6 +19,7 @@ from core.automation.goals import (
 from core.chat import ChatSessionManager, ReplySurface
 from core.chat.commands import CommandExecutionContext
 from core.chat.messages import ChatMessage
+from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, Run, RunAdmission, RunKind
 from core.sessions import SESSION_GOAL_META_KEY, SessionAddress
 
@@ -448,6 +449,41 @@ async def test_goal_commands_pause_resume_and_clear(harness: _Harness) -> None:
     assert await harness.command(None) == (
         "This session has no goal. Set one with /goal <objective>."
     )
+
+
+@pytest.mark.parametrize("transition", ["set", "replace", "resume", "newer-goal"])
+async def test_rejected_goal_command_restores_only_its_own_metadata(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, transition: str
+) -> None:
+    if transition in {"replace", "resume"}:
+        harness.loop.turns = [_marks(harness.goals, "blocked")]
+        await harness.command("Previous objective")
+        await harness.settle()
+        await harness.command("pause")
+    previous = harness.sessions.metadata_value(_ADDRESS, SESSION_GOAL_META_KEY)
+    rows = harness.rows()
+    changed = harness.changes[:]
+    newer = {"objective": "Newer objective", "status": "paused", "turns": 3}
+
+    async def reject(*_args: Any, **_kwargs: Any) -> Run:
+        if transition == "newer-goal":
+            await harness.sessions.run_async(
+                harness.sessions.mutate_metadata,
+                _ADDRESS,
+                lambda metadata: metadata.update({SESSION_GOAL_META_KEY: newer}),
+            )
+        raise AgentResolutionError("no usable route")
+
+    monkeypatch.setattr(harness.loop, "start_run", reject)
+    with pytest.raises(AgentResolutionError):
+        await harness.command("resume" if transition == "resume" else "Requested objective")
+
+    assert harness.sessions.metadata_value(_ADDRESS, SESSION_GOAL_META_KEY) == (
+        newer if transition == "newer-goal" else previous
+    )
+    assert harness.rows() == rows
+    assert harness.changes == changed
+    assert harness.runs.active_runs() == []
 
 
 async def test_a_goal_is_not_set_while_a_run_is_active(harness: _Harness) -> None:

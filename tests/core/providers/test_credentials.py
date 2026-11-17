@@ -217,6 +217,7 @@ def test_token_store_and_keyless_connections_list_their_own_accounts(tmp_path: P
             id="oauth-stub-with-credential-key",
         ),
         pytest.param({}, "ollama:local", "", id="keyless"),
+        pytest.param({}, "ollama:local:default", "", id="explicit-keyless-default"),
         pytest.param(
             {"OLLAMA_API_KEY": "sk-cloud"}, "ollama:cloud", "sk-cloud", id="keyed-sibling"
         ),
@@ -253,6 +254,7 @@ def test_oauth_credentials_come_from_the_account_token_file(tmp_path: Path) -> N
         pytest.param({}, "openai:api-key", "OPENAI_API_KEY", id="env-connection"),
         pytest.param({}, "openai:subscription:work", "work", id="oauth-account"),
         pytest.param({}, "openai:subscription", "subscription", id="oauth-connection"),
+        pytest.param({}, "ollama:local:other", "default account", id="keyless-account"),
     ],
 )
 def test_missing_credentials_name_the_slot_but_no_secret(
@@ -261,7 +263,7 @@ def test_missing_credentials_name_the_slot_but_no_secret(
     resolver = _resolver(env=env, token_store=TokenStore(SecretStore(tmp_path)))
 
     with pytest.raises(ConfigError, match=named) as error_info:
-        resolver.get_credentials("openai", connection_id)
+        resolver.get_credentials(connection_id.split(":")[0], connection_id)
 
     assert "default-secret" not in str(error_info.value)
 

@@ -174,6 +174,21 @@ def test_edits_outside_the_service_are_recorded_when_next_noticed(
     assert service.history(workspace, "coder") == revisions
 
 
+def test_history_reads_a_replacement_file_with_preserved_metadata(
+    service: MemoryService, workspace: Path, agents_root: Path
+) -> None:
+    service.add_entry(workspace, "agent", "One fact.", writer=_TOOL)
+    log = agents_root / "coder" / "memory-history.jsonl"
+    assert service.recorded_revisions("coder")[0].actor == "tool"
+    status = log.stat()
+    restored = log.with_suffix(".restore")
+    restored.write_bytes(log.read_bytes().replace(b'"actor":"tool"', b'"actor":"user"'))
+    os.utime(restored, ns=(status.st_atime_ns, status.st_mtime_ns))
+    os.replace(restored, log)
+
+    assert service.recorded_revisions("coder")[0].actor == "user"
+
+
 @pytest.mark.parametrize(
     ("setup", "revert", "expected"),
     [

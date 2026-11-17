@@ -84,6 +84,7 @@ export function createProjectsController({
   let active = true;
   let listRequestId = 0;
   let scanRequestId = 0;
+  let catalogRequestId = 0;
   let selectionVersion = 0;
   const overrideEditVersions = new Map();
   let autoSaveTimer = null;
@@ -423,8 +424,9 @@ export function createProjectsController({
   }
 
   async function loadCatalogs({ reload = false } = {}) {
+    const requestId = ++catalogRequestId;
     const catalogs = await fetchCatalogs();
-    if (catalogs.stale) {
+    if (catalogs.stale || requestId !== catalogRequestId) {
       return;
     }
     state.toolCatalog = catalogs.tools;
@@ -501,7 +503,14 @@ export function createProjectsController({
       if (!active) return;
       if (Number.isInteger(result?.order_revision)) {
         state.orderRevision = result.order_revision;
-        latestOrderRevision = result.order_revision;
+        // A list captured before this write cannot replace its order or be
+        // published with the revision of this response.
+        if (
+          state.loadingProjects ||
+          (pendingProjectList && latestOrderRevision < result.order_revision)
+        ) {
+          void loadProjects({ reload: true });
+        }
       }
     } catch (error) {
       if (!active) return;

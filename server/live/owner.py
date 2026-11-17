@@ -24,11 +24,11 @@ Server to accessor:
   disconnects a slow owner; reattachment starts a fresh generation. A
   ``playback_clear`` removes every queued binary frame before being enqueued.
 
-Updates wait for an owner: before it attaches and while it reconnects, they
-are kept in a bounded buffer that drops the oldest caption, activity, action,
-or heartbeat frames first, never a ``state``, ``ui_request``, ``error``, or
-``closed`` frame. Updates a lost socket had not yet taken return to that
-buffer, so a reconnecting owner still receives a pending UI request.
+Updates waiting for an owner share a bounded buffer. Replay keeps the latest
+snapshot of each state and coalesces repeated nonfatal errors by code. Under
+pressure, caption, action and heartbeat frames go first, then nonfatal errors
+and older state. Pending UI requests and the final ``closed`` frame have
+reserved space. Updates a lost socket had not yet taken return to that buffer.
 
 Accessor to server: binary frames of a relay call are microphone PCM in the
 same format (even length, at most 64 KiB each). JSON text frames (at most

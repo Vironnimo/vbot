@@ -423,6 +423,23 @@ async def test_opens_sessions_terminals_groups_projects_and_views(fx: Fixture) -
 
 
 @pytest.mark.asyncio
+async def test_open_rechecks_call_before_showing_a_resolved_terminal(
+    fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fx.app.add_terminal("term_a")
+    list_terminals = fx.app._terminal_list
+
+    def list_at_stop(params):
+        fx.active = False
+        return list_terminals(params)
+
+    monkeypatch.setattr(fx.app, "_terminal_list", list_at_stop)
+    code, _ = await fx.failed("open", target="term_a", view="terminals")
+    assert code == "voice_stopped"
+    assert fx.ui.of("terminal_view") == []
+
+
+@pytest.mark.asyncio
 async def test_opens_an_agent_by_its_latest_session_or_its_page(fx: Fixture) -> None:
     fx.app.sessions = [session_row("ses_1", "coder")]
     text = await fx.ok("open", target="Coder")

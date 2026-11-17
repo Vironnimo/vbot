@@ -329,6 +329,31 @@ describe('controller', () => {
     expect(state.jobsError).toBe('cron store unreadable');
   });
 
+  it('shows events while Agent jobs are loading and ignores an older jobs response', async () => {
+    const older = Promise.withResolvers();
+    getCalendarWindow.mockResolvedValue({
+      ...serverWindow('UTC'),
+      events: [{ id: 'evt-1' }],
+    });
+    const eventJob = { id: 'new', schedule_type: 'event', event_id: 'evt-1' };
+    listCronJobs
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce({ jobs: [eventJob] });
+    const state = createCalendarViewState();
+    const controller = createCalendarController({ state });
+
+    void controller.show('week', '2026-09-09');
+    await vi.waitFor(() => expect(state.loading).toBe(false));
+    expect(state.events).toEqual([{ id: 'evt-1' }]);
+    expect(state.jobs).toEqual([]);
+
+    await controller.show('week', '2026-09-16');
+    expect(state.jobs).toEqual([eventJob]);
+    older.resolve({ jobs: [{ ...eventJob, id: 'old' }] });
+    await older.promise;
+    expect(state.jobs).toEqual([eventJob]);
+  });
+
   it.each(['success', 'failure'])(
     'keeps completeness with its projection across reloads and stale %s',
     async (staleOutcome) => {
