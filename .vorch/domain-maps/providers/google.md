@@ -20,4 +20,9 @@ This supplementary map covers the `google` Provider: Google's own Gemini API at 
 
 ## Verification
 
-- Free-tier key, 2026-11-17: the catalog listed 27 chat Models after filtering. `gemini-4-hydrogen` answered a raw streamed Function Call with an id and `thoughtSignature`; `scripts/verify_wire_profile.py` results are recorded in `resources/wire/google.json` (`models.gemini-4-hydrogen.verified`). Latency was 30-130 s per request under Google's load at the time. Many other Models returned 429 `limit: 0` on that key; that is an account entitlement, not a Model fact, and none of them is excluded for it.
+Free-tier key, 2026-11-17; latency 30-230 s per request under Google's load at the time.
+
+- Catalog: 27 chat Models after filtering; `gemini-4-hydrogen` joins its canonical `google/gemini-4-hydrogen` entry (effort ladder `low/medium/high/xhigh`).
+- `gemini-4-hydrogen` through `scripts/verify_wire_profile.py`: send, stream, Tool replay (signed parts, effort `xhigh`) and each effort `low`, `medium`, `high`, `xhigh` passed. The key then hit the Model's daily free-tier quota, which the Adapter classified as non-retryable; `none`, sampling, image and the replay measurement were not run on it. No `verified` record is written, so its wire status stays `inferred`.
+- The replay measurement passed on `gemini-3-flash-preview` (`full_history` consumed in-Run and across Runs) once unsigned Function Calls carried the placeholder signature (`providers/opencode-zen.md` -> Reasoning, Replay, and Prompt Caching).
+- Many other Models returned 429 `limit: 0` on that key; that is an account entitlement, not a Model fact, and none of them is excluded for it.
