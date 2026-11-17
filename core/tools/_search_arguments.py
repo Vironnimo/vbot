@@ -222,7 +222,9 @@ _TARGET_VALUES = {
 
 def _normalize_output(value: Any) -> Any:
     if isinstance(value, str) and (
-        wrapped := re.fullmatch(r"\s*output\s*>\s*(content|files|count)\s*", value, re.IGNORECASE)
+        wrapped := re.fullmatch(
+            r"\s*output\s*(?:>|</arg_key>)\s*(content|files|count)\s*", value, re.IGNORECASE
+        )
     ):
         return wrapped[1].lower()
     return _OUTPUT_VALUES.get(_spelling(value), value) if isinstance(value, str) else value
@@ -273,6 +275,18 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
             f'{SEARCH_FILES_TOOL_NAME} was not run: "{key}" must be {expected}; '
             f"received {received}."
         )
+
+    output = result.get("output")
+    if isinstance(output, str) and output.startswith("path</arg_key>"):
+        # The complete named path arrived in the output field. Never let damaged
+        # or empty markup turn an explicit scope into a working-directory search.
+        paths = _repair_name_list(output.removeprefix("path</arg_key>"))
+        if not isinstance(paths, list) or not paths or not all(item.strip() for item in paths):
+            raise ToolContractError(
+                "Nothing was searched. Send the complete list of files or directories in path."
+            )
+        set_field("path", paths, ("output", output))
+        del result["output"]
 
     for key, value in arguments.items():
         if key in SEARCH_FILES_TOOL_PARAMETERS["properties"]:
@@ -331,6 +345,22 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     if tokens:
         existing = result.get("args", [])
         result["args"] = [*tokens, *(existing if isinstance(existing, list) else [existing])]
+    if result.get("output") in ("output", "context"):
+        # An echoed field name supplies no format. An explicit request for
+        # surrounding lines selects content if no rg options ask for another format.
+        context = result.get("context")
+        if (
+            type(context) is int
+            and context > 0
+            and result.get("pattern")
+            and not result.get("args")
+        ):
+            result["output"] = "content"
+        elif result["output"] == "context":
+            raise ToolContractError(
+                'Nothing was searched. For surrounding lines, set output to "content" '
+                "and context to the number of lines on each side."
+            )
     return result
 
 

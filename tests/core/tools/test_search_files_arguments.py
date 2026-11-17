@@ -500,6 +500,15 @@ async def test_a_glob_shaped_explicit_content_search_keeps_its_matching_rules(
         ),
         ({"pattern": "load", "output": "output>files", "glob": "*.py"}, "src/app.py"),
         ({"pattern": "os", "output": "output>count", "path": "src"}, "src/app.py:2"),
+        ({"pattern": "os", "output": "output</arg_key>count", "path": "src"}, "src/app.py:2"),
+        (
+            {"pattern": "load", "output": 'path</arg_key>["docs"]'},
+            "docs/guide.md\n1:Call load() first.",
+        ),
+        (
+            {"pattern": "def", "output": "output", "context": 1, "path": "src/app.py"},
+            "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
+        ),
         (
             {"pattern": "def", "-C": 1, "path": "src/app.py"},
             "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
@@ -716,6 +725,12 @@ async def test_a_glob_written_as_a_windows_or_absolute_path_selects_what_it_name
         {"pattern": "load", "output": "output>content>files"},
         {"pattern": "load", "output": "target>content"},
         {"pattern": "load", "output": "output>contents"},
+        {"pattern": "load", "output": "output</arg_key>content</arg_key>files"},
+        {"pattern": "load", "output": 'path</arg_key>["docs"'},
+        {"pattern": "load", "output": "path</arg_key>[]"},
+        {"pattern": "load", "output": 'path</arg_key>["docs"]', "path": "src"},
+        {"pattern": "load", "output": "output", "context": 1, "args": ["-c"]},
+        {"pattern": "load", "output": "context"},
     ],
 )
 async def test_unclear_or_conflicting_fields_are_rejected(project: Path, arguments: dict):

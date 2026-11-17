@@ -265,10 +265,12 @@ names from other search Tools and command-line habits when their meaning is exac
 
 - **Renamed fields:** `query`, `include`, `output_mode`, `head_limit`, `argv`, and
   the old `options`, `patterns` and `paths`.
-- **Output value wrappers:** `output>content`, `output>files` and `output>count`
-  silently select the named canonical output; another prefix, value or a chain
-  of values stays invalid. Two Calls on 2026-10-19 were retried with only
-  `output>content` changed to `content`.
+- **Output value wrappers:** `output>` and `output</arg_key>` followed by one
+  canonical mode select that mode. A complete `path</arg_key>` string array in
+  `output` supplies those exact roots. Empty, broken or conflicting roots fail
+  before traversal. An echoed `output` or `context` mode with a pattern, a
+  positive context size and no rg arguments asks for matching lines.
+  Other prefixes and chained modes stay invalid.
 - **Flag fields:** `-i`, `ignore_case`, `literal`, `-C`, `type`, `exclude`,
   `recursive: false` (becomes `-d 1`), Hermes-style `target: "files"`, and others.
 
@@ -783,6 +785,8 @@ blank placeholders, so no sentence has to warn about them.
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
 | pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`. Empty content searches retain their result kind: the former name fallback substituted file names for requested counts and content in November 2026 Sessions. |
 | Empty content result: `No matches` (with a searched-file total when known). | A matching file name or parent directory is not a content match. Removing `No file contents match pattern, so the files whose names match it were listed.` preserves content, files-with-matches and count semantics (F3, F4; November 2026 Session audit). |
+| `Nothing was searched. For surrounding lines, set output to "content" and context to the number of lines on each side.` | A context request without a size needs a correction the Agent can apply. |
+| `Send the complete list of files or directories in path.` | A damaged list can omit roots. An invalid-character diagnostic led an Agent to change its scope on retry. |
 | `non-matching lines` for inverted counts and pages, and `pattern "*.ts" with -v was applied as glob "!*.ts".` | Names the unit ripgrep returns with inversion and identifies the excluded file-name glob (F3, F4). |
 | `--column was ignored: results show line numbers without column numbers.` (also `--byte-offset` and `--vimgrep`) and `--max-columns was ignored: long lines use a fixed excerpt around the match.` | Names the coordinates or width the output uses when a requested display flag cannot change them (F4). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
