@@ -132,9 +132,9 @@ async def test_history_selects_windows_by_time_and_name_and_skips_torn_lines(
     tmp_path: Path,
 ) -> None:
     directory = tmp_path / "performance" / "history"
-    _append(directory, _window(DAY, metrics={"a": {"count": 1}, "b": {"count": 2}}))
-    with (directory / "2026-09-20.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write('{"started_at": "2026-09-20T10:10:00+00:00", "torn')
+    _append(directory, _window(DAY, metrics={"a\u2028b": {"count": 1}, "b": {"count": 2}}))
+    with (directory / "2026-09-20.jsonl").open("ab") as handle:
+        handle.write(b'{"started_at": "2026-09-20T10:10:00+00:00", "torn": "\xe2\x80')
     _append(directory, _window(DAY + timedelta(minutes=10)))
     _append(directory, _window(DAY + timedelta(hours=14)))
     service = _service(tmp_path)
@@ -148,8 +148,8 @@ async def test_history_selects_windows_by_time_and_name_and_skips_torn_lines(
     moment = DAY + timedelta(minutes=10)
     assert spans(await service.history(since=moment, until=moment)) == ["10:00", "10:10"]
     assert spans(await service.history(limit=1)) == ["00:00"]
-    named = await service.history(until=DAY, names=["b"])
-    assert named["windows"][0]["metrics"] == {"b": {"count": 2}}
+    named = await service.history(until=DAY, names=["a\u2028b"])
+    assert named["windows"][0]["metrics"] == {"a\u2028b": {"count": 1}}
     assert (named["interval_seconds"], named["retention_days"]) == (3600, 14)
     with pytest.raises(ValueError, match="offset"):
         await service.history(since=datetime(2026, 9, 20, 10, 0))
