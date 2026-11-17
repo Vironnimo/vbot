@@ -75,6 +75,7 @@ class _ExtensionSession:
 
 
 MAX_RUN_ACTIVITY = 200
+_SUMMARY_FIELDS = ("seen_skills", "generation_id")
 
 # The sections of ``StatisticsService.report``, in report order.
 REPORT_SECTIONS = SECTION_NAMES
@@ -430,7 +431,7 @@ class StatisticsService:
         summaries = {
             owned.address: extension_session_summary(owned)
             for owned in self._sessions.list_owned_session_summaries(
-                owner_name=owner_name, group_id=group_id, metadata_keys=("seen_skills",)
+                owner_name=owner_name, group_id=group_id, metadata_keys=_SUMMARY_FIELDS
             )
         }
         by_address: dict[SessionAddress, list[OwnedRunRecord]] = {}
@@ -454,7 +455,7 @@ class StatisticsService:
 
         return self._index.read(
             self._sessions,
-            _owner_scopes(records, owner_name, summaries, self._sessions.summary),
+            _owner_scopes(records, owner_name, summaries, self._session_summary),
             consume,
             prune=False,
             usage_recorder=self._usage_recorder,
@@ -516,7 +517,7 @@ class StatisticsService:
 
         return self._index.read(
             self._sessions,
-            _session_scopes(addresses, owned, self._sessions.summary),
+            _session_scopes(addresses, owned, self._session_summary),
             consume,
             prune=False,
             usage_recorder=self._usage_recorder,
@@ -543,9 +544,12 @@ class StatisticsService:
             owner.address: owner
             for owner_name, group_id in groups
             for owner in self._sessions.list_owned_session_summaries(
-                owner_name=owner_name, group_id=group_id, metadata_keys=("seen_skills",)
+                owner_name=owner_name, group_id=group_id, metadata_keys=_SUMMARY_FIELDS
             )
         }
+
+    def _session_summary(self, address: SessionAddress) -> JsonObject | None:
+        return self._sessions.summary(address, metadata_keys=_SUMMARY_FIELDS)
 
     def _import_session_usage(self) -> None:
         if self._usage_recorder is not None:
@@ -572,7 +576,7 @@ class StatisticsService:
                     self._sessions.list_summaries(
                         agent.id,
                         None,
-                        metadata_keys=("seen_skills",),
+                        metadata_keys=_SUMMARY_FIELDS,
                     )
                 ),
             )
@@ -588,7 +592,7 @@ class StatisticsService:
                         self._sessions.list_summaries(
                             agent_id,
                             project_id,
-                            metadata_keys=("seen_skills",),
+                            metadata_keys=_SUMMARY_FIELDS,
                         )
                     ),
                 )
@@ -598,7 +602,7 @@ class StatisticsService:
     def _extension_sessions(self) -> tuple[_ExtensionSession, ...]:
         """Discover every live Extension-owned participant Session in one read."""
         entries: list[_ExtensionSession] = []
-        for owned in self._sessions.list_owned_session_summaries(metadata_keys=("seen_skills",)):
+        for owned in self._sessions.list_owned_session_summaries(metadata_keys=_SUMMARY_FIELDS):
             summary = extension_session_summary(owned)
             created_at = summary.get("created_at")
             entries.append(

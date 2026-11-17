@@ -165,11 +165,12 @@ _REFLECTION_RUN_KINDS_SQL = (
 _RECALL_USER_FACING_RUN_KINDS = ("user", "session_message", "channel", "cron", "calendar")
 # Summary values a Session list may add on request, by name.
 _SUMMARY_METADATA_COLUMNS = {
+    "generation_id": "json_quote(s.generation_id)",
     "seen_skills": (
         "CASE WHEN s.seen_skills_initialized = 1 THEN "
         "(SELECT json_group_array(k.skill_name) FROM (SELECT skill_name FROM session_seen_skills "
         "WHERE session_key = s.session_key ORDER BY skill_name) AS k) END"
-    )
+    ),
 }
 _LIST_VISIBILITY_SUBAGENT_SESSION = 1 << 0
 _LIST_VISIBILITY_BACKGROUND = 1 << 1

@@ -461,32 +461,52 @@ def test_deleted_session_is_pruned_from_index(
 @pytest.mark.parametrize(
     ("storage", "projection"), [("file", "report"), ("transient", "run_activity")]
 )
-def test_all_statistics_reads_skip_sessions_deleted_after_listing(
+@pytest.mark.parametrize("change", ["deleted", "replaced-before-version", "replaced-after-version"])
+def test_all_statistics_reads_skip_session_generations_changed_after_listing(
     manager: ChatSessionManager,
     session: ChatSession,
     statistics: StatisticsFactory,
     monkeypatch: pytest.MonkeyPatch,
     storage: str,
     projection: str,
+    change: str,
 ) -> None:
     service = statistics()
     if storage == "transient":
         _make_index_file_unavailable(monkeypatch)
+    manager.set_title(session.address, "Old title")
     list_history_versions = manager.list_history_versions
 
-    def delete_after_listing(addresses):
-        versions = list_history_versions(addresses)
+    def switch_generation() -> None:
         manager.delete(session.address)
+        if change != "deleted":
+            replacement = manager.create(session.address.agent_id, session_id=session.id)
+            seed_history(
+                replacement,
+                [_run_summary(status="completed", at=BASE, duration_ms=1, run_id="replacement")],
+            )
+            manager.set_title(replacement.address, "Replacement title")
+
+    def change_after_listing(addresses):
+        if change == "replaced-before-version":
+            switch_generation()
+            return list_history_versions(addresses)
+        versions = list_history_versions(addresses)
+        switch_generation()
         return versions
 
-    monkeypatch.setattr(manager, "list_history_versions", delete_after_listing)
-    if projection == "report":
-        result = service.report()
-        assert (_runs(result), result["overview"]["active_sessions"]) == (0, 0)
-    else:
-        activity = service.run_activity(since=BASE, until=BASE + timedelta(minutes=1))
-        assert activity.total_runs == 0
-        assert activity.runs == []
+    with monkeypatch.context() as changing:
+        changing.setattr(manager, "list_history_versions", change_after_listing)
+        if projection == "report":
+            result = service.report()
+            assert (_runs(result), result["overview"]["active_sessions"]) == (0, 0)
+        else:
+            activity = service.run_activity(since=BASE, until=BASE + timedelta(minutes=1))
+            assert activity.total_runs == 0
+            assert activity.runs == []
+    if change != "deleted":
+        [row] = service.run_activity(since=BASE, until=BASE + timedelta(minutes=1)).runs
+        assert (row.run_id, row.session_title) == ("replacement", "Replacement title")
 
 
 def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(

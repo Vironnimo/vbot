@@ -996,8 +996,14 @@ class SessionStore:
             )
         )
 
-    def summary(self, address: SessionAddress) -> JsonObject | None:
-        return self._read_decoded(lambda connection: _store_queries.summary(connection, address))
+    def summary(
+        self, address: SessionAddress, *, metadata_keys: Sequence[str] = ()
+    ) -> JsonObject | None:
+        return self._read_decoded(
+            lambda connection: _store_queries.summary(
+                connection, address, metadata_keys=metadata_keys
+            )
+        )
 
     def change_stats(
         self, address: SessionAddress, merged: Sequence[SessionAddress] = ()
