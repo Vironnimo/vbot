@@ -7,6 +7,7 @@ Read this reference when you change semantic indexing: triggers, passes, batchin
 `SemanticIndexer` runs while the selected backend is in `SEMANTIC_RECALL_BACKENDS` (`vector`, `hybrid`; `RecallIntegration` calls `set_enabled` at construction and on every reload) and a `text_embedding` binding is set. Runtime starts its loop task (`recall-semantic-indexer`) through `start_event_loop_service`, so only inside a serving Event Loop and never in safe-startup mode, and closes it before the index.
 
 - Triggers: start (`START_DELAY_S` 5 s), every terminal Run (`RecallIntegration.observe_runs` adds a completion observer to each started Run; coalesced within `RUN_DEBOUNCE_S` 20 s), a periodic sweep (`SWEEP_INTERVAL_S` 600 s) that also catches edits, imports and Channel traffic, a `text_embedding` binding change (`Runtime.apply_settings_change` -> `embedding_binding_changed`), `rebuild`, enabling, and a search that finds waiting Passages (`on_waiting`). Settings changes, rebuild and enabling clear a pending backoff; the others respect it.
+- A binding change or rebuild invalidates the in-flight pass, so a late provider response cannot restore cleared skips or delay the replacement pass. A successful first pass after rebuild records completion even when there are no eligible Passages.
 
 ## Passes and batching
 
@@ -21,7 +22,7 @@ Read this reference when you change semantic indexing: triggers, passes, batchin
 
 ## Embedding space changes
 
-A pass whose binding names another space than the pinned header drops every vector first (`reset_vectors`, logged with `reason=binding`), so a change of embedding identity re-embeds everything even when nothing was waiting; equivalent target spellings keep their space (`model_tasks/embeddings.md` -> Interfaces). A dimension that differs from the pinned header re-pins (`use_space`), which requeues everything; a pass that moves space more than `_MAX_SPACE_MOVES` (3) times stops as `space_unstable`. A response from a binding other than the one the pass started with restarts the pass.
+A pass whose binding names another space than the pinned header drops every vector first (`reset_vectors`, logged with `reason=binding`), so a change of embedding identity re-embeds everything even when nothing was waiting; equivalent target spellings keep their space (`model_tasks/embeddings.md` -> Interfaces). A dimension that differs from the pinned header re-pins (`use_space`), which requeues everything. If a concurrent search changes the pin before a vector or skip can be saved, the indexer reloads the header before retrying; a pass that moves space more than `_MAX_SPACE_MOVES` (3) times stops as `space_unstable`. A response from a binding other than the one the pass started with restarts the pass.
 
 ## Status and logs
 

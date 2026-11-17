@@ -202,7 +202,7 @@ class _HaltError(Exception):
 
 
 class _RestartError(Exception):
-    """The binding changed during the pass; run a new pass at once."""
+    """The binding or requested index generation changed during the pass."""
 
 
 class _SpaceMovedError(Exception):
@@ -220,6 +220,7 @@ class _BatchOutcome:
 
 @dataclass
 class _PassTotals:
+    revision: int
     embedded: int = 0
     skipped: int = 0
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
@@ -276,6 +277,8 @@ class SemanticIndexer:
         self._sweep_interval_s = sweep_interval_s
         self._batch_size = batch_size
         self._enabled = False
+        self._pass_revision = 0
+        self._rebuild_lock = asyncio.Lock()
         self._state: IndexState = "idle"
         self._last_error: IndexFailure | None = None
         self._failures = 0
@@ -317,6 +320,7 @@ class SemanticIndexer:
         if enabled == self._enabled:
             return
         self._enabled = enabled
+        self._pass_revision += 1
         if enabled:
             self._schedule(0.0, force=True)
         else:
@@ -325,6 +329,7 @@ class SemanticIndexer:
 
     def settings_changed(self) -> None:
         """The embedding binding changed: retry at once, without the backoff."""
+        self._pass_revision += 1
         self._schedule(0.0, force=True)
 
     def run_finished(self) -> None:
@@ -337,10 +342,13 @@ class SemanticIndexer:
 
     async def rebuild(self) -> None:
         """Drop every vector and skipped text and index everything again."""
-        if self._index.path.exists():
-            await self._index.reset_vectors()
-            self._log_info("Reset Recall Passage vectors")
-        self._schedule(0.0, force=True)
+        async with self._rebuild_lock:
+            self._pass_revision += 1
+            if self._index.path.exists():
+                await self._index.reset_vectors()
+                self._log_info("Reset Recall Passage vectors")
+            self._completed_once = False
+            self._schedule(0.0, force=True)
         await self._publish(force=True)
 
     def add_listener(self, listener: Callable[[IndexStatus], None]) -> Callable[[], None]:
@@ -502,21 +510,27 @@ class SemanticIndexer:
             await self._run_one_pass()
 
     async def _run_one_pass(self) -> None:
-        self._due = None
-        if not self._enabled:
-            return
+        async with self._rebuild_lock:
+            self._due = None
+            revision = self._pass_revision
+            if not self._enabled:
+                return
         try:
-            await self._pass()
+            await self._pass(revision)
         except _HaltError as halt:
             self._fail(halt.classified)
         except _RestartError:
+            self._state = "idle"
             self._schedule(0.0)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             await self._index.discard_if_damaged(error)
             self._warn_index_failure(error)
-            self._fail(_Classified("transient", IndexFailure.of("index_unavailable")))
+            if revision == self._pass_revision:
+                self._fail(_Classified("transient", IndexFailure.of("index_unavailable")))
+            else:
+                self._state = "idle"
         else:
             self._recovered()
         if self._due is None and self._enabled:
@@ -562,8 +576,9 @@ class SemanticIndexer:
         except EmbeddingError as error:
             return True, None, error
 
-    async def _pass(self) -> None:
+    async def _pass(self, revision: int) -> None:
         configured, identity, error = await asyncio.to_thread(self._resolve)
+        self._require_current_pass(revision)
         if not configured:
             self._state = "unconfigured"
             self._last_error = None
@@ -574,7 +589,7 @@ class SemanticIndexer:
         batch_size = await asyncio.to_thread(self._document_batch_size)
         await self._refresh_catalog()
         try:
-            await self._drain(binding, batch_size, _PassTotals(local=identity.local))
+            await self._drain(binding, batch_size, _PassTotals(revision, local=identity.local))
         finally:
             self._pace_started = None
             self._pace_texts = 0
@@ -607,9 +622,10 @@ class SemanticIndexer:
     async def _drain(self, binding: VectorHeader, batch_size: int, totals: _PassTotals) -> None:
         started_at = self._monotonic()
         started = False
-        header = await self._enter_space(binding)
+        header = await self._enter_space(binding, totals.revision)
         while self._enabled and not self._closed:
             batch = await self._index.pending_texts(limit=batch_size)
+            self._require_current_pass(totals.revision)
             if not batch:
                 break
             if not started:
@@ -627,6 +643,20 @@ class SemanticIndexer:
             outcome = _BatchOutcome()
             try:
                 header = await self._embed(binding, header, batch, outcome, totals)
+                self._require_current_pass(totals.revision)
+                if outcome.rejected:
+                    if not outcome.succeeded and len(batch) > 1 and outcome.first_rejection:
+                        # Every text failed alone: the provider rejects this
+                        # request shape, not individual texts.
+                        rejection = outcome.first_rejection
+                        raise _HaltError(_Classified("configuration", rejection.failure))
+                    async with self._rebuild_lock:
+                        self._require_current_pass(totals.revision)
+                        if not await self._index.record_skipped(
+                            header, outcome.rejected, at=self._clock()
+                        ):
+                            raise _SpaceMovedError()
+                    totals.skipped += len(outcome.rejected)
             except _SpaceMovedError:
                 totals.moved_space()
                 header = await self._pinned(binding)
@@ -634,14 +664,7 @@ class SemanticIndexer:
             finally:
                 totals.embedded += outcome.embedded
                 totals.usage = totals.usage.combined(outcome.usage)
-            if outcome.rejected:
-                if not outcome.succeeded and len(batch) > 1 and outcome.first_rejection:
-                    # Every text failed alone: the provider rejects this request
-                    # shape, not individual texts.
-                    rejection = outcome.first_rejection
-                    raise _HaltError(_Classified("configuration", rejection.failure))
-                await self._index.record_skipped(header, outcome.rejected, at=self._clock())
-                totals.skipped += len(outcome.rejected)
+            self._require_current_pass(totals.revision)
             self._pace_texts += outcome.embedded + len(outcome.rejected)
             self._recovered()
             self._debug(
@@ -656,8 +679,10 @@ class SemanticIndexer:
         if not self._enabled or self._closed:
             return
         if started or not self._completed_once:
-            self._completed_once = True
-            await self._index.mark_completed(self._clock())
+            async with self._rebuild_lock:
+                self._require_current_pass(totals.revision)
+                await self._index.mark_completed(self._clock())
+                self._completed_once = True
         if started:
             self._log_info(
                 "Indexed Recall Passages (embedded=%d skipped=%d duration_ms=%d requests=%d "
@@ -675,20 +700,28 @@ class SemanticIndexer:
         stored = await self._index.read_header()
         return stored if stored is not None and stored.same_space(binding) else None
 
-    async def _enter_space(self, binding: VectorHeader) -> VectorHeader | None:
+    async def _enter_space(self, binding: VectorHeader, revision: int) -> VectorHeader | None:
         """The binding's pinned header; another space's vectors are dropped.
 
         Without this a binding change that leaves nothing waiting would keep
         the old space's vectors, which no search of the new space can use.
         """
         stored = await self._index.read_header()
+        self._require_current_pass(revision)
         if stored is None or stored.same_space(binding):
             return stored
-        await self._index.reset_vectors()
+        async with self._rebuild_lock:
+            self._require_current_pass(revision)
+            await self._index.reset_vectors()
+            self._completed_once = False
         self._log_info(
             "Reset Recall Passage vectors (reason=%s)", space_change_reason(stored, binding)
         )
         return None
+
+    def _require_current_pass(self, revision: int) -> None:
+        if revision != self._pass_revision:
+            raise _RestartError()
 
     async def _embed(
         self,
@@ -703,6 +736,7 @@ class SemanticIndexer:
         A served model that differs from the pinned one re-pins the space, which
         queues every Passage again; a pass gives up after a few such moves.
         """
+        self._require_current_pass(totals.revision)
         embeddings = self._embeddings
         if embeddings is None:
             raise _HaltError(_Classified("configuration", IndexFailure.of("embedding_unusable")))
@@ -711,6 +745,7 @@ class SemanticIndexer:
                 [text for _text_hash, text in items], purpose="document"
             )
         except EmbeddingError as error:
+            self._require_current_pass(totals.revision)
             classified = _classify(error, local=totals.local)
             if classified.kind != "permanent":
                 raise _HaltError(classified) from error
@@ -722,33 +757,39 @@ class SemanticIndexer:
             middle = len(items) // 2
             header = await self._embed(binding, header, items[:middle], outcome, totals)
             return await self._embed(binding, header, items[middle:], outcome, totals)
+        self._require_current_pass(totals.revision)
         outcome.usage = outcome.usage.combined(result.usage)
         resolved = VectorHeader.from_result(result)
         if not resolved.same_space(binding):
             # The binding changed while the call ran.
             raise _RestartError()
-        if header != resolved:
-            previous = await self._index.read_header()
-            if await self._index.use_space(resolved):
-                if previous is not None:
-                    totals.moved_space()
-                self._log_info(
-                    "Pinned Recall embedding space (provider=%s model=%s dimension=%d reason=%s)",
-                    resolved.provider_id,
-                    resolved.response_model_id or resolved.model_id,
-                    resolved.dimension,
-                    space_change_reason(previous, resolved),
-                )
-            header = resolved
-        vectors = {
-            text_hash: vector
-            for (text_hash, _text), vector in zip(items, result.vectors, strict=True)
-        }
-        characters = sum(len(text) for _text_hash, text in items)
-        if not await self._index.store_vectors(
-            header, vectors, usage=result.usage, characters=characters
-        ):
-            raise _SpaceMovedError()
+        async with self._rebuild_lock:
+            self._require_current_pass(totals.revision)
+            if header != resolved:
+                previous = await self._index.read_header()
+                self._require_current_pass(totals.revision)
+                if await self._index.use_space(resolved):
+                    if previous is not None:
+                        totals.moved_space()
+                    self._log_info(
+                        "Pinned Recall embedding space "
+                        "(provider=%s model=%s dimension=%d reason=%s)",
+                        resolved.provider_id,
+                        resolved.response_model_id or resolved.model_id,
+                        resolved.dimension,
+                        space_change_reason(previous, resolved),
+                    )
+                header = resolved
+            vectors = {
+                text_hash: vector
+                for (text_hash, _text), vector in zip(items, result.vectors, strict=True)
+            }
+            characters = sum(len(text) for _text_hash, text in items)
+            self._require_current_pass(totals.revision)
+            if not await self._index.store_vectors(
+                header, vectors, usage=result.usage, characters=characters
+            ):
+                raise _SpaceMovedError()
         outcome.succeeded = True
         outcome.embedded += len(items)
         return header
