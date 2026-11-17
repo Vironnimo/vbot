@@ -243,13 +243,20 @@ class LocalSetup:
         task = self._task
         if self._state == "installing" and task is not None and not task.done():
             self._cancelled = True
-            await cancel_and_wait(task)
-            # A task cancelled before it started never ran its handler.
-            if self._state == "installing":
-                self._stopped()
+            try:
+                await cancel_and_wait(task)
+            finally:
+                # A task cancelled before starting never ran its handler. A retry
+                # may already have replaced a task which did run its handler.
+                if self._task is task and self._state == "installing":
+                    if self._closed:
+                        self._fail("interrupted")
+                    else:
+                        self._stopped()
         return self.status()
 
     def _stopped(self) -> None:
+        self._cancelled = False
         self._state, self._phase, self._error = "idle", "checking", ""
         self._logger.info(f"{self._subject} installation cancelled (engine=%s)", self._name)
 
@@ -607,7 +614,11 @@ class LocalSetup:
     async def aclose(self) -> None:
         self.close()
         if self._task is not None:
-            await cancel_and_wait(self._task)
+            try:
+                await cancel_and_wait(self._task)
+            finally:
+                if self._state == "installing":
+                    self._fail("interrupted")
 
 
 def environment_error(directory: Path, python: Path, python_version: str) -> str:
