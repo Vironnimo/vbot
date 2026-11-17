@@ -239,7 +239,7 @@ class LibrarianService:
         self._reviewing = reviewing
         self._clock = clock or (lambda: datetime.now(UTC))
         self._active: dict[str, _ActivePass] = {}
-        self._pass_generation = 0
+        self._pass_generations: dict[str, int] = {}
         self._undo_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
@@ -540,13 +540,13 @@ class LibrarianService:
         """
         if agent_id in self._active:
             return usage
-        pass_generation = self._pass_generation
+        pass_generation = self._pass_generations.get(agent_id, 0)
         try:
             state = await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)
         except LibrarianStateError as error:
             _LOGGER.warning("Librarian skipped an Agent (agent=%s): %s", agent_id, error)
             return usage
-        if self._pass_generation != pass_generation:
+        if self._pass_generations.get(agent_id, 0) != pass_generation:
             return usage
         state = state.settled()
         if state.last_pass is None and state.first_seen_at is None:
@@ -574,7 +574,11 @@ class LibrarianService:
         if usage is None:
             usage = await self._skill_usage()
         # Checked again after the last await, so no Run or manual pass starts in between.
-        if self._closed or self._pass_generation != pass_generation or self._busy(agent_id):
+        if (
+            self._closed
+            or self._pass_generations.get(agent_id, 0) != pass_generation
+            or self._busy(agent_id)
+        ):
             return usage
         active = self._begin(agent_id, "schedule", agent, agent_created_at=agent_created_at)
         active.usage = usage
@@ -689,7 +693,7 @@ class LibrarianService:
             agent_name=str(getattr(agent, "name", "") or agent_id),
             agent_created_at=agent_created_at,
         )
-        self._pass_generation += 1
+        self._pass_generations[agent_id] = self._pass_generations.get(agent_id, 0) + 1
         self._active[agent_id] = active
         self._announce()
         return active

@@ -965,9 +965,16 @@ async def test_shutdown_keeps_aging_changes_in_the_interrupted_pass(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("known_to_schedule", [False, True])
+@pytest.mark.parametrize(
+    ("known_to_schedule", "manual_agent"),
+    [
+        pytest.param(False, "main", id="first-check"),
+        pytest.param(True, "main", id="due"),
+        pytest.param(True, "other", id="unrelated-manual-pass"),
+    ],
+)
 async def test_scheduled_check_keeps_a_concurrent_manual_pass(
-    harness: _Harness, monkeypatch: pytest.MonkeyPatch, known_to_schedule: bool
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, known_to_schedule: bool, manual_agent: str
 ) -> None:
     harness.settings["consolidate"] = False
     harness.authoring.create(harness.home("main"), "guide", _document("guide"), writer=_HUMAN)
@@ -993,13 +1000,20 @@ async def test_scheduled_check_keeps_a_concurrent_manual_pass(
     scheduled = asyncio.create_task(harness.service._check())
     try:
         await asyncio.wait_for(selected.wait(), timeout=2)
-        manual = await harness.run_pass()
+        if manual_agent == "other":
+            harness.agents["other"] = harness.agent(name="Other")
+            harness.authoring.create(
+                harness.home("other"), "guide", _document("guide"), writer=_HUMAN
+            )
+        manual = await harness.run_pass(manual_agent)
         assert manual["last_pass"]["outcome"] == "completed"
     finally:
         proceed.set()
         await scheduled
 
-    assert (await harness.service.status("main"))["passes"] == manual["passes"]
+    assert (await harness.service.status(manual_agent))["passes"] == manual["passes"]
+    if manual_agent == "other":
+        assert harness.state("main")["last_pass"]["trigger"] == "schedule"
 
 
 @pytest.mark.asyncio
