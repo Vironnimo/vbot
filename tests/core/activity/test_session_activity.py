@@ -256,6 +256,34 @@ async def test_a_session_waits_for_its_commands_and_results_and_ends_one_span(
     assert all(work is None for _address, _state, work in world.changes[:-1])
 
 
+@pytest.mark.parametrize("contributes", [True, False])
+async def test_a_run_that_finishes_before_the_first_recompute_still_records_its_span(
+    world: _World, contributes: bool
+) -> None:
+    async def finish_immediately(_run: Run) -> str:
+        world.clock.seconds = 3
+        return "done"
+
+    run = await world.runs.start(
+        PARENT,
+        finish_immediately,
+        admission=RunAdmission(contributes_to_agent_activity=contributes),
+    )
+    await run.wait()
+    events = [event async for event in run.subscribe()]
+    assert events[-1].payload["timing"]["work_started_at"] == format_canonical_timestamp(START)
+    assert world.activity.state(PARENT) == SessionActivityState(
+        "working", START, contributes_to_agent_activity=contributes
+    )
+    await _turns()
+    await world.clock.settle()
+
+    assert world.states(PARENT) == ["working", "idle"]
+    assert world.changes[-1][2] == FinishedWork(
+        started_at=START, finished_at=START + timedelta(seconds=3), duration_ms=3000
+    )
+
+
 @pytest.mark.parametrize("during_recheck", [False, True])
 async def test_a_run_inside_the_settle_period_continues_the_span(
     world: _World, monkeypatch: pytest.MonkeyPatch, during_recheck: bool

@@ -192,6 +192,8 @@ class _Entry:
     worker: asyncio.Task[None] | None = None
     # Start of the current span: wall clock and monotonic; None while idle.
     span: tuple[datetime, float] | None = None
+    # A Run can finish before the first asynchronous recompute sees it.
+    unpublished_run_contributes: bool | None = None
     # When the Session became idle, while that is not yet confirmed.
     idle_since: tuple[datetime, float] | None = None
     settled: bool = False
@@ -235,7 +237,7 @@ class SessionActivity:
         self._answer_read_errors = LoggedConditions()
         self._closed = False
         self._unsubscribers = [
-            runs.add_run_started_callback(self._on_run),
+            runs.add_run_started_callback(self._on_run_started),
             runs.add_run_finished_callback(self._on_run),
             runs.add_queue_changed_callback(self._mark),
             commands.add_changed_callback(self._on_command),
@@ -319,6 +321,20 @@ class SessionActivity:
         return None if entry is None or entry.span is None else entry.span[0]
 
     # Events
+
+    def _on_run_started(self, run: Run) -> None:
+        if self._closed:
+            return
+        address = SessionAddress(run.project_id, run.agent_id, run.session_id)
+        entry = self._entries.get(address)
+        if entry is None:
+            entry = self._entries[address] = _Entry()
+        if entry.span is None:
+            entry.span = (self._clock(), self._monotonic())
+            entry.unpublished_run_contributes = run.contributes_to_agent_activity
+        elif entry.unpublished_run_contributes is not None:
+            entry.unpublished_run_contributes |= run.contributes_to_agent_activity
+        self._mark(address)
 
     def _on_run(self, run: Run) -> None:
         self._mark(SessionAddress(run.project_id, run.agent_id, run.session_id))
@@ -508,8 +524,19 @@ class SessionActivity:
         """Apply a recomputed state; whether a change was published."""
         published = self.state(address)
         if computed.state == "idle":
+            observed_run = entry.unpublished_run_contributes
+            entry.unpublished_run_contributes = None
             if published.state == "idle":
-                return False
+                if observed_run is None:
+                    return False
+                assert entry.span is not None
+                self._publish(
+                    address,
+                    SessionActivityState(
+                        "working", entry.span[0], contributes_to_agent_activity=observed_run
+                    ),
+                    None,
+                )
             if entry.idle_since is None:
                 entry.idle_since = (self._clock(), self._monotonic())
                 entry.settled = False
@@ -517,7 +544,7 @@ class SessionActivity:
                     self._settle(address, entry), name=f"session-activity-settle:{address.agent_id}"
                 )
                 entry.settle.add_done_callback(_log_failure)
-                return False
+                return observed_run is not None
             if not entry.settled or entry.span is None:
                 return False
             started_at, started = entry.span
@@ -532,6 +559,7 @@ class SessionActivity:
             self._publish(address, IDLE, work)
             return True
         self._end_settle(entry)
+        entry.unpublished_run_contributes = None
         if entry.span is None:
             entry.span = (self._clock(), self._monotonic())
         state = SessionActivityState(
