@@ -90,6 +90,44 @@ it('reads without importing, then imports the selected full Session into the nam
   });
 });
 
+it('seeds facts for a complete Memory preview with supplementary Unicode characters', async () => {
+  api.readExternalMemories.mockResolvedValue({
+    items: [
+      {
+        path: '/source.md',
+        name: 'source.md',
+        content: 'Review 🧪 notes.',
+        char_offset: 0,
+        characters: 15,
+      },
+    ],
+    total: 1,
+  });
+  api.importExternalMemory.mockResolvedValue({ entries: [] });
+  component = mount(Dialog, {
+    target: document.body,
+    props: { agentAddress: 'coder', onClose, onImported },
+  });
+  await settle();
+  await click(t('external.sessions'));
+  const option = [...document.querySelectorAll('[role="option"]')].find(
+    (el) => el.textContent.trim() === t('external.memories'),
+  );
+  option.click();
+  await settle();
+  await click(t('external.browse'));
+  await click('source.md');
+  expect(document.querySelector('textarea').value).toBe('Review 🧪 notes.');
+  await click(t('external.importMemory'));
+  expect(api.importExternalMemory).toHaveBeenCalledWith({
+    source: 'codex',
+    path: '/source.md',
+    scope: 'agent',
+    agent_id: 'coder',
+    entries: ['Review 🧪 notes.'],
+  });
+});
+
 it('renders imported text with a source marker and inert historical tool details', async () => {
   component = mount(Entry, {
     target: document.body,
