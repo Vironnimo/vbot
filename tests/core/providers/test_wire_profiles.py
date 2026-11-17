@@ -562,6 +562,34 @@ def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("provider_id", "model_id", "native_on_demand"),
+    [
+        ("opencode-go", "glm-5.3", False),
+        ("ollama-cloud", "glm-5.3", True),
+        ("opencode-go", "glm-5.3-flash", True),
+        ("opencode-go", "glm-future", True),
+        ("opencode-go", "deepseek-v4.1-flash", True),
+    ],
+)
+def test_on_demand_transport_exceptions_stay_with_the_observed_route(
+    provider_id: str, model_id: str, native_on_demand: bool
+) -> None:
+    providers = ProviderRegistry.load(RESOURCES)
+    profiles = WireProfiles(
+        files=load_wire_profile_files(RESOURCES, report=lambda issue: pytest.fail(issue)),
+        protocol_support=lambda provider: (
+            ADAPTER_TYPES[providers.get(provider).adapter].WIRE_PROTOCOLS
+        ),
+        model_resolver=lambda provider, model: None,
+        report=lambda issue: pytest.fail(issue),
+    )
+
+    profile = profiles.resolve(provider_id, "api-key", model_id)
+
+    assert profile.request.on_demand_tools is native_on_demand
+
+
+@pytest.mark.parametrize(
     ("provider_id", "connection_id", "model_id", "decision"),
     [
         (
