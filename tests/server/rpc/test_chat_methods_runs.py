@@ -6,10 +6,12 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.commands import CommandDispatcher
 from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.services import ExtensionServiceCatalog, ExtensionServiceError
@@ -222,9 +224,14 @@ async def test_cancel_tool_call_reports_an_unknown_run_or_tool_call(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extension", [False, True], ids=["accessor", "extension"])
+@pytest.mark.parametrize(
+    ("extension", "waiting_goal"),
+    [(False, False), (True, False), (False, True)],
+    ids=["accessor", "extension", "waiting-goal"],
+)
 async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped(
     extension: bool,
+    waiting_goal: bool,
 ) -> None:
     stopped: list[SessionAddress] = []
     stop_options = []
@@ -232,19 +239,34 @@ async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped(
     async def stop_tree(address: SessionAddress, **options: str) -> int:
         stopped.append(address)
         stop_options.append(options)
-        return 3
+        return 0 if waiting_goal else 3
 
-    state = SimpleNamespace(runtime=SimpleNamespace(subagents=SimpleNamespace(stop_tree=stop_tree)))
+    async def stop_from_command(address: SessionAddress) -> int:
+        return await stop_tree(address)
+
+    pause_goal = AsyncMock(return_value=waiting_goal)
+    goals: Any = SimpleNamespace(pause_for_stop=pause_goal)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(subagents=SimpleNamespace(stop_tree=stop_tree)),
+        command_dispatcher=CommandDispatcher(
+            ChatRunManager(), stop_all=stop_from_command, goals=goals
+        ),
+    )
 
     response = await (_service_call if extension else call)(
         state, "chat.stop_all", agent_id="builder@vbot", session_id="s1"
     )
 
-    assert response == {"ok": True, "result": {"ok": True, "stopped": 3}}
-    assert stopped == [SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")]
+    assert response == {"ok": True, "result": {"ok": True, "stopped": 1 if waiting_goal else 3}}
+    address = SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")
+    assert stopped == [address]
     assert stop_options == [
         {"reason": "extension_cancelled", "initiator": "extension_stop_all"} if extension else {}
     ]
+    if extension:
+        pause_goal.assert_not_awaited()
+    else:
+        pause_goal.assert_awaited_once_with(address)
 
 
 @pytest.mark.asyncio
