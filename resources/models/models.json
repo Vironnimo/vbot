@@ -6516,17 +6516,7 @@
       "pricing": {
         "rates": {
           "input": 1.25,
-          "output": 10.0,
-          "tiers": [
-            {
-              "input": 2.5,
-              "output": 15.0,
-              "tier": {
-                "size": 200000,
-                "type": "context"
-              }
-            }
-          ]
+          "output": 10.0
         },
         "source": "models.dev:google/gemini-2.5-computer-use-preview-10-2025"
       },
@@ -6604,7 +6594,7 @@
         "rates": {
           "cache_read": 0.075,
           "input": 0.3,
-          "output": 30.0
+          "output": 2.5
         },
         "source": "models.dev:google/gemini-2.5-flash-image"
       },
@@ -6958,7 +6948,7 @@
       "pricing": {
         "rates": {
           "input": 2.0,
-          "output": 120.0
+          "output": 12.0
         },
         "source": "models.dev:google/gemini-3-pro-image"
       },
@@ -7061,7 +7051,7 @@
       "pricing": {
         "rates": {
           "input": 0.5,
-          "output": 60.0
+          "output": 3.0
         },
         "source": "models.dev:google/gemini-3.1-flash-image"
       },
@@ -7178,7 +7168,7 @@
       "pricing": {
         "rates": {
           "input": 0.25,
-          "output": 30.0
+          "output": 1.5
         },
         "source": "models.dev:google/gemini-3.1-flash-lite-image"
       },
@@ -7749,6 +7739,91 @@
       "release_date": "2026-10-13",
       "temperature": false
     },
+    "google/gemini-4-carbon": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini",
+      "knowledge": "2026-03",
+      "last_updated": "2026-11-10",
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Carbon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:google/gemini-4-carbon"
+      },
+      "release_date": "2026-11-10",
+      "temperature": false
+    },
+    "google/gemini-4-hydrogen": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini",
+      "knowledge": "2026-03",
+      "last_updated": "2026-11-12",
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Hydrogen",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:google/gemini-4-hydrogen"
+      },
+      "release_date": "2026-11-12",
+      "temperature": false
+    },
     "google/gemini-embedding-001": {
       "capabilities": {
         "input_modalities": [
@@ -8266,6 +8341,13 @@
       "last_updated": "2026-04-02",
       "max_output_tokens": 32768,
       "name": "Gemma 4 26B A4B IT",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:google/gemma-4-26b-a4b-it"
+      },
       "release_date": "2026-04-02",
       "temperature": true
     },
@@ -8295,6 +8377,13 @@
       "last_updated": "2026-04-02",
       "max_output_tokens": 32768,
       "name": "Gemma 4 31B IT",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:google/gemma-4-31b-it"
+      },
       "release_date": "2026-04-02",
       "temperature": true
     },

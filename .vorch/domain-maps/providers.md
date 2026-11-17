@@ -72,16 +72,17 @@ Claude Agent history framing (`_claude_agent_wire.py`): read and maintain its se
 
 Read these only when your task matches - not by default.
 
-- Verifying or revising a Provider/Connection/Model's live compatibility, endpoint choice, Reasoning control/replay, Tool interaction, Usage, media, sampling, Context, output limit, or error behavior -> `providers/compatibility-verification.md`
-- Changing a wire profile file or a Custom Provider's `wire` block, protocol or layer resolution, family defaults, rules and admission, learned wire facts, or the wire statuses `model.list`/`model.get` report -> `providers/wire-profiles.md`
-- Changing Provider/Connection config, Extension Provider registration, Accounts, credentials, enablement, OAuth/device flow, token storage/refresh, Connection RPCs, or local reachability -> `providers/connections.md`
+- Verifying a Provider/Connection/Model's live compatibility, endpoint choice, Reasoning control/replay, Tool interaction, Usage, media, sampling, Context, output limit, or error behavior -> `providers/compatibility-verification.md`
+- Changing a wire profile file or a Custom Provider's `wire` block, protocol or layer resolution, family defaults, rules and admission, learned wire facts, or reported wire statuses -> `providers/wire-profiles.md`
+- Changing Provider/Connection config, Extension Provider registration, Accounts, credentials, enablement, OAuth/device flow, tokens, Connection RPCs, or local reachability -> `providers/connections.md`
 - Changing Model endpoint discovery, catalog normalization, connection-scoped merge, supplementary/task feeds, refresh retry behavior, or local auto-refresh -> `providers/catalog-discovery.md`
-- Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, token estimation, shared task HTTP plumbing, or the internal module layout of `core/providers/` -> `providers/request-policy.md`
-- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, the automatic usage history in `provider-usage.db`, or the `provider.usage*` RPCs -> `providers/usage.md`
+- Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, token estimation, shared task HTTP plumbing, or `core/providers/` module layout -> `providers/request-policy.md`
+- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, usage history in `provider-usage.db`, or the `provider.usage*` RPCs -> `providers/usage.md`
 - Adding a Provider, Connection variant, Adapter selector or composed inner Adapter, discovery normalizer, or Provider-specific map -> `providers/add-a-provider.md`
 - Changing Claude Agent SDK auth, sessions, Tool bridging or history framing -> `providers/claude-agent.md`
 - Changing native Anthropic Messages behavior -> `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`
+- Changing Google AI Studio discovery, errors, or wire profile -> `providers/google.md`
 - Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior -> `providers/kimi.md`
 - Changing MiniMax wire, reasoning, catalog, or usage parsing -> `providers/minimax.md`
 - Changing Mistral request policy or catalog normalization -> `providers/mistral.md`

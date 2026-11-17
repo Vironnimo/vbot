@@ -16,6 +16,7 @@ from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.google import GoogleAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
@@ -44,6 +45,7 @@ ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
     "opencode_go": OpenCodeGoAdapter,
     "opencode_zen": OpenCodeZenAdapter,
     "github_copilot": GitHubCopilotAdapter,
+    "google": GoogleAdapter,
     "anthropic": AnthropicAdapter,
     "claude_agent": ClaudeAgentAdapter,
     "ollama": OllamaAdapter,

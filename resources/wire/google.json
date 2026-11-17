@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "_comment": "Google AI Studio (Gemini API, generativelanguage.googleapis.com). Every Model speaks native Gemini generateContent. Reasoning renders as thinkingLevel with visible thoughts so opaque thoughtSignature parts replay; Agent none selects the lowest level. Media follows Google's documented inline types and 20 MB request limit.",
+  "defaults": {
+    "protocol": "gemini",
+    "reasoning": {"floor": ["low", "medium", "high"], "off": "lowest"},
+    "media": {
+      "types": [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/heic",
+        "image/heif",
+        "audio/wav",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/aiff",
+        "audio/aac",
+        "audio/ogg",
+        "audio/flac",
+        "video/mp4",
+        "video/mpeg",
+        "video/quicktime",
+        "video/avi",
+        "video/x-flv",
+        "video/mpg",
+        "video/webm",
+        "video/wmv",
+        "video/3gpp",
+        "application/pdf"
+      ],
+      "request_max_bytes": 20000000,
+      "request_max_images": 3600
+    }
+  }
+}

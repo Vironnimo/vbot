@@ -218,6 +218,35 @@ async def test_gemini_request_preserves_native_tools_media_thinking_and_replay(
     )
 
 
+@pytest.mark.asyncio
+async def test_gemini_unsigned_tool_call_history_carries_the_documented_placeholder() -> None:
+    """History without native parts (another Model's turn) must not be rejected by Gemini 3+."""
+
+    calls = [
+        {"id": "call_1", "name": "weather", "arguments": {"city": "Berlin"}},
+        {"id": "call_2", "name": "weather", "arguments": {"city": "Paris"}},
+    ]
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "Checking.", "tool_calls": calls},
+        {"role": "tool", "tool_call_id": "call_1", "content": "21"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "18"},
+    ]
+    with respx.mock:
+        route = respx.post(GEMINI_URL).mock(return_value=httpx.Response(200, json=_DONE))
+        await zen_adapter().send(messages, model_id=GEMINI_MODEL)
+
+    parts = json.loads(route.calls.last.request.content)["contents"][1]["parts"]
+    assert parts == [
+        {"text": "Checking."},
+        {
+            "functionCall": {"id": "call_1", "name": "weather", "args": {"city": "Berlin"}},
+            "thoughtSignature": "skip_thought_signature_validator",
+        },
+        {"functionCall": {"id": "call_2", "name": "weather", "args": {"city": "Paris"}}},
+    ]
+
+
 @pytest.mark.parametrize("with_media", [False, True], ids=["text", "media"])
 @pytest.mark.asyncio
 async def test_gemini_tool_results_keep_literal_json_and_failure_classification(
