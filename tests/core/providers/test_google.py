@@ -12,6 +12,7 @@ import respx
 
 from core.chat.streaming import StreamingAccumulator
 from core.model_tasks.decision_profile import decision_profile
+from core.model_tasks.options import option_schema_for, validate_task_model_options
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.errors import (
     CatalogEntrySkipped,
@@ -82,6 +83,39 @@ def test_catalog_classifies_task_models_by_method_and_family(
 
     assert task in model.capabilities.task_types
     assert "chat" not in model.capabilities.task_types
+
+
+@pytest.mark.parametrize(
+    ("model_id", "task", "fields"),
+    [
+        ("gemini-3.8-flash-tts", "text_to_speech", ["voice", "style"]),
+        # Older TTS generations reject speech metadata, so they offer no style.
+        ("gemini-2.5-flash-preview-tts", "text_to_speech", ["voice"]),
+        (
+            "gemini-3.5-transcribe",
+            "speech_to_text",
+            ["language", "mode", "context_bias", "word_timestamps", "diarize"],
+        ),
+    ],
+)
+def test_speech_models_publish_their_option_schema(
+    model_id: str, task: str, fields: list[str]
+) -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry(model_id))
+
+    schema = option_schema_for(task, "google", f"google/{model_id}::api-key", model=model)
+
+    by_name = {field.name: field for field in schema.fields}
+    assert list(by_name) == [*fields, "extra_options"]
+    validate_task_model_options(schema, schema.default_options())
+    if task == "text_to_speech":
+        assert len(model.capabilities.supported_voices) == 30
+        assert by_name["voice"].type == "select"
+        assert by_name["voice"].default == "kore"
+    else:
+        assert by_name["language"].default == "auto"
+        assert "de-DE" in [choice.value for choice in by_name["language"].options]
+        assert [choice.value for choice in by_name["mode"].options] == ["verbatim", "smart"]
 
 
 def test_decision_model_publishes_its_documented_limits_and_input_price() -> None:

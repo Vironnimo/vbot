@@ -6,7 +6,7 @@ Provider-neutral speech-to-text and text-to-speech execution for configured task
 
 `core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. STT preparation follows the target: local engines decode the original recording directly, while Provider requests preserve a supported original after validation and use `speech.transcription_audio` only when conversion is needed. The service owns input limits for every caller; the HTTP edge also enforces the per-upload limit (Transcription input below).
 
-This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. Provider execution supports OpenAI-compatible audio endpoints, OpenRouter's audio endpoints, and Mistral's native file transcription and speech synthesis endpoints.
+This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. Provider execution supports OpenAI-compatible audio endpoints, OpenRouter's audio endpoints, Mistral's native file transcription and speech synthesis endpoints, and Google's Gemini `generateContent` (Google route below).
 
 ## Interfaces
 
@@ -368,7 +368,7 @@ the selected Model's catalog determines the offered timestamps. Other
 OpenAI-compatible targets use normalized optional `language`, `prompt`,
 `response_format` and `temperature` fields.
 
-All speech requests honor the universal `extra_options` escape hatch: for JSON payloads (OpenRouter STT, all TTS) the object adds non-empty fields at the top level (`merge_extra_options` from `core/providers/task_client.py`); for multipart STT values are stringified as form fields (booleans as lowercase literals, containers JSON-encoded, except Mistral context/timestamp string arrays use repeated fields). Either path rejects a collision with an authored request field locally as a non-retryable Provider error before send, including the multipart `file` upload part. Mistral also reserves `file_id` and `file_url` so extras cannot replace the prepared upload.
+All speech requests honor the universal `extra_options` escape hatch: for JSON payloads (OpenRouter and Google STT, all TTS) the object adds non-empty fields at the top level (`merge_extra_options` from `core/providers/task_client.py`); for multipart STT values are stringified as form fields (booleans as lowercase literals, containers JSON-encoded, except Mistral context/timestamp string arrays use repeated fields). Either path rejects a collision with an authored request field locally as a non-retryable Provider error before send, including the multipart `file` upload part. Mistral also reserves `file_id` and `file_url` so extras cannot replace the prepared upload.
 
 Executable TTS targets send JSON to `/audio/speech`. TTS is billed and non-idempotent: connect/connect-timeout/pool-timeout failures and HTTP 429 remain retryable, but ambiguous read/write/remote-protocol failures, every unverified 5xx response (including 502/503/504), and empty/unusable 2xx results stop after one attempt with `ProviderOutcomeUnknownError`. No current TTS endpoint profile sends an idempotency header. `voice` is taken from stored task-model options, populated from `model.capabilities.supported_voices` when the model provides them - OpenRouter models get model-specific voice lists (e.g. Kokoro 54, Gemini TTS 30, Voxtral 30); OpenAI models get the canonical OpenAI voice list; other providers fall back to free-text `voice` input.
 
@@ -389,6 +389,45 @@ Formats and voices come from Model catalog facts; the fallback is MP3 and
 `gb_jane_neutral`, with no unsupported speed or speaking instructions offered.
 Mistral's PCM is mono PCM16 at 24 kHz and is wrapped in WAV. See
 `../providers/mistral.md` for exact Model/format checks and official sources.
+
+### Google route
+
+Targets whose Provider uses the `google` adapter call Gemini's native
+`/models/{model}:generateContent` with the shared task client (Google key header, Google's
+quota/key status classification through `classify_task_http_status`, a 600 s timeout because
+Gemini answers only with the complete result). Options and voices are Model catalog facts
+from `core/providers/google.py`; `extra_options` merges at the top level of the JSON body.
+Usage comes from `usageMetadata` through the Gemini Usage normalization. Sources:
+[speech generation](https://aistudio.google.com/docs/speech-generation) and
+[transcription](https://aistudio.google.com/docs/transcribe), reviewed and checked live
+2026-11-17.
+
+TTS sends the text as one user part with `responseModalities: ["AUDIO"]` and
+`speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName` (default `kore`; the 30 prebuilt
+voices are stored lowercase, which Google accepts). 3.8 Models offer a `style` option sent
+as the part's `speech_metadata.style`; 3.1 and 2.5 TTS Models reject that field, offer no
+style, and take directions only inside the text. Unary 3.8 answers are WAV, older Models
+answer headerless little-endian `audio/L16;rate=24000`; both become a WAV artifact. With
+`on_audio` the request goes to `:streamGenerateContent?alt=sse`, whose events carry L16 PCM
+chunks and cumulative `usageMetadata` (latest wins); the stream must end with
+`finishReason: STOP`. A `promptFeedback.blockReason` or a safety finish reason is a
+`ProviderContentRefusedError`; no audio, another finish reason or an unfinished stream is an
+unknown outcome without replay.
+
+STT sends the original recording as `inlineData` (wav, mp3, flac, ogg, webm, aac, m4a are
+kept; others convert) with no prompt. Options map to
+`generationConfig.audioTranscriptionConfig`: `language` (BCP-47 code, `auto` omitted) to
+`languageCodes`, `mode` `smart` to `SMART`, `context_bias` lines to `customVocabulary`,
+`word_timestamps` to `wordTimestamp`, `diarize` to `diarization`. Google rejects smart mode
+and vocabulary together with word timestamps or speaker labels, so those two win and the
+others are dropped. The answer's parts each hold an `audioTranscription.text` utterance
+(joined by newlines); with word times or speaker labels each becomes a segment
+`{text, start, end, speaker, words}` with offsets in seconds. The 25 MB vBot audio ceiling
+stays well below Google's 100 MB inline request limit.
+
+Google Chat Models with audio input are not STT targets: like Mistral, audio chat derives
+only `audio_input`, never `speech_to_text` (`models.md`), because a Chat Model needs a
+prompt and gives no verbatim-transcript contract; Gemini Transcribe is the dedicated route.
 
 With `on_audio`, the same speech POST is consumed as an HTTP byte stream (Mistral:
 decoded SSE audio chunks) through

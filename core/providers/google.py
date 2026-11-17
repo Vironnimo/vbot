@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, override
 
 import httpx
@@ -159,7 +160,7 @@ def _family_capabilities(
     if "generateContent" not in methods or _INTERACTIONS_ONLY.search(model_id):
         return None
     if _TTS.search(model_id):
-        return _speech_synthesis_capabilities()
+        return _speech_synthesis_capabilities(model_id)
     if _TRANSCRIBE.search(model_id):
         return _transcription_capabilities()
     if _IMAGE.search(model_id):
@@ -245,12 +246,67 @@ def _live_voice_capabilities() -> Capabilities:
     return _task_capabilities(("text", "audio"), ("text", "audio"), ("live_voice",))
 
 
-def _speech_synthesis_capabilities() -> Capabilities:
-    return _task_capabilities(("text",), ("speech",))
+# Prebuilt voices of every Gemini TTS Model (aistudio.google.com/docs/speech-generation,
+# reviewed 2026-11-17). Capabilities store them lowercase; voice names are not
+# case-sensitive (3.8 Flash Lite and 2.5 Flash TTS, live 2026-11-17).
+_TTS_VOICES = (
+    "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe",
+    "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib",
+    "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima",
+    "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+)  # fmt: skip
+# TTS generations before 3.8 take style directions only inside the spoken text:
+# gemini-3.1-flash-tts-preview answered ``speech_metadata`` with HTTP 400 "Speech
+# metadata is not supported for this model" (live 2026-11-17).
+_TTS_WITHOUT_STYLE = re.compile(r"^gemini-(?:2\.5|3\.1)-")
+# Language codes ``audioTranscriptionConfig.languageCodes`` accepts
+# (aistudio.google.com/docs/transcribe, reviewed 2026-11-17).
+_TRANSCRIPTION_LANGUAGES = (
+    "af-ZA", "am-ET", "ar-EG", "hy-AM", "as-IN", "az-AZ", "be-BY", "bn-BD", "bn-IN", "bs-BA",
+    "bg-BG", "rup-BG", "my-MM", "yue-Hant-HK", "ca-ES", "ceb", "km-KH", "hr-HR", "cs-CZ",
+    "da-DK", "nl-NL", "en-GB", "en-IN", "en-US", "et-EE", "fa-IR", "fil-PH", "fi-FI", "fr-FR",
+    "gl-ES", "ka-GE", "de-DE", "el-GR", "gu-IN", "ha-NG", "he-IL", "hi-IN", "hu-HU", "is-IS",
+    "id-ID", "it-IT", "ja-JP", "jv-ID", "kea-CV", "kn-IN", "kk-KZ", "ko-KR", "ky-KG", "lv-LV",
+    "ln-CD", "lt-LT", "mk-MK", "ms-MY", "ml-IN", "mt-MT", "cmn-Hans-CN", "mr-IN", "mn-MN",
+    "ne-NP", "nb-NO", "or-IN", "pl-PL", "pt-BR", "pt-PT", "pa-IN", "pa-Guru-IN", "ro-RO",
+    "ru-RU", "sr-RS", "sd-Arab-IN", "sk-SK", "sl-SI", "es-419", "es-US", "sw-KE", "sv-SE",
+    "tg-TJ", "te-IN", "th-TH", "tr-TR", "uk-UA", "uz-UZ", "vi-VN",
+)  # fmt: skip
+
+
+def _speech_synthesis_capabilities(model_id: str) -> Capabilities:
+    """Gemini TTS on ``generateContent``: a prebuilt voice, and a style on 3.8+."""
+
+    parameters: dict[str, Any] = {"voice": {"type": "string", "default": "kore"}}
+    if not _TTS_WITHOUT_STYLE.search(model_id):
+        parameters["style"] = {"type": "string"}
+    return replace(
+        _task_capabilities(("text",), ("speech",)),
+        supported_parameters=tuple(parameters),
+        supported_voices=_TTS_VOICES,
+        task_options={"text_to_speech": {"parameters": parameters}},
+    )
 
 
 def _transcription_capabilities() -> Capabilities:
-    return _task_capabilities(("audio",), ("transcription",))
+    """Gemini Transcribe and its ``audioTranscriptionConfig`` controls."""
+
+    parameters: dict[str, Any] = {
+        "language": {
+            "type": "enum",
+            "values": ["auto", *_TRANSCRIPTION_LANGUAGES],
+            "default": "auto",
+        },
+        "mode": {"type": "enum", "values": ["verbatim", "smart"], "default": "verbatim"},
+        "context_bias": {"type": "string"},
+        "word_timestamps": {"type": "boolean", "default": False},
+        "diarize": {"type": "boolean", "default": False},
+    }
+    return replace(
+        _task_capabilities(("audio",), ("transcription",)),
+        supported_parameters=tuple(parameters),
+        task_options={"speech_to_text": {"parameters": parameters}},
+    )
 
 
 def _image_generation_capabilities() -> Capabilities:

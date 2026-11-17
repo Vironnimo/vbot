@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
-from collections.abc import AsyncIterator, Collection, Mapping
+import wave
+from collections.abc import AsyncGenerator, AsyncIterator, Collection, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, override
+from urllib.parse import quote
 
 import httpx
 
@@ -17,7 +20,9 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-from core.providers.errors import ProviderError
+from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
+from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED
+from core.providers.errors import ProviderContentRefusedError, ProviderError
 from core.providers.http import iter_sse_data, parse_sse_json_data
 from core.providers.task_client import (
     EXTRA_OPTIONS_KEY,
@@ -32,10 +37,24 @@ OPENROUTER_TRANSCRIPTIONS_ENDPOINT = "/audio/transcriptions"
 OPENAI_TRANSCRIPTIONS_ENDPOINT = "/audio/transcriptions"
 SPEECH_ENDPOINT = "/audio/speech"
 DEFAULT_SPEECH_TIMEOUT = 120.0
+# Gemini answers TTS and transcription only once the whole result exists; a
+# transcript of up to an hour of audio or minutes of speech take longer.
+GOOGLE_SPEECH_TIMEOUT = 600.0
+# Gemini Transcribe input media types (aistudio.google.com/docs/transcribe,
+# reviewed 2026-11-17), keyed by vBot's prepared audio formats.
+_GOOGLE_TRANSCRIPTION_MEDIA_TYPES = {
+    "wav": "audio/wav",
+    "mp3": "audio/mp3",
+    "flac": "audio/flac",
+    "ogg": "audio/ogg",
+    "webm": "audio/webm",
+    "aac": "audio/aac",
+    "m4a": "audio/m4a",
+}
 
 
 class ProviderSpeechClient(ProviderTaskClient):
-    """Small OpenAI-compatible speech HTTP client bound to one target."""
+    """Speech HTTP client bound to one target: OpenAI-compatible, Mistral or Google."""
 
     def transcription_input_policy(self) -> TranscriptionInputPolicy:
         """Return preparation formats and conservative vBot request ceilings.
@@ -47,6 +66,12 @@ class ProviderSpeechClient(ProviderTaskClient):
         JSON ceiling is vBot's bound, including base64 and request options,
         not a claim about every upstream's maximum request size.
         """
+        if self._provider.adapter == "google":
+            # Google accepts 100 MB of inline data per request; the 25 MB
+            # ceiling keeps the Base64 body well below it.
+            return TranscriptionInputPolicy(
+                accepted_formats=frozenset(_GOOGLE_TRANSCRIPTION_MEDIA_TYPES)
+            )
         if self._provider.id == "openai":
             # OpenAI Audio Transcriptions API reference, reviewed 2026-10-09.
             return TranscriptionInputPolicy(
@@ -81,6 +106,10 @@ class ProviderSpeechClient(ProviderTaskClient):
                 f"Transcription audio exceeds the target limit of {policy.max_audio_bytes} bytes",
                 too_large=True,
             )
+        if self._provider.adapter == "google":
+            return await self._transcribe_google(
+                audio, filename=filename, media_type=media_type, options=options
+            )
         if self._provider.id == "openrouter":
             return await self._transcribe_openrouter(
                 audio,
@@ -104,9 +133,142 @@ class ProviderSpeechClient(ProviderTaskClient):
     ) -> SpeechSynthesisResult:
         """Synthesize speech through the selected Provider's audio endpoint."""
 
+        if self._provider.adapter == "google":
+            return await self._synthesize_google(text, options=options, on_audio=on_audio)
         if self._provider.id == "mistral":
             return await self._synthesize_mistral(text, options=options, on_audio=on_audio)
         return await self._synthesize_openai_compatible(text, options=options, on_audio=on_audio)
+
+    @override
+    async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        if self._provider.adapter != "google":
+            return await super()._observe_response_usage(response)
+        try:
+            payload = response.json()
+        except ValueError, UnicodeError:
+            return None
+        return _normalize_gemini_usage(
+            payload.get("usageMetadata") if isinstance(payload, Mapping) else None
+        )
+
+    def _google_endpoint(self, method: str) -> str:
+        return f"/models/{quote(self._model_id, safe='')}:{method}"
+
+    async def _transcribe_google(
+        self, audio: bytes, *, filename: str, media_type: str, options: JsonObject
+    ) -> SpeechTranscriptionResult:
+        """Transcribe inline audio through ``generateContent``; no prompt is needed."""
+
+        audio_format = audio_format_from(filename=filename, media_type=media_type)
+        inline: JsonObject = {
+            "mimeType": _GOOGLE_TRANSCRIPTION_MEDIA_TYPES.get(audio_format, "audio/wav"),
+            "data": "",
+        }
+        payload: JsonObject = {"contents": [{"role": "user", "parts": [{"inlineData": inline}]}]}
+        if config := _google_transcription_config(options):
+            payload["generationConfig"] = {"audioTranscriptionConfig": config}
+        merge_extra_options(payload, options)
+        inline["data"] = base64.b64encode(audio).decode("ascii")
+        return await self.post_and_parse(
+            self._google_endpoint("generateContent"),
+            timeout=GOOGLE_SPEECH_TIMEOUT,
+            parse=lambda response: _google_transcription_result(response.json()),
+            json=payload,
+        )
+
+    async def _synthesize_google(
+        self, text: str, *, options: JsonObject, on_audio: SpeechAudioCallback | None
+    ) -> SpeechSynthesisResult:
+        """Synthesize through ``generateContent``, or its SSE stream with *on_audio*.
+
+        The artifact is always WAV: unary 3.8 Models answer WAV, older Models
+        and every stream answer headerless little-endian ``audio/l16`` PCM.
+        """
+
+        part: JsonObject = {"text": text}
+        style = options.get("style")
+        if isinstance(style, str) and style.strip():
+            part["speech_metadata"] = {"style": style.strip()}
+        voice = options.get("voice")
+        voice_name = voice.strip() if isinstance(voice, str) and voice.strip() else "kore"
+        payload: JsonObject = {
+            "contents": [{"role": "user", "parts": [part]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}},
+            },
+        }
+        merge_extra_options(payload, options)
+
+        def parse(response: httpx.Response) -> SpeechSynthesisResult:
+            candidate = _google_candidate(response.json(), final=True)
+            pcm = bytearray()
+            audio_format: tuple[int, int] | None = None
+            for chunk, rate, channels in _google_audio(candidate):
+                if audio_format not in (None, (rate, channels)):
+                    raise ValueError("Google speech response mixes audio formats")
+                audio_format = (rate, channels)
+                pcm.extend(chunk)
+                if len(pcm) > MAX_SPEECH_BYTES:
+                    raise ValueError("Speech response exceeds the audio size limit")
+            if audio_format is None or not pcm:
+                raise ValueError("Google speech response contains no audio")
+            return SpeechSynthesisResult(pcm_to_wav(bytes(pcm), *audio_format), "audio/wav", "wav")
+
+        async def consume(response: httpx.Response) -> SpeechSynthesisResult:
+            assert on_audio is not None
+            finished = False
+
+            async def chunks() -> AsyncGenerator[tuple[bytes, int, int]]:
+                nonlocal finished
+                async for raw in iter_sse_data(response):
+                    event = parse_sse_json_data(raw, context="Google speech")
+                    if not isinstance(event, dict) or "error" in event:
+                        raise ValueError("Google speech stream reported an error")
+                    # Every event carries the cumulative usage so far.
+                    usage = _normalize_gemini_usage(event.get("usageMetadata"))
+                    if usage is not None and self._usage_observer is not None:
+                        await self._usage_observer.update_latest(usage)
+                    candidate = _google_candidate(event, final=False)
+                    finished = finished or (
+                        candidate is not None and candidate.get("finishReason") == "STOP"
+                    )
+                    for chunk in _google_audio(candidate):
+                        yield chunk
+
+            stream = chunks()
+            try:
+                first = await anext(stream, None)
+                if first is None:
+                    raise ValueError("Google speech stream contains no audio")
+                _, rate, channels = first
+
+                async def pcm() -> AsyncIterator[bytes]:
+                    yield first[0]
+                    async for chunk, chunk_rate, chunk_channels in stream:
+                        if (chunk_rate, chunk_channels) != (rate, channels):
+                            raise ValueError("Google speech stream mixes audio formats")
+                        yield chunk
+
+                audio = await decode_speech_audio(
+                    pcm(), on_audio, audio_format="pcm", pcm_sample_rate=rate, pcm_channels=channels
+                )
+            finally:
+                await stream.aclose()
+            if not finished:
+                raise ValueError("Google speech stream ended before completion")
+            return SpeechSynthesisResult(pcm_to_wav(audio, rate, channels), "audio/wav", "wav")
+
+        return await self.post_and_parse(
+            self._google_endpoint(
+                "streamGenerateContent?alt=sse" if on_audio is not None else "generateContent"
+            ),
+            timeout=GOOGLE_SPEECH_TIMEOUT,
+            parse=parse,
+            consume=consume if on_audio is not None else None,
+            json=payload,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
 
     async def _transcribe_mistral(
         self, audio: bytes, *, filename: str, media_type: str, options: JsonObject
@@ -544,5 +706,152 @@ def _transcription_result(payload: Any) -> SpeechTranscriptionResult:
         language=language if isinstance(language, str) else None,
         segments=segments,
         usage=dict(usage) if isinstance(usage, dict) else None,
+        raw=dict(payload),
+    )
+
+
+def _google_transcription_config(options: JsonObject) -> JsonObject:
+    """Map speech options onto Gemini's ``audioTranscriptionConfig``.
+
+    Google rejects custom vocabulary or smart mode together with word
+    timestamps or speaker labels, so those two win and the others are dropped.
+    """
+
+    config: JsonObject = {}
+    language = options.get("language")
+    if isinstance(language, str) and language.strip() and language.strip().lower() != "auto":
+        config["languageCodes"] = [language.strip()]
+    if options.get("word_timestamps") is True:
+        config["wordTimestamp"] = True
+    if options.get("diarize") is True:
+        config["diarization"] = True
+    if config.keys() & {"wordTimestamp", "diarization"}:
+        return config
+    mode = options.get("mode")
+    if isinstance(mode, str) and mode.strip().lower() == "smart":
+        config["mode"] = "SMART"
+    context = options.get("context_bias")
+    terms = context.splitlines() if isinstance(context, str) else []
+    if terms := [term.strip() for term in terms if term.strip()]:
+        config["customVocabulary"] = terms
+    return config
+
+
+def _google_candidate(payload: Any, *, final: bool) -> Mapping[str, Any] | None:
+    """Return the first candidate of a Gemini answer or stream event.
+
+    A blocked prompt or a safety finish is a refusal; any other finish than
+    ``STOP``, or none on a *final* answer, leaves the result unconfirmed.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("Google response must be a JSON object")
+    candidates = payload.get("candidates")
+    candidate = (
+        candidates[0]
+        if isinstance(candidates, list) and candidates and isinstance(candidates[0], Mapping)
+        else None
+    )
+    finish = candidate.get("finishReason") if candidate is not None else None
+    feedback = payload.get("promptFeedback")
+    outcome = _gemini_finish_reason(finish, has_tool_calls=False, prompt_feedback=feedback)
+    if outcome == TERMINAL_OUTCOME_CONTENT_FILTERED:
+        reason = finish if isinstance(finish, str) else None
+        if reason is None and isinstance(feedback, Mapping):
+            reason = feedback.get("blockReason")
+        raise ProviderContentRefusedError(f"Google declined the request ({reason})")
+    if (final or finish is not None) and finish != "STOP":
+        raise ValueError(f"Google response finished with {finish or 'no finish reason'}")
+    return candidate
+
+
+def _google_parts(candidate: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    content = candidate.get("content") if candidate is not None else None
+    parts = content.get("parts") if isinstance(content, Mapping) else None
+    return [part for part in parts if isinstance(part, Mapping)] if isinstance(parts, list) else []
+
+
+def _google_audio(candidate: Mapping[str, Any] | None) -> list[tuple[bytes, int, int]]:
+    """Decode a candidate's inline audio into ``(pcm16le, rate, channels)`` parts."""
+
+    decoded = []
+    for part in _google_parts(candidate):
+        inline = part.get("inlineData")
+        if not isinstance(inline, Mapping):
+            continue
+        encoded, mime_type = inline.get("data"), inline.get("mimeType")
+        if not isinstance(encoded, str) or not isinstance(mime_type, str):
+            raise ValueError("Google speech response has malformed inline audio")
+        if len(encoded) > 4 * ((MAX_SPEECH_BYTES + 2) // 3):
+            raise ValueError("Speech response exceeds the audio size limit")
+        audio = base64.b64decode(encoded, validate=True)
+        media_type = mime_type.split(";", 1)[0].strip().lower()
+        if media_type in {"audio/wav", "audio/x-wav", "audio/wave"}:
+            try:
+                with wave.open(io.BytesIO(audio)) as reader:
+                    if reader.getsampwidth() != 2:
+                        raise ValueError("Google speech WAV is not 16-bit PCM")
+                    frames = reader.readframes(reader.getnframes())
+                    decoded.append((frames, reader.getframerate(), reader.getnchannels()))
+            except (wave.Error, EOFError) as error:
+                raise ValueError("Google speech response has an unreadable WAV") from error
+        elif media_type in {"audio/l16", "audio/pcm"}:
+            # Gemini's L16 is little-endian, unlike RFC 2586 (checked live 2026-11-17).
+            decoded.append((audio, *_pcm_format(mime_type, "google")))
+        else:
+            raise ValueError(f"Google speech response has unsupported audio {media_type}")
+    return decoded
+
+
+def _google_offset(value: Any) -> float | None:
+    """Parse a protobuf Duration such as ``"1.200s"``."""
+
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        return float(value[:-1])
+    except ValueError:
+        return None
+
+
+def _google_transcription_result(payload: Any) -> SpeechTranscriptionResult:
+    """Read Gemini Transcribe's ``audioTranscription`` parts.
+
+    Each part is one utterance; with word timestamps or speaker labels it
+    becomes a segment with its speaker, word times and outer bounds.
+    """
+
+    try:
+        candidate = _google_candidate(payload, final=True)
+    except ValueError as error:
+        raise ProviderError(f"Speech transcription failed: {error}", retryable=False) from error
+    texts: list[str] = []
+    segments: list[JsonObject] = []
+    for part in _google_parts(candidate):
+        transcription = part.get("audioTranscription")
+        details = transcription if isinstance(transcription, Mapping) else {}
+        text = details.get("text", part.get("text"))
+        if not isinstance(text, str) or not text.strip():
+            continue
+        texts.append(text.strip())
+        words: list[JsonObject] = []
+        for word in details.get("words") or ():
+            start = _google_offset(word.get("startOffset")) if isinstance(word, Mapping) else None
+            end = _google_offset(word.get("endOffset")) if isinstance(word, Mapping) else None
+            if start is not None and end is not None and isinstance(word.get("word"), str):
+                words.append({"word": word["word"], "start": start, "end": end})
+        speaker = details.get("speakerLabel")
+        if not words and not isinstance(speaker, str):
+            continue
+        segment: JsonObject = {"text": text.strip()}
+        if words:
+            segment.update(start=words[0]["start"], end=words[-1]["end"], words=words)
+        if isinstance(speaker, str):
+            segment["speaker"] = speaker
+        segments.append(segment)
+    return SpeechTranscriptionResult(
+        text="\n".join(texts),
+        segments=tuple(segments),
+        usage=_normalize_gemini_usage(payload.get("usageMetadata")),
         raw=dict(payload),
     )
