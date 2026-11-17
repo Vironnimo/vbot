@@ -223,7 +223,7 @@ def content_page(
                 f"{entry.label} contains lone CR line endings, shown as \\r; line numbers "
                 "count LF boundaries and can differ from read."
             )
-        if query.only_matching:
+        if query.only_matching and not query.inverted:
             _only_matching(page, entry, file_events, skip)
             continue
         _file_lines(page, entry, file_events, skip, query, separate)
@@ -264,12 +264,13 @@ def _file_lines(
     # First and last index in lines of each result: a matching line, or with -U one
     # match, which can span lines and share a line with the match before it.
     groups: list[tuple[int, int]] = []
+    by_line = not query.multiline or query.inverted
     for event in file_events:
         start = len(lines)
         lines.extend(_event_lines(event))
         if event["type"] != "match":
             continue
-        if not query.multiline:
+        if by_line:
             groups.append((start, len(lines) - 1))
             continue
         raw = decode_event_text(event["data"]["lines"])
@@ -409,6 +410,8 @@ def summary(
         if query.count_matches or query.multiline
         else ("matching line", "matching lines")
     )
+    if query.inverted:
+        matched = ("non-matching line", "non-matching lines")
     newest = ", newest first" if query.sort is None else ""
     shown = "files"
     if query.mode == "content":

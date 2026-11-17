@@ -139,10 +139,7 @@ _SILENT = frozenset(
         "no-heading",
         "color",
         "colors",
-        "column",
         "no-column",
-        "byte-offset",
-        "vimgrep",
         "json",
         "no-json",
         "null",
@@ -168,7 +165,6 @@ _SILENT = frozenset(
         "mmap",
         "no-mmap",
         "pretty",
-        "max-columns",
         "max-columns-preview",
         "no-max-columns-preview",
         "no-config",
@@ -177,6 +173,10 @@ _SILENT = frozenset(
     }
 )
 _IGNORED_WITH_NOTE = {
+    "column": "results show line numbers without column numbers",
+    "byte-offset": "results show line numbers without byte offsets",
+    "vimgrep": "results group matches by file and show line numbers without column numbers",
+    "max-columns": "long lines use a fixed excerpt around the match",
     "no-line-number": "results always name each match's file and line",
     "no-filename": "results always name each match's file and line",
     "passthru": "results show matching lines and the context you request",
@@ -242,6 +242,13 @@ class SearchQuery:
     @property
     def searches_contents(self) -> bool:
         return self.mode in CONTENT_MODES
+
+    @property
+    def inverted(self) -> bool:
+        for argument in reversed(self.rg_args):
+            if argument in {"--invert-match", "--no-invert-match"}:
+                return argument == "--invert-match"
+        return False
 
     @property
     def multiline(self) -> bool:
@@ -440,13 +447,11 @@ def _number(name: str, value: str, *, minimum: int, maximum: int, field_name: st
     return number
 
 
-_GLOB_EVERYTHING = frozenset({"*", "**", "*.*", "**/*", "./*", "./**"})
+_GLOB_EVERYTHING = frozenset({"*", "**", "**/*", "./**"})
 _GLOB_SHAPE = re.compile(r"[^\s()|^$+\\]+")
 _NAME_GLOB = re.compile(r"[\w.\-/{},]*(?<![.\])])\*[\w.\-/*{},]*\.(?:\w{1,10}|\{[\w,]+\})")
 # A regex that matches every non-empty text, such as ".", ".*" or "^(.*)$".
 _REGEX_EVERYTHING = re.compile(r"\^?(?:\.[*+]?|\((?:\?:)?\.[*+]?\))\$?|\^|\$")
-# Flags under which such a regex no longer matches every name or line.
-_NARROWING_FLAGS = frozenset({"--invert-match", "--line-regexp", "--word-regexp"})
 
 
 # On Windows a backslash in a glob separates folders unless it escapes a character
@@ -463,22 +468,18 @@ def glob_shaped(pattern: str) -> bool:
     """Whether a pattern can only be meant as a file name glob such as *.py or test_*.py."""
     if not _GLOB_SHAPE.fullmatch(pattern):
         return False
-    if pattern.startswith("*") or "**" in pattern or "/*." in pattern:
+    if pattern.startswith("*") or "**" in pattern or "/*." in pattern or pattern == "./*":
         return True
     return bool(_NAME_GLOB.fullmatch(pattern))
 
 
-def _matches_everything(query: SearchQuery, pattern: str) -> bool:
-    """Whether pattern, as the query matches it, matches every name and every non-empty line."""
-    if query.literal or not _REGEX_EVERYTHING.fullmatch(pattern):
-        return False
-    narrowing: set[str] = set()
-    for argument in query.rg_args:
-        if argument in _NARROWING_FLAGS:
-            narrowing.add(argument)
-        elif argument == "--no-invert-match":
-            narrowing.discard("--invert-match")
-    return not narrowing
+def _matches_everything(pattern: str) -> bool:
+    """Whether this regex matches every non-empty line without additional matching flags."""
+    return bool(_REGEX_EVERYTHING.fullmatch(pattern)) and pattern not in {"^.$", "^(.)$", "^(?:.)$"}
+
+
+def _narrowed(query: SearchQuery) -> bool:
+    return query.inverted or any(arg in {"--word-regexp", "--line-regexp"} for arg in query.rg_args)
 
 
 # ripgrep 15.1.0's long flags, their negations, and the ones vBot adds or reads as grep's.
@@ -858,13 +859,20 @@ def _match_listed_names(query: SearchQuery, listing: Mode) -> None:
     patterns, query.patterns = query.patterns, []
     if len(patterns) == 1 and not query.literal:
         only = patterns[0]
-        if only in _GLOB_EVERYTHING or _matches_everything(query, only):
+        if not _narrowed(query) and (only in _GLOB_EVERYTHING or _matches_everything(only)):
             return
-        if not query.globs and glob_shaped(only):
-            query.globs = [only]
-            query.notes.append(
-                f'pattern "{only}" is a name glob, so matching {listed} were listed.'
-            )
+        if (
+            not query.globs
+            and glob_shaped(only)
+            and not any(arg in {"--word-regexp", "--line-regexp"} for arg in query.rg_args)
+        ):
+            query.globs = ["!" + only if query.inverted else only]
+            if query.inverted:
+                query.notes.append(f'pattern "{only}" with -v was applied as glob "!{only}".')
+            else:
+                query.notes.append(
+                    f'pattern "{only}" is a name glob, so matching {listed} were listed.'
+                )
             return
     query.name_patterns = patterns
     shown = " or ".join(f'"{text}"' for text in patterns)
@@ -884,14 +892,14 @@ def _list_glob_shaped_pattern(
     ripgrep would leave out empty and binary files and count lines nobody asked for.
     """
     pattern = query.patterns[0]
-    if output == "count" or context_requested or query.only_matching:
+    if output == "count" or context_requested or query.only_matching or _narrowed(query):
         return
     if pattern in _GLOB_EVERYTHING:
         query.patterns = []
         query.mode = "list_files"
         query.notes.append(f'pattern "{pattern}" matches every file name, so files were listed.')
         return
-    if query.mode == "files_with_matches" and _matches_everything(query, pattern):
+    if query.mode == "files_with_matches" and _matches_everything(pattern):
         query.patterns = []
         query.mode = "list_files"
         query.notes.append(
@@ -901,11 +909,7 @@ def _list_glob_shaped_pattern(
         return
     if not glob_shaped(pattern):
         return
-    if query.globs and not (
-        query.mode == "files_with_matches"
-        and set(query.globs) == {pattern}
-        and not any(argument in _NARROWING_FLAGS for argument in query.rg_args)
-    ):
+    if query.globs and not (query.mode == "files_with_matches" and set(query.globs) == {pattern}):
         return
     query.patterns = []
     query.mode = "list_files"

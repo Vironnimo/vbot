@@ -716,17 +716,17 @@ class SearchExecution:
     ) -> ScanResult:
         """List the files ripgrep would search, in one parallel pass.
 
-        The result names the paths ignore files excluded (``ignored``). For
-        ``directories``, only the excluding globs apply, since the others select
-        directory names, and the result also names every path ripgrep skipped.
+        The result names the paths ignore files excluded (``ignored``). For a
+        directory listing it also names every path ripgrep skipped. Directory
+        selection needs the full ordered glob list so a later inclusion can
+        reopen a directory excluded by an earlier glob.
         """
         if directories:
-            excluding = [glob for glob in query.globs if glob.startswith("!")]
             skip_caches = skips_caches(query, scope.globs)
             selection = [
                 *DEFAULT_ARGUMENTS,
                 *query.rg_args,
-                *rg_globs(excluding, scope.prefixes, skip_caches=skip_caches),
+                *rg_globs(query.globs, scope.prefixes, skip_caches=skip_caches),
             ]
             report = True
         else:

@@ -95,7 +95,8 @@ Rules for `args`:
     a first-page bound sent as a familiar flag (Swarm run 2026-10-13).
   - **Silent display flags** (`-n`, `--heading`, `--color`, `--json`, ...) are
     dropped because the fixed output already satisfies them.
-  - **`-N`, `-I`/`--no-filename`, `--passthru` and `--replace`** are ignored
+  - **`-N`, `-I`/`--no-filename`, `--column`, `--byte-offset`, `--vimgrep`,
+    `--max-columns`, `--passthru` and `--replace`** are ignored
     with a `note`; the `--replace` note names the offered file edit Tool
     (`offered_edit_tool`: `apply_patch` or `edit`, `tools/edit.md`), or none
     when neither is offered. grep's `-h` is also ignored with a note when the
@@ -120,7 +121,7 @@ Modes:
   `glob` or `path` narrow it.
 - A pattern beside `--files` or `--dirs` filters the listed names, with a
   `note` (`name_patterns`, `_match_listed_names`): `--files` matches each file's
-  name and shown path; `--dirs` matches
+  name and shown path. With `-v`, either spelling matching excludes the file. `--dirs` matches
   directory names. ripgrep matches them (`match_names`): the names go
   NUL-separated through `--null-data` with the query's matching flags (`-i`,
   `-S`, `-F`, `-w`, `-x`, `-v`, `-P`, `--engine`, ...), so the `pattern`
@@ -130,7 +131,8 @@ Modes:
   pattern that matches every name (a glob such as `*` or `**/*`, or a regex
   such as `.`, `.*` or `^(.*)$` without `-v`, `-x` or `-w`) lists everything
   without a note, since matching it would list the same; a file name glob
-  (`*.ts`) selects as `glob`, with a note. Agents sent `--dirs` with
+  (`*.ts`) selects as `glob`, as an exclusion with `-v`, with a note. `*.*` requires
+  a dot and `./*` is anchored. Agents sent `--dirs` with
   `pattern: "^empty$"` (first-use probe, 2026-10) and `--files` with
   `pattern: "."` (Swarm Sessions, 2026-10), which was rejected until then.
 - `output: "count"` or context without a pattern is rejected.
@@ -449,16 +451,20 @@ excluded in the same walk. With `-t` or `-T` they run without `--debug` and
 after ignore files and never to directories, so that walk skips the same paths
 without reporting every file of another type.
 
-ripgrep lists no directories, so `--dirs` runs `--files --debug` with only the
-excluding globs and collects the paths ripgrep's
+ripgrep lists no directories, so `--dirs` runs `--files --debug` with the glob
+filters and collects the paths ripgrep's
 walker reports as skipped (`ignoring <path>: Ignore(...)`, captured by
 `native_lines`; file type lines are dropped because types skip files only). The
 owner then walks the directories without those paths (`_walk_directories`), so
 empty directories are listed and ignore rules, hidden paths and excluding globs
 stay ripgrep's decisions. Links and junctions are entered only with `--follow`.
 `--max-depth` and the selecting globs apply to the directories themselves
-(`_directory_selected`, with `PurePath.full_match`). With `-t` or `-T`, only
-directories holding a selected file are listed. The `--debug` line format is
+(`_directory_selected`, with `PurePath.full_match`). Leading `/` or `./` anchors
+a glob at the working directory or a searched root. Native ripgrep applies
+`--iglob` filters after its regular globs, always ignoring case. With `-t` or
+`-T`, only directories holding a selected file are listed. A separate type
+scan checks that file when a selecting glob applies to directory names.
+The `--debug` line format is
 ripgrep 15.1.0's; `test_directory_lists_include_empty_directories_ripgrep_enters`
 fails if an upgrade changes it.
 
@@ -477,6 +483,7 @@ Result units:
   events by submatch line spans; a line shared by several matches appears once
   per page.
 - With `-o`, one result is one match.
+- With `-v`, each result is a whole non-matching line, including with `-o` or `-U`.
 
 Documented deviations from plain `rg`, all deliberate:
 
@@ -776,6 +783,8 @@ blank placeholders, so no sentence has to warn about them.
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
 | pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`. Empty content searches retain their result kind: the former name fallback substituted file names for requested counts and content in November 2026 Sessions. |
 | Empty content result: `No matches` (with a searched-file total when known). | A matching file name or parent directory is not a content match. Removing `No file contents match pattern, so the files whose names match it were listed.` preserves content, files-with-matches and count semantics (F3, F4; November 2026 Session audit). |
+| `non-matching lines` for inverted counts and pages, and `pattern "*.ts" with -v was applied as glob "!*.ts".` | Names the unit ripgrep returns with inversion and identifies the excluded file-name glob (F3, F4). |
+| `--column was ignored: results show line numbers without column numbers.` (also `--byte-offset` and `--vimgrep`) and `--max-columns was ignored: long lines use a fixed excerpt around the match.` | Names the coordinates or width the output uses when a requested display flag cannot change them (F4). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
 | glob: `Case-insensitive name filters such as *.py; a leading ! excludes.` | Without "Case-insensitive", Agents asked to ignore extension case wrote `*.[pP][yY]`, `--iglob`, several globs or a shell command (first-use probe, 2026-10). Exclusion is the one other glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |
 | output: `files lists matching files; count counts matching lines per file, every match with "--count-matches" in args. Omit for matching lines.` | Names the shapes in Agent terms (F2). Agents asked for occurrences per file did not find `--count-matches` (first-use probe, 2026-10). Agents sent `output: "content"` in 1769 calls (Sessions, 2026-09). |
