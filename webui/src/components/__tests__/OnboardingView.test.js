@@ -1047,4 +1047,37 @@ describe('OnboardingView', () => {
       ),
     ).toBe(false);
   });
+
+  it.each(['local', 'shared'])(
+    'keeps newer %s setup progress when the initial read answers late',
+    async (source) => {
+      const initialRead = Promise.withResolvers();
+      rpcMock.mockImplementation((method, params) =>
+        method === 'setup.get'
+          ? initialRead.promise
+          : server.rpc(method, params),
+      );
+      const props = reactiveProps({ initialSetup: null });
+      mountedComponent = mount(OnboardingView, {
+        target: document.body,
+        props,
+      });
+      await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('setup.get'));
+
+      if (source === 'local') {
+        byText(
+          '.onboarding-progress button',
+          t('onboarding.progress.components'),
+        ).click();
+      } else {
+        props.initialSetup = { ...server.state.setup, step: 'components' };
+      }
+      const components = () => document.querySelector('.onboarding-components');
+      await waitFor(() => expect(components()).toBeTruthy());
+      initialRead.resolve({ ...server.state.setup, step: 'provider' });
+      await initialRead.promise;
+      flushSync();
+      expect(components()).toBeTruthy();
+    },
+  );
 });

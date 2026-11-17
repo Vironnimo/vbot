@@ -20,6 +20,8 @@ Setup stays outside data snapshots and configuration backups: restoring older co
 
 Progress writes remain allowed after completion or skipping. Explicit finish records completed when the first Agent is configured and skipped otherwise; completed never becomes skipped or pending. `setup.get` can latch a newly observed manual configuration, so its sequence uses the cancellation-safe mutation lock too. Agent roster reads and state writes run on the Session worker, never on the Event Loop. Changed setup state publishes the ordinary unscoped `resource_changed` kind `setup`; defaults also publish their usual Agent invalidation.
 
+The WebUI guide adopts shared progress or its own initial read through the same step transition. A newer shared snapshot or an acknowledged local change supersedes an initial read still in flight.
+
 ## Verification
 
 `tests/server/rpc/test_setup_methods.py` covers exit at every step, shared durable progress, manual configuration and later removal, existing configuration, sparse validation and unknown-field preservation. `tests/core/test_json_documents.py` guards exclusion from both snapshot kinds; Runtime wiring verifies that a fresh bootstrap Agent has no Model and leaves setup pending.
