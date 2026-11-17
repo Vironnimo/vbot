@@ -374,8 +374,9 @@ def test_tray_starts_update_workers_itself_and_for_other_requesters(
     assert _activity(install)[-1] == "action_failed"
 
 
+@pytest.mark.parametrize("failed_poll", [False, True], ids=["ready", "status-read-failed"])
 def test_tray_runs_a_handed_server_request_once_and_reports_its_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_poll: bool
 ):
     install = _install(tmp_path)
     facade = host.ApplicationFacade(install)
@@ -399,6 +400,17 @@ def test_tray_runs_a_handed_server_request_once_and_reports_its_result(
         json.dumps({"schema_version": 1, "server": "restart", "request": request_id}),
         encoding="utf-8",
     )
+
+    if failed_poll:
+
+        def unavailable(_root: Path) -> bool:
+            raise PermissionError("exit request could not be read")
+
+        with monkeypatch.context() as patches:
+            patches.setattr(host, "_valid_exit_request", unavailable)
+            with pytest.raises(PermissionError):
+                facade.state()
+        assert json.loads(result_file.read_text(encoding="utf-8"))["state"] == "accepted"
 
     request = facade.state().server_request
     assert request == host.operations.ServerRequest(request_id, "restart")
