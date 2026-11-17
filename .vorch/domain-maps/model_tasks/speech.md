@@ -406,7 +406,9 @@ TTS sends the text as one user part with `responseModalities: ["AUDIO"]` and
 `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName` (default `kore`; the 30 prebuilt
 voices are stored lowercase, which Google accepts). 3.8 Models offer a `style` option sent
 as the part's `speech_metadata.style`; 3.1 and 2.5 TTS Models reject that field, offer no
-style, and take directions only inside the text. Unary 3.8 answers are WAV, older Models
+style, and take directions only inside the text; `gemini-2.5-flash-preview-tts` sometimes
+reads plain text as an instruction and answers HTTP 400 "Model tried to generate text"
+(live 2026-11-17), surfaced as an ordinary non-retryable error. Unary 3.8 answers are WAV, older Models
 answer headerless little-endian `audio/L16;rate=24000`; both become a WAV artifact. With
 `on_audio` the request goes to `:streamGenerateContent?alt=sse`, whose events carry L16 PCM
 chunks and cumulative `usageMetadata` (latest wins); the stream must end with
@@ -420,7 +422,7 @@ kept; others convert) with no prompt. Options map to
 `languageCodes`, `mode` `smart` to `SMART`, `context_bias` lines to `customVocabulary`,
 `word_timestamps` to `wordTimestamp`, `diarize` to `diarization`. Google rejects smart mode
 and vocabulary together with word timestamps or speaker labels, so those two win and the
-others are dropped. The answer's parts each hold an `audioTranscription.text` utterance
+others are dropped (Google answers HTTP 400 otherwise, live 2026-11-17). The answer's parts each hold an `audioTranscription.text` utterance
 (joined by newlines); with word times or speaker labels each becomes a segment
 `{text, start, end, speaker, words}` with offsets in seconds. The 25 MB vBot audio ceiling
 stays well below Google's 100 MB inline request limit.
