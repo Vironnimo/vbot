@@ -38,7 +38,7 @@ vbot performance recordings [--limit <count>]
 ```
 
 - Measurement is always on. `status` reports since server start: the slowest operations by p99 and by total time, key gauges (Event Loop utilization, process CPU and memory, active and queued Runs), and recent Event Loop stalls with the code locations that blocked the server.
-- `history` shows stored 10-minute summaries of the last 24 hours (`--hours` up to 336), also from earlier server processes, so a slowdown the user reports afterwards can still be examined: `--at "2026-09-28 16:40"` (local time, as in log lines) shows the windows around that time, `--metric <name>` one value per window. `heap` counts the objects in memory by type, for a growing memory use.
+- `history` shows stored 10-minute summaries of the last 24 hours (`--hours` up to 336), including earlier server processes. Use `--at "2026-09-28 16:40"` for the windows containing that local time. If the time occurs twice, supply its UTC offset, for example `--at "2026-10-25 02:30+01:00"`. Use `--metric <name>` for one value per window. `heap` counts objects in memory by type.
 - To examine a specific slowdown, start a recording, let the slow behavior happen, then stop it. `record stop` prints the trace file path and the slowest operations of exactly the recorded window. Only one recording runs at a time; it stops automatically after `--max-seconds`, and `recordings` still lists it. Give the user the trace path: the file opens in https://ui.perfetto.dev, with one track per Session.
 - Measurements, traces and summaries contain timings, ids and code locations, never message content.
 
