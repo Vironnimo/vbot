@@ -484,12 +484,16 @@ class UsageRecorder:
                 merged["estimated"] = True
             else:
                 merged.pop("estimated", None)
+            incoming_cost_source = incoming.get("cost", {}).get("source")
+            if incoming_cost_source == "provider" and "reported_cost_usd" not in incoming:
+                # A fresh provider cost supersedes the previous scalar report.
+                merged.pop("reported_cost_usd", None)
             if "reported_cost_usd" in merged:
                 merged["cost"] = price_usage(merged, None)
             elif (
                 previous_cost is not None
                 and previous_cost["source"] == "provider"
-                and incoming.get("cost", {}).get("source") != "provider"
+                and incoming_cost_source != "provider"
             ):
                 merged["cost"] = previous_cost
             elif "cost" not in incoming and (incoming or "cost" not in merged):

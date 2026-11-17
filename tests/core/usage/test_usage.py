@@ -39,15 +39,18 @@ def recorder(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_field", ["reported_cost_usd", "cost"])
-async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder, provider_field):
+@pytest.mark.parametrize("first_field", ["reported_cost_usd", "cost"])
+@pytest.mark.parametrize("next_field", ["reported_cost_usd", "cost"])
+async def test_cumulative_updates_retain_one_call_and_field_provenance(
+    recorder, first_field, next_field
+):
     identifier = await recorder.start(model="p/model::p:api", kind="live_voice")
     provider_cost = {"amount_usd": 0.1, "source": "provider"}
     first = await recorder.update(
         identifier,
         {
             "input_tokens": 12,
-            provider_field: 0.1 if provider_field == "reported_cost_usd" else provider_cost,
+            first_field: 0.1 if first_field == "reported_cost_usd" else provider_cost,
         },
     )
     revision, records = read_ledger(recorder)
@@ -63,7 +66,7 @@ async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder,
     updated_cost = {"amount_usd": 0.2, "source": "provider"}
     await recorder.update(
         identifier,
-        {provider_field: 0.2 if provider_field == "reported_cost_usd" else updated_cost},
+        {next_field: 0.2 if next_field == "reported_cost_usd" else updated_cost},
     )
     await recorder.finish(identifier)
     newer, changed = read_ledger(recorder, revision)
