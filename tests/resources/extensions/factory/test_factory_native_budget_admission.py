@@ -777,3 +777,52 @@ async def test_native_follower_tool_admission_matches_offered_tools_for_descenda
         assert (result is not None) is denied
     request["answer"].set_result({"content": "test-owned-policy-end", "tool_calls": None})
     await harness.settle()
+
+
+async def test_capped_admission_uses_changed_records_without_history_scans(
+    native_factory_runtime: NativeFactoryRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = native_factory_runtime
+    factory = await establish(
+        harness, tmp_path, limits={"runs": 50, "tool_calls": 50, "tokens": 100000, "cost_usd": 10}
+    )
+    await harness.operation(
+        "task.create",
+        factory_id=factory["id"],
+        title="Indexed",
+        objective="Budget",
+        assignee_id=factory["leader_member_id"],
+    )
+    request = await harness.request()
+    root = context(harness, harness.runtime.chat_run_manager.active_runs()[0])
+    changes = harness.service.records().budget_changes
+    payload_sizes = []
+
+    async def record_changes(*args: Any, **kwargs: Any) -> Json:
+        page = cast(Json, await changes(*args, **kwargs))
+        payload_sizes.append(len(page["records"]))
+        return page
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Capped admission scanned retained history")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(harness.service.native, "all_tasks", forbidden)
+        patch.setattr(harness.service.native, "all_executions", forbidden)
+        patch.setattr(harness.service.records(), "list_cards", forbidden)
+        patch.setattr(harness.service.records(), "budget_changes", record_changes)
+        host = harness.service.host
+        patch.setattr(harness.service, "host", replace(host, execution_usage=forbidden))
+        await harness.service.native.sessions.before_model_request(root)
+        for call_id in ("bounded-one", "bounded-two"):
+            assert (
+                await harness.service.native.sessions.before_tool_call(
+                    root, tool_name="read", tool_call_id=call_id
+                )
+                is None
+            )
+        assert all(size <= 1 for size in payload_sizes)
+    request["answer"].set_result({"content": "test-owned-end", "tool_calls": None})
+    await harness.settle()

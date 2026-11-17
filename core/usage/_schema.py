@@ -7,8 +7,11 @@ from core.database import (
     CANONICAL,
     TRAILING_CAPTURE,
     DatabaseSpec,
+    Migration,
     SnapshotFacts,
 )
+
+from . import _execution_totals
 
 DATABASE_NAME = "model_usage"
 
@@ -72,6 +75,7 @@ CREATE TABLE input_estimate_calibration (
     estimator_version INTEGER
 ) STRICT;
 """
+SCHEMA_SQL += _execution_totals.SCHEMA_SQL
 
 
 def usage_database_spec(path: Path) -> DatabaseSpec:
@@ -82,6 +86,7 @@ def usage_database_spec(path: Path) -> DatabaseSpec:
         application_id=APPLICATION_IDS[DATABASE_NAME],
         format_generation=1,
         schema_sql=SCHEMA_SQL,
+        migrations=(Migration("owned_execution_totals", apply=_execution_totals.backfill),),
         snapshot_facts=SnapshotFacts(
             {
                 "call_count": "SELECT COUNT(*) FROM usage_calls",

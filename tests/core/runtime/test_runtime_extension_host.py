@@ -240,9 +240,17 @@ async def test_execution_usage_keeps_owner_scope_and_rejects_retired_hosts(runti
     reader.assert_awaited_once_with("factory", "card", ["run"])
     await host.execution_usage("card")
     reader.assert_awaited_with("factory", "card", None)
+    changes = AsyncMock(
+        return_value={"ledger_id": "usage", "revision": 7, "more": False, "groups": []}
+    )
+    monkeypatch.setattr(runtime._usage_recorder, "execution_changes", changes)  # noqa: SLF001
+    assert (await host.execution_usage_changes(4, ledger_id="usage", limit=10))["revision"] == 7
+    changes.assert_awaited_once_with("factory", 4, ledger_id="usage", limit=10)
     runtime.extensions.retire_registration()
     with pytest.raises(ValueError):
         await host.execution_usage("card", None)
+    with pytest.raises(ValueError):
+        await host.execution_usage_changes(7, ledger_id="usage")
     assert reader.await_count == 2
 
 

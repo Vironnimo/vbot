@@ -120,7 +120,7 @@ async def recover_archives(native: Any) -> None:
                 await native.store.change_execution(
                     execution["id"], {"state": "draining"}, actor="factory"
                 )
-            native.service.spawn(native._close(execution, archive=True))
+            native.service.spawn(native.sessions._close(execution, archive=True))
     for factory in factories.values():
         if factory["state"] == "archived":
             await native.workflows.fence(factory["id"], archive=True)

@@ -154,7 +154,7 @@ async def prepare(native: Any, execution: Json, token: str) -> bool:
         and item["epoch"] < execution["epoch"]
     ]
     for item in previous:
-        await native._close(item)
+        await native.sessions._close(item)
     async with native.service.lock:
         current = await native.store.get_execution(execution["id"])
         pending = current["runtime"].get("pending") or {}

@@ -163,6 +163,7 @@ class FakeExecution:
 
     def __init__(self, store: FactoryStore) -> None:
         self.store = store
+        self.budgets = self
         self.calls: list[tuple[str, str, str]] = []
         self.start_gate: tuple[asyncio.Event, asyncio.Event] | None = None
 

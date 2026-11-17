@@ -110,6 +110,31 @@ async def test_execution_totals_use_settled_owner_usage_and_historical_prices(re
     total = await recorder.execution_totals("factory", "card")
     assert total["unreported_calls"] == total["unpriced_calls"] == 1
     assert total["cost_usd"] == 0.3
+    pages = []
+    cursor = 0
+    ledger = None
+    while True:
+        page = await recorder.execution_changes("factory", cursor, ledger_id=ledger, limit=1)
+        ledger, cursor = page["ledger_id"], page["revision"]
+        pages.extend(page["groups"])
+        if not page["more"]:
+            break
+    assert {item["group_id"] for item in pages} == {"card", "other"}
+    await recorder.update(first, {"input_tokens": 12, "reported_cost_usd": 0.05})
+    changed = await recorder.execution_changes("factory", cursor, ledger_id=ledger)
+    assert len(changed["groups"]) == 1
+    assert changed["groups"][0]["group_id"] == "card"
+    assert changed["groups"][0]["usage"]["cost_nano_usd"] == 250_000_000
+    assert changed["groups"][0]["usage"]["input_tokens"] == 32
+    assert (
+        await recorder.execution_changes(
+            "factory",
+            changed["revision"],
+            ledger_id=ledger,
+        )
+    )["groups"] == []
+    reset = await recorder.execution_changes("factory", changed["revision"], ledger_id="restored")
+    assert {item["group_id"] for item in reset["groups"]} == {"card", "other"}
 
 
 @pytest.mark.asyncio
@@ -746,3 +771,45 @@ async def test_input_estimate_calibration_of_another_estimator_version_starts_af
         assert reopened.input_estimate_factor(model) == 1.0
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_totals_backfill_and_source_writes_remain_atomic(tmp_path, monkeypatch):
+    from core.usage import _execution_totals
+    from core.usage import usage as owner
+
+    write_bootstrap_marker(tmp_path)
+    spec = owner.usage_database_spec
+    monkeypatch.setattr(
+        owner,
+        "usage_database_spec",
+        lambda path: replace(
+            spec(path),
+            schema_sql=spec(path).schema_sql.removesuffix(_execution_totals.SCHEMA_SQL),
+            migrations=(),
+        ),
+    )
+    old = UsageRecorder(tmp_path / "model-usage.db")
+    call = await old.start(model="p/model", kind="chat", owner_name="factory", group_id="group")
+    await old.finish(call, {"input_tokens": 2, "output_tokens": 3, "reported_cost_usd": 0.1})
+    old.close()
+    monkeypatch.setattr(owner, "usage_database_spec", spec)
+    current = UsageRecorder(tmp_path / "model-usage.db")
+    try:
+        total = await current.execution_totals("factory", "group")
+        assert total["input_tokens"] == 2 and total["cost_usd"] == 0.1
+        page = await current.execution_changes("factory")
+        assert len(page["groups"]) == 1
+
+        # A failed source write rolls back both the source and its projection.
+        def rolled_back(connection):
+            connection.execute("UPDATE usage_calls SET status = 'started' WHERE id = ?", (call,))
+            raise ValueError("test-owned-rollback")
+
+        with pytest.raises(ValueError):
+            current.database.write(rolled_back)
+        assert await current.execution_totals("factory", "group") == total
+        await current.update(call, {"input_tokens": 7, "reported_cost_usd": 0.01})
+        assert (await current.execution_totals("factory", "group"))["cost_usd"] == 0.01
+    finally:
+        current.close()

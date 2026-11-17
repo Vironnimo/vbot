@@ -12,7 +12,7 @@ from core.extensions.operations import ExtensionOperationError
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
-from . import agent_text
+from . import _budget_store, agent_text
 from ._native_schema import SCHEMA_SQL as NATIVE_SCHEMA_SQL
 from ._native_store import NativeFactoryStore
 
@@ -308,6 +308,7 @@ MIGRATIONS = (
     Migration("execution_limit_history", breaks_older=True),
     Migration("global_workflows", breaks_older=True, apply=_migrate_global_workflows),
     Migration("native_factory_teams"),
+    Migration("factory_budget_changes", apply=_budget_store.backfill),
 )
 
 _CARD_FIELDS = (
@@ -401,6 +402,23 @@ class FactoryStore:
     def __init__(self, database: Database) -> None:
         self.database = database
         self.native = NativeFactoryStore(database)
+
+    async def budget_changes(
+        self,
+        after: int = 0,
+        *,
+        ledger_id: str | None = None,
+        limit: int = 1000,
+    ) -> Json:
+        current = f"{self.database.database_id}:{self.database.restore_id or ''}"
+        page = await self.database.read_async(
+            lambda connection: _budget_store.read_changes(
+                connection,
+                0 if ledger_id != current else after,
+                limit,
+            )
+        )
+        return {"ledger_id": current, **page}
 
     # Workflows
 

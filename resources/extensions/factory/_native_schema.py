@@ -1,5 +1,7 @@
 """Additive native Factory records; Workflow Card tables keep their meaning."""
 
+from ._budget_store import SCHEMA_SQL as BUDGET_SCHEMA_SQL
+
 SCHEMA_SQL = """
 CREATE TABLE native_factories (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL UNIQUE,
@@ -91,3 +93,5 @@ CREATE TABLE native_identity_reservations (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 ) STRICT;
 """
+
+SCHEMA_SQL += BUDGET_SCHEMA_SQL

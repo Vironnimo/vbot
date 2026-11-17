@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -45,8 +46,10 @@ class Native:
         self.reads: list[str] = []
         self.cards: list[Json] = []
         self.store = self
+        self._feed: dict[tuple[str, str], Json] = {}
+        self._revision = 0
         self.service = SimpleNamespace(
-            host=SimpleNamespace(execution_usage=self.usage),
+            host=SimpleNamespace(execution_usage_changes=self.usage_changes),
             records=lambda: self,
             execution=SimpleNamespace(group_ids=lambda card: [card["group_id"]]),
         )
@@ -82,10 +85,62 @@ class Native:
         item.update(deepcopy(patch))
         return deepcopy(item)
 
-    async def usage(self, group: str, runs: list[str] | None) -> Json:
-        assert runs is None  # includes auxiliary and owned descendant requests
-        self.reads.append(group)
-        return deepcopy(self.reports.get(group, {}))
+    async def budget_changes(self, after: int = 0, **kwargs: Any) -> Json:
+        rows: dict[tuple[str, str], Json] = {}
+        for task in self.tasks:
+            rows[("task", task["id"])] = {
+                "id": task["id"],
+                "factory_id": task.get("factory_id", "factory"),
+                "parent_id": task.get("parent_id", ""),
+            }
+        for key, topic in self.topics.items():
+            rows[("topic", key)] = {"id": key, "factory_id": "factory", **topic}
+        for item in self.executions:
+            rows[("execution", item["id"])] = {
+                **item,
+                "execution_kind": item["kind"],
+                "runs": item["runtime"].get("runs", []),
+                "tool_calls": item["runtime"].get("tool_calls", 0),
+            }
+        for item in self.cards:
+            rows[("card", item["id"])] = {
+                **item,
+                "task_id": item["runtime"].get("native_task_id", ""),
+                **item["runtime"].get("budget", {}),
+                "steps": [],
+            }
+        changes = []
+        for record_key in self._feed.keys() | rows.keys():
+            if not after or rows.get(record_key) != self._feed.get(record_key):
+                self._revision += 1
+                changes.append(
+                    {"kind": record_key[0], "id": record_key[1], "value": rows.get(record_key)}
+                )
+        self._feed = deepcopy(rows)
+        return {
+            "ledger_id": "domain",
+            "revision": self._revision,
+            "more": False,
+            "records": changes,
+        }
+
+    async def usage_changes(self, after: int = 0, **kwargs: Any) -> Json:
+        self.reads.append("changes")
+        return {
+            "ledger_id": "usage",
+            "revision": after + 1,
+            "more": False,
+            "groups": [
+                {
+                    "group_id": key,
+                    "usage": {
+                        **report,
+                        "cost_nano_usd": round((report.get("cost_usd") or 0) * 1e9),
+                    },
+                }
+                for key, report in self.reports.items()
+            ],
+        }
 
     async def block(self, execution: Json, reason: str, detail: Json) -> None:
         assert reason == "budget_exhausted"
@@ -144,7 +199,7 @@ async def test_native_factory_resource_limits_include_unrelated_and_topic_work(
     assert await limits.check(native.executions[-1])
     assert native.blocks[-1]["scope"] == "factory"
     assert native.blocks[-1]["reason"] == reason
-    assert set(native.reads) == {"old-group", "child-group", "topic-group"}
+    assert native.reads == ["changes"]
 
 
 async def test_native_tool_reservation_checks_ancestor_cap_without_resource_reads() -> None:
@@ -206,3 +261,71 @@ async def test_unlimited_admission_reads_only_its_ancestor_chain(
     assert not await limits.check(native.executions[-1])
     assert not await limits.check(native.executions[-1], resources=False)
     assert native.reads == []
+
+
+async def test_incremental_totals_follow_corrections_reparenting_and_reconstruction() -> None:
+    native = Native()
+    native.factory["limits"] = {"cost_usd": 100}
+    native.reports["child-group"] = {
+        "calls": 1,
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cost_nano_usd": 400_000_000,
+        "cost_usd": 0.4,
+    }
+    limits = NativeLimits(native)
+    execution = native.executions[-1]
+    first = await limits.status(execution, report_all=True)
+    assert first["task:parent"]["usage"]["cost_usd"] == 0.4
+    native.reports["child-group"].update(input_tokens=20, cost_usd=0.1)
+    corrected = await limits.status(execution, report_all=True)
+    assert corrected["task:parent"]["usage"]["tokens"] == 22
+    assert corrected["factory"]["usage"]["cost_usd"] == 0.1
+    assert await limits.status(execution, report_all=True) == corrected
+    native.tasks[-1]["parent_id"] = ""
+    moved = await limits.status(execution, report_all=True)
+    assert "task:parent" not in moved
+    parent = await limits.status(native.executions[0], report_all=True)
+    assert parent["task:parent"]["usage"]["tool_calls"] == 1
+    assert parent["task:parent"]["usage"]["cost_usd"] == 0
+    assert moved["factory"]["usage"] == parent["factory"]["usage"]
+    assert await NativeLimits(native).status(execution, report_all=True) == moved
+    feed, usage_feed = native.budget_changes, native.usage_changes
+
+    async def restored_feed(after: int = 0, **kwargs: Any) -> Json:
+        page = await feed(0 if kwargs.get("ledger_id") != "restored-domain" else after)
+        return {**page, "ledger_id": "restored-domain"}
+
+    async def restored_usage(after: int = 0, **kwargs: Any) -> Json:
+        return {**await usage_feed(after), "ledger_id": "restored-usage"}
+
+    native.service.records = lambda: SimpleNamespace(budget_changes=restored_feed)
+    native.service.host.execution_usage_changes = restored_usage
+    assert await limits.status(execution, report_all=True) == moved
+
+
+async def test_cancelled_projection_page_does_not_skip_unapplied_changes() -> None:
+    native = Native()
+    snapshot = (await native.budget_changes())["records"]
+    entered = asyncio.Event()
+    block = True
+
+    async def feed(after: int = 0, **kwargs: Any) -> Json:
+        if after == 0:
+            return {"ledger_id": "paged", "revision": 1, "more": True, "records": snapshot[:2]}
+        entered.set()
+        if block:
+            await asyncio.Event().wait()
+        return {"ledger_id": "paged", "revision": 2, "more": False, "records": snapshot[2:]}
+
+    native.service.records = lambda: SimpleNamespace(budget_changes=feed)
+    limits = NativeLimits(native)
+    interrupted = asyncio.create_task(limits.status(native.executions[-1]))
+    await entered.wait()
+    interrupted.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await interrupted
+    block = False
+    status = await limits.status(native.executions[-1])
+    assert status["task:parent"]["usage"]["runs"] == 2
+    assert status["factory"]["usage"]["tool_calls"] == 2

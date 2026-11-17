@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-33.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-34.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-33.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-34.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,17 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `33.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 33` in `extension.json` for Extensions using the new
+The SDK version is `34.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 34` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 34 adds `host.execution_usage_changes` for incremental, owner-scoped settled
+Usage snapshots. Carry its `ledger_id` and `revision` cursor between reads; a
+restore resets the cursor, and `more` indicates another bounded page. Group
+snapshots retain exact integer `cost_nano_usd` for budget aggregation.
 
 API 33 adds `catalog().tool_activations`, the complete non-private follower graph,
 including Tools hidden from configuration pickers. API 32 adds actual Identity

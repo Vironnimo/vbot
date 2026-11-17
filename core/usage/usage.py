@@ -23,6 +23,7 @@ from typing import Any, NamedTuple, Protocol
 from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
 from core.sessions import SessionAddress
+from core.usage import _execution_totals
 from core.usage._calibration import InputEstimateCalibration, LearnedSample
 from core.usage._failures import classify_failure
 from core.usage._request_usage import last_request_usage
@@ -568,6 +569,14 @@ class UsageRecorder:
         selected = json.dumps(run_ids) if run_ids is not None else None
 
         def read(connection: sqlite3.Connection) -> dict[str, Any]:
+            if run_ids is None:
+                return _execution_totals.summary(
+                    connection.execute(
+                        f"SELECT {', '.join(_execution_totals.FIELDS)} FROM usage_execution_totals "
+                        "WHERE owner_name = ? AND group_id = ?",
+                        (owner_name, group_id),
+                    ).fetchone()
+                )
             row = connection.execute(
                 "SELECT COUNT(*), COALESCE(SUM(json_extract(usage_json, '$.input_tokens')), 0), "
                 "COALESCE(SUM(json_extract(usage_json, '$.output_tokens')), 0), "
@@ -591,6 +600,34 @@ class UsageRecorder:
             }
 
         return await self.database.read_async(read)
+
+    async def execution_changes(
+        self,
+        owner_name: str,
+        after: int = 0,
+        *,
+        ledger_id: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        """Current totals of changed groups; a restored ledger resets the cursor."""
+        if (
+            not owner_name
+            or type(after) is not int
+            or after < 0
+            or type(limit) is not int
+            or not 1 <= limit <= 1000
+        ):
+            raise ValueError("Supply an owner, a nonnegative revision and a limit from 1 to 1000")
+        current = self.ledger_id
+        result = await self.database.read_async(
+            lambda connection: _execution_totals.read_changes(
+                connection,
+                owner_name,
+                0 if ledger_id != current else after,
+                limit,
+            )
+        )
+        return {"ledger_id": current, **result}
 
     def read_since(
         self, revision: int = 0, *, page_size: int = READ_PAGE_SIZE
