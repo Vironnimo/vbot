@@ -35,6 +35,7 @@ WEB_SEARCH_DEFAULTS = {
     "searxng": {"base_url": "http://localhost:8888"},
 }
 NOTIFICATION_DEFAULTS = {
+    "approval_required": True,
     "run_completed": True,
     "run_failed": True,
     "automation_failed": True,

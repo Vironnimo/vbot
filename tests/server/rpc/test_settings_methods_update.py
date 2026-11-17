@@ -274,6 +274,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
     }
     assert result["session_titles"] == {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"}
     assert result["notifications"] == {
+        "approval_required": True,
         "run_completed": False,
         "run_failed": True,
         "automation_failed": True,
