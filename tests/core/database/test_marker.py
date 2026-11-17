@@ -69,6 +69,7 @@ def test_the_bootstrap_marker_authorizes_creating_and_registering_databases(
     "payload",
     [
         "{",
+        "1" * 5000,
         {"format_version": 1},
         {"format_version": 2, "databases": {}},
         {"format_version": 0, "databases": {}},
@@ -86,6 +87,7 @@ def test_the_bootstrap_marker_authorizes_creating_and_registering_databases(
     ],
     ids=[
         "malformed-json",
+        "oversized-integer",
         "missing-databases",
         "newer-format",
         "older-format",
@@ -253,8 +255,9 @@ def test_the_maintenance_block_keeps_the_guard_when_the_operation_fails(data_dir
     assert guard.operation == "convert"
 
 
-def test_a_malformed_guard_still_blocks_and_names_the_way_out(data_dir: Path) -> None:
-    (data_dir / MAINTENANCE_GUARD_FILE_NAME).write_text("{}", encoding="utf-8")
+@pytest.mark.parametrize("payload", ["{}", "1" * 5000], ids=["shape", "oversized-integer"])
+def test_a_malformed_guard_still_blocks_and_names_the_way_out(data_dir: Path, payload: str) -> None:
+    (data_dir / MAINTENANCE_GUARD_FILE_NAME).write_text(payload, encoding="utf-8")
 
     guard = read_maintenance(data_dir)
     assert guard is not None

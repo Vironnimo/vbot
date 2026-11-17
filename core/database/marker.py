@@ -161,7 +161,7 @@ def missing_marker_error(data_dir: Path) -> DatabaseConversionRequiredError:
 def _parse_marker(raw: str, path: Path) -> DataStoreMarker:
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         raise DatabaseFormatError(f"data-store marker is malformed: {path}") from exc
     if not isinstance(payload, dict) or not set(payload) >= _MARKER_KEYS:
         raise DatabaseFormatError(f"data-store marker has an unexpected shape: {path}")
@@ -360,7 +360,7 @@ def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
         raw = ""
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except ValueError, RecursionError:
         payload = None
     if (
         not isinstance(payload, dict)

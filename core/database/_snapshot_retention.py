@@ -40,7 +40,7 @@ def _read(data_dir: Path) -> dict[str, Any]:
         return value
     except FileNotFoundError:
         return {"format_version": 1, "owners": {}}
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise DatabaseUnavailableError("snapshot retention claims cannot be read") from exc
 
 

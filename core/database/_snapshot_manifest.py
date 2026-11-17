@@ -301,7 +301,7 @@ def read_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | None
         return None
     except OSError as exc:
         raise DatabaseUnavailableError("snapshot manifest is unavailable") from exc
-    except UnicodeError, json.JSONDecodeError, DatabaseCorruptError:
+    except ValueError, RecursionError, DatabaseCorruptError:
         return None
 
 
