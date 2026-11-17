@@ -16,6 +16,10 @@ from core.external_history.files import MAX_SOURCE_BYTES, read_session
 from core.external_history.records import SOURCES, ExternalSession
 from core.utils.file_status import is_dir_strict, is_file_strict, is_link_status
 
+_DATABASE_SUFFIXES = {".db", ".sqlite"}
+_SOURCE_READ_ERRORS = (OSError, sqlite3.Error, ValueError, TypeError, KeyError, AttributeError)
+_OPENCLAW_DATABASE = "openclaw-agent.sqlite"
+
 
 def source_root(source: str, path: str | None) -> Path:
     if source not in SOURCES:
@@ -84,7 +88,7 @@ def _transcripts(source: str, root: Path) -> list[Path]:
         for file in _walk(tree, {".jsonl", ".sqlite"}):
             if (
                 source != "openclaw"
-                or file.name == "openclaw-agent.sqlite"
+                or file.name.lower() == _OPENCLAW_DATABASE
                 or "sessions" in file.parts
                 or "transcripts" in file.parts
             ):
@@ -94,14 +98,17 @@ def _transcripts(source: str, root: Path) -> list[Path]:
     for item in root.iterdir():
         if is_link_status(item.lstat()) or not is_file_strict(item):
             continue
+        name = item.name.lower()
         if (
             source == "hermes"
-            and item.name == "state.db"
+            and name == "state.db"
+            or source == "openclaw"
+            and name == _OPENCLAW_DATABASE
             or source == "opencode"
-            and item.name.startswith("opencode")
-            and item.suffix == ".db"
-            or item.suffix in {".jsonl", ".json"}
-            and item.name
+            and name.startswith("opencode")
+            and item.suffix.lower() == ".db"
+            or item.suffix.lower() in {".jsonl", ".json"}
+            and name
             not in {
                 "settings.json",
                 "config.json",
@@ -113,7 +120,21 @@ def _transcripts(source: str, root: Path) -> list[Path]:
             }
         ):
             selected.append(item)
-    return sorted(set(selected), key=lambda p: (p.stat().st_mtime_ns, p.as_posix()), reverse=True)
+    return sorted(set(selected))
+
+
+def _scan_sessions(source: str, root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for candidate in _transcripts(source, root):
+        try:
+            if candidate.suffix.lower() in _DATABASE_SUFFIXES:
+                rows.extend(list_database(source, candidate))
+            else:
+                rows.append(read_session(source, candidate).summary())
+        except (ExternalHistoryError, *_SOURCE_READ_ERRORS) as exc:
+            problems.append(f"{candidate.as_posix()}: {exc}")
+    return rows, problems
 
 
 def _memory_files(source: str, root: Path) -> list[Path]:
@@ -210,17 +231,8 @@ class ExternalHistory:
     ) -> dict[str, Any]:
         root = source_root(source, path)
         self._page(offset, limit)
-        rows: list[dict[str, Any]] = []
-        problems: list[str] = []
         try:
-            for candidate in _transcripts(source, root):
-                try:
-                    if candidate.suffix in {".db", ".sqlite"}:
-                        rows.extend(list_database(source, candidate))
-                    else:
-                        rows.append(read_session(source, candidate).summary())
-                except (ExternalHistoryError, OSError, sqlite3.Error, ValueError) as exc:
-                    problems.append(f"{candidate.as_posix()}: {exc}")
+            rows, problems = _scan_sessions(source, root)
         except OSError as exc:
             raise ExternalHistoryError(
                 f"Cannot read source {root.as_posix()}: {exc.strerror}."
@@ -249,7 +261,7 @@ class ExternalHistory:
             if is_file_strict(root):
                 result = (
                     read_database(source, root, session_id)
-                    if root.suffix in {".db", ".sqlite"}
+                    if root.suffix.lower() in _DATABASE_SUFFIXES
                     else read_session(source, root)
                 )
                 if result.id != session_id:
@@ -258,23 +270,17 @@ class ExternalHistory:
                         f"{session_id!r}. Nothing was imported."
                     )
                 return result
-            matches: list[dict[str, Any]] = []
-            for candidate in _transcripts(source, root):
-                if candidate.suffix in {".db", ".sqlite"}:
-                    matches.extend(
-                        row for row in list_database(source, candidate) if row["id"] == session_id
-                    )
-                else:
-                    candidate_session = read_session(source, candidate)
-                    if candidate_session.id == session_id:
-                        matches.append(candidate_session.summary())
+            rows, problems = _scan_sessions(source, root)
+            matches = [row for row in rows if row["id"] == session_id]
             if len(matches) != 1:
                 raise ExternalHistoryError(
                     f"Session {session_id!r} has {len(matches)} matches. List sessions and "
                     f"pass the exact source file path."
                 )
-            return self.read(source, session_id, path=matches[0]["path"])
-        except (OSError, sqlite3.Error, ValueError, TypeError, KeyError, AttributeError) as exc:
+            result = self.read(source, session_id, path=matches[0]["path"])
+            result.warnings.extend(problems)
+            return result
+        except _SOURCE_READ_ERRORS as exc:
             raise ExternalHistoryError(
                 f"Cannot read the selected {SOURCES[source]} Session: {exc}. Nothing was imported."
             ) from exc
@@ -317,7 +323,7 @@ class ExternalHistory:
                 )
             if item.stat().st_size > MAX_SOURCE_BYTES:
                 raise ExternalHistoryError(f"Memory file exceeds 256 MiB: {item.as_posix()}.")
-            content = item.read_text(encoding="utf-8-sig")
+            content = item.read_bytes().decode("utf-8")
             return {
                 "path": item.as_posix(),
                 "name": item.name,
@@ -341,13 +347,23 @@ class ExternalHistory:
         self._page(offset, limit)
         root = source_root(source, path)
         try:
-            rows = [
-                self.read_memory(source, item.as_posix()) for item in _memory_files(source, root)
-            ]
+            rows = []
+            problems = []
+            for item in _memory_files(source, root):
+                try:
+                    document = self.read_memory(source, item.as_posix())
+                except ExternalHistoryError as exc:
+                    if item == root:
+                        raise
+                    problems.append(str(exc))
+                    continue
+                content = _normalize_memory_text(document["content"])
+                rows.append({**document, "content": content, "characters": len(content)})
             return {
                 "source": source,
                 "path": root.as_posix(),
                 **_content_page(rows, offset, limit, char_offset),
+                "warnings": problems,
             }
         except OSError as exc:
             raise ExternalHistoryError(f"Cannot read Memory at {root.as_posix()}: {exc}.") from exc
@@ -378,10 +394,16 @@ def import_metadata(session: ExternalSession) -> dict[str, Any]:
     }
 
 
+def _normalize_memory_text(content: str) -> str:
+    return content.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def memory_entries(content: str) -> list[str]:
     """Offer paragraphs for review; preserve their wording instead of summarizing."""
     entries = []
-    for paragraph in re.split(r"\n\s*\n|\n(?=\s*[-*] )|\n§\n", content.strip()):
+    for paragraph in re.split(
+        r"\n\s*\n|\n(?=\s*[-*] )|\n§\n", _normalize_memory_text(content).strip()
+    ):
         value = paragraph.strip()
         if value.startswith(("- ", "* ")):
             value = value[2:]

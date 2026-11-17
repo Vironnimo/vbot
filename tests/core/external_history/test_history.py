@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -141,10 +142,15 @@ def test_export_preserves_text_and_foreign_tool_payloads(tmp_path: Path, source:
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("source", ["hermes", "opencode", "openclaw"])
-def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: str) -> None:
-    path = tmp_path / "source.db"
-    with sqlite3.connect(path) as db:
+@pytest.mark.parametrize(
+    ("source", "variant"),
+    [("hermes", ""), ("opencode", "v2"), ("opencode", "v1"), ("openclaw", "")],
+)
+def test_sqlite_sources_read_a_snapshot_without_writing(
+    tmp_path: Path, source: str, variant: str
+) -> None:
+    path = tmp_path / ("openclaw-agent.sqlite" if source == "openclaw" else "source.DB")
+    with closing(sqlite3.connect(path)) as db, db:
         if source == "hermes":
             db.executescript(
                 "CREATE TABLE sessions (id TEXT, parent_session_id TEXT, title TEXT); "
@@ -158,7 +164,7 @@ def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: 
                 "ALTER TABLE messages ADD COLUMN derived TEXT "
                 "GENERATED ALWAYS AS (content || '!') VIRTUAL"
             )
-        elif source == "opencode":
+        elif variant == "v2":
             db.executescript(
                 "CREATE TABLE session_v2 (id TEXT, title TEXT); "
                 "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, "
@@ -170,14 +176,23 @@ def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: 
                 "INSERT INTO session_message VALUES ('m','s','user',1,1700000000000,?)",
                 (json.dumps({"text": "hello"}),),
             )
+        elif variant == "v1":
+            db.executescript(
+                "CREATE TABLE session (id TEXT, title TEXT); "
+                "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT); "
+                "CREATE TABLE part (id TEXT, message_id TEXT, data TEXT); "
+                "INSERT INTO session VALUES ('s','title');"
+            )
+            db.execute("INSERT INTO message VALUES ('m','s',1700000000000,?)", ('{"role":"user"}',))
+            db.execute("INSERT INTO part VALUES ('p','m',?)", ('{"type":"text","text":"hello"}',))
         else:
             db.executescript(
-                "CREATE TABLE session_windows (session_id TEXT); "
+                "CREATE TABLE session_windows (session_id TEXT, display_name TEXT); "
                 "CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT); "
                 "CREATE TABLE session_transcript_active_events "
                 "(session_id TEXT, event_seq INTEGER, active_position INTEGER);"
             )
-            db.execute("INSERT INTO session_windows VALUES ('s')")
+            db.execute("INSERT INTO session_windows VALUES ('s','OpenClaw display title')")
             db.execute(
                 "INSERT INTO transcript_events VALUES ('s',1,?)",
                 (json.dumps({"type": "message", "message": {"role": "user", "content": "hello"}}),),
@@ -186,12 +201,44 @@ def test_sqlite_sources_read_a_snapshot_without_writing(tmp_path: Path, source: 
     before = path.read_bytes()
     reader = ExternalHistory()
     assert reader.list(source, path=str(path))["items"][0]["id"] == "s"
-    entry = reader.read(source, "s", path=str(path)).entries[0]
+    session = reader.read(source, "s", path=str(path))
+    entry = session.entries[0]
     assert entry.content == "hello"
     if source == "hermes":
         assert entry.raw['source"extra'] == "kept"
         assert entry.raw["derived"] == "hello!"
+    if source == "openclaw":
+        directory = reader.list(source, path=str(tmp_path))
+        assert directory["total"] == 1
+        assert directory["items"][0]["title"] == session.title == "OpenClaw display title"
     assert path.read_bytes() == before
+    if variant == "v1":
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("DROP TABLE part")
+        with pytest.raises(ExternalHistoryError, match="Unsupported opencode database schema"):
+            reader.read(source, "s", path=str(path))
+
+
+@pytest.mark.parametrize("missing_row", [False, True])
+def test_openclaw_refuses_an_incomplete_active_path(tmp_path: Path, missing_row: bool) -> None:
+    path = tmp_path / "openclaw-agent.sqlite"
+    with closing(sqlite3.connect(path)) as db, db:
+        db.executescript(
+            "CREATE TABLE session_windows (session_id TEXT); "
+            "CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT); "
+            "CREATE TABLE session_transcript_active_events "
+            "(session_id TEXT, event_seq INTEGER, active_position INTEGER); "
+            "INSERT INTO session_windows VALUES ('s'); "
+            "INSERT INTO session_transcript_active_events VALUES ('s',1,0), ('s',2,1);"
+        )
+        db.execute(
+            "INSERT INTO transcript_events VALUES ('s',1,?)",
+            ('{"type":"message","message":{"role":"user","content":"visible"}}',),
+        )
+        if not missing_row:
+            db.execute("INSERT INTO transcript_events VALUES ('s',2,NULL)")
+    with pytest.raises(ExternalHistoryError, match="transcript is unavailable"):
+        ExternalHistory().read("openclaw", "s", path=str(path))
 
 
 def test_large_entries_page_without_losing_text_and_invalid_logs_refuse(tmp_path: Path) -> None:
@@ -225,6 +272,54 @@ def test_discovery_does_not_read_plugin_caches(tmp_path: Path, deny_access) -> N
     (tmp_path / "plugins").mkdir()
     deny_access(tmp_path / "plugins")
     assert ExternalHistory().list("codex", path=str(tmp_path))["items"] == []
+
+
+def test_directory_session_lookup_isolates_malformed_exports_and_rejects_duplicates(
+    tmp_path: Path,
+) -> None:
+    readable = tmp_path / "readable.JSON"
+    unreadable = tmp_path / "unreadable.json"
+    readable.write_text(
+        '{"info":{"id":"wanted"},"messages":[{"type":"user","text":"available"}]}',
+        encoding="utf-8",
+    )
+    unreadable.write_text('{"info":null,"messages":[{"type":"user"}]}', encoding="utf-8")
+    reader = ExternalHistory()
+    page = reader.list("opencode", path=str(tmp_path))
+    assert [item["id"] for item in page["items"]] == ["wanted"]
+    assert unreadable.as_posix() in page["warnings"][0]
+    session = reader.read("opencode", "wanted", path=str(tmp_path))
+    assert session.entries[0].content == "available"
+    assert session.warnings == page["warnings"]
+
+    unreadable.write_bytes(readable.read_bytes())
+    with pytest.raises(ExternalHistoryError, match="2 matches"):
+        reader.read("opencode", "wanted", path=str(tmp_path))
+    assert reader.read("opencode", "wanted", path=str(readable)).path == readable.as_posix()
+
+
+def test_directory_memory_lookup_pages_readable_files_and_warns_for_invalid_encoding(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "memory.md"
+    content = "𐐀\n" * 1600
+    path.write_bytes(("\ufeff" + content.replace("\n", "\r\n")).encode("utf-8"))
+    unreadable = tmp_path / "unreadable.md"
+    unreadable.write_bytes(b"\x81")
+    reader = ExternalHistory()
+    first = reader.memories("codex", path=str(tmp_path))
+    assert first["total"] == 1
+    assert unreadable.as_posix() in first["warnings"][0]
+    second = reader.memories(
+        "codex",
+        path=str(tmp_path),
+        offset=first["next_offset"],
+        char_offset=first["next_char_offset"],
+    )
+    assert first["items"][0]["content"] + second["items"][0]["content"] == content
+    assert second["next_offset"] is None
+    with pytest.raises(ExternalHistoryError, match="Cannot read Memory"):
+        reader.memories("codex", path=str(unreadable))
 
 
 @pytest.mark.parametrize("parent_reason", ["reset", "branched", "compression"])

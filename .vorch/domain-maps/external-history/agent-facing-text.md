@@ -37,6 +37,7 @@ The user requested the first-continuation notice because numerous foreign Tool c
 | `list, show, memories and sources are read-only.` | Identifies the Skill's mutation boundary. |
 | `No source application needs to be launched.` | Prevents an unnecessary native app launch/resume. |
 | `The reader refuses unrecognized ...` | Gives recovery for unsupported source layouts without suggesting data repair or partial success. |
+| `Part of this OpenClaw transcript is unavailable.` | Refuses an incomplete active path whether the event payload is cold or its index points to a missing event. The same error tells the Agent to use a complete native export. |
 | `For code processing multiple records ...` | Keeps JSON available for structured work without burdening ordinary reads. |
 | `Normal output is enough ...` | Explains why source text is indented and why embedded Next markers are not CLI guidance. |
 | Example report distinguishing a recorded test run from a rerun | Models copy the example; it must preserve historical attribution. |

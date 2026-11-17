@@ -1,5 +1,6 @@
 """Import orchestration uses Session and Memory ownership boundaries."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -48,8 +49,8 @@ async def test_memory_import_preserves_original_deduplicates_and_refuses_over_bu
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     path = tmp_path / "source.md"
-    original = "# Original\n\nA long source document.\n\nOther facts."
-    path.write_text(original, encoding="utf-8")
+    original = b"\xef\xbb\xbf# Original\r\n\r\nA long source document.\r\n\r\nOther facts."
+    path.write_bytes(original)
     params = {
         "source": "claude-code",
         "path": str(path),
@@ -60,8 +61,17 @@ async def test_memory_import_preserves_original_deduplicates_and_refuses_over_bu
     first = await rpc_result(state, "memory.import", **params)
     again = await rpc_result(state, "memory.import", **params)
     assert len(first["entries"]) == len(again["entries"]) == 1
-    assert Path(first["saved_source_path"]).read_text(encoding="utf-8") == original
-    assert path.read_text(encoding="utf-8") == original
+    copied = Path(first["saved_source_path"])
+    assert copied.stem == hashlib.sha256(original).hexdigest()
+    assert copied.read_bytes() == path.read_bytes() == original
+    implicitly_selected = await rpc_result(
+        state, "memory.import", **{**params, "scope": "user", "entries": None}
+    )
+    assert [entry["content"] for entry in implicitly_selected["entries"]] == [
+        "# Original",
+        "A long source document.",
+        "Other facts.",
+    ]
     before = await rpc_result(state, "memory.list", agent_id="coder")
     error = await rpc_error(
         state, "memory.import", **{**params, "entries": ["a" * 1900, "b" * 1900, "c" * 1900]}
