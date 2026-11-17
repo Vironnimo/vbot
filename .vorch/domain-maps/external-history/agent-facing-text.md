@@ -47,6 +47,7 @@ The user requested the first-continuation notice because numerous foreign Tool c
 | Snapshot repetition, changed snapshot and no-Run rules | Makes retry effects and the continuation boundary clear. |
 | Continuation and archive commands | Supplies explicit next/undo actions using returned vBot identifiers. |
 | Reviewed Memory file, scopes, omission and budget rules | Gives intentional facts/scope selection and prevents silent shortening. |
+| `Use the digest printed for the reviewed file as --expected-digest.` / `The source Memory changed after preview. Read it again and review the facts.` | Links the CLI mutation to the file version whose contents the Agent reviewed. A retry after a change needs review of the new source, rather than submitting the old selection again. |
 | Source retention, duplicate skipping and Memory history | Explains the resulting state and recovery through the existing Memory owner. |
 
 CLI help states source paths are server paths; page/character offsets are optional and reusable from `Next:`. List/show output indents source content and preserves the resolved server target in continuation commands. Errors from readers name the source problem and the complete-export recovery where direct reading cannot preserve history.

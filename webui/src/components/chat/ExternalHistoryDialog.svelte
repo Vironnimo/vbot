@@ -44,6 +44,7 @@
   let memoryProject = $state('');
   let busy = $state(false);
   let saving = $state(false);
+  let sourceChanged = $state(false);
   let error = $state('');
   let result = $state(null);
   let disposed = false;
@@ -63,7 +64,10 @@
     try {
       await action();
     } catch (failure) {
-      if (!disposed) error = failure.message;
+      if (!disposed) {
+        error = failure.message;
+        if (failure.code === 'external_memory_changed') sourceChanged = true;
+      }
     } finally {
       if (!disposed) {
         busy = false;
@@ -85,6 +89,7 @@
     facts = '';
     result = null;
     error = '';
+    sourceChanged = false;
   }
   function browse(offset = 0, charOffset = 0) {
     return perform(async () => {
@@ -109,6 +114,7 @@
         selected = null;
         preview = null;
         result = null;
+        sourceChanged = false;
       }
     });
   }
@@ -161,6 +167,7 @@
         const response = await importExternalMemory({
           ...params,
           scope: effectiveScope,
+          expected_digest: selected.digest,
           ...(effectiveScope === 'project'
             ? { project_id: destinationProject }
             : { agent_id: agentAddress }),
@@ -395,6 +402,7 @@
       variant="primary"
       loading={saving}
       disabled={busy ||
+        sourceChanged ||
         !selected ||
         Boolean(result) ||
         (mode === 'memories' &&

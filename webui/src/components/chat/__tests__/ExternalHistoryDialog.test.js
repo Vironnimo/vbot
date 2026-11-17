@@ -90,7 +90,7 @@ it('reads without importing, then imports the selected full Session into the nam
   });
 });
 
-it('seeds facts for a complete Memory preview with supplementary Unicode characters', async () => {
+it('binds reviewed Unicode Memory facts to the selected preview and requires a refresh on change', async () => {
   api.readExternalMemories.mockResolvedValue({
     items: [
       {
@@ -99,11 +99,16 @@ it('seeds facts for a complete Memory preview with supplementary Unicode charact
         content: 'Review 🧪 notes.',
         char_offset: 0,
         characters: 15,
+        digest: 'a'.repeat(64),
       },
     ],
     total: 1,
   });
-  api.importExternalMemory.mockResolvedValue({ entries: [] });
+  api.importExternalMemory.mockRejectedValueOnce(
+    Object.assign(new Error('The source changed'), {
+      code: 'external_memory_changed',
+    }),
+  );
   component = mount(Dialog, {
     target: document.body,
     props: { agentAddress: 'coder', onClose, onImported },
@@ -123,9 +128,38 @@ it('seeds facts for a complete Memory preview with supplementary Unicode charact
     source: 'codex',
     path: '/source.md',
     scope: 'agent',
+    expected_digest: 'a'.repeat(64),
     agent_id: 'coder',
     entries: ['Review 🧪 notes.'],
   });
+  const importButton = [...document.querySelectorAll('button')].find(
+    (button) => button.textContent.trim() === t('external.importMemory'),
+  );
+  expect(importButton.disabled).toBe(true);
+  expect(document.querySelector('textarea').value).toBe('Review 🧪 notes.');
+  api.readExternalMemories.mockResolvedValue({
+    items: [
+      {
+        path: '/source.md',
+        name: 'source.md',
+        content: 'New facts.',
+        char_offset: 0,
+        characters: 10,
+        digest: 'b'.repeat(64),
+      },
+    ],
+    total: 1,
+  });
+  api.importExternalMemory.mockResolvedValue({ entries: [] });
+  await click(t('external.browse'));
+  await click('source.md');
+  await click(t('external.importMemory'));
+  expect(api.importExternalMemory).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      expected_digest: 'b'.repeat(64),
+      entries: ['New facts.'],
+    }),
+  );
 });
 
 it('renders imported text with a source marker and inert historical tool details', async () => {

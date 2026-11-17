@@ -58,7 +58,18 @@ async def test_memory_import_preserves_original_deduplicates_and_refuses_over_bu
         "scope": "agent",
         "entries": ["Keep this fact.", "Keep this fact."],
     }
-    first = await rpc_result(state, "memory.import", **params)
+    preview = await rpc_result(state, "external.memories", source=params["source"], path=str(path))
+    digest = preview["items"][0]["digest"]
+    assert digest == hashlib.sha256(original).hexdigest()
+    changed = original.replace(b"\r\n", b"\n")
+    path.write_bytes(changed)
+    before = await rpc_result(state, "memory.list", agent_id="coder")
+    error = await rpc_error(state, "memory.import", **params, expected_digest=digest)
+    assert error["code"] == "external_memory_changed"
+    assert await rpc_result(state, "memory.list", agent_id="coder") == before
+    assert not (tmp_path / "workspace" / "memory-sources").exists()
+    path.write_bytes(original)
+    first = await rpc_result(state, "memory.import", **params, expected_digest=digest)
     again = await rpc_result(state, "memory.import", **params)
     assert len(first["entries"]) == len(again["entries"]) == 1
     copied = Path(first["saved_source_path"])

@@ -367,6 +367,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
                 "source": _SOURCE,
                 "path": _PATH,
                 "entries": nullable({**array(_text()), "minItems": 1}),
+                "expected_digest": {**_text(), "pattern": "^[0-9a-f]{64}$"},
             },
             ("scope", "source", "path"),
         ),

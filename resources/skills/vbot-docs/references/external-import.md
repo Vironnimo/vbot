@@ -23,9 +23,11 @@ The returned Session id is the destination. Repeating the same source snapshot f
 
 ```bash
 vbot external memories <source>
-vbot external import-memory <source> --path "<memory-file>" --agent <agent> --scope user --entries-file "<reviewed-facts-file>"
+vbot external import-memory <source> --path "<memory-file>" --agent <agent> --scope user --entries-file "<reviewed-facts-file>" --expected-digest <digest>
 ```
 
 Write the reviewed facts into the entries file, separated by blank lines, as UTF-8 or UTF-16 with a BOM. `--scope agent` stores Agent facts; `--project <project-id> --scope project` selects shared Project Memory instead of `--agent`. Omitting `--entries-file` uses the source paragraphs unchanged.
+
+Use the digest printed for the reviewed file as `--expected-digest`. If the source changed, read it and review the facts again before importing. Omit the digest for a direct import without a preview.
 
 The import retains the complete original document in the destination's `memory-sources` directory and adds the selected facts in one Memory revision. Existing entries stay; identical facts are skipped. If the selection exceeds the Memory budget, nothing is added to pinned Memory: select fewer facts without discarding the original document. Memory history and revert use the usual commands in the Memory reference.

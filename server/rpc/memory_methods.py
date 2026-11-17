@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -107,9 +108,19 @@ async def _import_memory(state: Any, params: JsonObject) -> JsonObject:
     scope = _memory_scope(params, owner)
     source = _required_string(params, "source")
     path = _required_string(params, "path")
+    expected_digest = params.get("expected_digest")
+    if "expected_digest" in params and (
+        not isinstance(expected_digest, str) or not re.fullmatch("[0-9a-f]{64}", expected_digest)
+    ):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "expected_digest must be a SHA-256 digest.")
 
     def import_entries() -> JsonObject:
         document = ExternalHistory().read_memory(source, path)
+        if expected_digest is not None and document["digest"] != expected_digest:
+            raise RpcError(
+                "external_memory_changed",
+                "The source Memory changed after preview. Read it again and review the facts.",
+            )
         entries = params.get("entries")
         if entries is None:
             entries = memory_entries(document["content"])
