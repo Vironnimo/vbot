@@ -57,6 +57,7 @@ _LIVE_VOICE = re.compile(r"(?:-live(?:-|$)|-native-audio-)")
 _LIVE_OTHER = re.compile(r"(?:-transcribe-|-translate-|^gemini-robotics-)")
 
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
+_ZERO_LIMIT = re.compile(r"\blimit: 0(?![\d.])")
 # Throttle messages name the wait ("Please retry in 41.5s."); the Decisions API
 # sends only that message, with a string ``code`` and no RetryInfo detail.
 _RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s(?![a-z])", re.IGNORECASE)
@@ -482,15 +483,21 @@ def _classify_google_status(
 
 
 def _google_error(detail: str) -> Mapping[str, Any]:
-    """Return the ``error`` object of a Google error body inside ``detail``."""
+    """Return the ``error`` object of a Google error body inside ``detail``.
 
-    start = detail.find("{")
-    if start < 0:
+    The Interactions API wraps some errors in a one-element array
+    (``[{"error": {...}}]`` for an invalid key, live 2026-11-17).
+    """
+
+    starts = [index for index in (detail.find("{"), detail.find("[")) if index >= 0]
+    if not starts:
         return {}
     try:
-        body = json.loads(detail[start:])
+        body = json.loads(detail[min(starts) :])
     except ValueError:
         return {}
+    if isinstance(body, list) and body:
+        body = body[0]
     if isinstance(body, Mapping):
         error = body.get("error", body)
         if isinstance(error, Mapping):
@@ -518,9 +525,15 @@ def _error_reason(error: Mapping[str, Any]) -> str | None:
 
 
 def _quota_exhausted(error: Mapping[str, Any], detail: str) -> bool:
-    """Whether retrying cannot succeed soon: a zero limit or a daily quota."""
+    """Whether retrying cannot succeed soon: a zero limit or a daily quota.
 
-    if "limit: 0," in detail:
+    Gemini RPC errors name a zero limit in the message (``limit: 0,``; the
+    Interactions API writes ``limit: 0 input tokens per minute``) and a daily
+    quota in ``QuotaFailure``; the Interactions API reports a daily quota as
+    the string code ``quota_exceeded``.
+    """
+
+    if _ZERO_LIMIT.search(detail) or error.get("code") == "quota_exceeded":
         return True
     for failure in _details(error, "google.rpc.QuotaFailure"):
         violations = failure.get("violations")

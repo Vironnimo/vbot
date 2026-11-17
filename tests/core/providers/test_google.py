@@ -309,8 +309,52 @@ _DAILY_QUOTA = _error(
             False,
             None,
         ),
+        (
+            httpx.Response(
+                400,
+                json=[
+                    {
+                        "error": {
+                            "code": 400,
+                            "message": "API key not valid.",
+                            "details": [
+                                {
+                                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                                    "reason": "API_KEY_INVALID",
+                                }
+                            ],
+                        }
+                    }
+                ],
+            ),
+            ProviderAuthError,
+            False,
+            None,
+        ),
         (_ZERO_QUOTA, ProviderError, False, None),
+        (
+            httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": "resource_exhausted",
+                        "message": "limit: 0 input tokens per minute",
+                    }
+                },
+            ),
+            ProviderError,
+            False,
+            None,
+        ),
         (_DAILY_QUOTA, ProviderError, False, None),
+        (
+            httpx.Response(
+                429, json={"error": {"code": "quota_exceeded", "message": "Daily quota exceeded."}}
+            ),
+            ProviderError,
+            False,
+            None,
+        ),
         (
             _error(
                 429,
@@ -328,7 +372,16 @@ _DAILY_QUOTA = _error(
             41.25,
         ),
     ],
-    ids=["invalid-key", "zero-quota", "daily-quota", "retry-info", "retry-message"],
+    ids=[
+        "invalid-key",
+        "invalid-key-array",
+        "zero-quota",
+        "zero-quota-interactions",
+        "daily-quota",
+        "daily-quota-interactions",
+        "retry-info",
+        "retry-message",
+    ],
 )
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio

@@ -568,7 +568,7 @@ def _google_error(status: int, error: dict[str, Any]) -> httpx.Response:
             ),
             ProviderRateLimitError,
             True,
-            9.0,
+            9.2,
             id="throttle-with-retry-hint",
         ),
     ],
