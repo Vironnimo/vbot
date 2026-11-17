@@ -120,7 +120,10 @@ def test_change_subscriptions_observe_only_committed_mutations(
 
 
 @pytest.mark.asyncio
-async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failed_save", [None, "run_references", "terminal"])
+async def test_once_job_arms_for_next_startup_and_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_save: str | None
+) -> None:
     first_trigger = StubTriggerService()
     first = make_service(first_trigger, tmp_path, "startup-one")
     created = first.create_job(
@@ -139,6 +142,19 @@ async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> N
     second = make_service(second_trigger, tmp_path, "startup-two")
     observed = []
     second.add_changed_callback(lambda: observed.append(second.get_job(created.id)))
+    write_document = bootstrap_module.write_json_document
+    failed_write = False
+
+    def write(path: Path, payload: Any, schema: Any) -> None:
+        nonlocal failed_write
+        job = payload["jobs"][0]
+        stage = "terminal" if job.get("last_outcome") else "run_references"
+        if job.get("last_run_id") and stage == failed_save and not failed_write:
+            failed_write = True
+            raise OSError("Temporary disk error")
+        write_document(path, payload, schema)
+
+    monkeypatch.setattr(bootstrap_module, "write_json_document", write)
     second.activate()
     await second.wait_until_idle()
 
@@ -157,7 +173,12 @@ async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> N
     assert completed.status == "completed"
     assert completed.last_outcome == "success"
     assert completed.last_run_id == "run-1"
+    assert failed_write == (failed_save is not None)
     assert observed[-1] == completed
+    assert (
+        make_service(StubTriggerService(), tmp_path, "startup-three").get_job(created.id)
+        == completed
+    )
     assert any(job.last_started_startup_id == "startup-two" for job in observed)
 
 

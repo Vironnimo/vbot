@@ -592,31 +592,38 @@ class BootstrapService:
             return
         self._running_job_ids.add(job_id)
         try:
-            job.last_started_startup_id = self._startup_id
-            job.last_started_at = _utc_now_iso()
-            job.last_error = None
-            self._save()
-            self._validate_references(job)
-            run = await self._trigger_service.trigger_run(
-                job.agent_id,
-                job.prompt,
-                session_id=job.session_id,
-                internal=True,
-                project_id=job.project_id,
-                run_kind=RunKind.SYSTEM,
-                contributes_to_agent_activity=False,
-            )
+            try:
+                job.last_started_startup_id = self._startup_id
+                job.last_started_at = _utc_now_iso()
+                job.last_error = None
+                self._save()
+                self._validate_references(job)
+                run = await self._trigger_service.trigger_run(
+                    job.agent_id,
+                    job.prompt,
+                    session_id=job.session_id,
+                    internal=True,
+                    project_id=job.project_id,
+                    run_kind=RunKind.SYSTEM,
+                    contributes_to_agent_activity=False,
+                )
+            except Exception as error:
+                self._record_terminal(job_id, "failed", error)
+                return
             self._active_runs[job_id] = run
             latest = self._jobs.get(job_id)
             if latest is None:
                 return
             latest.last_run_id = run.id
             latest.last_session_id = run.session_id
-            self._save()
+            try:
+                self._save()
+            except BootstrapStorageError:
+                # The Run is already admitted. Keep its slot and save the
+                # references together with the actual outcome when it settles.
+                _LOGGER.warning("Bootstrap Run references could not be saved (job=%s)", job_id)
             try:
                 await run.wait()
-            except asyncio.CancelledError:
-                raise
             except Exception as error:
                 outcome: BootstrapOutcome = (
                     "cancelled" if run.status == RunStatus.CANCELLED else "failed"
@@ -624,10 +631,6 @@ class BootstrapService:
                 self._record_terminal(job_id, outcome, error)
             else:
                 self._record_terminal(job_id, "success", None)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._record_terminal(job_id, "failed", error)
         finally:
             self._active_runs.pop(job_id, None)
             self._running_job_ids.discard(job_id)
@@ -655,7 +658,10 @@ class BootstrapService:
         job.last_error = _bounded_error(error)
         if job.mode == "once":
             job.status = "completed" if outcome == "success" else "failed"
-        self._save()
+        try:
+            self._save()
+        except BootstrapStorageError:
+            self._save()
         failed = outcome == "failed" or job.status == "failed"
         _LOGGER.log(
             logging.WARNING if failed else logging.INFO,

@@ -64,6 +64,8 @@ The catch-up rule (`../automation.md` -> Catch-up) follows anacron, systemd `Per
 
 ## Once claims, failures and edits
 
+Bootstrap keeps waiting in its execution slot when the first write of an admitted Run's references fails. Its terminal write includes those references and retries once with the Run's actual outcome.
+
 Terminal jobs accept notification-policy changes but refuse effective edits to execution fields, including the schedule, count and delivery, before reference checks or persistence; identical values are a no-op. Deletion and the separate retained-notification retry/acknowledgement operations remain available. Internal Agent retargeting keeps its rename-specific path. Coverage: `test_terminal_jobs_cannot_be_changed_through_update`, `test_finished_job_cannot_resume_or_change`, `test_cron_notifications.py`.
 
 - Changing schedule/count/status restarts an active sleeper; during queued admission or an admitted Run it defers the restart until that execution settles, retaining its global slot and preventing overlap. Schedule/count/status edits while waiting for a Run slot or the initial fire save withdraw that unadmitted fire, so its replacement waits for the new schedule. Name/prompt/agent/session updates do not restart it (the task reloads before firing).
