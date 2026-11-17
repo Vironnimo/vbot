@@ -797,6 +797,7 @@ def _add_performance_parsers(
         "--at",
         metavar="<time>",
         help=(
-            "Show full windows containing this ISO 8601 time. Without an offset, use local time."
+            "Show full windows containing this ISO 8601 time. "
+            "Use an offset if it occurs twice locally."
         ),
     )

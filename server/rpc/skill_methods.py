@@ -38,6 +38,7 @@ from core.skills import (
     SkillPolicyError,
     SkillRegistry,
     SkillRevertConflictError,
+    SkillRevertIncompleteError,
     SkillWriter,
     SkillWriteResult,
 )
@@ -327,7 +328,7 @@ def _read_history(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _skill_revert(state: Any, params: JsonObject) -> JsonObject:
-    """Undo revisions of one home, all or none, as a person."""
+    """Undo or resume the named revisions of one home."""
     _reject_unsupported(params, rpc_request_fields("skill.revert"), "skill.revert")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     revision_ids = params.get("revisions")
@@ -355,6 +356,10 @@ async def _skill_revert(state: Any, params: JsonObject) -> JsonObject:
             RPC_ERROR_DOMAIN,
             str(exc),
             data={"revision": exc.revision, "later": exc.later, "skill": exc.skill_name},
+        ) from exc
+    except SkillRevertIncompleteError as exc:
+        raise RpcError(
+            "skill_revert_pending", str(exc), data={"revisions": list(exc.revision_ids)}
         ) from exc
     except (SkillAuthoringError, OSError) as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
@@ -667,7 +672,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.remove_file": _serialized_skill_mutation(_skill_remove_file),
         "skill.set_pinned": _serialized_skill_mutation(_skill_set_pinned),
         "skill.history": _skill_history,
-        "skill.revert": _serialized_skill_mutation(_skill_revert),
+        "skill.revert": _serialized_skill_mutation(_skill_revert, references_agents=True),
         "skill.archived": _skill_archived,
         "skill.restore": _serialized_skill_mutation(_skill_restore),
         "skill.purge": _serialized_skill_mutation(_skill_purge),

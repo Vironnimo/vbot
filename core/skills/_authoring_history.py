@@ -34,6 +34,7 @@ from core.skills._revert import (
     check_revert,
     revert_revisions,
 )
+from core.skills._revert_journal import read_journal, require_revert_idle, revert_pending
 from core.skills.skills import SKILL_FILENAME
 from core.utils.logging import get_logger
 
@@ -59,6 +60,7 @@ class SkillRevisions:
                 raise SkillAuthoringError("Only a person can pin or unpin a Skill.")
             skill_dir = self._owner._existing_skill_dir(target_root, skill_name)
             history = SkillHistory(skill_dir.parent)
+            require_revert_idle(history.home)
             require_idle(history.home, skill_name)
             revision: int | None = None
             try:
@@ -96,6 +98,8 @@ class SkillRevisions:
             history = SkillHistory(root)
             records: dict[str, SkillRecord] = {}
             try:
+                if revert_pending(root):
+                    return {}
                 intent = read_intent(root)
                 known = history.records()
                 for package in _live_packages(root):
@@ -140,6 +144,8 @@ class SkillRevisions:
                 return None
             history = SkillHistory(root)
             try:
+                if revert_pending(root):
+                    return None
                 intent = read_intent(root)
                 if intent is not None and intent.name == skill_name:
                     return history.record(skill_name) if intent.matches(package) else None
@@ -161,6 +167,8 @@ class SkillRevisions:
             if skill_name is not None:
                 _validate_skill_name(skill_name)
             try:
+                if revert_pending(root):
+                    return list(reversed(_settled_revisions(history, skill_name)))[: max(limit, 0)]
                 intent = read_intent(root)
                 if skill_name is not None:
                     names = {skill_name}
@@ -188,11 +196,12 @@ class SkillRevisions:
         Unlike :meth:`history`, this reads only the history: outside changes of
         the packages not noticed yet are not recorded first.
         """
-        history = SkillHistory(self._owner._resolve(target_root))
-        try:
-            return history.revisions()
-        except OSError as error:
-            raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+        with self._owner._write_lock:
+            history = SkillHistory(self._owner._resolve(target_root))
+            try:
+                return _settled_revisions(history)
+            except OSError as error:
+                raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
 
     def check_revert(
         self,
@@ -226,18 +235,7 @@ class SkillRevisions:
         writer: SkillWriter,
         related: Collection[int] = (),
     ) -> list[SkillRevision]:
-        """Undo the named revisions, all or none; return the recorded revisions.
-
-        Refused when a later revision outside the request changed the same file,
-        pin or presence of that Skill (``SkillRevertConflictError`` names it), when
-        an earlier text is not stored, or when an archived package was purged. A
-        later revision in *related* (an earlier revert of the same change) never
-        blocks. A failure while changing packages takes the steps back and
-        raises :class:`SkillAuthoringError`, or :class:`SkillRevertIncompleteError`
-        when a step cannot be taken back. Once every package changed, each named
-        revision records one ``revert`` revision; the list is shorter when the
-        history cannot record them all.
-        """
+        """Undo the named revisions, or resume their pending revert."""
         with self._owner._write_lock:
             history = self._revert_history(target_root, writer)
             with _revert_errors():
@@ -277,6 +275,7 @@ class SkillRevisions:
         existing Skill: it cannot know whether the user pinned the Skill, and the
         change could not be recorded for undo, so it is refused.
         """
+        require_revert_idle(history.home)
         require_idle(
             history.home, skill_name, skill_dir.name if skill_dir is not None else skill_name
         )
@@ -329,6 +328,16 @@ class SkillRevisions:
             return None
 
 
+def _settled_revisions(history: SkillHistory, skill_name: str | None = None) -> list[SkillRevision]:
+    journal = read_journal(history.home)
+    revisions = history.revisions(skill_name)
+    if journal is None:
+        return revisions
+    return [
+        revision for revision in revisions if revision.revert_transaction != journal.transaction
+    ]
+
+
 @contextmanager
 def _revert_errors() -> Iterator[None]:
     """Report a refused or failed revert as the authoring service's errors."""
@@ -343,12 +352,12 @@ def _revert_errors() -> Iterator[None]:
         ) from conflict
     except RevertIncompleteError as incomplete:
         raise SkillRevertIncompleteError(
-            str(incomplete), skill_names=incomplete.skills
+            str(incomplete), skill_names=incomplete.skills, revision_ids=incomplete.revisions
         ) from incomplete
     except RevertError as error:
         raise SkillAuthoringError(str(error)) from error
     except OSError as error:
-        raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+        raise SkillAuthoringError(f"Could not prepare the Skill revert. {error}") from error
 
 
 def _check_writer(writer: SkillWriter) -> None:

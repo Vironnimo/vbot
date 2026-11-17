@@ -724,7 +724,7 @@ def test_revert_returns_files_to_their_earlier_text(
 
 
 @pytest.mark.parametrize("outside_change", [None, "edit", "remove"])
-def test_failed_revert_restores_only_its_own_file_changes(
+def test_retry_resumes_a_partial_revert_and_keeps_newer_outside_changes(
     service: SkillAuthoringService,
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -751,23 +751,92 @@ def test_failed_revert_restores_only_its_own_file_changes(
 
     with monkeypatch.context() as patch:
         patch.setattr(revert_module, "atomic_write_bytes", fail_second_write)
-        with pytest.raises(SkillAuthoringError) as error:
+        with pytest.raises(SkillRevertIncompleteError) as error:
             service.revert(
                 root, [int(first.revision or 0), int(second.revision or 0)], writer=HUMAN_WRITER
             )
 
     assert (root / "demo" / "references" / "first.md").read_bytes() == b"first after\n"
+    assert error.value.skill_names == ("demo",)
     if outside_change is None:
-        assert not isinstance(error.value, SkillRevertIncompleteError)
-        assert second_path.read_bytes() == b"second after\n"
+        assert second_path.read_bytes() == b"second before\n"
+    elif outside_change == "edit":
+        assert second_path.read_bytes() == b"Later user edit.\n"
     else:
-        assert isinstance(error.value, SkillRevertIncompleteError)
-        assert error.value.skill_names == ("demo",)
-        if outside_change == "edit":
-            assert second_path.read_bytes() == b"Later user edit.\n"
+        assert not second_path.exists()
+
+    reopened = SkillAuthoringService()
+    assert reopened.history(root)[0].id == second.revision
+    restored = reopened.revert(root, error.value.revision_ids, writer=HUMAN_WRITER)
+    assert [revision.reverts for revision in restored] == [(second.revision,), (first.revision,)]
+    assert (root / "demo" / "references" / "first.md").read_bytes() == b"first before\n"
+    if outside_change == "edit":
+        assert second_path.read_bytes() == b"Later user edit.\n"
+    elif outside_change == "remove":
+        assert not second_path.exists()
+    else:
+        assert second_path.read_bytes() == b"second before\n"
+        assert reopened.history(root)[0].actor == ("external" if outside_change else "human")
+
+
+@pytest.mark.parametrize("interrupted_at", ["move-cursor", "history-fsync"])
+def test_revert_resumes_a_pinned_archive_and_multiple_revisions(
+    service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch, interrupted_at: str
+) -> None:
+    service.create(root, "review", skill_document("review"), writer=AGENT)
+    edited = service.edit(root, "review", skill_document("review", body="Later.\n"), writer=AGENT)
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
+    original = service.records(root)["demo"]
+    archived = service.delete(root, "demo", writer=HUMAN_WRITER)
+    targets = [int(edited.revision or 0), int(archived.revision or 0)]
+    append = SkillHistory.append
+
+    def interrupt_cursor(*_args: object) -> None:
+        raise OSError("progress storage unavailable")
+
+    def fail_sync(_descriptor: int) -> None:
+        raise OSError("history fsync failed")
+
+    def interrupt_append(history: SkillHistory, **fields: Any) -> history_module.SkillRevision:
+        if fields.get("reverts") == (edited.revision,):
+            with monkeypatch.context() as patch:
+                patch.setattr(os, "fsync", fail_sync)
+                return append(history, **fields)
+        return append(history, **fields)
+
+    with monkeypatch.context() as patch:
+        if interrupted_at == "move-cursor":
+            patch.setattr(revert_module, "write_cursor", interrupt_cursor)
         else:
-            assert not second_path.exists()
-        assert service.history(root)[0].actor == "external"
+            patch.setattr(SkillHistory, "append", interrupt_append)
+        with pytest.raises(SkillRevertIncompleteError):
+            service.revert(root, targets, writer=HUMAN_WRITER)
+
+    assert (root / "demo" / "SKILL.md").is_file()
+    assert not archived.path.exists()
+    reopened = SkillAuthoringService()
+    assert all(revision.kind != "revert" for revision in reopened.recorded_revisions(root))
+    assert reopened.background_protection(root)["demo"] == "unknown"
+    with pytest.raises(SkillAuthoringError, match="pending"):
+        reopened.set_pinned(root, "demo", False, writer=HUMAN_WRITER)
+    with pytest.raises(SkillRevertIncompleteError) as error:
+        reopened.revert(root, targets[:1], writer=HUMAN_WRITER)
+    assert error.value.revision_ids == tuple(reversed(targets))
+
+    restored = reopened.revert(root, targets, writer=AGENT)
+    assert [revision.reverts for revision in restored] == [(archived.revision,), (edited.revision,)]
+    assert all(revision.actor == "human" for revision in restored)
+    assert "Later." not in (root / "review" / "SKILL.md").read_text(encoding="utf-8")
+    record = reopened.records(root)["demo"]
+    assert (record.created_at, record.origin, record.pinned) == (
+        original.created_at,
+        original.origin,
+        True,
+    )
+    assert {revision.id for revision in reopened.history(root) if revision.kind == "revert"} == {
+        revision.id for revision in restored
+    }
 
 
 def test_revert_refuses_to_overwrite_a_later_change_and_changes_nothing(

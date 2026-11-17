@@ -30,6 +30,7 @@ def dispatch_external(args: argparse.Namespace, instance: ServerInstance) -> Com
         ("agent", "agent_id"),
         ("project", "project_id"),
         ("scope", "scope"),
+        ("expected_digest", "expected_digest"),
         ("working_project", "working_project_id"),
     ):
         if getattr(args, name, None) is not None:
@@ -98,6 +99,8 @@ def dispatch_external(args: argparse.Namespace, instance: ServerInstance) -> Com
             else:
                 label = f"[{item['ordinal']}] {item['role']}" if action == "show" else item["path"]
                 lines.append("  " + inline_text(label))
+                if action == "memories" and item.get("digest"):
+                    lines.append("    digest: " + inline_text(item["digest"]))
                 lines.extend("    " + inline_text(line) for line in item["content"].splitlines())
         if data.get("next_offset") is not None:
             tokens = ["vbot", "external", action, args.source]

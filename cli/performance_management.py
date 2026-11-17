@@ -180,11 +180,12 @@ def performance_history(
 
     params: dict[str, Any] = {"limit": MAX_HISTORY_WINDOWS}
     if at is not None:
-        moment = _parse_local_time(at)
-        if moment is None:
+        try:
+            moment = _parse_local_time(at)
+        except ValueError as error:
             return CommandResult(
                 ok=False,
-                message=f"invalid --at time: {at} (expected e.g. 2026-09-28 16:40)",
+                message=str(error),
                 instance=instance,
                 refused=True,
             )
@@ -299,13 +300,25 @@ def _local_datetime(value: object) -> datetime | None:
         return None
 
 
-def _parse_local_time(value: str) -> datetime | None:
+def _parse_local_time(value: str) -> datetime:
     try:
         moment = datetime.fromisoformat(value.strip())
-    except ValueError:
-        return None
-    # Log lines carry local time without an offset; read such a time the same way.
-    return moment.astimezone() if moment.tzinfo is None else moment
+    except ValueError as error:
+        raise ValueError(f"invalid --at time: {value} (expected e.g. 2026-09-28 16:40)") from error
+    if moment.tzinfo is not None:
+        return moment
+    first = moment.astimezone()
+    second = moment.replace(fold=1).astimezone()
+    if (
+        first.utcoffset() != second.utcoffset()
+        and first.replace(tzinfo=None) == moment
+        and second.replace(tzinfo=None) == moment
+    ):
+        raise ValueError(
+            f"--at time occurs twice locally. Use an explicit offset: "
+            f"{first.isoformat(sep=' ')} or {second.isoformat(sep=' ')}."
+        )
+    return first
 
 
 def _census_section(title: str, rows: Sequence[object]) -> list[str]:

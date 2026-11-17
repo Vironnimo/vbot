@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any, override
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -464,6 +464,22 @@ def test_history_distinguishes_offsets_during_clock_change_and_dates_at_midnight
     assert code == 0
     assert "2026-10-25 02:55+02:00 to 02:05+01:00" in out
     assert "2026-10-25 23:55+01:00 to 2026-10-26 00:05+01:00" in out
+
+    class BerlinLocalTime(datetime):
+        @override
+        def astimezone(self, tz: tzinfo | None = None) -> BerlinLocalTime:
+            return self.replace(tzinfo=berlin) if self.tzinfo is None else super().astimezone(tz)
+
+    monkeypatch.setattr("cli.performance_management.datetime", BerlinLocalTime)
+    count = len(rpc.calls)
+    code, out, err = run_cli("performance", "history", "--at", "2026-10-25 02:30")
+    assert code == 2
+    assert "2026-10-25 02:30:00+02:00" in out + err and "2026-10-25 02:30:00+01:00" in out + err
+    assert len(rpc.calls) == count
+    for offset in ("+02:00", "+01:00"):
+        moment = f"2026-10-25T02:30:00{offset}"
+        code, *_ = run_cli("performance", "history", "--at", moment)
+        assert code == 0 and rpc.calls[-1][1]["since"] == moment
 
 
 @pytest.mark.parametrize(

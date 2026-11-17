@@ -84,3 +84,6 @@ def add_external_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
                     "import the source paragraphs unchanged."
                 ),
             )
+            command.add_argument(
+                "--expected-digest", help="Require the digest shown by external memories"
+            )

@@ -48,7 +48,17 @@ def test_external_show_keeps_source_paging_and_server_target(rpc: FakeRpc, run_c
         (
             "import-memory",
             "memory.import",
-            ["hermes", "--path", "/source.md", "--agent", "coder", "--scope", "user"],
+            [
+                "hermes",
+                "--path",
+                "/source.md",
+                "--agent",
+                "coder",
+                "--scope",
+                "user",
+                "--expected-digest",
+                "a" * 64,
+            ],
         ),
     ],
 )
@@ -59,6 +69,8 @@ def test_external_json_success_and_failure_are_one_document(
     code, out, err = run_cli("external", action, *extra, "--json")
     assert code == 0
     assert json.loads(out) == {"sentinel": "東京"}
+    if action == "import-memory":
+        assert rpc.params(method)["expected_digest"] == "a" * 64
     rpc.fail(method, "external_history_error", "Source not found")
     # FakeRpc keeps the last success until it is consumed once more.
     run_cli("external", action, *extra, "--json")

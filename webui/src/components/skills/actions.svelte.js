@@ -320,6 +320,22 @@ export function createSkillActions(context) {
               revisions: target.revisions.join(', '),
             }),
       (error) => {
+        if (error?.code === 'skill_revert_pending') {
+          const revisions = error.details?.data?.revisions;
+          if (
+            !Array.isArray(revisions) ||
+            !revisions.length ||
+            !revisions.every(Number.isSafeInteger)
+          )
+            return false;
+          revertTarget = {
+            ...target,
+            pending: true,
+            revisions: [...revisions].sort((a, b) => a - b),
+          };
+          context.onToast({ title: error.message, variant: 'error' });
+          return true;
+        }
         const later = laterRevision(error, target.revisions);
         if (later === null) return false;
         const skill = error.details.data.skill;

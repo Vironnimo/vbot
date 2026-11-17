@@ -219,21 +219,31 @@ async def test_high_bit_depth_grayscale_preserves_tones_during_conversion(mode):
 
 
 @pytest.mark.asyncio
-async def test_webp_converts_high_bit_depth_transparency_before_quantizing():
+@pytest.mark.parametrize(
+    ("output_type", "max_dimension", "expected"),
+    [
+        ("image/webp", None, [(39, 39, 39, 0), (39, 39, 39, 255)]),
+        ("image/webp", 1, [(39, 39, 39, 128)]),
+        ("image/png", 1, [(39, 39, 39, 128)]),
+    ],
+)
+async def test_converts_high_bit_depth_transparency_before_quantizing(
+    output_type, max_dimension, expected
+):
     image = Image.new("I;16", (2, 1))
     image.putdata([10000, 10002])
     stream = io.BytesIO()
     image.save(stream, format="PNG", transparency=10000)
 
     result = await ImageConverter().convert(
-        stream.getvalue(), "image/png", ImageTarget(frozenset({"image/webp"}))
+        stream.getvalue(),
+        "image/png",
+        ImageTarget(frozenset({output_type}), max_dimension=max_dimension),
     )
 
-    with Image.open(io.BytesIO(result.data)) as webp:
-        assert list(webp.convert("RGBA").get_flattened_data()) == [
-            (39, 39, 39, 0),
-            (39, 39, 39, 255),
-        ]
+    assert result.lossy and "reduced to 8 bits" in (result.note or "")
+    with Image.open(io.BytesIO(result.data)) as output:
+        assert list(output.convert("RGBA").get_flattened_data()) == expected
 
 
 @pytest.mark.asyncio

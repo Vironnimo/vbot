@@ -1,8 +1,8 @@
 """Revert of recorded Skill revisions inside the Skill authoring owner.
 
-A revert is all or none: every named revision is checked and its inverse planned
-before anything changes, the inverses run newest first, and a failure undoes the
-steps already taken. A revision cannot be reverted while a later revision outside
+A revert plans every inverse before touching the packages. Its durable intent
+lets the same request finish the package changes and the history after an
+interruption. A revision cannot be reverted while a later revision outside
 the request changed the same part of that Skill: one of its files, its pin, or
 its presence in the home. Revisions the caller names as related (such as earlier
 reverts of the same change) never block. Each reverted revision records one
@@ -11,16 +11,16 @@ reverts of the same change) never block. Each reverted revision records one
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass, field
-from functools import partial
+import hashlib
+import stat
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from uuid import uuid4
 
 from core.skills._history import (
     SKILL_DOCUMENT,
     FileState,
-    SkillFileRecord,
     SkillHistory,
     SkillRevision,
     declared_origin,
@@ -29,12 +29,22 @@ from core.skills._history import (
     package_state,
 )
 from core.skills._packages import excluded, is_redirect
+from core.skills._revert_journal import (
+    PackageIdentity,
+    RevertAction,
+    RevertJournal,
+    RevertStep,
+    finish_journal,
+    read_cursor,
+    read_journal,
+    write_cursor,
+    write_journal,
+)
 from core.skills.skills import SkillRegistry
-from core.utils.atomic import atomic_write_bytes
+from core.utils.atomic import atomic_write_bytes, sync_directory
+from core.utils.file_status import exists_strict, is_link_status, stat_or_none
 from core.utils.ids import new_id
-from core.utils.logging import get_logger
-
-_LOGGER = get_logger("skills.history")
+from core.utils.timestamps import utc_now_timestamp
 
 
 class RevertError(ValueError):
@@ -55,14 +65,15 @@ class RevertConflictError(RevertError):
 
 
 class RevertIncompleteError(RevertError):
-    """A revert failed while changing packages and could not undo every step.
+    """A revert stopped and retains its plan for a retry.
 
     ``skills`` names the Skills whose packages may be left part-way.
     """
 
-    def __init__(self, message: str, skills: Sequence[str]) -> None:
+    def __init__(self, message: str, skills: Sequence[str], revisions: Sequence[int]) -> None:
         super().__init__(message)
         self.skills = tuple(skills)
+        self.revisions = tuple(revisions)
 
 
 @dataclass(frozen=True)
@@ -77,21 +88,34 @@ class RevertActor:
 @dataclass
 class _Step:
     target: SkillRevision
-    action: Literal["archive", "restore", "content", "pin"]
+    action: RevertAction
     archive_id: str | None = None
     reason: str | None = None
     absorbed_into: str | None = None
     writes: dict[str, str | None] = field(default_factory=dict)
     pinned: bool | None = None
-    # Filled while the step runs, recorded once every step succeeded.
-    records: list[SkillFileRecord] = field(default_factory=list)
-    texts: dict[str, str] = field(default_factory=dict)
     origin: str | None = None
     created_at: str | None = None
 
     @property
     def skill(self) -> str:
         return self.target.skill
+
+
+@dataclass
+class _PackageSnapshot:
+    source: Path
+    identity: PackageIdentity
+    writes: dict[str, FileState | None] = field(default_factory=dict)
+
+    def files(self) -> dict[str, FileState]:
+        files = package_state(self.source)
+        for path, state in self.writes.items():
+            if state is None:
+                files.pop(path, None)
+            else:
+                files[path] = state
+        return files
 
 
 def check_revert(
@@ -107,7 +131,11 @@ def check_revert(
     Raises what the revert raises before changing anything. Outside changes of
     the named Skills are recorded first. The caller holds the authoring write lock.
     """
-    _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
+    journal = read_journal(root)
+    if journal is not None:
+        _check_retry(journal, revision_ids, allow_pin_changes)
+    else:
+        _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
 
 
 def revert_revisions(
@@ -119,43 +147,44 @@ def revert_revisions(
     related: Collection[int] = (),
     allow_pin_changes: bool = True,
 ) -> list[SkillRevision]:
-    """Revert *revision_ids* in the home *root*; return the recorded revisions.
+    """Revert the named revisions, or finish their already admitted plan."""
+    journal = read_journal(root)
+    new_plan = journal is None
+    if journal is None:
+        steps = _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
+        journal = _prepare(root, history.archive_root, steps, actor)
+    else:
+        _check_retry(journal, revision_ids, allow_pin_changes)
+    try:
+        if new_plan:
+            write_journal(root, journal)
+        return _finish(history, root, journal)
+    except OSError as error:
+        if new_plan:
+            saved = read_journal(root)
+            if saved is None:
+                raise RevertError(f"The Skill revert could not be saved. {error}") from error
+            journal = saved
+        ids = ", ".join(str(revision) for revision in journal.revisions)
+        raise RevertIncompleteError(
+            f"The Skill revert is pending. Resolve the error and retry revisions {ids}. {error}",
+            sorted({step.revision.skill for step in journal.steps}),
+            journal.revisions,
+        ) from error
 
-    A later revision in *related* does not block the revert. Each named
-    revision records one ``revert`` revision once every package changed; when
-    the history cannot record them all, the packages changed all the same and
-    the list is shorter. The caller holds the authoring write lock.
-    """
-    steps = _plan(history, root, revision_ids, related, allow_pin_changes=allow_pin_changes)
-    _execute(root, history.archive_root, steps)
-    recorded: list[SkillRevision] = []
-    for step in steps:
-        try:
-            recorded.append(
-                history.append(
-                    skill=step.skill,
-                    kind="revert",
-                    actor=actor.actor,
-                    files=step.records,
-                    texts=step.texts,
-                    session_id=actor.session_id,
-                    run_id=actor.run_id,
-                    run_kind=actor.run_kind,
-                    subject_created_at=actor.subject_created_at,
-                    origin=step.origin,
-                    created_at=step.created_at,
-                    pinned=step.pinned,
-                    live=_live_after(step),
-                    reason=step.reason if step.action == "archive" else None,
-                    absorbed_into=step.absorbed_into if step.action == "archive" else None,
-                    archive_id=step.archive_id,
-                    reverts=(step.target.id,),
-                )
-            )
-        except OSError as error:
-            _LOGGER.warning("Skill revert of %s not recorded: %s", root, error)
-            break
-    return recorded
+
+def _check_retry(
+    journal: RevertJournal, revision_ids: Sequence[int], allow_pin_changes: bool
+) -> None:
+    if tuple(sorted(set(revision_ids), reverse=True)) != journal.revisions:
+        ids = ", ".join(str(revision) for revision in journal.revisions)
+        raise RevertIncompleteError(
+            f"A Skill revert is pending. Retry revisions {ids} together.",
+            sorted({step.revision.skill for step in journal.steps}),
+            journal.revisions,
+        )
+    if not allow_pin_changes and any(step.action == "pin" for step in journal.steps):
+        raise RevertError("Extension writers cannot change Skill pins through revision reverts.")
 
 
 def _plan(
@@ -348,106 +377,221 @@ def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
             package_names.pop(root / step.skill, None)
 
 
-def _execute(root: Path, archive_root: Path, steps: list[_Step]) -> None:
-    undo: list[tuple[str, Callable[[], object]]] = []
-    try:
-        for step in steps:
+def _prepare(
+    root: Path, archive_root: Path, steps: list[_Step], actor: RevertActor
+) -> RevertJournal:
+    """Capture package identities, file witnesses and history for the whole redo plan."""
+    transaction = uuid4().hex
+    at = utc_now_timestamp()
+    packages: dict[Path, _PackageSnapshot] = {}
+    reserved = {step.archive_id for step in steps}
+    prepared: list[RevertStep] = []
+    for step in steps:
+        live = root / step.skill
+        source = live
+        destination = live
+        if step.action in ("archive", "restore"):
+            _identity(archive_root)
+            if step.archive_id is None:
+                step.archive_id = new_id(
+                    step.skill,
+                    claim=lambda candidate: (
+                        candidate not in reserved
+                        and not exists_strict(archive_root / candidate, follow_symlinks=False)
+                    ),
+                )
+                reserved.add(step.archive_id)
+            archived = archive_root / step.archive_id
             if step.action == "archive":
-                _archive(root, archive_root, step, undo)
-            elif step.action == "restore":
-                _restore(root, archive_root, step, undo)
-            elif step.action == "content":
-                _content(root, step, undo)
-    except OSError as error:
-        failed: list[str] = []
-        for skill, action in reversed(undo):
-            try:
-                action()
-            except OSError:
-                failed.append(skill)
-        if failed:
-            skills = sorted(set(failed))
-            raise RevertIncompleteError(
-                f"The revert failed and could not be undone completely ({error}). "
-                f"Check Skill {', '.join(skills)}.",
-                skills,
-            ) from error
-        raise RevertError(f"The revert failed and nothing was changed: {error}") from error
+                destination = archived
+            else:
+                source = archived
+
+        snapshot = packages.get(source)
+        if snapshot is None:
+            identity = _identity(source)
+            if identity is None:
+                raise OSError(f"Skill package is missing: {source}")
+            snapshot = packages[source] = _PackageSnapshot(source, identity)
+
+        if step.action == "archive":
+            records, texts = diff_states(_digests(snapshot.files()), {})
+        elif step.action == "restore":
+            records, texts = diff_states({}, snapshot.files())
+            if step.origin is None:
+                step.origin = declared_origin(snapshot.source)
+                step.pinned = False
+        else:
+            before, after = _prepare_content(snapshot, step)
+            records, texts = diff_states(_digests(before), after)
+        if source != destination:
+            packages.pop(source)
+            packages[destination] = snapshot
+        prepared.append(
+            RevertStep(
+                step.action,
+                snapshot.identity,
+                SkillRevision(
+                    id=step.target.id,
+                    at=at,
+                    skill=step.skill,
+                    kind="revert",
+                    actor=actor.actor,
+                    files=tuple(replace(record, stored=record.path in texts) for record in records),
+                    session_id=actor.session_id,
+                    run_id=actor.run_id,
+                    run_kind=actor.run_kind,
+                    subject_created_at=actor.subject_created_at,
+                    origin=step.origin,
+                    created_at=step.created_at,
+                    pinned=step.pinned,
+                    live=_live_after(step),
+                    reason=step.reason if step.action == "archive" else None,
+                    absorbed_into=step.absorbed_into if step.action == "archive" else None,
+                    archive_id=step.archive_id,
+                    reverts=(step.target.id,),
+                    revert_transaction=transaction,
+                ),
+                texts,
+            )
+        )
+    return RevertJournal(transaction, tuple(prepared))
 
 
-def _archive(
-    root: Path, archive_root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]]]
-) -> None:
-    package = root / step.skill
-    before = package_state(package)
-    archive_root.mkdir(exist_ok=True)
-    if is_redirect(archive_root):
-        raise OSError("the Skill archive is a link")
-    archive_id = step.archive_id or new_id(
-        step.skill, claim=lambda candidate: not (archive_root / candidate).exists()
-    )
-    destination = archive_root / archive_id
-    package.rename(destination)
-    undo.append((step.skill, lambda: destination.rename(package)))
-    step.archive_id = archive_id
-    step.records, step.texts = diff_states(_digests(before), {})
-
-
-def _restore(
-    root: Path, archive_root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]]]
-) -> None:
-    assert step.archive_id is not None
-    source = archive_root / step.archive_id
-    package = root / step.skill
-    source.rename(package)
-    undo.append((step.skill, lambda: package.rename(source)))
-    if step.origin is None:
-        step.origin = declared_origin(package)
-        step.pinned = False
-    step.records, step.texts = diff_states({}, package_state(package))
-
-
-def _content(root: Path, step: _Step, undo: list[tuple[str, Callable[[], object]]]) -> None:
-    package = root / step.skill
+def _prepare_content(
+    snapshot: _PackageSnapshot, step: _Step
+) -> tuple[dict[str, FileState], dict[str, FileState]]:
     before: dict[str, FileState] = {}
     after: dict[str, FileState] = {}
-    for path, text in step.writes.items():
-        target = _package_path(package, path, step.target.id)
-        try:
-            previous = target.read_bytes()
-        except FileNotFoundError:
-            previous = None
-        state = file_state(target)
-        if state is not None:
-            before[path] = state
-        written = text.encode("utf-8") if text is not None else None
-        undo.append((step.skill, partial(_put, target, previous, written)))
-        if text is None:
-            target.unlink(missing_ok=True)
-            _remove_empty_parents(target.parent, package)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(target, text.encode("utf-8"))
-            written_state = file_state(target)
-            if written_state is not None:
-                after[path] = written_state
-    step.records, step.texts = diff_states(_digests(before), after)
+    for relative, text in step.writes.items():
+        target = _package_path(snapshot.source, relative, step.target.id)
+        old = snapshot.writes[relative] if relative in snapshot.writes else file_state(target)
+        if old is not None:
+            before[relative] = old
+        new = None if text is None else FileState(hashlib.sha256(text.encode()).hexdigest(), text)
+        snapshot.writes[relative] = new
+        if new is not None:
+            after[relative] = new
+    return before, after
 
 
-def _put(target: Path, data: bytes | None, written: bytes | None) -> None:
-    try:
-        current = target.read_bytes()
-    except FileNotFoundError:
-        current = None
-    if current == data:
+def _finish(history: SkillHistory, root: Path, journal: RevertJournal) -> list[SkillRevision]:
+    sync_directory(root.parent)
+    cursor = read_cursor(root, journal)
+    for index, step in enumerate(journal.steps[cursor:], start=cursor):
+        _apply_step(root, history.archive_root, step)
+        write_cursor(root, journal, index + 1)
+
+    # A package can be moved several times in one plan. Verify its final
+    # position before committing a lineage to it, including after a restart.
+    final_paths = {
+        step.identity: _step_paths(root, history.archive_root, step)[1] for step in journal.steps
+    }
+    for identity, path in final_paths.items():
+        if _identity(path) != identity:
+            raise OSError(f"The reverted package changed or is missing: {path}")
+
+    recorded = []
+    for step in journal.steps:
+        entry = step.revision
+        recorded.append(
+            history.append(
+                skill=entry.skill,
+                kind=entry.kind,
+                actor=entry.actor,
+                files=entry.files,
+                texts=step.texts,
+                session_id=entry.session_id,
+                run_id=entry.run_id,
+                run_kind=entry.run_kind,
+                subject_created_at=entry.subject_created_at,
+                origin=entry.origin,
+                created_at=entry.created_at,
+                pinned=entry.pinned,
+                live=entry.live,
+                reason=entry.reason,
+                absorbed_into=entry.absorbed_into,
+                archive_id=entry.archive_id,
+                reverts=entry.reverts,
+                revert_transaction=journal.transaction,
+            )
+        )
+    sync_directory(root.parent)
+    finish_journal(root)
+    return recorded
+
+
+def _step_paths(root: Path, archive_root: Path, step: RevertStep) -> tuple[Path, Path]:
+    live = _skill_path(root, step.revision.skill)
+    if step.action in ("archive", "restore"):
+        archive_id = step.revision.archive_id
+        if archive_id is None or not _is_entry_name(archive_id):
+            raise OSError("The pending Skill revert has an invalid archive path.")
+        _identity(archive_root)
+        archive = archive_root / archive_id
+        return (live, archive) if step.action == "archive" else (archive, live)
+    return live, live
+
+
+def _identity(path: Path) -> PackageIdentity | None:
+    status = stat_or_none(path, follow_symlinks=False)
+    if status is None:
+        return None
+    if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+        raise OSError(f"Expected a Skill package directory: {path}")
+    return status.st_dev, status.st_ino
+
+
+def _apply_step(root: Path, archive_root: Path, step: RevertStep) -> None:
+    source, destination = _step_paths(root, archive_root, step)
+    source_identity = _identity(source)
+    if source != destination:
+        existing = _identity(destination)
+        if source_identity == step.identity and existing is None:
+            expected = {
+                record.path: digest
+                for record in step.revision.files
+                if (digest := record.before if step.action == "archive" else record.after)
+                is not None
+            }
+            if _digests(package_state(source)) != expected:
+                raise OSError(f"The Skill package files changed during the revert: {source}")
+            if step.action == "restore" and any(
+                diagnostic.name == step.revision.skill
+                for diagnostic in SkillRegistry.load(root).diagnostics()
+            ):
+                raise OSError(f"A Skill named '{step.revision.skill}' exists in this home.")
+            destination.parent.mkdir(exist_ok=True)
+            source.rename(destination)
+        elif source_identity is not None or existing != step.identity:
+            raise OSError(f"The package moved or the destination is occupied: {source}")
+        for directory in (source.parent, destination.parent, root.parent):
+            sync_directory(directory)
         return
-    if current != written:
-        raise OSError(f"Skill file changed before it could be restored: {target}")
-    if data is None:
-        target.unlink(missing_ok=True)
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(target, data)
+    if source_identity != step.identity:
+        raise OSError(f"The Skill package changed or is missing: {source}")
+    for record in step.revision.files:
+        target = _package_path(source, record.path, step.revision.id)
+        state = file_state(target)
+        digest = state.digest if state is not None else None
+        if digest != record.after:
+            if digest != record.before:
+                raise OSError(f"The Skill file changed during the revert: {target}")
+            if record.after is None:
+                target.unlink()
+            else:
+                data = step.texts[record.path].encode()
+                if hashlib.sha256(data).hexdigest() != record.after:
+                    raise OSError(f"The pending text is invalid for {target}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(target, data)
+        if record.after is None:
+            _remove_empty_parents(target.parent, source)
+        for directory in target.parents:
+            if exists_strict(directory, follow_symlinks=False):
+                sync_directory(directory)
+            if directory == source:
+                break
 
 
 def _remove_empty_parents(directory: Path, package: Path) -> None:
@@ -457,6 +601,7 @@ def _remove_empty_parents(directory: Path, package: Path) -> None:
         except OSError:
             return
         directory = directory.parent
+        sync_directory(directory)
 
 
 def _digests(states: dict[str, FileState]) -> dict[str, str]:

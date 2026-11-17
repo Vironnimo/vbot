@@ -561,16 +561,6 @@ class LearningChanges:
                         ) from error
                     raise
                 applied_skills.append((skill_plan, skill_reverts))
-                if len(skill_reverts) < len(skill_plan.revisions):
-                    _LOGGER.error(
-                        "Learning undo changed Skills the history did not record "
-                        "(agent=%s owner=%s run=%s recorded=%d of %d)",
-                        agent_id,
-                        skill_plan.owner_id,
-                        run_id,
-                        len(skill_reverts),
-                        len(skill_plan.revisions),
-                    )
             memory_changed = False
             applied: list[tuple[_MemoryUndo, MemoryRevertResult]] = []
             for plan in memory_plans:
@@ -610,7 +600,6 @@ class LearningChanges:
                 actor,
             )
             after = self._read(agent_id).changes(agent_id, run_id)
-            # Every Skill step ran once the revert returned, recorded or not.
             return LearningUndoResult(after, memory_changed, bool(skill_plans))
 
     def _check_skill_subject(
@@ -721,8 +710,8 @@ class LearningChanges:
     ) -> Iterator[None]:
         """Turn a refused revert into the undo's refusal, naming the blocking change.
 
-        A Skill revert that could not take its own steps back changed packages,
-        so it is a failure, not a refusal.
+        A pending Skill revert can already have changed packages. Report the
+        interrupted work and its recovery.
         """
         try:
             yield

@@ -681,9 +681,9 @@ def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
         ),
         pytest.param(
             _fail_skill_writes,
-            LearningUndoError,
+            LearningUndoFailedError,
             False,
-            id="skill-write-fails-before-effect",
+            id="skill-write-pends-after-package-restore",
         ),
     ],
 )
@@ -705,7 +705,17 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
         with pytest.raises(error_type):
             agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor=actor)
 
-    assert agent.skill_files() == skill_files
+    after_failure = agent.skill_files()
+    if break_writes is _fail_skill_writes:
+        # The newer archive inverse was already applied when the next file
+        # write failed. Its settled History remains hidden until the retry.
+        assert b"# Steps" in after_failure.pop(str(Path("skills", "old", "SKILL.md")))
+        assert not [
+            revision
+            for revision in agent.skills.recorded_revisions(agent.home)
+            if revision.kind == "revert"
+        ]
+    assert after_failure == skill_files
     assert agent.entries() == ({**entries, "user": []} if user_memory_undone else entries)
     assert all(
         [entry.content for entry in agent.memory.list_entries(path, "project")]

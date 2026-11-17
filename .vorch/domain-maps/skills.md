@@ -54,7 +54,7 @@ A one-time System Reminder that a Skill became available and allowed during a pr
 
 ## Authoring & Write Scope
 
-`SkillAuthoringService` (`core/skills/authoring.py`) is the single validated write core behind the Agent Tool, RPC, WebUI, CLI, installation and `/learn`; no surface writes packages itself. Mutations name their writer (`SkillWriter`; people pass `HUMAN_WRITER`) and enforce the Background Writer rules. Ordinary edits record Skill History on a best-effort basis. Pin changes require a history write, and archive restores record provenance and pin before republishing the package (`skills/history.md`). Mechanics and `skill.*` write RPCs live in `skills/authoring.md`.
+`SkillAuthoringService` (`core/skills/authoring.py`) is the single validated write core behind the Agent Tool, RPC, WebUI, CLI, installation and `/learn`; no surface writes packages itself. Mutations name their writer (`SkillWriter`; people pass `HUMAN_WRITER`) and enforce the Background Writer rules. Ordinary edits record Skill History on a best-effort basis. Pin changes require a history write. Archive restores record provenance and pin before republishing the package, and Skill History reverts stay resumable until every package change and revision is recorded (`skills/history.md`). Mechanics and `skill.*` write RPCs live in `skills/authoring.md`.
 
 Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
