@@ -41,11 +41,14 @@ from core.utils.errors import VBotError
 from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
+from core.utils.surrogates import replace_lone_surrogates
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 
 if TYPE_CHECKING:
+    from os import stat_result
+
     from core.sessions import ChatSessionManager
 
 # Storing sniffs the content and fsyncs a blob of up to the size limit: never on
@@ -201,8 +204,9 @@ class AttachmentStore:
         if max_size_bytes <= 0:
             raise AttachmentError("max_size_bytes must be greater than 0")
 
-        self._attachments_dir = DataDirectoryLayout(data_dir).attachments
-        self._data_dir = Path(data_dir)
+        layout = DataDirectoryLayout(data_dir)
+        self._attachments_dir = layout.attachments
+        self._data_dir = layout.root
         self._max_size_bytes = max_size_bytes
 
     def collect_session_orphans(self, sessions: ChatSessionManager) -> int:
@@ -249,7 +253,9 @@ class AttachmentStore:
         if not _is_allowed_mime(media_type):
             raise AttachmentTypeNotAllowedError(f"Attachment type not allowed: {media_type}")
         canonical_extension = canonical_extension_for_media_type(media_type)
-        stored_filename = _filename_with_extension(filename, canonical_extension)
+        stored_filename = _filename_with_extension(
+            replace_lone_surrogates(filename), canonical_extension
+        )
 
         stored_at = datetime.now(UTC).isoformat()
         self._require_canonical_directory()
@@ -297,7 +303,7 @@ class AttachmentStore:
 
         try:
             self._write_new_sidecar(sidecar_path, record)
-        except AttachmentError:
+        except BaseException:
             self._safe_remove_path(blob_path)
             self._safe_remove_path(sidecar_path)
             raise
@@ -325,7 +331,7 @@ class AttachmentStore:
         normalized_id = _normalize_attachment_id(attachment_id)
         self._require_canonical_directory()
         sidecar_path = self._sidecar_path(normalized_id)
-        if not self._regular_file_exists(sidecar_path):
+        if self._regular_file_status(sidecar_path) is None:
             raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
         try:
             data = load_validated_json_file(
@@ -347,8 +353,12 @@ class AttachmentStore:
             )
 
         blob_path = self._blob_path(normalized_id, metadata["media_type"])
-        if require_blob and not self._regular_file_exists(blob_path):
-            raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
+        if require_blob:
+            status = self._regular_file_status(blob_path)
+            if status is None:
+                raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
+            if status.st_size != metadata["size_bytes"]:
+                raise AttachmentError(f"Attachment blob size mismatch: {normalized_id}")
 
         return AttachmentRecord(
             id=normalized_id,
@@ -367,7 +377,7 @@ class AttachmentStore:
             raise AttachmentError("transcription must be a non-empty string")
 
         record = self.get(attachment_id)
-        updated_record = replace(record, transcription=transcription)
+        updated_record = replace(record, transcription=replace_lone_surrogates(transcription))
         sidecar_path = self._sidecar_path(updated_record.id)
         try:
             write_json_document(
@@ -402,7 +412,7 @@ class AttachmentStore:
         """A missing directory is fine; redirecting managed storage is not."""
         try:
             status = stat_or_none(self._attachments_dir, follow_symlinks=False)
-            canonical = DataDirectoryLayout(self._data_dir.expanduser().resolve()).attachments
+            canonical = DataDirectoryLayout(self._data_dir.resolve()).attachments
             if self._attachments_dir.resolve() != canonical or (
                 status is not None and (is_link_status(status) or not stat.S_ISDIR(status.st_mode))
             ):
@@ -411,16 +421,14 @@ class AttachmentStore:
             raise AttachmentError("Cannot check the attachment folder") from exc
 
     @staticmethod
-    def _regular_file_exists(path: Path) -> bool:
+    def _regular_file_status(path: Path) -> stat_result | None:
         try:
             status = stat_or_none(path, follow_symlinks=False)
         except OSError as exc:
             raise AttachmentError(f"Cannot check attachment file {path}: {exc}") from exc
-        if status is None:
-            return False
-        if is_link_status(status) or not stat.S_ISREG(status.st_mode):
+        if status is not None and (is_link_status(status) or not stat.S_ISREG(status.st_mode)):
             raise AttachmentError(f"Attachment file is not a regular file: {path}")
-        return True
+        return status
 
     def _blob_path(self, attachment_id: str, media_type: str) -> Path:
         extension = canonical_extension_for_media_type(media_type)

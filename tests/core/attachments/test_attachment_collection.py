@@ -68,10 +68,13 @@ def test_unused_uploads_expire_only_with_a_valid_ten_day_old_timestamp(
     tmp_path: Path,
     sessions: ChatSessionManager,
     clock: datetime,
+    monkeypatch: pytest.MonkeyPatch,
     age: timedelta | None,
     expired: bool,
 ) -> None:
-    store = AttachmentStore(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path.parent))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path.parent))
+    store = AttachmentStore(Path("~") / tmp_path.name)
     record = _stored_at(
         store.store("draft.txt", b"unsubmitted draft"),
         (clock - age).isoformat() if age is not None else "not a timestamp",
