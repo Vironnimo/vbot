@@ -373,14 +373,9 @@ export function createCalendarController({ state }) {
     state.loadError = '';
     const requestId = ++loadRequestId;
     const { from, to } = windowForView(state.view, state.anchorKey);
-    // The events still show when their jobs cannot be read.
-    const jobsRequest = listCronJobs().then(
-      (result) => ({ jobs: result?.jobs ?? [] }),
-      (error) => ({ error }),
-    );
+    void loadJobs(requestId);
     try {
       const result = await getCalendarWindow({ from, to });
-      const jobs = await jobsRequest;
       if (requestId !== loadRequestId) {
         return;
       }
@@ -400,12 +395,6 @@ export function createCalendarController({ state }) {
       state.events = result.events ?? [];
       state.cron = (result.cron ?? []).filter((item) => !item.event_id);
       state.cronIncomplete = result.cron_incomplete === true;
-      if (jobs.error) {
-        state.jobsError = jobs.error?.message ?? String(jobs.error);
-      } else {
-        state.jobs = jobs.jobs.filter((job) => job.schedule_type === 'event');
-        state.jobsError = '';
-      }
     } catch (error) {
       if (requestId !== loadRequestId) {
         return;
@@ -415,6 +404,21 @@ export function createCalendarController({ state }) {
       if (requestId === loadRequestId) {
         state.loading = false;
       }
+    }
+  }
+
+  // Bound jobs enrich the Calendar independently of the window request.
+  async function loadJobs(requestId) {
+    try {
+      const result = await listCronJobs();
+      if (requestId !== loadRequestId) return;
+      state.jobs = (result?.jobs ?? []).filter(
+        (job) => job.schedule_type === 'event',
+      );
+      state.jobsError = '';
+    } catch (error) {
+      if (requestId === loadRequestId)
+        state.jobsError = error?.message ?? String(error);
     }
   }
 
