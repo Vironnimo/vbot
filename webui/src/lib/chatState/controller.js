@@ -236,6 +236,11 @@ export function createChatController({
     return loadHistoryForSession(agent.id, agent.current_session_id);
   }
 
+  function syncDisplayedSession(key) {
+    syncDisplayedHistoryLoad();
+    runStream.closeSubscriptionsExcept(key);
+  }
+
   // A selection adopted without navigation still shows its current History.
   // While the mount's roster load is pending, that load reads the History
   // itself; a Chat mounted hidden has already finished it for another Agent.
@@ -758,7 +763,7 @@ export function createChatController({
     loadCommandOutput,
     loadCommands,
     loadCurrentHistory,
-    syncDisplayedHistoryLoad,
+    syncDisplayedSession,
     loadHistoryForSession,
     loadOlderHistory,
     loadRunHistory,

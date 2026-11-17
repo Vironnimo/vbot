@@ -85,7 +85,7 @@ export function createChatHistory({
   const historyLoadVersions = new Map();
   const historyCache = new Map();
   const runHistoryLoads = new Map();
-  let displayedHistoryLoad = null;
+  let displayedHistoryRequest = null;
 
   function retainHistory(session) {
     historyCache.delete(session);
@@ -117,8 +117,8 @@ export function createChatHistory({
     }
   }
   function syncDisplayedHistoryLoad() {
-    if (displayedHistoryLoad && !displayedHistoryLoad.isDisplayed()) {
-      displayedHistoryLoad = null;
+    if (displayedHistoryRequest && !displayedHistoryRequest.isDisplayed()) {
+      displayedHistoryRequest = null;
       chatState.loadingHistory = false;
       chatState.historyError = '';
     }
@@ -235,7 +235,7 @@ export function createChatHistory({
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
     if (startedDisplayed) {
-      displayedHistoryLoad = request;
+      displayedHistoryRequest = request;
       chatState.loadingHistory = true;
       chatState.historyError = '';
       runStream.closeSubscriptionsExcept(sessionState.key);
@@ -288,13 +288,15 @@ export function createChatHistory({
       return true;
     } catch (error) {
       if (isLatestRequest() && isDisplayed()) {
+        displayedHistoryRequest = request;
         chatState.historyError = errorMessage(error);
       }
       return false;
     } finally {
-      if (displayedHistoryLoad === request) {
-        displayedHistoryLoad = null;
+      if (displayedHistoryRequest === request) {
         chatState.loadingHistory = false;
+        // A visible error belongs to this Session even after loading ends.
+        if (!chatState.historyError) displayedHistoryRequest = null;
       }
     }
   }
@@ -472,7 +474,7 @@ export function createChatHistory({
     },
     destroy() {
       historyLoadVersions.clear();
-      displayedHistoryLoad = null;
+      displayedHistoryRequest = null;
       chatState.loadingHistory = false;
     },
   };
