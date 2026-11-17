@@ -40,7 +40,7 @@ A resolved, placeholder-free rule set a Run inherits from whoever caused it: the
 One placeholder-free rule set inside a Permission Boundary, tagged with its source: the Agent's own rules, a parent Session, a Cron job or an Extension.
 
 ### Session Grant
-An allow rule the user added to one Session while approving a Tool call; it widens only the Agent's own Layer, never a Permission Ceiling (`permissions/approvals.md` -> Session Grants). Not the Session's own rules.
+Additional access the user allows while approving a Tool call for one Session (`permissions/approvals.md` -> Session Grants).
 
 ## Interfaces
 
@@ -72,7 +72,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 
 ## Approval ownership
 
-Runs own pending decisions; Tools prepare and revalidate exact per-call access; `_session_grants.py` suggests Session Grants. Lifecycle, rejection scope, grants and accessor/review contracts: `permissions/approvals.md`.
+Runs own pending decisions, Tools prepare and revalidate access, and `_session_grants.py` suggests grants (`permissions/approvals.md`).
 
 ## Decision order
 
@@ -81,7 +81,7 @@ For a path, in this order (normalization, unsafe forms and links in detail: `per
 2. Resolve links and junctions; the lexical and the resolved form must both pass every later step.
 3. Protected locations: the Agent's `agent.json` (always); the locations a Team member's rules come from (`rule_files`) and install and interpreter dirs (writes); the data directory, except the Workspace and the Scratch Area, and for reading also `readable_dirs` (the Run's own artifact folders and Skill folders).
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.
-5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. Every layer permits the current Run's Scratch Area and Workspace, and reading `readable_dirs`.
+5. Every layer must permit by base or allow rule (`Edit` covers reads), or by a Session read folder in Agent and Parent layers. All layers grant the Workspace, Scratch Area and reading `readable_dirs`.
 
 Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `permissions/rule-language.md` -> Bases, kinds and placeholders.
 

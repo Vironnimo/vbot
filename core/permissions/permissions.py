@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -176,6 +177,7 @@ class BoundaryContext:
     loopback_port: int | None = None
     own_hosts: tuple[str, ...] = ()
     platform: str = sys.platform
+    session_read_folders: tuple[str, ...] = ()
 
 
 class PermissionBoundary:
@@ -222,7 +224,15 @@ class PermissionBoundary:
         self._workdir = lexical_text(os.fspath(context.workdir), windows=windows)
         self._home = lexical_text(os.fspath(context.home), windows=windows)
         self._compiled = tuple(
-            _CompiledLayer(layer, scratch=context.scratch_root, windows=windows) for layer in layers
+            _CompiledLayer(
+                layer,
+                scratch=context.scratch_root,
+                windows=windows,
+                read_folders=context.session_read_folders
+                if layer.source in ("agent", "parent")
+                else (),
+            )
+            for layer in layers
         )
         self._data_dirs = _Area.of(os.fspath(context.data_dir), windows=windows)
         self._workspace = _Area.optional(context.workspace, windows=windows)
@@ -235,9 +245,7 @@ class PermissionBoundary:
             scoped.root if scoped is not None else None, windows=windows
         )
         self._scope_fingerprints = (
-            frozenset(layer.fingerprint for layer in self.layers)
-            if self._scoped_root is not None
-            else frozenset()
+            self.scope_fingerprints() if self._scoped_root is not None else frozenset()
         )
         self._agent_config = _Area.optional(context.agent_config, windows=windows)
         # Inside the data directory the Workspace counts only within the Agent's
@@ -301,6 +309,15 @@ class PermissionBoundary:
         """Every effective layer, including this Run's Scratch Area, the Agent's own first."""
         return tuple(compiled.layer for compiled in self._compiled)
 
+    def scope_fingerprints(self) -> frozenset[str]:
+        """Identify effective layers for access to retained resources such as terminals."""
+        return frozenset(
+            json.dumps([layer.layer.fingerprint, sorted(layer.session_read_folders)])
+            if layer.session_read_folders
+            else layer.layer.fingerprint
+            for layer in self._compiled
+        )
+
     @property
     def context(self) -> BoundaryContext | None:
         return self._context
@@ -336,6 +353,14 @@ class PermissionBoundary:
                 layer.retagged(source) if layer.source == "agent" else layer
                 for layer in self._layers
             )
+        )
+
+    def with_read_folder(self, folder: str) -> PermissionBoundary:
+        """Preview a local Session exception without changing the delegable layers."""
+        assert self._context is not None
+        folders = (*self._context.session_read_folders, folder)
+        return PermissionBoundary(
+            self._layers, replace(self._context, session_read_folders=folders)
         )
 
     def with_agent_allow(self, rules: Iterable[PermissionRule]) -> PermissionBoundary | None:
@@ -902,6 +927,7 @@ class _CompiledLayer:
         "workdir",
         "scratch",
         "read_allow",
+        "session_read_folders",
         "edit_allow",
         "read_deny",
         "edit_deny",
@@ -909,8 +935,20 @@ class _CompiledLayer:
         "web_deny",
     )
 
-    def __init__(self, layer: PermissionLayer, *, scratch: PathLike | None, windows: bool) -> None:
+    def __init__(
+        self,
+        layer: PermissionLayer,
+        *,
+        scratch: PathLike | None,
+        windows: bool,
+        read_folders: tuple[str, ...],
+    ) -> None:
         self.layer = replace(layer, scratch=_optional_text(scratch, windows=windows))
+        # Keep literal lexical roots pinned. A grant must not follow a replacement
+        # junction out of the folder the user selected. Both access forms are checked.
+        self.session_read_folders = {
+            path_key(folder, windows=windows): folder for folder in read_folders
+        }
         self.workdir = _Area.of(layer.workdir, windows=windows)
         # A ceiling retains its creator's workdir, but each Run owns its Scratch
         # Area. The stored scratch field stays intact for ceiling round trips.
@@ -944,6 +982,8 @@ class _CompiledLayer:
             if base == "work_area" and self.workdir.contains(key):
                 return True
             return any(rule.matches(key) for rule in self.edit_allow)
+        if access == "read" and any(is_inside(key, root) for root in self.session_read_folders):
+            return True
         if self.layer.read == "anywhere" or _contains(self.scratch, key):
             return True
         if self.workdir.contains(key):
@@ -961,6 +1001,8 @@ class _CompiledLayer:
         if self.layer.scratch is not None:
             items.append(self.layer.scratch)
         rules = self.edit_allow if access == "write" else self.read_allow + self.edit_allow
+        if access == "read":
+            items.extend(self.session_read_folders.values())
         items.extend(rule.rule.pattern for rule in rules)
         return items
 

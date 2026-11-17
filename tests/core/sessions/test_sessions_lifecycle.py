@@ -342,7 +342,12 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
     source = manager.create(
         "coder",
         session_id="source",
-        metadata={"ephemeral": True, "fast_mode": True, "input_source_id": "in_source"},
+        metadata={
+            "ephemeral": True,
+            "fast_mode": True,
+            "input_source_id": "in_source",
+            "agent_overrides": {"read_folders": {"server": ["/library"]}, "model": "test"},
+        },
     )
     source.append_many(
         [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
@@ -375,6 +380,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
     assert "ephemeral" not in metadata
     assert "fast_mode" not in metadata
     assert "input_source_id" not in metadata
+    assert metadata["agent_overrides"] == {"model": "test"}
     # A fork into another Agent's scope starts its own prompt-cache lineage.
     assert manager.prompt_cache_affinity_id(forked.address) != manager.prompt_cache_affinity_id(
         source_address

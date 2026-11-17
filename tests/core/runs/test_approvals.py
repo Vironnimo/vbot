@@ -141,6 +141,47 @@ async def test_rejection_settles_other_pending_calls_for_same_access() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_folder_decision_rechecks_only_the_requesting_sessions_waiters() -> None:
+    manager = ChatRunManager()
+    child = Run(run_id="child", agent_id="a", session_id="same", project_id="child-project")
+    other = Run(run_id="other", agent_id="a", session_id="same", project_id="other-project")
+    saved = False
+
+    async def covered() -> bool:
+        return saved
+
+    async def outside() -> bool:
+        return False
+
+    async def remember(request: dict[str, Any]) -> None:
+        nonlocal saved
+        assert request["run_id"] == "child"
+        assert not manager.resolve_approval(request["id"], "reject")
+        saved = True
+
+    tasks = [
+        asyncio.create_task(manager.request_approval(run, {}, [], [], recheck=check))
+        for run, check in [(child, covered), (child, covered), (child, outside), (other, covered)]
+    ]
+    try:
+        await asyncio.sleep(0)
+        ids = [r["id"] for r in manager.approvals_snapshot()["requests"]]
+        assert len(ids) == 4
+        assert await manager.remember_approval(ids[0], remember, folder_read=True)
+        assert await tasks[0] == "permitted"
+        assert await tasks[1] == "permitted"
+        assert {r["id"] for r in manager.approvals_snapshot()["requests"]} == set(ids[2:])
+        # A sibling that prepared against the old rules finishes without publishing a card.
+        revision = manager.approvals_snapshot()["revision"]
+        assert await manager.request_approval(child, {}, [], [], recheck=covered) == "permitted"
+        assert manager.approvals_snapshot()["revision"] == revision
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_cancelling_one_waiting_approval_does_not_cancel_sibling() -> None:
     manager = ChatRunManager()
     run = Run(run_id="r", agent_id="a", session_id="s")

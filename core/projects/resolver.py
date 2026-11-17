@@ -505,13 +505,21 @@ class AgentResolver:
         *,
         add: Sequence[str] = (),
         remove: Sequence[str] = (),
+        read_folder: str | None = None,
+        remove_folder: str | None = None,
+        computer_id: str = "server",
     ) -> AgentOverrides:
         """Add and remove Session Grants of one Session. Blocking.
 
         See ``SessionResolution.change_session_permission_grants``.
         """
         return self._session_resolution.change_session_permission_grants(
-            address, add=add, remove=remove
+            address,
+            add=add,
+            remove=remove,
+            read_folder=read_folder,
+            remove_folder=remove_folder,
+            computer_id=computer_id,
         )
 
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:

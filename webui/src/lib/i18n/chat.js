@@ -65,6 +65,10 @@ export default Object.freeze({
   'approvals.invocation': 'Prepared Tool arguments',
   'approvals.redacted': 'Secret values are hidden in this display.',
   'approvals.reject': 'Reject',
+  'approvals.session.chooseFolder': 'Choose a read folder…',
+  'approvals.session.readFolder': 'Allow reading “{folder}”',
+  'approvals.session.readScope':
+    'Folder for this Session, including subfolders:',
   'approvals.allowOnce': 'Allow once',
   'approvals.allowSession': 'Allow in this Session',
   'approvals.session.tooltip':

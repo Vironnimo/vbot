@@ -228,14 +228,25 @@ def _session_summary(
 
 def _session_rules(overrides: AgentOverrides) -> JsonObject:
     stored = overrides.permission_rules
-    grants = list(overrides.permission_grants)
+    grants = _grant_summary(overrides)
     if stored is None:
-        return {"session_rules": None, "session_preset": None, "session_grants": grants}
+        return {"session_rules": None, "session_preset": None, **grants}
     return {
         "session_rules": dict(stored),
         "session_preset": matching_preset(normalize_permission_rules(stored)),
-        "session_grants": grants,
+        **grants,
     }
+
+
+def _grant_summary(overrides: AgentOverrides) -> JsonObject:
+    result: JsonObject = {"session_grants": list(overrides.permission_grants)}
+    if overrides.read_folders:
+        result["session_read_folders"] = [
+            {"computer_id": computer, "folder": folder}
+            for computer, folders in overrides.read_folders.items()
+            for folder in folders
+        ]
+    return result
 
 
 async def _set_session_rules(state: Any, params: JsonObject) -> JsonObject:
@@ -339,46 +350,59 @@ async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
     are stored before the call goes on, so its Tool's recheck and every later
     call of the Session see them.
     """
-    _reject_unsupported(params, {"id", "decision", "remember"}, "permissions.resolve")
+    _reject_unsupported(
+        params, {"id", "decision", "remember", "read_folder"}, "permissions.resolve"
+    )
     request_id = _required_string(params, "id")
     decision = _required_string(params, "decision")
     if decision not in {"allow", "reject"}:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "decision must be allow or reject")
     remember = params.get("remember")
-    if remember is not None:
-        if decision != "allow":
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, "remember needs the decision allow")
+    folder = _optional_string(params, "read_folder")
+    if remember is None and folder is None:
+        resolved = state.chat_runs.resolve_approval(request_id, decision)
+    else:
+        if decision != "allow" or (folder is not None and remember is not None):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "Choose one Session grant with decision allow."
+            )
         if current_principal() is None:
             raise RpcError("access_denied", "Only the user can allow access for a Session.")
-        try:
-            rules = [rule.text for rule in normalize_session_grants(remember)]
-        except PermissionRulesError as error:
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.remember: {error}") from error
-        if not rules:
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.remember names no rule")
-        request = next(
-            (
-                item
-                for item in state.chat_runs.approvals_snapshot()["requests"]
-                if item["id"] == request_id
-            ),
-            None,
-        )
-        if request is None:
-            raise RpcError(
-                "approval_not_found", "The approval request is no longer pending", routine=True
+        rules: list[str] = []
+        if remember is not None:
+            try:
+                rules = [rule.text for rule in normalize_session_grants(remember)]
+            except PermissionRulesError as error:
+                raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.remember: {error}") from error
+            if not rules:
+                raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.remember names no rule")
+
+        async def save(request: JsonObject) -> None:
+            if folder is not None and folder not in (request.get("session_grant") or {}).get(
+                "folders", ()
+            ):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST, "Choose a read folder offered for this request."
+                )
+            address = SessionAddress(
+                request.get("project_id"), request["agent_id"], request["session_id"]
             )
-        address = SessionAddress(
-            request.get("project_id"), request["agent_id"], request["session_id"]
+            try:
+                await state.runtime.chat_sessions.run_async(
+                    state.runtime.agent_resolver.change_session_permission_grants,
+                    address,
+                    add=rules,
+                    read_folder=folder,
+                    computer_id=request.get("execution", {}).get("computer_id", "server"),
+                )
+            except Exception as exc:
+                raise _map_expected_error(exc) from exc
+            publish_session_changed(state, address)
+
+        resolved = await state.chat_runs.remember_approval(
+            request_id, save, folder_read=folder is not None
         )
-        try:
-            await state.runtime.chat_sessions.run_async(
-                state.runtime.agent_resolver.change_session_permission_grants, address, add=rules
-            )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        publish_session_changed(state, address)
-    if not state.chat_runs.resolve_approval(request_id, decision):
+    if not resolved:
         raise RpcError(
             "approval_not_found", "The approval request is no longer pending", routine=True
         )
@@ -388,24 +412,33 @@ async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
 async def _remove_session_grants(state: Any, params: JsonObject) -> JsonObject:
     """Take back Session Grants; a Run in progress applies it at its next Tool round."""
     _reject_unsupported(
-        params, {"agent_id", "session_id", "rules"}, "permissions.remove_session_grants"
+        params,
+        {"agent_id", "session_id", "rules", "read_folder", "computer_id"},
+        "permissions.remove_session_grants",
     )
     if current_principal() is None:
         raise RpcError("access_denied", "Only the user can change a Session's permission rules.")
     address = _required_session_address(params)
-    rules = params.get("rules")
+    folder = _optional_string(params, "read_folder")
+    if ("rules" in params) == (folder is not None) or ("computer_id" in params and folder is None):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Choose rules or a read folder to remove.")
+    rules = params.get("rules", [])
     try:
         normalize_session_grants(rules)
     except PermissionRulesError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.rules: {error}") from error
     try:
         overrides = await state.runtime.chat_sessions.run_async(
-            state.runtime.agent_resolver.change_session_permission_grants, address, remove=rules
+            state.runtime.agent_resolver.change_session_permission_grants,
+            address,
+            remove=rules,
+            remove_folder=folder,
+            computer_id=_optional_string(params, "computer_id") or "server",
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_session_changed(state, address)
-    return {"session_grants": list(overrides.permission_grants)}
+    return _grant_summary(overrides)
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

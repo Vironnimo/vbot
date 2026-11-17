@@ -1,11 +1,8 @@
-"""Session Grants: allow rules the user adds to one Session while approving a Tool call.
+"""Session Grants offered when the operator approves a Tool call.
 
-An approval request offers to remember its access for the rest of the Session.
-:func:`suggest_session_grants` proposes the rules for that: a sensible scope by
-default (the folder, the command with any arguments, the host) and, where it
-differs, one that names only this access. A suggestion exists only when the
-rules, added to the Agent's own layer, would really let the same call run:
-inherited limits are never widened, so a call they refuse gets none.
+Rule suggestions widen the Agent layer. Literal read folders can also satisfy
+a Parent layer, and stay with the requesting Session and Computer. Every
+suggestion must cover the whole prepared access under the resulting boundary.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.permissions._approval_access import ApprovalRequirement
-from core.permissions._paths import LexicalPath, has_wildcard, split_lexical
+from core.permissions._paths import LexicalPath, has_wildcard, is_inside, path_key, split_lexical
 from core.permissions._refusal import HostAccess, PathAccess
 from core.permissions._rules import PermissionRule, PermissionRulesError, parse_permission_rule
 from core.permissions.commands.commands import (
@@ -38,14 +35,25 @@ class GrantSuggestion:
     """The rules that would let later calls make an approval's access without asking.
 
     ``rules`` is the default scope; ``exact`` names only this access, ``None``
-    where it equals ``rules`` or no rule can name it exactly.
+    where it equals ``rules`` or no rule can name it exactly. ``folders`` lists literal
+    read scopes from nearest to broadest. ``choose_folder`` requires an explicit
+    choice when even the nearest common scope is wider than the direct folder.
     """
 
     rules: tuple[str, ...]
     exact: tuple[str, ...] | None = None
+    folders: tuple[str, ...] = ()
+    choose_folder: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {"rules": list(self.rules), "exact": list(self.exact) if self.exact else None}
+        result: dict[str, Any] = {
+            "rules": list(self.rules),
+            "exact": list(self.exact) if self.exact else None,
+        }
+        if self.folders:
+            result["folders"] = list(self.folders)
+            result["choose_folder"] = self.choose_folder
+        return result
 
 
 def normalize_session_grants(
@@ -79,20 +87,27 @@ def suggest_session_grants(
     """Rules for the Session that make *requirements* permitted, or ``None``.
 
     Blocking: paths resolve on the filesystem. ``is_dir`` tells a folder from a
-    file for paths on the server (default: the server's filesystem); a path on
-    another Computer counts as a file unless its access reaches below it.
+    file on the filesystem where the boundary actually checked the path.
     """
-    if not requirements or boundary.with_agent_allow(()) is None:
+    if not requirements or not boundary.restricted:
         return None
     windows = (boundary.context.platform if boundary.context else sys.platform) == "win32"
     probe = is_dir or _is_server_dir
+    folders, choose_folder = _read_folder_choices(
+        boundary, requirements, windows=windows, is_dir=probe
+    )
+    folder_only = (
+        GrantSuggestion((), folders=folders, choose_folder=choose_folder) if folders else None
+    )
+    if not boundary.layers or boundary.layers[0].source != "agent":
+        return folder_only
     default: list[str] = []
     exact: list[str] = []
     exact_possible = True
     for requirement in requirements:
         proposed = _proposed(requirement, windows=windows, is_dir=probe)
         if proposed is None:
-            return None
+            return folder_only
         scoped, only = proposed
         default.extend(rule for rule in scoped if rule not in default)
         if only is None:
@@ -100,7 +115,7 @@ def suggest_session_grants(
         else:
             exact.extend(rule for rule in only if rule not in exact)
     if not _covers(boundary, default, requirements, windows=windows):
-        return None
+        return folder_only
     narrow: tuple[str, ...] | None = None
     if (
         exact_possible
@@ -108,7 +123,83 @@ def suggest_session_grants(
         and _covers(boundary, exact, requirements, windows=windows)
     ):
         narrow = tuple(exact)
-    return GrantSuggestion(tuple(default), narrow)
+    return GrantSuggestion(tuple(default), narrow, folders, choose_folder)
+
+
+def normalize_read_folders(
+    value: object, *, windows: bool = sys.platform == "win32"
+) -> tuple[str, ...]:
+    """Canonical absolute, literal folder names in a stored Session exception."""
+    if not isinstance(value, (list, tuple)):
+        raise PermissionRulesError("Session read folders must be a list.")
+    result: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, str) or not item or has_wildcard(item) or "\x00" in item:
+            raise PermissionRulesError("A Session read folder must be a literal path.")
+        folder = split_lexical(item, windows=windows)
+        if not folder.absolute or folder.unsafe or folder.text != item:
+            raise PermissionRulesError("A Session read folder must be an absolute folder path.")
+        result.setdefault(path_key(item, windows=windows), item)
+    return tuple(result.values())
+
+
+def _read_folder_choices(
+    boundary: PermissionBoundary,
+    requirements: Sequence[ApprovalRequirement],
+    *,
+    windows: bool,
+    is_dir: Callable[[str], bool],
+) -> tuple[tuple[str, ...], bool]:
+    if not all(
+        r.kind == "path" and r.access == "read" and r.computer_id == requirements[0].computer_id
+        for r in requirements
+    ):
+        return (), False
+    first = requirements[0]
+    shown = first.shown or first.target
+    path = split_lexical(shown, windows=windows)
+    if path.unsafe or not path.absolute or has_wildcard(shown):
+        return (), False
+    segments = (
+        path.segments
+        if (first.subtree and not first.filtered) or first.glob or is_dir(shown)
+        else path.segments[:-1]
+    )
+    choices: list[str] = []
+    for length in range(len(segments), -1, -1):
+        folder = LexicalPath(path.root, segments[:length])
+        key = path_key(folder.text, windows=windows)
+        if not all(
+            is_inside(r.target, key) and is_inside(r.resolved or r.target, key)
+            for r in requirements
+        ):
+            continue
+        # The narrowest common folder must actually permit every read. Broader
+        # folders cannot change a protected path, deny or independent ceiling.
+        if not choices and not permitted_folder_reads(
+            boundary.with_read_folder(folder.text), requirements
+        ):
+            return (), False
+        choices.append(folder.text)
+    # A shared ancestor across different directories or a link target needs an explicit choice.
+    direct = LexicalPath(path.root, segments)
+    return tuple(choices), bool(
+        choices and (choices[0] != direct.text or _too_wide(direct, windows=windows))
+    )
+
+
+def permitted_folder_reads(
+    boundary: PermissionBoundary, requirements: Sequence[ApprovalRequirement]
+) -> bool:
+    """Recheck the private prepared accesses of a waiting call against current rules."""
+    return bool(requirements) and all(
+        item.kind == "path"
+        and item.access == "read"
+        and _permits(
+            boundary, item, windows=bool(boundary.context and boundary.context.platform == "win32")
+        )
+        for item in requirements
+    )
 
 
 def _proposed(
@@ -282,5 +373,7 @@ __all__ = [
     "GRANT_KINDS",
     "GrantSuggestion",
     "normalize_session_grants",
+    "normalize_read_folders",
+    "permitted_folder_reads",
     "suggest_session_grants",
 ]

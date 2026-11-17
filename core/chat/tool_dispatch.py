@@ -39,6 +39,7 @@ from core.permissions import (
     ApprovalRequirement,
     GrantSuggestion,
     PermissionBoundary,
+    permitted_folder_reads,
     run_permission_decision,
     suggest_session_grants,
 )
@@ -162,7 +163,30 @@ class ToolRound:
             rejected = [item.suppression_key for item in requirements]
             manager = context.approval_manager
             assert manager is not None
-            return await manager.request_approval(run, safe_payload, checks, rejected)
+
+            async def recheck_folder_reads() -> bool:
+                boundary, execution = await tool_context.approval_refresh_hook(False)
+                if execution.get("computer_id", "server") != tool_context.execution.get(
+                    "computer_id", "server"
+                ):
+                    return False
+                return await run_permission_decision(
+                    lambda: permitted_folder_reads(boundary, requirements)
+                )
+
+            can_recheck = tool_context.approval_refresh_hook is not None and all(
+                item.kind == "path"
+                and item.access == "read"
+                and item.computer_id == tool_context.execution.get("computer_id", "server")
+                for item in requirements
+            )
+            return await manager.request_approval(
+                run,
+                safe_payload,
+                checks,
+                rejected,
+                recheck=recheck_folder_reads if can_recheck else None,
+            )
 
         config = ToolExecutionConfig(
             agent_id=run.agent_id,
