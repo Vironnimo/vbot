@@ -289,6 +289,8 @@ class SetupScreen(ModalScreen[bool]):
                 + (
                     "Connected. You can continue or replace its credential."
                     if value.get("usable")
+                    else "Connect using the saved API key, or enter a replacement."
+                    if key.display and value.get("configured")
                     else "Enter the API key and connect."
                     if key.display
                     else "Connect to enable this local service."
@@ -313,14 +315,18 @@ class SetupScreen(ModalScreen[bool]):
         if kind == "api_key":
             field = self.query_one("#setup-key", Input)
             value = field.value.strip()
-            if not value:
+            if value:
+                await self.client.rpc("provider.set_key", {**params, "value": value})
+                row["configured"] = True
+                if self.selected_connection is row and field.value.strip() == value:
+                    field.value = ""
+            elif not row.get("configured"):
                 raise ClientError("Enter an API key, or finish setup to configure it later.")
-            await self.client.rpc("provider.set_key", {**params, "value": value})
-            field.value = ""
             await self.client.rpc("connection.set_enabled", {**params, "enabled": True})
-            self.query_one("#setup-detail", Static).update(
-                "Provider connected. Continue to choose a Model."
-            )
+            if self.selected_connection is row:
+                self.query_one("#setup-detail", Static).update(
+                    "Provider connected. Continue to choose a Model."
+                )
         elif kind == "none":
             response = await self.client.rpc("connection.set_enabled", {**params, "enabled": True})
             message = "Connection enabled. Continue to choose a Model."

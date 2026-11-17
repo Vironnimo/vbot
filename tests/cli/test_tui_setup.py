@@ -179,7 +179,10 @@ async def test_tui_setup_precedes_chat_and_reopen_keeps_terminal_status(
 
 
 @pytest.mark.asyncio
-async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model() -> None:
+@pytest.mark.parametrize("retry_enablement", [False, True])
+async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model(
+    retry_enablement: bool,
+) -> None:
     server = SetupServer()
     app = SetupApp(server)
     async with app.run_test(size=(110, 40)) as pilot:
@@ -191,9 +194,16 @@ async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model() 
         key = app.screen.query_one("#setup-key", Input)
         assert key.password
         key.value = "test-secret"
+        if retry_enablement:
+            server.fail_method = "connection.set_enabled"
         await pilot.click("#setup-connect")
         await pilot.pause()
         assert key.value == ""
+        if retry_enablement:
+            assert not server.connected
+            server.fail_method = ""
+            await pilot.click("#setup-retry")
+            await pilot.pause()
         assert server.connected
         await pilot.click("#setup-next")
         await pilot.pause()
