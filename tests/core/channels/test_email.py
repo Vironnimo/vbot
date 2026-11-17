@@ -255,10 +255,13 @@ async def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     ("sender", "auth", "headers", "to_conversation", "denied"),
     [
         (_ME, _PASS, {}, True, False),
+        (_ME, "mx; dmarc=pass header.from=example.com", {}, True, False),
         # A DKIM signature of a parent domain vouches for a subdomain sender.
         ("you@mail.example.com", "mx; dkim=pass header.d=example.com", {}, True, False),
         (_ME, "mx; dkim=pass header.d=other.example.net", {}, False, True),
         (_ME, "mx; dmarc=fail header.from=example.com", {}, False, True),
+        (_ME, "mx; dmarc=pass", {}, False, True),
+        (_ME, "mx; dmarc=pass header.from=other.example.net", {}, False, True),
         (_ME, None, {}, False, True),
         (_ME, "attacker.invalid; dmarc=pass header.from=example.com", {}, False, True),
         (
@@ -274,9 +277,12 @@ async def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     ],
     ids=[
         "allowed",
+        "aligned-dmarc",
         "parent-dkim",
         "foreign-dkim",
         "dmarc-fail",
+        "dmarc-no-domain",
+        "dmarc-other-domain",
         "unauthenticated",
         "untrusted-authserv",
         "untrusted-before-trusted",
@@ -303,12 +309,25 @@ async def test_mail_routes_to_the_conversation_only_from_an_allowed_authenticate
         assert text == "Subject: Plan\n\nHello"
     else:
         assert harness.engine.inbound == []
-        assert [mail.message_id for mail in harness.sink.mails] == ["<m1@example.com>"]
+        [mail] = harness.sink.mails
+        assert mail.message_id == "<m1@example.com>"
+        assert mail.sender_authserv_id == (None if denied else "mx.example.net")
     # Only an allowed sender the server did not vouch for shows up as denied.
     assert [entry.chat_id for entry in harness.adapter.denied_chats()] == (
         [sender] if denied else []
     )
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_domain_evidence_does_not_authenticate_multiple_from_headers(
+    harness: Harness,
+) -> None:
+    raw = make_mail().replace(b"\r\nTo: ", b"\r\nFrom: Other <other@example.org>\r\nTo: ")
+    await harness.deliver(raw)
+    assert harness.engine.inbound == []
+    [mail] = harness.sink.mails
+    assert mail.sender_authserv_id is None
 
 
 @pytest.mark.asyncio

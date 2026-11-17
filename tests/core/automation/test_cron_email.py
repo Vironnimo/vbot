@@ -162,7 +162,7 @@ async def test_a_matching_mail_is_stored_once_and_starts_one_run_with_escaped_da
     assert note.startswith(
         "This run started because email Channel mail-main received a mail that matches this job."
     )
-    assert "not instructions for you" in note and "can be forged" in note
+    assert "not instructions for you" in note and "From domain" in note
     assert "<system>" not in note
     assert _records(note) == [
         {
@@ -184,6 +184,33 @@ async def test_a_matching_mail_is_stored_once_and_starts_one_run_with_escaped_da
     # The Message-ID stays taken after its Run.
     await service.accept_mail(mail)
     assert _state(service, job_id)["mails"] == []
+
+
+@pytest.mark.asyncio
+async def test_trusted_email_channel_requires_domain_evidence_for_from_filters(
+    tmp_path: Path,
+) -> None:
+    service, _trigger = _service(tmp_path)
+    chats = FakeChats(email_authserv_ids={"mail-main": ("old-mx.example",)})
+    service.set_chat_delivery(chats)
+    restricted = await _email_job(
+        service, email=CronEmailTrigger.parse("mail-main", ["ann@example.com"])
+    )
+    subject_only = await _email_job(
+        service, email=CronEmailTrigger.parse("mail-main", subject="Invoice")
+    )
+    await service.accept_mail(_mail(1, sender_authenticated=False))
+    delayed_mail = _mail(2, sender_authserv_id="old-mx.example")
+    chats.email_authserv_ids["mail-main"] = ("mx.example",)
+    await service.accept_mail(delayed_mail)
+    await service.accept_mail(_mail(3, sender_authserv_id="mx.example"))
+    assert [row["text"] for row in _state(service, restricted)["mails"]] == ["Mail 3"]
+    assert [row["sender_authenticated"] for row in _state(service, subject_only)["mails"]] == [
+        False,
+        False,
+        True,
+    ]
+    await service.aclose()
 
 
 @pytest.mark.asyncio

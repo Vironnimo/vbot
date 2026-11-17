@@ -273,8 +273,10 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
             "description": (
-                "For schedule email: senders whose mails start runs, as addresses or domains "
-                "such as @example.com. Omit for any sender; on update, [] removes the filter."
+                "For schedule email: From header addresses or domains such as @example.com. "
+                "If the Channel has trusted authentication servers, they must verify the From "
+                "domain. Without them, the From header can be forged. Omit for any sender. "
+                "On update, [] removes the filter."
             ),
         },
         "email_subject": {

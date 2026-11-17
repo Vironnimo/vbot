@@ -91,6 +91,7 @@ class FakeChats:
         default_factory=lambda: {"tg-main": "agent-one", "mail-main": "agent-one"}
     )
     platforms: dict[str, str] = field(default_factory=dict)
+    email_authserv_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
     relayed: list[tuple[Any, str, str, str | None]] = field(default_factory=list)
     sent: list[tuple[str, str, str, str | None]] = field(default_factory=list)
     notes: list[tuple[str, str, str, str | None, str | None]] = field(default_factory=list)
@@ -101,7 +102,15 @@ class FakeChats:
         platform = self.platforms.get(
             channel_id, "email" if channel_id.startswith("mail-") else "telegram"
         )
-        return SimpleNamespace(agent_id=self.owners[channel_id], platform=platform)
+        return SimpleNamespace(
+            agent_id=self.owners[channel_id],
+            platform=platform,
+            email=(
+                SimpleNamespace(trusted_authserv_ids=self.email_authserv_ids.get(channel_id, ()))
+                if platform == "email"
+                else None
+            ),
+        )
 
     async def relay_run_to_chat(
         self, run: Any, channel_id: str, platform_target: str, *, thread_id: str | None = None

@@ -48,7 +48,7 @@ class ParsedMail:
     message_id: str
     sender: str
     sender_name: str
-    sender_authenticated: bool
+    sender_authserv_id: str | None
     automatic: bool
     recipients: tuple[str, ...]
     subject: str
@@ -57,6 +57,10 @@ class ParsedMail:
     text_cut: bool
     attachments: tuple[ParsedAttachment, ...]
     references: tuple[str, ...]
+
+    @property
+    def sender_authenticated(self) -> bool:
+        return self.sender_authserv_id is not None
 
     def inbound_mail(self, *, channel_id: str, folder: str, received_at: str) -> InboundMail:
         return InboundMail(
@@ -72,6 +76,7 @@ class ParsedMail:
             sent_at=self.sent_at,
             text=self.text,
             text_cut=self.text_cut,
+            sender_authserv_id=self.sender_authserv_id,
             attachments=tuple(
                 MailAttachment(
                     filename=attachment.filename,
@@ -88,14 +93,23 @@ def parse_mail(
 ) -> ParsedMail:
     """Read one RFC 5322 mail; ``fallback_message_id`` stands in for a missing Message-ID."""
     message = BytesParser(policy=policy.default).parsebytes(raw)
-    name, sender = _first_address(message, "From")
+    from_headers = message.get_all("From", [])
+    from_addresses = getaddresses([str(header) for header in from_headers])
+    name, sender = _first_address(from_addresses)
+    trusted_from = (
+        len(from_headers) == 1
+        and len(from_addresses) == 1
+        and not getattr(from_headers[0], "defects", ())
+    )
     message_id = _message_id(message.get("Message-ID")) or fallback_message_id
     text, cut = _body_text(message)
     return ParsedMail(
         message_id=message_id,
         sender=sender,
         sender_name=name,
-        sender_authenticated=sender_authenticated(message, sender, trusted_authserv_ids),
+        sender_authserv_id=(
+            _sender_authserv_id(message, sender, trusted_authserv_ids) if trusted_from else None
+        ),
         automatic=is_automatic(message, sender),
         recipients=tuple(
             address
@@ -113,10 +127,10 @@ def parse_mail(
     )
 
 
-def sender_authenticated(
+def _sender_authserv_id(
     message: Message, sender: str, trusted_authserv_ids: tuple[str, ...] = ()
-) -> bool:
-    """Whether the receiving server's topmost Authentication-Results vouches for the From.
+) -> str | None:
+    """Which trusted receiving server's Authentication-Results vouches for the From domain.
 
     Authenticated means ``dmarc=pass`` for the From domain, or ``dkim=pass`` for
     a signing domain that equals the From domain or is a parent of it.
@@ -124,12 +138,12 @@ def sender_authenticated(
     domain = sender.rpartition("@")[2]
     headers = message.get_all("Authentication-Results") or []
     if not domain or not headers:
-        return False
+        return None
     # The authserv-id leads; result clauses follow, separated by semicolons.
     parts = _COMMENT.sub(" ", str(headers[0])).split(";")
-    authserv = parts[0].strip().split()
-    if not authserv or authserv[0].lower() not in trusted_authserv_ids:
-        return False
+    authserv = parts[0].strip().lower().split()
+    if not authserv or authserv[0] not in trusted_authserv_ids:
+        return None
     clauses = parts[1:]
     for clause in clauses:
         result = _RESULT.match(clause)
@@ -138,15 +152,14 @@ def sender_authenticated(
         method = result.group(1).lower()
         properties = {key.lower(): value.lower() for key, value in _PROPERTY.findall(clause)}
         if method == "dmarc":
-            header_from = properties.get("header.from")
-            if header_from is None or header_from == domain:
-                return True
+            if properties.get("header.from") == domain:
+                return authserv[0]
         elif method == "dkim":
             signer = properties.get("header.d") or properties.get("header.i", "")
             signer = signer.rpartition("@")[2]
             if signer and (domain == signer or domain.endswith(f".{signer}")):
-                return True
-    return False
+                return authserv[0]
+    return None
 
 
 def is_automatic(message: Message, sender: str) -> bool:
@@ -225,8 +238,8 @@ def build_mail(
     return message
 
 
-def _first_address(message: Message, header: str) -> tuple[str, str]:
-    for name, value in getaddresses([str(item) for item in message.get_all(header, [])]):
+def _first_address(addresses: list[tuple[str, str]]) -> tuple[str, str]:
+    for name, value in addresses:
         address = normalize_email_address(value)
         if address is not None:
             return name.strip(), address

@@ -164,10 +164,13 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
 
     previous_config = await _channel_config_if_available(state.runtime.channel_service, channel_id)
 
-    if "agent_id" in updates:
+    if "agent_id" in updates or "email" in updates:
         try:
             async with _agent_reference_lock(state):
-                _validate_channel_agent_exists(state, updates["agent_id"])
+                # Cron email admissions use this lock to read the Channel's
+                # owner and current receiving-server trust in one operation.
+                if "agent_id" in updates:
+                    _validate_channel_agent_exists(state, updates["agent_id"])
                 await state.runtime.channel_service.update_channel(channel_id, **updates)
                 state.runtime.reload_channel_tool()
         except Exception as exc:

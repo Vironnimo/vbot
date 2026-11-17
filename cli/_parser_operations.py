@@ -241,8 +241,9 @@ def _add_cron_email_filter_arguments(parser: argparse.ArgumentParser, *, update:
         action="append",
         metavar="<address-or-@domain>",
         help=(
-            "For --email jobs: start Runs only for mails from this address, or from any "
-            "address of a domain such as @example.com; repeat for several. "
+            "For --email jobs: match a From header address or domain such as @example.com. "
+            "Repeat for several. When trusted authentication servers are configured, they "
+            "must also verify the From domain. A From header alone can be forged. "
             + (keep or "Omit for any sender")
         ),
     )

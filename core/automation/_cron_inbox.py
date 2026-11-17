@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -117,6 +118,9 @@ class InboxState[Item: InboxItem]:
     binding: str | None = None
     """The source Channel of an email inbox; absent in older state files."""
 
+    latest_receipt: str | None = None
+    """The latest signed webhook's receipt, persisted together with its arrival."""
+
     def copy(self) -> InboxState[Item]:
         return InboxState(
             self.job_id,
@@ -126,23 +130,19 @@ class InboxState[Item: InboxItem]:
             list(self.items),
             list(self.keys),
             self.binding,
+            self.latest_receipt,
         )
 
-    def add(
-        self, item: Item, *, taken: frozenset[int] = frozenset(), key: str | None = None
-    ) -> None:
+    def add(self, item: Item, *, taken: frozenset[int] = frozenset()) -> None:
         """Queue an arrival, dropping the oldest waiting ones beyond the caps.
 
         ``taken`` are the arrivals a starting Run already took; they never count
         toward the caps and are never dropped here. The newest arrival is always
-        kept. ``key`` is remembered so the same arrival is not taken twice.
+        kept.
         """
         self.items.append(item)
         self.next_seq = max(self.next_seq, item.seq + 1)
         self.last_received_at = item.received_at
-        if key is not None:
-            self.keys.append(key)
-            del self.keys[:-INBOX_MAX_KEYS]
         while True:
             waiting = [entry for entry in self.items if entry.seq not in taken]
             if len(waiting) <= 1 or (
@@ -174,6 +174,8 @@ class InboxState[Item: InboxItem]:
             data["keys"] = list(self.keys)
         if self.binding is not None:
             data["binding"] = self.binding
+        if self.latest_receipt is not None:
+            data["latest_receipt"] = self.latest_receipt
         return data
 
 
@@ -306,14 +308,15 @@ class CronInbox[Item: InboxItem]:
     async def add(
         self,
         job_id: str,
-        make: Callable[[int], Item],
+        make: Callable[[int], Item] | None,
         *,
         key: str | None = None,
         wanted: Callable[[], bool] = lambda: True,
     ) -> tuple[InboxAdded, InboxState[Item] | None]:
         """Store one arrival for the job's next Run and wake its task.
 
-        ``make`` builds the arrival from its sequence number. ``wanted`` is
+        ``make`` builds the arrival from its sequence number, or is None to
+        remember a key without queuing a Run. ``wanted`` is
         checked under the job's lock, after any earlier arrival settled; an
         arrival it refuses is not stored. A ``key`` the job already took is a
         ``duplicate``. Raises ``CronStorageError`` when the waiting arrivals
@@ -325,26 +328,38 @@ class CronInbox[Item: InboxItem]:
             if not wanted():
                 return "refused", None
             state = await self._state(job_id)
-            # The caller's check may have changed while the state was read.
+            duplicate = key is not None and await self._already_took(state, key)
+            # The caller's check may have changed while reading the state or receipts.
             if not wanted():
                 return "refused", None
-            if key is not None and key in state.keys:
+            if duplicate:
                 return "duplicate", state
             updated = state.copy()
             updated.binding = self._binding(job_id)
-            updated.add(make(state.next_seq), taken=self._taken_seqs(job_id), key=key)
-            await settle_before_cancelling(self._commit_added(updated))
+            if make is not None:
+                updated.add(make(state.next_seq), taken=self._taken_seqs(job_id))
+            if key is not None:
+                self._remember_key(updated, key)
+            await settle_before_cancelling(self._commit_added(updated, wake=make is not None))
         return "added", updated
 
-    async def _commit_added(self, state: InboxState[Item]) -> None:
+    async def _already_took(self, state: InboxState[Item], key: str) -> bool:
+        return key in state.keys
+
+    def _remember_key(self, state: InboxState[Item], key: str) -> None:
+        state.keys.append(key)
+        del state.keys[:-INBOX_MAX_KEYS]
+
+    async def _commit_added(self, state: InboxState[Item], *, wake: bool) -> None:
         """Persist and publish a stored arrival before honoring caller cancellation."""
         try:
             await self._write(state)
         except CronStorageError as error:
             raise InboxWriteError(str(error)) from error
         self._states[state.job_id] = state
-        self.wake(state.job_id).set()
-        self._owner._notify_changed()
+        if wake:
+            self.wake(state.job_id).set()
+            self._owner._notify_changed()
 
     async def take(self, job_id: str) -> InboxBatch[Item] | None:
         """Take the waiting arrivals for a Run about to start; None when none wait."""
@@ -516,6 +531,11 @@ def _parse_state[Item: InboxItem](
     keys = payload.get("keys", [])
     if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
         raise ValueError("keys must be a list of text")
+    latest_receipt = payload.get("latest_receipt")
+    if latest_receipt is not None and (
+        not isinstance(latest_receipt, str) or re.fullmatch(r"[0-9a-f]{64}", latest_receipt) is None
+    ):
+        raise ValueError("latest_receipt must be a digest")
     binding = payload.get("binding")
     if binding is not None and not isinstance(binding, str):
         raise ValueError("binding must be text or null")
@@ -524,5 +544,12 @@ def _parse_state[Item: InboxItem](
     if any(item.seq >= next_seq for item in parsed):
         raise ValueError("an item's seq is not below next_seq")
     return InboxState(
-        job_id, next_seq, last_received_at, dropped, parsed, keys[-INBOX_MAX_KEYS:], binding
+        job_id,
+        next_seq,
+        last_received_at,
+        dropped,
+        parsed,
+        keys[-INBOX_MAX_KEYS:],
+        binding,
+        latest_receipt,
     )
