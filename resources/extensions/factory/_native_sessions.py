@@ -220,6 +220,9 @@ class NativeSessions:
                         execution["participant_id"],
                         TemporaryRunInput(pending["kind"], pending["content"], token),
                     )
+                    # The admitted input is durable. Advance its read marker
+                    # while the same input identity is still safe to retry.
+                    await self.native.discussions.acknowledged(execution, pending)
                     runtime.update(run_id=admission.run_id)
                     runtime["pending"] = None
                     execution = await self.store.change_execution(
@@ -228,7 +231,6 @@ class NativeSessions:
                         actor="factory",
                     )
                     await self.native.limits.observe_run(execution, admission.run_id)
-                    await self.native.discussions.acknowledged(execution, pending)
                     if admission.existing and admission.status != "running":
                         await self._finished(
                             await self.store.get_execution(execution_id),
@@ -339,10 +341,11 @@ class NativeSessions:
             or receipt.carrier_location.get("kind") != "note"
         ):
             raise FactoryError("receipt_conflict", "Factory discussion delivery conflicts.")
+        # A committed receipt is replayable until the read marker is durable.
+        await self.native.discussions.acknowledged(execution, pending)
         runtime = deepcopy(execution["runtime"])
         runtime["pending"] = None
         await self.store.change_execution(execution["id"], {"runtime": runtime}, actor="factory")
-        await self.native.discussions.acknowledged(execution, pending)
         return True
 
     async def before_model_request(self, context: SessionRequestContext) -> None:

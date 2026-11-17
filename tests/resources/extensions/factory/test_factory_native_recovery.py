@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from core.extensions.operations import ExtensionOperationError
-from core.sessions import SessionAddress
+from core.sessions import DeliveryReceipt, SessionAddress
+from resources.extensions.factory.store import FactoryStore
 from tests.core.runtime.runtime_test_support import extension_record, tool_context
+from tests.resources.extensions.factory.factory_test_support import build_factory
 from tests.resources.extensions.factory.test_factory_execution import step, workflow
 from tests.resources.extensions.factory.test_factory_native_budget_admission import (
     drain_factory_work,
@@ -78,6 +82,134 @@ def complete(harness: NativeFactoryRuntime, record: Json, request: Json) -> None
         },
         request=request,
     )
+
+
+async def test_topic_note_keeps_its_receipt_until_the_read_cursor_is_durable(
+    factory_store: FactoryStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    native = factory_store.native
+    factory = await native.create_factory(
+        "project", leader_agent_id="leader", leader_agent_proof="proof"
+    )
+    leader = factory["leader_member_id"]
+    topic = await native.create_topic(
+        factory["id"], "Topic", participants=[leader], initial_text="First post"
+    )
+    sequence = (await native.list_posts(topic["id"]))[0]["sequence"]
+    address = SessionAddress(None, "leader", "discussion")
+    pending = {
+        "id": "note-receipt",
+        "kind": "continuation",
+        "content": "First post",
+        "topic_sequence": sequence,
+        "delivery": {
+            "generation_id": "generation",
+            "address": {"project_id": None, "agent_id": "leader", "session_id": "discussion"},
+            "revision": "1",
+        },
+    }
+    execution = await native.create_execution(
+        factory["id"],
+        "topic",
+        topic["id"],
+        leader,
+        1,
+        group_id="native.discussion",
+        participant_id=leader,
+        runtime={"pending": pending},
+    )
+
+    async def receipt(target: SessionAddress, generation: str, input_id: str) -> DeliveryReceipt:
+        assert (target, generation, input_id) == (address, "generation", "note-receipt")
+        return DeliveryReceipt(
+            input_id,
+            hashlib.sha256(b"First post").hexdigest(),
+            "factory_native",
+            {"kind": "note", "sequence": 4},
+        )
+
+    monkeypatch.setattr(
+        harness.host, "temporary_agents", SimpleNamespace(delivery_receipt=receipt), raising=False
+    )
+    sessions = harness.service.native.sessions
+
+    async def unavailable(*_args: Any) -> None:
+        raise OSError("read marker unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(native, "mark_topic_read", unavailable)
+        with pytest.raises(OSError):
+            await sessions._acknowledge(execution)
+    saved = await native.get_execution(execution["id"])
+    assert saved["runtime"]["pending"] == pending
+    assert (await native.topic_participants(topic["id"]))[0]["read_sequence"] == 0
+    assert await sessions._acknowledge(saved)
+    assert (await native.get_execution(execution["id"]))["runtime"]["pending"] is None
+    assert (await native.topic_participants(topic["id"]))[0]["read_sequence"] == sequence
+
+
+@pytest.mark.parametrize("linked_task", [False, True], ids=["discussion", "task"])
+async def test_unaddressed_discussion_page_does_not_hide_later_addressed_posts(
+    factory_store: FactoryStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    linked_task: bool,
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    native = factory_store.native
+    scheduler = harness.service.native
+    requested = asyncio.Event()
+    monkeypatch.setattr(harness.service, "request_schedule", requested.set)
+    admissions: list[Json] = []
+    monkeypatch.setattr(scheduler.sessions, "_launch_later", admissions.append)
+    factory = await native.create_factory(
+        "project", leader_agent_id="leader", leader_agent_proof="proof"
+    )
+    leader = await native.get_member(factory["leader_member_id"])
+    work = (
+        await native.create_task(factory["id"], "Task", "Investigate", assignee_id=leader["id"])
+        if linked_task
+        else None
+    )
+    topic = await native.create_topic(
+        factory["id"],
+        "Topic",
+        participants=[leader["id"]],
+        task_id=work["id"] if work else "",
+    )
+    if work is None:
+        await native.create_execution(
+            factory["id"],
+            "topic",
+            topic["id"],
+            leader["id"],
+            scheduler.topic_epoch(factory, leader),
+            group_id="native.discussion",
+            participant_id=leader["id"],
+            state="idle",
+        )
+    for index in range(100):
+        await native.add_post(topic["id"], f"Post {index}", author=f"member:{leader['id']}")
+    await native.add_post(topic["id"], "test-owned-later-answer", author="user")
+
+    async def scan() -> None:
+        if linked_task:
+            await scheduler.discussions.wake_origins()
+        else:
+            await scheduler.discussions.schedule(limit=2)
+
+    await scan()
+    assert requested.is_set()
+    assert admissions == []
+    await scan()
+
+    if work is not None:
+        [following] = (await native.get_task(work["id"]))["runtime"]["wakes"]
+    else:
+        [admission] = admissions
+        following = admission["runtime"]["pending"]
+    assert "test-owned-later-answer" in following["content"]
 
 
 @pytest.mark.parametrize("scope", ["factory", "member"])
