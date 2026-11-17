@@ -90,7 +90,8 @@ CREATE TABLE store_header (
   response_model_id TEXT NOT NULL,
   space_fingerprint TEXT NOT NULL,
   index_policy TEXT NOT NULL,
-  dimension INTEGER NOT NULL CHECK (dimension > 0)
+  dimension INTEGER NOT NULL CHECK (dimension > 0),
+  generation TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE TABLE pending_vectors (
@@ -181,6 +182,8 @@ class VectorHeader:
     # informational, not identity: a router such as OpenRouter may answer one
     # configured model from several hosts that report different names.
     response_model_id: str = field(default="", compare=False)
+    # Physical pin identity for pagination, independent of the embedding space.
+    generation: str = field(default="", compare=False)
 
     @classmethod
     def for_space(cls, identity: EmbeddingSpaceIdentity) -> VectorHeader:
@@ -235,6 +238,8 @@ class KnnMatches:
 
     matches: tuple[tuple[StoredPassage, str, float], ...]
     truncated: bool = False
+    generation: str = ""
+    pending: int = 0
 
 
 @dataclass(frozen=True)
@@ -455,27 +460,11 @@ class PassageIndex(PassageCatalog):
         Skipped texts never get a vector in this space and do not count.
         """
 
-        def count(connection: sqlite3.Connection) -> int:
-            refs = candidate_refs(connection, candidates)
-            if not refs:
-                return 0
-            conditions = [
-                f"q.passage_ref IN ({VIEWED_BY_SESSIONS})",
-                "p.text_hash NOT IN (SELECT text_hash FROM skipped_texts)",
-            ]
-            parameters: list[object] = [refs_parameter(refs)]
-            bounds, bound_parameters = time_bounds("p", since, until)
-            conditions.extend(bounds)
-            parameters.extend(bound_parameters)
-            row = connection.execute(
-                "SELECT COUNT(*) FROM pending_vectors AS q "
-                "JOIN passages AS p ON p.passage_ref = q.passage_ref "
-                f"WHERE {' AND '.join(conditions)}",
-                parameters,
-            ).fetchone()
-            return int(row[0])
-
-        return await self.read(count)
+        return await self.read(
+            lambda connection: _count_pending(
+                connection, candidate_refs(connection, candidates), since, until
+            )
+        )
 
     async def store_vectors(
         self,
@@ -593,16 +582,16 @@ class PassageIndex(PassageCatalog):
                 f"{header.dimension} for model {header.provider_id}/{header.model_id}"
             )
         embedding = _sqlite_vec().serialize_float32([float(value) for value in query_vector])
-        k = min(limit, KNN_MAX_K)
 
         def search(connection: sqlite3.Connection) -> KnnMatches:
-            if _read_header(connection) != header:
+            pinned = _read_header(connection)
+            if pinned is None or pinned != header:
                 raise PassageIndexError(
                     "the pinned embedding space is missing or differs from the requested one"
                 )
             refs = candidate_refs(connection, candidates)
             if not refs:
-                return KnnMatches(())
+                return KnnMatches((), generation=pinned.generation)
             clauses = [
                 "embedding MATCH ?",
                 "k = ?",
@@ -610,8 +599,6 @@ class PassageIndex(PassageCatalog):
                 f"rowid IN ({VIEWED_BY_SESSIONS})",
             ]
             parameters: list[object] = [
-                embedding,
-                k,
                 _scope_key(candidates.project, candidates.agent_id),
                 refs_parameter(refs),
             ]
@@ -621,23 +608,33 @@ class PassageIndex(PassageCatalog):
             if until is not None:
                 clauses.append("start_timestamp <= ?")
                 parameters.append(_datetime_micros(until))
+            sql = f"""
+                WITH knn AS (
+                  SELECT rowid, distance FROM {_VECTOR_TABLE}
+                  WHERE {" AND ".join(clauses)}
+                )
+                SELECT {passage_columns("p")}, knn.distance
+                FROM knn JOIN passages AS p ON p.passage_ref = knn.rowid
+                ORDER BY knn.distance, p.passage_id, p.passage_ref
+            """
+            k = min(limit + 1, KNN_MAX_K)
             try:
-                rows = connection.execute(
-                    f"""
-                    WITH knn AS (
-                      SELECT rowid, distance FROM {_VECTOR_TABLE}
-                      WHERE {" AND ".join(clauses)}
-                    )
-                    SELECT {passage_columns("p")}, knn.distance
-                    FROM knn JOIN passages AS p ON p.passage_ref = knn.rowid
-                    ORDER BY knn.distance, p.passage_id, p.passage_ref
-                    """,
-                    parameters,
-                ).fetchall()
+                while True:
+                    rows = connection.execute(sql, (embedding, k, *parameters)).fetchall()
+                    # vec0 can cut an equal-distance group before our tie-break.
+                    # Expand only if this page ends inside such a group.
+                    if (
+                        k == KNN_MAX_K
+                        or len(rows) < k
+                        or rows[limit - 1]["distance"] != rows[-1]["distance"]
+                    ):
+                        break
+                    k = min(k * 2, KNN_MAX_K)
             except sqlite3.OperationalError as error:
                 if _is_knn_parameter_error(error):
                     raise PassageIndexError(f"invalid KNN query: {error}") from None
                 raise
+            rows = rows[:limit]
             reported = reported_sessions(
                 connection, [int(row["passage_ref"]) for row in rows], refs
             )
@@ -647,6 +644,8 @@ class PassageIndex(PassageCatalog):
                     for row in rows
                 ),
                 truncated=limit > KNN_MAX_K and len(rows) >= KNN_MAX_K,
+                generation=pinned.generation,
+                pending=_count_pending(connection, refs, since, until),
             )
 
         return await self.read(search)
@@ -711,6 +710,14 @@ def literal_query(request: RecallSearchRequest) -> LiteralQuery | None:
     literal = LiteralSearchQuery(request.query, request.match_mode)
     if not literal.values:
         return None
+    if request.match_mode == "phrase":
+        # A canonical phrase allows any run of Unicode whitespace between
+        # its words. Use individual trigrams as candidates and let the
+        # literal check enforce adjacency and order on the original text.
+        terms = [word for word in literal.compact.split() if len(word) >= 3]
+        if terms:
+            anchor = LiteralSearchQuery(" ".join(terms))
+            return LiteralQuery(_TRIGRAM_TABLE, anchor.fts_expression, TRIGRAM_RANKING)
     if literal.trigram_supported:
         return LiteralQuery(_TRIGRAM_TABLE, literal.fts_expression, TRIGRAM_RANKING)
     return LiteralQuery(_TOKEN_TABLE, literal.fts_expression, _TOKEN_RANKING)
@@ -762,10 +769,33 @@ def _matching_passages(
 # -- Vector rows ---------------------------------------------------------------------
 
 
+def _count_pending(
+    connection: sqlite3.Connection,
+    refs: Mapping[int, Any],
+    since: datetime | None,
+    until: datetime | None,
+) -> int:
+    if not refs:
+        return 0
+    conditions = [
+        f"q.passage_ref IN ({VIEWED_BY_SESSIONS})",
+        "p.text_hash NOT IN (SELECT text_hash FROM skipped_texts)",
+    ]
+    bounds, bound_parameters = time_bounds("p", since, until)
+    conditions.extend(bounds)
+    row = connection.execute(
+        "SELECT COUNT(*) FROM pending_vectors AS q "
+        "JOIN passages AS p ON p.passage_ref = q.passage_ref "
+        f"WHERE {' AND '.join(conditions)}",
+        (refs_parameter(refs), *bound_parameters),
+    ).fetchone()
+    return int(row[0])
+
+
 def _read_header(connection: sqlite3.Connection) -> VectorHeader | None:
     row = connection.execute(
         "SELECT provider_id, model_id, response_model_id, space_fingerprint, index_policy, "
-        "dimension FROM store_header WHERE singleton = 1"
+        "dimension, generation FROM store_header WHERE singleton = 1"
     ).fetchone()
     if row is None:
         return None
@@ -776,6 +806,7 @@ def _read_header(connection: sqlite3.Connection) -> VectorHeader | None:
         dimension=int(row["dimension"]),
         space_fingerprint=str(row["space_fingerprint"]),
         index_policy=str(row["index_policy"]),
+        generation=str(row["generation"]),
     )
 
 
@@ -809,7 +840,8 @@ def _use_space(connection: sqlite3.Connection, header: VectorHeader) -> bool:
     _drop_vectors(connection)
     connection.execute(
         "INSERT INTO store_header (singleton, provider_id, model_id, response_model_id, "
-        "space_fingerprint, index_policy, dimension) VALUES (1, ?, ?, ?, ?, ?, ?)",
+        "space_fingerprint, index_policy, dimension, generation) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?, lower(hex(randomblob(16))))",
         (
             header.provider_id,
             header.model_id,
