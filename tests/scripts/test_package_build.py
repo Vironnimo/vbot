@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _BARE_IMPORT = """
 import importlib, sys
 sys.path.insert(0, sys.argv[1])
-own = {"cli", "core", "scripts", "server", "desktop"}
+own = {"cli", "core", "scripts", "server", "desktop", "vbot_extension_sdk"}
 
 class Bare:
     def find_spec(self, name, path=None, target=None):
