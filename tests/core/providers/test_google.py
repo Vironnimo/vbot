@@ -11,6 +11,7 @@ import pytest
 import respx
 
 from core.chat.streaming import StreamingAccumulator
+from core.model_tasks.decision_profile import decision_profile
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.errors import (
     CatalogEntrySkipped,
@@ -20,6 +21,7 @@ from core.providers.errors import (
 )
 from core.providers.google import GoogleAdapter
 from core.providers.providers import ProviderRegistry
+from core.providers.wire_profile import DecisionWire
 from core.utils.retry import caller_owns_retries
 
 _RESOURCES = Path(__file__).resolve().parents[3] / "resources"
@@ -80,6 +82,22 @@ def test_catalog_classifies_task_models_by_method_and_family(
 
     assert task in model.capabilities.task_types
     assert "chat" not in model.capabilities.task_types
+
+
+def test_decision_model_publishes_its_documented_limits_and_input_price() -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry("gemini-decision-1", ("createDecision",)))
+
+    profile = decision_profile(model, DecisionWire(protocol="google_decisions"), "api-key")
+
+    assert (
+        profile.max_input_tokens,
+        profile.max_questions,
+        profile.max_choices,
+        profile.max_levels,
+    ) == (262144, 1000, 255, 255)
+    assert profile.pricing is not None
+    assert profile.pricing.rates.input == 0.1
+    assert model.max_output_tokens is None
 
 
 @pytest.mark.parametrize(

@@ -190,7 +190,32 @@ def _embedding_capabilities() -> Capabilities:
 
 
 def _decision_capabilities() -> Capabilities:
-    return _task_capabilities(("text",), ("decisions",))
+    """Gemini Decision 1 on ``POST /v1beta/decisions``.
+
+    The listing reports no Decision facts, so the published ones are stated
+    here (aistudio.google.com/docs/decisions-api#limits and
+    /docs/pricing#gemini-decision, 2026-11-17): only input tokens are billed.
+    """
+
+    return Capabilities(
+        vision=False,
+        tools=False,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(supported=False),
+        input_modalities=("text",),
+        output_modalities=("decisions",),
+        task_options={
+            "decision": {
+                "limits": {
+                    "max_input_tokens": 262144,
+                    "max_questions": 1000,
+                    "max_choices": 255,
+                    "max_levels": 255,
+                },
+                "pricing": {"source": "google:decision", "rates": {"input": 0.1, "output": 0}},
+            }
+        },
+    )
 
 
 def _live_voice_capabilities() -> Capabilities:

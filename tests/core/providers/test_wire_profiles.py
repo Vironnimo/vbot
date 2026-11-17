@@ -597,6 +597,12 @@ def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
         ),
         ("openai", "subscription", "gpt-6-luna", DecisionWire()),
         (
+            "google",
+            "api-key",
+            "gemini-decision-1",
+            DecisionWire(protocol="google_decisions", endpoint="/v1beta/decisions"),
+        ),
+        (
             "ollama",
             "local",
             "clef",
@@ -636,6 +642,8 @@ def test_decision_routes_are_connection_scoped_and_independent_of_chat(
         if provider_id == "openai"
         else "ollama_chat"
         if provider_id == "ollama"
+        else "gemini"
+        if provider_id == "google"
         else "chat_completions"
     )
     assert profile.protocol == expected_chat
