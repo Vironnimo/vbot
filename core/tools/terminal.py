@@ -704,11 +704,12 @@ async def _handle_status(
     )
     owner = _owner(context)
     info = _terminal_info(terminal_manager, terminal_id)
+    holders = await _subagent_holders(subagents, owner, [info])
     snapshot = None
     if await _screen_allowed(terminal_manager, context, terminal_id):
         snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
     if snapshot is None or not await _screen_allowed(terminal_manager, context, terminal_id):
-        holders = await _subagent_holders(subagents, owner, [info])
+        info = _terminal_info(terminal_manager, terminal_id)
         facts = {**_terminal_facts(info, owner), **_attachment_fields(info, owner, holders)}
         return tool_success({**facts, "note": screen_hidden_note()})
     info = _terminal_info(terminal_manager, terminal_id)
@@ -733,7 +734,6 @@ async def _handle_status(
             ],
         )
     if not attached_here:
-        holders = await _subagent_holders(subagents, owner, [info])
         data.update(_attachment_fields(info, owner, holders))
         data["next"] = _not_attached_text(info, terminal_id)
     return tool_success(data)

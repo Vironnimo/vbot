@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents.agents import AgentStore
 from core.archive import ArchiveRetentionUnknownError, ArchiveServices
 from core.automation import LibrarianService
+from core.chat import SessionPermissions, session_permissions
 from core.performance import PerformanceService
+from core.permissions import run_permission_decision
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
 from core.sessions.errors import SessionNotFoundError
@@ -17,19 +20,25 @@ from core.statistics import StatisticsService
 from core.storage.errors import StorageError
 from core.storage.storage import StorageManager
 from core.subagents.links import ancestors
+from core.tools._terminal_permissions import may_attach
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import (
+    TerminalInfo,
     TerminalManager,
     TerminalOwner,
     TerminalSessionView,
     observe_process_tree,
     resolve_root_view,
 )
+from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from core.runtime.runtime import Runtime
+
+_LOGGER = get_logger("core")
 
 
 def _agent_names(agents: AgentStore) -> list[str]:
@@ -276,6 +285,65 @@ def _build_performance_service(
     )
 
 
+async def _terminal_output_allowed(
+    runtime: Runtime, address: SessionAddress, info: TerminalInfo
+) -> bool:
+    """Resolve the current Session boundary before its terminal screen is delivered."""
+    sessions = runtime._chat_sessions
+    resolver = runtime._agent_resolver
+    storage = runtime._storage
+    projects = runtime._projects
+    if sessions is None or resolver is None or storage is None or projects is None:
+        return False
+    data_dir = Path(storage.data_dir)
+
+    def resolve() -> SessionPermissions:
+        binding = sessions.temporary_binding(address)
+        if binding is None:
+            binding = sessions.temporary_agent_binding(address.project_id, address.agent_id)
+        if binding is not None:
+            agent = resolver.resolve_temporary_agent(
+                binding.address, generation_id=binding.generation_id, session=address
+            )
+        else:
+            agent = resolver.resolve_agent(
+                address.project_id,
+                address.agent_id,
+                session_id=address.session_id,
+                require_model=False,
+            )
+        work_project = resolver.resolve_working_project(
+            address.project_id, agent, session_id=address.session_id
+        )
+        root = Path(projects.get(work_project).cwd) if work_project is not None else None
+        return session_permissions(
+            agent,
+            data_dir=data_dir,
+            project_root=root,
+            ceiling=resolver.session_overrides(address).ceiling(),
+        )
+
+    try:
+        permissions = await sessions.run_async(resolve)
+        if not permissions.restricted:
+            return True
+        if info.permission_scope is None or info.computer_id != "server":
+            return False
+        scratch = runtime._scratch_areas
+        scratch_root = (await scratch.folder_for(address)).area if scratch is not None else None
+        boundary = await run_permission_decision(
+            partial(permissions.boundary, data_dir, owner=address, scratch_root=scratch_root)
+        )
+        return may_attach(boundary, info)
+    except (VBotError, OSError) as error:
+        _LOGGER.warning(
+            "Terminal screen authority unavailable (terminal=%s error=%s)",
+            info.terminal_id,
+            type(error).__name__,
+        )
+        return False
+
+
 def _build_terminal_manager(runtime: Runtime) -> TerminalManager:
     """Wire Terminal ownership, views and title invalidation together."""
     agents, storage, sessions = runtime._agents, runtime._storage, runtime._chat_sessions
@@ -292,6 +360,7 @@ def _build_terminal_manager(runtime: Runtime) -> TerminalManager:
         credential_names=runtime.environment_credential_names,
         computers=runtime._computers,
         session_execution=lambda address: sessions.metadata_value(address, "execution"),
+        output_allowed=partial(_terminal_output_allowed, runtime),
     )
     sessions.add_title_changed_callback(lambda _address: terminal_manager.forget_session_views())
     return terminal_manager

@@ -18,10 +18,15 @@ from core.projects import ProjectStore
 from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.tools import _workdir
-from core.tools._terminal_permissions import permission_scope
+from core.tools._terminal_permissions import may_attach, permission_scope
 from core.tools._terminal_shell_state import ShellState
 from core.tools.terminal import register_terminal_tool
-from core.tools.terminal_manager import TerminalManager, TerminalOwner
+from core.tools.terminal_manager import (
+    TerminalInfo,
+    TerminalManager,
+    TerminalOwner,
+    TerminalRenderHost,
+)
 from core.tools.tools import JsonObject, ToolRegistry
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
@@ -33,7 +38,11 @@ from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.secrets.test_agent_secrets import Clock
 from tests.core.tools.shell_test_support import FakeProjects
 from tests.core.tools.terminal_helpers import call, make_context, manager
-from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
+from tests.core.tools.terminal_manager_helpers import (
+    AdapterFactory,
+    PendingTriggerService,
+    eventually,
+)
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 __all__ = ["manager"]
@@ -405,6 +414,37 @@ async def test_a_wait_rechecks_scope_before_returning_output(
 
     assert denied["error"]["code"] == "permission_denied"
     assert "previously available output" not in denied["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_attention_projects_only_the_state_after_scope_narrows(work: Path) -> None:
+    factory = AdapterFactory()
+    sink = PendingTriggerService()
+    current = PermissionBoundary.UNRESTRICTED
+
+    async def output_allowed(_address: SessionAddress, info: TerminalInfo) -> bool:
+        return may_attach(current, info)
+
+    manager = TerminalManager(
+        sink,
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        output_allowed=output_allowed,
+    )
+    try:
+        await manager.spawn(_OWNER, ["fake-tui"], cwd=work, env=None, origin_run_id="run-a")
+        factory.adapters[0].emit("previously available output")
+        factory.adapters[0].finish(0)
+        await eventually(lambda: bool(sink.submissions))
+        (address,), submitted = sink.submissions[-1]
+        project = submitted["filter_body"]
+        assert "previously available output" in await project(address, submitted["body"])
+        current = restricted(work)
+        notice = await project(address, submitted["body"])
+        assert "previously available output" not in notice
+        assert "exited" in notice
+    finally:
+        await manager.aclose()
 
 
 def _shell(terminal_manager: TerminalManager, terminal_id: str) -> ShellState:

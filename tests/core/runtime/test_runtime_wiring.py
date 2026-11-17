@@ -7,13 +7,14 @@ import os
 import threading
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from core.agents.agents import AgentStore
 from core.automation import CronService
-from core.chat import ChatLoop
+from core.chat import ChatLoop, session_permissions
 from core.model_tasks import EmbeddingService
 from core.model_tasks.live import LiveVoiceService
 from core.models.models import ModelRegistry
@@ -35,10 +36,11 @@ from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
+from core.tools._terminal_permissions import permission_scope
 from core.tools.command_manager import CommandManager
 from core.tools.live import LIVE_TOOL_NAMES
 from core.tools.scratch_areas import ScratchAreas, ScratchFolder, ScratchUnavailableError
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalInfo, TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.tools.update_handoff import UpdateHandoffs
 from core.utils.version import detect_vbot_version
@@ -272,6 +274,47 @@ async def test_scratch_retention_observes_each_live_resource_owner(
     assert await runtime.scratch_areas.sweep() == 0
     assert folder.own.is_dir()
     assert marker.stat().st_mtime > 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_notices_resolve_current_rules_with_the_live_scratch(
+    runtime: Runtime,
+) -> None:
+    address = runtime.chat_sessions.create("main").address
+    data_dir = Path(runtime.storage.data_dir)
+    resolver = runtime.agent_resolver
+    await runtime.chat_sessions.run_async(
+        resolver.set_session_permission_rules,
+        address,
+        {"read": "work_area", "deny": ["Read({scratch}/private)"]},
+    )
+    agent = await resolver.resolve_agent_async(
+        None, "main", session_id=address.session_id, require_model=False
+    )
+    scratch = await runtime.scratch_areas.folder_for(address)
+    boundary = session_permissions(
+        agent,
+        data_dir=data_dir,
+        project_root=None,
+        ceiling=None,
+    ).boundary(data_dir, owner=address, scratch_root=scratch.area)
+    info = cast(
+        TerminalInfo,
+        SimpleNamespace(
+            terminal_id="term_example",
+            computer_id="server",
+            permission_scope=permission_scope(boundary),
+        ),
+    )
+    can_show_screen = runtime.terminal_manager._services.output_allowed
+    assert can_show_screen is not None
+    assert await can_show_screen(address, info)
+    await runtime.chat_sessions.run_async(
+        resolver.set_session_permission_rules,
+        address,
+        {"read": "work_area", "deny": ["Read({scratch}/private)", "Shell(stop)"]},
+    )
+    assert not await can_show_screen(address, info)
 
 
 @pytest.mark.asyncio

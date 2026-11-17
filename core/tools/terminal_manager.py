@@ -147,6 +147,7 @@ class TerminalManager:
         credential_names: Callable[[], Container[str]] = frozenset,
         computers: ComputerRegistry | None = None,
         session_execution: Callable[[SessionAddress], Any] | None = None,
+        output_allowed: Callable[[SessionAddress, TerminalInfo], Awaitable[bool]] | None = None,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
         does not show; without it, only output and declared signals show work.
@@ -157,7 +158,8 @@ class TerminalManager:
         environment of a Terminal under Permission Rules withholds.
         *session_execution* reads a Session's stored ``execution`` metadata, so a
         Terminal stops reporting to a Session that lost its computer; without it
-        every computer stays granted."""
+        every computer stays granted. *output_allowed* checks the attachment's
+        current Permission Rules when its notices are projected."""
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
         if finished_session_ttl <= timedelta(0):
@@ -224,6 +226,7 @@ class TerminalManager:
             changed=self._catalog.notify_changed,
             open_screen=self._factory.open_screen,
             granted=partial(_session_grants_computer, session_execution),
+            output_allowed=output_allowed,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
