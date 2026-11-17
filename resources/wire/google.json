@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "Google AI Studio (Gemini API, generativelanguage.googleapis.com). Every Model speaks native Gemini generateContent. Reasoning renders as thinkingLevel with visible thoughts so opaque thoughtSignature parts replay; Agent none selects the lowest level. Media follows Google's documented inline types and 20 MB request limit. Native Decisions (gemini-decision-1) use POST /v1beta/decisions, which takes no task controls.",
+  "_comment": "Google AI Studio (Gemini API, generativelanguage.googleapis.com). Every Model speaks native Gemini generateContent. Reasoning renders as thinkingLevel with visible thoughts so opaque thoughtSignature parts replay; Agent none selects the lowest level. Media follows Google's documented inline types and 100 MB request payload limit (file input guide, read 2026-11-17; PDFs 50 MB each). Native Decisions (gemini-decision-1) use POST /v1beta/decisions, which takes no task controls.",
   "defaults": {
     "protocol": "gemini",
     "reasoning": {"floor": ["low", "medium", "high"], "off": "lowest"},
@@ -29,7 +29,7 @@
         "video/3gpp",
         "application/pdf"
       ],
-      "request_max_bytes": 20000000,
+      "request_max_bytes": 100000000,
       "request_max_images": 3600
     }
   },

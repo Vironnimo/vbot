@@ -4,7 +4,7 @@ This supplementary map covers the `google` Provider: Google's own Gemini API at 
 
 ## Boundary
 
-`core/providers/google.py::GoogleAdapter` subclasses the shared native Gemini codec `GeminiCompatibleAdapter` (`gemini_compatible.py`, `_gemini_wire.py`; its request, replay, stream and usage contracts are documented in `providers/opencode-zen.md` -> Reasoning, Replay, and Prompt Caching and -> Limits, Sampling, Tools, and Media, since OpenCode Zen and Go compose the same codec). The Adapter adds only what is specific to Google's endpoint: catalog discovery and normalization, and Google's error semantics. Request rules (protocol `gemini`, reasoning ladder fallback, media types and the 20 MB inline request limit) are wire-profile data in `resources/wire/google.json`; Provider and Connection live in `resources/providers/google.json`.
+`core/providers/google.py::GoogleAdapter` subclasses the shared native Gemini codec `GeminiCompatibleAdapter` (`gemini_compatible.py`, `_gemini_wire.py`; its request, replay, stream and usage contracts are documented in `providers/opencode-zen.md` -> Reasoning, Replay, and Prompt Caching and -> Limits, Sampling, Tools, and Media, since OpenCode Zen and Go compose the same codec). The Adapter adds only what is specific to Google's endpoint: catalog discovery and normalization, and Google's error semantics. Request rules (protocol `gemini`, reasoning ladder fallback, media types and the documented 100 MB request payload limit) are wire-profile data in `resources/wire/google.json`; Provider and Connection live in `resources/providers/google.json`.
 
 ## Connection and discovery
 
