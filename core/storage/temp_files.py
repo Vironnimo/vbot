@@ -77,11 +77,8 @@ class TemporaryFileLease:
     _finished: bool = field(default=False, init=False, repr=False)
 
     def finish(self) -> None:
-        """End active protection and start retention from this moment."""
-        if self._finished:
-            return
-        self._finished = True
-        self._manager._finish(self.path)
+        """End this lease; retention starts when the last lease finishes."""
+        self._manager._finish(self)
 
 
 class TemporaryFileManager:
@@ -109,7 +106,7 @@ class TemporaryFileManager:
         self.root = DataDirectoryLayout(data_dir).temporary
         self._retention = policies
         self._sweep_interval_seconds = sweep_interval_seconds
-        self._active: set[Path] = set()
+        self._active: dict[Path, int] = {}
         self._lock = RLock()
         self._sweeper_task: asyncio.Task[None] | None = None
         # Set by ``stop`` so an in-flight background sweep ends between files.
@@ -134,7 +131,7 @@ class TemporaryFileManager:
         # creation and the file's.
         with self._lock:
             path = write_id_file(directory, "tmp", suffix, b"")
-            self._active.add(path)
+            self._active[path] = 1
         return TemporaryFileLease(path=path, _manager=self)
 
     def reopen(self, path: Path) -> TemporaryFileLease:
@@ -150,13 +147,9 @@ class TemporaryFileManager:
         if category.parent != self.root or category.name not in self._cleanup_retention():
             raise ValueError(f"Not a temporary file of this manager: {path}")
         with self._lock:
-            self._active.add(path)
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.touch(exist_ok=True)
-            except OSError:
-                self._active.discard(path)
-                raise
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+            self._active[path] = self._active.get(path, 0) + 1
         return TemporaryFileLease(path=path, _manager=self)
 
     def start(self) -> None:
@@ -184,10 +177,11 @@ class TemporaryFileManager:
 
         An in-flight background sweep ends after its current file.
         """
+        if self._stopping.is_set():
+            return
         self._stopping.set()
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
-            self._sweeper_task = None
 
     async def aclose(self) -> None:
         """Stop periodic cleanup and await its task, including an in-flight sweep."""
@@ -317,14 +311,24 @@ class TemporaryFileManager:
                 )
         return True
 
-    def _finish(self, path: Path) -> None:
-        try:
-            os.utime(path, None)
-        except OSError as error:
-            _LOGGER.warning("Temporary-file completion timestamp failed path=%s: %s", path, error)
-        finally:
-            with self._lock:
-                self._active.discard(path)
+    def _finish(self, lease: TemporaryFileLease) -> None:
+        with self._lock:
+            if lease._finished:
+                return
+            lease._finished = True
+            path = lease.path
+            count = self._active[path]
+            if count > 1:
+                self._active[path] = count - 1
+                return
+            try:
+                os.utime(path, None)
+            except OSError as error:
+                _LOGGER.warning(
+                    "Temporary-file completion timestamp failed path=%s: %s", path, error
+                )
+            finally:
+                del self._active[path]
 
     async def _sweep_loop(self) -> None:
         # A cancelled pool call returns only after the started sweep settles, so
