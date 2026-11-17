@@ -157,7 +157,8 @@ engine whose option is on; the server lifespan calls it for both bindings after 
 `model_tasks.speech_to_text` and `text_to_speech` whose binding changed.
 `SpeechService.prepare_transcription()`
 starts the same load regardless of the option and returns at once with `loaded`,
-`loading`, `not_local` (Provider binding) or `unavailable`. Both use
+`loading`, `not_local` (Provider binding) or `unavailable`. Preparation skips an
+unavailable local candidate when another usable transcription route is configured. Both use
 `LocalSpeechExecutor.prepare(local_id, options)` (Event Loop only, STT or TTS): the load
 runs on the engine's worker, so a request arriving meanwhile queues behind it and
 reuses the model; a pending load with the same load identity is not started

@@ -302,13 +302,21 @@ class SpeechService:
         ``not_local`` when a Provider transcribes, ``unavailable`` when no
         usable binding exists. Must run on the Event Loop.
         """
+        result = "not_local"
+
+        def prepare(attempt: TaskAttempt) -> None:
+            nonlocal result
+            if attempt.target.kind == "local":
+                state = self._local_executor.prepare(attempt.target.local_id, attempt.options)
+                if state == "unavailable":
+                    raise SpeechConfigurationError("Local transcription is unavailable")
+                result = state
+
         try:
-            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+            self._resolver.resolve(TASK_SPEECH_TO_TEXT, validate=prepare)
         except SpeechConfigurationError:
             return "unavailable"
-        if target_ref.kind != "local":
-            return "not_local"
-        return self._local_executor.prepare(target_ref.local_id, options)
+        return result
 
     def preload_configured(
         self, task_types: Iterable[str] = (TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH)

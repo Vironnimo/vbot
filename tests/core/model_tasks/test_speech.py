@@ -388,6 +388,39 @@ def test_preparation_and_preload_load_only_the_bound_local_engine(
         executor.close()
 
 
+@pytest.mark.parametrize(
+    ("backup_target", "state", "prepared"),
+    [
+        ("local/backup", "loading", ["missing", "backup"]),
+        ("openrouter/backup::api-key", "not_local", ["missing"]),
+    ],
+)
+def test_prepare_transcription_skips_an_unavailable_local_primary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backup_target: str,
+    state: str,
+    prepared: list[str],
+) -> None:
+    from core.model_tasks import TaskModelBinding
+
+    backup = TaskModelBinding(TASK_SPEECH_TO_TEXT, backup_target)
+    primary = TaskModelBinding(TASK_SPEECH_TO_TEXT, "local/missing", {}, (backup,))
+    tasks = _SttModelTasks(primary.target, {})
+    monkeypatch.setattr(tasks, "binding_for", lambda _: primary)
+    executor = LocalSpeechExecutor(engines=[])
+    prepare = MagicMock(
+        side_effect=lambda local_id, _: "unavailable" if local_id == "missing" else "loading"
+    )
+    monkeypatch.setattr(executor, "prepare", prepare)
+    service = SpeechService(tasks, cast(Any, object()), tmp_path, local_executor=executor)
+    try:
+        assert service.prepare_transcription() == state
+        assert [invocation.args[0] for invocation in prepare.call_args_list] == prepared
+    finally:
+        service.close()
+
+
 class _SttModelTasks:
     def __init__(
         self,
