@@ -11,7 +11,6 @@ from desktop.server_address import Scheme, ServerAddress, parse_server_address
 from desktop.settings import (
     HTTPS_SCHEME,
     SCHEME_KEY,
-    clear_last_used,
     read_last_used,
     read_servers,
     write_last_used,
@@ -157,15 +156,15 @@ def remove_server(
     target_key = _entry_key(host, port)
     with _MUTATIONS_LOCK:
         servers = list_servers(settings_file)
-        remaining = [entry for entry in servers if entry.key != target_key]
-        if len(remaining) == len(servers):
+        removed = next((entry for entry in servers if entry.key == target_key), None)
+        if removed is None:
             return False
 
-        write_servers([entry.to_storage() for entry in remaining], settings_file)
-
-        last_used = read_last_used(settings_file)
-        if last_used is not None and ServerEntry.from_storage(last_used).key == target_key:
-            clear_last_used(settings_file)
+        write_servers(
+            [entry.to_storage() for entry in servers if entry.key != target_key],
+            settings_file,
+            clear_last_used_for=removed.to_storage(),
+        )
     return True
 
 
@@ -191,8 +190,9 @@ def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
     the caller opens the connection screen instead of grabbing a default.
     """
 
-    servers = list_servers(settings_file)
-    last_used = read_last_used(settings_file)
+    with _MUTATIONS_LOCK:
+        servers = list_servers(settings_file)
+        last_used = read_last_used(settings_file)
     if last_used is not None:
         wanted = ServerEntry.from_storage(last_used)
         for entry in servers:

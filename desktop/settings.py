@@ -207,10 +207,22 @@ def read_servers(path: Path | None = None) -> list[dict[str, Any]]:
     return servers
 
 
-def write_servers(servers: list[dict[str, Any]], path: Path | None = None) -> None:
-    """Persist the remembered-servers list, preserving other settings keys."""
+def write_servers(
+    servers: list[dict[str, Any]],
+    path: Path | None = None,
+    *,
+    clear_last_used_for: dict[str, Any] | None = None,
+) -> None:
+    """Persist the server list and clear a matching removed launch target atomically."""
 
-    _write_section(SERVERS_KEY, servers, path)
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        full[SERVERS_KEY] = servers
+        removed = _normalize_target_reference(clear_last_used_for)
+        if removed is not None and removed == _normalize_target_reference(full.get(LAST_USED_KEY)):
+            del full[LAST_USED_KEY]
+        _write_settings_unlocked(full, resolved_path)
 
 
 def read_last_used(path: Path | None = None) -> dict[str, Any] | None:
@@ -229,18 +241,6 @@ def write_last_used(
     if scheme == HTTPS_SCHEME:
         reference[SCHEME_KEY] = HTTPS_SCHEME
     _write_section(LAST_USED_KEY, reference, path)
-
-
-def clear_last_used(path: Path | None = None) -> None:
-    """Remove the last-used target reference while preserving other settings."""
-
-    resolved_path = _resolve_settings_path(path)
-    with _settings_lock(resolved_path):
-        full = _read_settings_unlocked(resolved_path)
-        if LAST_USED_KEY not in full:
-            return
-        del full[LAST_USED_KEY]
-        _write_settings_unlocked(full, resolved_path)
 
 
 def read_window_size(path: Path | None = None) -> tuple[int, int] | None:
