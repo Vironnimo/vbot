@@ -106,7 +106,7 @@ class TaskRecovery:
                         runner.id,
                         configuration_hash(runner.config),
                         payload,
-                        json.dumps(arguments),
+                        json.dumps({"name": arguments["name"]}),
                     ),
                 )
             )

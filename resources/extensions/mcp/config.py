@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlsplit
@@ -35,8 +36,10 @@ from core.json_documents import (
     validate_collection_root,
     write_json_document,
 )
+from core.utils.owner_only import restrict_to_owner
 
 from ._addresses import is_loopback_host
+from ._credential_fields import looks_like_credential
 
 CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
@@ -175,6 +178,14 @@ def validate_connection(value: Any) -> dict[str, Any]:
     for field in ("environment", "credential_environment"):
         if any(not re.fullmatch(ENVIRONMENT_KEY_PATTERN, key) for key in record.get(field, {})):
             raise ValueError("MCP environment names must be valid environment variable names")
+    if any(
+        value.strip() and looks_like_credential(key, value)
+        for key, value in record.get("environment", {}).items()
+    ):
+        raise ValueError(
+            "MCP environment contains a value that belongs in Credentials. "
+            "Remove it from environment, use credential_environment and set the named credential."
+        )
     for field in ("credential_headers", "credential_environment"):
         if any(
             not re.fullmatch(ENVIRONMENT_KEY_PATTERN, key) for key in record.get(field, {}).values()
@@ -283,7 +294,18 @@ class ConnectionStore:
         self.path = directory / "connections.json"
         self.issues: list[dict[str, Any]] = []
 
+    @property
+    def rejected_ids(self) -> set[str]:
+        """Ids reserved by persisted records that could not be loaded."""
+        return {
+            issue["connection_id"]
+            for issue in self.issues
+            if issue["code"] != "unknown_fields" and "connection_id" in issue
+        }
+
     def _read(self) -> dict[str, Any] | None:
+        with suppress(FileNotFoundError):
+            restrict_to_owner(self.path)
         report, data = read_json_file(self.path, validate_connections_document, missing_ok=True)
         if not report.exists:
             return None
@@ -338,5 +360,5 @@ class ConnectionStore:
         values.extend(
             record for identifier, record in normalized.items() if identifier not in written
         )
-        write_json_document(self.path, {"connections": values}, CONNECTIONS_FORMAT)
+        write_json_document(self.path, {"connections": values}, CONNECTIONS_FORMAT, owner_only=True)
         self._parse(self._read())

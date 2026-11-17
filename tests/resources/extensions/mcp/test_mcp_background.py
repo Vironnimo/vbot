@@ -140,6 +140,8 @@ async def test_background_call_returns_once_then_delivers_after_result_commit(de
     assert result["ok"] and result["data"]["state"] == "running"
     receipt = result["data"]["result_id"]
     assert receipt == "etr_background"
+    row = d.database.execute("SELECT arguments_json FROM pending_calls").fetchone()
+    assert json.loads(row["arguments_json"]) == {"name": "inspect"}
     pending = await d.background.load_result(receipt, d.current, "example")
     assert pending["payload"]["state"] == "running"
     other = replace(d.current, session_id="other-session")

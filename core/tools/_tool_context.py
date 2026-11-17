@@ -411,6 +411,11 @@ class ToolContext:
     # reference text it replaced: the file edit Tools match old text that holds
     # the reference text itself (``secrets/agent-secrets.md`` -> References and sinks).
     secret_literals: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    # Exact values substituted for external arguments in this dispatch. The
+    # transport can redact their echoes without changing the outbound request.
+    external_secret_values: frozenset[str] = field(
+        default_factory=frozenset, repr=False, compare=False
+    )
     prepared_secret_literals: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False
     )

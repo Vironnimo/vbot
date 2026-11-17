@@ -771,6 +771,8 @@ class ConnectionRunner:
     async def _run_call(self, call: _Call) -> None:
         # Each task runs in its own context copy: this marks only this call.
         _CURRENT_CALL.set(call)
+        if call.context is not None and call.context.external_secret_values:
+            self._events.remember_argument_secrets(call.context.external_secret_values)
         try:
             if call.resuming:
                 value = await self._protocol._resume_task(call)

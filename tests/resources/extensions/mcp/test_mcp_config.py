@@ -1,7 +1,9 @@
 """Persisted MCP faults must not disable unrelated connections or erase data."""
 
 import json
+import os
 import re
+import stat
 
 import pytest
 
@@ -153,7 +155,11 @@ def test_unknown_persisted_fields_do_not_block_or_rewrite_connection(tmp_path, e
 def test_invalid_record_is_isolated_and_preserved_on_other_changes(tmp_path, bad):
     store = ConnectionStore(tmp_path)
     store.path.write_text(document(bad, connection()))
+    if os.name != "nt":
+        store.path.chmod(0o644)
     records = store.load()
+    if os.name != "nt":
+        assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     assert set(records) == {"example"}
     assert store.issues[0]["code"] == "invalid_connection"
     records["example"]["enabled"] = False
@@ -201,6 +207,8 @@ def test_unknown_fields_survive_save_of_known_fields(tmp_path):
 def test_save_creates_a_versioned_document(tmp_path):
     store = ConnectionStore(tmp_path)
     store.save({"example": connection()})
+    if os.name != "nt":
+        assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     assert json.loads(store.path.read_text()) == {
         "format_version": 1,
         "connections": [validate_connection(connection())],
@@ -264,6 +272,7 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
             connection("godot", agents=[]),
             connection("blender", future_option="secret-sentinel"),
             connection("broken", timeout=-1),
+            connection("legacy", environment={"API_TOKEN": "previous-value-sentinel"}),
         )
     )
     started = []
@@ -278,10 +287,35 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
             "unknown_fields",
             "invalid_connection",
         }
-        assert len(caplog.records) == 3
+        assert len(caplog.records) == 4
         assert "secret-sentinel" not in caplog.text
+        assert "previous-value-sentinel" not in json.dumps(result) + caplog.text
+
+        setup = json.dumps({"mcpServers": {"legacy": {"command": "unused"}}})
+        preview = await service.management.manage("import", {"source": setup})
+        assert preview["servers"][0]["conflict"] is True
+        with pytest.raises(ValueError, match="already exists"):
+            await service.management.manage(
+                "import", {"source": setup, "apply": True, "servers": ["legacy"]}
+            )
+
         await service.management.manage("disable", {"id": "godot"})
         assert ConnectionStore(host.state_dir).load()["godot"]["enabled"] is False
+        assert saved_connections(store)[3]["environment"] == {
+            "API_TOKEN": "previous-value-sentinel"
+        }
+        host.set_credential("LEGACY_TOKEN", "previous-value-sentinel")
+        repaired = await service.management.manage(
+            "save",
+            {
+                "base": None,
+                "connection": connection(
+                    "legacy", enabled=False, credential_environment={"API_TOKEN": "LEGACY_TOKEN"}
+                ),
+            },
+        )
+        assert repaired["configuration"]["credential_environment"] == {"API_TOKEN": "LEGACY_TOKEN"}
+        assert "previous-value-sentinel" not in store.path.read_text()
         assert not (host.data_dir / "mcp").exists()
     finally:
         await service.close()
