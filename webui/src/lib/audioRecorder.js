@@ -53,39 +53,62 @@ export async function createAudioRecorder(options = {}) {
   const stopTracks = () => {
     if (released) return;
     released = true;
-    releaseMicrophone();
-    for (const track of stream.getTracks()) {
-      try {
-        track.stop();
-      } catch {
-        // Continue releasing the remaining tracks when one browser track fails.
+    try {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+          // Continue releasing the remaining tracks when one browser track fails.
+        }
       }
+    } finally {
+      releaseMicrophone();
     }
   };
 
   const chunks = [];
-  let stopped = false;
+  let started = false;
+  let stopPromise = null;
   let recordingError = null;
   let mimeType;
+  let nativeMimeType;
   let recorder;
+  let settle;
+  const finished = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const finish = () => {
+    try {
+      stopTracks();
+    } finally {
+      settle();
+    }
+  };
   // Some recorders choose the format themselves and reset `recorder.mimeType`
-  // on stop. The final chunks still identify the actual container.
+  // on stop. Prefer the chunks' type when they identify the actual container.
   const recordedMimeType = () =>
-    chunks.find((chunk) => chunk.type)?.type || mimeType || 'audio/webm';
+    chunks.find((chunk) => chunk.type)?.type ||
+    recorder?.mimeType ||
+    nativeMimeType ||
+    mimeType ||
+    'audio/webm';
   const recordedBlob = () => new Blob(chunks, { type: recordedMimeType() });
   try {
     mimeType = chooseAudioMimeType(MediaRecorderClass);
     const recorderOptions = mimeType ? { mimeType } : {};
     recorder = new MediaRecorderClass(stream, recorderOptions);
+    recorder.addEventListener('start', () => {
+      nativeMimeType = recorder.mimeType || nativeMimeType;
+    });
     recorder.addEventListener('dataavailable', (event) => {
       if (event.data && event.data.size > 0) {
         chunks.push(event.data);
       }
     });
-    recorder.addEventListener('stop', stopTracks, { once: true });
+    recorder.addEventListener('stop', finish, { once: true });
     recorder.addEventListener('error', (event) => {
       recordingError = event.error ?? new Error(t('audioRecording.failed'));
-      stopTracks();
+      finish();
     });
   } catch (error) {
     stopTracks();
@@ -97,54 +120,44 @@ export async function createAudioRecorder(options = {}) {
       return recorder.state;
     },
     start() {
+      if (released) return;
       try {
         recorder.start();
+        started = true;
+        nativeMimeType = recorder.mimeType || nativeMimeType;
       } catch (error) {
-        stopped = true;
-        stopTracks();
+        recordingError = error;
+        finish();
         throw error;
       }
     },
     cancel() {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
+      if (released) return;
       try {
         if (recorder.state !== 'inactive') {
           recorder.stop();
         }
       } finally {
-        stopTracks();
+        finish();
       }
     },
     stop() {
-      if (recordingError) return Promise.reject(recordingError);
-      if (stopped) {
-        return Promise.resolve(recordedBlob());
-      }
-      stopped = true;
-
-      return new Promise((resolve, reject) => {
-        try {
-          recorder.addEventListener('stop', () => resolve(recordedBlob()), {
-            once: true,
-          });
-          recorder.addEventListener('error', () => reject(recordingError), {
-            once: true,
-          });
-
-          if (recorder.state === 'inactive') {
-            stopTracks();
-            resolve(recordedBlob());
-            return;
-          }
-          recorder.stop();
-        } catch (error) {
-          stopTracks();
-          reject(error);
-        }
+      if (stopPromise) return stopPromise;
+      stopPromise = finished.then(() => {
+        if (recordingError) throw recordingError;
+        return recordedBlob();
       });
+      try {
+        if (!started) finish();
+        else if (!released && recorder.state !== 'inactive') {
+          nativeMimeType = recorder.mimeType || nativeMimeType;
+          recorder.stop();
+        }
+      } catch (error) {
+        recordingError = error;
+        finish();
+      }
+      return stopPromise;
     },
     filename() {
       return `recording.${audioExtensionFromMimeType(recordedMimeType())}`;
