@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from core.sessions import SessionAddress
 from core.tools.command_manager import CommandNotFoundError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -231,6 +232,7 @@ class SessionActivity:
         self._command_owners: dict[str, SessionAddress] = {}
         self._callbacks: list[SessionActivityCallback] = []
         self._links_failing = False
+        self._answer_read_errors = LoggedConditions()
         self._closed = False
         self._unsubscribers = [
             runs.add_run_started_callback(self._on_run),
@@ -468,7 +470,7 @@ class SessionActivity:
             if link is None or link.parent != address:
                 continue
             if link.reply_target != "parent":
-                if await self._subagents.parent_answer_pending(child):
+                if await self._parent_answer_pending(child, strict=revisions is not None):
                     count += 1
                 continue
             if (
@@ -479,6 +481,28 @@ class SessionActivity:
             ):
                 count += 1
         return count
+
+    async def _parent_answer_pending(self, child: SessionAddress, *, strict: bool) -> bool:
+        try:
+            pending = await self._subagents.parent_answer_pending(child)
+        except Exception:
+            if strict:
+                raise
+            if self._answer_read_errors.started(child):
+                _LOGGER.warning(
+                    "Session activity cannot read a Sub-Agent answer (agent=%s session=%s)",
+                    child.agent_id,
+                    child.session_id,
+                    exc_info=True,
+                )
+            return True
+        if self._answer_read_errors.ended(child):
+            _LOGGER.info(
+                "Session activity reads Sub-Agent answers again (agent=%s session=%s)",
+                child.agent_id,
+                child.session_id,
+            )
+        return pending
 
     def _apply(self, address: SessionAddress, entry: _Entry, computed: _Computed) -> bool:
         """Apply a recomputed state; whether a change was published."""

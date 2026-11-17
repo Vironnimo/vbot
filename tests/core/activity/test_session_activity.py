@@ -402,6 +402,30 @@ async def test_a_parent_waits_for_sub_agents_answering_it_until_their_answers_ar
     assert world.states(PARENT)[-1] == "idle"
 
 
+async def test_parent_waits_when_a_redirected_subagents_answers_cannot_be_read(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.subagents.link(CHILD, PARENT, "user")
+    await world.start(CHILD)
+    parent_run = await world.start(PARENT)
+
+    async def unavailable(_address: SessionAddress) -> bool:
+        raise PermissionError("Sub-Agent history is unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(world.subagents, "parent_answer_pending", unavailable)
+        await world.finish(parent_run)
+        assert world.activity.state(PARENT).state == "waiting"
+        assert world.activity.state(PARENT).waiting_for == WaitingFor(subagents=1)
+        with pytest.raises(PermissionError):
+            await world.activity.pending_wakes(PARENT)
+
+    world.subagents.forwarded(CHILD)
+    await _turns()
+    await world.clock.settle()
+    assert world.activity.state(PARENT) == IDLE
+
+
 async def test_pending_wakes_rechecks_related_changes_during_link_reads(
     world: _World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
