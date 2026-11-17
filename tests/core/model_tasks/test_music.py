@@ -16,10 +16,11 @@ from core.utils.errors import ConfigError
 
 
 class _ModelTasks:
+    def __init__(self, target: str = "openrouter/m/lyria::api-key") -> None:
+        self._target = target
+
     def binding_for(self, task_type: str) -> object:
-        return SimpleNamespace(
-            task_type=task_type, target="openrouter/m/lyria::api-key", options={}
-        )
+        return SimpleNamespace(task_type=task_type, target=self._target, options={})
 
     def validate_execution_target(self, _binding: object) -> None:
         pass
@@ -55,8 +56,11 @@ async def test_client_preparation_preserves_configuration_error(
 
 
 @pytest.mark.asyncio
-async def test_text_only_model_refuses_source_images_with_the_fix(tmp_path: Path) -> None:
-    service = MusicService(_ModelTasks(), cast(Any, None))
+@pytest.mark.parametrize("target", ["openrouter/m/lyria::api-key", "google/lyria-3.5::api-key"])
+async def test_text_only_model_refuses_source_images_with_the_fix(
+    tmp_path: Path, target: str
+) -> None:
+    service = MusicService(_ModelTasks(target), cast(Any, None))
 
     with pytest.raises(MusicOptionError) as caught:
         await service.generate("Calm piano", source_paths=[tmp_path / "cover.png"])

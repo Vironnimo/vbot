@@ -1,11 +1,11 @@
-"""Wire-contract tests for OpenRouter Video and Music generation."""
+"""Wire-contract tests for OpenRouter Video and Music and Google Music generation."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -351,6 +351,175 @@ async def test_music_refusals_carry_the_models_reason(
     assert caught.value.reason == reason
 
 
+GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
+GOOGLE_MUSIC_URL = f"{GOOGLE_BASE}/models/lyria-3.5:generateContent"
+
+
+def _google_music_answer(*parts: dict, finish: str | None = "STOP", **fields: object) -> dict:
+    candidate: dict = {"content": {"role": "model", "parts": list(parts)}}
+    if finish is not None:
+        candidate["finishReason"] = finish
+    if "finishMessage" in fields:
+        candidate["finishMessage"] = fields.pop("finishMessage")
+    return {"candidates": [candidate], **fields}
+
+
+def _google_audio(data: bytes, mime_type: str = "audio/mpeg") -> dict:
+    return {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(data).decode()}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_music_sends_one_generate_content_and_reads_track_and_lyrics() -> None:
+    route = respx.post(GOOGLE_MUSIC_URL).respond(
+        200,
+        json=_google_music_answer(
+            {"text": "[Verse]\nRain on the window"},
+            {"text": "draft plan", "thought": True},
+            _google_audio(b"RIFF....WAVEfmt ", "audio/wav"),
+            {"text": "[Chorus]\nMorning light"},
+            usageMetadata={"promptTokenCount": 9, "candidatesTokenCount": 40},
+        ),
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "call"
+    cover = ImageInput("cover.png", "image/png", b"cover")
+
+    result = await _google_music_client(usage_observer=observer).generate(
+        "Rainy lo-fi",
+        options={"response_format": "wav", "extra_options": {"labels": {"team": "music"}}},
+        input_images=(cover,),
+    )
+
+    request = route.calls.last.request
+    assert request.headers["x-goog-api-key"] == "google-test-key"
+    assert json.loads(request.content) == {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Rainy lo-fi"},
+                    {"inlineData": {"mimeType": "image/png", "data": "Y292ZXI="}},
+                ],
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["AUDIO", "TEXT"],
+            "responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}},
+        },
+        "labels": {"team": "music"},
+    }
+    assert request.extensions["timeout"]["read"] == MUSIC_REQUEST_TIMEOUT_SECONDS
+    assert (result.data, result.media_type, result.model) == (
+        b"RIFF....WAVEfmt ",
+        "audio/wav",
+        "lyria-3.5",
+    )
+    assert result.text == "[Verse]\nRain on the window\n[Chorus]\nMorning light"
+    usage = observer.finish.await_args.kwargs["usage"]
+    assert (usage["input_tokens"], usage["output_tokens"]) == (9, 40)
+
+
+@pytest.mark.parametrize(
+    ("response", "outcome", "calls"),
+    [
+        pytest.param(
+            httpx.Response(200, json={"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}),
+            "Google blocked the prompt (PROHIBITED_CONTENT)",
+            1,
+            id="blocked-prompt",
+        ),
+        pytest.param(
+            httpx.Response(
+                200,
+                json=_google_music_answer(finish="SAFETY", finishMessage="Artist voices."),
+            ),
+            "Artist voices.",
+            1,
+            id="safety-finish",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_google_music_answer({"text": "I can't sing that."})),
+            "I can't sing that.",
+            1,
+            id="text-instead-of-audio",
+        ),
+        # An answer that cannot be confirmed may follow a billed track.
+        pytest.param(
+            httpx.Response(200, json=_google_music_answer(_google_audio(b"ID3"), finish="OTHER")),
+            ProviderOutcomeUnknownError,
+            1,
+            id="unexpected-finish",
+        ),
+        pytest.param(
+            httpx.Response(
+                200,
+                json=_google_music_answer({"inlineData": {"mimeType": "audio/mpeg", "data": "!"}}),
+            ),
+            ProviderOutcomeUnknownError,
+            1,
+            id="undecodable-audio",
+        ),
+        pytest.param(
+            httpx.Response(200, json={"candidates": []}),
+            ProviderOutcomeUnknownError,
+            1,
+            id="no-candidate",
+        ),
+        pytest.param(httpx.Response(500), ProviderOutcomeUnknownError, 1, id="ambiguous-500"),
+        # A zero free-tier quota never succeeds on retry.
+        pytest.param(
+            httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": 429,
+                        "status": "RESOURCE_EXHAUSTED",
+                        "message": "Quota exceeded for metric: x, limit: 0, model: lyria-3-pro",
+                    }
+                },
+            ),
+            "quota exhausted",
+            1,
+            id="zero-quota",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_music_outcomes_never_replay_a_possibly_billed_track(
+    response: httpx.Response, outcome: str | type[Exception], calls: int
+) -> None:
+    route = respx.post(GOOGLE_MUSIC_URL).mock(return_value=response)
+
+    with pytest.raises(ProviderError) as caught:
+        await _google_music_client().generate("A song", options={})
+
+    if isinstance(outcome, str) and isinstance(caught.value, ProviderContentRefusedError):
+        assert caught.value.reason == outcome
+    elif isinstance(outcome, str):
+        assert outcome in str(caught.value) and not caught.value.retryable
+    else:
+        assert isinstance(caught.value, outcome)
+    assert route.call_count == calls
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_music_retries_documented_overload() -> None:
+    route = respx.post(GOOGLE_MUSIC_URL).mock(
+        side_effect=[
+            httpx.Response(503, json={"error": {"code": 503, "status": "UNAVAILABLE"}}),
+            httpx.Response(200, json=_google_music_answer(_google_audio(b"ID3track"))),
+        ]
+    )
+
+    with patch("core.utils.retry._sleep", new=AsyncMock()):
+        result = await _google_music_client().generate("A song", options={})
+
+    assert (result.data, route.call_count) == (b"ID3track", 2)
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -394,4 +563,27 @@ def _openrouter_music_client() -> ProviderMusicClient:
         connection=_connection(),
         credential="sk-test",
         model_id="google/lyria-3-pro-preview",
+    )
+
+
+def _google_music_client(*, usage_observer: object = None) -> ProviderMusicClient:
+    provider = ProviderConfig(
+        id="google",
+        name="Google AI Studio",
+        adapter="google",
+        base_url=GOOGLE_BASE,
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="x-goog-api-key", prefix="", credential_key="GEMINI_API_KEY"),
+    )
+    return ProviderMusicClient(
+        provider=provider,
+        connection=connection,
+        credential="google-test-key",
+        model_id="lyria-3.5",
+        usage_observer=usage_observer,  # type: ignore[arg-type]
     )

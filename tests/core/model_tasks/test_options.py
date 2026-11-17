@@ -831,6 +831,34 @@ def test_music_schema_uses_only_model_supported_sampling_options() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("model_id", "formats"),
+    [
+        # Google documents the WAV choice only for Lyria 3.5.
+        pytest.param("lyria-3.5", ["", "mp3", "wav"], id="lyria-3.5"),
+        pytest.param("lyria-3-clip-preview", None, id="lyria-3-clip"),
+    ],
+)
+def test_google_music_schema_offers_only_the_cataloged_audio_format(
+    model_id: str, formats: list[str] | None
+) -> None:
+    from core.providers.google import GoogleAdapter
+
+    model = GoogleAdapter.normalize_catalog_entry(
+        {"name": f"models/{model_id}", "supportedGenerationMethods": ["generateContent"]}
+    )
+
+    schema = option_schema_for(
+        TASK_MUSIC_GENERATION, "google", f"google/{model_id}::api-key", model=model
+    )
+
+    fields = {field.name: field for field in schema.fields}
+    assert set(fields) == ({"response_format"} if formats else set()) | {"extra_options"}
+    if formats:
+        assert fields["response_format"].default == ""
+        assert [choice.value for choice in fields["response_format"].options] == formats
+
+
 # ---------------------------------------------------------------------------
 # Text embedding
 # ---------------------------------------------------------------------------

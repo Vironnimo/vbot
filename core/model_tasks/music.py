@@ -35,6 +35,9 @@ from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 
+#: Providers with a Music wire route in ``ProviderMusicClient``.
+MUSIC_PROVIDERS = frozenset({"openrouter", "google"})
+
 
 class MusicError(TaskError):
     """Base class for expected Music generation errors."""
@@ -54,7 +57,7 @@ class MusicOptionError(MusicError):
 
 
 class MusicExecutionError(MusicError):
-    """Raised when an OpenRouter Music request fails."""
+    """Raised when a Provider Music request fails."""
 
     code = "provider_error"
 
@@ -223,12 +226,12 @@ class MusicService:
             _binding, _options, target_ref = self._resolver.resolve(TASK_MUSIC_GENERATION)
         except MusicConfigurationError:
             return None
-        if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
+        if target_ref.kind != "provider" or target_ref.provider_id not in MUSIC_PROVIDERS:
             return None
         return self._model_tasks.model_for_target(target_ref)
 
     def _validated_model(self, target_ref: TaskModelTargetRef) -> Any:
-        if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
+        if target_ref.kind != "provider" or target_ref.provider_id not in MUSIC_PROVIDERS:
             raise MusicConfigurationError("the chosen provider does not offer Music generation")
         model = self._model_tasks.model_for_target(target_ref)
         if model is None:
