@@ -331,7 +331,6 @@ export function createPromptEditor(context) {
         liveBlock.editedContent = restored;
       }
       liveBlock.isDirty = liveBlock.editedContent !== restored;
-      if (liveBlock.isDirty) scheduleAutoSaveTimer(blockId);
       liveBlock.isModified = result.is_modified === true;
       if (typeof result.inheritance === 'string') {
         liveBlock.inheritance = result.inheritance;
@@ -342,7 +341,11 @@ export function createPromptEditor(context) {
     } finally {
       const liveIndex = blockIndexById(blockId);
       if (liveIndex !== -1 && context.blocksScopeKey === scopeKey) {
-        blocks[liveIndex].isBusy = false;
+        const liveBlock = blocks[liveIndex];
+        liveBlock.isBusy = false;
+        if (liveBlock.isDirty && liveBlock.editedContent !== previousDraft) {
+          scheduleAutoSaveTimer(blockId);
+        }
       }
     }
   }

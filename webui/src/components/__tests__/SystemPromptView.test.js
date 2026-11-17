@@ -271,6 +271,36 @@ describe('SystemPromptView blocks', () => {
     );
   });
 
+  it('autosaves typing made during a reset that later fails', async () => {
+    await mountView();
+    const reset = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'prompt.reset') {
+        await reset.promise;
+        throw new Error('reset failed');
+      }
+      return base(method, params);
+    });
+    vi.useFakeTimers();
+    Array.from(blockElement('core:intro').querySelectorAll('button'))
+      .find(
+        (button) =>
+          button.textContent.trim() === t('systemPrompt.fragmentEditor.reset'),
+      )
+      .click();
+    flushSync();
+    confirmDialog(t('common.reset'));
+    expect(hasCall('prompt.reset')).toBe(true);
+    editBlock('core:intro', 'typed during reset');
+    await advanceAutosave();
+    expect(hasCall('prompt.update')).toBe(false);
+
+    reset.resolve();
+    await advanceAutosave();
+    expect(lastCall('prompt.update')?.[1].content).toBe('typed during reset');
+  });
+
   it.each([
     ['a valid slug', 'my-note', null, null],
     [
