@@ -10,7 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.computers import ComputerError
+from core.computers import ComputerError, normalize_execution
 from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
@@ -97,6 +97,7 @@ from ._terminal_display import _terminal_detail_blocks, _terminal_display_parts
 from ._terminal_permissions import (
     UnfollowableInput,
     attach_refused_message,
+    attached_access_refused_message,
     authorize_input,
     check_start,
     may_attach,
@@ -227,6 +228,18 @@ async def _handle_terminal(
         known = None if action in {"start", "list"} else _find(terminal_manager, str(terminal_id))
         if known is not None:
             check_terminal_target(terminal_manager, context, known, arguments)
+            if action in {"wait", "input", "resize", "kill"}:
+
+                async def recheck_attachment() -> None:
+                    info = terminal_manager.terminal(known.terminal_id, owner)
+                    check_terminal_target(terminal_manager, context, info, arguments)
+                    if not may_attach(context.permissions, info):
+                        raise ComputerError(
+                            "permission_denied", attached_access_refused_message(info.terminal_id)
+                        )
+
+                context.add_permission_recheck(recheck_attachment)
+                await context.revalidate_permissions()
         if action == "start":
             return await _handle_start(
                 terminal_manager, projects, context, arguments, scratch_areas, command_checker
@@ -528,6 +541,7 @@ async def _started_result(
     owner = _owner(context)
     # An empty screen that is out of date does not show that nothing was printed.
     shown_nothing = False
+    screen_withheld = False
     try:
         await terminal_manager.wait_for_startup(terminal_id)
         snapshot = await terminal_manager.snapshot(terminal_id, owner)
@@ -537,9 +551,14 @@ async def _started_result(
             terminal_manager, terminal_id, error, done="The program started"
         )
     else:
-        _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-        data = _screen_result(snapshot, view="start", unseen_from=_unseen_from(snapshot))
-        shown_nothing = data.get("screen") == "" and not snapshot.get("screen_behind")
+        if await _screen_allowed(terminal_manager, context, terminal_id, owner):
+            _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+            data = _screen_result(snapshot, view="start", unseen_from=_unseen_from(snapshot))
+            shown_nothing = data.get("screen") == "" and not snapshot.get("screen_behind")
+        else:
+            current = _terminal_info(terminal_manager, terminal_id)
+            data = {**_terminal_facts(current, owner), "note": screen_hidden_note()}
+            screen_withheld = True
     running = data["state"] == "running"
     if launch_note := _terminal_info(terminal_manager, terminal_id).launch_note:
         notes.append(launch_note)
@@ -550,7 +569,7 @@ async def _started_result(
     if requested_id is not None:
         notes.append(f"start assigns the terminal_id: use {terminal_id}, not {requested_id}.")
     data = _with_notes(data, notes)
-    if running:
+    if running and not screen_withheld:
         data["next"] = (
             _first_screen_pending_text(terminal_id) if shown_nothing else _DELIVERIES_TEXT
         )
@@ -685,11 +704,14 @@ async def _handle_status(
     )
     owner = _owner(context)
     info = _terminal_info(terminal_manager, terminal_id)
-    if not may_attach(context.permissions, info):
+    snapshot = None
+    if await _screen_allowed(terminal_manager, context, terminal_id):
+        snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
+    if snapshot is None or not await _screen_allowed(terminal_manager, context, terminal_id):
         holders = await _subagent_holders(subagents, owner, [info])
         facts = {**_terminal_facts(info, owner), **_attachment_fields(info, owner, holders)}
         return tool_success({**facts, "note": screen_hidden_note()})
-    snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
+    info = _terminal_info(terminal_manager, terminal_id)
     attached_here = info.attachment == owner
     if attached_here and start_line is None:
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -751,6 +773,7 @@ async def _handle_wait(
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
     snapshot = await terminal_manager.snapshot(terminal_id, owner)
+    await context.revalidate_permissions()
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _screen_result(snapshot, view="wait", unseen_from=_unseen_from(snapshot))
     data["wait_ended"] = _wait_end(ended, data)
@@ -981,6 +1004,10 @@ async def _handle_input(
     finally:
         with contextlib.suppress(Exception):
             await terminal_manager.release_focus(terminal_id, owner)
+    if not await _screen_allowed(terminal_manager, context, terminal_id, owner):
+        current = _terminal_info(terminal_manager, terminal_id)
+        data = {**_terminal_facts(current, owner), "note": screen_hidden_note()}
+        return tool_success(_with_notes({**data, **typed}, notes))
     notes.extend(_wait_ended_notes(ended, pattern=pattern is not None, seconds=seconds))
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
@@ -1025,6 +1052,9 @@ async def _handle_resize(
         terminal_id, owner, columns=columns, rows=rows, seconds=TERMINAL_REPLY_SECONDS
     )
     snapshot = await terminal_manager.snapshot(terminal_id, owner)
+    if not await _screen_allowed(terminal_manager, context, terminal_id, owner):
+        current = _terminal_info(terminal_manager, terminal_id)
+        return tool_success({**_terminal_facts(current, owner), "note": screen_hidden_note()})
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _screen_result(snapshot, view="resize", unseen_from=_unseen_from(snapshot))
     # The Agent asked for this size; the notice is for sizes it did not set.
@@ -1052,9 +1082,33 @@ async def _handle_kill(
         data["exit_code"] = after.exit_code
     if before.finished:
         snapshot = await terminal_manager.read(terminal_id)
-        data["screen"] = snapshot.get("screen") or ""
         data["note"] = "The program had already ended; nothing was stopped."
+        if await _screen_allowed(terminal_manager, context, terminal_id, owner):
+            data["screen"] = snapshot.get("screen") or ""
+        else:
+            _with_notes(data, [screen_hidden_note()])
     return tool_success(data)
+
+
+async def _screen_allowed(
+    manager: TerminalManager,
+    context: ToolContext,
+    terminal_id: str,
+    owner: TerminalOwner | None = None,
+) -> bool:
+    """Refresh permission to publish output after a launch, action, or screen read."""
+    boundary = context.permissions
+    execution = context.execution
+    if context.approval_refresh_hook is not None:
+        boundary, execution = await context.approval_refresh_hook(False)
+    info = _find(manager, terminal_id)
+    return (
+        info is not None
+        and (owner is None or info.attachment == owner)
+        and info.computer_id in normalize_execution(execution)["allowed_computer_ids"]
+        and (info.computer_id == "server" or not boundary.restricted)
+        and may_attach(boundary, info)
+    )
 
 
 def _acknowledge_after_persistence(

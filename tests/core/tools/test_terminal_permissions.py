@@ -3,6 +3,7 @@ status check against its Permission Rules (``_terminal_permissions``)."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -340,6 +341,72 @@ async def test_a_restricted_session_attaches_and_reads_only_terminals_under_its_
     assert "secret output" in unrestricted["data"]["screen"]
 
 
+@pytest.mark.asyncio
+async def test_an_attachment_cannot_keep_a_terminal_outside_the_sessions_current_rules(
+    manager: tuple[TerminalManager, AdapterFactory], work: Path
+) -> None:
+    terminal_manager, factory = manager
+    factory.initial_output = "previously available output"
+    terminal = _Terminal(manager, work, FakeAnalyzer(plan("fake-tui")), restricted(work))
+    started = await terminal({"action": "start", "command": "fake-tui"}, restricted=False)
+    terminal_id = started["data"]["terminal_id"]
+    columns = terminal_manager.terminal(terminal_id, _OWNER).columns
+
+    for arguments in (
+        {"action": "wait", "pattern": "previously available"},
+        {"action": "input", "text": "continue"},
+        {"action": "resize", "columns": 90},
+        {"action": "kill"},
+    ):
+        denied = await terminal({**arguments, "terminal_id": terminal_id})
+        assert denied["error"]["code"] == "permission_denied"
+        assert "previously available output" not in denied["error"]["message"]
+
+    info = terminal_manager.terminal(terminal_id, _OWNER)
+    assert not info.finished
+    assert info.columns == columns
+    assert factory.adapters[0].writes == []
+    released = await terminal({"action": "detach", "terminal_id": terminal_id})
+    assert released["ok"]
+    operator = await terminal_manager.read_for_operator(terminal_id)
+    assert "previously available output" in operator["screen"]
+
+
+@pytest.mark.asyncio
+async def test_a_wait_rechecks_scope_before_returning_output(
+    manager: tuple[TerminalManager, AdapterFactory], work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal_manager, factory = manager
+    factory.initial_output = "previously available output"
+    context = make_context(work)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
+    terminal_id = started["data"]["terminal_id"]
+    waiting = asyncio.Event()
+    resumed = asyncio.Event()
+    boundary = PermissionBoundary.UNRESTRICTED
+
+    async def hold_wait(*_args: Any, **_kwargs: Any) -> str:
+        waiting.set()
+        await resumed.wait()
+        return "idle"
+
+    async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
+        return boundary, context.execution
+
+    monkeypatch.setattr(terminal_manager, "wait", hold_wait)
+    context = replace(context, approval_refresh_hook=refresh)
+    pending = asyncio.create_task(
+        call(terminal_manager, context, {"action": "wait", "terminal_id": terminal_id})
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=2)
+    boundary = restricted(work)
+    resumed.set()
+    denied = await asyncio.wait_for(pending, timeout=2)
+
+    assert denied["error"]["code"] == "permission_denied"
+    assert "previously available output" not in denied["error"]["message"]
+
+
 def _shell(terminal_manager: TerminalManager, terminal_id: str) -> ShellState:
     state = terminal_manager.shell_state(terminal_id, _OWNER)
     assert state is not None
@@ -398,8 +465,13 @@ async def test_changed_preparation_refuses_effects_with_a_retryable_result(
             "key": "enter",
         }
     before = len(factory.calls)
+    refreshed = False
 
     async def refresh(_force: bool) -> tuple[PermissionBoundary, dict[str, Any]]:
+        nonlocal refreshed
+        if changed != "start-rules" and not refreshed:
+            refreshed = True
+            return PermissionBoundary.UNRESTRICTED, context.execution
         if changed == "input-prompt":
             state = terminal_manager.shell_state(arguments["terminal_id"], _OWNER)
             assert state is not None
@@ -409,7 +481,13 @@ async def test_changed_preparation_refuses_effects_with_a_retryable_result(
 
     context = replace(context, approval_refresh_hook=refresh)
     refused = await call(terminal_manager, context, arguments)
-    assert refused["error"]["code"] == "terminal_preparation_changed", refused
-    assert refused["error"]["retryable"] is True
+    if changed == "input-rules":
+        # The resulting terminal scope is itself denied, so this action must
+        # use a terminal under the new rules.
+        assert refused["error"]["code"] == "permission_denied", refused
+        assert refused["error"]["retryable"] is False
+    else:
+        assert refused["error"]["code"] == "terminal_preparation_changed", refused
+        assert refused["error"]["retryable"] is True
     assert len(factory.calls) == before
     assert all(adapter.writes == [] for adapter in factory.adapters)

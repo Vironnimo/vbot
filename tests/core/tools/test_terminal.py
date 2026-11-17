@@ -7,6 +7,7 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast, override
 
@@ -776,7 +777,9 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     async def run(arguments: JsonObject, caller: Any = context) -> dict[str, Any]:
         return cast(
             dict[str, Any],
-            await call(terminal_manager, caller, {**arguments, "terminal_id": terminal_id}),
+            await call(
+                terminal_manager, replace(caller), {**arguments, "terminal_id": terminal_id}
+            ),
         )
 
     listed = await call(terminal_manager, context, {"action": "list"})
