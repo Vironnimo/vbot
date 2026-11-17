@@ -19,6 +19,7 @@ from cli.application.payload import APP_DESKTOP_TARGET, SHAPES
 from desktop import _windows
 from scripts import build_windows
 from scripts.windows import native_hosts
+from vbot_extension_sdk import SDK_VERSION
 
 
 def test_build_command_preserves_failure_output() -> None:
@@ -216,7 +217,9 @@ def test_copy_application_respects_shape_and_exclusions(
     )
 
     assert (destination / "vbot_extension_sdk").exists()
-    assert (destination / "resources/sdk/vbot_extension_sdk-31.0.1-py3-none-any.whl").is_file()
+    assert (
+        destination / f"resources/sdk/vbot_extension_sdk-{SDK_VERSION}-py3-none-any.whl"
+    ).is_file()
 
     if shape == "desktop-client":
         assert not (destination / sdk_path).exists()

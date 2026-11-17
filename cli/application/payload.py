@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from vbot_extension_sdk import SDK_VERSION
+
 SHAPES = ("server", "server-desktop", "desktop-client")
 APP_COMMON = ("core", "cli", "vbot_extension_sdk")
 APP_SERVER = ("server", "resources", "webui/dist")
@@ -33,7 +35,7 @@ APP_DESKTOP_TARGET += (
     "resources/extensions/terminal/extension.json",
     "resources/extensions/terminal/desktop.py",
     "resources/extensions/terminal/docs/usage.md",
-    "resources/sdk/vbot_extension_sdk-32.0.0-py3-none-any.whl",
+    f"resources/sdk/vbot_extension_sdk-{SDK_VERSION}-py3-none-any.whl",
 )
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
