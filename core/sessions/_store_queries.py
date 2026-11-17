@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from itertools import batched
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_values
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress, SessionListFilters, SessionRecallVisibility
 
 _LIST_FROM = f"FROM sessions AS s {_store_values._DERIVED_METADATA_JOIN}"
-# Pinned Sessions one split list reads; pins are chosen by hand, so few exist.
+# Pinned Sessions one split list reads per group; pins are chosen by hand, so few exist.
 _PINNED_READ_LIMIT = 200
 
 
@@ -567,6 +567,32 @@ def _list_page_check(limit: int) -> None:
         raise ChatSessionError("Session list limit must be a positive integer")
 
 
+def _grouped_page_rows(
+    connection: sqlite3.Connection,
+    group_sql: str,
+    where: str,
+    params: Sequence[Any],
+    *,
+    order_column: Literal["last_activity_at", "pinned_at"],
+    limit: int,
+) -> list[sqlite3.Row]:
+    """Read the first page and full count of each group for one Session selection."""
+    return connection.execute(
+        f"WITH listed AS (SELECT s.session_key, s.{order_column} AS list_order, s.project_id, "
+        f"s.agent_id, s.session_id, {group_sql} AS list_group FROM sessions AS s "
+        f"WHERE {where}), "
+        "ranked AS (SELECT session_key, list_group, ROW_NUMBER() OVER ("
+        "PARTITION BY list_group ORDER BY list_order DESC, project_id, agent_id, "
+        "session_id) AS list_position, COUNT(*) OVER (PARTITION BY list_group) "
+        "AS list_group_total FROM listed) "
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS}, r.list_group, r.list_group_total "
+        "FROM ranked AS r JOIN sessions AS s ON s.session_key = r.session_key "
+        f"{_store_values._DERIVED_METADATA_JOIN} "
+        "WHERE r.list_position <= ? ORDER BY r.list_group, r.list_position",
+        (*params, limit),
+    ).fetchall()
+
+
 def list_project_groups(
     connection: sqlite3.Connection,
     grouping: SessionProjectGrouping,
@@ -588,30 +614,25 @@ def list_project_groups(
         include_channels=filters.include_channels,
     )
     projects_param, excluded_param = group_params
-    unpinned_sql = _unpinned_sql(filters)
-    rows = connection.execute(
-        f"WITH listed AS (SELECT s.session_key, s.last_activity_at, s.project_id, "
-        f"s.agent_id, s.session_id, {group_sql} AS list_group FROM sessions AS s "
-        f"WHERE {listed_sql} AND {visibility_sql}{unpinned_sql}), "
-        "ranked AS (SELECT session_key, list_group, ROW_NUMBER() OVER ("
-        "PARTITION BY list_group ORDER BY last_activity_at DESC, project_id, agent_id, "
-        "session_id) AS list_position, COUNT(*) OVER (PARTITION BY list_group) "
-        "AS list_group_total FROM listed) "
-        f"SELECT {_store_values._SESSION_LIST_COLUMNS}, r.list_group, r.list_group_total "
-        "FROM ranked AS r JOIN sessions AS s ON s.session_key = r.session_key "
-        f"{_store_values._DERIVED_METADATA_JOIN} "
-        "WHERE r.list_position <= ? ORDER BY r.list_group, r.list_position",
-        (projects_param, excluded_param, *visibility_params, limit),
-    ).fetchall()
+    rows = _grouped_page_rows(
+        connection,
+        group_sql,
+        f"{listed_sql} AND {visibility_sql}{_unpinned_sql(filters)}",
+        (projects_param, excluded_param, *visibility_params),
+        order_column="last_activity_at",
+        limit=limit,
+    )
     pinned_rows: list[sqlite3.Row] = []
     if filters.split_pinned:
-        pinned_rows = connection.execute(
-            f"SELECT {_store_values._SESSION_LIST_COLUMNS}, {group_sql} AS list_group {_LIST_FROM} "
-            f"WHERE {listed_sql} AND s.pinned_at IS NOT NULL "
-            f"AND {_store_values._session_list_listable_sql()} "
-            "ORDER BY s.pinned_at DESC, s.project_id, s.agent_id, s.session_id LIMIT ?",
-            (projects_param, excluded_param, _PINNED_READ_LIMIT),
-        ).fetchall()
+        pinned_rows = _grouped_page_rows(
+            connection,
+            group_sql,
+            f"{listed_sql} AND s.pinned_at IS NOT NULL "
+            f"AND {_store_values._session_list_listable_sql()}",
+            (projects_param, excluded_param),
+            order_column="pinned_at",
+            limit=_PINNED_READ_LIMIT,
+        )
     changes = change_totals(connection, [int(row["session_key"]) for row in (*rows, *pinned_rows)])
 
     def decode() -> dict[str | None, SessionListPage]:
@@ -626,10 +647,11 @@ def list_project_groups(
             group_rows = grouped.get(project_id or "", [])
             group_pinned = pinned.get(project_id or "", [])
             unpinned_total = int(group_rows[0]["list_group_total"]) if group_rows else 0
+            pinned_total = int(group_pinned[0]["list_group_total"]) if group_pinned else 0
             pages[project_id] = _summaries_page(
                 group_rows,
                 None,
-                unpinned_total + len(group_pinned),
+                unpinned_total + pinned_total,
                 changes,
                 has_more=unpinned_total > len(group_rows),
                 pinned_rows=group_pinned,
