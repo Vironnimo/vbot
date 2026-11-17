@@ -424,7 +424,7 @@ async def test_owned_descendant_records_its_admission_and_skips_titles_and_refle
         owner_name="swarm",
         group_id="group",
         participant_id="participant",
-        config={},
+        config={"allowed_skills": []},
     )
     declarations = ExtensionDeclarations()
     ExtensionAPI("swarm", declarations, config={}, logger=None).register_session_tool(
