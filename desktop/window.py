@@ -164,11 +164,11 @@ class WindowFocus:
 def page_location(window_holder: list[Any], controller: ConnectionController) -> str | None:
     """Return the WebUI URL fragment the window shows, for a restart to restore."""
 
-    active = controller.active_server_url()
-    if not window_holder or active is None:
+    active_origin = _windows.url_origin(controller.active_server_url())
+    if not window_holder or active_origin is None:
         return None
     url = window_holder[0].get_current_url()
-    if not isinstance(url, str) or not url.startswith(active):
+    if not isinstance(url, str) or _windows.url_origin(url) != active_origin:
         return None
     _, separator, fragment = url.partition("#")
     location = f"#{fragment}" if separator and fragment else None
