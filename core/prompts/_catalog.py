@@ -190,13 +190,20 @@ class PromptBlockCatalog:
         derived server-side from the live definition (or kept from the client only
         as inert metadata for a remembered id). Unknown ids are **tolerated**: the
         store prunes any entry whose id has no live definition on this write, so a
-        reorder never errors on a contributor that vanished. Returns the persisted
-        effective layout (post-prune), as ``[{id, enabled, source}]``.
+        reorder never errors on a contributor that vanished. Existing custom blocks
+        omitted by the caller are appended. Returns the persisted effective layout
+        as ``[{id, enabled, source}]``.
         """
         prompt_scope = self._resolve_edit_scope(scope)
         entries = self._parse_layout_payload(layout)
         known_ids = self._known_block_ids(prompt_scope)
         scope_key = self.scope_key(prompt_scope)
+        requested_ids = {entry.id for entry in entries}
+        entries.extend(
+            entry
+            for entry in self.resolve_layout(scope_key)
+            if entry.id.startswith(USER_BLOCK_ID_PREFIX) and entry.id not in requested_ids
+        )
         self._block_store.prune_layout(scope_key, entries, known_ids)
         live_entries = [entry for entry in entries if entry.id in known_ids]
         return {"layout": [self._layout_entry_dict(entry) for entry in live_entries]}
@@ -235,11 +242,25 @@ class PromptBlockCatalog:
         if clash is not None:
             raise PromptError(f"custom block already exists: {clash}")
 
-        self._block_store.write_block_override(scope_key, block_id, content or "")
         new_entry = LayoutEntry(id=block_id, enabled=True, source=USER_BLOCK_SOURCE)
         entries = self._insert_layout_entry(list(existing), new_entry, position)
         known_ids = self._known_block_ids(prompt_scope) | {block_id}
-        self._block_store.prune_layout(scope_key, entries, known_ids)
+        previous_text = self._block_store.read_block_override(scope_key, block_id)
+        try:
+            self._block_store.write_block_override(scope_key, block_id, content or "")
+            self._block_store.prune_layout(scope_key, entries, known_ids)
+        except Exception:
+            try:
+                # A directory sync can fail after the layout has been replaced.
+                # Keep the body in that case so the published entry has its text.
+                if not any(entry.id == block_id for entry in self.resolve_layout(scope_key)):
+                    if previous_text is None:
+                        self._block_store.remove_block_override(scope_key, block_id)
+                    else:
+                        self._block_store.write_block_override(scope_key, block_id, previous_text)
+            except Exception:
+                _LOGGER.exception("Failed to roll back creation of %s in %s", block_id, scope_key)
+            raise
 
         definition = self._custom_block_definition(block_id)
         rank = next(index for index, entry in enumerate(entries) if entry.id == block_id)
@@ -256,26 +277,36 @@ class PromptBlockCatalog:
         if not block_id.startswith(USER_BLOCK_ID_PREFIX):
             raise PromptError(f"only custom user blocks can be removed: {block_id}")
         scope_key = self.scope_key(prompt_scope)
-        self._block_store.remove_block_override(scope_key, block_id)
-        remaining = [entry for entry in self.resolve_layout(scope_key) if entry.id != block_id]
+        previous = self.resolve_layout(scope_key)
+        remaining = [entry for entry in previous if entry.id != block_id]
         known_ids = self._known_block_ids(prompt_scope)
-        self._block_store.prune_layout(scope_key, remaining, known_ids)
+        try:
+            self._block_store.prune_layout(scope_key, remaining, known_ids)
+            self._block_store.remove_block_override(scope_key, block_id)
+        except Exception:
+            try:
+                if len(remaining) != len(previous) and not any(
+                    entry.id == block_id for entry in self.resolve_layout(scope_key)
+                ):
+                    self._block_store.write_layout(scope_key, previous)
+            except Exception:
+                _LOGGER.exception("Failed to roll back removal of %s in %s", block_id, scope_key)
+            raise
         live = [entry for entry in remaining if entry.id in known_ids]
         return {"layout": [self._layout_entry_dict(entry) for entry in live]}
 
     def reset_layout(self, scope: Any = None) -> JsonObject:
-        """Reset a scope's layout (order + on/off) to the bundled default (T6).
-
-        The agreed server-side reset so the tab need not reconstruct the default:
-        the active scope's ``layout.json`` is overwritten with the bundled default
-        layout, also when the saved layout fails to load (the explicit repair).
-        Per-block text overrides are untouched (use :meth:`reset_block` for text).
-        Returns the restored effective layout.
-        """
+        """Restore the bundled layout and keep custom blocks in their relative order."""
         prompt_scope = self._resolve_edit_scope(scope)
         scope_key = self.scope_key(prompt_scope)
-        self._block_store.write_layout(scope_key, self._default_layout, reset=True)
-        return {"layout": [self._layout_entry_dict(entry) for entry in self._default_layout]}
+        custom_entries = [
+            entry
+            for entry in self.resolve_layout(scope_key)
+            if entry.id.startswith(USER_BLOCK_ID_PREFIX)
+        ]
+        entries = [*self._default_layout, *custom_entries]
+        self._block_store.write_layout(scope_key, entries, reset=True)
+        return {"layout": [self._layout_entry_dict(entry) for entry in entries]}
 
     def _resolve_edit_scope(self, scope: Any = None) -> PromptScope:
         """Validate an edit-surface scope payload against the agent store.
@@ -422,11 +453,13 @@ class PromptBlockCatalog:
     def _require_block(self, prompt_scope: PromptScope, block_id: str) -> BlockDefinition:
         """Return the definition for *block_id* in a scope, or raise if unknown.
 
-        A custom ``user:`` block has no contributor definition, so it is resolved
-        on the fly (its existence is its layout entry + override file).
+        A custom ``user:`` block gets its definition from the scope's layout.
         """
         if block_id.startswith(USER_BLOCK_ID_PREFIX):
-            return self._custom_block_definition(block_id)
+            layout = self.resolve_layout(self.scope_key(prompt_scope))
+            if any(entry.id == block_id for entry in layout):
+                return self._custom_block_definition(block_id)
+            raise PromptError(f"unknown block: {block_id}")
         by_id = {
             definition.id: definition
             for definition in self._listing_block_definitions(prompt_scope)

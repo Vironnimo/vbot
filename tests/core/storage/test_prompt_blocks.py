@@ -242,6 +242,11 @@ def test_block_override_lifecycle(
     monkeypatch.undo()
     assert store.read_block_override(scope, "user:notes") == "kept"
 
+    written_path.write_bytes(b"\xff")
+    with pytest.raises(StorageError, match="Cannot read block override"):
+        store.read_block_override(scope, "user:notes")
+    assert written_path.read_bytes() == b"\xff"
+
 
 def test_case_variant_blocks_never_read_write_or_remove_each_others_file(tmp_path: Path) -> None:
     store = make_store(tmp_path)

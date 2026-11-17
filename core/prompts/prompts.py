@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from core.memory import (
@@ -202,6 +203,8 @@ class SystemPromptManager:
             agent_store,
             block_definitions,
         )
+        # An edit can span both the layout and its text overrides.
+        self._edit_lock = Lock()
 
     @property
     def vbot_root(self) -> Path:
@@ -907,19 +910,23 @@ class SystemPromptManager:
 
     def list_blocks(self, scope: Any = None) -> list[JsonObject]:
         """Return per-block static metadata for a scope, in layout order (D3)."""
-        return self._catalog.list_blocks(scope)
+        with self._edit_lock:
+            return self._catalog.list_blocks(scope)
 
     def update_block(self, block_id: str, content: str, scope: Any = None) -> JsonObject:
         """Write a block's text override and return its new state (T6 autosave)."""
-        return self._catalog.update_block(block_id, content, scope)
+        with self._edit_lock:
+            return self._catalog.update_block(block_id, content, scope)
 
     def reset_block(self, block_id: str, scope: Any = None) -> JsonObject:
         """Reset a block to its inherited/default text (T5 "reset → inherited")."""
-        return self._catalog.reset_block(block_id, scope)
+        with self._edit_lock:
+            return self._catalog.reset_block(block_id, scope)
 
     def set_layout(self, layout: Sequence[Mapping[str, Any]], scope: Any = None) -> JsonObject:
         """Persist a scope's order + on/off, tolerating a contributor-gone id (T6)."""
-        return self._catalog.set_layout(layout, scope)
+        with self._edit_lock:
+            return self._catalog.set_layout(layout, scope)
 
     def create_block(
         self,
@@ -930,15 +937,18 @@ class SystemPromptManager:
         position: int | None = None,
     ) -> JsonObject:
         """Create a custom ``user:<slug>`` text block (T1): override file + layout entry."""
-        return self._catalog.create_block(slug, content, scope, position=position)
+        with self._edit_lock:
+            return self._catalog.create_block(slug, content, scope, position=position)
 
     def remove_block(self, block_id: str, scope: Any = None) -> JsonObject:
         """Delete a custom ``user:`` block: drop the override file + the layout entry."""
-        return self._catalog.remove_block(block_id, scope)
+        with self._edit_lock:
+            return self._catalog.remove_block(block_id, scope)
 
     def reset_layout(self, scope: Any = None) -> JsonObject:
-        """Reset a scope's layout (order + on/off) to the bundled default (T6)."""
-        return self._catalog.reset_layout(scope)
+        """Restore the bundled layout while keeping the scope's custom blocks."""
+        with self._edit_lock:
+            return self._catalog.reset_layout(scope)
 
 
 def _selected_layout(
