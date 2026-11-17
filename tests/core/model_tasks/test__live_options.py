@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from core.model_tasks._live_options import live_thinking_level, live_tools_non_blocking
 from core.model_tasks.constants import TASK_LIVE_VOICE
 from core.model_tasks.options import (
     TaskModelOptionField,
@@ -110,6 +111,37 @@ def test_an_xai_like_model_offers_no_openai_backend_model() -> None:
 
     assert list(_fields(schema)) == ["voice", "backend"]
     assert schema.default_options() == {"voice": "eve", "backend": "none"}
+
+
+def test_a_gemini_like_model_offers_a_thinking_level_and_reports_non_blocking_calls() -> None:
+    parameters = {
+        "voice": {"type": "enum", "values": ["kore", "puck"], "default": "kore"},
+        "backend": {"type": "enum", "values": ["none", "vbot"], "default": "none"},
+        "thinking_level": {"type": "enum", "values": ["low", "high"], "default": "low"},
+    }
+    model = _registry_model(
+        "live-thinking",
+        "Live Thinking",
+        task_types=(TASK_LIVE_VOICE,),
+        connections=("subscription",),
+        task_options={TASK_LIVE_VOICE: {"parameters": parameters, "tool_calls": "non_blocking"}},
+    )
+    schema = _schema(parameters)
+
+    assert list(_fields(schema)) == ["voice", "thinking_level", "backend"]
+    thinking = _fields(schema)["thinking_level"]
+    assert (thinking.type, thinking.required, thinking.default) == ("select", True, "low")
+    assert [(choice.value, choice.label) for choice in thinking.options] == [
+        ("low", "Low"),
+        ("high", "High"),
+    ]
+    # A Model that requires a level gets its default when the binding names none.
+    assert live_thinking_level(model, {}) == "low"
+    assert live_thinking_level(model, {"thinking_level": "high"}) == "high"
+    assert live_thinking_level(model, {"thinking_level": "maximal"}) == "low"
+    assert live_thinking_level(_live_model(), {"thinking_level": "high"}) is None
+    assert live_tools_non_blocking(model) is True
+    assert live_tools_non_blocking(_live_model()) is False
 
 
 def test_undeclared_defaults_fall_back_to_the_first_choice() -> None:

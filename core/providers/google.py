@@ -55,12 +55,20 @@ _VIDEO = re.compile(r"^gemini-omni-")
 # speech-to-speech translation and robotics streaming are other jobs.
 _LIVE_VOICE = re.compile(r"(?:-live(?:-|$)|-native-audio-)")
 _LIVE_OTHER = re.compile(r"(?:-transcribe-|-translate-|^gemini-robotics-)")
+# Live thinking levels (aistudio.google.com/docs/live-api/thinking, 2026-11-17):
+# Extended Thinking requires one (a setup without it closes with 1007, live
+# 2026-11-17); 3.8 Live rejects any; 3.1 Flash Live offers minimal to high.
+_LIVE_EXTENDED_THINKING = re.compile(r"^gemini-3\.8-live-extended-thinking(?:-|$)")
+_LIVE_THINKING_LEVELS = re.compile(r"^gemini-3\.1-flash-live(?:-|$)")
 
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 _ZERO_LIMIT = re.compile(r"\blimit: 0(?![\d.])")
 # Throttle messages name the wait ("Please retry in 41.5s."); the Decisions API
 # sends only that message, with a string ``code`` and no RetryInfo detail.
 _RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)\s*s(?![a-z])", re.IGNORECASE)
+# Google's invalid-key message. The Live API reports it only as the reason of
+# a WebSocket close (1007 "API key not valid. Please pass a valid API key.").
+_API_KEY_REJECTED = re.compile(r"\bAPI key (?:not valid|expired)\b")
 
 
 class GoogleAdapter(GeminiCompatibleAdapter):
@@ -157,7 +165,7 @@ def _family_capabilities(
         return _decision_capabilities()
     if "bidiGenerateContent" in methods:
         if _LIVE_VOICE.search(model_id) and not _LIVE_OTHER.search(model_id):
-            return _live_voice_capabilities()
+            return _live_voice_capabilities(model_id)
         return None
     if "generateContent" not in methods or _INTERACTIONS_ONLY.search(model_id):
         return None
@@ -244,8 +252,35 @@ def _decision_capabilities() -> Capabilities:
     )
 
 
-def _live_voice_capabilities() -> Capabilities:
-    return _task_capabilities(("text", "audio"), ("text", "audio"), ("live_voice",))
+def _live_voice_capabilities(model_id: str) -> Capabilities:
+    """Gemini Live on ``BidiGenerateContent``: a prebuilt voice and function Tools.
+
+    The voice model calls the voice Agent's Tools itself (backend ``none``) or
+    hands requests to vBot's Live backend Agent (``vbot``). Extended Thinking
+    runs function calls only asynchronously, so its Tools are declared
+    ``NON_BLOCKING`` (``tool_calls``; aistudio.google.com/docs/live-api/tools).
+    """
+
+    parameters: dict[str, Any] = {
+        "voice": {
+            "type": "enum",
+            "values": [voice.lower() for voice in _TTS_VOICES],
+            "default": "kore",
+        },
+        "backend": {"type": "enum", "values": ["none", "vbot"], "default": "none"},
+    }
+    facts: dict[str, Any] = {"parameters": parameters}
+    if _LIVE_EXTENDED_THINKING.search(model_id):
+        levels = ["low", "medium", "high"]
+        parameters["thinking_level"] = {"type": "enum", "values": levels, "default": "low"}
+        facts["tool_calls"] = "non_blocking"
+    elif _LIVE_THINKING_LEVELS.search(model_id):
+        levels = ["minimal", "low", "medium", "high"]
+        parameters["thinking_level"] = {"type": "enum", "values": levels, "default": "minimal"}
+    return replace(
+        _task_capabilities(("text", "audio"), ("text", "audio"), ("live_voice",)),
+        task_options={"live_voice": facts},
+    )
 
 
 # Prebuilt voices of every Gemini TTS Model (aistudio.google.com/docs/speech-generation,
@@ -459,7 +494,9 @@ def _classify_google_status(
     if status_code < 400:
         return
     error = _google_error(detail)
-    if status_code == 400 and _error_reason(error) == "API_KEY_INVALID":
+    if status_code == 400 and (
+        _error_reason(error) == "API_KEY_INVALID" or _API_KEY_REJECTED.search(detail)
+    ):
         rejected = ProviderAuthError(f"Google AI Studio rejected the API key: {detail}")
         rejected.status_code = status_code
         raise rejected
